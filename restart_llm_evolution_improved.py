@@ -36,6 +36,7 @@ from src.evolution.strategies.map_elites import (
     MapElitesMultiIsland,
     ParetoFrontArchiveRemoverDropOldest,
     ParetoFrontMigrantSelector,
+    RandomMigrantSelector,
     ParetoFrontSelector,
     ParetoTournamentEliteSelector,
     SumArchiveSelector,
@@ -318,15 +319,12 @@ async def create_initial_population(
 
 
 def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
-    """Improved behavior spaces for four diverse islands with proper fitness coverage."""
+    """Improved behavior spaces for four diverse islands with better fitness coverage and resolution balance."""
 
-    # 🏝️ 1. Fitness–Validity Island – focused on the actual fitness range
+    # 🏝️ 1. Fitness–Validity Island
     fitness_validity_space = BehaviorSpace(
         feature_bounds={
-            "fitness": (
-                args.min_fitness,
-                args.max_fitness,
-            ),
+            "fitness": (args.min_fitness, args.max_fitness),
             "is_valid": (-0.01, 1.01),
         },
         resolution={"fitness": 30, "is_valid": 2},
@@ -336,16 +334,16 @@ def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
         },
     )
 
-    # 🏝️ 2. Simplicity Island – fitness vs complexity with proper fitness range
+    # 🏝️ 2. Simplicity Island
     simplicity_space = BehaviorSpace(
         feature_bounds={
-            "fitness": (args.min_fitness, args.max_fitness),  # Match realistic range for 11 hexagons
-            "complexity_score": (0.1, 200),  # Increased complexity range
+            "fitness": (args.min_fitness, args.max_fitness),
+            "complexity_score": (0.5, 20),
             "is_valid": (-0.01, 1.01),
         },
         resolution={
-            "fitness": 15,  # Good resolution for fitness
-            "complexity_score": 20,
+            "fitness": 12,
+            "complexity_score": 12,
             "is_valid": 2,
         },
         binning_types={
@@ -355,38 +353,16 @@ def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
         },
     )
 
-    # 🏝️ 3. Structure Island – size vs structure diversity
-    structure_space = BehaviorSpace(
-        feature_bounds={
-            "total_nodes": (1, 300),  # Increased node range
-            "ast_entropy": (0.1, 4.0),  # Slightly expanded entropy range
-            "fitness": (args.min_fitness, args.max_fitness),
-            "is_valid": (-0.01, 1.01),
-        },
-        resolution={
-            "total_nodes": 10,
-            "ast_entropy": 15,
-            "is_valid": 2,
-            "fitness": 15,
-        },  
-        binning_types={
-            "total_nodes": BinningType.LOGARITHMIC,
-            "ast_entropy": BinningType.LOGARITHMIC,
-            "is_valid": BinningType.LINEAR,
-            "fitness": BinningType.LINEAR,
-        },
-    )
-
-    # 🏝️ 4. Entropy Island – fitness vs structural diversity with proper range
+    # 🏝️ 3. Entropy Island
     entropy_space = BehaviorSpace(
         feature_bounds={
-            "fitness": (args.min_fitness, args.max_fitness),  # Match realistic range for 11 hexagons
-            "ast_entropy": (0.01, 4.0),
+            "fitness": (args.min_fitness, args.max_fitness),
+            "ast_entropy": (1.5, 3.5),
             "is_valid": (-0.01, 1.01),
         },
         resolution={
-            "fitness": 15,  # Good fitness resolution
-            "ast_entropy": 12,
+            "fitness": 10,
+            "ast_entropy": 6,
             "is_valid": 2,
         },
         binning_types={
@@ -396,24 +372,18 @@ def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
         },
     )
 
-    return [
-        fitness_validity_space,
-        simplicity_space,
-        structure_space,
-        entropy_space,
-    ]
+    return [fitness_validity_space, simplicity_space, entropy_space]
 
 
 def create_island_configs(
     behavior_spaces: List[BehaviorSpace],
 ) -> List[IslandConfig]:
-    """Create 4 island configurations matching the improved behavior spaces."""
+    """Create 4 island configurations with improved resolution balance and migration strategies."""
 
     configs = [
-        # 🏝️ 1. Fitness Island – Strict fitness optimization
         IslandConfig(
             island_id="fitness_island",
-            max_size=40,
+            max_size=50,
             behavior_space=behavior_spaces[0],
             archive_selector=SumArchiveSelector(["fitness"]),
             elite_selector=FitnessProportionalEliteSelector("fitness"),
@@ -421,75 +391,24 @@ def create_island_configs(
             migrant_selector=TopFitnessMigrantSelector("fitness"),
             migration_rate=0.05,
         ),
-        # 🏝️ 2. Simplicity Island – Balance performance and elegance
         IslandConfig(
             island_id="simplicity_island",
-            max_size=30,
+            max_size=50,
             behavior_space=behavior_spaces[1],
-            archive_selector=ParetoFrontSelector(
-                ["fitness", "complexity_score"],
-                fitness_key_higher_is_better={
-                    "fitness": True,
-                    "complexity_score": False,
-                },
-            ),
-            elite_selector=ParetoTournamentEliteSelector(
-                ["fitness", "complexity_score"],
-                fitness_key_higher_is_better={
-                    "fitness": True,
-                    "complexity_score": False,
-                },
-            ),
-            archive_remover=ParetoFrontArchiveRemoverDropOldest(
-                ["fitness", "complexity_score"],
-                fitness_key_higher_is_better={
-                    "fitness": True,
-                    "complexity_score": False,
-                },
-            ),
-            migrant_selector=ParetoFrontMigrantSelector(
-                ["fitness", "complexity_score"],
-                fitness_key_higher_is_better={
-                    "fitness": True,
-                    "complexity_score": False,
-                },
-            ),
+            archive_selector=ParetoFrontSelector(["fitness", "complexity_score"], fitness_key_higher_is_better={"fitness": True, "complexity_score": False}),
+            elite_selector=ParetoTournamentEliteSelector(["fitness", "complexity_score"], fitness_key_higher_is_better={"fitness": True, "complexity_score": False}),
+            archive_remover=ParetoFrontArchiveRemoverDropOldest(["fitness", "complexity_score"], fitness_key_higher_is_better={"fitness": True, "complexity_score": False}),
+            migrant_selector=ParetoFrontMigrantSelector(["fitness", "complexity_score"], fitness_key_higher_is_better={"fitness": True, "complexity_score": False}),
             migration_rate=0.15,
         ),
-        # 🏝️ 3. Structure Island – Encourage scalable and diverse logic
-        IslandConfig(
-            island_id="structure_island",
-            max_size=30,
-            behavior_space=behavior_spaces[2],
-            archive_selector=ParetoFrontSelector(
-                ["fitness", "total_nodes", "ast_entropy"]
-            ),
-            elite_selector=ParetoTournamentEliteSelector(
-                ["fitness", "total_nodes", "ast_entropy"]
-            ),
-            archive_remover=ParetoFrontArchiveRemoverDropOldest(
-                ["fitness", "total_nodes", "ast_entropy"]
-            ),
-            migrant_selector=ParetoFrontMigrantSelector(
-                ["fitness", "total_nodes", "ast_entropy"]
-            ),
-            migration_rate=0.15,
-        ),
-        # 🏝️ 4. Entropy Island – Fitness with diversity bonus
         IslandConfig(
             island_id="entropy_island",
-            max_size=30,
-            behavior_space=behavior_spaces[3],
+            max_size=50,
+            behavior_space=behavior_spaces[2],
             archive_selector=ParetoFrontSelector(["fitness", "ast_entropy"]),
-            elite_selector=ParetoTournamentEliteSelector(
-                ["fitness", "ast_entropy"]
-            ),
-            archive_remover=ParetoFrontArchiveRemoverDropOldest(
-                ["fitness", "ast_entropy"]
-            ),
-            migrant_selector=ParetoFrontMigrantSelector(
-                ["fitness", "ast_entropy"]
-            ),
+            elite_selector=ParetoTournamentEliteSelector(["fitness", "ast_entropy"]),
+            archive_remover=ParetoFrontArchiveRemoverDropOldest(["fitness", "ast_entropy"]),
+            migrant_selector=RandomMigrantSelector(),
             migration_rate=0.1,
         ),
     ]
@@ -715,10 +634,23 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     if not LLM_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable must be set")
 
+    # Updated for longer programs and better model alignment
     settings_per_stage = {
-        "insights": {"temperature": 0.7, "max_tokens": 2048, "top_p": 0.9},
-        "lineage": {"temperature": 0.6, "max_tokens": 4096, "top_p": 0.85},
-        "mutation": {"temperature": 0.8, "max_tokens": 8192, "top_p": 0.85},
+        "insights": {
+            "temperature": 0.65,
+            "max_tokens": 4096,
+            "top_p": 0.9,
+        },
+        "lineage": {
+            "temperature": 0.6,
+            "max_tokens": 8192,
+            "top_p": 0.85,
+        },
+        "mutation": {
+            "temperature": 0.85,
+            "max_tokens": 10000,
+            "top_p": 0.85,
+        },
     }
 
     def build_wrapper_with_params(
@@ -726,10 +658,10 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     ) -> MultiModelLLMWrapper:
         return MultiModelLLMWrapper(
             models=[
-                "google/gemini-2.5-flash",
-                "anthropic/claude-4-sonnet-20250522",
+                "google/gemini-2.5-flash",       # fast, good for insights
+                "anthropic/claude-sonnet-4",         # deep context for lineage/mutation
             ],
-            probabilities=[0.8, 0.2],
+            probabilities=[0.8, 0.2],  # favor Gemini unless structure is needed
             api_key=LLM_API_KEY,
             system_prompt="",  # to be set in subclasses
             configs=[

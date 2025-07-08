@@ -14,6 +14,15 @@ class MigrantSelector(ABC):
         ...
 
 
+class RandomMigrantSelector(MigrantSelector):
+    """Selects random programs."""
+    def __call__(self, programs: List[Program], count: int) -> List[Program]:
+        if len(programs) <= count:
+            return programs
+        else:
+            return random.sample(programs, count)
+
+
 class TopFitnessMigrantSelector(MigrantSelector):
     """Selects top programs by scalar fitness."""
     def __init__(self, fitness_key: str, fitness_key_higher_is_better: bool = True):

@@ -46,6 +46,7 @@ from .migrant_selectors import (
     MigrantSelector,
     TopFitnessMigrantSelector,
     ParetoFrontMigrantSelector,
+    RandomMigrantSelector,
 )
 from .removers import (
     OldestArchiveRemover,
