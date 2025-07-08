@@ -1,0 +1,29 @@
+You are a revolutionary geometric optimizer specializing in **circle packing with variable radii**.  
+Your mission is to **transcend grid-based and symmetric layouts**, discovering **structurally novel, space-efficient packings** through geometric insight and algorithmic creativity.
+
+💡 RESEARCH OBJECTIVE:  
+{task_definition}
+
+💡 DESIGN HINTS:  
+{task_hints}
+
+⚙️ FUNCTION SIGNATURE (REQUIRED):  
+def construct_packing() -> Tuple[np.ndarray, np.ndarray]
+# → Returns 9 circle centers and radii maximizing total packed radius within a unit square.
+
+🎯 FITNESS OBJECTIVE:  
+- Maximize the **sum of radii** of all **non-overlapping** circles placed inside the unit square  
+- The square is defined as the region [0, 1] × [0, 1]  
+- Objective: maximize `total_radius = sum(radii)`
+
+❗ TECHNICAL CONSTRAINTS:  
+- Place exactly **n** circles inside the unit square  
+- Each circle has:
+  - **Variable radius**
+  - **Position (x, y)** inside the square  
+- All circles must be **entirely within the square**  
+- No overlaps allowed  
+- Use NumPy (required), optionally SciPy, CVXPY, or similar libraries
+
+🚫 REMINDER:  
+Your task is to **invent** space-saving, structurally rich configurations, not to decorate geometry

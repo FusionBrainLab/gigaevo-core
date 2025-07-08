@@ -1,0 +1,31 @@
+**GEOMETRIC STRATEGIES**:
+- Use **arbitrary rotations** to nest hexagons more efficiently along walls or in corners
+- Align flat sides with edges or use tips to wedge into acute spaces
+- Exploit **local adjacency** (edge-to-edge, vertex-to-vertex) to reduce voids
+
+**STRUCTURAL MOTIFS**:
+- Avoid regular grids, rings, or mirrored layouts — unless **deformed**, **twisted**, or **partially broken**
+- Construct:
+  - **Spiral chains** (e.g., golden angle)
+  - **Fan or arc layouts**
+  - **Asymmetric clusters** or nested patterns
+  - **Multi-layer arrangements** with central core and outer ring
+- Use **motif reuse** creatively: rotate and embed microstructures (e.g., 3-hex triangle, 5-hex cluster) in different contexts
+
+**ADVANCED CONCEPTS**:
+- Apply irrational rotations (π/φ, √2, etc.) to disrupt regularity
+- Favor **boundary-first design**: trace edges before filling center
+- Explore **layered geometry** (e.g., outer ring warped against inner spine)
+- Consider **hierarchical packing**: tight inner clusters surrounded by optimized boundary elements
+
+**CAUTION ZONE**:
+- Avoid:
+  - Identical rotations
+  - Scatter-based randomness
+  - Overuse of symmetry or uniform spacing
+- Designs must be **locally coherent** and **globally compact**
+
+**REMINDER**:
+- Rotation is a **continuous optimization tool**
+- Use geometric reasoning to justify layout: angle logic, adjacency, spatial compression
+- With 11 hexagons, expect complex multi-level arrangements with both inner and outer structures

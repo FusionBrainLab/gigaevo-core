@@ -1,0 +1,1674 @@
+#!/usr/bin/env python3
+"""
+Evolution Fitness Analyzer
+
+This script extracts running programs from the MetaEvolve evolution system
+and creates comprehensive visualizations including:
+- Fitness evolution over time
+- Program state statistics (failed/completed/running/etc.)
+- Time since last update analysis (how long programs have been in their current state)
+- DAG stage results statistics (individual stage execution analysis)
+- Island statistics (distribution of programs across evolution islands)
+- Top performing programs analysis
+
+It connects to Redis, extracts all programs, analyzes their fitness data,
+and creates comprehensive visualizations and reports.
+
+Usage:
+    python evolution_fitness_analyzer.py --output-folder results [--redis-host localhost] [--redis-port 6379] [--redis-db 0]
+    
+Plot Options:
+    --no-plots              Skip all plotting (just export data)
+    --no-fitness-plots      Skip fitness evolution plots
+    --no-stage-plots        Skip program state statistics plots
+    --no-persistence-plots  Skip time since last update analysis plots
+    --no-dag-stage-plots    Skip DAG stage results statistics plots
+    --no-island-plots       Skip island statistics plots
+    --no-metric-plots       Skip metric correlation plots
+"""
+
+import asyncio
+import os
+import sys
+import argparse
+from pathlib import Path
+from typing import Dict, Any
+from datetime import datetime, timezone
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns  # professional styling
+from loguru import logger
+from src.database.program_storage import RedisProgramStorage
+import numpy as np
+
+
+class EvolutionFitnessAnalyzer:
+    """Analyzer for evolution fitness data from MetaEvolve system."""
+    
+    def __init__(self, redis_host: str = "localhost", redis_port: int = 6379, redis_db: int = 0):
+        self.redis_host = redis_host
+        self.redis_port = redis_port
+        self.redis_db = redis_db
+        
+        # ------------------------------------------------------------------
+        # Configure a CONSISTENT, polished plotting style once at init.
+        # ------------------------------------------------------------------
+        self._configure_plotting_style()
+        
+        # Create Redis storage connection
+        self.redis_storage = RedisProgramStorage({
+            "redis_url": f"redis://{redis_host}:{redis_port}/{redis_db}",
+            "key_prefix": "hexagon_pack_evolution",
+            "max_connections": 50,
+            "connection_pool_timeout": 30.0,
+            "health_check_interval": 60,
+        })
+        
+        logger.info(f"Initialized analyzer for Redis at {redis_host}:{redis_port}/{redis_db}")
+    
+    async def extract_evolution_data(self) -> pd.DataFrame:
+        """Extract all programs and their fitness data from Redis."""
+        
+        logger.info("🔍 Extracting programs from Redis...")
+        
+        try:
+            # Get all programs from Redis
+            all_programs = await self.redis_storage.get_all()
+            logger.info(f"📊 Found {len(all_programs)} total programs")
+            
+            if not all_programs:
+                logger.warning("⚠️ No programs found in Redis database")
+                return pd.DataFrame()
+            
+            # Extract data for each program
+            data = []
+            
+            for program in all_programs:
+                # Get basic program info
+                program_data = {
+                    'program_id': program.id,
+                    'name': program.name or 'unnamed',
+                    'created_at': program.created_at,
+                    'updated_at': program.updated_at,
+                    'state': program.state.value,
+                    'is_complete': program.is_complete,
+                    'generation': program.generation or 0,
+                    'parent_count': program.parent_count,
+                    'is_root': program.is_root,
+                }
+                
+                # Extract fitness and other metrics
+                if program.metrics:
+                    for metric_name, metric_value in program.metrics.items():
+                        program_data[f'metric_{metric_name}'] = metric_value
+                
+                # Extract lineage information
+                if program.lineage:
+                    program_data['lineage_parents'] = len(program.lineage.parents)
+                    program_data['lineage_mutation'] = program.lineage.mutation
+                    program_data['lineage_generation'] = program.lineage.generation or 0
+                else:
+                    program_data['lineage_parents'] = 0
+                    program_data['lineage_mutation'] = None
+                    program_data['lineage_generation'] = 0
+                
+                # Extract metadata
+                if program.metadata:
+                    for meta_key, meta_value in program.metadata.items():
+                        if isinstance(meta_value, (str, int, float, bool)):
+                            program_data[f'meta_{meta_key}'] = meta_value
+                
+                # Extract stage results
+                if program.stage_results:
+                    for stage_name, stage_result in program.stage_results.items():
+                        stage_key = f'stage_{stage_name}'
+                        program_data[f'{stage_key}_status'] = stage_result.status.value
+                        program_data[f'{stage_key}_started_at'] = stage_result.started_at
+                        program_data[f'{stage_key}_finished_at'] = stage_result.finished_at
+                        program_data[f'{stage_key}_duration'] = stage_result.duration_seconds()
+                        program_data[f'{stage_key}_has_error'] = stage_result.error is not None
+                        if stage_result.error:
+                            program_data[f'{stage_key}_error_type'] = str(type(stage_result.error).__name__)
+                
+                data.append(program_data)
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data)
+            
+            # Convert timestamps to datetime if they're strings
+            for col in ['created_at', 'updated_at']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col])
+            
+            logger.info(f"✅ Extracted {len(df)} programs with data")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"❌ Error extracting data: {e}")
+            return pd.DataFrame()
+    
+    def analyze_fitness_data(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Analyze fitness data and prepare for plotting."""
+        
+        if df.empty:
+            return {}
+        
+        # Store the full dataset for state analysis
+        full_df = df.copy()
+        
+        # Check if fitness metric exists
+        fitness_col = 'metric_fitness'
+        if fitness_col not in df.columns:
+            logger.warning(f"⚠️ No fitness metric found. Available metrics: {[col for col in df.columns if col.startswith('metric_')]}")
+            return {}
+        
+        # Calculate time since start using a more intelligent approach
+        # Look for the first program created by evolution (has lineage/parents) rather than initial population
+        full_df_sorted = full_df.sort_values('created_at').copy()
+        
+        # Find programs with lineage (created by evolution, not initial population)
+        evolved_programs = full_df_sorted[full_df_sorted['lineage_parents'] > 0]
+        
+        if not evolved_programs.empty:
+            # Use the first evolved program as the evolution start time
+            evolution_start_time = evolved_programs['created_at'].min()
+            logger.info(f"🎯 Evolution start time (first evolved program): {evolution_start_time}")
+        else:
+            # Fallback to earliest program if no evolved programs found
+            evolution_start_time = full_df_sorted['created_at'].min()
+            logger.info(f"⚠️ No evolved programs found, using earliest program as start: {evolution_start_time}")
+        
+        # Calculate time since evolution start
+        full_df_sorted['time_since_start'] = (full_df_sorted['created_at'] - evolution_start_time).dt.total_seconds()
+        
+        # Filter programs with valid fitness values (exclude -1000.0 which indicates failure)
+        valid_fitness = full_df_sorted[full_df_sorted[fitness_col].notna() & (full_df_sorted[fitness_col] != -1000.0)]
+        
+        if valid_fitness.empty:
+            logger.warning("⚠️ No programs with valid fitness values found")
+            return {}
+        
+        logger.info(f"📊 Found {len(valid_fitness)} programs with valid fitness out of {len(full_df)} total programs")
+        logger.info(f"Fitness range: {valid_fitness[fitness_col].min():.4f} to {valid_fitness[fitness_col].max():.4f}")
+        logger.info(f"Timeline spans: {evolution_start_time} to {full_df_sorted['created_at'].max()}")
+        logger.info(f"Time range: {full_df_sorted['time_since_start'].min():.1f}s to {full_df_sorted['time_since_start'].max():.1f}s")
+        
+        # Analyze gaps in the timeline
+        time_gaps = []
+        sorted_times = full_df_sorted['time_since_start'].sort_values().values
+        for i in range(1, len(sorted_times)):
+            gap = sorted_times[i] - sorted_times[i-1]
+            if gap > 60:  # Report gaps larger than 1 minute
+                time_gaps.append((sorted_times[i-1], sorted_times[i], gap))
+        
+        if time_gaps:
+            # Sort gaps by size (largest first)
+            time_gaps.sort(key=lambda x: x[2], reverse=True)
+            
+            logger.info(f"⚠️ Found {len(time_gaps)} significant time gaps (>60s):")
+            for i, (start, end, gap) in enumerate(time_gaps[:5]):  # Show top 5 gaps
+                gap_minutes = gap / 60
+                logger.info(f"   {i+1}. Gap: {start:.1f}s - {end:.1f}s (duration: {gap:.1f}s = {gap_minutes:.1f} minutes)")
+                
+                # Check what programs exist in this gap
+                gap_programs = full_df_sorted[(full_df_sorted['time_since_start'] >= start) & 
+                                            (full_df_sorted['time_since_start'] <= end)]
+                if len(gap_programs) > 0:
+                    logger.info(f"      Programs in gap: {len(gap_programs)} (states: {dict(gap_programs['state'].value_counts())})")
+                else:
+                    logger.info(f"      No programs created during this gap")
+            
+            if len(time_gaps) > 5:
+                logger.info(f"   ... and {len(time_gaps) - 5} more gaps")
+                
+            # Highlight the largest gap
+            largest_gap = time_gaps[0]
+            logger.warning(f"🚨 LARGEST GAP: {largest_gap[2]:.1f}s ({largest_gap[2]/60:.1f} minutes) - "
+                          f"Evolution may have been paused, stopped, or experiencing issues")
+        else:
+            logger.info("✅ No significant time gaps found")
+        
+        # Create timeline for fitness analysis (only valid fitness programs)
+        timeline_df = valid_fitness.copy()
+        
+        # Calculate running best fitness
+        timeline_df['running_best_fitness'] = timeline_df[fitness_col].expanding().max()
+        
+        # Group by generation if available
+        generation_stats = None
+        if 'generation' in timeline_df.columns:
+            generation_stats = timeline_df.groupby('generation').agg({
+                fitness_col: ['count', 'mean', 'max', 'min'],
+                'created_at': 'min'
+            }).round(4)
+            
+            generation_stats.columns = ['program_count', 'mean_fitness', 'max_fitness', 'min_fitness', 'generation_start']
+            generation_stats = generation_stats.reset_index()
+            
+            logger.info(f"📈 Generation Statistics:")
+            logger.info(generation_stats)
+        
+        return {
+            'timeline_df': timeline_df,
+            'full_df': full_df_sorted,  # Include full dataset with proper timeline
+            'generation_stats': generation_stats,
+            'fitness_col': fitness_col,
+            'start_time': evolution_start_time,
+            'total_programs': len(valid_fitness),
+            'total_all_programs': len(full_df),
+            'best_fitness': valid_fitness[fitness_col].max(),
+            'worst_fitness': valid_fitness[fitness_col].min(),
+            'mean_fitness': valid_fitness[fitness_col].mean()
+        }
+    
+    def plot_fitness_evolution(self, fitness_analysis: Dict[str, Any], output_folder: Path, save_plots: bool = True):
+        """Create comprehensive fitness evolution plots."""
+        
+        if not fitness_analysis:
+            logger.warning("No fitness data to plot")
+            return
+        
+        timeline_df = fitness_analysis['timeline_df']
+        fitness_col = fitness_analysis['fitness_col']
+        
+        # Create main figure with subplots - increased size for better readability
+        fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+        fig.suptitle('Evolution Fitness Analysis', fontsize=18, fontweight='bold')
+        
+        # 1. Best Fitness vs Time
+        ax1 = axes[0, 0]
+        ax1.plot(timeline_df['time_since_start'], timeline_df['running_best_fitness'], 
+                 linewidth=2, color='green', label='Running Best Fitness')
+        ax1.scatter(timeline_df['time_since_start'], timeline_df[fitness_col], 
+                    alpha=0.6, s=20, color='blue', label='Individual Fitness')
+        ax1.set_xlabel('Time Since Start (seconds)')
+        ax1.set_ylabel('Fitness (negative enclosing hexagon side length)')
+        ax1.set_title('Best Fitness vs Time')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. Fitness Distribution
+        ax2 = axes[0, 1]
+        ax2.hist(timeline_df[fitness_col], bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+        ax2.axvline(timeline_df[fitness_col].mean(), color='red', linestyle='--', 
+                    label=f'Mean: {timeline_df[fitness_col].mean():.3f}')
+        ax2.axvline(timeline_df[fitness_col].max(), color='green', linestyle='--', 
+                    label=f'Best: {timeline_df[fitness_col].max():.3f}')
+        ax2.set_xlabel('Fitness')
+        ax2.set_ylabel('Frequency')
+        ax2.set_title('Fitness Distribution')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # 3. Generation-based analysis (if available)
+        ax3 = axes[1, 0]
+        if fitness_analysis['generation_stats'] is not None:
+            gen_stats = fitness_analysis['generation_stats']
+            ax3.plot(gen_stats['generation'], gen_stats['max_fitness'], 
+                     marker='o', linewidth=2, color='green', label='Best Fitness')
+            ax3.plot(gen_stats['generation'], gen_stats['mean_fitness'], 
+                     marker='s', linewidth=2, color='orange', label='Mean Fitness')
+            ax3.fill_between(gen_stats['generation'], 
+                            gen_stats['min_fitness'], gen_stats['max_fitness'], 
+                            alpha=0.2, color='blue', label='Fitness Range')
+            ax3.set_xlabel('Generation')
+            ax3.set_ylabel('Fitness')
+            ax3.set_title('Fitness by Generation')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+        else:
+            ax3.text(0.5, 0.5, 'No generation data available', 
+                     ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+            ax3.set_title('Fitness by Generation')
+        
+        # 4. Program State Analysis
+        ax4 = axes[1, 1]
+        if 'state' in timeline_df.columns:
+            # Use the full dataset for state distribution, not just valid fitness programs
+            full_df = fitness_analysis.get('full_df', timeline_df)  # Fallback to timeline_df if full_df not available
+            state_counts = full_df['state'].value_counts()
+            ax4.pie(state_counts.values, labels=state_counts.index, autopct='%1.1f%%', 
+                    startangle=90, colors=plt.cm.Set3.colors)
+            ax4.set_title('Program States Distribution')
+        else:
+            ax4.text(0.5, 0.5, 'No state data available', 
+                     ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+            ax4.set_title('Program States Distribution')
+        
+        plt.tight_layout(pad=2.0)  # Increased padding for better spacing
+        
+        if save_plots:
+            self._save_fig(fig, output_folder / 'evolution_analysis_overview')
+        
+        plt.show()
+        
+        # Additional detailed plot: Fitness improvement over time
+        plt.figure(figsize=(12, 6))
+        
+        # Plot individual fitness points
+        plt.scatter(timeline_df['time_since_start'], timeline_df[fitness_col], 
+                    alpha=0.4, s=30, color='lightblue', label='Individual Programs')
+        
+        # Plot running best with thicker line
+        plt.plot(timeline_df['time_since_start'], timeline_df['running_best_fitness'], 
+                 linewidth=3, color='darkgreen', label='Running Best Fitness')
+        
+        # Highlight improvements
+        improvements = timeline_df[timeline_df[fitness_col] == timeline_df['running_best_fitness']]
+        plt.scatter(improvements['time_since_start'], improvements[fitness_col], 
+                    color='red', s=100, zorder=5, label='New Best Fitness')
+        
+        plt.xlabel('Time Since Start (seconds)')
+        plt.ylabel('Fitness (negative enclosing hexagon side length)')
+        plt.title('Fitness Evolution Over Time\n(Red dots = New best fitness achieved)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout(pad=2.0)  # Increased padding for better spacing
+        
+        if save_plots:
+            self._save_fig(plt.gcf(), output_folder / 'fitness_evolution_timeline')
+        
+        plt.show()
+        
+        # New plot: Full timeline showing all programs (including failed ones)
+        # Get the full dataset
+        full_df = fitness_analysis['full_df']
+        
+        # Create subplots - increased size for better readability
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 12), sharex=True)
+        
+        # Top subplot: All programs over time (by state)
+        for state in full_df['state'].unique():
+            state_data = full_df[full_df['state'] == state]
+            ax1.scatter(state_data['time_since_start'], [1] * len(state_data), 
+                       alpha=0.6, s=20, label=f'{state} ({len(state_data)} programs)')
+        
+        ax1.set_ylabel('Programs')
+        ax1.set_title('All Programs Timeline (by State)')
+        ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax1.grid(True, alpha=0.3)
+        
+        # Bottom subplot: Fitness programs only
+        ax2.scatter(timeline_df['time_since_start'], timeline_df[fitness_col], 
+                   alpha=0.4, s=30, color='lightblue', label='Individual Programs')
+        ax2.plot(timeline_df['time_since_start'], timeline_df['running_best_fitness'], 
+                linewidth=3, color='darkgreen', label='Running Best Fitness')
+        
+        # Highlight improvements
+        improvements = timeline_df[timeline_df[fitness_col] == timeline_df['running_best_fitness']]
+        ax2.scatter(improvements['time_since_start'], improvements[fitness_col], 
+                   color='red', s=100, zorder=5, label='New Best Fitness')
+        
+        ax2.set_xlabel('Time Since Start (seconds)')
+        ax2.set_ylabel('Fitness (negative enclosing hexagon side length)')
+        ax2.set_title('Fitness Evolution Over Time')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout(pad=2.0)  # Increased padding for better spacing
+        
+        if save_plots:
+            self._save_fig(fig, output_folder / 'full_timeline_analysis')
+        
+        plt.show()
+    
+    def plot_program_stage_statistics(self, fitness_analysis: Dict[str, Any], output_folder: Path, save_plots: bool = True):
+        """Create comprehensive program state statistics plots."""
+        
+        if not fitness_analysis:
+            logger.warning("No data to plot")
+            return
+        
+        full_df = fitness_analysis['full_df']
+        
+        if 'state' not in full_df.columns:
+            logger.warning("No state data available for program state statistics")
+            return
+        
+        # Create figure with subplots - increased size for better readability
+        fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle('Program State Statistics Analysis', fontsize=18, fontweight='bold')
+        
+        # 1. Program State Distribution (Bar Chart)
+        ax1 = axes[0, 0]
+        state_counts = full_df['state'].value_counts()
+        colors = plt.cm.Set3.colors[:len(state_counts)]
+        
+        bars = ax1.bar(range(len(state_counts)), state_counts.values, color=colors, alpha=0.8, edgecolor='black')
+        ax1.set_xlabel('Program State')
+        ax1.set_ylabel('Number of Programs')
+        ax1.set_title('Program State Distribution')
+        ax1.set_xticks(range(len(state_counts)))
+        ax1.set_xticklabels(state_counts.index, rotation=45, ha='right', fontsize=10)
+        
+        # Add value labels on bars
+        for bar, count in zip(bars, state_counts.values):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + max(state_counts.values) * 0.01,
+                    f'{count}\n({count/len(full_df)*100:.1f}%)', ha='center', va='bottom', fontweight='bold')
+        
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # 2. Program State Distribution (Pie Chart)
+        ax2 = axes[0, 1]
+        ax2.pie(state_counts.values, labels=state_counts.index, autopct='%1.1f%%', 
+                startangle=90, colors=colors, explode=[0.05] * len(state_counts))
+        ax2.set_title('Program State Distribution (Pie Chart)')
+        
+        # 3. Programs by State Over Time
+        ax3 = axes[1, 0]
+        
+        # Create a timeline showing when programs in each state were created
+        for i, state in enumerate(state_counts.index):
+            state_data = full_df[full_df['state'] == state]
+            if not state_data.empty:
+                ax3.scatter(state_data['time_since_start'], [i] * len(state_data), 
+                           alpha=0.6, s=20, label=f'{state} ({len(state_data)} programs)', 
+                           color=colors[i % len(colors)])
+        
+        ax3.set_xlabel('Time Since Start (seconds)')
+        ax3.set_ylabel('Program State')
+        ax3.set_title('Program States Timeline')
+        ax3.set_yticks(range(len(state_counts)))
+        ax3.set_yticklabels(state_counts.index)
+        ax3.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax3.grid(True, alpha=0.3, axis='x')
+        
+        # 4. State Persistence Analysis (how long programs stay in each state)
+        ax4 = axes[1, 1]
+        
+        if 'updated_at' in full_df.columns and 'created_at' in full_df.columns:
+            # Calculate current time since last update for each program
+            # Since we don't track when programs entered their current state, we'll use
+            # the time since last update as a proxy for how long they've been in current state
+            current_time = datetime.now(timezone.utc)
+            full_df['state_persistence_seconds'] = (current_time - full_df['updated_at']).dt.total_seconds()
+            
+            # Filter out negative persistence times (data issues)
+            # Don't filter out long persistence times as programs can legitimately stay in states for hours
+            valid_persistence = full_df[full_df['state_persistence_seconds'] >= 0]
+            
+            if not valid_persistence.empty:
+                # Box plot of persistence time by state
+                state_persistence_data = [valid_persistence[valid_persistence['state'] == state]['state_persistence_seconds'].values 
+                                        for state in state_counts.index 
+                                        if len(valid_persistence[valid_persistence['state'] == state]) > 0]
+                state_labels = [state for state in state_counts.index 
+                              if len(valid_persistence[valid_persistence['state'] == state]) > 0]
+                
+                if state_persistence_data:
+                    bp = ax4.boxplot(state_persistence_data, labels=state_labels, patch_artist=True)
+                    
+                    # Color the boxes
+                    for patch, color in zip(bp['boxes'], colors[:len(state_persistence_data)]):
+                        patch.set_facecolor(color)
+                        patch.set_alpha(0.7)
+                    
+                    ax4.set_xlabel('Program State')
+                    ax4.set_ylabel('Time Since Last Update (seconds)')
+                    ax4.set_title('Time Since Last Update Distribution')
+                    ax4.tick_params(axis='x', rotation=45, labelsize=10)
+                    ax4.grid(True, alpha=0.3, axis='y')
+                else:
+                    ax4.text(0.5, 0.5, 'No valid persistence data available', 
+                             ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+                    ax4.set_title('State Persistence Distribution')
+            else:
+                ax4.text(0.5, 0.5, 'No valid persistence data available', 
+                         ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+                ax4.set_title('State Persistence Distribution')
+        else:
+            ax4.text(0.5, 0.5, 'No timestamp data available for persistence analysis', 
+                     ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+            ax4.set_title('State Persistence Distribution')
+        
+        plt.tight_layout(pad=3.0)  # Increased padding for better spacing
+        
+        if save_plots:
+            self._save_fig(fig, output_folder / 'program_stage_statistics')
+        
+        plt.show()
+        
+        # Additional detailed analysis: State statistics table
+        logger.info("\n📊 PROGRAM STATE STATISTICS:")
+        logger.info("=" * 80)
+        
+        for state in state_counts.index:
+            state_data = full_df[full_df['state'] == state]
+            count = len(state_data)
+            percentage = count / len(full_df) * 100
+            
+            logger.info(f"\n{state.upper()}:")
+            logger.info(f"  Count: {count} programs ({percentage:.1f}%)")
+            
+            # Show generation info if available
+            if 'generation' in state_data.columns:
+                gen_stats = state_data['generation'].describe()
+                logger.info(f"  Generation range: {gen_stats['min']:.0f} - {gen_stats['max']:.0f}")
+                logger.info(f"  Mean generation: {gen_stats['mean']:.1f}")
+            
+            # Show time since update info if available
+            if 'state_persistence_seconds' in state_data.columns:
+                time_data = state_data[state_data['state_persistence_seconds'] >= 0]['state_persistence_seconds']
+                if not time_data.empty:
+                    time_stats = time_data.describe()
+                    logger.info(f"  Time since update: {time_stats['min']:.1f}s - {time_stats['max']:.1f}s")
+                    logger.info(f"  Mean time since update: {time_stats['mean']:.1f}s")
+                    logger.info(f"  Median time since update: {time_stats['50%']:.1f}s")
+                else:
+                    logger.info(f"  Time since update: No valid data")
+    
+    def plot_state_persistence_analysis(self, fitness_analysis: Dict[str, Any], output_folder: Path, save_plots: bool = True):
+        """Create detailed state persistence analysis plots for each program state."""
+        
+        if not fitness_analysis:
+            logger.warning("No data to plot")
+            return
+        
+        full_df = fitness_analysis['full_df']
+        
+        if 'state' not in full_df.columns or 'updated_at' not in full_df.columns or 'created_at' not in full_df.columns:
+            logger.warning("Missing required data for state persistence analysis")
+            return
+        
+        # Calculate current state persistence time for each program
+        # Since we don't track when programs entered their current state, we'll use
+        # the time since last update as a proxy for how long they've been in current state
+        current_time = datetime.now(timezone.utc)
+        full_df['state_persistence_seconds'] = (current_time - full_df['updated_at']).dt.total_seconds()
+        
+        # Filter out negative persistence times (data issues)
+        # Don't filter out long persistence times as programs can legitimately stay in states for hours
+        valid_persistence = full_df[full_df['state_persistence_seconds'] >= 0]
+        
+        # Log persistence data quality
+        total_programs = len(full_df)
+        valid_programs = len(valid_persistence)
+        invalid_programs = total_programs - valid_programs
+        
+        if invalid_programs > 0:
+            logger.info(f"⚠️ Persistence data quality: {valid_programs}/{total_programs} programs have valid persistence data")
+            logger.info(f"   {invalid_programs} programs excluded (negative persistence time)")
+        else:
+            logger.info(f"✅ Persistence data quality: All {valid_programs} programs have valid persistence data")
+        
+        if valid_persistence.empty:
+            logger.warning("No valid persistence data available")
+            return
+        
+        # Log data ranges for debugging
+        logger.info(f"📊 Time since last update data ranges:")
+        for state in valid_persistence['state'].unique():
+            state_data = valid_persistence[valid_persistence['state'] == state]['state_persistence_seconds']
+            logger.info(f"  {state}: {state_data.min():.1f}s - {state_data.max():.1f}s (mean: {state_data.mean():.1f}s)")
+        
+        # Set up the plotting style
+        plt.style.use('seaborn-v0_8')
+        
+        # Get unique states
+        states = valid_persistence['state'].unique()
+        colors = plt.cm.Set3.colors[:len(states)]
+        
+        # Create figure with subplots - increased size for better readability
+        fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle('Time Since Last Update Analysis by Program State', fontsize=18, fontweight='bold')
+        
+        # 1. Overall Persistence Distribution (All States Combined)
+        ax1 = axes[0, 0]
+        # ------------------------------------------------------------------
+        # 1. Program counts by state (replaces overall histogram)
+        # ------------------------------------------------------------------
+        state_counts = valid_persistence['state'].value_counts()
+        bars = ax1.bar(range(len(state_counts)), state_counts.values, color=colors, alpha=0.8, edgecolor='black')
+        ax1.set_xlabel('Program State')
+        ax1.set_ylabel('Number of Programs')
+        ax1.set_title('Number of Programs by State')
+        ax1.set_xticks(range(len(state_counts)))
+        ax1.set_xticklabels(state_counts.index, rotation=45, ha='right', fontsize=10)
+        for bar, count in zip(bars, state_counts.values):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + max(state_counts.values) * 0.01,
+                     f'{count}', ha='center', va='bottom', fontweight='bold')
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # 2. Persistence Distribution by State (Box Plot)
+        ax2 = axes[0, 1]
+        state_persistence_data = [valid_persistence[valid_persistence['state'] == state]['state_persistence_seconds'].values 
+                                for state in states]
+        
+        bp = ax2.boxplot(state_persistence_data, labels=states, patch_artist=True)
+        
+        # Color the boxes
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        
+        ax2.set_xlabel('Program State')
+        ax2.set_ylabel('Time Since Last Update (seconds)')
+        ax2.set_title('Time Since Last Update by State (Box Plot)')
+        ax2.tick_params(axis='x', rotation=45, labelsize=10)
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        # 3. Persistence Distribution by State (Violin Plot – replaces per-state histograms)
+        ax3 = axes[1, 0]
+        vp = ax3.violinplot(state_persistence_data, positions=range(len(states)), showmeans=True)
+        # Colour each violin body to match state colours
+        for body, color in zip(vp['bodies'], colors):
+            body.set_facecolor(color)
+            body.set_alpha(0.7)
+        ax3.set_xlabel('Program State')
+        ax3.set_ylabel('Time Since Last Update (seconds)')
+        ax3.set_title('Time Since Last Update by State (Violin Plot)')
+        ax3.set_xticks(range(len(states)))
+        ax3.set_xticklabels(states, rotation=45, ha='right', fontsize=10)
+        ax3.grid(True, alpha=0.3, axis='y')
+        
+        # 4. Persistence Statistics by State (Bar Chart)
+        ax4 = axes[1, 1]
+        
+        # Calculate statistics for each state
+        state_stats = []
+        for state in states:
+            state_data = valid_persistence[valid_persistence['state'] == state]['state_persistence_seconds']
+            state_stats.append({
+                'state': state,
+                'count': len(state_data),
+                'mean': state_data.mean(),
+                'median': state_data.median(),
+                'std': state_data.std(),
+                'min': state_data.min(),
+                'max': state_data.max()
+            })
+        
+        # Create bar chart for mean persistence by state
+        states_list = [stat['state'] for stat in state_stats]
+        means = [stat['mean'] for stat in state_stats]
+        counts = [stat['count'] for stat in state_stats]
+        
+        bars = ax4.bar(range(len(states_list)), means, color=colors, alpha=0.8, edgecolor='black')
+        ax4.set_xlabel('Program State')
+        ax4.set_ylabel('Mean Time Since Last Update (seconds)')
+        ax4.set_title('Mean Time Since Last Update by State')
+        ax4.set_xticks(range(len(states_list)))
+        ax4.set_xticklabels(states_list, rotation=45, ha='right', fontsize=10)
+        
+        # Add count labels on bars
+        for bar, count in zip(bars, counts):
+            height = bar.get_height()
+            ax4.text(bar.get_x() + bar.get_width()/2., height + max(means) * 0.01,
+                    f'n={count}', ha='center', va='bottom', fontweight='bold')
+        
+        ax4.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout(pad=3.0)  # Increased padding for better spacing
+        
+        if save_plots:
+            self._save_fig(fig, output_folder / 'state_persistence_analysis')
+        
+        plt.show()
+        
+        # Additional detailed analysis
+        logger.info("\n⏱️ TIME SINCE LAST UPDATE ANALYSIS:")
+        logger.info("=" * 80)
+        
+        for stat in state_stats:
+            logger.info(f"\n{stat['state'].upper()}:")
+            logger.info(f"  Count: {stat['count']} programs")
+            logger.info(f"  Mean time since update: {stat['mean']:.1f}s")
+            logger.info(f"  Median time since update: {stat['median']:.1f}s")
+            logger.info(f"  Std dev: {stat['std']:.1f}s")
+            logger.info(f"  Range: {stat['min']:.1f}s - {stat['max']:.1f}s")
+            
+            # Calculate percentiles
+            state_data = valid_persistence[valid_persistence['state'] == stat['state']]['state_persistence_seconds']
+            p25 = state_data.quantile(0.25)
+            p75 = state_data.quantile(0.75)
+            logger.info(f"  25th percentile: {p25:.1f}s")
+            logger.info(f"  75th percentile: {p75:.1f}s")
+        
+        # Overall statistics
+        logger.info(f"\n📊 OVERALL TIME SINCE UPDATE STATISTICS:")
+        logger.info(f"  Total programs with valid data: {len(valid_persistence)}")
+        logger.info(f"  Overall mean time since update: {valid_persistence['state_persistence_seconds'].mean():.1f}s")
+        logger.info(f"  Overall median time since update: {valid_persistence['state_persistence_seconds'].median():.1f}s")
+        logger.info(f"  Overall std dev: {valid_persistence['state_persistence_seconds'].std():.1f}s")
+        logger.info(f"  Overall range: {valid_persistence['state_persistence_seconds'].min():.1f}s - {valid_persistence['state_persistence_seconds'].max():.1f}s")
+        
+        # Identify outliers (programs with time since update > 2 standard deviations from mean)
+        mean_time = valid_persistence['state_persistence_seconds'].mean()
+        std_time = valid_persistence['state_persistence_seconds'].std()
+        outliers = valid_persistence[valid_persistence['state_persistence_seconds'] > mean_time + 2 * std_time]
+        
+        if not outliers.empty:
+            logger.info(f"\n🚨 TIME SINCE UPDATE OUTLIERS (>2σ from mean):")
+            logger.info(f"  Found {len(outliers)} outliers")
+            for _, outlier in outliers.head(10).iterrows():  # Show top 10 outliers
+                logger.info(f"    Program {outlier['program_id'][:12]}...: {outlier['state_persistence_seconds']:.1f}s ({outlier['state']})")
+            if len(outliers) > 10:
+                logger.info(f"    ... and {len(outliers) - 10} more outliers")
+        
+        # Save detailed statistics to file
+        persistence_stats_path = output_folder / 'time_since_update_statistics.txt'
+        with open(persistence_stats_path, 'w') as f:
+            f.write("Time Since Last Update Statistics by Program State\n")
+            f.write("=" * 50 + "\n\n")
+            
+            for stat in state_stats:
+                f.write(f"{stat['state'].upper()}:\n")
+                f.write(f"  Count: {stat['count']} programs\n")
+                f.write(f"  Mean time since update: {stat['mean']:.1f}s\n")
+                f.write(f"  Median time since update: {stat['median']:.1f}s\n")
+                f.write(f"  Std dev: {stat['std']:.1f}s\n")
+                f.write(f"  Range: {stat['min']:.1f}s - {stat['max']:.1f}s\n\n")
+            
+            f.write(f"OVERALL STATISTICS:\n")
+            f.write(f"  Total programs with valid data: {len(valid_persistence)}\n")
+            f.write(f"  Overall mean time since update: {valid_persistence['state_persistence_seconds'].mean():.1f}s\n")
+            f.write(f"  Overall median time since update: {valid_persistence['state_persistence_seconds'].median():.1f}s\n")
+            f.write(f"  Overall std dev: {valid_persistence['state_persistence_seconds'].std():.1f}s\n")
+            f.write(f"  Overall range: {valid_persistence['state_persistence_seconds'].min():.1f}s - {valid_persistence['state_persistence_seconds'].max():.1f}s\n")
+        
+        logger.info(f"✅ Saved detailed time since update statistics to {persistence_stats_path}")
+    
+    def plot_island_statistics(self, fitness_analysis: Dict[str, Any], output_folder: Path, save_plots: bool = True):
+        """Create comprehensive island statistics analysis."""
+        
+        if not fitness_analysis:
+            logger.warning("No data to plot")
+            return
+        
+        full_df = fitness_analysis['full_df']
+        
+        # Check if island data is available
+        island_col = 'meta_current_island'
+        if island_col not in full_df.columns:
+            logger.warning(f"⚠️ No island data found. Available metadata columns: {[col for col in full_df.columns if col.startswith('meta_')]}")
+            return
+        
+        # Filter out programs without island data
+        island_data = full_df[full_df[island_col].notna()]
+        
+        if island_data.empty:
+            logger.warning("No programs with island data found")
+            return
+        
+        logger.info(f"📊 Found {len(island_data)} programs with island data out of {len(full_df)} total programs")
+        logger.info(f"📊 Unique islands: {list(island_data[island_col].unique())}")
+        
+        # Set up the plotting style
+        plt.style.use('seaborn-v0_8')
+        
+        # Create figure with subplots - increased size for better readability
+        fig, axes = plt.subplots(2, 3, figsize=(24, 16))
+        fig.suptitle('Island Statistics Analysis', fontsize=18, fontweight='bold')
+        
+        # 1. Island Distribution (Bar Chart)
+        ax1 = axes[0, 0]
+        island_counts = island_data[island_col].value_counts()
+        colors = plt.cm.Set3.colors[:len(island_counts)]
+        
+        bars = ax1.bar(range(len(island_counts)), island_counts.values, color=colors, alpha=0.8, edgecolor='black')
+        ax1.set_xlabel('Island')
+        ax1.set_ylabel('Number of Programs')
+        ax1.set_title('Program Distribution by Island')
+        ax1.set_xticks(range(len(island_counts)))
+        ax1.set_xticklabels(island_counts.index, rotation=45, ha='right', fontsize=10)
+        
+        # Add value labels on bars
+        for bar, count in zip(bars, island_counts.values):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + max(island_counts.values) * 0.01,
+                    f'{count}\n({count/len(island_data)*100:.1f}%)', ha='center', va='bottom', fontweight='bold')
+        
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # 2. Island Distribution (Pie Chart)
+        ax2 = axes[0, 1]
+        ax2.pie(island_counts.values, labels=island_counts.index, autopct='%1.1f%%', 
+                startangle=90, colors=colors, explode=[0.05] * len(island_counts))
+        ax2.set_title('Program Distribution by Island (Pie Chart)')
+        
+        # 3. Island vs State Distribution
+        ax3 = axes[0, 2]
+        island_state_pivot = pd.crosstab(island_data[island_col], island_data['state'], normalize='index') * 100
+        
+        island_state_pivot.plot(kind='bar', stacked=True, ax=ax3, colormap='Set3')
+        ax3.set_xlabel('Island')
+        ax3.set_ylabel('Percentage')
+        ax3.set_title('Program States by Island')
+        ax3.tick_params(axis='x', rotation=45, labelsize=10)
+        ax3.legend(title='State', bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax3.grid(True, alpha=0.3, axis='y')
+        
+        # 4. Island Timeline (when programs were created)
+        ax4 = axes[1, 0]
+        
+        # Consistent y-axis ordering for islands
+        islands_sorted = sorted(island_data[island_col].unique())
+        island_to_y = {name: idx for idx, name in enumerate(islands_sorted)}
+        
+        for island in islands_sorted:
+            island_programs = island_data[island_data[island_col] == island]
+            y = np.full(len(island_programs), island_to_y[island])
+            ax4.scatter(island_programs['time_since_start'], y,
+                        alpha=0.6, s=20,
+                        label=f'{island} ({len(island_programs)} programs)')
+        
+        ax4.set_xlabel('Time Since Start (seconds)')
+        ax4.set_ylabel('Island')
+        ax4.set_title('Program Creation Timeline by Island')
+        ax4.set_yticks(list(island_to_y.values()))
+        ax4.set_yticklabels(islands_sorted)
+        ax4.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax4.grid(True, alpha=0.3, axis='x')
+        
+        # 5. Fitness by Island (if fitness data available)
+        ax5 = axes[1, 1]
+        fitness_col = fitness_analysis.get('fitness_col', 'metric_fitness')
+        
+        if fitness_col in island_data.columns:
+            # Filter programs with valid fitness
+            valid_fitness_islands = island_data[island_data[fitness_col].notna() & (island_data[fitness_col] != -1000.0)]
+            
+            if not valid_fitness_islands.empty:
+                # Box plot of fitness by island
+                island_fitness_data = [valid_fitness_islands[valid_fitness_islands[island_col] == island][fitness_col].values 
+                                     for island in valid_fitness_islands[island_col].unique()]
+                island_names = valid_fitness_islands[island_col].unique()
+                
+                if island_fitness_data:
+                    bp = ax5.boxplot(island_fitness_data, labels=island_names, patch_artist=True)
+                    
+                    # Color the boxes
+                    for patch, color in zip(bp['boxes'], colors[:len(island_fitness_data)]):
+                        patch.set_facecolor(color)
+                        patch.set_alpha(0.7)
+                    
+                    ax5.set_xlabel('Island')
+                    ax5.set_ylabel('Fitness')
+                    ax5.set_title('Fitness Distribution by Island')
+                    ax5.tick_params(axis='x', rotation=45, labelsize=10)
+                    ax5.grid(True, alpha=0.3, axis='y')
+                else:
+                    ax5.text(0.5, 0.5, 'No valid fitness data available', 
+                             ha='center', va='center', transform=ax5.transAxes, fontsize=12)
+                    ax5.set_title('Fitness Distribution by Island')
+            else:
+                ax5.text(0.5, 0.5, 'No valid fitness data available', 
+                         ha='center', va='center', transform=ax5.transAxes, fontsize=12)
+                ax5.set_title('Fitness Distribution by Island')
+        else:
+            ax5.text(0.5, 0.5, 'No fitness data available', 
+                     ha='center', va='center', transform=ax5.transAxes, fontsize=12)
+            ax5.set_title('Fitness Distribution by Island')
+        
+        # 6. Island Statistics Summary
+        ax6 = axes[1, 2]
+        
+        # Calculate statistics for each island
+        island_stats = []
+        for island in island_data[island_col].unique():
+            island_programs = island_data[island_data[island_col] == island]
+            stats = {
+                'island': island,
+                'count': len(island_programs),
+                'evolving_count': len(island_programs[island_programs['state'] == 'evolving']),
+                'discarded_count': len(island_programs[island_programs['state'] == 'discarded']),
+                'other_states_count': len(island_programs[~island_programs['state'].isin(['evolving', 'discarded'])])
+            }
+            
+            # Add fitness stats if available
+            if fitness_col in island_programs.columns:
+                valid_fitness = island_programs[island_programs[fitness_col].notna() & (island_programs[fitness_col] != -1000.0)]
+                if not valid_fitness.empty:
+                    stats['mean_fitness'] = valid_fitness[fitness_col].mean()
+                    stats['best_fitness'] = valid_fitness[fitness_col].max()
+                    stats['fitness_count'] = len(valid_fitness)
+                else:
+                    stats['mean_fitness'] = None
+                    stats['best_fitness'] = None
+                    stats['fitness_count'] = 0
+            else:
+                stats['mean_fitness'] = None
+                stats['best_fitness'] = None
+                stats['fitness_count'] = 0
+            
+            island_stats.append(stats)
+        
+        # Create summary table
+        summary_data = []
+        for stat in island_stats:
+            summary_data.append([
+                stat['island'],
+                stat['count'],
+                stat['evolving_count'],
+                stat['discarded_count'],
+                stat['other_states_count'],
+                f"{stat['mean_fitness']:.3f}" if stat['mean_fitness'] is not None else "N/A",
+                f"{stat['best_fitness']:.3f}" if stat['best_fitness'] is not None else "N/A",
+                stat['fitness_count']
+            ])
+        
+        # Create table
+        table_data = [['Island', 'Total', 'Evolving', 'Discarded', 'Other', 'Mean Fitness', 'Best Fitness', 'Fitness Count']] + summary_data
+        table = ax6.table(cellText=table_data[1:], colLabels=table_data[0], 
+                         cellLoc='center', loc='center', colWidths=[0.15, 0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.15])
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 2)
+        
+        ax6.set_title('Island Statistics Summary')
+        ax6.axis('off')
+        
+        plt.tight_layout(pad=3.0)  # Increased padding for better spacing
+        
+        if save_plots:
+            self._save_fig(fig, output_folder / 'island_statistics')
+        
+        plt.show()
+        
+        # Additional detailed analysis
+        logger.info("\n🏝️ ISLAND STATISTICS:")
+        logger.info("=" * 80)
+        
+        for stat in island_stats:
+            logger.info(f"\n{stat['island'].upper()}:")
+            logger.info(f"  Total programs: {stat['count']}")
+            logger.info(f"  Evolving: {stat['evolving_count']} ({stat['evolving_count']/stat['count']*100:.1f}%)")
+            logger.info(f"  Discarded: {stat['discarded_count']} ({stat['discarded_count']/stat['count']*100:.1f}%)")
+            logger.info(f"  Other states: {stat['other_states_count']} ({stat['other_states_count']/stat['count']*100:.1f}%)")
+            
+            if stat['mean_fitness'] is not None:
+                logger.info(f"  Mean fitness: {stat['mean_fitness']:.3f}")
+                logger.info(f"  Best fitness: {stat['best_fitness']:.3f}")
+                logger.info(f"  Programs with fitness: {stat['fitness_count']} ({stat['fitness_count']/stat['count']*100:.1f}%)")
+        
+        # Save detailed island statistics to file
+        island_stats_file_path = output_folder / 'island_statistics.txt'
+        with open(island_stats_file_path, 'w') as f:
+            f.write("Island Statistics Analysis\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write(f"OVERALL STATISTICS:\n")
+            f.write(f"  Total programs with island data: {len(island_data)}\n")
+            f.write(f"  Total programs without island data: {len(full_df) - len(island_data)}\n")
+            f.write(f"  Unique islands: {len(island_data[island_col].unique())}\n\n")
+            
+            f.write(f"ISLAND-BY-ISLAND ANALYSIS:\n")
+            for stat in island_stats:
+                f.write(f"\n{stat['island'].upper()}:\n")
+                f.write(f"  Total programs: {stat['count']}\n")
+                f.write(f"  Evolving: {stat['evolving_count']} ({stat['evolving_count']/stat['count']*100:.1f}%)\n")
+                f.write(f"  Discarded: {stat['discarded_count']} ({stat['discarded_count']/stat['count']*100:.1f}%)\n")
+                f.write(f"  Other states: {stat['other_states_count']} ({stat['other_states_count']/stat['count']*100:.1f}%)\n")
+                
+                if stat['mean_fitness'] is not None:
+                    f.write(f"  Mean fitness: {stat['mean_fitness']:.3f}\n")
+                    f.write(f"  Best fitness: {stat['best_fitness']:.3f}\n")
+                    f.write(f"  Programs with fitness: {stat['fitness_count']} ({stat['fitness_count']/stat['count']*100:.1f}%)\n")
+        
+        logger.info(f"✅ Saved detailed island statistics to {island_stats_file_path}")
+    
+    def plot_stage_results_statistics(self, fitness_analysis: Dict[str, Any], output_folder: Path, save_plots: bool = True):
+        """Create comprehensive analysis of individual DAG stage results."""
+        
+        if not fitness_analysis:
+            logger.warning("No data to plot")
+            return
+        
+        full_df = fitness_analysis['full_df']
+        
+        # Extract stage results from programs
+        stage_data = []
+        
+        # Find all stage-related columns
+        stage_columns = [col for col in full_df.columns if col.startswith('stage_') and col.endswith('_status')]
+        stage_names = [col.replace('stage_', '').replace('_status', '') for col in stage_columns]
+        
+        logger.info(f"🔍 Found stage columns: {stage_names}")
+        
+        for _, program_row in full_df.iterrows():
+            program_id = program_row['program_id']
+            created_at = program_row['created_at']
+            time_since_start = program_row['time_since_start']
+            
+            # Extract stage data for each stage
+            for stage_name in stage_names:
+                stage_key = f'stage_{stage_name}'
+                status_col = f'{stage_key}_status'
+                
+                # Check if this stage has data
+                if status_col in program_row and pd.notna(program_row[status_col]):
+                    stage_data.append({
+                        'program_id': program_id,
+                        'stage_name': stage_name,
+                        'stage_status': program_row[status_col],
+                        'started_at': program_row.get(f'{stage_key}_started_at'),
+                        'finished_at': program_row.get(f'{stage_key}_finished_at'),
+                        'duration_seconds': program_row.get(f'{stage_key}_duration'),
+                        'has_error': program_row.get(f'{stage_key}_has_error', False),
+                        'error_type': program_row.get(f'{stage_key}_error_type'),
+                        'program_created_at': created_at,
+                        'time_since_start': time_since_start
+                    })
+        
+        if not stage_data:
+            logger.warning("No stage results data found. This might be because:")
+            logger.warning("1. Programs don't have stage_results populated")
+            logger.warning("2. Stage results are not being extracted properly")
+            logger.warning("3. Programs haven't been processed through DAG stages yet")
+            logger.warning("4. Stage results are stored in a different format")
+            
+            # Show what columns we actually have for debugging
+            stage_related_cols = [col for col in full_df.columns if 'stage' in col.lower()]
+            if stage_related_cols:
+                logger.info(f"Found stage-related columns: {stage_related_cols}")
+            else:
+                logger.info("No stage-related columns found in the data")
+            return
+        
+        stage_df = pd.DataFrame(stage_data)
+        
+        # Convert timestamps to datetime if they're strings
+        for col in ['started_at', 'finished_at', 'program_created_at']:
+            if col in stage_df.columns:
+                stage_df[col] = pd.to_datetime(stage_df[col], errors='coerce')
+        
+        # Clean up duration data
+        if 'duration_seconds' in stage_df.columns:
+            # Filter out negative or extremely long durations
+            stage_df['duration_seconds'] = stage_df['duration_seconds'].apply(
+                lambda x: x if pd.notna(x) and 0 <= x <= 86400 else None  # Max 24 hours
+            )
+        
+        logger.info(f"📊 Found {len(stage_df)} stage results from {stage_df['program_id'].nunique()} programs")
+        logger.info(f"📊 Unique stages: {list(stage_df['stage_name'].unique())}")
+        logger.info(f"📊 Stage statuses: {list(stage_df['stage_status'].unique())}")
+        
+        # Set up the plotting style
+        plt.style.use('seaborn-v0_8')
+        
+        # Create figure with subplots - increased size for better readability with long stage names
+        fig, axes = plt.subplots(2, 3, figsize=(24, 16))
+        fig.suptitle('DAG Stage Results Analysis', fontsize=18, fontweight='bold')
+        
+        # 1. Stage Status Distribution (Overall)
+        ax1 = axes[0, 0]
+        status_counts = stage_df['stage_status'].value_counts()
+        colors = plt.cm.Set3.colors[:len(status_counts)]
+        
+        bars = ax1.bar(range(len(status_counts)), status_counts.values, color=colors, alpha=0.8, edgecolor='black')
+        ax1.set_xlabel('Stage Status')
+        ax1.set_ylabel('Number of Stage Results')
+        ax1.set_title('Overall Stage Status Distribution')
+        ax1.set_xticks(range(len(status_counts)))
+        ax1.set_xticklabels(status_counts.index, rotation=45, ha='right', fontsize=10)
+        
+        # Add value labels on bars
+        for bar, count in zip(bars, status_counts.values):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + max(status_counts.values) * 0.01,
+                    f'{count}\n({count/len(stage_df)*100:.1f}%)', ha='center', va='bottom', fontweight='bold')
+        
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # 2. Stage Status Distribution by Stage Name
+        ax2 = axes[0, 1]
+        stage_status_pivot = pd.crosstab(stage_df['stage_name'], stage_df['stage_status'], normalize='index') * 100
+        
+        stage_status_pivot.plot(kind='bar', stacked=True, ax=ax2, colormap='Set3')
+        ax2.set_xlabel('Stage Name')
+        ax2.set_ylabel('Percentage')
+        ax2.set_title('Stage Status Distribution by Stage Name')
+        ax2.tick_params(axis='x', rotation=45, labelsize=9)
+        ax2.legend(title='Status', bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        # 3. Stage Duration Analysis (if available)
+        ax3 = axes[0, 2]
+        if 'duration_seconds' in stage_df.columns and stage_df['duration_seconds'].notna().any():
+            valid_duration = stage_df[stage_df['duration_seconds'].notna()]
+            
+            # Box plot of duration by stage name
+            stage_duration_data = [valid_duration[valid_duration['stage_name'] == stage]['duration_seconds'].values 
+                                 for stage in valid_duration['stage_name'].unique()]
+            stage_names = valid_duration['stage_name'].unique()
+            
+            if stage_duration_data:
+                bp = ax3.boxplot(stage_duration_data, labels=stage_names, patch_artist=True)
+                
+                # Color the boxes
+                for patch, color in zip(bp['boxes'], colors[:len(stage_duration_data)]):
+                    patch.set_facecolor(color)
+                    patch.set_alpha(0.7)
+                
+                ax3.set_xlabel('Stage Name')
+                ax3.set_ylabel('Duration (seconds)')
+                ax3.set_title('Stage Duration Distribution')
+                ax3.tick_params(axis='x', rotation=45, labelsize=9)
+                ax3.grid(True, alpha=0.3, axis='y')
+            else:
+                ax3.text(0.5, 0.5, 'No valid duration data available', 
+                         ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+                ax3.set_title('Stage Duration Distribution')
+        else:
+            ax3.text(0.5, 0.5, 'No duration data available', 
+                     ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+            ax3.set_title('Stage Duration Distribution')
+        
+        # 4. Stage Timeline (when stages were executed)
+        ax4 = axes[1, 0]
+        if 'started_at' in stage_df.columns and stage_df['started_at'].notna().any():
+            valid_timeline = stage_df[stage_df['started_at'].notna()]
+            
+            for stage_name in valid_timeline['stage_name'].unique():
+                stage_data = valid_timeline[valid_timeline['stage_name'] == stage_name]
+                ax4.scatter(stage_data['time_since_start'], [stage_name] * len(stage_data), 
+                           alpha=0.6, s=20, label=f'{stage_name} ({len(stage_data)} executions)')
+            
+            ax4.set_xlabel('Time Since Start (seconds)')
+            ax4.set_ylabel('Stage Name')
+            ax4.set_title('Stage Execution Timeline')
+            ax4.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax4.grid(True, alpha=0.3, axis='x')
+        else:
+            ax4.text(0.5, 0.5, 'No timeline data available', 
+                     ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+            ax4.set_title('Stage Execution Timeline')
+        
+        # 5. Error Rate by Stage
+        ax5 = axes[1, 1]
+        if 'has_error' in stage_df.columns:
+            error_rates = stage_df.groupby('stage_name')['has_error'].agg(['count', 'sum']).reset_index()
+            error_rates['error_rate'] = error_rates['sum'] / error_rates['count'] * 100
+            
+            bars = ax5.bar(range(len(error_rates)), error_rates['error_rate'], 
+                          color='red', alpha=0.7, edgecolor='black')
+            ax5.set_xlabel('Stage Name')
+            ax5.set_ylabel('Error Rate (%)')
+            ax5.set_title('Error Rate by Stage')
+            ax5.set_xticks(range(len(error_rates)))
+            ax5.set_xticklabels(error_rates['stage_name'], rotation=45, ha='right', fontsize=9)
+            
+            # Add value labels on bars
+            for bar, rate, count in zip(bars, error_rates['error_rate'], error_rates['count']):
+                height = bar.get_height()
+                ax5.text(bar.get_x() + bar.get_width()/2., height + 1,
+                        f'{rate:.1f}%\n(n={count})', ha='center', va='bottom', fontweight='bold')
+            
+            ax5.grid(True, alpha=0.3, axis='y')
+        else:
+            ax5.text(0.5, 0.5, 'No error data available', 
+                     ha='center', va='center', transform=ax5.transAxes, fontsize=12)
+            ax5.set_title('Error Rate by Stage')
+        
+        # 6. Success Rate by Stage
+        ax6 = axes[1, 2]
+        success_rates = stage_df.groupby('stage_name')['stage_status'].apply(
+            lambda x: (x == 'completed').sum() / len(x) * 100
+        ).reset_index()
+        success_rates.columns = ['stage_name', 'success_rate']
+        
+        bars = ax6.bar(range(len(success_rates)), success_rates['success_rate'], 
+                      color='green', alpha=0.7, edgecolor='black')
+        ax6.set_xlabel('Stage Name')
+        ax6.set_ylabel('Success Rate (%)')
+        ax6.set_title('Success Rate by Stage')
+        ax6.set_xticks(range(len(success_rates)))
+        ax6.set_xticklabels(success_rates['stage_name'], rotation=45, ha='right', fontsize=9)
+        
+        # Add value labels on bars
+        for bar, rate in zip(bars, success_rates['success_rate']):
+            height = bar.get_height()
+            ax6.text(bar.get_x() + bar.get_width()/2., height + 1,
+                    f'{rate:.1f}%', ha='center', va='bottom', fontweight='bold')
+        
+        ax6.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout(pad=3.0)  # Increased padding for better spacing
+        
+        if save_plots:
+            self._save_fig(fig, output_folder / 'stage_results_statistics')
+        
+        plt.show()
+        
+        # Additional detailed stage analysis
+        logger.info("\n📊 STAGE RESULTS ANALYSIS:")
+        logger.info("=" * 80)
+        
+        # Overall statistics
+        logger.info(f"\n📈 OVERALL STATISTICS:")
+        logger.info(f"  Total stage results: {len(stage_df)}")
+        logger.info(f"  Unique programs: {stage_df['program_id'].nunique()}")
+        logger.info(f"  Unique stages: {stage_df['stage_name'].nunique()}")
+        logger.info(f"  Unique statuses: {stage_df['stage_status'].nunique()}")
+        
+        # Stage-by-stage analysis
+        logger.info(f"\n🔍 STAGE-BY-STAGE ANALYSIS:")
+        for stage_name in stage_df['stage_name'].unique():
+            stage_data = stage_df[stage_df['stage_name'] == stage_name]
+            total_executions = len(stage_data)
+            
+            logger.info(f"\n{stage_name.upper()}:")
+            logger.info(f"  Total executions: {total_executions}")
+            
+            # Status breakdown
+            status_counts = stage_data['stage_status'].value_counts()
+            for status, count in status_counts.items():
+                percentage = count / total_executions * 100
+                logger.info(f"  {status}: {count} ({percentage:.1f}%)")
+            
+            # Duration analysis if available
+            if 'duration_seconds' in stage_data.columns and stage_data['duration_seconds'].notna().any():
+                valid_duration = stage_data[stage_data['duration_seconds'].notna()]['duration_seconds']
+                if not valid_duration.empty:
+                    logger.info(f"  Duration: {valid_duration.mean():.1f}s mean, {valid_duration.median():.1f}s median")
+                    logger.info(f"  Duration range: {valid_duration.min():.1f}s - {valid_duration.max():.1f}s")
+            
+            # Error analysis if available
+            if 'has_error' in stage_data.columns:
+                error_count = stage_data['has_error'].sum()
+                error_rate = error_count / total_executions * 100
+                logger.info(f"  Errors: {error_count} ({error_rate:.1f}%)")
+        
+        # Save detailed stage statistics to file
+        stage_stats_file_path = output_folder / 'stage_results_statistics.txt'
+        with open(stage_stats_file_path, 'w') as f:
+            f.write("DAG Stage Results Statistics\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write(f"OVERALL STATISTICS:\n")
+            f.write(f"  Total stage results: {len(stage_df)}\n")
+            f.write(f"  Unique programs: {stage_df['program_id'].nunique()}\n")
+            f.write(f"  Unique stages: {stage_df['stage_name'].nunique()}\n")
+            f.write(f"  Unique statuses: {stage_df['stage_status'].nunique()}\n\n")
+            
+            f.write(f"STAGE-BY-STAGE ANALYSIS:\n")
+            for stage_name in stage_df['stage_name'].unique():
+                stage_data = stage_df[stage_df['stage_name'] == stage_name]
+                total_executions = len(stage_data)
+                
+                f.write(f"\n{stage_name.upper()}:\n")
+                f.write(f"  Total executions: {total_executions}\n")
+                
+                # Status breakdown
+                status_counts = stage_data['stage_status'].value_counts()
+                for status, count in status_counts.items():
+                    percentage = count / total_executions * 100
+                    f.write(f"  {status}: {count} ({percentage:.1f}%)\n")
+                
+                # Duration analysis if available
+                if 'duration_seconds' in stage_data.columns and stage_data['duration_seconds'].notna().any():
+                    valid_duration = stage_data[stage_data['duration_seconds'].notna()]['duration_seconds']
+                    if not valid_duration.empty:
+                        f.write(f"  Duration: {valid_duration.mean():.1f}s mean, {valid_duration.median():.1f}s median\n")
+                        f.write(f"  Duration range: {valid_duration.min():.1f}s - {valid_duration.max():.1f}s\n")
+                
+                # Error analysis if available
+                if 'has_error' in stage_data.columns:
+                    error_count = stage_data['has_error'].sum()
+                    error_rate = error_count / total_executions * 100
+                    f.write(f"  Errors: {error_count} ({error_rate:.1f}%)\n")
+        
+        logger.info(f"✅ Saved detailed stage statistics to {stage_stats_file_path}")
+    
+    def analyze_top_programs(self, df: pd.DataFrame, fitness_analysis: Dict[str, Any], output_folder: Path, top_n: int = 10):
+        """Analyze the top performing programs and save to file."""
+        
+        if not fitness_analysis:
+            return
+        
+        fitness_col = fitness_analysis['fitness_col']
+        timeline_df = fitness_analysis['timeline_df']
+        
+        # Get top programs
+        top_programs = timeline_df.nlargest(top_n, fitness_col)
+        
+        # Create detailed analysis file
+        analysis_path = output_folder / 'top_programs_analysis.txt'
+        
+        with open(analysis_path, 'w') as f:
+            f.write(f"🏆 TOP {top_n} PROGRAMS ANALYSIS\n")
+            f.write("=" * 80 + "\n\n")
+            
+            for i, (_, program) in enumerate(top_programs.iterrows(), 1):
+                f.write(f"{i}. Program ID: {program['program_id'][:12]}...\n")
+                f.write(f"   Fitness: {program[fitness_col]:.4f}\n")
+                f.write(f"   Created: {program['created_at']}\n")
+                f.write(f"   Generation: {program['generation']}\n")
+                f.write(f"   State: {program['state']}\n")
+                
+                # Show lineage info if available
+                if program['lineage_parents'] > 0:
+                    f.write(f"   Parents: {program['lineage_parents']}\n")
+                    if program['lineage_mutation']:
+                        f.write(f"   Mutation: {program['lineage_mutation']}\n")
+                
+                # Show other metrics if available
+                metric_cols = [col for col in program.index if col.startswith('metric_') and col != fitness_col]
+                if metric_cols:
+                    f.write(f"   Other metrics: {', '.join([f'{col[7:]}: {program[col]:.3f}' for col in metric_cols[:3]])}\n")
+                
+                f.write("\n")
+            
+            # Show fitness improvement timeline
+            f.write(f"\n📈 FITNESS IMPROVEMENT TIMELINE:\n")
+            f.write("=" * 80 + "\n")
+            
+            improvements = timeline_df[timeline_df[fitness_col] == timeline_df['running_best_fitness']]
+            
+            for i, (_, improvement) in enumerate(improvements.iterrows(), 1):
+                time_since_start = improvement['time_since_start']
+                fitness = improvement[fitness_col]
+                program_id = improvement['program_id'][:12]
+                
+                f.write(f"{i:2d}. Time: {time_since_start:8.1f}s | Fitness: {fitness:8.4f} | Program: {program_id}...\n")
+        
+        logger.info(f"✅ Saved top programs analysis to {analysis_path}")
+        
+        # Also print to console for immediate feedback
+        logger.info(f"🏆 TOP {top_n} PROGRAMS:")
+        logger.info("=" * 80)
+        
+        for i, (_, program) in enumerate(top_programs.iterrows(), 1):
+            logger.info(f"\n{i}. Program ID: {program['program_id'][:12]}...")
+            logger.info(f"   Fitness: {program[fitness_col]:.4f}")
+            logger.info(f"   Created: {program['created_at']}")
+            logger.info(f"   Generation: {program['generation']}")
+            logger.info(f"   State: {program['state']}")
+            
+            # Show lineage info if available
+            if program['lineage_parents'] > 0:
+                logger.info(f"   Parents: {program['lineage_parents']}")
+                if program['lineage_mutation']:
+                    logger.info(f"   Mutation: {program['lineage_mutation']}")
+            
+            # Show other metrics if available
+            metric_cols = [col for col in program.index if col.startswith('metric_') and col != fitness_col]
+            if metric_cols:
+                logger.info(f"   Other metrics: {', '.join([f'{col[7:]}: {program[col]:.3f}' for col in metric_cols[:3]])}")
+        
+        # Show fitness improvement timeline
+        logger.info(f"\n📈 FITNESS IMPROVEMENT TIMELINE:")
+        logger.info("=" * 80)
+        
+        improvements = timeline_df[timeline_df[fitness_col] == timeline_df['running_best_fitness']]
+        
+        for i, (_, improvement) in enumerate(improvements.iterrows(), 1):
+            time_since_start = improvement['time_since_start']
+            fitness = improvement[fitness_col]
+            program_id = improvement['program_id'][:12]
+            
+            logger.info(f"{i:2d}. Time: {time_since_start:8.1f}s | Fitness: {fitness:8.4f} | Program: {program_id}...")
+    
+    def export_evolution_data(self, fitness_analysis: Dict[str, Any], output_folder: Path, base_filename: str = "evolution_data"):
+        """Export the evolution data to CSV for further analysis."""
+        
+        if not fitness_analysis:
+            logger.warning("No data to export")
+            return
+        
+        timeline_df = fitness_analysis['timeline_df']
+        
+        # Export timeline data
+        timeline_path = output_folder / f"{base_filename}.csv"
+        timeline_df.to_csv(timeline_path, index=False)
+        logger.info(f"✅ Exported timeline data to {timeline_path}")
+        
+        # Export generation stats if available
+        if fitness_analysis['generation_stats'] is not None:
+            gen_path = output_folder / f"{base_filename}_generations.csv"
+            fitness_analysis['generation_stats'].to_csv(gen_path, index=False)
+            logger.info(f"✅ Exported generation stats to {gen_path}")
+        
+        # Create summary report
+        summary = {
+            'total_programs_with_fitness': fitness_analysis['total_programs'],
+            'total_all_programs': fitness_analysis['total_all_programs'],
+            'best_fitness': fitness_analysis['best_fitness'],
+            'worst_fitness': fitness_analysis['worst_fitness'],
+            'mean_fitness': fitness_analysis['mean_fitness'],
+            'start_time': fitness_analysis['start_time'],
+            'analysis_timestamp': datetime.now(timezone.utc)
+        }
+        
+        summary_path = output_folder / f"{base_filename}_summary.txt"
+        with open(summary_path, 'w') as f:
+            f.write("Evolution Analysis Summary\n")
+            f.write("=" * 50 + "\n")
+            f.write(f"Total Programs with Fitness: {summary['total_programs_with_fitness']}\n")
+            f.write(f"Total All Programs: {summary['total_all_programs']}\n")
+            f.write(f"Success Rate: {summary['total_programs_with_fitness']/summary['total_all_programs']*100:.1f}%\n")
+            f.write(f"Best Fitness: {summary['best_fitness']:.4f}\n")
+            f.write(f"Worst Fitness: {summary['worst_fitness']:.4f}\n")
+            f.write(f"Mean Fitness: {summary['mean_fitness']:.4f}\n")
+            f.write(f"Start Time: {summary['start_time']}\n")
+            f.write(f"Analysis Time: {summary['analysis_timestamp']}\n")
+        
+        logger.info(f"✅ Exported summary to {summary_path}")
+    
+    async def cleanup(self):
+        """Clean up Redis connections."""
+        try:
+            redis_conn = await self.redis_storage._conn()
+            if redis_conn:
+                if hasattr(redis_conn, 'connection_pool'):
+                    await redis_conn.connection_pool.disconnect()
+                if hasattr(redis_conn, 'close'):
+                    await redis_conn.close()
+            logger.info("✅ Redis connection closed")
+        except Exception as e:
+            logger.warning(f"⚠️ Error closing Redis connection: {e}")
+
+    # ------------------------------------------------------------------
+    # 🔧  INTERNAL UTILITIES  🔧
+    # ------------------------------------------------------------------
+
+    def _configure_plotting_style(self):
+        """Set global Matplotlib / Seaborn parameters for a polished look."""
+
+        # Use seaborn's modern theme as a base
+        sns.set_theme(style="whitegrid", context="talk", palette="deep")
+
+        # Global rcParams tweaks – fonts & figure size / DPI
+        plt.rcParams.update({
+            # Typography
+            "font.family": "sans-serif",
+            "font.sans-serif": ["DejaVu Sans", "Helvetica", "Arial"],
+            "font.size": 14,
+            "axes.titlesize": 18,
+            "axes.titleweight": "bold",
+            "axes.labelsize": 14,
+            "axes.labelweight": "semibold",
+            "legend.fontsize": 12,
+            # Grid & ticks
+            "axes.grid": True,
+            "grid.alpha": 0.25,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            # High-resolution outputs by default
+            "savefig.dpi": 300,
+            "figure.dpi": 150,
+        })
+
+    # Small helper to save figures both as PNG & PDF for crisp presentations
+    def _save_fig(self, fig: plt.Figure, path_no_ext: Path):
+        png_path = path_no_ext.with_suffix(".png")
+        pdf_path = path_no_ext.with_suffix(".pdf")
+        fig.savefig(png_path, bbox_inches="tight")
+        fig.savefig(pdf_path, bbox_inches="tight")
+        logger.info(f"✅ Saved figure to {png_path.name} & {pdf_path.name}")
+
+    # ------------------------------------------------------------------
+    # 📊 Metric Correlation Heatmap
+    # ------------------------------------------------------------------
+    def plot_metric_correlations(self, fitness_analysis: Dict[str, Any], output_folder: Path, save_plots: bool = True):
+        """Plot correlation heat-map between all numeric metric_ columns."""
+
+        if not fitness_analysis:
+            return
+
+        df = fitness_analysis['full_df']
+        metric_cols = [c for c in df.columns if c.startswith('metric_')]
+        # Keep fitness in the analysis – we will use a centred diverging palette so ±1 correlations remain readable
+
+        numeric_cols = metric_cols + ['lineage_generation', 'generation'] if 'generation' in df.columns else metric_cols
+        if len(numeric_cols) < 2:
+            logger.info("Not enough metrics for correlation heatmap")
+            return
+
+        corr = df[numeric_cols].corr()
+
+        fig, ax = plt.subplots(figsize=(12, 10))
+        sns.heatmap(
+            corr,
+            annot=True,
+            fmt='.2f',
+            cmap='coolwarm',
+            center=0,             # make 0 white so positive/negative stand out equally
+            ax=ax,
+            linewidths=0.5,
+            cbar_kws={'shrink': .8},
+        )
+        ax.set_title('Metric Correlation Heat-map')
+
+        plt.tight_layout()
+        if save_plots:
+            self._save_fig(fig, output_folder / 'metric_correlations')
+        plt.show()
+
+
+async def main():
+    """Main function to run the evolution fitness analysis."""
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Analyze evolution fitness data from MetaEvolve')
+    parser.add_argument('--redis-host', default='localhost', help='Redis host (default: localhost)')
+    parser.add_argument('--redis-port', type=int, default=6379, help='Redis port (default: 6379)')
+    parser.add_argument('--redis-db', type=int, default=0, help='Redis database (default: 0)')
+    parser.add_argument('--redis-prefix', required=True, help='Redis key prefix (required)')
+    parser.add_argument('--top-n', type=int, default=10, help='Number of top programs to analyze (default: 10)')
+    parser.add_argument('--no-plots', action='store_true', help='Skip all plotting (just export data)')
+    parser.add_argument('--no-fitness-plots', action='store_true', help='Skip fitness evolution plots')
+    parser.add_argument('--no-stage-plots', action='store_true', help='Skip program stage statistics plots')
+    parser.add_argument('--no-persistence-plots', action='store_true', help='Skip time since last update analysis plots')
+    parser.add_argument('--no-dag-stage-plots', action='store_true', help='Skip DAG stage results statistics plots')
+    parser.add_argument('--no-island-plots', action='store_true', help='Skip island statistics plots')
+    parser.add_argument('--no-metric-plots', action='store_true', help='Skip metric correlation plots')
+    parser.add_argument('--output-folder', required=True, help='Output folder for all results (required)')
+    parser.add_argument('--base-filename', default='evolution_data', help='Base filename for CSV files (default: evolution_data)')
+    
+    args = parser.parse_args()
+    
+    # Create output folder
+    output_folder = Path(args.output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+    logger.info(f"📁 Output folder: {output_folder.absolute()}")
+    
+    # Create analyzer
+    analyzer = EvolutionFitnessAnalyzer(
+        redis_host=args.redis_host,
+        redis_port=args.redis_port,
+        redis_db=args.redis_db
+    )
+    
+    try:
+        # Extract data
+        evolution_df = await analyzer.extract_evolution_data()
+        
+        if evolution_df.empty:
+            logger.error("No data found. Exiting.")
+            return
+        
+        # Analyze fitness data
+        fitness_analysis = analyzer.analyze_fitness_data(evolution_df)
+        
+        if not fitness_analysis:
+            logger.error("No valid fitness data found. Exiting.")
+            return
+        
+        # Print summary
+        logger.info(f"\n🏆 Best Fitness: {fitness_analysis['best_fitness']:.4f}")
+        logger.info(f"📊 Mean Fitness: {fitness_analysis['mean_fitness']:.4f}")
+        logger.info(f"📈 Total Programs with Fitness: {fitness_analysis['total_programs']}")
+        logger.info(f"📈 Total All Programs: {fitness_analysis['total_all_programs']}")
+        
+        # Create plots (unless disabled)
+        if not args.no_plots:
+            # Create fitness evolution plots
+            if not args.no_fitness_plots:
+                try:
+                    analyzer.plot_fitness_evolution(fitness_analysis, output_folder)
+                    logger.info("✅ Fitness evolution plots completed")
+                except Exception as e:
+                    logger.error(f"❌ Error creating fitness evolution plots: {e}")
+            
+            # Create program stage statistics plots
+            if not args.no_stage_plots:
+                try:
+                    analyzer.plot_program_stage_statistics(fitness_analysis, output_folder)
+                    logger.info("✅ Program stage statistics plots completed")
+                except Exception as e:
+                    logger.error(f"❌ Error creating program stage statistics plots: {e}")
+            
+            # Create time since last update analysis plots
+            if not args.no_persistence_plots:
+                try:
+                    analyzer.plot_state_persistence_analysis(fitness_analysis, output_folder)
+                    logger.info("✅ Time since last update analysis plots completed")
+                except Exception as e:
+                    logger.error(f"❌ Error creating time since last update analysis plots: {e}")
+            
+            # Create DAG stage results statistics plots
+            if not args.no_dag_stage_plots:
+                try:
+                    analyzer.plot_stage_results_statistics(fitness_analysis, output_folder)
+                    logger.info("✅ DAG stage results statistics plots completed")
+                except Exception as e:
+                    logger.error(f"❌ Error creating DAG stage results statistics plots: {e}")
+            
+            # Create island statistics plots
+            if not args.no_island_plots:
+                try:
+                    analyzer.plot_island_statistics(fitness_analysis, output_folder)
+                    logger.info("✅ Island statistics plots completed")
+                except Exception as e:
+                    logger.error(f"❌ Error creating island statistics plots: {e}")
+            
+            # Create metric correlation heatmap
+            if not args.no_metric_plots:
+                try:
+                    analyzer.plot_metric_correlations(fitness_analysis, output_folder)
+                    logger.info("✅ Metric correlation plots completed")
+                except Exception as e:
+                    logger.error(f"❌ Error creating metric correlation plots: {e}")
+        
+        # Analyze top programs
+        analyzer.analyze_top_programs(evolution_df, fitness_analysis, output_folder, top_n=args.top_n)
+        
+        # Export data
+        analyzer.export_evolution_data(fitness_analysis, output_folder, args.base_filename)
+        
+        # Create a summary of all generated files
+        logger.info(f"\n📋 Generated files in {output_folder}:")
+        for file_path in output_folder.glob("*"):
+            if file_path.is_file():
+                logger.info(f"  📄 {file_path.name}")
+        
+        logger.info("\n🎉 Analysis complete!")
+        
+    except KeyboardInterrupt:
+        logger.info("🛑 Analysis interrupted by user")
+    except Exception as e:
+        logger.error(f"❌ Analysis failed: {e}")
+        raise
+    finally:
+        await analyzer.cleanup()
+
+
+if __name__ == "__main__":
+    # Run the analysis
+    asyncio.run(main()) 

@@ -1,0 +1,232 @@
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field, computed_field, field_validator
+
+from src.programs.program import Program
+
+
+class StrategyMetrics(BaseModel):
+    """Generic metrics that any evolution strategy can provide."""
+
+    total_programs: int = Field(
+        default=0, ge=0, description="Total number of programs in the strategy"
+    )
+
+    active_populations: int = Field(
+        default=0, ge=0, description="Number of active populations/islands"
+    )
+
+    strategy_specific_metrics: Optional[Dict[str, Any]] = Field(
+        default=None, description="Strategy-specific metrics and statistics"
+    )
+
+    @computed_field
+    @property
+    def programs_per_population(self) -> float:
+        """Calculate average programs per population."""
+        if self.active_populations == 0:
+            return 0.0
+        return self.total_programs / self.active_populations
+
+    @computed_field
+    @property
+    def has_programs(self) -> bool:
+        """Check if strategy contains any programs."""
+        return self.total_programs > 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary with computed fields."""
+        result = {
+            "total_programs": self.total_programs,
+            "active_populations": self.active_populations,
+            "programs_per_population": round(self.programs_per_population, 2),
+            "has_programs": self.has_programs,
+        }
+        if self.strategy_specific_metrics:
+            result.update(self.strategy_specific_metrics)
+        return result
+
+
+class StrategyStatus(BaseModel):
+    """Generic status information that any evolution strategy can provide."""
+
+    strategy_type: str = Field(
+        description="Type/name of the evolution strategy"
+    )
+
+    is_healthy: bool = Field(
+        default=True, description="Whether the strategy is operating normally"
+    )
+
+    error_message: Optional[str] = Field(
+        default=None,
+        max_length=1000,
+        description="Error message if strategy is unhealthy",
+    )
+
+    metrics: Optional[StrategyMetrics] = Field(
+        default=None, description="Current strategy metrics"
+    )
+
+    @computed_field
+    @property
+    def status_summary(self) -> str:
+        """Generate a human-readable status summary."""
+        if self.is_healthy:
+            programs_info = ""
+            if self.metrics and self.metrics.has_programs:
+                programs_info = f" ({self.metrics.total_programs} programs)"
+            return f"{self.strategy_type}: Healthy{programs_info}"
+        else:
+            return f"{self.strategy_type}: Error - {self.error_message or 'Unknown error'}"
+
+    @field_validator("error_message")
+    @classmethod
+    def validate_error_message_with_health(cls, v, info):
+        """Ensure error message is provided when unhealthy."""
+        if "is_healthy" in info.data and not info.data["is_healthy"] and not v:
+            raise ValueError(
+                "error_message must be provided when is_healthy is False"
+            )
+        return v
+
+    status_details: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = {
+            "strategy_type": self.strategy_type,
+            "is_healthy": self.is_healthy,
+            "error_message": self.error_message,
+            "metrics": self.metrics.to_dict() if self.metrics else None,
+        }
+        if self.status_details:
+            result.update(self.status_details)
+        return result
+
+
+class EvolutionStrategy(ABC):
+    """
+    Abstract base class for evolution strategies.
+
+    Defines the core interface that all evolution strategies must implement,
+    along with optional capabilities for enhanced monitoring and control.
+    """
+
+    @abstractmethod
+    async def add(self, program: Program) -> bool:
+        """
+        Add a program to the evolution strategy.
+
+        Args:
+            program: The program to add
+
+        Returns:
+            True if program was added/updated, False otherwise
+        """
+        ...
+
+    @abstractmethod
+    async def select_elites(self, total: int) -> List[Program]:
+        """
+        Select elite programs from the strategy.
+
+        Args:
+            total: Number of elites to select
+
+        Returns:
+            List of selected elite programs
+        """
+        ...
+
+    @abstractmethod
+    async def get_program_ids(self) -> List[Program]:
+        """
+        Get all programs managed by this strategy.
+
+        Returns:
+            List of all Program objects in the strategy
+        """
+        ...
+
+    # Optional capabilities - strategies can override these for enhanced functionality
+
+    async def get_metrics(self) -> Optional[StrategyMetrics]:
+        """
+        Get strategy-specific metrics.
+
+        Returns:
+            StrategyMetrics object or None if not supported
+        """
+        return None
+
+    async def get_status(self) -> StrategyStatus:
+        """
+        Get comprehensive strategy status.
+
+        Returns:
+            StrategyStatus object with current state
+        """
+        try:
+            metrics = await self.get_metrics()
+            return StrategyStatus(
+                strategy_type=self.__class__.__name__,
+                is_healthy=True,
+                metrics=metrics,
+            )
+        except Exception as e:
+            return StrategyStatus(
+                strategy_type=self.__class__.__name__,
+                is_healthy=False,
+                error_message=str(e),
+            )
+
+    def supports_capability(self, capability: str) -> bool:
+        """
+        Check if strategy supports a specific capability.
+
+        Args:
+            capability: Capability name to check
+
+        Returns:
+            True if capability is supported
+        """
+        capability_methods = {
+            "metrics": "get_metrics",
+            "status": "get_status",
+            "pause_resume": "pause",
+            "cleanup": "cleanup",
+        }
+
+        if capability in capability_methods:
+            method_name = capability_methods[capability]
+            # Check if method is overridden from base class
+            base_method = getattr(EvolutionStrategy, method_name, None)
+            strategy_method = getattr(self, method_name, None)
+            return strategy_method != base_method
+
+        return False
+
+    async def cleanup(self) -> None:
+        """
+        Perform cleanup operations.
+
+        Override this method if strategy supports cleanup operations.
+        """
+        pass
+
+    async def pause(self) -> None:
+        """
+        Pause strategy operations.
+
+        Override this method if strategy supports pause/resume.
+        """
+        pass
+
+    async def resume(self) -> None:
+        """
+        Resume strategy operations.
+
+        Override this method if strategy supports pause/resume.
+        """
+        pass

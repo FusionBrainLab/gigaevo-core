@@ -1,0 +1,19 @@
+**OBJECTIVE**: Write a Python function that arranges exactly 11 **non-overlapping** unit regular hexagons inside a larger enclosing regular hexagon (flat top/bottom, centered at the origin) to **minimize the enclosing hexagon's side length**.
+
+**RULES**:
+- Hexagons may be placed and **rotated arbitrarily** in 2D space
+- The enclosing hexagon is:
+  - Regular
+  - Centered at (0, 0)
+  - Flat top and bottom edges
+- The function must return a **valid, overlap-free arrangement**
+
+**GOAL**:
+- Discover structurally novel, space-efficient packings by leveraging:
+  - Irregular orientation
+  - Cluster variation
+  - Strategic boundary interaction
+
+**MUTATION TARGET**:
+- Create **architecturally distinct** configurations using placement, rotation, or layout motif change
+- Reject traditional layouts unless transformed by a structural twist (e.g. offset rings, twisted grids, broken symmetry)

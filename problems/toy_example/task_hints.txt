@@ -1,0 +1,31 @@
+**GEOMETRIC STRATEGIES**:
+- Use **variable radii** to adapt circles to local voids and tight gaps
+- Prioritize **corner and edge-first placement** to anchor dense configurations
+- Combine **large central circles** with smaller peripheral ones for tighter packing
+
+**STRUCTURAL MOTIFS**:
+- Avoid uniform grids or concentric rings — unless **distorted**, **offset**, or **partially disrupted**
+- Construct:
+  - **Asymmetric clusters** or organic blobs
+  - **Spiral or radial patterns**
+  - **Nested motifs** with mixed-radius layering
+  - **Dense corners** paired with looser interior zones
+
+**ADVANCED CONCEPTS**:
+- Apply **non-uniform radius distributions** (e.g., power laws, golden ratio)
+- Try **hierarchical strategies**: inner bulk zone + adaptive boundary shell
+- Explore **greedy growth** vs **global optimization** tactics
+- Consider **directional density gradients** (e.g., compact lower half, sparse top)
+
+**CAUTION ZONE**:
+- Avoid:
+  - Equal-sized circles (unless structurally justified)
+  - Naive randomness without structure
+  - Excessively symmetric or evenly spaced layouts
+- Designs must be **spatially efficient** and **structurally intentional**
+
+**REMINDER**:
+- Radius is a **continuous variable** — tune each circle independently
+- Use geometric logic and **local interactions** to drive global compactness
+- With many circles, expect **multi-scale solutions** balancing core density and peripheral adaptability
+"""

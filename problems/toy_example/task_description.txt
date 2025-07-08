@@ -1,0 +1,19 @@
+**OBJECTIVE**: Write a Python function that arranges exactly **9 non-overlapping circles with variable radii** inside a unit square [0, 1] × [0, 1] to **maximize the total sum of their radii**.
+
+**RULES**:
+- Each circle must lie **entirely within the unit square**
+- No two circles may **overlap**
+- Each circle may have an **arbitrary radius**, determined by the algorithm
+- The function must return a **valid, overlap-free arrangement**
+
+**GOAL**:
+- Discover **structurally novel**, tightly packed configurations by exploring:
+  - Radius variation and adaptive sizing
+  - Irregular grid breaking and cluster patterns
+  - Efficient corner usage and edge-aligned packing
+
+**MUTATION TARGET**:
+- Produce **architecturally distinct** arrangements by altering:
+  - Circle sizes, distributions, and cluster formations
+  - Avoid repetitive or symmetric tilings unless purposefully distorted
+  - Emphasize **spatial innovation** and packing efficiency over aesthetic regularity
