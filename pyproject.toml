@@ -37,7 +37,10 @@ dependencies = [
     "fakeredis[lua]>=2.19.0",
     "orjson",
     "diffpatch",
-    "openai>=1.0.0"
+    "openai>=1.0.0",
+    "pandas",
+    "matplotlib",
+    "seaborn",
 ]
 
 [project.optional-dependencies]
