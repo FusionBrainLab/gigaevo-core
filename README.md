@@ -37,20 +37,20 @@ export OPENROUTER_API_KEY=your_openrouter_api_key_here
 
 ```bash
 # Run evolution on the hexagon packing problem
-python restart_llm_evolution_improved.py --problem-dir problems/hexagon_pack --min-fitness -7 --max-fitness -3.9
+python run.py --problem-dir problems/hexagon_pack --min-fitness -7 --max-fitness -3.9
 
 # Run with verbose logging
-python restart_llm_evolution_improved.py --problem-dir problems/hexagon_pack --verbose --min-fitness -7 --max-fitness -3.9
+python run.py --problem-dir problems/hexagon_pack --verbose --min-fitness -7 --max-fitness -3.9
 
 # Use different Redis database
-python restart_llm_evolution_improved.py --problem-dir problems/hexagon_pack --redis-db 1 --min-fitness -7 --max-fitness -3.9
+python run.py --problem-dir problems/hexagon_pack --redis-db 1 --min-fitness -7 --max-fitness -3.9
 ```
 
 ### Advanced Configuration
 
 ```bash
 # Full configuration example
-python restart_llm_evolution_improved.py \
+python run.py \
     --problem-dir problems/hexagon_pack \
     --redis-host localhost \
     --redis-port 6379 \
@@ -75,6 +75,7 @@ problems/your_problem/
 ├── mutation_system_prompt.txt   # LLM system prompt
 ├── mutation_user_prompt.txt     # LLM user prompt
 ├── helper.py                    # Helper functions (optional)
+├── context.py                   # Context builder (optional)
 └── initial_programs/            # Initial population strategies (required)
     ├── strategy1.py
     ├── strategy2.py
@@ -93,6 +94,90 @@ problems/your_problem/
 ### Optional Files
 
 - **`helper.py`**: Utility functions that solutions can import
+- **`context.py`**: Context builder function for problems requiring external data
+
+## Example Problems
+
+The system includes three example problems demonstrating different types of optimization challenges:
+
+### 1. Hexagon Packing (`problems/hexagon_pack/`)
+
+**Problem**: Arrange 11 unit regular hexagons inside a larger enclosing hexagon to minimize the enclosing hexagon's side length.
+
+**Type**: Geometric optimization without context
+
+**Key Features**:
+- Complex constraint satisfaction (non-overlapping)
+- Geometric reasoning and spatial optimization
+- Multiple initial strategies (hexagonal rings, spirals, clusters)
+
+**Usage**:
+```bash
+# Basic hexagon packing optimization
+python run.py --problem-dir problems/hexagon_pack --min-fitness -7 --max-fitness -3.9
+
+# With high performance settings
+python run.py --problem-dir problems/hexagon_pack \
+    --min-fitness -7 --max-fitness -3.9 \
+    --max-concurrent-dags 12 \
+    --log-level INFO
+```
+
+**Expected Fitness Range**: -7.0 to -3.9 (negative because we minimize enclosing hexagon size)
+
+### 2. Regression Optimization (`problems/optimization/`)
+
+**Problem**: Learn a regression model from California housing dataset to predict house prices.
+
+**Type**: Machine learning optimization with context
+
+**Key Features**:
+- Uses external data context (California housing dataset)
+- Requires `--add-context` flag
+- Demonstrates ML model evolution
+
+**Usage**:
+```bash
+# Regression model optimization (note: requires --add-context)
+python run.py --problem-dir problems/optimization \
+    --add-context \
+    --min-fitness -2.0 --max-fitness 0.0
+
+# With extended evolution
+python run.py --problem-dir problems/optimization \
+    --add-context \
+    --min-fitness -2.0 --max-fitness 0.0 \
+    --max-generations 100 \
+    --verbose
+```
+
+**Expected Fitness Range**: -2.0 to 0.0 (negative mean squared error)
+
+### 3. Circle Packing (`problems/toy_example/`)
+
+**Problem**: Arrange 9 non-overlapping circles with variable radii in a unit square to maximize total radius sum.
+
+**Type**: Geometric optimization with variable sizing
+
+**Key Features**:
+- Variable circle sizes (adaptive radius optimization)
+- Unit square constraint
+- Multiple initial strategies (simple, jittered, optimized)
+
+**Usage**:
+```bash
+# Circle packing optimization
+python run.py --problem-dir problems/toy_example \
+    --min-fitness 0.0 --max-fitness 5.0
+
+# With performance monitoring disabled for speed
+python run.py --problem-dir problems/toy_example \
+    --min-fitness 0.0 --max-fitness 5.0 \
+    --disable-monitoring \
+    --max-concurrent-dags 16
+```
+
+**Expected Fitness Range**: 0.0 to 5.0 (sum of circle radii)
 
 ## Configuration Options
 
@@ -100,6 +185,11 @@ problems/your_problem/
 
 #### Required
 - `--problem-dir`: Directory containing problem files
+- `--min-fitness`: Expected minimum fitness value during evolution
+- `--max-fitness`: Expected maximum fitness value during evolution
+
+#### Context Configuration
+- `--add-context`: Enable context mode (required for problems with `context.py`)
 
 #### Redis Configuration
 - `--redis-host`: Redis hostname (default: localhost)
@@ -109,8 +199,11 @@ problems/your_problem/
 #### Evolution Configuration
 - `--max-generations`: Maximum number of generations (default: unlimited)
 - `--population-size`: Initial population size (default: auto-determined)
--- `--min-fitness`: Expected smallest value of fitness during the evolution
--- `--max-fitness`: Expected largest value of fitness during the evolution
+
+#### Redis Selection Mode
+- `--use-redis-selection`: Use existing Redis programs instead of initial_programs/
+- `--source-redis-db`: Source Redis database for program selection (default: 0)
+- `--top-n`: Number of top programs to select by fitness (default: 50)
 
 #### Performance Configuration
 - `--max-concurrent-dags`: Maximum concurrent DAG executions (default: 6)
@@ -127,6 +220,61 @@ problems/your_problem/
 - `REDIS_HOST`: Override default Redis host
 - `REDIS_PORT`: Override default Redis port
 - `REDIS_DB`: Override default Redis database
+
+## Advanced Usage Examples
+
+### Continuing Evolution from Previous Run
+
+```bash
+# Run initial evolution
+python run.py --problem-dir problems/hexagon_pack \
+    --min-fitness -7 --max-fitness -3.9 \
+    --redis-db 1
+
+# Continue evolution using best programs from previous run
+python run.py --problem-dir problems/hexagon_pack \
+    --min-fitness -7 --max-fitness -3.9 \
+    --redis-db 2 \
+    --use-redis-selection \
+    --source-redis-db 1 \
+    --top-n 30
+```
+
+### High-Performance Configuration
+
+```bash
+# Maximum performance setup
+python run.py --problem-dir problems/hexagon_pack \
+    --min-fitness -7 --max-fitness -3.9 \
+    --max-concurrent-dags 16 \
+    --disable-monitoring \
+    --log-level WARNING \
+    --redis-db 3
+```
+
+### Debugging and Development
+
+```bash
+# Full debugging information
+python run.py --problem-dir problems/toy_example \
+    --min-fitness 0 --max-fitness 5 \
+    --verbose \
+    --log-level DEBUG \
+    --log-dir debug_logs \
+    --max-concurrent-dags 2
+```
+
+### Remote Redis Configuration
+
+```bash
+# Using remote Redis server
+python run.py --problem-dir problems/optimization \
+    --add-context \
+    --min-fitness -2.0 --max-fitness 0.0 \
+    --redis-host redis-server.example.com \
+    --redis-port 6380 \
+    --redis-db 5
+```
 
 ## Architecture
 
@@ -175,12 +323,11 @@ Persistent, high-performance program and state management:
 
 ### Behavior Spaces
 
-The system uses four specialized islands:
+The system uses three specialized islands:
 
-1. **Fitness Island**: Focuses on pure fitness optimization
-2. **Simplicity Island**: Balances performance and code elegance
-3. **Structure Island**: Encourages scalable and diverse logic
-4. **Entropy Island**: Rewards fitness with structural diversity
+1. **Fitness Island**: Focuses on pure fitness optimization using fitness and validity dimensions
+2. **Simplicity Island**: Balances performance and code elegance using Pareto optimization across fitness, complexity_score, and validity dimensions
+3. **Entropy Island**: Rewards fitness combined with structural diversity using fitness, AST entropy, and validity dimensions
 
 ### Execution Pipeline
 
@@ -224,12 +371,11 @@ Each generated program goes through a multi-stage DAG pipeline:
 6. **Metrics Collection**: Aggregate all performance data
 
 ### 4. Multi-Island Strategy
-The system maintains four specialized islands:
+The system maintains three specialized islands:
 
-- **🏆 Fitness Island**: Pure optimization for best solutions
-- **⚖️ Simplicity Island**: Balance between performance and code elegance  
-- **🏗️ Structure Island**: Encourage scalable and diverse program logic
-- **🌀 Entropy Island**: Reward fitness combined with structural diversity
+- **🏆 Fitness Island**: Pure optimization for best solutions using fitness proportional selection
+- **⚖️ Simplicity Island**: Balance between performance and code elegance using Pareto front optimization (fitness vs. complexity)  
+- **🌀 Entropy Island**: Reward fitness combined with structural diversity using Pareto front optimization (fitness vs. AST entropy)
 
 ### 5. Migration & Selection
 - Programs migrate between islands based on performance
@@ -261,18 +407,22 @@ touch problems/my_problem/mutation_user_prompt.txt
 
 # Create initial programs directory
 mkdir problems/my_problem/initial_programs
+
+# Optional: Create context file for problems requiring external data
+touch problems/my_problem/context.py
 ```
 
 ### Step 3: Implement Validation Function
 
 ```python
 # problems/my_problem/validate.py
-def validate(solution_output):
+def validate(payload):
     """
     Validate and score the solution.
     
     Args:
-        solution_output: Output from the solution program
+        payload: For context problems: (context, solution_output)
+                For non-context problems: solution_output
         
     Returns:
         dict: Metrics including 'fitness' and 'is_valid'
@@ -286,25 +436,71 @@ def validate(solution_output):
 
 ### Step 4: Create Initial Programs
 
-Add at least one Python file to the `initial_programs/` directory with your problem-specific function (e.g., `construct_packing()` for hexagon packing):
+Add at least one Python file to the `initial_programs/` directory. The expected function name is `entrypoint`.
 
-```bash
-# Example: Create a basic initial program
-cat > problems/my_problem/initial_programs/basic_solution.py << 'EOF'
+#### For Problems Without Context:
+```python
+# problems/my_problem/initial_programs/basic_solution.py
 """
 Basic solution strategy for my_problem.
 """
 
-def my_problem_function():
+def entrypoint():
     # Implement your basic solution here
     return solution_data
-EOF
 ```
 
-### Step 5: Run Evolution
+#### For Problems With Context:
+```python
+# problems/my_problem/initial_programs/basic_solution.py
+"""
+Basic solution strategy for my_problem.
+"""
 
+def entrypoint(context):
+    # Implement your basic solution here
+    return solution_data
+```
+
+### Step 5: Optional Context Implementation
+
+For problems requiring external data, create a context builder:
+
+```python
+# problems/my_problem/context.py
+import numpy as np
+from sklearn.datasets import fetch_california_housing
+from sklearn.model_selection import train_test_split
+
+def build_context() -> dict[str, np.ndarray]:
+    """
+    Build context data for the problem.
+    
+    Returns:
+        dict: Context data that will be passed to entrypoint()
+    """
+    housing = fetch_california_housing(return_X_y=True)
+    X_train, X_test, y_train, y_test = train_test_split(
+        housing[0], housing[1], test_size=0.2, random_state=42
+    )
+    return {
+        "X_train": X_train, 
+        "X_test": X_test, 
+        "y_train": y_train, 
+        "y_test": y_test
+    }
+```
+
+### Step 6: Run Evolution
+
+#### For Non-Context Problems:
 ```bash
-python restart_llm_evolution_improved.py --problem-dir problems/my_problem
+python run.py --problem-dir problems/my_problem --min-fitness 0 --max-fitness 1
+```
+
+#### For Context Problems:
+```bash
+python run.py --problem-dir problems/my_problem --add-context --min-fitness 0 --max-fitness 1
 ```
 
 ## Performance Monitoring
@@ -319,7 +515,7 @@ MetaEvolve includes comprehensive performance monitoring:
 Disable monitoring for maximum performance:
 
 ```bash
-python restart_llm_evolution_improved.py --problem-dir problems/my_problem --disable-monitoring
+python run.py --problem-dir problems/my_problem --disable-monitoring --min-fitness 0 --max-fitness 1
 ```
 
 ## 📊 Performance
@@ -338,15 +534,17 @@ MetaEvolve is designed for high performance and scalability. Benchmarks on stand
 
 ```bash
 # High-performance configuration
-python restart_llm_evolution_improved.py \
+python run.py \
     --problem-dir problems/hexagon_pack \
+    --min-fitness -7 --max-fitness -3.9 \
     --max-concurrent-dags 12 \
     --disable-monitoring \
     --redis-db 1
 
 # Memory-efficient configuration  
-python restart_llm_evolution_improved.py \
+python run.py \
     --problem-dir problems/hexagon_pack \
+    --min-fitness -7 --max-fitness -3.9 \
     --max-concurrent-dags 4 \
     --log-level WARNING
 ```
@@ -358,7 +556,7 @@ python restart_llm_evolution_improved.py \
 The system can be fine-tuned by modifying the configuration in the source code:
 
 ```python
-# In restart_llm_evolution_improved.py - create_evolution_strategy()
+# In run.py - create_evolution_strategy()
 engine_config = EngineConfig(
     loop_interval=1.0,                    # Evolution frequency (seconds)
     max_elites_per_generation=6,          # Selection pressure
@@ -371,7 +569,7 @@ engine_config = EngineConfig(
 ### Runner Configuration
 
 ```python
-# In restart_llm_evolution_improved.py - run_evolution_experiment()
+# In run.py - run_evolution_experiment()
 runner_config = RunnerConfig(
     poll_interval=5.0,                    # DAG polling frequency
     max_concurrent_dags=6,                # Parallelism level
@@ -382,7 +580,7 @@ runner_config = RunnerConfig(
 ### Behavior Space Customization
 
 ```python
-# In restart_llm_evolution_improved.py - create_behavior_spaces()
+# In run.py - create_behavior_spaces()
 fitness_validity_space = BehaviorSpace(
     feature_bounds={
         'fitness': (-7.0, -3.93),         # Expected fitness range
@@ -407,13 +605,14 @@ fitness_validity_space = BehaviorSpace(
 2. **Redis Connection**: Check Redis server is running
 3. **Problem Directory**: Verify all required files are present
 4. **Permissions**: Ensure write access to log directory
+5. **Context Problems**: Use `--add-context` flag for problems with `context.py`
 
 ### Debug Mode
 
 Enable verbose logging for detailed debugging:
 
 ```bash
-python restart_llm_evolution_improved.py --problem-dir problems/my_problem --verbose
+python run.py --problem-dir problems/my_problem --verbose --min-fitness 0 --max-fitness 1
 ```
 
 ### Log Files

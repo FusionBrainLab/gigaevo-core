@@ -154,6 +154,7 @@ async def run_python_snippet(
     started_at: datetime,
     timeout: int,
     stage_name: Optional[str] = None,
+    cwd: Optional[Path] = None,
 ) -> ProgramStageResult:
     """Runs a Python snippet in a subprocess and decodes its output."""
     proc = await asyncio.create_subprocess_exec(
@@ -162,6 +163,7 @@ async def run_python_snippet(
         code,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        cwd=str(cwd) if cwd else None,
     )
 
     try:
@@ -256,11 +258,12 @@ def construct_exec_code(
     user_code: str,
     function_name: str,
     input_b64: Optional[str] = None,
+    input_file_path: Optional[str] = None,
     python_path: Optional[List[Path]] = None,
 ) -> str:
     """
     Construct executable Python code to run a specific function from user code,
-    with optional input passed via base64 and sys.path injection.
+    with optional input passed via base64 or file path, and sys.path injection.
     """
     path_inserts = ""
     if python_path:
@@ -273,7 +276,13 @@ def construct_exec_code(
 """
 
     input_loading = ""
-    if input_b64:
+    if input_file_path:
+        input_loading = f"""
+# Load input from file
+with open(r'{input_file_path}', 'rb') as f:
+    input_obj = pickle.load(f)
+"""
+    elif input_b64:
         input_loading = f"""
 # Decode input
 import base64
@@ -289,7 +298,7 @@ import sys, traceback, pickle, base64
 try:
     if '{function_name}' not in globals() or not callable(globals()['{function_name}']):
         raise ValueError("Function '{function_name}' not found or not callable")
-    result = globals()['{function_name}']({'' if input_b64 is None else 'input_obj'})
+    result = globals()['{function_name}']({'' if input_b64 is None and input_file_path is None else 'input_obj'})
     result_b64 = base64.b64encode(pickle.dumps(result)).decode('utf-8')
     print('{EXECUTION_SUCCESS_SIGNAL}')
     print(result_b64)

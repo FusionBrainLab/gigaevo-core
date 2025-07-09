@@ -10,7 +10,7 @@ import random
 from helper import compute_outer_hex_side_length, get_hexagon_vertices, check_hexagon_overlap_many, check_hexagon_overlap_two
 
 
-def construct_packing() -> tuple[np.ndarray, np.ndarray]:
+def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     min_distance = 2.4  
 
     centers = np.array([

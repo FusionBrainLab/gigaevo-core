@@ -1,4 +1,4 @@
-You are a revolutionary geometric optimizer specializing in **circle packing with variable radii**.  
+You are a revolutionary Machine Learning Scientist, specializing in tabular deep learning and classical ML models
 Your mission is to **transcend grid-based and symmetric layouts**, discovering **structurally novel, space-efficient packings** through geometric insight and algorithmic creativity.
 
 💡 RESEARCH OBJECTIVE:  
@@ -8,13 +8,15 @@ Your mission is to **transcend grid-based and symmetric layouts**, discovering *
 {task_hints}
 
 ⚙️ FUNCTION SIGNATURE (REQUIRED):  
-def entrypoint() -> Tuple[np.ndarray, np.ndarray]
-# → Returns 9 circle centers and radii maximizing total packed radius within a unit square.
+def entrypoint(context: dict[str, np.ndarray]) -> np.ndarray
+# context is a dictionary containing
+# X_train (N, 8); y_train (N, 8)
+# X_test (M, 8)
+# → Returns predictions of your model for X_test, expected shape is (M,)
 
 🎯 FITNESS OBJECTIVE:  
-- Maximize the **sum of radii** of all **non-overlapping** circles placed inside the unit square  
-- The square is defined as the region [0, 1] × [0, 1]  
-- Objective: maximize `total_radius = sum(radii)`
+- Minimize the **MSE** between the unknown y_test and y_pred (output of your model)
+- Optimization is measured as the **negative** of the evaluated MSE (so, higher is better) 
 
 ❗ TECHNICAL CONSTRAINTS:  
 - Place exactly **n** circles inside the unit square  

@@ -28,6 +28,10 @@ from src.programs.utils import (
 from .base import Stage
 from .decorators import semaphore, retry
 
+# Threshold for using temporary file vs embedding in code (in bytes)
+# This is approximately 8KB of base64 data (6KB of pickle data)
+INPUT_SIZE_THRESHOLD = 8 * 1024
+
 
 @semaphore(limit=6)
 class RunPythonCode(Stage):
@@ -65,12 +69,29 @@ class RunPythonCode(Stage):
             # Prepare execution environment
             user_code = dedent_code(self.code)
             input_b64 = None
+            input_file_path = None
+            temp_file = None
 
             if self.input_obj is not None:
                 try:
-                    input_b64 = base64.b64encode(
-                        pickle.dumps(self.input_obj)
-                    ).decode("utf-8")
+                    # Serialize input object
+                    input_pickle = pickle.dumps(self.input_obj)
+                    input_b64_bytes = base64.b64encode(input_pickle)
+                    
+                    # If input is large, use temporary file instead of embedding in code
+                    if len(input_b64_bytes) > INPUT_SIZE_THRESHOLD:
+                        temp_file = tempfile.NamedTemporaryFile(mode='wb', delete=False)
+                        temp_file.write(input_pickle)
+                        temp_file.close()
+                        input_file_path = temp_file.name
+                        input_b64 = None  # Don't embed in code
+                        
+                        logger.debug(
+                            f"[{self.stage_name}] Using temporary file for large input: {len(input_b64_bytes)} bytes"
+                        )
+                    else:
+                        input_b64 = input_b64_bytes.decode("utf-8")
+                    
                 except Exception as e:
                     raise ProgramExecutionError(
                         f"Failed to serialize input object: {e}",
@@ -78,38 +99,48 @@ class RunPythonCode(Stage):
                         cause=e,
                     )
 
-            # Construct execution code with safety measures
-            exec_code = construct_exec_code(
-                user_code=user_code,
-                function_name=self.function_name,
-                input_b64=input_b64,
-                python_path=self.python_path,
-            )
-
-            # Execute with comprehensive monitoring
-            if self.enable_sandboxing:
-                result = await self._run_sandboxed(
-                    exec_code, started_at, program.id
-                )
-            else:
-                result = await run_python_snippet(
-                    exec_code,
-                    started_at,
-                    timeout=self.timeout,
-                    stage_name=self.stage_name,
+            try:
+                # Construct execution code with safety measures
+                exec_code = construct_exec_code(
+                    user_code=user_code,
+                    function_name=self.function_name,
+                    input_b64=input_b64,
+                    input_file_path=input_file_path,
+                    python_path=self.python_path,
                 )
 
-            # Validate output size
-            if result.output and len(str(result.output)) > self.max_output_size:
-                return build_stage_result(
-                    status=StageState.FAILED,
-                    started_at=started_at,
-                    error=f"Output too large: {len(str(result.output))} > {self.max_output_size}",
-                    stage_name=self.stage_name,
-                    context=f"Output size limit exceeded: {len(str(result.output))} bytes",
-                )
+                # Execute with comprehensive monitoring
+                if self.enable_sandboxing:
+                    result = await self._run_sandboxed(
+                        exec_code, started_at, program.id
+                    )
+                else:
+                    result = await run_python_snippet(
+                        exec_code,
+                        started_at,
+                        timeout=self.timeout,
+                        stage_name=self.stage_name,
+                    )
 
-            return result
+                # Validate output size
+                if result.output is not None and (size := len(pickle.dumps(result.output))) > self.max_output_size:
+                    return build_stage_result(
+                        status=StageState.FAILED,
+                        started_at=started_at,
+                        error=f"Output too large: {size} > {self.max_output_size}",
+                        stage_name=self.stage_name,
+                        context=f"Output size limit exceeded: {size} bytes",
+                    )
+
+                return result
+
+            finally:
+                # Clean up temporary file if used
+                if temp_file and input_file_path:
+                    try:
+                        Path(input_file_path).unlink()
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up temporary file {input_file_path}: {e}")
 
         except Exception as e:
             return build_stage_result(
@@ -170,9 +201,10 @@ class RunPythonCode(Stage):
 class RunCodeStage(RunPythonCode):
     """Stage that runs the program's own code."""
 
-    def __init__(self, function_name: str = "run_code", **kwargs):
+    def __init__(self, function_name: str = "run_code", context_stage: Optional[str] = None, **kwargs):
         # We'll set the code in run() method
         super().__init__(code="", function_name=function_name, **kwargs)
+        self.context_stage = context_stage
         self._requires_code = True
 
     async def _execute_stage(
@@ -180,6 +212,18 @@ class RunCodeStage(RunPythonCode):
     ) -> ProgramStageResult:
         # Set the code from the program
         self.code = program.code
+
+        if self.context_stage:
+            context_result: Optional[ProgramStageResult] = program.stage_results.get(
+                self.context_stage
+            )
+            if not context_result or not context_result.is_completed():
+                raise StageError(
+                    f"Context stage '{self.context_stage}' did not complete successfully",
+                    stage_name=self.stage_name,
+                    stage_type="execution",
+                )
+            self.input_obj = context_result.output
 
         # Call parent run method
         return await super()._execute_stage(program, started_at)
@@ -192,14 +236,16 @@ class RunValidationStage(RunPythonCode):
     def __init__(
         self,
         validator_path: Path,
-        prev_stage_name: str,
+        data_to_validate_stage: str,
+        context_stage: Optional[str] = None,
         function_name: str = "validate",
         **kwargs,
     ):
         self.validator_path = Path(validator_path)
-        self.prev_stage_name = ensure_not_none(
-            prev_stage_name, "prev_stage_name"
+        self.data_to_validate_stage = ensure_not_none(
+            data_to_validate_stage, "data_to_validate_stage"
         )
+        self.context_stage = context_stage
 
         # Validate validator file exists
         if not self.validator_path.exists():
@@ -224,22 +270,33 @@ class RunValidationStage(RunPythonCode):
         self, program: Program, started_at: datetime
     ) -> ProgramStageResult:
         logger.debug(
-            f"[{self.stage_name}] Program {program.id}: Running validation against {self.prev_stage_name}"
+            f"[{self.stage_name}] Program {program.id}: Running validation against {self.data_to_validate_stage}"
         )
 
         # Check previous stage result
         prev_result: Optional[ProgramStageResult] = program.stage_results.get(
-            self.prev_stage_name
+            self.data_to_validate_stage
         )
         if not prev_result or not prev_result.is_completed():
             raise StageError(
-                f"Previous stage '{self.prev_stage_name}' did not complete successfully",
+                f"Previous stage '{self.data_to_validate_stage}' did not complete successfully",
                 stage_name=self.stage_name,
                 stage_type="validation",
             )
-
-        # Set input object from previous stage
+        
         self.input_obj = prev_result.output
+        
+        if self.context_stage:
+            context_result: Optional[ProgramStageResult] = program.stage_results.get(
+                self.context_stage
+            )
+            if not context_result or not context_result.is_completed():
+                raise StageError(
+                    f"Context stage '{self.context_stage}' did not complete successfully",
+                    stage_name=self.stage_name,
+                    stage_type="validation",
+                )
+            self.input_obj = (context_result.output, prev_result.output)
 
         # Run validation
         return await super()._execute_stage(program, started_at)
