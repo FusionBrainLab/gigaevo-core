@@ -49,6 +49,7 @@ Output **only a single fenced Python code block** (```python ... ```), with:
 ⚠️ DO NOT write anything outside the code block.
 ⚠️ DO NOT expand the comment block.
 ⚠️ DO NOT add docstrings, markdown, explanations, or general commentary.
+⚠️ If using **randomization** ALWAYS FIX SEEDS BEFOREHANDS
 
 🧬 CROSSOVER INPUT:
 

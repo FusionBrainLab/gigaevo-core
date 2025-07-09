@@ -163,7 +163,7 @@ class DagScheduler:
                 if p.state == ProgramState.FRESH
             ]
             
-            # Log any orphaned programs but don't retry them automatically
+            # Find and actively clean up orphaned programs
             orphaned = [
                 p for p in all_programs 
                 if p.state == ProgramState.DAG_PROCESSING_STARTED and p.id not in self._active_tasks
@@ -172,8 +172,21 @@ class DagScheduler:
             if orphaned:
                 logger.warning(
                     f"[DagScheduler] Found {len(orphaned)} orphaned DAG_PROCESSING_STARTED programs. "
-                    f"These will be cleaned up by timeout mechanism if stuck."
+                    f"Cleaning them up now."
                 )
+                
+                # Actively clean up orphaned programs by marking them as discarded
+                for orphaned_program in orphaned:
+                    try:
+                        await self._state_manager.set_program_state(orphaned_program, ProgramState.DISCARDED)
+                        logger.info(f"[DagScheduler] Orphaned program {orphaned_program.id} marked as discarded")
+                        
+                        # Update metrics to track the cleanup
+                        await self._metrics.increment_dag_errors()
+                        MetricsService.inc_dag_error()
+                        
+                    except Exception as e:
+                        logger.error(f"[DagScheduler] Failed to mark orphaned program {orphaned_program.id} as discarded: {e}")
                 
         except Exception as e:  # pragma: no cover
             logger.error(f"[DagScheduler] Failed to fetch programs: {e}")
