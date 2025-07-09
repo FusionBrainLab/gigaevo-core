@@ -36,7 +36,8 @@ dependencies = [
     "psutil>=5.9.0",
     "fakeredis[lua]>=2.19.0",
     "orjson",
-    "diffpatch"
+    "diffpatch",
+    "openai>=1.0.0"
 ]
 
 [project.optional-dependencies]
