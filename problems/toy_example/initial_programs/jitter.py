@@ -1,6 +1,6 @@
 import numpy as np
 
-def construct_packing() -> tuple[np.ndarray, np.ndarray]:
+def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     """
     Place 9 circles on a jittered 3×3 grid inside the unit square.
     Each circle is adjusted to avoid boundary violation and potential overlap.

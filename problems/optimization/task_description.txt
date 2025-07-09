@@ -1,0 +1,22 @@
+**OBJECTIVE**: Write a Python function that learns a regression model from given training data (X_train, y_train) and uses it to predict the target values for unseen inputs X_test.
+
+**RULES**:
+The constructed function must:
+- Accept a dictionary containing X_train, y_train, and X_test as inputs
+- Output an array y_test of predicted values, matching the shape of X_test
+- The implementation may use any suitable regression technique (e.g., linear, tree-based, neural networks)
+
+**GOAL**:
+
+Discover accurate and generalizable regression strategies by leveraging:
+- Robust feature–target relationships
+- Effective regularization
+- Generalization to the hidden test set
+
+**MUTATION TARGET**:
+
+- Create architecturally distinct regression models via:
+- Model structure changes (e.g. ensemble, kernel-based, nonlinear transforms)
+- Preprocessing pipeline modifications
+- Loss function or optimization strategy variation
+- Reject trivial variations unless they contribute clear performance or structural innovation

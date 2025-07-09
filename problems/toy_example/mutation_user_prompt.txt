@@ -32,7 +32,7 @@ You must:
 ✍️ OUTPUT FORMAT — STRICT:
 
 Output **only a single fenced Python code block** (```python ... ```), with:
-- A single entry point: `construct_packing()`
+- A single entry point: `entrypoint()`
 - Other functions as needed
 - **No docstrings, no markdown, no explanation, no extra comments**
 

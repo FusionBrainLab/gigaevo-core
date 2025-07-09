@@ -7,7 +7,7 @@ central stability to minimize the enclosing hexagon size.
 
 import numpy as np
 
-def construct_packing() -> tuple[np.ndarray, np.ndarray]:
+def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     """
     Greedy adaptive placement of 9 non-overlapping circles inside the unit square.
     Random centers are proposed and radii are shrunk until valid.

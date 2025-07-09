@@ -1,7 +1,7 @@
 import numpy as np
 import random
 
-def construct_packing() -> tuple[np.ndarray, np.ndarray]:
+def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     """
     Generate a crude arrangement of 9 non-overlapping circles with variable radii,
     packed inside the unit square. Tries to prioritize center and edge usage.

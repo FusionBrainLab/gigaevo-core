@@ -137,27 +137,45 @@ class MapElitesMultiIsland(EvolutionStrategy):
         if not accepting_islands:
             return None
 
-        # Second pass: get sizes only for accepting islands (optimized)
-        island_sizes: Dict[str, int] = {}
+        # Second pass: get sizes for accepting islands and calculate weights
+        island_info = []  # List of (island, reason, size, weight)
+        
         for island, reason in accepting_islands:
-            island_sizes[island.config.island_id] = await self._get_cached_island_size(island.config.island_id)
+            size = await self._get_cached_island_size(island.config.island_id)
+            island_info.append((island, reason, size))
 
-        # Define priority for reason: empty_cell < improvement (lower is better)
-        reason_priority = {"empty_cell": 0, "improvement": 1}
+        # Calculate weights inversely proportional to island size
+        # Smaller islands get higher weight, but with bounds to prevent extreme bias
+        total_sizes = sum(info[2] for info in island_info)
+        avg_size = total_sizes / len(island_info) if island_info else 1
+        
+        weighted_islands = []
+        weights = []
+        
+        for island, reason, size in island_info:
+            # Inverse weight with floor to prevent division by zero and extreme bias
+            # Prefer empty cells over improvements
+            reason_multiplier = 2.0 if reason == "empty_cell" else 1.0
+            
+            # Inverse size weight: smaller islands get higher probability
+            # Use max(size, 1) to avoid division by zero
+            # Add avg_size to prevent extreme bias towards very small islands
+            size_weight = (avg_size + 1) / (size + 1)
+            
+            final_weight = size_weight * reason_multiplier
+            
+            weighted_islands.append(island)
+            weights.append(final_weight)
+            
+            logger.debug(f"Island {island.config.island_id}: size={size}, reason={reason}, weight={final_weight:.3f}")
 
-        # Shuffle to avoid deterministic bias when all keys tie
-        random.shuffle(accepting_islands)
-
-        # Sort by island size (smaller first), then reason priority, then random jitter
-        accepting_islands.sort(
-            key=lambda x: (
-                island_sizes.get(x[0].config.island_id, float("inf")),
-                reason_priority.get(x[1], 99),
-                random.random(),
-            )
-        )
-
-        return accepting_islands[0][0]
+        # Weighted random selection
+        if weighted_islands:
+            chosen_island = random.choices(weighted_islands, weights=weights, k=1)[0]
+            logger.debug(f"Selected island {chosen_island.config.island_id} via weighted random selection")
+            return chosen_island
+        
+        return None
 
     async def select_elites(self, total: int = 10) -> List[Program]:
         """Sample elites from all islands (with optional migration)."""

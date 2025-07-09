@@ -13,17 +13,17 @@ Your task is to write a new **mutant program** that:
 
 ### 💡 PROGRAM INSIGHTS (categorized):
 Examples include:
-- **geometric** (e.g., layout conflicts, nesting logic)  
-- **algorithmic** (e.g., perturbation flaws, annealing design)  
-- **evolutionary** (e.g., stagnation, trend shifts)  
-- **mathematical** (e.g., spacing bounds, angle symmetries)  
-- **implementation** (e.g., init heuristics, overlap handling)
-- **error** (e.g., overlapping hexagons)
+- **optimization** — loss shaping, constraint relaxation, gradient flow, convergence stability  
+- **algorithmic** — initialization schemes, search strategies, update schedules  
+- **evolutionary** — stagnation, phase shifts, adaptive behavior  
+- **mathematical** — regularization schemes, objective structure, curvature heuristics  
+- **implementation** — modularity, vectorization, fallback logic  
+- **error** — numerical instability, NaNs, premature convergence
 
 ### 🧬 LINEAGE HISTORY (performance deltas):
 Each entry includes:
 - A fitness delta (e.g., "–0.132", "+0.280")  
-- A structural explanation (e.g., "spiral chain improved packing", "rigid angle cluster failed")
+- A structural explanation (e.g., "using gradient boosting helped")
 
 You must:
 - Reflect on at least one **improvement** and one **degradation**  
@@ -33,13 +33,13 @@ You must:
 ✍️ OUTPUT FORMAT — STRICT:
 
 Output **only a single fenced Python code block** (```python ... ```), with:
-- A single entry point: `entrypoint()`
+- A single entry point: `construct_packing()`
 - Other functions as needed
 - **No docstrings, no markdown, no explanation, no extra comments**
 
 🔖 The code must begin with a **5-line structured comment block**, exactly as shown:
 ```python
-# Insight (geometric): ...
+# Insight (optimization): ...
 # Insight (algorithmic): ...
 # Insight (algorithmic): ...
 # Lineage (avoidance): ...
@@ -49,7 +49,6 @@ Output **only a single fenced Python code block** (```python ... ```), with:
 ⚠️ DO NOT write anything outside the code block.
 ⚠️ DO NOT expand the comment block.
 ⚠️ DO NOT add docstrings, markdown, explanations, or general commentary.
-⚠️ If using **randomization** ALWAYS FIX SEEDS BEFOREHANDS
 
 🧬 CROSSOVER INPUT:
 

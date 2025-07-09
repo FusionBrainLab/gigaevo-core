@@ -47,7 +47,7 @@ from src.programs.automata import ExecutionOrderDependency
 from src.programs.program import Program
 from src.programs.stages.base import Stage
 from src.programs.stages.complexity import ComputeComplexityStage
-from src.programs.stages.execution import RunCodeStage, RunValidationStage
+from src.programs.stages.execution import RunCodeStage, RunValidationStage, RunPythonCode
 from src.programs.stages.insights import (
     GenerateLLMInsightsStage,
     InsightsConfig,
@@ -82,9 +82,13 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s --problem-dir problems/hexagon_pack
-  %(prog)s --problem-dir problems/hexagon_pack --redis-db 1 --verbose
-  %(prog)s --problem-dir problems/custom_problem --max-generations 1000
+  # Use initial programs from directory
+  %(prog)s --problem-dir problems/hexagon_pack --min-fitness 0 --max-fitness 100
+  %(prog)s --problem-dir problems/hexagon_pack --redis-db 1 --verbose --min-fitness 0 --max-fitness 100
+  
+  # Use top programs from existing Redis database (by fitness)
+  %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --source-redis-db 0 --top-n 30 --min-fitness 0 --max-fitness 100
+  %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --redis-host remote-host --redis-port 6379 --source-redis-db 2 --top-n 50 --min-fitness 0 --max-fitness 100
         """,
     )
 
@@ -94,6 +98,11 @@ Examples:
         type=str,
         default=DEFAULT_PROBLEM_DIR,
         help=f"Directory containing problem files (default: {DEFAULT_PROBLEM_DIR})",
+    )
+    parser.add_argument(
+        "--add-context",
+        action="store_true",
+        help="Add context to the problem (i.e., context.py will be run to produce an input to the main program)",
     )
 
     # Redis configuration
@@ -146,6 +155,26 @@ Examples:
         help="Maximum fitness value for program to be considered",
     )
 
+    # Redis selection configuration
+    redis_selection_group = parser.add_argument_group("Redis Selection Configuration")
+    redis_selection_group.add_argument(
+        "--use-redis-selection",
+        action="store_true",
+        help="Use Redis selection instead of initial programs directory",
+    )
+    redis_selection_group.add_argument(
+        "--source-redis-db",
+        type=int,
+        default=0,
+        help="Source Redis database number for program selection (default: 0)",
+    )
+    redis_selection_group.add_argument(
+        "--top-n",
+        type=int,
+        default=50,
+        help="Number of top programs to select by fitness (default: 50)",
+    )
+
     # Logging configuration
     logging_group = parser.add_argument_group("Logging Configuration")
     logging_group.add_argument(
@@ -181,7 +210,7 @@ Examples:
     return parser.parse_args()
 
 
-def validate_problem_directory(problem_dir: Path) -> None:
+def validate_problem_directory(problem_dir: Path, add_context: bool = False) -> None:
     """Validate that the problem directory contains required files and directories."""
     required_files = [
         "task_description.txt",
@@ -190,6 +219,9 @@ def validate_problem_directory(problem_dir: Path) -> None:
         "mutation_system_prompt.txt",
         "mutation_user_prompt.txt",
     ]
+
+    if add_context:
+        required_files.append("context.py")
 
     required_directories = ["initial_programs"]
 
@@ -318,6 +350,103 @@ async def create_initial_population(
     return programs
 
 
+async def select_top_programs_from_redis(
+    redis_storage: RedisProgramStorage,
+    source_redis_host: str,
+    source_redis_port: int,
+    source_redis_db: int,
+    problem_dir: Path,
+    top_n: int = 50,
+) -> List[Program]:
+    """
+    Select top programs by fitness from an existing Redis database.
+    
+    Args:
+        redis_storage: Target Redis storage where selected programs will be added
+        source_redis_host: Host of the source Redis database
+        source_redis_port: Port of the source Redis database
+        source_redis_db: Database number of the source Redis database
+        problem_dir: Problem directory path (used to construct key prefix)
+        top_n: Number of top programs to select
+    
+    Returns:
+        List of selected programs added to target database
+    """
+    logger.info(f"🔍 Selecting top {top_n} programs from Redis {source_redis_host}:{source_redis_port}/{source_redis_db}...")
+    
+    # Create source Redis storage connection with same key prefix construction
+    source_storage = RedisProgramStorage({
+        "redis_url": f"redis://{source_redis_host}:{source_redis_port}/{source_redis_db}",
+        "key_prefix": f"{problem_dir.name}_evolution",
+        "max_connections": 50,
+        "connection_pool_timeout": 30.0,
+        "health_check_interval": 60,
+    })
+    
+    try:
+        # Get all programs from source database
+        logger.info("📥 Retrieving all programs from source database...")
+        all_programs = await source_storage.get_all()
+        logger.info(f"📊 Found {len(all_programs)} total programs in source database")
+        
+        if not all_programs:
+            logger.warning("⚠️ No programs found in source database")
+            return []
+        
+        # Filter programs that have fitness metrics
+        programs_with_fitness = []
+        for program in all_programs:
+            if program.metrics and "fitness" in program.metrics:
+                programs_with_fitness.append(program)
+        
+        logger.info(f"🔄 Found {len(programs_with_fitness)} programs with fitness metrics")
+        
+        if not programs_with_fitness:
+            logger.warning("⚠️ No programs with fitness metrics found")
+            return []
+        
+        # Sort by fitness (descending) and take top N
+        programs_with_fitness.sort(
+            key=lambda p: p.metrics.get("fitness", -1000.0), 
+            reverse=True
+        )
+        selected_programs = programs_with_fitness[:top_n]
+        
+        logger.info(f"🎯 Selected {len(selected_programs)} top programs by fitness")
+        
+        # Add selected programs to target database
+        added_programs = []
+        for i, program in enumerate(selected_programs):
+            program_to_add = Program(code=program.code)
+            # Update metadata to indicate source
+            program_to_add.metadata = {
+                "source": "redis_selection",
+                "source_db": source_redis_db,
+                "selection_rank": i + 1,
+                "original_id": program.id,
+            }
+            
+            # Add to target database
+            await redis_storage.add(program_to_add)
+            added_programs.append(program_to_add)
+            
+            fitness = program.metrics.get("fitness", "N/A")
+            logger.info(f"  ✅ Added program {i+1}/{len(selected_programs)}: fitness={fitness}")
+        
+        logger.info(f"🎯 Successfully selected and added {len(added_programs)} top programs")
+        return added_programs
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to select top programs: {e}")
+        raise
+    finally:
+        # Clean up source connection
+        try:
+            await source_storage.close()
+        except Exception as e:
+            logger.warning(f"⚠️ Error closing source storage: {e}")
+
+
 def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
     """Improved behavior spaces for four diverse islands with better fitness coverage and resolution balance."""
 
@@ -421,6 +550,7 @@ def create_dag_stages(
     redis_storage: RedisProgramStorage,
     task_description: str,
     problem_dir: Path,
+    add_context: bool = False,
 ) -> Dict[str, Stage]:
     """Create optimized DAG stages with stage-specific timeouts and resource allocation."""
 
@@ -434,12 +564,24 @@ def create_dag_stages(
         safe_mode=True,
     )
 
+    if add_context:
+        stages["AddContext"] = lambda: RunPythonCode(
+            code=load_problem_file(problem_dir, "context.py"),
+            stage_name="AddContext",
+            function_name="build_context",
+            python_path=[problem_dir.resolve()],
+            timeout=120.0,
+            max_memory_mb=1024,
+        )
+
+
     # Stage 2: Execute the code to get results
     stages["ExecuteCode"] = lambda: RunCodeStage(
         stage_name="ExecuteCode",
-        function_name="construct_packing",
+        function_name="entrypoint",
+        context_stage="AddContext" if add_context else None,
         python_path=[problem_dir.resolve()],
-        timeout=300.0,
+        timeout=600.0,
         max_memory_mb=512,
     )
 
@@ -454,7 +596,8 @@ def create_dag_stages(
     stages["RunValidation"] = lambda: RunValidationStage(
         stage_name="RunValidation",
         validator_path=validator_path,
-        prev_stage_name="ExecuteCode",
+        data_to_validate_stage="ExecuteCode",
+        context_stage="AddContext" if add_context else None,
         function_name="validate",
         timeout=60.0,  # OPTIMIZED: Reduced from 120s for faster validation
     )
@@ -557,9 +700,9 @@ def create_dag_stages(
     return stages
 
 
-def create_dag_edges() -> Dict[str, List[str]]:
+def create_dag_edges(add_context: bool = False) -> Dict[str, List[str]]:
     """Define the DAG execution dependencies."""
-    return {
+    base_dag =  {
         "ValidateCompiles": [
             "ExecuteCode",
             "ComputeComplexity",
@@ -572,6 +715,10 @@ def create_dag_edges() -> Dict[str, List[str]]:
         "ValidationMetricUpdate": [],  # Independent terminal stage
         "ComplexityMetricUpdate": [],  # Independent terminal stage - NO dependency on ValidationMetricUpdate
     }
+    if add_context:
+        # first create code, then everything else
+        base_dag["AddContext"] = ["ValidateCompiles",]
+    return base_dag
 
 
 def create_execution_order_deps() -> Dict[str, List[ExecutionOrderDependency]]:
@@ -619,10 +766,7 @@ async def create_evolution_strategy(
         program_storage=redis_storage,
         migration_interval=25,
         enable_migration=True,
-        max_migrants_per_island=5,
-        # Filter out programs that are have very low fitness (< -7) but keep invalid programs so they can be utilized for mutation
-        should_consider_program_filter=lambda x: x.metrics.get("fitness") > -7
-        or x.metrics.get("is_valid") == 0,
+        max_migrants_per_island=5,      
     )
 
     return strategy
@@ -696,7 +840,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
 
     # Validate problem directory
     try:
-        validate_problem_directory(problem_dir)
+        validate_problem_directory(problem_dir, args.add_context)
         logger.info("✅ Problem directory validated")
     except Exception as e:
         logger.error(f"❌ Problem directory validation failed: {e}")
@@ -725,8 +869,19 @@ async def run_evolution_experiment(args: argparse.Namespace):
         logger.info(f"✓ Redis database {args.redis_db} cleared")
 
         # Initialize new DB with initial programs
-        logger.info("🌱 Initializing database with initial programs...")
-        programs = await create_initial_population(redis_storage, problem_dir)
+        if args.use_redis_selection:
+            logger.info("🔍 Initializing database with selected programs from Redis...")
+            programs = await select_top_programs_from_redis(
+                redis_storage=redis_storage,
+                source_redis_host=args.redis_host,
+                source_redis_port=args.redis_port,
+                source_redis_db=args.source_redis_db,
+                problem_dir=problem_dir,
+                top_n=args.top_n,
+            )
+        else:
+            logger.info("🌱 Initializing database with initial programs...")
+            programs = await create_initial_population(redis_storage, problem_dir)
 
         task_description = load_problem_file(
             problem_dir, "task_description.txt"
@@ -740,9 +895,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
         # Create DAG pipeline
         logger.info("Creating DAG pipeline...")
         dag_stages = create_dag_stages(
-            llm_wrapper, redis_storage, task_description, problem_dir
+            llm_wrapper, redis_storage, task_description, problem_dir, args.add_context
         )
-        dag_edges = create_dag_edges()
+        dag_edges = create_dag_edges(args.add_context)
         execution_order_deps = create_execution_order_deps()
         entry_points = ["ValidateCompiles"]
 

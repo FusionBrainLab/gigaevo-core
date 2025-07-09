@@ -33,7 +33,7 @@ class TopFitnessMigrantSelector(MigrantSelector):
         if not programs:
             return []
 
-        fitness_values = extract_fitness_values(programs, [self.fitness_key], {self.fitness_key: self.fitness_key_higher_is_better})
+        fitness_values = [extract_fitness_values(program, [self.fitness_key], {self.fitness_key: self.fitness_key_higher_is_better}) for program in programs]
         scored_programs = [
             (prog, fitness_values[i]) for i, prog in enumerate(programs) if fitness_values[i] is not None
         ]

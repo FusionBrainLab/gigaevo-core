@@ -8,7 +8,7 @@ Your mission is to **surpass symmetry-bound logic** and invent **structurally no
 {task_hints}
 
 ⚙️ FUNCTION SIGNATURE (REQUIRED TO IMPLEMENT):  
-def construct_packing() -> Tuple[np.ndarray, np.ndarray]
+def entrypoint() -> Tuple[np.ndarray, np.ndarray]
 # → Returns 11 non-overlapping hexagon centers and angles to minimize enclosing hexagon size.
 
 # 🧰 HELPER FUNCTIONS AVAILABLE IN helper.py:
