@@ -917,7 +917,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             fetch_lineage_insights_fn=lambda x: x.metadata.get(
                 "lineage_insights", "No lineage insights available."
             ),
-            max_parents=2,
+            max_parents=1,
             task_definition=task_description,
             task_hints=task_hints,
             system_prompt_template=load_problem_file(

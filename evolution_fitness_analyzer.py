@@ -25,6 +25,12 @@ Plot Options:
     --no-dag-stage-plots    Skip DAG stage results statistics plots
     --no-island-plots       Skip island statistics plots
     --no-metric-plots       Skip metric correlation plots
+    --no-validity-plots     Skip validity distribution plots
+
+Outlier Detection Options:
+    --extreme-threshold     Threshold for extreme outliers (default: -10000.0)
+    --outlier-multiplier    IQR multiplier for outlier detection (default: 3.0)
+    --no-outlier-removal    Skip outlier removal (keep all fitness values)
 """
 
 import asyncio
@@ -45,10 +51,15 @@ import numpy as np
 class EvolutionFitnessAnalyzer:
     """Analyzer for evolution fitness data from MetaEvolve system."""
     
-    def __init__(self, redis_host: str = "localhost", redis_port: int = 6379, redis_db: int = 0):
+    def __init__(self, redis_host: str = "localhost", redis_port: int = 6379, redis_db: int = 0, 
+                 extreme_threshold: float = -10000.0, outlier_multiplier: float = 3.0, 
+                 remove_outliers: bool = True):
         self.redis_host = redis_host
         self.redis_port = redis_port
         self.redis_db = redis_db
+        self.extreme_threshold = extreme_threshold
+        self.outlier_multiplier = outlier_multiplier
+        self.remove_outliers = remove_outliers
         
         # ------------------------------------------------------------------
         # Configure a CONSISTENT, polished plotting style once at init.
@@ -182,8 +193,88 @@ class EvolutionFitnessAnalyzer:
         # Calculate time since evolution start
         full_df_sorted['time_since_start'] = (full_df_sorted['created_at'] - evolution_start_time).dt.total_seconds()
         
-        # Filter programs with valid fitness values (exclude -1000.0 which indicates failure)
-        valid_fitness = full_df_sorted[full_df_sorted[fitness_col].notna() & (full_df_sorted[fitness_col] != -1000.0)]
+        # Filter programs with valid fitness values (exclude failures and extreme outliers)
+        # First, remove known failure values (-1000.0)
+        valid_fitness_basic = full_df_sorted[full_df_sorted[fitness_col].notna() & (full_df_sorted[fitness_col] != -1000.0)]
+        
+        if valid_fitness_basic.empty:
+            logger.warning("⚠️ No programs with valid fitness values found after basic filtering")
+            return {}
+        
+        # Apply outlier removal if enabled
+        if self.remove_outliers:
+            # Remove extreme outliers that disrupt plotting
+            fitness_values = valid_fitness_basic[fitness_col]
+            
+            # Log fitness value distribution before outlier removal
+            logger.info(f"📊 Fitness distribution before outlier removal:")
+            logger.info(f"   Min: {fitness_values.min():.4f}")
+            logger.info(f"   Max: {fitness_values.max():.4f}")
+            logger.info(f"   Mean: {fitness_values.mean():.4f}")
+            logger.info(f"   Median: {fitness_values.median():.4f}")
+            logger.info(f"   Std: {fitness_values.std():.4f}")
+            
+            # 1. Remove extremely negative values (likely errors)
+            extreme_outliers = fitness_values < self.extreme_threshold
+            
+            # 2. Use IQR method for additional outlier detection on remaining values
+            non_extreme = fitness_values[fitness_values >= self.extreme_threshold]
+            
+            if len(non_extreme) > 0:
+                Q1 = non_extreme.quantile(0.25)
+                Q3 = non_extreme.quantile(0.75)
+                IQR = Q3 - Q1
+                
+                # Use configurable multiplier for outlier detection
+                lower_bound = Q1 - self.outlier_multiplier * IQR
+                upper_bound = Q3 + self.outlier_multiplier * IQR
+                
+                # Since fitness values are negative (smaller is worse), we're mainly concerned with the lower bound
+                statistical_outliers = (fitness_values < lower_bound) | (fitness_values > upper_bound)
+            else:
+                statistical_outliers = pd.Series([False] * len(fitness_values), index=fitness_values.index)
+                lower_bound = self.extreme_threshold
+                upper_bound = 0.0
+            
+            # Combine outlier detection methods
+            all_outliers = extreme_outliers | statistical_outliers
+            
+            # Log outlier detection results
+            num_extreme = extreme_outliers.sum()
+            num_statistical = statistical_outliers.sum()
+            num_total_outliers = all_outliers.sum()
+            
+            logger.info(f"🔍 Outlier detection results:")
+            logger.info(f"   Extreme threshold: {self.extreme_threshold}")
+            logger.info(f"   IQR multiplier: {self.outlier_multiplier}")
+            logger.info(f"   Extreme outliers (< {self.extreme_threshold}): {num_extreme}")
+            logger.info(f"   Statistical outliers (IQR method): {num_statistical}")
+            logger.info(f"   Total outliers removed: {num_total_outliers}")
+            logger.info(f"   Fitness range for analysis: {lower_bound:.4f} to {upper_bound:.4f}")
+            
+            if num_total_outliers > 0:
+                outlier_examples = fitness_values[all_outliers].head(5)
+                logger.info(f"   Examples of removed outliers: {list(outlier_examples.values)}")
+            
+            # Filter out outliers
+            valid_fitness = valid_fitness_basic[~all_outliers]
+            
+            if valid_fitness.empty:
+                logger.warning("⚠️ No programs with valid fitness values found after outlier removal")
+                return {}
+            
+            # Log final fitness distribution
+            final_fitness = valid_fitness[fitness_col]
+            logger.info(f"📊 Final fitness distribution after outlier removal:")
+            logger.info(f"   Programs remaining: {len(valid_fitness)} (removed {num_total_outliers} outliers)")
+            logger.info(f"   Min: {final_fitness.min():.4f}")
+            logger.info(f"   Max: {final_fitness.max():.4f}")
+            logger.info(f"   Mean: {final_fitness.mean():.4f}")
+            logger.info(f"   Median: {final_fitness.median():.4f}")
+            logger.info(f"   Std: {final_fitness.std():.4f}")
+        else:
+            logger.info("⚠️ Outlier removal disabled - using all fitness values")
+            valid_fitness = valid_fitness_basic
         
         if valid_fitness.empty:
             logger.warning("⚠️ No programs with valid fitness values found")
@@ -1502,6 +1593,261 @@ class EvolutionFitnessAnalyzer:
         fig.savefig(pdf_path, bbox_inches="tight")
         logger.info(f"✅ Saved figure to {png_path.name} & {pdf_path.name}")
 
+    def plot_validity_distribution(self, fitness_analysis: Dict[str, Any], output_folder: Path, save_plots: bool = True):
+        """Create comprehensive validity distribution analysis."""
+        
+        if not fitness_analysis:
+            logger.warning("No data to plot validity distribution")
+            return
+        
+        full_df = fitness_analysis['full_df']
+        fitness_col = fitness_analysis.get('fitness_col', 'metric_fitness')
+        
+        if fitness_col not in full_df.columns:
+            logger.warning(f"No fitness column ({fitness_col}) found for validity analysis")
+            return
+        
+        # Define validity criteria for each program
+        validity_analysis = full_df.copy()
+        
+        # 1. Basic validity: has fitness value and not -1000.0 (failure indicator)
+        validity_analysis['has_fitness'] = validity_analysis[fitness_col].notna()
+        validity_analysis['not_failure'] = validity_analysis[fitness_col] != -1000.0
+        validity_analysis['basic_valid'] = validity_analysis['has_fitness'] & validity_analysis['not_failure']
+        
+        # 2. Outlier status (if outlier removal is enabled)
+        if self.remove_outliers:
+            fitness_values = validity_analysis[fitness_col]
+            
+            # Apply same outlier detection as in main analysis
+            extreme_outliers = fitness_values < self.extreme_threshold
+            
+            # IQR method for statistical outliers
+            non_extreme = fitness_values[fitness_values >= self.extreme_threshold]
+            if len(non_extreme) > 0:
+                Q1 = non_extreme.quantile(0.25)
+                Q3 = non_extreme.quantile(0.75)
+                IQR = Q3 - Q1
+                
+                if IQR > 0:
+                    lower_bound = Q1 - self.outlier_multiplier * IQR
+                    upper_bound = Q3 + self.outlier_multiplier * IQR
+                    statistical_outliers = (fitness_values < lower_bound) | (fitness_values > upper_bound)
+                else:
+                    statistical_outliers = pd.Series([False] * len(fitness_values), index=fitness_values.index)
+            else:
+                statistical_outliers = pd.Series([False] * len(fitness_values), index=fitness_values.index)
+            
+            all_outliers = extreme_outliers | statistical_outliers
+            validity_analysis['is_outlier'] = all_outliers
+            validity_analysis['analysis_valid'] = validity_analysis['basic_valid'] & ~validity_analysis['is_outlier']
+        else:
+            validity_analysis['is_outlier'] = False
+            validity_analysis['analysis_valid'] = validity_analysis['basic_valid']
+        
+        # 3. State-based validity
+        validity_analysis['is_completed'] = validity_analysis['state'] == 'completed'
+        validity_analysis['is_running'] = validity_analysis['state'].isin(['running', 'evolving'])
+        validity_analysis['is_failed'] = validity_analysis['state'].isin(['failed', 'error'])
+        
+        # Create comprehensive validity categories
+        def categorize_validity(row):
+            if not row['has_fitness']:
+                return 'No Fitness Data'
+            elif row['not_failure'] == False:  # fitness == -1000.0
+                return 'Marked as Failure'
+            elif row.get('is_outlier', False):
+                return 'Outlier (Removed)'
+            elif row['analysis_valid']:
+                return 'Valid for Analysis'
+            else:
+                return 'Other Invalid'
+        
+        validity_analysis['validity_category'] = validity_analysis.apply(categorize_validity, axis=1)
+        
+        # Set up the plotting style
+        plt.style.use('seaborn-v0_8')
+        
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 3, figsize=(24, 16))
+        fig.suptitle('Program Validity Distribution Analysis', fontsize=18, fontweight='bold')
+        
+        # 1. Overall Validity Distribution (Pie Chart)
+        ax1 = axes[0, 0]
+        validity_counts = validity_analysis['validity_category'].value_counts()
+        colors = plt.cm.Set3.colors[:len(validity_counts)]
+        
+        ax1.pie(validity_counts.values, labels=validity_counts.index, autopct='%1.1f%%', 
+                startangle=90, colors=colors, explode=[0.05] * len(validity_counts))
+        ax1.set_title('Program Validity Distribution')
+        
+        # 2. Validity by State (Stacked Bar)
+        ax2 = axes[0, 1]
+        state_validity_pivot = pd.crosstab(validity_analysis['state'], validity_analysis['validity_category'], normalize='index') * 100
+        
+        state_validity_pivot.plot(kind='bar', stacked=True, ax=ax2, colormap='Set3')
+        ax2.set_xlabel('Program State')
+        ax2.set_ylabel('Percentage')
+        ax2.set_title('Validity Distribution by Program State')
+        ax2.tick_params(axis='x', rotation=45, labelsize=10)
+        ax2.legend(title='Validity', bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        # 3. Validity Timeline
+        ax3 = axes[0, 2]
+        
+        # Create consistent y-axis ordering for validity categories
+        categories_sorted = sorted(validity_analysis['validity_category'].unique())
+        category_to_y = {name: idx for idx, name in enumerate(categories_sorted)}
+        
+        for category in categories_sorted:
+            category_programs = validity_analysis[validity_analysis['validity_category'] == category]
+            y = np.full(len(category_programs), category_to_y[category])
+            ax3.scatter(category_programs['time_since_start'], y,
+                        alpha=0.6, s=20, label=f'{category} ({len(category_programs)})')
+        
+        ax3.set_xlabel('Time Since Start (seconds)')
+        ax3.set_ylabel('Validity Category')
+        ax3.set_title('Program Validity Timeline')
+        ax3.set_yticks(list(category_to_y.values()))
+        ax3.set_yticklabels(categories_sorted, fontsize=9)
+        ax3.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax3.grid(True, alpha=0.3, axis='x')
+        
+        # 4. Validity Counts (Bar Chart)
+        ax4 = axes[1, 0]
+        bars = ax4.bar(range(len(validity_counts)), validity_counts.values, color=colors, alpha=0.8, edgecolor='black')
+        ax4.set_xlabel('Validity Category')
+        ax4.set_ylabel('Number of Programs')
+        ax4.set_title('Program Validity Counts')
+        ax4.set_xticks(range(len(validity_counts)))
+        ax4.set_xticklabels(validity_counts.index, rotation=45, ha='right', fontsize=10)
+        
+        # Add value labels on bars
+        for bar, count in zip(bars, validity_counts.values):
+            height = bar.get_height()
+            ax4.text(bar.get_x() + bar.get_width()/2., height + max(validity_counts.values) * 0.01,
+                    f'{count}\n({count/len(validity_analysis)*100:.1f}%)', ha='center', va='bottom', fontweight='bold')
+        
+        ax4.grid(True, alpha=0.3, axis='y')
+        
+        # 5. Success Rate Analysis
+        ax5 = axes[1, 1]
+        
+        # Calculate success rates by different criteria
+        success_metrics = {
+            'Has Any Fitness': (validity_analysis['has_fitness'].sum() / len(validity_analysis) * 100),
+            'Not Failure (-1000)': (validity_analysis['not_failure'].sum() / len(validity_analysis) * 100),
+            'Basic Valid': (validity_analysis['basic_valid'].sum() / len(validity_analysis) * 100),
+            'Analysis Valid': (validity_analysis['analysis_valid'].sum() / len(validity_analysis) * 100),
+            'Completed State': (validity_analysis['is_completed'].sum() / len(validity_analysis) * 100)
+        }
+        
+        success_names = list(success_metrics.keys())
+        success_rates = list(success_metrics.values())
+        
+        bars = ax5.barh(range(len(success_names)), success_rates, color='green', alpha=0.7, edgecolor='black')
+        ax5.set_xlabel('Success Rate (%)')
+        ax5.set_ylabel('Success Metric')
+        ax5.set_title('Program Success Rates')
+        ax5.set_yticks(range(len(success_names)))
+        ax5.set_yticklabels(success_names)
+        
+        # Add value labels on bars
+        for bar, rate in zip(bars, success_rates):
+            width = bar.get_width()
+            ax5.text(width + 1, bar.get_y() + bar.get_height()/2.,
+                    f'{rate:.1f}%', ha='left', va='center', fontweight='bold')
+        
+        ax5.grid(True, alpha=0.3, axis='x')
+        ax5.set_xlim(0, 105)
+        
+        # 6. Detailed Statistics Table
+        ax6 = axes[1, 2]
+        
+        # Create detailed statistics
+        total_programs = len(validity_analysis)
+        stats_data = []
+        
+        for category in validity_counts.index:
+            count = validity_counts[category]
+            percentage = count / total_programs * 100
+            stats_data.append([category, count, f'{percentage:.1f}%'])
+        
+        # Add summary row
+        valid_for_analysis = validity_analysis['analysis_valid'].sum()
+        stats_data.append(['─' * 20, '─' * 10, '─' * 10])
+        stats_data.append(['TOTAL PROGRAMS', total_programs, '100.0%'])
+        stats_data.append(['VALID FOR ANALYSIS', valid_for_analysis, f'{valid_for_analysis/total_programs*100:.1f}%'])
+        
+        # Create table
+        table_data = [['Validity Category', 'Count', 'Percentage']] + stats_data
+        table = ax6.table(cellText=table_data[1:], colLabels=table_data[0], 
+                         cellLoc='center', loc='center', colWidths=[0.5, 0.25, 0.25])
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 2)
+        
+        ax6.set_title('Validity Statistics Summary')
+        ax6.axis('off')
+        
+        plt.tight_layout(pad=3.0)
+        
+        if save_plots:
+            self._save_fig(fig, output_folder / 'validity_distribution')
+        
+        plt.show()
+        
+        # Log detailed validity analysis
+        logger.info("\n✅ PROGRAM VALIDITY ANALYSIS:")
+        logger.info("=" * 80)
+        
+        total = len(validity_analysis)
+        logger.info(f"📊 OVERALL STATISTICS:")
+        logger.info(f"  Total programs: {total}")
+        
+        for category, count in validity_counts.items():
+            percentage = count / total * 100
+            logger.info(f"  {category}: {count} ({percentage:.1f}%)")
+        
+        logger.info(f"\n📈 SUCCESS RATES:")
+        for metric, rate in success_metrics.items():
+            logger.info(f"  {metric}: {rate:.1f}%")
+        
+        # Show validity by state
+        logger.info(f"\n🔍 VALIDITY BY STATE:")
+        for state in validity_analysis['state'].unique():
+            state_data = validity_analysis[validity_analysis['state'] == state]
+            valid_count = state_data['analysis_valid'].sum()
+            total_count = len(state_data)
+            logger.info(f"  {state}: {valid_count}/{total_count} valid ({valid_count/total_count*100:.1f}%)")
+        
+        # Save detailed validity statistics to file
+        validity_stats_path = output_folder / 'validity_statistics.txt'
+        with open(validity_stats_path, 'w') as f:
+            f.write("Program Validity Distribution Analysis\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write(f"OVERALL STATISTICS:\n")
+            f.write(f"  Total programs: {total}\n\n")
+            
+            for category, count in validity_counts.items():
+                percentage = count / total * 100
+                f.write(f"  {category}: {count} ({percentage:.1f}%)\n")
+            
+            f.write(f"\nSUCCESS RATES:\n")
+            for metric, rate in success_metrics.items():
+                f.write(f"  {metric}: {rate:.1f}%\n")
+            
+            f.write(f"\nVALIDITY BY STATE:\n")
+            for state in validity_analysis['state'].unique():
+                state_data = validity_analysis[validity_analysis['state'] == state]
+                valid_count = state_data['analysis_valid'].sum()
+                total_count = len(state_data)
+                f.write(f"  {state}: {valid_count}/{total_count} valid ({valid_count/total_count*100:.1f}%)\n")
+        
+        logger.info(f"✅ Saved detailed validity statistics to {validity_stats_path}")
+
     # ------------------------------------------------------------------
     # 📊 Metric Correlation Heatmap
     # ------------------------------------------------------------------
@@ -1520,7 +1866,42 @@ class EvolutionFitnessAnalyzer:
             logger.info("Not enough metrics for correlation heatmap")
             return
 
-        corr = df[numeric_cols].corr()
+        # Filter outliers from metric data to avoid correlation distortion (if enabled)
+        df_filtered = df.copy()
+        outliers_removed = 0
+        
+        if self.remove_outliers:
+            for col in metric_cols:
+                if col in df_filtered.columns and df_filtered[col].notna().sum() > 0:
+                    values = df_filtered[col].dropna()
+                    
+                    # Remove extreme outliers using IQR method
+                    Q1 = values.quantile(0.25)
+                    Q3 = values.quantile(0.75)
+                    IQR = Q3 - Q1
+                    
+                    if IQR > 0:  # Only apply if there's variation
+                        lower_bound = Q1 - self.outlier_multiplier * IQR
+                        upper_bound = Q3 + self.outlier_multiplier * IQR
+                        
+                        # For fitness column, also apply extreme threshold
+                        if col == 'metric_fitness':
+                            lower_bound = max(lower_bound, self.extreme_threshold)
+                        
+                        outliers = (df_filtered[col] < lower_bound) | (df_filtered[col] > upper_bound)
+                        outliers_in_col = outliers.sum()
+                        
+                        if outliers_in_col > 0:
+                            df_filtered.loc[outliers, col] = np.nan
+                            outliers_removed += outliers_in_col
+                            logger.info(f"   Removed {outliers_in_col} outliers from {col} (range: {lower_bound:.2f} to {upper_bound:.2f})")
+            
+            if outliers_removed > 0:
+                logger.info(f"🔍 Removed {outliers_removed} total outliers from correlation analysis")
+        else:
+            logger.info("⚠️ Outlier removal disabled for correlation analysis")
+
+        corr = df_filtered[numeric_cols].corr()
 
         fig, ax = plt.subplots(figsize=(12, 10))
         sns.heatmap(
@@ -1558,8 +1939,12 @@ async def main():
     parser.add_argument('--no-dag-stage-plots', action='store_true', help='Skip DAG stage results statistics plots')
     parser.add_argument('--no-island-plots', action='store_true', help='Skip island statistics plots')
     parser.add_argument('--no-metric-plots', action='store_true', help='Skip metric correlation plots')
+    parser.add_argument('--no-validity-plots', action='store_true', help='Skip validity distribution plots')
     parser.add_argument('--output-folder', required=True, help='Output folder for all results (required)')
     parser.add_argument('--base-filename', default='evolution_data', help='Base filename for CSV files (default: evolution_data)')
+    parser.add_argument('--extreme-threshold', type=float, default=-10000.0, help='Threshold for extreme outliers (default: -10000.0)')
+    parser.add_argument('--outlier-multiplier', type=float, default=3.0, help='IQR multiplier for outlier detection (default: 3.0)')
+    parser.add_argument('--no-outlier-removal', action='store_true', help='Skip outlier removal (keep all fitness values)')
     
     args = parser.parse_args()
     
@@ -1572,7 +1957,10 @@ async def main():
     analyzer = EvolutionFitnessAnalyzer(
         redis_host=args.redis_host,
         redis_port=args.redis_port,
-        redis_db=args.redis_db
+        redis_db=args.redis_db,
+        extreme_threshold=args.extreme_threshold,
+        outlier_multiplier=args.outlier_multiplier,
+        remove_outliers=not args.no_outlier_removal
     )
     
     try:
@@ -1645,6 +2033,14 @@ async def main():
                     logger.info("✅ Metric correlation plots completed")
                 except Exception as e:
                     logger.error(f"❌ Error creating metric correlation plots: {e}")
+            
+            # Create validity distribution plots
+            if not args.no_validity_plots:
+                try:
+                    analyzer.plot_validity_distribution(fitness_analysis, output_folder)
+                    logger.info("✅ Validity distribution plots completed")
+                except Exception as e:
+                    logger.error(f"❌ Error creating validity distribution plots: {e}")
         
         # Analyze top programs
         analyzer.analyze_top_programs(evolution_df, fitness_analysis, output_folder, top_n=args.top_n)
