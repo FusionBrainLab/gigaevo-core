@@ -36,7 +36,11 @@ dependencies = [
     "psutil>=5.9.0",
     "fakeredis[lua]>=2.19.0",
     "orjson",
-    "diffpatch"
+    "diffpatch",
+    "openai>=1.0.0",
+    "pandas",
+    "matplotlib",
+    "seaborn",
 ]
 
 [project.optional-dependencies]
