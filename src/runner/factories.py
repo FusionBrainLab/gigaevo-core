@@ -28,10 +28,8 @@ class DagFactory:
     def __init__(
         self,
         dag_spec: DAGSpec,
-        max_parallel_stages: int = 8,
     ) -> None:
         self._spec = dag_spec
-        self._max_parallel_stages = max_parallel_stages
 
     def create(self, state_manager: ProgramStateManager) -> DAG:
         """Return a brand-new `DAG` instance whose `Stage`s are independent."""
@@ -44,4 +42,5 @@ class DagFactory:
             entry_points=self._spec.entry_points or list(new_nodes.keys()),
             execution_order_deps=self._spec.exec_order_deps,
             max_parallel_stages=self._spec.max_parallel_stages,
+            dag_timeout=self._spec.dag_timeout,
         ) 

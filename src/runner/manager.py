@@ -61,9 +61,9 @@ class RunnerConfig(BaseModel):
     )
 
     dag_timeout: float = Field(
-        default=900,  # Increased from 600 to 900 (15 minutes) for complex problems like 11-hexagon packing
+        default=2400,  # Increased from 900 to 2400 (40 minutes) to match DAG timeout
         gt=0,
-        le=1800.0,  # Max 30 minutes
+        le=3600.0,  # Max 60 minutes
         description="How long to wait for a DAG to complete (seconds). Programs stuck for 2x this time get discarded.",
     )
 
@@ -172,16 +172,15 @@ class RunnerManager:
         dag_spec: DAGSpec,
         storage: ProgramStorage | None = None,
         config: Optional[RunnerConfig] = None,
-        max_parallel_stages: int = 8,
     ) -> None:
         if storage is None:
             raise ValueError("A 'storage' instance is required.")
 
         self.storage = storage
         self.engine = engine
+        self._dag_spec = dag_spec   
         self._dag_factory = DagFactory(
-            max_parallel_stages=max_parallel_stages,
-            dag_spec=dag_spec,
+            dag_spec=self._dag_spec,
         )
         self.config = config or RunnerConfig()
         self.metrics = RunnerMetrics()

@@ -42,7 +42,7 @@ class DAG:
             Dict[str, List[ExecutionOrderDependency]]
         ] = None,
         max_parallel_stages: int = 8,
-        dag_timeout: Optional[float] = 600.0,
+        dag_timeout: Optional[float] = 2400.0,
     ):
         self.nodes = nodes
         self.edges = edges

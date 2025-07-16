@@ -198,8 +198,8 @@ Examples:
     performance_group.add_argument(
         "--max-concurrent-dags",
         type=int,
-        default=6,
-        help="Maximum concurrent DAG executions (default: 6)",
+        default=10,
+        help="Maximum concurrent DAG executions (default: 10)",
     )
     performance_group.add_argument(
         "--disable-monitoring",
@@ -581,14 +581,14 @@ def create_dag_stages(
         function_name="entrypoint",
         context_stage="AddContext" if add_context else None,
         python_path=[problem_dir.resolve()],
-        timeout=600.0,
+        timeout=1200.0,
         max_memory_mb=512,
     )
 
     # Stage 2.5: Compute complexity metrics (FAST - 30s timeout)
     stages["ComputeComplexity"] = lambda: ComputeComplexityStage(
         stage_name="ComputeComplexity",
-        timeout=30.0,  # OPTIMIZED: Reduced timeout for AST analysis
+        timeout=60.0,  # OPTIMIZED: Reduced timeout for AST analysis
     )
 
     # Stage 3: Run validation against the output (MEDIUM - 60s timeout)
@@ -619,7 +619,7 @@ def create_dag_stages(
                     "ComplexityMetricUpdate",
                 ],
             ),
-            timeout=90.0,  # OPTIMIZED: Reduced from 120s
+            timeout=240.0,  # OPTIMIZED: Reduced from 120s
         )
 
     def create_lineage_insights_stage():
@@ -634,7 +634,7 @@ def create_dag_stages(
                 fitness_selector_higher_is_better=True,
             ),
             storage=redis_storage,
-            timeout=90.0,  # OPTIMIZED: Reduced from 120s
+            timeout=240,  # OPTIMIZED: Reduced from 120s
         )
 
     stages["LLMInsights"] = create_insights_stage
@@ -791,7 +791,7 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
             "top_p": 0.85,
         },
         "mutation": {
-            "temperature": 0.85,
+            "temperature": 0.75,
             "max_tokens": 10000,
             "top_p": 0.85,
         },
@@ -802,12 +802,11 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     ) -> MultiModelLLMWrapper:
         return MultiModelLLMWrapper(
             models=[
-                "google/gemini-2.5-flash",       # fast, good for insights
-                "anthropic/claude-sonnet-4",         # deep context for lineage/mutation
+                "google/gemini-2.5-flash:nitro",       # fast, good for insights
+                "anthropic/claude-sonnet-4:nitro",         # deep context for lineage/mutation
             ],
             probabilities=[0.8, 0.2],  # favor Gemini unless structure is needed
             api_key=LLM_API_KEY,
-            system_prompt="",  # to be set in subclasses
             configs=[
                 LLMConfig(
                     **params,
@@ -959,6 +958,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             poll_interval=5.0,
             max_concurrent_dags=args.max_concurrent_dags,
             log_interval=15,
+            dag_timeout=2400,
         )
 
         runner = RunnerManager(
@@ -968,10 +968,11 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 edges=dag_edges,
                 entry_points=entry_points,
                 exec_order_deps=execution_order_deps,
+                dag_timeout=2400,
+                max_parallel_stages=3,
             ),
             storage=redis_storage,
             config=runner_config,
-            max_parallel_stages=3,
         )
 
         logger.info("🎯 Starting evolution run...")
@@ -986,6 +987,8 @@ async def run_evolution_experiment(args: argparse.Namespace):
             logger.info("🔍 Performance monitoring enabled")
         else:
             logger.info("🔍 Performance monitoring disabled")
+
+        runner._dag_spec.visualize(save_path=Path(args.log_dir) / "dag_visualization.png")
 
         # Run the complete system with performance monitoring
         monitor_task = None
