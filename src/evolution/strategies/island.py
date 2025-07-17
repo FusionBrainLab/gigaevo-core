@@ -185,6 +185,13 @@ class MapElitesIsland:
                 cell = self.config.behavior_space.get_cell(elite.metrics)
                 cell_key = self._cell_key(cell)
                 await self.archive_storage.remove_elite(cell_key, elite)
+                # Update metadata: set current_island to None and persist
+                if elite.metadata.get("current_island") == self.config.island_id:
+                    elite.metadata["current_island"] = None
+                    try:
+                        await self.program_storage.update(elite)
+                    except Exception as exc:
+                        logger.warning(f"Failed to update metadata for removed elite {elite.id}: {exc}")
                 removal_count += 1
                 logger.debug(f"Removed elite {elite.id} from island {self.config.island_id}")
             except Exception as exc:

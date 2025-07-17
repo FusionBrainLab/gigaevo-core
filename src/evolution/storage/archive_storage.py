@@ -127,6 +127,30 @@ class RedisArchiveStorage(ArchiveStorage):
         except Exception as exc:
             logger.warning(f"[RedisArchiveStorage] Could not mark {program.id} discarded: {exc}")
 
+    async def remove_elite_by_id(self, program_id: str) -> None:
+        """Remove an elite from the archive by program ID (searches all cells)."""
+        # Find the cell key containing this program ID
+        pattern = f"{self.key_prefix}:archive:*"
+        async def _inner(redis):
+            cursor = "0"
+            while True:
+                cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=1000)
+                if keys:
+                    pipe = redis.pipeline()
+                    for k in keys:
+                        pipe.get(k)
+                    raw_ids = await pipe.execute()
+                    for k, rid in zip(keys, raw_ids):
+                        if rid and rid.decode() == program_id:
+                            await redis.delete(k)
+                            return True
+                if cursor in ("0", 0):
+                    break
+            return False
+        removed = await self._program_storage._execute("archive_remove_by_id", _inner)
+        if not removed:
+            logger.warning(f"[RedisArchiveStorage] Program ID {program_id} not found in archive for removal.")
+
     async def iter_all_elites(self) -> List[Program]:
         """Return a list of all elite programs currently stored with optimized Redis usage and error recovery."""
         pattern = f"{self.key_prefix}:archive:*"

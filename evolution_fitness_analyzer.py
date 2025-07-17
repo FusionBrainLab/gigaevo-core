@@ -51,12 +51,13 @@ import numpy as np
 class EvolutionFitnessAnalyzer:
     """Analyzer for evolution fitness data from MetaEvolve system."""
     
-    def __init__(self, redis_host: str = "localhost", redis_port: int = 6379, redis_db: int = 0, 
-                 extreme_threshold: float = -10000.0, outlier_multiplier: float = 3.0, 
+    def __init__(self, redis_prefix: str, redis_host: str = "localhost", redis_port: int = 6379, redis_db: int = 0,
+                 extreme_threshold: float = -10000.0, outlier_multiplier: float = 3.0,
                  remove_outliers: bool = True):
         self.redis_host = redis_host
         self.redis_port = redis_port
         self.redis_db = redis_db
+        self.redis_prefix = redis_prefix
         self.extreme_threshold = extreme_threshold
         self.outlier_multiplier = outlier_multiplier
         self.remove_outliers = remove_outliers
@@ -69,7 +70,7 @@ class EvolutionFitnessAnalyzer:
         # Create Redis storage connection
         self.redis_storage = RedisProgramStorage({
             "redis_url": f"redis://{redis_host}:{redis_port}/{redis_db}",
-            "key_prefix": "hexagon_pack_evolution",
+            "key_prefix": redis_prefix,
             "max_connections": 50,
             "connection_pool_timeout": 30.0,
             "health_check_interval": 60,
@@ -884,25 +885,33 @@ class EvolutionFitnessAnalyzer:
             logger.warning("No programs with island data found")
             return
         
-        logger.info(f"📊 Found {len(island_data)} programs with island data out of {len(full_df)} total programs")
-        logger.info(f"📊 Unique islands: {list(island_data[island_col].unique())}")
+        # IMPORTANT: For island visualization, only consider EVOLVING programs
+        evolving_island_data = island_data[island_data['state'] == 'evolving']
+        
+        if evolving_island_data.empty:
+            logger.warning("No EVOLVING programs with island data found")
+            return
+        
+        logger.info(f"📊 Found {len(island_data)} total programs with island data out of {len(full_df)} total programs")
+        logger.info(f"📊 Found {len(evolving_island_data)} EVOLVING programs with island data")
+        logger.info(f"📊 Unique islands: {list(evolving_island_data[island_col].unique())}")
         
         # Set up the plotting style
         plt.style.use('seaborn-v0_8')
         
         # Create figure with subplots - increased size for better readability
         fig, axes = plt.subplots(2, 3, figsize=(24, 16))
-        fig.suptitle('Island Statistics Analysis', fontsize=18, fontweight='bold')
+        fig.suptitle('Island Statistics Analysis (EVOLVING Programs Only)', fontsize=18, fontweight='bold')
         
-        # 1. Island Distribution (Bar Chart)
+        # 1. Island Distribution (Bar Chart) - EVOLVING programs only
         ax1 = axes[0, 0]
-        island_counts = island_data[island_col].value_counts()
+        island_counts = evolving_island_data[island_col].value_counts()
         colors = plt.cm.Set3.colors[:len(island_counts)]
         
         bars = ax1.bar(range(len(island_counts)), island_counts.values, color=colors, alpha=0.8, edgecolor='black')
         ax1.set_xlabel('Island')
-        ax1.set_ylabel('Number of Programs')
-        ax1.set_title('Program Distribution by Island')
+        ax1.set_ylabel('Number of EVOLVING Programs')
+        ax1.set_title('EVOLVING Program Distribution by Island')
         ax1.set_xticks(range(len(island_counts)))
         ax1.set_xticklabels(island_counts.index, rotation=45, ha='right', fontsize=10)
         
@@ -910,37 +919,37 @@ class EvolutionFitnessAnalyzer:
         for bar, count in zip(bars, island_counts.values):
             height = bar.get_height()
             ax1.text(bar.get_x() + bar.get_width()/2., height + max(island_counts.values) * 0.01,
-                    f'{count}\n({count/len(island_data)*100:.1f}%)', ha='center', va='bottom', fontweight='bold')
+                    f'{count}\n({count/len(evolving_island_data)*100:.1f}%)', ha='center', va='bottom', fontweight='bold')
         
         ax1.grid(True, alpha=0.3, axis='y')
         
-        # 2. Island Distribution (Pie Chart)
+        # 2. Island Distribution (Pie Chart) - EVOLVING programs only
         ax2 = axes[0, 1]
         ax2.pie(island_counts.values, labels=island_counts.index, autopct='%1.1f%%', 
                 startangle=90, colors=colors, explode=[0.05] * len(island_counts))
-        ax2.set_title('Program Distribution by Island (Pie Chart)')
+        ax2.set_title('EVOLVING Program Distribution by Island (Pie Chart)')
         
-        # 3. Island vs State Distribution
+        # 3. Island vs State Distribution - Show full state breakdown for context
         ax3 = axes[0, 2]
         island_state_pivot = pd.crosstab(island_data[island_col], island_data['state'], normalize='index') * 100
         
         island_state_pivot.plot(kind='bar', stacked=True, ax=ax3, colormap='Set3')
         ax3.set_xlabel('Island')
         ax3.set_ylabel('Percentage')
-        ax3.set_title('Program States by Island')
+        ax3.set_title('All Program States by Island')
         ax3.tick_params(axis='x', rotation=45, labelsize=10)
         ax3.legend(title='State', bbox_to_anchor=(1.05, 1), loc='upper left')
         ax3.grid(True, alpha=0.3, axis='y')
         
-        # 4. Island Timeline (when programs were created)
+        # 4. Island Timeline (when EVOLVING programs were created)
         ax4 = axes[1, 0]
         
         # Consistent y-axis ordering for islands
-        islands_sorted = sorted(island_data[island_col].unique())
+        islands_sorted = sorted(evolving_island_data[island_col].unique())
         island_to_y = {name: idx for idx, name in enumerate(islands_sorted)}
         
         for island in islands_sorted:
-            island_programs = island_data[island_data[island_col] == island]
+            island_programs = evolving_island_data[evolving_island_data[island_col] == island]
             y = np.full(len(island_programs), island_to_y[island])
             ax4.scatter(island_programs['time_since_start'], y,
                         alpha=0.6, s=20,
@@ -948,19 +957,19 @@ class EvolutionFitnessAnalyzer:
         
         ax4.set_xlabel('Time Since Start (seconds)')
         ax4.set_ylabel('Island')
-        ax4.set_title('Program Creation Timeline by Island')
+        ax4.set_title('EVOLVING Program Creation Timeline by Island')
         ax4.set_yticks(list(island_to_y.values()))
         ax4.set_yticklabels(islands_sorted)
         ax4.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax4.grid(True, alpha=0.3, axis='x')
         
-        # 5. Fitness by Island (if fitness data available)
+        # 5. Fitness by Island (EVOLVING programs only)
         ax5 = axes[1, 1]
         fitness_col = fitness_analysis.get('fitness_col', 'metric_fitness')
         
-        if fitness_col in island_data.columns:
+        if fitness_col in evolving_island_data.columns:
             # Filter programs with valid fitness
-            valid_fitness_islands = island_data[island_data[fitness_col].notna() & (island_data[fitness_col] != -1000.0)]
+            valid_fitness_islands = evolving_island_data[evolving_island_data[fitness_col].notna() & (evolving_island_data[fitness_col] != -1000.0)]
             
             if not valid_fitness_islands.empty:
                 # Box plot of fitness by island
@@ -978,40 +987,42 @@ class EvolutionFitnessAnalyzer:
                     
                     ax5.set_xlabel('Island')
                     ax5.set_ylabel('Fitness')
-                    ax5.set_title('Fitness Distribution by Island')
+                    ax5.set_title('EVOLVING Program Fitness Distribution by Island')
                     ax5.tick_params(axis='x', rotation=45, labelsize=10)
                     ax5.grid(True, alpha=0.3, axis='y')
                 else:
                     ax5.text(0.5, 0.5, 'No valid fitness data available', 
                              ha='center', va='center', transform=ax5.transAxes, fontsize=12)
-                    ax5.set_title('Fitness Distribution by Island')
+                    ax5.set_title('EVOLVING Program Fitness Distribution by Island')
             else:
                 ax5.text(0.5, 0.5, 'No valid fitness data available', 
                          ha='center', va='center', transform=ax5.transAxes, fontsize=12)
-                ax5.set_title('Fitness Distribution by Island')
+                ax5.set_title('EVOLVING Program Fitness Distribution by Island')
         else:
             ax5.text(0.5, 0.5, 'No fitness data available', 
                      ha='center', va='center', transform=ax5.transAxes, fontsize=12)
-            ax5.set_title('Fitness Distribution by Island')
+            ax5.set_title('EVOLVING Program Fitness Distribution by Island')
         
-        # 6. Island Statistics Summary
+        # 6. Island Statistics Summary - Show both EVOLVING and full statistics
         ax6 = axes[1, 2]
         
-        # Calculate statistics for each island
+        # Calculate statistics for each island (both EVOLVING and full)
         island_stats = []
         for island in island_data[island_col].unique():
             island_programs = island_data[island_data[island_col] == island]
+            evolving_island_programs = evolving_island_data[evolving_island_data[island_col] == island]
+            
             stats = {
                 'island': island,
-                'count': len(island_programs),
-                'evolving_count': len(island_programs[island_programs['state'] == 'evolving']),
+                'total_count': len(island_programs),
+                'evolving_count': len(evolving_island_programs),
                 'discarded_count': len(island_programs[island_programs['state'] == 'discarded']),
                 'other_states_count': len(island_programs[~island_programs['state'].isin(['evolving', 'discarded'])])
             }
             
-            # Add fitness stats if available
-            if fitness_col in island_programs.columns:
-                valid_fitness = island_programs[island_programs[fitness_col].notna() & (island_programs[fitness_col] != -1000.0)]
+            # Add fitness stats for EVOLVING programs only
+            if fitness_col in evolving_island_programs.columns:
+                valid_fitness = evolving_island_programs[evolving_island_programs[fitness_col].notna() & (evolving_island_programs[fitness_col] != -1000.0)]
                 if not valid_fitness.empty:
                     stats['mean_fitness'] = valid_fitness[fitness_col].mean()
                     stats['best_fitness'] = valid_fitness[fitness_col].max()
@@ -1032,24 +1043,22 @@ class EvolutionFitnessAnalyzer:
         for stat in island_stats:
             summary_data.append([
                 stat['island'],
-                stat['count'],
-                stat['evolving_count'],
-                stat['discarded_count'],
-                stat['other_states_count'],
+                stat['evolving_count'],  # Show EVOLVING count as primary
+                stat['total_count'],     # Show total count for reference
                 f"{stat['mean_fitness']:.3f}" if stat['mean_fitness'] is not None else "N/A",
                 f"{stat['best_fitness']:.3f}" if stat['best_fitness'] is not None else "N/A",
                 stat['fitness_count']
             ])
         
         # Create table
-        table_data = [['Island', 'Total', 'Evolving', 'Discarded', 'Other', 'Mean Fitness', 'Best Fitness', 'Fitness Count']] + summary_data
+        table_data = [['Island', 'EVOLVING', 'Total', 'Mean Fitness', 'Best Fitness', 'Fitness Count']] + summary_data
         table = ax6.table(cellText=table_data[1:], colLabels=table_data[0], 
-                         cellLoc='center', loc='center', colWidths=[0.15, 0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.15])
+                         cellLoc='center', loc='center', colWidths=[0.2, 0.15, 0.15, 0.15, 0.15, 0.2])
         table.auto_set_font_size(False)
         table.set_fontsize(9)
         table.scale(1, 2)
         
-        ax6.set_title('Island Statistics Summary')
+        ax6.set_title('Island Statistics Summary (EVOLVING Programs)')
         ax6.axis('off')
         
         plt.tight_layout(pad=3.0)  # Increased padding for better spacing
@@ -1060,20 +1069,20 @@ class EvolutionFitnessAnalyzer:
         plt.show()
         
         # Additional detailed analysis
-        logger.info("\n🏝️ ISLAND STATISTICS:")
+        logger.info("\n🏝️ ISLAND STATISTICS (EVOLVING PROGRAMS):")
         logger.info("=" * 80)
         
         for stat in island_stats:
             logger.info(f"\n{stat['island'].upper()}:")
-            logger.info(f"  Total programs: {stat['count']}")
-            logger.info(f"  Evolving: {stat['evolving_count']} ({stat['evolving_count']/stat['count']*100:.1f}%)")
-            logger.info(f"  Discarded: {stat['discarded_count']} ({stat['discarded_count']/stat['count']*100:.1f}%)")
-            logger.info(f"  Other states: {stat['other_states_count']} ({stat['other_states_count']/stat['count']*100:.1f}%)")
+            logger.info(f"  Total programs: {stat['total_count']}")
+            logger.info(f"  EVOLVING: {stat['evolving_count']} ({stat['evolving_count']/stat['total_count']*100:.1f}%)")
+            logger.info(f"  Discarded: {stat['discarded_count']} ({stat['discarded_count']/stat['total_count']*100:.1f}%)")
+            logger.info(f"  Other states: {stat['other_states_count']} ({stat['other_states_count']/stat['total_count']*100:.1f}%)")
             
             if stat['mean_fitness'] is not None:
-                logger.info(f"  Mean fitness: {stat['mean_fitness']:.3f}")
-                logger.info(f"  Best fitness: {stat['best_fitness']:.3f}")
-                logger.info(f"  Programs with fitness: {stat['fitness_count']} ({stat['fitness_count']/stat['count']*100:.1f}%)")
+                logger.info(f"  Mean fitness (EVOLVING): {stat['mean_fitness']:.3f}")
+                logger.info(f"  Best fitness (EVOLVING): {stat['best_fitness']:.3f}")
+                logger.info(f"  EVOLVING programs with fitness: {stat['fitness_count']} ({stat['fitness_count']/stat['evolving_count']*100:.1f}%)")
         
         # Save detailed island statistics to file
         island_stats_file_path = output_folder / 'island_statistics.txt'
@@ -1083,21 +1092,22 @@ class EvolutionFitnessAnalyzer:
             
             f.write(f"OVERALL STATISTICS:\n")
             f.write(f"  Total programs with island data: {len(island_data)}\n")
+            f.write(f"  Total EVOLVING programs with island data: {len(evolving_island_data)}\n")
             f.write(f"  Total programs without island data: {len(full_df) - len(island_data)}\n")
             f.write(f"  Unique islands: {len(island_data[island_col].unique())}\n\n")
             
             f.write(f"ISLAND-BY-ISLAND ANALYSIS:\n")
             for stat in island_stats:
                 f.write(f"\n{stat['island'].upper()}:\n")
-                f.write(f"  Total programs: {stat['count']}\n")
-                f.write(f"  Evolving: {stat['evolving_count']} ({stat['evolving_count']/stat['count']*100:.1f}%)\n")
-                f.write(f"  Discarded: {stat['discarded_count']} ({stat['discarded_count']/stat['count']*100:.1f}%)\n")
-                f.write(f"  Other states: {stat['other_states_count']} ({stat['other_states_count']/stat['count']*100:.1f}%)\n")
+                f.write(f"  Total programs: {stat['total_count']}\n")
+                f.write(f"  EVOLVING: {stat['evolving_count']} ({stat['evolving_count']/stat['total_count']*100:.1f}%)\n")
+                f.write(f"  Discarded: {stat['discarded_count']} ({stat['discarded_count']/stat['total_count']*100:.1f}%)\n")
+                f.write(f"  Other states: {stat['other_states_count']} ({stat['other_states_count']/stat['total_count']*100:.1f}%)\n")
                 
                 if stat['mean_fitness'] is not None:
-                    f.write(f"  Mean fitness: {stat['mean_fitness']:.3f}\n")
-                    f.write(f"  Best fitness: {stat['best_fitness']:.3f}\n")
-                    f.write(f"  Programs with fitness: {stat['fitness_count']} ({stat['fitness_count']/stat['count']*100:.1f}%)\n")
+                    f.write(f"  Mean fitness (EVOLVING): {stat['mean_fitness']:.3f}\n")
+                    f.write(f"  Best fitness (EVOLVING): {stat['best_fitness']:.3f}\n")
+                    f.write(f"  EVOLVING programs with fitness: {stat['fitness_count']} ({stat['fitness_count']/stat['evolving_count']*100:.1f}%)\n")
         
         logger.info(f"✅ Saved detailed island statistics to {island_stats_file_path}")
     
@@ -1955,6 +1965,7 @@ async def main():
     
     # Create analyzer
     analyzer = EvolutionFitnessAnalyzer(
+        redis_prefix=args.redis_prefix,
         redis_host=args.redis_host,
         redis_port=args.redis_port,
         redis_db=args.redis_db,

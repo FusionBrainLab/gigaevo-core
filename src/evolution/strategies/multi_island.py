@@ -162,6 +162,13 @@ class MapElitesMultiIsland(EvolutionStrategy):
             # Add avg_size to prevent extreme bias towards very small islands
             size_weight = (avg_size + 1) / (size + 1)
             
+            # Additional penalty for islands close to capacity
+            if island.config.max_size is not None:
+                capacity_ratio = size / island.config.max_size
+                if capacity_ratio > 0.8:  # Penalize islands that are >80% full
+                    capacity_penalty = 1.0 - (capacity_ratio - 0.8) * 5.0  # Reduce weight by up to 100%
+                    size_weight *= max(capacity_penalty, 0.1)  # Minimum 10% weight
+            
             final_weight = size_weight * reason_multiplier
             
             weighted_islands.append(island)
@@ -186,6 +193,10 @@ class MapElitesMultiIsland(EvolutionStrategy):
         ):
             await self._perform_migration()
             self.last_migration = self.generation
+
+        # Periodic size enforcement every 10 generations
+        if self.generation % 10 == 0:
+            await self._enforce_all_island_size_limits()
 
         all_elites: List[Program] = []
         quotas = self._calculate_island_quotas(total)
@@ -251,6 +262,14 @@ class MapElitesMultiIsland(EvolutionStrategy):
             try:
                 accepted = await destination.add(migrant)
                 if accepted:
+                    # Remove from source island if different
+                    if source_island and source_island != destination.config.island_id:
+                        try:
+                            source_island_obj = self.islands.get(source_island)
+                            if source_island_obj:
+                                await source_island_obj.archive_storage.remove_elite_by_id(migrant.id)
+                        except Exception as exc:
+                            logger.warning(f"Failed to remove program {migrant.id} from source island {source_island}: {exc}")
                     successful += 1
                 else:
                     failed += 1
@@ -259,6 +278,21 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 failed += 1
 
         logger.info(f"Migration complete: {successful} succeeded, {failed} failed")
+        
+        # Post-migration size enforcement to ensure no islands exceed limits
+        await self._enforce_all_island_size_limits()
+
+    async def _enforce_all_island_size_limits(self) -> None:
+        """Enforce size limits on all islands after migration."""
+        for island_id, island in self.islands.items():
+            if island.config.max_size is not None:
+                try:
+                    current_count = await island.get_elite_count()
+                    if current_count > island.config.max_size:
+                        logger.warning(f"Enforcing size limit on island {island_id}: {current_count} > {island.config.max_size}")
+                        await island.enforce_size_limit()
+                except Exception as e:
+                    logger.error(f"Failed to enforce size limit on island {island_id}: {e}")
 
     async def _collect_migrants_from_island(
         self, island_id: str, island: MapElitesIsland
