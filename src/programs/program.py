@@ -12,7 +12,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from src.programs.stages.base import ProgramStageResult, StageState
+from src.programs.stages.state import StageState
+from src.programs.stages.base import ProgramStageResult
 from src.programs.stages.utils import pickle_b64_deserialize, pickle_b64_serialize
 from src.programs.utils import pretty_print_error
 from src.programs.program_state import ProgramState

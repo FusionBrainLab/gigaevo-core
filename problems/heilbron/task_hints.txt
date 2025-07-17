@@ -1,30 +1,22 @@
-**GEOMETRIC STRATEGIES**:
-- Use **non-uniform spacing** to prevent tight clusters and promote large minimal triangle areas
-- Position points along **edges or near corners** to break symmetry and exploit boundary tension
-- Encourage **triangular diversity**: vary triangle sizes and shapes formed between nearby points
+- **Triplet-aware spacing**: Prevent groups of 3 points from forming extremely small triangles by maintaining angular and spatial separation.
 
-**STRUCTURAL MOTIFS**:
-- Avoid regular grids or symmetric rings — unless **deliberately distorted** to enhance minimum triangle area
-- Construct:
-  - **Spaced arcs** or bent rows to balance density and separation
-  - **Asymmetric clusters** with tension across triangle scales
-  - **Central voids** or sparse hubs with radiating arms
-- Use **partial symmetry breaking** to create structural tension between compactness and separation
+- **Asymmetric edge loading**: Place some points near triangle edges or corners, but break symmetry to prevent internal collapses.
 
-**ADVANCED CONCEPTS**:
-- Leverage **angle-based heuristics**: favor layouts where adjacent triangles form stable obtuse or balanced acute angles
-- Try **triplet-aware spacing**: prevent any three nearby points from forming small triangles
-- Explore **progressive placement**: place critical high-tension triplets first, then fill in with margin
-- Consider **local-max optimization**: identify triangle hotspots and shift surrounding points outward
+- **Partial symmetry breaking**: Use near-symmetries (like mirrored arcs) distorted just enough to avoid degeneracies.
 
-**CAUTION ZONE**:
-- Avoid:
-  - Points lying nearly on a straight line (degenerate triangles)
-  - Excessive clustering without area gain
-  - Symmetric layouts that yield small inner triangles
-- Designs must be **globally spread** and **locally diverse**
+- **Angular robustness**: Favor obtuse or well-distributed triangle angles; avoid layouts where many triangles share a nearly collinear point.
 
-**REMINDER**:
-- The goal is not visual symmetry but **area robustness**
-- Focus on the **smallest triangle** — all other layout choices should serve to **push it larger**
-- Use geometric intuition to identify and mitigate triangle compression risks
+- **Tension-based distribution**: Use repulsive spacing or progressive placement where high-risk triplets (likely to compress area) are pre-spaced early.
+
+🚫 FAILURE MODES TO AVOID:
+- Do **not** place multiple points exactly along a single triangle edge (→ collinear)
+- Avoid placing many points at or near triangle **vertices** (→ stacked points)
+- Prevent repeated (x, y) coordinates — even tiny shifts help prevent collapse
+
+✅ TECHNIQUES TO REDUCE COLLAPSE:
+- Add small spacing perturbations to edge-aligned or loop-generated points
+- Check triangle areas during generation
+- For edge or arc structures, **curve** the layout to break collinearity
+
+📈 GOAL:
+Push the **smallest triangle area upward** by trading symmetry for robustness and crafting **globally spread, locally stable** configurations.

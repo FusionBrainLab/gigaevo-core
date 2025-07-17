@@ -1,22 +1,16 @@
-**OBJECTIVE**: Write a Python function that arranges exactly 11 points on or inside a unit-area equilateral triangle so that the area of the smallest triangle formed by any three points is maximized.
+Design a function that returns **11 2D points** lying **on or inside** a **unit-area equilateral triangle** such that the **area of the smallest triangle** formed by any three points is **maximized**.
 
-**RULES**:
-- The enclosing triangle:
-  - Is equilateral (all sides and angles equal)
-  - Has unit area
-  - Has its base on the X-axis, with one vertex at (0, 0) and the triangle extending upward
-- Points may be placed anywhere inside or on the triangle
-- The function must return a valid configuration of 11 points in 2D space
+📐 TRIANGLE SPECIFICATION:
+- Equilateral with unit area
+- Flat base along the X-axis
+- One vertex fixed at (0, 0)
+- Triangle points upward
 
-**GOAL**:
-- Discover spatial arrangements that maximize the smallest triangle area by leveraging:
-  - Non-uniform spacing
-  - Edge utilization
-  - Geometric diversity in local triangle configurations
+🧮 OBJECTIVE:
+Among all \\( \\binom{11}{3} = 165 \\) triangles that can be formed, find the layout where the **smallest of these triangle areas is as large as possible**.
 
-**MUTATION TARGET**:
-- Create structurally novel point arrangements through:
-  - Spatial redistribution
-  - Symmetry breaking
-  - Local triangle shape manipulation
-- Avoid clustered or degenerate configurations unless they are structurally justified (e.g. controlled near-collinear bands for tension)
+This is a variant of the **Heilbronn Triangle Problem**.
+
+⚠️ CONSTRAINTS:
+- All 11 points must be **distinct**
+- No three points may be exactly **collinear** or positioned so their triangle area is 0

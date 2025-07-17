@@ -786,7 +786,7 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
             "top_p": 0.85,
         },
         "mutation": {
-            "temperature": 0.75,
+            "temperature": 0.85,
             "max_tokens": 10000,
             "top_p": 0.85,
         },

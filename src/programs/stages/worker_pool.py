@@ -15,7 +15,8 @@ from typing import Optional
 
 from loguru import logger
 
-from .base import Stage, ProgramStageResult, StageState
+from src.programs.stages.base import Stage
+from src.programs.stages.state import ProgramStageResult
 
 __all__ = ["WorkerPoolStage"]
 

@@ -5,8 +5,9 @@ import weakref
 from typing import Optional, List, Dict
 
 from src.programs.program import Program
-from src.programs.stages.base import ProgramStageResult, StageState
-from src.database.program_storage import ProgramStorage, RedisProgramStorage
+from src.programs.stages.base import ProgramStageResult
+from src.programs.stages.state import StageState
+from src.database.program_storage import ProgramStorage
 from src.programs.program_state import ProgramState
 
 class ProgramStateManager:

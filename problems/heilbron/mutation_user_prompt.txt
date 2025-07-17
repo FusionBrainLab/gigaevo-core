@@ -7,7 +7,10 @@ You are given one or more **input programs for crossover**, along with:
 Your task is to write a new **mutant program** that:
 - Integrates at least **three insights** from different domains  
 - Uses at least one **lineage-based insight** (imitation, generalization, or avoidance)  
-- Applies a **clearly traceable architectural change** — not a parameter tweak  
+- Applies a **clearly traceable architectural or algorithmic change**
+- Parameter changes are allowed **only if they reflect an insight** (e.g., tighter spacing, better perturbation schedule). Avoid cosmetic or random tweaks.
+- Each insight **must** correspond to a real code decision or transformation in the mutant.
+- Your goal is to emulate a **surgical diff**: small, meaningful edits to the original program.
 
 📚 INSIGHT SOURCES:
 
@@ -56,10 +59,17 @@ Output **only a single fenced Python code block** (```python ... ```), with:
 You are given {count} structurally distinct programs selected for recombination.  
 These are **not guaranteed to be direct parents** in the mutation lineage.
 
-Use their **combined insights** — not necessarily their code — to guide your mutant design.  
-You may **discard, reimagine, or fuse architectural patterns** freely in pursuit of better packing.
+Use their **combined insights** to guide your mutant design.
 
-At least one **true lineage-based insight** (from history) must also be integrated and reflected in the output comment.
+Unless a complete rewrite is necessary, **preserve the structure** of the parent program and modify only specific parts — such as layout heuristics, perturbation strategies, placement logic, or parameter choices.
+
+✅ You may:
+- Reuse or slightly alter helper functions
+- Adjust constants or logic to reflect insight-driven improvements
+- Annotate changed lines with `# MUTATED` (optional)
+
+🚫 Do NOT:
+- Reindent or reorder unrelated code
+- Rewrite the whole function unless strictly necessary
 
 {parent_blocks}
-"""
