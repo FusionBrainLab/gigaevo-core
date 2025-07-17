@@ -645,7 +645,7 @@ def create_dag_stages(
 
     stages["ValidationMetricUpdate"] = lambda: FactoryMetricsStage(
         stage_name="ValidationMetricUpdate",
-        prev_stage_name="RunValidation",
+        stage_to_extract_metrics="RunValidation",
         metrics_factory=validation_metrics_factory,
         required_keys=["fitness", "is_valid"],
         timeout=15.0,  # OPTIMIZED: Reduced for fast metric updates
@@ -672,7 +672,7 @@ def create_dag_stages(
 
     stages["ComplexityMetricUpdate"] = lambda: FactoryMetricsStage(
         stage_name="ComplexityMetricUpdate",
-        prev_stage_name="ComputeComplexity",
+        stage_to_extract_metrics="ComputeComplexity",
         metrics_factory=complexity_metrics_factory,
         required_keys=[
             "complexity_score",
