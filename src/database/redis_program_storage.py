@@ -20,8 +20,6 @@ from src.programs.program import Program
 from src.utils.error_handling import (
     resilient_operation, 
     RetryConfig, 
-    CircuitBreakerConfig,
-    circuit_breaker
 )
 from pydantic import BaseModel, Field, AnyUrl
 
