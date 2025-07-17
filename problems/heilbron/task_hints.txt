@@ -1,0 +1,30 @@
+**GEOMETRIC STRATEGIES**:
+- Use **non-uniform spacing** to prevent tight clusters and promote large minimal triangle areas
+- Position points along **edges or near corners** to break symmetry and exploit boundary tension
+- Encourage **triangular diversity**: vary triangle sizes and shapes formed between nearby points
+
+**STRUCTURAL MOTIFS**:
+- Avoid regular grids or symmetric rings — unless **deliberately distorted** to enhance minimum triangle area
+- Construct:
+  - **Spaced arcs** or bent rows to balance density and separation
+  - **Asymmetric clusters** with tension across triangle scales
+  - **Central voids** or sparse hubs with radiating arms
+- Use **partial symmetry breaking** to create structural tension between compactness and separation
+
+**ADVANCED CONCEPTS**:
+- Leverage **angle-based heuristics**: favor layouts where adjacent triangles form stable obtuse or balanced acute angles
+- Try **triplet-aware spacing**: prevent any three nearby points from forming small triangles
+- Explore **progressive placement**: place critical high-tension triplets first, then fill in with margin
+- Consider **local-max optimization**: identify triangle hotspots and shift surrounding points outward
+
+**CAUTION ZONE**:
+- Avoid:
+  - Points lying nearly on a straight line (degenerate triangles)
+  - Excessive clustering without area gain
+  - Symmetric layouts that yield small inner triangles
+- Designs must be **globally spread** and **locally diverse**
+
+**REMINDER**:
+- The goal is not visual symmetry but **area robustness**
+- Focus on the **smallest triangle** — all other layout choices should serve to **push it larger**
+- Use geometric intuition to identify and mitigate triangle compression risks

@@ -21,6 +21,7 @@ from src.programs.state_manager import ProgramStateManager
 from src.runner.factories import DagFactory
 from src.runner.scheduler import DagScheduler
 from src.runner.engine_driver import EngineDriver
+from src.runner.metrics import MetricsService
 
 __all__ = [
     "RunnerConfig",
@@ -186,8 +187,6 @@ class RunnerManager:
         self.metrics = RunnerMetrics()
 
         # Metrics exporter
-        from src.runner.metrics import MetricsService
-
         MetricsService.init(self.config.prometheus_port)
 
         # Helper for persisting stage updates
@@ -371,8 +370,6 @@ class RunnerManager:
     # ------------------------------------------------------------------
 
     async def _export_metrics_loop(self):
-        from src.runner.metrics import MetricsService
-
         try:
             while self._running and not self._stopping:
                 MetricsService.tick_uptime()

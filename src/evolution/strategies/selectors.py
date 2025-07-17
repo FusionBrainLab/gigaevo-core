@@ -16,10 +16,11 @@ class ArchiveSelectorProtocol(Protocol):
 class ArchiveSelector(ABC):
     """Base class for archive selection strategies."""
     
-    def __init__(self, fitness_keys: List[str]):
+    def __init__(self, fitness_keys: List[str], fitness_key_higher_is_better: dict[str, bool] | None = None):
         if not fitness_keys:
             raise ValueError("fitness_keys cannot be empty")
         self.fitness_keys = fitness_keys
+        self.fitness_key_higher_is_better = fitness_key_higher_is_better or {key: True for key in fitness_keys}
 
     @abstractmethod
     def __call__(self, new: Program, current: Program) -> bool:
@@ -28,10 +29,8 @@ class ArchiveSelector(ABC):
 
 
 class SumArchiveSelector(ArchiveSelector):
-    def __init__(self, *args, weights: Optional[List[float]] = None, fitness_key_higher_is_better: dict[str, bool] | None = None, **kwargs):
+    def __init__(self, *args, weights: Optional[List[float]] = None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fitness_key_higher_is_better = fitness_key_higher_is_better or {key: True for key in self.fitness_keys}
-        # if higher is better, the weight is positive; if lower is better, the weight will be negated
         self.weights = weights or [1.0] * len(self.fitness_keys)
 
     def __call__(self, new: Program, current: Program) -> bool:
@@ -40,13 +39,12 @@ class SumArchiveSelector(ArchiveSelector):
         return new_sum > current_sum
 
     def score(self, program: Program) -> float:
-        return sum([v * w for v, w in zip(extract_fitness_values(program, self.fitness_keys), self.weights)])
+        return sum([v * w for v, w in zip(extract_fitness_values(program, self.fitness_keys, self.fitness_key_higher_is_better), self.weights)])
 
 
 class ParetoFrontSelector(ArchiveSelector):
-    def __init__(self, *args, fitness_key_higher_is_better: dict[str, bool] | None = None, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fitness_key_higher_is_better = fitness_key_higher_is_better or {key: True for key in self.fitness_keys}
 
     def __call__(self, new: Program, current: Program) -> bool:
         new_values = extract_fitness_values(new, self.fitness_keys, self.fitness_key_higher_is_better)

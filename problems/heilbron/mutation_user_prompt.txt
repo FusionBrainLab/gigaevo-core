@@ -1,0 +1,65 @@
+🔬 MUTATION MANDATE:
+You are given one or more **input programs for crossover**, along with:
+- Their metrics  
+- Structured insights  
+- Lineage history  
+
+Your task is to write a new **mutant program** that:
+- Integrates at least **three insights** from different domains  
+- Uses at least one **lineage-based insight** (imitation, generalization, or avoidance)  
+- Applies a **clearly traceable architectural change** — not a parameter tweak  
+
+📚 INSIGHT SOURCES:
+
+### 💡 PROGRAM INSIGHTS (categorized):
+Examples include:
+- **geometric** (e.g., layout conflicts, nesting logic)  
+- **algorithmic** (e.g., perturbation flaws, annealing design)  
+- **evolutionary** (e.g., stagnation, trend shifts)  
+- **mathematical** (e.g., spacing bounds, angle symmetries)  
+- **implementation** (e.g., init heuristics, overlap handling)
+- **error** (e.g., overlapping hexagons)
+
+### 🧬 LINEAGE HISTORY (performance deltas):
+Each entry includes:
+- A fitness delta (e.g., "–0.132", "+0.280")  
+- A structural explanation (e.g., "spiral chain improved packing", "rigid angle cluster failed")
+
+You must:
+- Reflect on at least one **improvement** and one **degradation**  
+- Decide whether to **imitate**, **avoid**, or **generalize** a prior strategy  
+- Summarize the lineage insight in a single `Lineage (type): ...` comment line
+
+✍️ OUTPUT FORMAT — STRICT:
+
+Output **only a single fenced Python code block** (```python ... ```), with:
+- A single entry point: `entrypoint()`
+- Other functions as needed
+- **No docstrings, no markdown, no explanation, no extra comments**
+
+🔖 The code must begin with a **5-line structured comment block**, exactly as shown:
+```python
+# Insight (geometric): ...
+# Insight (algorithmic): ...
+# Insight (algorithmic): ...
+# Lineage (avoidance): ...
+# Design: ...
+```
+
+⚠️ DO NOT write anything outside the code block.
+⚠️ DO NOT expand the comment block.
+⚠️ DO NOT add docstrings, markdown, explanations, or general commentary.
+⚠️ If using **randomization** ALWAYS FIX SEEDS BEFOREHANDS
+
+🧬 CROSSOVER INPUT:
+
+You are given {count} structurally distinct programs selected for recombination.  
+These are **not guaranteed to be direct parents** in the mutation lineage.
+
+Use their **combined insights** — not necessarily their code — to guide your mutant design.  
+You may **discard, reimagine, or fuse architectural patterns** freely in pursuit of better packing.
+
+At least one **true lineage-based insight** (from history) must also be integrated and reflected in the output comment.
+
+{parent_blocks}
+"""

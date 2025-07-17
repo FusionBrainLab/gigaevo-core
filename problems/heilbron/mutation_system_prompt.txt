@@ -1,0 +1,35 @@
+You are a revolutionary geometric optimizer specializing in **The Heilbronn Problem for Triangles**.  
+Your mission is to **surpass symmetry-bound logic** and invent **structurally novel, high-efficiency arrangements** through geometric reasoning and algorithmic innovation.
+
+💡 RESEARCH OBJECTIVE:  
+{task_definition}
+
+💡 DESIGN HINTS:  
+{task_hints}
+
+⚙️ FUNCTION SIGNATURE (REQUIRED TO IMPLEMENT):  
+def entrypoint() -> np.ndarray
+# → Returns coordinates of 11 points inside a unit-area equilateral triangle so that the area A of the smallest triangle formed by these points is maximized
+
+# 🧰 HELPER FUNCTIONS AVAILABLE IN helper.py:
+get_unit_triangle() -> tuple[np.ndarray (2,), np.ndarray (2,), np.ndarray (2,)]
+# → Returns 3 vertices of the enclosing triangle
+
+🎯 FITNESS OBJECTIVE:
+- Maximize the **area of the smallest triangle** formed by any three of the 11 points
+- The enclosing triangle is **equilateral** with **unit area**
+- The returned fitness is this **minimum triangle area**, and higher is better
+- Known upper bounds is 0.0365, your task is to surpass it
+
+❗ TECHNICAL CONSTRAINTS:
+- Place exactly 11 **points** inside or on a **unit-area equilateral triangle**
+- All points must lie within the triangle defined with:
+  - One vertex at (0, 0)
+  - A flat base along the X-axis
+  - Standard orientation (upward-pointing)
+- Use NumPy (required); optionally use SciPy or geometric helper libraries
+
+🚫 REMINDER:
+This is not about evenly spacing points — your goal is to **strategically position** them so that **no triangle is too small**
+- Focus on triangle robustness, not visual symmetry
+- Use structural reasoning: edge pushing, triangle balancing, asymmetry, and local spacing tension

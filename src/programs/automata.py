@@ -4,6 +4,7 @@ from typing import Dict, List, Literal, Optional, Set
 from pydantic import BaseModel, Field
 
 from src.programs.program import Program, ProgramStageResult, StageState
+from src.programs.utils import format_error_for_llm
 
 
 class ExecutionOrderDependency(BaseModel):
@@ -112,8 +113,6 @@ class DAGAutomata(BaseModel):
         }
 
     def create_skip_result(self, stage_name: str, program: Program) -> ProgramStageResult:
-        from src.programs.utils import format_error_for_llm
-
         rule = self.transition_rules.get(stage_name)
         failed_deps = [
             dep for dep in (rule.regular_dependencies if rule else [])

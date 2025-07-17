@@ -13,7 +13,7 @@ Only internal layout changed; logic is identical (except for import paths).
 
 import asyncio
 import gc
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 import random
@@ -85,6 +85,11 @@ class EvolutionEngine:
                 if self._paused:
                     await asyncio.sleep(self.config.loop_interval)
                     continue
+
+                # Check max_generations limit
+                if self.config.max_generations is not None and self.metrics.total_generations >= self.config.max_generations:
+                    logger.info(f"[EvolutionEngine] Reached max_generations limit ({self.config.max_generations}) - stopping evolution")
+                    break
 
                 try:
                     generation_start = datetime.now(timezone.utc)

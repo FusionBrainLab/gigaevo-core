@@ -201,11 +201,6 @@ Examples:
         default=10,
         help="Maximum concurrent DAG executions (default: 10)",
     )
-    performance_group.add_argument(
-        "--disable-monitoring",
-        action="store_true",
-        help="Disable performance monitoring",
-    )
 
     return parser.parse_args()
 
@@ -941,6 +936,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             loop_interval=1.0,
             max_elites_per_generation=6,  # INCREASED: More elites for better diversity preservation
             max_mutations_per_generation=8,  # INCREASED: More mutations per generation for faster exploration
+            max_generations=args.max_generations,  # Pass max_generations from command line
             required_behavior_keys=required_behavior_keys,
             log_validation_failures=True,
         )
@@ -980,66 +976,10 @@ async def run_evolution_experiment(args: argparse.Namespace):
         logger.info(f"  - Problem directory: {problem_dir}")
         logger.info(f"  - Target DB: {args.redis_db}")
         logger.info(f"  - Initial population: {len(programs)} programs")
+        logger.info(f"  - Max generations: {args.max_generations if args.max_generations else 'unlimited'}")
         logger.info(f"  - DAG stages: {list(dag_stages.keys())}")
 
-        # Start performance monitoring
-        if not args.disable_monitoring:
-            logger.info("🔍 Performance monitoring enabled")
-        else:
-            logger.info("🔍 Performance monitoring disabled")
-
-        runner._dag_spec.visualize(save_path=Path(args.log_dir) / "dag_visualization.png")
-
-        # Run the complete system with performance monitoring
-        monitor_task = None
-
-        if not args.disable_monitoring:
-
-            async def monitor_and_optimize():
-                """Background task for performance monitoring and auto-optimization."""
-                while True:
-                    try:
-                        await asyncio.sleep(60)  # Check every minute
-
-                        # Auto-optimize if needed
-                        optimizations_applied = await auto_optimize()
-                        if optimizations_applied > 0:
-                            logger.info(
-                                f"🔧 Applied {optimizations_applied} automatic optimizations"
-                            )
-
-                        # Log performance dashboard every 5 minutes
-                        if int(time.time()) % 300 == 0:
-                            dashboard = await get_performance_dashboard()
-                            logger.info(
-                                f"📊 Performance: {dashboard['health']['status']} "
-                                f"(score: {dashboard['health']['performance_score']:.1f}/100)"
-                            )
-
-                            if dashboard["alerts"]:
-                                logger.warning(
-                                    f"⚠️ System alerts: {len(dashboard['alerts'])} active"
-                                )
-                                for alert in dashboard["alerts"]:
-                                    logger.warning(
-                                        f"  - {alert['level']}: {alert['message']}"
-                                    )
-
-                    except Exception as e:
-                        logger.error(f"Performance monitoring error: {e}")
-
-            # Start monitoring task
-            monitor_task = asyncio.create_task(monitor_and_optimize())
-
-        try:
-            await runner.run()
-        finally:
-            if monitor_task:
-                monitor_task.cancel()
-                try:
-                    await monitor_task
-                except asyncio.CancelledError:
-                    pass
+        await runner.run()
 
     except KeyboardInterrupt:
         logger.info("🛑 Evolution experiment interrupted by user")
