@@ -14,6 +14,10 @@ def entrypoint() -> np.ndarray
 # 🧰 HELPER FUNCTIONS AVAILABLE IN helper.py:
 get_unit_triangle() -> tuple[np.ndarray (2,), np.ndarray (2,), np.ndarray (2,)]
 # → Returns 3 vertices of the enclosing triangle
+get_smallest_triangle_area(np.ndarray (n, 2)) -> float
+# → Returns the are of the smallest triangle formed by any 3 points in the array of coordinates
+is_inside_triangle(points: np.ndarray (n, 2), a: np.ndarray (2,), b: np.ndarray (2,), c: np.ndarray (2,)) -> bool
+# → Checks if all points are inside the triangle (a, b, c)
 
 🎯 FITNESS OBJECTIVE:
 - Maximize the **area of the smallest triangle** formed by any three of the 11 points

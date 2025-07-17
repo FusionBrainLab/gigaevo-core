@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Central execution guard shared by all Stage objects.
 
-Encapsulates timeout, resource monitoring, pre/post validation, error mapping,
+Encapsulates timeout, resource monitoring, error mapping,
 metrics recording and Prometheus export in a single place so every Stage
 inherits identical robust behaviour.
 """
@@ -34,17 +34,11 @@ async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
     duration: float = 0.0
 
     try:
-        # Pre-execution validation hook
-        await stage._validate_program(program)  # pylint: disable=protected-access
-
         async with stage._resource_monitor(program):  # pylint: disable=protected-access
             result = await asyncio.wait_for(
                 stage._execute_stage(program, started_at),  # pylint: disable=protected-access
                 timeout=stage.timeout,
             )
-
-        # Post-execution validation
-        await stage._validate_result(result)  # pylint: disable=protected-access
 
         duration = (datetime.now(timezone.utc) - started_at).total_seconds()
         stage.metrics.record_execution(duration, True)
@@ -55,9 +49,8 @@ async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
         return result
 
     except asyncio.TimeoutError:
-        stage.metrics.record_timeout()
         duration = (datetime.now(timezone.utc) - started_at).total_seconds()
-        stage.metrics.record_execution(duration, False, "TimeoutError")
+        stage.metrics.record_execution(duration, False)
         StagePrometheusExporter.record(stage.stage_name, duration, False)
         err = f"Stage timeout after {stage.timeout}s"
         logger.error(f"[{stage.stage_name}] Program {program.id}: {err}")
@@ -70,8 +63,7 @@ async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
         )
 
     except SecurityViolationError as exc:
-        stage.metrics.record_security_violation()
-        stage.metrics.record_execution(0, False, "SecurityViolation")
+        stage.metrics.record_execution(0, False)
         StagePrometheusExporter.record(stage.stage_name, 0, False)
         logger.error(
             f"[{stage.stage_name}] Program {program.id}: Security violation - {exc}"
@@ -86,7 +78,7 @@ async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
 
     except MetaEvolveError as exc:  # includes ValidationError, ResourceError, etc.
         duration = (datetime.now(timezone.utc) - started_at).total_seconds()
-        stage.metrics.record_execution(duration, False, type(exc).__name__)
+        stage.metrics.record_execution(duration, False)
         StagePrometheusExporter.record(stage.stage_name, duration, False)
         logger.error(f"[{stage.stage_name}] Program {program.id}: {exc}")
         return build_stage_result(
@@ -98,7 +90,7 @@ async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
 
     except Exception as exc:  # pragma: no cover – unexpected
         duration = (datetime.now(timezone.utc) - started_at).total_seconds()
-        stage.metrics.record_execution(duration, False, "UnexpectedError")
+        stage.metrics.record_execution(duration, False)
         StagePrometheusExporter.record(stage.stage_name, duration, False)
         logger.error(
             f"[{stage.stage_name}] Program {program.id}: Unexpected error - {exc}"
