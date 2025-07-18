@@ -568,7 +568,7 @@ def create_dag_stages(
         function_name="entrypoint",
         context_stage="AddContext" if add_context else None,
         python_path=[problem_dir.resolve()],
-        timeout=1200.0,
+        timeout=300.0,
         max_memory_mb=512,
     )
 
@@ -945,7 +945,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             poll_interval=5.0,
             max_concurrent_dags=args.max_concurrent_dags,
             log_interval=15,
-            dag_timeout=1800,
+            dag_timeout=600,
         )
 
         runner = RunnerManager(
@@ -955,7 +955,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 edges=dag_edges,
                 entry_points=entry_points,
                 exec_order_deps=execution_order_deps,
-                dag_timeout=1800,
+                dag_timeout=600,
                 max_parallel_stages=3,
             ),
             storage=redis_storage,

@@ -6,7 +6,6 @@ from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
 from src.programs.program import Program, ProgramStageResult, StageState
-from src.database.program_storage import ProgramStorage
 from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
 from src.exceptions import StageError
@@ -137,23 +136,19 @@ class GenerateLLMInsightsStage(Stage):
     def __init__(self, config: InsightsConfig, **kwargs):
         super().__init__(**kwargs)
         self.config = config
-
-        if self.config.system_prompt_template is not None:
-            self.system_prompt_template = self.config.system_prompt_template
-        else:
-            if self.config.output_format == "json":
-                self.system_prompt_template = DEFAULT_SYSTEM_PROMPT_TEMPLATE_JSON
-            else:
-                self.system_prompt_template = DEFAULT_SYSTEM_PROMPT_TEMPLATE_TEXT
-
-        if self.config.user_prompt_template is not None:
-            self.user_prompt_template = self.config.user_prompt_template
-        else:
-            if self.config.output_format == "json":
-                self.user_prompt_template = DEFAULT_USER_PROMPT_TEMPLATE_JSON
-            else:
-                self.user_prompt_template = DEFAULT_USER_PROMPT_TEMPLATE_TEXT
-
+        
+        # Select templates based on output format
+        self.system_prompt_template = self._select_template(
+            custom=config.system_prompt_template,
+            json_default=DEFAULT_SYSTEM_PROMPT_TEMPLATE_JSON,
+            text_default=DEFAULT_SYSTEM_PROMPT_TEMPLATE_TEXT
+        )
+        
+        self.user_prompt_template = self._select_template(
+            custom=config.user_prompt_template,
+            json_default=DEFAULT_USER_PROMPT_TEMPLATE_JSON,
+            text_default=DEFAULT_USER_PROMPT_TEMPLATE_TEXT
+        )
         
         self.system_prompt = self.system_prompt_template.format(
             evolutionary_task_description=self.config.evolutionary_task_description,
@@ -163,6 +158,12 @@ class GenerateLLMInsightsStage(Stage):
         logger.info(
             f"[{self.stage_name}] Initialized LLM insights stage for task: {self.config.evolutionary_task_description[:100]}..."
         )
+
+    def _select_template(self, custom: Optional[str], json_default: str, text_default: str) -> str:
+        """Select appropriate template based on config."""
+        if custom is not None:
+            return custom
+        return json_default if self.config.output_format == "json" else text_default
 
     async def _execute_stage(self, program: Program, started_at: datetime) -> ProgramStageResult:
         try:
@@ -206,6 +207,7 @@ class GenerateLLMInsightsStage(Stage):
             raise StageError(error_msg) from e
 
     def _render_user_prompt(self, program: Program) -> str:
+        """Render the user prompt with program data."""
         metrics_str = self._format_metrics(program.metrics)
         return self.user_prompt_template.format(
             code=program.code,
@@ -216,42 +218,35 @@ class GenerateLLMInsightsStage(Stage):
         )
 
     def _format_metrics(self, metrics: Dict[str, Any]) -> str:
+        """Format metrics for display in prompt."""
         lines = []
         for metric_key, metric_description in self.config.metrics_to_display.items():
             v = metrics[metric_key]
             lines.append(f"- {metric_key} : {v} ({metric_description})")
-
         return "\n".join(lines)
 
-    def _format_error_section(self, program: Program) -> str:
+    def _get_filtered_failed_stages(self, program: Program) -> List[str]:
+        """Get failed stages excluding configured exclusions."""
         excluded = set(self.config.excluded_error_stages or [])
-        failed = [s for s in program.get_failed_stages() if s not in excluded]
+        return [s for s in program.get_failed_stages() if s not in excluded]
+
+    def _format_error_section(self, program: Program) -> str:
+        """Format error section for prompt."""
+        failed = self._get_filtered_failed_stages(program)
         if not failed:
             return ""
+        
         blocks = []
         for stage in failed:
             summary = program.get_stage_error_summary(stage)
             if summary:
                 blocks.append(f"=== Stage: {stage} ===\n{summary}")
+        
         return f"\nStage Execution Errors:\n{chr(10).join(blocks)}\n" if blocks else ""
 
     def _format_error_focus(self, program: Program) -> str:
-        failed = [s for s in program.get_failed_stages() if s not in (self.config.excluded_error_stages or [])]
+        """Format error focus section for prompt."""
+        failed = self._get_filtered_failed_stages(program)
         if not failed:
             return ""
         return f"\n- **Error Analysis**: Focus on fixing or avoiding failure modes from stages: {', '.join(failed)}"
-
-    def get_task_description(self) -> str:
-        return self.config.evolutionary_task_description
-
-    def get_formatted_system_prompt(self) -> str:
-        return self.system_prompt
-
-    def get_excluded_error_stages(self) -> List[str]:
-        return self.config.excluded_error_stages or []
-
-    def is_stage_error_excluded(self, stage_name: str) -> bool:
-        return stage_name in (self.config.excluded_error_stages or [])
-
-    def get_formatted_user_prompt(self, program: Program) -> str:
-        return self._render_user_prompt(program)
