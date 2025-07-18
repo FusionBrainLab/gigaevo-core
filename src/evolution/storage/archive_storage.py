@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Callable, List, Optional, Tuple
+import random
 
 from loguru import logger
 from redis import asyncio as aioredis
@@ -147,6 +148,9 @@ class RedisArchiveStorage(ArchiveStorage):
                     break
             if not program_ids:
                 return []
+            
+            random.shuffle(program_ids)
+            
             return await self._program_storage.mget(program_ids)
         elites = await self._program_storage._execute("archive_get_all_elites", _scan)
         logger.debug(f"Retrieved {len(elites)} elites from archive.")
@@ -167,7 +171,7 @@ class RedisArchiveStorage(ArchiveStorage):
                         pipe.get(k)
                     raw_ids = await pipe.execute()
                     for k, rid in zip(keys, raw_ids):
-                        if rid and rid.decode() == program_id:
+                        if rid and rid == program_id:
                             await redis.delete(k)
                             logger.debug(f"Removed elite with program_id {program_id} from archive.")
                             return True

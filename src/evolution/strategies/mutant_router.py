@@ -27,31 +27,31 @@ class MutantRouter(ABC):
 
 class RandomMutantRouter(MutantRouter, IslandCompatibilityMixin):
     """
-    Routes programs to random accepting islands. Always logs selection.
+    Routes programs to random accepting islands.
     """
-    def __init__(self):
-        """Initialize the random mutant router."""
-        pass
 
     async def route_mutant(self, mutant: Program, islands: List[MapElitesIsland], 
                           context: Optional[Dict[str, Any]] = None) -> Optional[MapElitesIsland]:
-        """Route mutant to a random accepting island."""
+        """Route mutant to a random accepting island with logging."""
         if not islands:
             return None
 
-        # Get compatible islands
+        # Get compatible islands with logging
         compatible_islands = await self._get_compatible_islands(mutant, islands)
 
         if not compatible_islands:
+            logger.debug(f"🚫 No compatible islands found for mutant {mutant.id}")
             return None
 
         # Select random island
         selected = random.choice(compatible_islands)
-        logger.debug(f"Selected island {selected.config.island_id} via random selection")
+        
+        logger.debug(f"🏝️ Routed mutant {mutant.id} to {selected.config.island_id} (random selection)")
+        
         return selected
 
     async def _get_compatible_islands(self, mutant: Program, islands: List[MapElitesIsland]) -> List[MapElitesIsland]:
-        """Get list of islands that can accept the mutant."""
+        """Get list of islands that can accept the mutant with logging."""
         compatible_islands = []
         for island in islands:
             if await self._can_accept_program(island, mutant):

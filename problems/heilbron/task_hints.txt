@@ -1,22 +1,28 @@
-- **Triplet-aware spacing**: Prevent groups of 3 points from forming extremely small triangles by maintaining angular and spatial separation.
+💡 DESIGN HINTS FOR OPTIMAL POINT LAYOUT
 
-- **Asymmetric edge loading**: Place some points near triangle edges or corners, but break symmetry to prevent internal collapses.
+- **Triplet-aware spacing**: Optimize for triangle robustness by preventing any group of 3 points from forming a very small or flat triangle. This requires angular as well as spatial separation.
 
-- **Partial symmetry breaking**: Use near-symmetries (like mirrored arcs) distorted just enough to avoid degeneracies.
+- **Asymmetric edge loading**: It’s acceptable to place points near triangle edges or corners, but avoid doing so symmetrically — symmetry often creates repeating degeneracies in triangle area.
 
-- **Angular robustness**: Favor obtuse or well-distributed triangle angles; avoid layouts where many triangles share a nearly collinear point.
+- **Broken symmetry beats perfect order**: Partial or near-symmetries (e.g., arcs or spirals) can be used, but they must be distorted or perturbed enough to avoid triplet collapses.
 
-- **Tension-based distribution**: Use repulsive spacing or progressive placement where high-risk triplets (likely to compress area) are pre-spaced early.
+- **Angular robustness**: Favor configurations where triangle angles are diverse and well-spread. Avoid layouts where many triangles share a nearly collinear anchor point.
 
-🚫 FAILURE MODES TO AVOID:
-- Do **not** place multiple points exactly along a single triangle edge (→ collinear)
-- Avoid placing many points at or near triangle **vertices** (→ stacked points)
-- Prevent repeated (x, y) coordinates — even tiny shifts help prevent collapse
+- **Tension-based distribution**: Use repulsion, local neighborhood shaping, or progressive placement schemes that space apart likely-degenerate triplets early in the generation process.
 
-✅ TECHNIQUES TO REDUCE COLLAPSE:
-- Add small spacing perturbations to edge-aligned or loop-generated points
-- Check triangle areas during generation
-- For edge or arc structures, **curve** the layout to break collinearity
+🚫 FAILURE MODES TO AVOID
 
-📈 GOAL:
-Push the **smallest triangle area upward** by trading symmetry for robustness and crafting **globally spread, locally stable** configurations.
+- Do NOT align multiple points along a single triangle edge (→ collinearity → zero-area triangles)
+- Avoid stacking many points at triangle vertices (→ high-density → degeneracies)
+- Never reuse exact (x, y) coordinates — even small noise is better than duplication
+
+✅ STRATEGIES TO PREVENT COLLAPSE
+
+- Apply small perturbations to edge-aligned or patterned placements to break collinearity
+- Consider triangle area quality during generation — reject or adjust placements that cause poor triplets
+- When using arcs or edge-following structures, introduce curvature or angular irregularity to maintain triangle diversity
+
+📈 GOAL
+
+Construct a configuration where the **minimum triangle area among all point triplets is maximized**.  
+Prioritize **triplet robustness** over symmetry. Trade geometric regularity for layouts that yield **globally spread, locally stable** triangles.

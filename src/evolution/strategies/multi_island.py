@@ -87,24 +87,37 @@ class MapElitesMultiIsland(EvolutionStrategy):
         if self.enable_migration and self.generation - self.last_migration >= self.migration_interval:
             await self._perform_migration()
             self.last_migration = self.generation
+            await self._enforce_all_island_size_limits()
         if self.generation % 10 == 0:
             await self._enforce_all_island_size_limits()
 
-        all_elites: List[Program] = []
+        # FIXED: Collect all candidates with their island info, then fairly select
+        island_candidates = []
         quotas = self._calculate_island_quotas(total)
 
         for island_id, quota in quotas.items():
             try:
                 if quota > 0:
                     selected = await self.islands[island_id].select_elites(quota)
-                    all_elites.extend(selected)
+                    island_candidates.append((island_id, selected))
             except Exception as e:
                 logger.warning(f"Failed to select elites from island {island_id}: {e}")
+
+        # FIXED: Randomize order to prevent bias toward specific islands
+        random.shuffle(island_candidates)
+        
+        all_elites: List[Program] = []
+        for island_id, selected in island_candidates:
+            all_elites.extend(selected)
+
+        # FIXED: If we have more than requested, fairly sample rather than truncate
+        if len(all_elites) > total:
+            all_elites = random.sample(all_elites, total)
 
         if all_elites:
             self.generation += 1
 
-        return all_elites[:total]
+        return all_elites
 
     def _calculate_island_quotas(self, total: int) -> Dict[str, int]:
         """Evenly distribute elite selection across islands."""
@@ -137,8 +150,17 @@ class MapElitesMultiIsland(EvolutionStrategy):
         logger.info(f"Migrating {len(all_migrants)} programs")
 
         successful, failed = 0, 0
+        # FIXED: Shuffle migrants to prevent processing order bias
+        random.shuffle(all_migrants)
+        
         for migrant in all_migrants:
             source_island = migrant.metadata.get("current_island")
+            
+            # FIXED: Handle missing current_island metadata
+            if not source_island:
+                logger.warning(f"Migrant {migrant.id} has no current_island metadata, skipping migration")
+                failed += 1
+                continue
             
             # Get all islands except the source island
             available_islands = [
@@ -162,14 +184,20 @@ class MapElitesMultiIsland(EvolutionStrategy):
             try:
                 accepted = await destination.add(migrant)
                 if accepted:
-                    # Remove from source island (always exists)
-                    try:
-                        source_island_obj = self.islands[source_island]
-                        await source_island_obj.archive_storage.remove_elite_by_id(migrant.id)
-                    except Exception as exc:
-                        logger.warning(f"Failed to remove program {migrant.id} from source island {source_island}: {exc}")
-                    successful += 1
-                    logger.debug(f"Successfully migrated program {migrant.id} from {source_island} to {destination.config.island_id}")
+                    source_island_obj = self.islands[source_island]
+                    removal_success = await source_island_obj.archive_storage.remove_elite_by_id(migrant.id)
+                    
+                    if removal_success:
+                        successful += 1
+                        logger.debug(f"Successfully migrated program {migrant.id} from {source_island} to {destination.config.island_id}")
+                    else:
+                        logger.error(f"CRITICAL: Program {migrant.id} added to {destination.config.island_id} but failed to remove from {source_island} - potential duplicate!")
+                        failed += 1
+                        try:
+                            await destination.archive_storage.remove_elite_by_id(migrant.id)
+                            logger.info(f"Cleaned up duplicate program {migrant.id} from destination island {destination.config.island_id}")
+                        except Exception as cleanup_exc:
+                            logger.error(f"Failed to cleanup duplicate program {migrant.id}: {cleanup_exc}")
                 else:
                     failed += 1
                     logger.debug(f"Destination island {destination.config.island_id} rejected migrant {migrant.id}")
@@ -181,16 +209,30 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
     async def _enforce_all_island_size_limits(self) -> None:
         """Enforce size limits on all islands after migration."""
+        violations_found = False
+        
         for island_id, island in self.islands.items():
             if island.config.max_size is None:
                 continue
             try:
                 current_count = await island.get_elite_count()
                 if current_count > island.config.max_size:
+                    violations_found = True
                     logger.warning(f"Enforcing size limit on island {island_id}: {current_count} > {island.config.max_size}")
                     await island.enforce_size_limit()
+                    
+                    # Verify enforcement worked
+                    post_enforcement_count = await island.get_elite_count()
+                    if post_enforcement_count > island.config.max_size:
+                        logger.error(f"CRITICAL: Size enforcement failed for island {island_id}! "
+                                   f"Still has {post_enforcement_count} > {island.config.max_size} after enforcement")
+                else:
+                    logger.debug(f"Island {island_id} size OK: {current_count}/{island.config.max_size}")
             except Exception as e:
                 logger.error(f"Failed to enforce size limit on island {island_id}: {e}")
+        
+        if not violations_found:
+            logger.debug("All island size limits are within bounds")
 
     async def get_global_archive_size(self) -> int:
         """Get total number of elites across all islands."""

@@ -63,10 +63,6 @@ from src.runner.manager import RunnerConfig, RunnerManager
 
 # Setup logging first
 from src.utils.logger_setup import setup_logger
-from src.utils.performance_monitor import (
-    auto_optimize,
-    get_performance_dashboard,
-)
 
 # Global configuration
 DEFAULT_PROBLEM_DIR = "problems/hexagon_pack"
@@ -254,10 +250,6 @@ def load_problem_file(problem_dir: Path, filename: str) -> str:
 
     return file_path.read_text().strip()
 
-
-log_file_path = setup_logger(
-    log_dir="logs", level="DEBUG", rotation="50 MB", retention="30 days"
-)
 
 
 # Configuration constants
@@ -451,7 +443,7 @@ def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
             "fitness": (args.min_fitness, args.max_fitness),
             "is_valid": (-0.01, 1.01),
         },
-        resolution={"fitness": 30, "is_valid": 2},
+        resolution={"fitness": 60, "is_valid": 2},
         binning_types={
             "fitness": BinningType.LINEAR,
             "is_valid": BinningType.LINEAR,
@@ -481,7 +473,7 @@ def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
     entropy_space = BehaviorSpace(
         feature_bounds={
             "fitness": (args.min_fitness, args.max_fitness),
-            "ast_entropy": (1.5, 3.5),
+            "ast_entropy": (3.0, 4.0),
             "is_valid": (-0.01, 1.01),
         },
         resolution={
@@ -583,7 +575,7 @@ def create_dag_stages(
     # Stage 2.5: Compute complexity metrics (FAST - 30s timeout)
     stages["ComputeComplexity"] = lambda: ComputeComplexityStage(
         stage_name="ComputeComplexity",
-        timeout=60.0,  # OPTIMIZED: Reduced timeout for AST analysis
+        timeout=60.0,
     )
 
     # Stage 3: Run validation against the output (MEDIUM - 60s timeout)
@@ -594,11 +586,10 @@ def create_dag_stages(
         data_to_validate_stage="ExecuteCode",
         context_stage="AddContext" if add_context else None,
         function_name="validate",
-        timeout=60.0,  # OPTIMIZED: Reduced from 120s for faster validation
+        timeout=60.0,
     )
 
     def create_insights_stage():
-        """Create insights stage with optimized timeout and caching."""
         return GenerateLLMInsightsStage(
             config=InsightsConfig(
                 llm_wrapper=llm_wrapper["insights"],
@@ -954,7 +945,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             poll_interval=5.0,
             max_concurrent_dags=args.max_concurrent_dags,
             log_interval=15,
-            dag_timeout=2400,
+            dag_timeout=1800,
         )
 
         runner = RunnerManager(
@@ -964,7 +955,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 edges=dag_edges,
                 entry_points=entry_points,
                 exec_order_deps=execution_order_deps,
-                dag_timeout=2400,
+                dag_timeout=1800,
                 max_parallel_stages=3,
             ),
             storage=redis_storage,

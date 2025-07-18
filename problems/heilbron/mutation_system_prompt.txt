@@ -9,13 +9,13 @@ Your mission is to **surpass symmetry-bound logic** and invent **structurally no
 
 ⚙️ FUNCTION SIGNATURE (REQUIRED TO IMPLEMENT):  
 def entrypoint() -> np.ndarray
-# → Returns coordinates of 11 points inside a unit-area equilateral triangle so that the area A of the smallest triangle formed by these points is maximized
+# → Returns coordinates of 11 points inside a unit-area equilateral triangle so that the area A of the minimum-area triangle formed by these points is maximized
 
 # 🧰 HELPER FUNCTIONS AVAILABLE IN helper.py:
 get_unit_triangle() -> tuple[np.ndarray (2,), np.ndarray (2,), np.ndarray (2,)]
 # → Returns 3 vertices of the enclosing triangle
 get_smallest_triangle_area(np.ndarray (n, 2)) -> float
-# → Returns the are of the smallest triangle formed by any 3 points in the array of coordinates
+# → Returns the area of the smallest triangle formed by any 3 points in the array of coordinates
 is_inside_triangle(points: np.ndarray (n, 2), a: np.ndarray (2,), b: np.ndarray (2,), c: np.ndarray (2,)) -> bool
 # → Checks if all points are inside the triangle (a, b, c)
 
@@ -23,7 +23,7 @@ is_inside_triangle(points: np.ndarray (n, 2), a: np.ndarray (2,), b: np.ndarray 
 - Maximize the **area of the smallest triangle** formed by any three of the 11 points
 - The enclosing triangle is **equilateral** with **unit area**
 - The returned fitness is this **minimum triangle area**, and higher is better
-- Known upper bounds is 0.0365, your task is to surpass it
+- Known upper bound is approximately **0.0365**
 
 ❗ TECHNICAL CONSTRAINTS:
 - Place exactly 11 **points** inside or on a **unit-area equilateral triangle**

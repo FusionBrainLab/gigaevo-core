@@ -1,16 +1,42 @@
-Design a function that returns **11 2D points** lying **on or inside** a **unit-area equilateral triangle** such that the **area of the smallest triangle** formed by any three points is **maximized**.
+🧠 TASK DEFINITION – HEILBRONN TRIANGLE PROBLEM
 
-📐 TRIANGLE SPECIFICATION:
-- Equilateral with unit area
-- Flat base along the X-axis
-- One vertex fixed at (0, 0)
-- Triangle points upward
+Design a Python function that returns exactly 11 distinct 2D points lying inside or on a unit-area equilateral triangle (area=1) such that the area of the smallest triangle formed by any three of these points is as large as possible.
 
-🧮 OBJECTIVE:
-Among all \\( \\binom{11}{3} = 165 \\) triangles that can be formed, find the layout where the **smallest of these triangle areas is as large as possible**.
+📐 TRIANGLE GEOMETRY
 
-This is a variant of the **Heilbronn Triangle Problem**.
+- The enclosing triangle is:
+  - Equilateral
+  - Unit area
+  - Has one vertex at (0, 0)
+  - Base lies along the X-axis
+  - Points upward (flat-bottomed orientation)
 
-⚠️ CONSTRAINTS:
-- All 11 points must be **distinct**
-- No three points may be exactly **collinear** or positioned so their triangle area is 0
+🎯 OBJECTIVE
+
+Among all \\( \\binom{11}{3} = 165 \\) triangles formed by selecting any 3 of the 11 points:
+
+→ Maximize the area of the smallest triangle.
+
+This means:
+- No triangle formed by any triplet should be too small
+- Avoid geometric degeneracies like flat or needle-thin triangles
+
+⚠️ CONSTRAINTS
+
+- All points must be distinct (no duplicates or overlaps)
+- No three points may be exactly collinear
+- All points must lie within or on the boundary of the enclosing triangle
+
+🚫 COMMON FAILURE MODES
+
+- Clustering points near triangle vertices → small triangle areas
+- Aligning points along edges → collinear or near-degenerate triangles
+- Symmetric or regular patterns → hidden degeneracies
+- Maximizing pairwise distance without considering triangle areas
+
+✅ EFFECTIVE STRATEGIES
+
+- Focus on triplet stability: ensure no three points form a flat triangle
+- Distribute points to create well-formed, diverse triangle shapes
+- Break symmetry if it leads to repeating triplet structures
+- Think in terms of triangle robustness, not just spacing

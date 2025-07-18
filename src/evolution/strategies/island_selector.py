@@ -14,22 +14,34 @@ class IslandCompatibilityMixin:
     
     @staticmethod
     async def _can_accept_program(island: MapElitesIsland, program: Program) -> bool:
-        """Check if island can accept program."""
+        """Check if island can accept program with comprehensive logging."""
+        island_id = island.config.island_id
+        
         try:
+            # Check required keys
             required_keys = set(island.config.behavior_space.behavior_keys)
             if not required_keys.issubset(program.metrics.keys()):
-                logger.debug(f"Island {island.config.island_id} rejected program {program.id}: missing keys {required_keys - program.metrics.keys()}")
+                missing_keys = required_keys - program.metrics.keys()
+                logger.debug(f"🏝️ {island_id} REJECTED {program.id}: missing keys {missing_keys}")
+                    
                 return False
                 
+            # Get the cell and check if there's an existing program
             cell = island.config.behavior_space.get_cell(program.metrics)
             existing = await island.archive_storage.get_elite(cell)
             
+            # Check if program can be accepted
             can_accept = existing is None or island.config.archive_selector(program, existing)
-            logger.debug(f"Island {island.config.island_id} can accept program {program.id}: {can_accept} (existing: {existing is not None})")
+            
+            if can_accept:
+                logger.debug(f"🏝️ {island_id} ACCEPTED {program.id} (existing: {existing is not None}, cell: {cell})")
+            else:
+                logger.debug(f"🏝️ {island_id} REJECTED {program.id}: not better than existing (cell: {cell})")
+                    
             return can_accept
             
         except Exception as e:
-            logger.warning(f"Error evaluating island {island.config.island_id} for program {program.id}: {e}")
+            logger.warning(f"🏝️ {island_id} REJECTED {program.id}: evaluation error - {e}")
             return False
 
 class IslandSelector(ABC):
@@ -52,6 +64,9 @@ class IslandSelector(ABC):
 class WeightedIslandSelector(IslandSelector, IslandCompatibilityMixin):
     """Weighted random selection based on island size and compatibility."""
     
+    def __init__(self):
+        self._selection_count = 0
+    
     async def select_island(self, program: Program, islands: List[MapElitesIsland]) -> Optional[MapElitesIsland]:
         """Select island using weighted random selection based on size."""
         if not islands:
@@ -67,10 +82,12 @@ class WeightedIslandSelector(IslandSelector, IslandCompatibilityMixin):
                 logger.warning(f"Error evaluating island {island.config.island_id} for program {program.id}: {e}")
         
         if not accepting_islands:
+            logger.debug(f"🚫 No accepting islands found for program {program.id}")
             return None
             
         # Weighted selection based on size
-        return await self._weighted_select(accepting_islands)
+        selected = await self._weighted_select(accepting_islands)                
+        return selected
     
     @staticmethod
     async def _weighted_select(islands: List[MapElitesIsland]) -> MapElitesIsland:
@@ -95,18 +112,20 @@ class WeightedIslandSelector(IslandSelector, IslandCompatibilityMixin):
         total_size = sum(size for _, size in island_info)
         if total_size == 0:
             # If all islands are empty, select randomly
-            return random.choice(islands)
+            selected = random.choice(islands)
+            logger.debug(f"🏝️ Selected {selected.config.island_id} (random - all empty)")
+            return selected
         
         weights = []
         for island, size in island_info:
             # Weight inversely proportional to size (smaller islands get higher weight)
             weight = 1.0 / (size + 1)  # Add 1 to avoid division by zero
             weights.append(weight)
-            logger.debug(f"Island {island.config.island_id}: size={size}, weight={weight:.3f}")
+            logger.debug(f"🏝️ {island.config.island_id}: size={size}, weight={weight:.3f}")
         
         # Weighted random selection
         selected_island = random.choices(islands, weights=weights, k=1)[0]
-        logger.debug(f"Selected island {selected_island.config.island_id} via weighted random selection")
+        logger.debug(f"🏝️ Selected {selected_island.config.island_id} (weighted selection)")
         return selected_island
 
 class RoundRobinIslandSelector(IslandSelector, IslandCompatibilityMixin):
@@ -135,7 +154,7 @@ class RoundRobinIslandSelector(IslandSelector, IslandCompatibilityMixin):
         # Round-robin selection
         self._last_index = (self._last_index + 1) % len(accepting_islands)
         selected = accepting_islands[self._last_index]
-        logger.debug(f"Selected island {selected.config.island_id} via round-robin selection")
+        logger.debug(f"🏝️ Selected {selected.config.island_id} (round-robin)")
         return selected
 
 class RandomIslandSelector(IslandSelector, IslandCompatibilityMixin):
@@ -160,5 +179,5 @@ class RandomIslandSelector(IslandSelector, IslandCompatibilityMixin):
         
         # Random selection
         selected = random.choice(accepting_islands)
-        logger.debug(f"Selected island {selected.config.island_id} via random selection")
-        return selected 
+        logger.debug(f"🏝️ Selected {selected.config.island_id} (random)")
+        return selected

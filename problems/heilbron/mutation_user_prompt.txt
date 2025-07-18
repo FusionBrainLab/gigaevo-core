@@ -4,33 +4,33 @@ You are given one or more **input programs for crossover**, along with:
 - Structured insights  
 - Lineage history  
 
-Your task is to write a new **mutant program** that:
-- Integrates at least **three insights** from different domains  
-- Uses at least one **lineage-based insight** (imitation, generalization, or avoidance)  
-- Applies a **clearly traceable architectural or algorithmic change**
-- Parameter changes are allowed **only if they reflect an insight** (e.g., tighter spacing, better perturbation schedule). Avoid cosmetic or random tweaks.
-- Each insight **must** correspond to a real code decision or transformation in the mutant.
-- Your goal is to emulate a **surgical diff**: small, meaningful edits to the original program.
+Your task is to write a new mutant program that:
+- Integrates at least **three distinct insights** from different domains  
+- Incorporates at least **one lineage-based** strategy: imitation, generalization, or avoidance  
+- Introduces a clearly identifiable **architectural or algorithmic modification** 
+- Adjusts parameters only **when justified by an insight** (e.g., improved spacing, smarter perturbation)  
+- Ensures each insight results in a **concrete, traceable change** in the code  
+- Emulates a **surgical diff**: targeted, meaningful edits without rewriting unrelated logic
 
 📚 INSIGHT SOURCES:
 
 ### 💡 PROGRAM INSIGHTS (categorized):
 Examples include:
-- **geometric** (e.g., layout conflicts, nesting logic)  
-- **algorithmic** (e.g., perturbation flaws, annealing design)  
-- **evolutionary** (e.g., stagnation, trend shifts)  
-- **mathematical** (e.g., spacing bounds, angle symmetries)  
-- **implementation** (e.g., init heuristics, overlap handling)
-- **error** (e.g., overlapping hexagons)
+- **geometric**: triplet conflicts, degeneracy near edges or vertices  
+- **algorithmic**: layout heuristics, point placement schemes  
+- **evolutionary**: stagnation, fitness regression, mode collapse  
+- **mathematical**: symmetry patterns, area scaling, triangle degeneracy  
+- **implementation**: randomization schemes, projection, revalidation  
+- **error**: invalid placements, outside-triangle points, collapsed triplets  
 
 ### 🧬 LINEAGE HISTORY (performance deltas):
 Each entry includes:
-- A fitness delta (e.g., "–0.132", "+0.280")  
-- A structural explanation (e.g., "spiral chain improved packing", "rigid angle cluster failed")
+- A fitness delta (e.g., "+0.0019", "–0.0142")  
+- An explanation of structural success or failure (e.g., "edge-aligned triplet collapsed", "clustered spiral improved area") 
 
 You must:
 - Reflect on at least one **improvement** and one **degradation**  
-- Decide whether to **imitate**, **avoid**, or **generalize** a prior strategy  
+- Choose whether to **imitate**, **avoid**, or **generalize** a prior strategy  
 - Summarize the lineage insight in a single `Lineage (type): ...` comment line
 
 ✍️ OUTPUT FORMAT — STRICT:
@@ -52,7 +52,7 @@ Output **only a single fenced Python code block** (```python ... ```), with:
 ⚠️ DO NOT write anything outside the code block.
 ⚠️ DO NOT expand the comment block.
 ⚠️ DO NOT add docstrings, markdown, explanations, or general commentary.
-⚠️ If using **randomization** ALWAYS FIX SEEDS BEFOREHANDS
+⚠️ If randomization is used, you must fix the seeds at the start 
 
 🧬 CROSSOVER INPUT:
 
@@ -64,12 +64,13 @@ Use their **combined insights** to guide your mutant design.
 Unless a complete rewrite is necessary, **preserve the structure** of the parent program and modify only specific parts — such as layout heuristics, perturbation strategies, placement logic, or parameter choices.
 
 ✅ You may:
-- Reuse or slightly alter helper functions
-- Adjust constants or logic to reflect insight-driven improvements
-- Annotate changed lines with `# MUTATED` (optional)
+- Reuse or adapt helper functions
+- Tune constants where appropriate
+- Use # MUTATED to annotate key modified lines (optional) 
 
 🚫 Do NOT:
-- Reindent or reorder unrelated code
-- Rewrite the whole function unless strictly necessary
+- Reindent or shuffle unrelated code  
+- Perform cosmetic refactors  
+- Rewrite the entire program without strong justification 
 
 {parent_blocks}

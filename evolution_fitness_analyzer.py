@@ -26,6 +26,7 @@ Plot Options:
     --no-island-plots       Skip island statistics plots
     --no-metric-plots       Skip metric correlation plots
     --no-validity-plots     Skip validity distribution plots
+    --no-metric-distribution-plots  Skip metric distribution plots
 
 Outlier Detection Options:
     --extreme-threshold     Threshold for extreme outliers (default: -10000.0)
@@ -1931,6 +1932,381 @@ class EvolutionFitnessAnalyzer:
             self._save_fig(fig, output_folder / 'metric_correlations')
         plt.show()
 
+    def plot_metric_distributions(self, fitness_analysis: Dict[str, Any], output_folder: Path, save_plots: bool = True):
+        """Create comprehensive distribution plots for all metrics across all programs."""
+        
+        if not fitness_analysis:
+            logger.warning("No data to plot metric distributions")
+            return
+        
+        full_df = fitness_analysis['full_df']
+        
+        # Find all metric columns
+        metric_cols = [col for col in full_df.columns if col.startswith('metric_')]
+        
+        if not metric_cols:
+            logger.warning("No metric columns found for distribution analysis")
+            return
+        
+        logger.info(f"📊 Found {len(metric_cols)} metrics for distribution analysis: {metric_cols}")
+        
+        # Create metrics folder
+        metrics_folder = output_folder / 'metrics'
+        metrics_folder.mkdir(exist_ok=True)
+        logger.info(f"📁 Created metrics folder: {metrics_folder}")
+        
+        # Set up the plotting style
+        plt.style.use('seaborn-v0_8')
+        
+        # Process each metric
+        for metric_col in metric_cols:
+            metric_name = metric_col.replace('metric_', '')
+            logger.info(f"📈 Processing metric: {metric_name}")
+            
+            # Get valid values for this metric
+            metric_data = full_df[metric_col].dropna()
+            
+            if metric_data.empty:
+                logger.warning(f"⚠️ No valid data for metric {metric_name}")
+                continue
+            
+            # Apply outlier removal if enabled
+            if self.remove_outliers:
+                # Remove extreme outliers that disrupt plotting
+                values = metric_data.copy()
+                
+                # For fitness metric, apply extreme threshold
+                if metric_col == 'metric_fitness':
+                    extreme_outliers = values < self.extreme_threshold
+                    non_extreme = values[values >= self.extreme_threshold]
+                else:
+                    # For other metrics, use a more general approach
+                    extreme_outliers = pd.Series([False] * len(values), index=values.index)
+                    non_extreme = values
+                
+                # Use IQR method for additional outlier detection
+                if len(non_extreme) > 0:
+                    Q1 = non_extreme.quantile(0.25)
+                    Q3 = non_extreme.quantile(0.75)
+                    IQR = Q3 - Q1
+                    
+                    if IQR > 0:
+                        lower_bound = Q1 - self.outlier_multiplier * IQR
+                        upper_bound = Q3 + self.outlier_multiplier * IQR
+                        statistical_outliers = (values < lower_bound) | (values > upper_bound)
+                    else:
+                        statistical_outliers = pd.Series([False] * len(values), index=values.index)
+                else:
+                    statistical_outliers = pd.Series([False] * len(values), index=values.index)
+                
+                # Combine outlier detection methods
+                all_outliers = extreme_outliers | statistical_outliers
+                
+                # Log outlier detection results
+                num_extreme = extreme_outliers.sum()
+                num_statistical = statistical_outliers.sum()
+                num_total_outliers = all_outliers.sum()
+                
+                logger.info(f"   🔍 {metric_name} outlier detection:")
+                logger.info(f"      Extreme outliers: {num_extreme}")
+                logger.info(f"      Statistical outliers: {num_statistical}")
+                logger.info(f"      Total outliers removed: {num_total_outliers}")
+                
+                # Filter out outliers
+                metric_data = values[~all_outliers]
+                
+                if metric_data.empty:
+                    logger.warning(f"⚠️ No valid data for metric {metric_name} after outlier removal")
+                    continue
+            
+            # Create comprehensive distribution plot for this metric
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            fig.suptitle(f'{metric_name.upper()} Distribution Analysis', fontsize=16, fontweight='bold')
+            
+            # 1. Histogram
+            ax1 = axes[0, 0]
+            ax1.hist(metric_data, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+            ax1.axvline(metric_data.mean(), color='red', linestyle='--', 
+                        label=f'Mean: {metric_data.mean():.3f}')
+            ax1.axvline(metric_data.median(), color='green', linestyle='--', 
+                        label=f'Median: {metric_data.median():.3f}')
+            ax1.set_xlabel(metric_name)
+            ax1.set_ylabel('Frequency')
+            ax1.set_title(f'{metric_name} Distribution')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            
+            # 2. Box Plot
+            ax2 = axes[0, 1]
+            ax2.boxplot(metric_data, patch_artist=True, boxprops=dict(facecolor='lightblue', alpha=0.7))
+            ax2.set_ylabel(metric_name)
+            ax2.set_title(f'{metric_name} Box Plot')
+            ax2.grid(True, alpha=0.3)
+            
+            # 3. Violin Plot
+            ax3 = axes[1, 0]
+            ax3.violinplot(metric_data, showmeans=True)
+            ax3.set_ylabel(metric_name)
+            ax3.set_title(f'{metric_name} Violin Plot')
+            ax3.grid(True, alpha=0.3)
+            
+            # 4. Statistics Table
+            ax4 = axes[1, 1]
+            
+            # Calculate comprehensive statistics
+            stats_data = [
+                ['Count', f'{len(metric_data)}'],
+                ['Mean', f'{metric_data.mean():.4f}'],
+                ['Median', f'{metric_data.median():.4f}'],
+                ['Std Dev', f'{metric_data.std():.4f}'],
+                ['Min', f'{metric_data.min():.4f}'],
+                ['Max', f'{metric_data.max():.4f}'],
+                ['Q1 (25%)', f'{metric_data.quantile(0.25):.4f}'],
+                ['Q3 (75%)', f'{metric_data.quantile(0.75):.4f}'],
+                ['IQR', f'{metric_data.quantile(0.75) - metric_data.quantile(0.25):.4f}'],
+                ['Skewness', f'{metric_data.skew():.4f}'],
+                ['Kurtosis', f'{metric_data.kurtosis():.4f}']
+            ]
+            
+            # Create table
+            table_data = [['Statistic', 'Value']] + stats_data
+            table = ax4.table(cellText=table_data[1:], colLabels=table_data[0], 
+                             cellLoc='center', loc='center', colWidths=[0.5, 0.5])
+            table.auto_set_font_size(False)
+            table.set_fontsize(10)
+            table.scale(1, 2)
+            
+            ax4.set_title(f'{metric_name} Statistics')
+            ax4.axis('off')
+            
+            plt.tight_layout(pad=2.0)
+            
+            if save_plots:
+                # Save individual metric plot
+                metric_filename = f'{metric_name}_distribution'
+                self._save_fig(fig, metrics_folder / metric_filename)
+                logger.info(f"   ✅ Saved {metric_name} distribution plot")
+            
+            plt.show()
+            
+            # Log metric statistics
+            logger.info(f"   📊 {metric_name} statistics:")
+            logger.info(f"      Count: {len(metric_data)}")
+            logger.info(f"      Mean: {metric_data.mean():.4f}")
+            logger.info(f"      Median: {metric_data.median():.4f}")
+            logger.info(f"      Std Dev: {metric_data.std():.4f}")
+            logger.info(f"      Range: {metric_data.min():.4f} - {metric_data.max():.4f}")
+        
+        # Create a comprehensive metrics summary plot
+        self._create_metrics_summary_plot(full_df, metric_cols, metrics_folder, save_plots)
+        
+        # Save detailed metrics statistics to file
+        metrics_stats_path = metrics_folder / 'metrics_statistics.txt'
+        with open(metrics_stats_path, 'w') as f:
+            f.write("Metrics Distribution Analysis\n")
+            f.write("=" * 50 + "\n\n")
+            
+            for metric_col in metric_cols:
+                metric_name = metric_col.replace('metric_', '')
+                metric_data = full_df[metric_col].dropna()
+                
+                if metric_data.empty:
+                    f.write(f"\n{metric_name.upper()}:\n")
+                    f.write(f"  No valid data available\n")
+                    continue
+                
+                # Apply outlier removal if enabled
+                if self.remove_outliers:
+                    values = metric_data.copy()
+                    
+                    if metric_col == 'metric_fitness':
+                        extreme_outliers = values < self.extreme_threshold
+                        non_extreme = values[values >= self.extreme_threshold]
+                    else:
+                        extreme_outliers = pd.Series([False] * len(values), index=values.index)
+                        non_extreme = values
+                    
+                    if len(non_extreme) > 0:
+                        Q1 = non_extreme.quantile(0.25)
+                        Q3 = non_extreme.quantile(0.75)
+                        IQR = Q3 - Q1
+                        
+                        if IQR > 0:
+                            lower_bound = Q1 - self.outlier_multiplier * IQR
+                            upper_bound = Q3 + self.outlier_multiplier * IQR
+                            statistical_outliers = (values < lower_bound) | (values > upper_bound)
+                        else:
+                            statistical_outliers = pd.Series([False] * len(values), index=values.index)
+                    else:
+                        statistical_outliers = pd.Series([False] * len(values), index=values.index)
+                    
+                    all_outliers = extreme_outliers | statistical_outliers
+                    metric_data = values[~all_outliers]
+                    
+                    if metric_data.empty:
+                        f.write(f"\n{metric_name.upper()}:\n")
+                        f.write(f"  No valid data after outlier removal\n")
+                        continue
+                
+                f.write(f"\n{metric_name.upper()}:\n")
+                f.write(f"  Count: {len(metric_data)}\n")
+                f.write(f"  Mean: {metric_data.mean():.4f}\n")
+                f.write(f"  Median: {metric_data.median():.4f}\n")
+                f.write(f"  Std Dev: {metric_data.std():.4f}\n")
+                f.write(f"  Min: {metric_data.min():.4f}\n")
+                f.write(f"  Max: {metric_data.max():.4f}\n")
+                f.write(f"  Q1 (25%): {metric_data.quantile(0.25):.4f}\n")
+                f.write(f"  Q3 (75%): {metric_data.quantile(0.75):.4f}\n")
+                f.write(f"  IQR: {metric_data.quantile(0.75) - metric_data.quantile(0.25):.4f}\n")
+                f.write(f"  Skewness: {metric_data.skew():.4f}\n")
+                f.write(f"  Kurtosis: {metric_data.kurtosis():.4f}\n")
+        
+        logger.info(f"✅ Saved detailed metrics statistics to {metrics_stats_path}")
+        logger.info(f"✅ Metrics distribution analysis completed. Files saved in: {metrics_folder}")
+    
+    def _create_metrics_summary_plot(self, full_df: pd.DataFrame, metric_cols: list, metrics_folder: Path, save_plots: bool = True):
+        """Create a summary plot showing all metrics distributions side by side."""
+        
+        if len(metric_cols) < 2:
+            logger.info("Not enough metrics for summary plot")
+            return
+        
+        # Prepare data for summary plot
+        summary_data = []
+        for metric_col in metric_cols:
+            metric_name = metric_col.replace('metric_', '')
+            metric_data = full_df[metric_col].dropna()
+            
+            if metric_data.empty:
+                continue
+            
+            # Apply outlier removal if enabled
+            if self.remove_outliers:
+                values = metric_data.copy()
+                
+                if metric_col == 'metric_fitness':
+                    extreme_outliers = values < self.extreme_threshold
+                    non_extreme = values[values >= self.extreme_threshold]
+                else:
+                    extreme_outliers = pd.Series([False] * len(values), index=values.index)
+                    non_extreme = values
+                
+                if len(non_extreme) > 0:
+                    Q1 = non_extreme.quantile(0.25)
+                    Q3 = non_extreme.quantile(0.75)
+                    IQR = Q3 - Q1
+                    
+                    if IQR > 0:
+                        lower_bound = Q1 - self.outlier_multiplier * IQR
+                        upper_bound = Q3 + self.outlier_multiplier * IQR
+                        statistical_outliers = (values < lower_bound) | (values > upper_bound)
+                    else:
+                        statistical_outliers = pd.Series([False] * len(values), index=values.index)
+                else:
+                    statistical_outliers = pd.Series([False] * len(values), index=values.index)
+                
+                all_outliers = extreme_outliers | statistical_outliers
+                metric_data = values[~all_outliers]
+                
+                if metric_data.empty:
+                    continue
+            
+            summary_data.append({
+                'metric': metric_name,
+                'data': metric_data,
+                'mean': metric_data.mean(),
+                'median': metric_data.median(),
+                'std': metric_data.std()
+            })
+        
+        if not summary_data:
+            logger.warning("No valid metric data for summary plot")
+            return
+        
+        # Create summary figure
+        fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle('All Metrics Summary Analysis', fontsize=18, fontweight='bold')
+        
+        # 1. Box plots for all metrics
+        ax1 = axes[0, 0]
+        metric_names = [d['metric'] for d in summary_data]
+        metric_data_list = [d['data'].values for d in summary_data]
+        
+        bp = ax1.boxplot(metric_data_list, labels=metric_names, patch_artist=True)
+        
+        # Color the boxes
+        colors = plt.cm.Set3.colors[:len(metric_data_list)]
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        
+        ax1.set_ylabel('Value')
+        ax1.set_title('All Metrics Box Plots')
+        ax1.tick_params(axis='x', rotation=45, labelsize=10)
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # 2. Violin plots for all metrics
+        ax2 = axes[0, 1]
+        vp = ax2.violinplot(metric_data_list, positions=range(len(metric_data_list)), showmeans=True)
+        
+        # Color the violins
+        for body, color in zip(vp['bodies'], colors):
+            body.set_facecolor(color)
+            body.set_alpha(0.7)
+        
+        ax2.set_ylabel('Value')
+        ax2.set_title('All Metrics Violin Plots')
+        ax2.set_xticks(range(len(metric_names)))
+        ax2.set_xticklabels(metric_names, rotation=45, ha='right', fontsize=10)
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        # 3. Statistics comparison
+        ax3 = axes[1, 0]
+        
+        means = [d['mean'] for d in summary_data]
+        medians = [d['median'] for d in summary_data]
+        stds = [d['std'] for d in summary_data]
+        
+        x = np.arange(len(metric_names))
+        width = 0.35
+        
+        bars1 = ax3.bar(x - width/2, means, width, label='Mean', alpha=0.7, color='skyblue')
+        bars2 = ax3.bar(x + width/2, medians, width, label='Median', alpha=0.7, color='lightcoral')
+        
+        ax3.set_xlabel('Metric')
+        ax3.set_ylabel('Value')
+        ax3.set_title('Mean vs Median Comparison')
+        ax3.set_xticks(x)
+        ax3.set_xticklabels(metric_names, rotation=45, ha='right', fontsize=10)
+        ax3.legend()
+        ax3.grid(True, alpha=0.3, axis='y')
+        
+        # 4. Standard deviation comparison
+        ax4 = axes[1, 1]
+        
+        bars = ax4.bar(range(len(metric_names)), stds, alpha=0.7, color='lightgreen', edgecolor='black')
+        ax4.set_xlabel('Metric')
+        ax4.set_ylabel('Standard Deviation')
+        ax4.set_title('Standard Deviation Comparison')
+        ax4.set_xticks(range(len(metric_names)))
+        ax4.set_xticklabels(metric_names, rotation=45, ha='right', fontsize=10)
+        
+        # Add value labels on bars
+        for bar, std in zip(bars, stds):
+            height = bar.get_height()
+            ax4.text(bar.get_x() + bar.get_width()/2., height + max(stds) * 0.01,
+                    f'{std:.3f}', ha='center', va='bottom', fontweight='bold')
+        
+        ax4.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout(pad=3.0)
+        
+        if save_plots:
+            self._save_fig(fig, metrics_folder / 'all_metrics_summary')
+            logger.info("✅ Saved all metrics summary plot")
+        
+        plt.show()
+
 
 async def main():
     """Main function to run the evolution fitness analysis."""
@@ -1950,6 +2326,7 @@ async def main():
     parser.add_argument('--no-island-plots', action='store_true', help='Skip island statistics plots')
     parser.add_argument('--no-metric-plots', action='store_true', help='Skip metric correlation plots')
     parser.add_argument('--no-validity-plots', action='store_true', help='Skip validity distribution plots')
+    parser.add_argument('--no-metric-distribution-plots', action='store_true', help='Skip metric distribution plots')
     parser.add_argument('--output-folder', required=True, help='Output folder for all results (required)')
     parser.add_argument('--base-filename', default='evolution_data', help='Base filename for CSV files (default: evolution_data)')
     parser.add_argument('--extreme-threshold', type=float, default=-10000.0, help='Threshold for extreme outliers (default: -10000.0)')
@@ -2052,6 +2429,14 @@ async def main():
                     logger.info("✅ Validity distribution plots completed")
                 except Exception as e:
                     logger.error(f"❌ Error creating validity distribution plots: {e}")
+            
+            # Create metric distribution plots
+            if not args.no_metric_distribution_plots:
+                try:
+                    analyzer.plot_metric_distributions(fitness_analysis, output_folder)
+                    logger.info("✅ Metric distribution plots completed")
+                except Exception as e:
+                    logger.error(f"❌ Error creating metric distribution plots: {e}")
         
         # Analyze top programs
         analyzer.analyze_top_programs(evolution_df, fitness_analysis, output_folder, top_n=args.top_n)

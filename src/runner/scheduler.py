@@ -92,8 +92,15 @@ class DagScheduler:
         
         for program_id, task_info in self._active_tasks.items():
             elapsed = current_time - task_info.start_time
-            if elapsed > self._config.dag_timeout:
-                timed_out_tasks.append((program_id, task_info, elapsed))
+            if elapsed > self._config.dag_timeout * 0.75:
+                if elapsed > self._config.dag_timeout:
+                    timed_out_tasks.append((program_id, task_info, elapsed))
+                else:
+                    # Warn about tasks approaching timeout
+                    logger.warning(
+                        f"[DagScheduler] Task for program {program_id} approaching timeout "
+                        f"({elapsed:.1f}s / {self._config.dag_timeout}s) - {(elapsed/self._config.dag_timeout)*100:.1f}% complete"
+                    )
         
         for program_id, task_info, elapsed in timed_out_tasks:
             logger.error(
@@ -101,6 +108,7 @@ class DagScheduler:
                 f"({elapsed:.1f}s > {self._config.dag_timeout}s) - force cancelling and discarding"
             )
             
+            # IMPROVED: More aggressive task cancellation
             await self._cancel_task_safely(task_info)
             self._active_tasks.pop(program_id, None)
             
@@ -239,17 +247,27 @@ class DagScheduler:
         await asyncio.sleep(self._config.poll_interval)
 
     async def _cancel_task_safely(self, task_info: TaskInfo):
+        """IMPROVED: More aggressive task cancellation to handle stuck DAGs."""
         if task_info.task.done():
             return
-            
+        
+        logger.debug(f"[DagScheduler] Cancelling task for program {task_info.program_id}")
         task_info.task.cancel()
         
         try:
-            await asyncio.wait_for(task_info.task, timeout=5.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
+            # IMPROVED: Shorter timeout for cancellation, then escalate
+            await asyncio.wait_for(task_info.task, timeout=2.0)
+            logger.debug(f"[DagScheduler] Task for program {task_info.program_id} cancelled gracefully")
+        except asyncio.CancelledError:
+            logger.debug(f"[DagScheduler] Task for program {task_info.program_id} cancelled")
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[DagScheduler] Task for program {task_info.program_id} did not respond to cancellation within 2s"
+            )
+            # Task is stuck and not responding to cancellation
+            # This indicates a serious issue like subprocess in uninterruptible state
         except Exception as e:
-            logger.warning(f"[DagScheduler] Unexpected error during task cancellation: {e}")
+            logger.error(f"[DagScheduler] Error cancelling task for program {task_info.program_id}: {e}")
         
         try:
             program = await self._storage.get(task_info.program_id)

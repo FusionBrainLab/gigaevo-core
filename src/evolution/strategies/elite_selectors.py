@@ -43,12 +43,25 @@ class FitnessProportionalEliteSelector(EliteSelector):
         if min_fitness < 0:
             fitnesses = [f - min_fitness + 1e-6 for f in fitnesses]  # shift to positive space
 
-        selected = set()
-        while len(selected) < total:
-            chosen = random.choices(programs, weights=fitnesses, k=1)[0]
-            selected.add(chosen)
+        # FIXED: Proper sampling without replacement using numpy-style approach
+        selected = []
+        remaining_programs = list(programs)
+        remaining_fitnesses = list(fitnesses)
+        
+        for _ in range(min(total, len(programs))):
+            if not remaining_programs:
+                break
+                
+            # Select one program based on fitness weights
+            chosen = random.choices(remaining_programs, weights=remaining_fitnesses, k=1)[0]
+            selected.append(chosen)
+            
+            # Remove selected program and its fitness from remaining pools
+            idx = remaining_programs.index(chosen)
+            remaining_programs.pop(idx)
+            remaining_fitnesses.pop(idx)
 
-        return list(selected)
+        return selected
     
 
 class ScalarTournamentEliteSelector(EliteSelector):
@@ -71,19 +84,21 @@ class ScalarTournamentEliteSelector(EliteSelector):
             logger.warning(f"Only {len(programs)} programs available, requested {total}. Returning all.")
             return programs
 
-        selected = set()
-        attempts = 0
-        while len(selected) < total and attempts < total * 10:
-            candidates = random.sample(programs, min(self.tournament_size, len(programs)))
+        # FIXED: Proper sampling without replacement
+        selected = []
+        remaining_programs = list(programs)
+        
+        while len(selected) < total and remaining_programs:
+            candidates = random.sample(remaining_programs, min(self.tournament_size, len(remaining_programs)))
             ranked = [(p, -self._rank(p)) for p in candidates]
             ranked.sort(key=lambda x: x[1])
             winner = ranked[0][0]
-            selected.add(winner)
-            attempts += 1
+            selected.append(winner)
+            
+            # Remove winner from remaining programs
+            remaining_programs.remove(winner)
 
-        if len(selected) < total:
-            logger.warning(f"Tournament selected only {len(selected)} of {total} requested elites.")
-        return list(selected)
+        return selected
     
 class ParetoTournamentEliteSelector(EliteSelector):
     def __init__(
@@ -116,18 +131,20 @@ class ParetoTournamentEliteSelector(EliteSelector):
             logger.warning(f"Only {len(programs)} programs available, requested {total}. Returning all.")
             return programs
 
-        selected = set()
-        attempts = 0
-        while len(selected) < total and attempts < total * 10:
-            candidates = random.sample(programs, min(self.tournament_size, len(programs)))
+        # FIXED: Proper sampling without replacement
+        selected = []
+        remaining_programs = list(programs)
+        
+        while len(selected) < total and remaining_programs:
+            candidates = random.sample(remaining_programs, min(self.tournament_size, len(remaining_programs)))
             ranked = [
                 (p, self._pareto_rank(p, candidates), self.tie_breaker(p)) for p in candidates
             ]
             ranked.sort(key=lambda x: (x[1], x[2]))  # by dominated count, then tie-breaker
             winner = ranked[0][0]
-            selected.add(winner)
-            attempts += 1
+            selected.append(winner)
+            
+            # Remove winner from remaining programs
+            remaining_programs.remove(winner)
 
-        if len(selected) < total:
-            logger.warning(f"Tournament selected only {len(selected)} of {total} requested elites.")
-        return list(selected)
+        return selected

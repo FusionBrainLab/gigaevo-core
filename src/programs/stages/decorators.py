@@ -13,6 +13,8 @@ from typing import TypeVar, Callable, Type
 from loguru import logger
 
 from .base import Stage
+from src.programs.utils import build_stage_result
+from src.programs.stages.state import StageState
 
 T = TypeVar("T", bound=Type[Stage])
 
@@ -68,7 +70,8 @@ def retry(times: int = 3, backoff: float = 0.2, exceptions: tuple[type[Exception
 # ---------------------------------------------------------------------------
 
 def semaphore(limit: int) -> Callable[[T], T]:
-    """Limit concurrent executions of a Stage via an *asyncio.Semaphore*."""
+    """Limit concurrent executions of a Stage via an *asyncio.Semaphore*.
+    """
 
     _sem = asyncio.Semaphore(max(1, limit))
 
@@ -80,8 +83,29 @@ def semaphore(limit: int) -> Callable[[T], T]:
 
         @functools.wraps(orig_execute)
         async def _execute_with_sema(self: Stage, program, started_at):  # type: ignore[override]
-            async with _sem:
+
+            semaphore_timeout = self.timeout * 0.9
+            
+            try:
+                await asyncio.wait_for(_sem.acquire(), timeout=semaphore_timeout)
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"[{self.stage_name}] Program {program.id}: "
+                    f"Semaphore acquisition timed out after {semaphore_timeout:.1f}s"
+                )
+                # Return timeout error instead of hanging forever
+                return build_stage_result(
+                    status=StageState.FAILED,
+                    started_at=started_at,
+                    error=f"Semaphore acquisition timeout after {semaphore_timeout:.1f}s",
+                    stage_name=self.stage_name,
+                    context=f"All {limit} semaphore slots may be held by stuck processes",
+                )
+            
+            try:
                 return await orig_execute(self, program, started_at)
+            finally:
+                _sem.release()
 
         cls._execute_stage = _execute_with_sema  # type: ignore[assignment]
         return cls

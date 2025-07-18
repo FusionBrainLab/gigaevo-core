@@ -1,5 +1,6 @@
 import numpy as np
 import itertools
+from scipy.spatial.distance import pdist
 from helper import get_unit_triangle
 
 def validate(coordinates):
@@ -39,6 +40,12 @@ def validate(coordinates):
 
     if not is_inside_triangle(coordinates, A, B, C):
         raise ValueError("Some coordinates are outside the triangle.")
+    
+    dists = pdist(coordinates)
+    min_dist = np.min(dists)
+
+    if min_dist < 1e-6:
+        raise ValueError("Some points are too close or overlapping.")
 
     # --- Vectorized triangle area computation for all (n choose 3) triplets ---
     n = coordinates.shape[0]

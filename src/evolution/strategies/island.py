@@ -104,7 +104,16 @@ class MapElitesIsland:
                 await self.metadata_manager.clear_current_island(elite)
                 removal_count += 1
         
-        logger.info(f"Island {self.config.island_id}: Removed {removal_count} elites to enforce size limit")
+        final_elites = await self.archive_storage.get_all_elites()
+        final_count = len(final_elites)
+        
+        if final_count > self.config.max_size:
+            logger.error(f"CRITICAL: Island {self.config.island_id} size limit enforcement FAILED! "
+                        f"Still has {final_count} elites after trying to remove {removal_count} programs. "
+                        f"Target was {self.config.max_size}. This indicates a bug in the archive remover.")
+        else:
+            logger.info(f"Island {self.config.island_id}: Successfully removed {removal_count} elites. "
+                       f"Population: {current_count} → {final_count} (target: {self.config.max_size})")
 
     async def select_elites(self, total: int) -> List[Program]:
         all_elites = await self.archive_storage.get_all_elites()

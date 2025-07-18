@@ -23,22 +23,24 @@ if TYPE_CHECKING:  # pragma: no cover
     from src.programs.program import Program
 
 
+async def _run_stage_with_monitoring(stage: "Stage", program: "Program", started_at: datetime) -> ProgramStageResult:
+    """Execute stage with resource monitoring - extracted to allow timeout to cover everything."""
+    async with stage._resource_monitor(program):  # pylint: disable=protected-access
+        return await stage._execute_stage(program, started_at)  # pylint: disable=protected-access
+
+
 async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:  # noqa: D401
     """Run *stage* on *program* with uniform guarantees.
-
-    Mirrors the previous logic inside ``Stage.run`` but extracted so that the
-    code lives only once.  Behaviour is intentionally unchanged.
     """
 
     started_at = datetime.now(timezone.utc)
     duration: float = 0.0
 
     try:
-        async with stage._resource_monitor(program):  # pylint: disable=protected-access
-            result = await asyncio.wait_for(
-                stage._execute_stage(program, started_at),  # pylint: disable=protected-access
-                timeout=stage.timeout,
-            )
+        result = await asyncio.wait_for(
+            _run_stage_with_monitoring(stage, program, started_at),
+            timeout=stage.timeout,
+        )
 
         duration = (datetime.now(timezone.utc) - started_at).total_seconds()
         stage.metrics.record_execution(duration, True)
@@ -52,14 +54,14 @@ async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
         duration = (datetime.now(timezone.utc) - started_at).total_seconds()
         stage.metrics.record_execution(duration, False)
         StagePrometheusExporter.record(stage.stage_name, duration, False)
-        err = f"Stage timeout after {stage.timeout}s"
+        err = f"Stage timeout after {stage.timeout}s (includes semaphore wait)"
         logger.error(f"[{stage.stage_name}] Program {program.id}: {err}")
         return build_stage_result(
             status=StageState.FAILED,
             started_at=started_at,
             error=err,
             stage_name=stage.stage_name,
-            context=f"Timeout after {stage.timeout} seconds",
+            context=f"Timeout after {stage.timeout} seconds - may have been waiting for semaphore",
         )
 
     except SecurityViolationError as exc:
