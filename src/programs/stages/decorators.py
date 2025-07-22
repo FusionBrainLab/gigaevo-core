@@ -8,13 +8,14 @@ compose cleanly with the shared *stage_guard* logic.
 
 import asyncio
 import functools
-from typing import TypeVar, Callable, Type
+from typing import Callable, Type, TypeVar
 
 from loguru import logger
 
-from .base import Stage
-from src.programs.utils import build_stage_result
 from src.programs.stages.state import StageState
+from src.programs.utils import build_stage_result
+
+from .base import Stage
 
 T = TypeVar("T", bound=Type[Stage])
 
@@ -25,7 +26,12 @@ __all__ = ["retry", "semaphore"]
 # Retry decorator
 # ---------------------------------------------------------------------------
 
-def retry(times: int = 3, backoff: float = 0.2, exceptions: tuple[type[Exception], ...] = (Exception,)) -> Callable[[T], T]:
+
+def retry(
+    times: int = 3,
+    backoff: float = 0.2,
+    exceptions: tuple[type[Exception], ...] = (Exception,),
+) -> Callable[[T], T]:
     """Retry a Stage's *_execute_stage* up to *times* on failure.
 
     Only retries when the resulting :pyclass:`ProgramStageResult` is FAILED or
@@ -69,9 +75,9 @@ def retry(times: int = 3, backoff: float = 0.2, exceptions: tuple[type[Exception
 # Semaphore decorator
 # ---------------------------------------------------------------------------
 
+
 def semaphore(limit: int) -> Callable[[T], T]:
-    """Limit concurrent executions of a Stage via an *asyncio.Semaphore*.
-    """
+    """Limit concurrent executions of a Stage via an *asyncio.Semaphore*."""
 
     _sem = asyncio.Semaphore(max(1, limit))
 
@@ -85,9 +91,11 @@ def semaphore(limit: int) -> Callable[[T], T]:
         async def _execute_with_sema(self: Stage, program, started_at):  # type: ignore[override]
 
             semaphore_timeout = self.timeout * 0.9
-            
+
             try:
-                await asyncio.wait_for(_sem.acquire(), timeout=semaphore_timeout)
+                await asyncio.wait_for(
+                    _sem.acquire(), timeout=semaphore_timeout
+                )
             except asyncio.TimeoutError:
                 logger.error(
                     f"[{self.stage_name}] Program {program.id}: "
@@ -101,7 +109,7 @@ def semaphore(limit: int) -> Callable[[T], T]:
                     stage_name=self.stage_name,
                     context=f"All {limit} semaphore slots may be held by stuck processes",
                 )
-            
+
             try:
                 return await orig_execute(self, program, started_at)
             finally:
@@ -110,4 +118,4 @@ def semaphore(limit: int) -> Callable[[T], T]:
         cls._execute_stage = _execute_with_sema  # type: ignore[assignment]
         return cls
 
-    return decorator 
+    return decorator

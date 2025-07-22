@@ -4,6 +4,7 @@ The public entry-point is :func:`resolve_merge_strategy` which returns a
 callable that merges two :class:`src.programs.program.Program` instances
 (*current* and *incoming*) according to the requested strategy.
 """
+
 from __future__ import annotations
 
 from typing import Callable, Optional, Union, get_origin
@@ -19,6 +20,7 @@ __all__ = ["resolve_merge_strategy"]
 # ---------------------------------------------------------------------------
 # Built-in strategies
 # ---------------------------------------------------------------------------
+
 
 def _additive_merge(current: Optional[Program], incoming: Program) -> Program:
     """Schema-aware additive merge used by the evolution engine.
@@ -82,6 +84,7 @@ def _overwrite_merge(_current: Optional[Program], incoming: Program) -> Program:
 # Helper utilities
 # ---------------------------------------------------------------------------
 
+
 def _field_strategy(field_name: str, field_info) -> str:
     """Derive merge behaviour for *field_name* based on heuristic rules."""
 
@@ -115,8 +118,9 @@ def _field_strategy(field_name: str, field_info) -> str:
 # Public resolver
 # ---------------------------------------------------------------------------
 
+
 def resolve_merge_strategy(
-    strategy: Union[str, Callable[[Optional[Program], Program], Program]]
+    strategy: Union[str, Callable[[Optional[Program], Program], Program]],
 ) -> Callable[[Optional[Program], Program], Program]:
     """Return a merge function according to *strategy* specification."""
 
@@ -130,4 +134,4 @@ def resolve_merge_strategy(
 
     raise ValueError(
         "Unknown merge_strategy. Provide 'additive', 'overwrite', or a callable."
-    ) 
+    )

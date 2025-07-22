@@ -11,10 +11,16 @@ from datetime import datetime, timezone
 from typing import Optional
 
 try:
-    from prometheus_client import Counter, Gauge, start_http_server  # type: ignore
+    from prometheus_client import (  # type: ignore
+        Counter,
+        Gauge,
+        start_http_server,
+    )
 
     _PROM_AVAILABLE = True
-except ImportError:  # pragma: no cover – allow running without prometheus_client
+except (
+    ImportError
+):  # pragma: no cover – allow running without prometheus_client
 
     class _NoOp:  # pylint: disable=too-few-public-methods
         def inc(self, *_a, **_kw):
@@ -72,21 +78,28 @@ class MetricsService:
             start_http_server(port)
 
         # Create counters/gauges (NoOp when prom not available)
-        cls.dag_runs_started = Counter("dag_runs_started_total", "Total DAG runs started")
+        cls.dag_runs_started = Counter(
+            "dag_runs_started_total", "Total DAG runs started"
+        )
         cls.dag_runs_completed = Counter(
             "dag_runs_completed_total", "Total DAG runs finished successfully"
         )
-        cls.dag_errors = Counter("dag_errors_total", "Total DAG runs that errored")
+        cls.dag_errors = Counter(
+            "dag_errors_total", "Total DAG runs that errored"
+        )
         cls.dag_runs_active = Gauge("dag_runs_active", "Currently running DAGs")
 
         cls.evolution_generations = Counter(
-            "evolution_generations_total", "Evolution engine generations completed"
+            "evolution_generations_total",
+            "Evolution engine generations completed",
         )
         cls.evolution_errors = Counter(
             "evolution_errors_total", "Errors encountered by evolution engine"
         )
 
-        cls.uptime_seconds = Gauge("runner_uptime_seconds", "Runner uptime in seconds")
+        cls.uptime_seconds = Gauge(
+            "runner_uptime_seconds", "Runner uptime in seconds"
+        )
         cls._started_at = datetime.now(timezone.utc)
 
         cls._inited = True
@@ -126,7 +139,9 @@ class MetricsService:
     @classmethod
     def tick_uptime(cls):
         if cls._inited:
-            delta = int((datetime.now(timezone.utc) - cls._started_at).total_seconds())
+            delta = int(
+                (datetime.now(timezone.utc) - cls._started_at).total_seconds()
+            )
             cls.uptime_seconds.set(delta)
 
     # ------------------------------------------------------------------
@@ -134,7 +149,9 @@ class MetricsService:
     # ------------------------------------------------------------------
 
     @classmethod
-    def export_dict(cls, prefix: str, data: "dict[str, object]") -> None:  # noqa: D401
+    def export_dict(
+        cls, prefix: str, data: "dict[str, object]"
+    ) -> None:  # noqa: D401
         """Publish numeric values from *data* as Gauge metrics.
 
         Non-numeric entries are skipped. Gauge names are formed as
@@ -156,4 +173,4 @@ class MetricsService:
                 gauge = Gauge(safe_name, f"{prefix} metric {key}")
                 cls._gauges[metric_name] = gauge
 
-            gauge.set(value) 
+            gauge.set(value)

@@ -1,11 +1,12 @@
 """
 Boundary Optimization Strategy for Hexagon Packing
 
-This strategy focuses on boundary-optimized arrangements with 
+This strategy focuses on boundary-optimized arrangements with
 central stability to minimize the enclosing hexagon size.
 """
 
 import numpy as np
+
 
 def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     """
@@ -22,7 +23,10 @@ def entrypoint() -> tuple[np.ndarray, np.ndarray]:
 
     def is_valid(new_center, new_radius, existing_centers, existing_radii):
         # Inside square
-        if not (new_radius <= new_center[0] <= 1 - new_radius and new_radius <= new_center[1] <= 1 - new_radius):
+        if not (
+            new_radius <= new_center[0] <= 1 - new_radius
+            and new_radius <= new_center[1] <= 1 - new_radius
+        ):
             return False
         # No overlap
         for c, r in zip(existing_centers, existing_radii):

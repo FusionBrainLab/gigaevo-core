@@ -3,23 +3,24 @@
 Provides a reliable interface for OpenAI API calls with comprehensive
 error handling, validation, and logging.
 """
-import time
+
 from abc import ABC, abstractmethod
 import asyncio
 import random
+import time
 from typing import Any, Dict, List, Optional
-import httpx
 
+import httpx
 from loguru import logger
 from openai import (
-    OpenAI, 
-    AsyncOpenAI,
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
+    AsyncOpenAI,
     AuthenticationError,
     BadRequestError,
     InternalServerError,
+    OpenAI,
     RateLimitError,
 )
 from pydantic import BaseModel, Field, computed_field
@@ -30,7 +31,9 @@ from src.exceptions import LLMAPIError, LLMValidationError, ensure_not_none
 class LLMConfig(BaseModel):
     """Configuration for LLM wrapper with Pydantic validation."""
 
-    max_retries: int = Field(default=3, ge=0, description="Maximum number of retries")
+    max_retries: int = Field(
+        default=3, ge=0, description="Maximum number of retries"
+    )
     retry_delay: float = Field(
         default=1.0, ge=0, description="Base delay between retries"
     )
@@ -55,12 +58,8 @@ class LLMConfig(BaseModel):
     proxy_password: Optional[str] = Field(
         default=None, description="Proxy password"
     )
-    proxy_host: Optional[str] = Field(
-        default=None, description="Proxy host"
-    )
-    proxy_port: Optional[int] = Field(
-        default=None, description="Proxy port"
-    )
+    proxy_host: Optional[str] = Field(default=None, description="Proxy host")
+    proxy_port: Optional[int] = Field(default=None, description="Proxy port")
 
     @computed_field
     @property
@@ -72,24 +71,23 @@ class LLMConfig(BaseModel):
 
 class LLMInterface(ABC):
     """Interface for LLM wrapper."""
-    
+
     @abstractmethod
     def generate(self, *args, **kwargs) -> str:
         """Generate a response from the LLM with robust error handling."""
-        pass
 
     @abstractmethod
     async def generate_async(self, *args, **kwargs) -> str:
         """Asynchronously generate a response from the LLM with robust error handling."""
-        pass
 
     @property
     @abstractmethod
     def model(self) -> str: ...
 
+
 class LLMWrapper(LLMInterface):
     """LLM wrapper with robust error handling and retry logic.
-    
+
     Always creates both sync and async clients for maximum flexibility.
     """
 
@@ -111,11 +109,11 @@ class LLMWrapper(LLMInterface):
         ensure_not_none(model, "model")
         if not isinstance(model, str) or not model.strip():
             raise LLMValidationError("model must be a non-empty string")
-        
+
         self._model = model
         self.system_prompt = system_prompt
         self.config = config or LLMConfig()
-        
+
         # Initialize both clients
         client_kwargs = {}
         if api_key:
@@ -123,9 +121,23 @@ class LLMWrapper(LLMInterface):
         if self.config.api_endpoint:
             client_kwargs["base_url"] = self.config.api_endpoint
 
-        self.sync_client = OpenAI(**client_kwargs, http_client=httpx.Client(proxy=self.config.proxy_url) if self.config.proxy_url else None)
-        self.async_client = AsyncOpenAI(**client_kwargs, http_client=httpx.AsyncClient(proxy=self.config.proxy_url) if self.config.proxy_url else None)
-        
+        self.sync_client = OpenAI(
+            **client_kwargs,
+            http_client=(
+                httpx.Client(proxy=self.config.proxy_url)
+                if self.config.proxy_url
+                else None
+            ),
+        )
+        self.async_client = AsyncOpenAI(
+            **client_kwargs,
+            http_client=(
+                httpx.AsyncClient(proxy=self.config.proxy_url)
+                if self.config.proxy_url
+                else None
+            ),
+        )
+
         logger.info(f"[LLMWrapper] Initialized with model: {model}")
 
     def _validate_user_prompt(self, user_prompt: str) -> None:
@@ -159,7 +171,9 @@ class LLMWrapper(LLMInterface):
     def _handle_api_error(self, error: Exception, attempt: int) -> None:
         """Handle and log API errors appropriately."""
         if isinstance(error, AuthenticationError):
-            logger.error(f"[LLMWrapper] Authentication failed - check API key: {error}")
+            logger.error(
+                f"[LLMWrapper] Authentication failed - check API key: {error}"
+            )
             raise LLMAPIError(f"Authentication error: {error}")
 
         elif isinstance(error, BadRequestError):
@@ -167,33 +181,41 @@ class LLMWrapper(LLMInterface):
             raise LLMAPIError(f"Invalid request: {error}")
 
         elif isinstance(error, RateLimitError):
-            logger.warning(f"[LLMWrapper] Rate limit exceeded (attempt {attempt}): {error}")
+            logger.warning(
+                f"[LLMWrapper] Rate limit exceeded (attempt {attempt}): {error}"
+            )
 
         elif isinstance(error, APITimeoutError):
-            logger.warning(f"[LLMWrapper] API timeout (attempt {attempt}): {error}")
+            logger.warning(
+                f"[LLMWrapper] API timeout (attempt {attempt}): {error}"
+            )
 
         elif isinstance(error, APIConnectionError):
-            logger.warning(f"[LLMWrapper] Connection error (attempt {attempt}): {error}")
+            logger.warning(
+                f"[LLMWrapper] Connection error (attempt {attempt}): {error}"
+            )
 
         elif isinstance(error, InternalServerError):
-            logger.warning(f"[LLMWrapper] Server error (attempt {attempt}): {error}")
+            logger.warning(
+                f"[LLMWrapper] Server error (attempt {attempt}): {error}"
+            )
 
         else:
             logger.error(f"[LLMWrapper] Unexpected API error: {error}")
             raise LLMAPIError(f"API error: {error}")
 
     def _prepare_messages(
-        self, 
-        user_prompt: str, 
+        self,
+        user_prompt: str,
         messages: Optional[List[Dict[str, str]]] = None,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """Prepare messages for API call."""
         if messages is not None:
             return messages
-        
+
         effective_system_prompt = system_prompt or self.system_prompt
-        
+
         if effective_system_prompt:
             return [
                 {"role": "system", "content": effective_system_prompt},
@@ -226,7 +248,9 @@ class LLMWrapper(LLMInterface):
             Generated response string
         """
         self._validate_user_prompt(user_prompt)
-        prepared_messages = self._prepare_messages(user_prompt, messages, system_prompt)
+        prepared_messages = self._prepare_messages(
+            user_prompt, messages, system_prompt
+        )
 
         api_params = {
             "model": self.model,
@@ -243,9 +267,13 @@ class LLMWrapper(LLMInterface):
 
         for attempt in range(self.config.max_retries + 1):
             try:
-                logger.debug(f"[LLMWrapper] Attempting generation (attempt {attempt + 1})")
+                logger.debug(
+                    f"[LLMWrapper] Attempting generation (attempt {attempt + 1})"
+                )
 
-                response = self.sync_client.chat.completions.create(**api_params)
+                response = self.sync_client.chat.completions.create(
+                    **api_params
+                )
 
                 if not response.choices:
                     raise LLMAPIError("API returned no choices")
@@ -262,7 +290,10 @@ class LLMWrapper(LLMInterface):
                 last_error = error
                 self._handle_api_error(error, attempt + 1)
 
-                if not self._should_retry(error) or attempt >= self.config.max_retries:
+                if (
+                    not self._should_retry(error)
+                    or attempt >= self.config.max_retries
+                ):
                     break
 
                 delay = self.config.retry_delay * (2**attempt)
@@ -292,7 +323,9 @@ class LLMWrapper(LLMInterface):
             Generated response string
         """
         self._validate_user_prompt(user_prompt)
-        prepared_messages = self._prepare_messages(user_prompt, messages, system_prompt)
+        prepared_messages = self._prepare_messages(
+            user_prompt, messages, system_prompt
+        )
 
         api_params = {
             "model": self.model,
@@ -309,9 +342,13 @@ class LLMWrapper(LLMInterface):
 
         for attempt in range(self.config.max_retries + 1):
             try:
-                logger.debug(f"[LLMWrapper] Attempting async generation (attempt {attempt + 1})")
+                logger.debug(
+                    f"[LLMWrapper] Attempting async generation (attempt {attempt + 1})"
+                )
 
-                response = await self.async_client.chat.completions.create(**api_params)
+                response = await self.async_client.chat.completions.create(
+                    **api_params
+                )
 
                 if not response.choices:
                     raise LLMAPIError("API returned no choices")
@@ -328,7 +365,10 @@ class LLMWrapper(LLMInterface):
                 last_error = error
                 self._handle_api_error(error, attempt + 1)
 
-                if not self._should_retry(error) or attempt >= self.config.max_retries:
+                if (
+                    not self._should_retry(error)
+                    or attempt >= self.config.max_retries
+                ):
                     break
 
                 delay = self.config.retry_delay * (2**attempt)
@@ -355,20 +395,21 @@ class LLMWrapper(LLMInterface):
             "has_system_prompt": self.system_prompt is not None,
         }
 
+
 class MultiModelLLMWrapper(LLMInterface):
     """Wrapper for multiple LLM models with probabilistic selection."""
 
     def __init__(
-        self, 
+        self,
         *,
-        models: List[str], 
-        probabilities: List[float], 
-        api_key: str, 
-        system_prompt: Optional[str] = None, 
-        configs: List[LLMConfig]
+        models: List[str],
+        probabilities: List[float],
+        api_key: str,
+        system_prompt: Optional[str] = None,
+        configs: List[LLMConfig],
     ):
         """Initialize the multi-model wrapper.
-        
+
         Args:
             models: List of model names
             probabilities: List of selection probabilities (will be normalized)
@@ -380,51 +421,55 @@ class MultiModelLLMWrapper(LLMInterface):
         ensure_not_none(models, "models")
         ensure_not_none(probabilities, "probabilities")
         ensure_not_none(api_key, "api_key")
-        
+
         if not models:
             raise LLMValidationError("models list cannot be empty")
-        
+
         if len(models) != len(probabilities):
             raise LLMValidationError(
                 f"models and probabilities must have same length: {len(models)} != {len(probabilities)}"
             )
-        
+
         if any(p <= 0 for p in probabilities):
             raise LLMValidationError("all probabilities must be positive")
-        
+
         elif len(configs) != len(models):
             raise LLMValidationError(
                 f"configs and models must have same length: {len(configs)} != {len(models)}"
             )
-        
+
         self.models = list(models)  # Make a copy
         self.api_key = api_key
         self.system_prompt = system_prompt
         self.configs = list(configs)  # Make a copy
-        
+
         # Normalize probabilities
         total_prob = sum(probabilities)
         self.probabilities = [p / total_prob for p in probabilities]
-        
+
         # Initialize model wrappers
         try:
             self.llm_wrappers = [
-                LLMWrapper(model, api_key, system_prompt, config) 
+                LLMWrapper(model, api_key, system_prompt, config)
                 for model, config in zip(models, configs)
             ]
         except Exception as e:
             raise LLMValidationError(f"Failed to initialize LLM wrappers: {e}")
-        
+
         # Default model for property access (first model)
         self._default_model = self.models[0]
         self.selected_model: Optional[LLMWrapper] = None
-        
-        logger.info(f"[MultiModelLLMWrapper] Initialized with {len(models)} models: {models}")
+
+        logger.info(
+            f"[MultiModelLLMWrapper] Initialized with {len(models)} models: {models}"
+        )
 
     def select_model(self) -> LLMWrapper:
         """Select a model based on the probabilities."""
         try:
-            return random.choices(self.llm_wrappers, weights=self.probabilities)[0]
+            return random.choices(
+                self.llm_wrappers, weights=self.probabilities
+            )[0]
         except Exception as e:
             logger.error(f"[MultiModelLLMWrapper] Model selection failed: {e}")
             # Fallback to first model
@@ -436,31 +481,37 @@ class MultiModelLLMWrapper(LLMInterface):
         try:
             return self.selected_model.generate(*args, **kwargs)
         except Exception as e:
-            logger.error(f"[MultiModelLLMWrapper] Generation failed with model {self.selected_model.model}: {e}")
+            logger.error(
+                f"[MultiModelLLMWrapper] Generation failed with model {self.selected_model.model}: {e}"
+            )
             raise
-    
+
     async def generate_async(self, *args, **kwargs) -> str:
         """Asynchronously generate a response from the LLM with robust error handling."""
         self.selected_model = self.select_model()
         try:
             return await self.selected_model.generate_async(*args, **kwargs)
         except Exception as e:
-            logger.error(f"[MultiModelLLMWrapper] Async generation failed with model {self.selected_model.model}: {e}")
+            logger.error(
+                f"[MultiModelLLMWrapper] Async generation failed with model {self.selected_model.model}: {e}"
+            )
             raise
-    
+
     @property
     def model(self) -> str:
         """Get the currently selected model name, or default if none selected."""
         if self.selected_model is not None:
             return self.selected_model.model
         return self._default_model
-    
+
     def get_config(self) -> Dict[str, Any]:
         """Get current configuration."""
         return {
             "models": self.models,
             "probabilities": self.probabilities,
-            "selected_model": self.selected_model.model if self.selected_model else None,
+            "selected_model": (
+                self.selected_model.model if self.selected_model else None
+            ),
             "default_model": self._default_model,
             "has_system_prompt": self.system_prompt is not None,
         }

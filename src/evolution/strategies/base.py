@@ -213,7 +213,6 @@ class EvolutionStrategy(ABC):
 
         Override this method if strategy supports cleanup operations.
         """
-        pass
 
     async def pause(self) -> None:
         """
@@ -221,7 +220,6 @@ class EvolutionStrategy(ABC):
 
         Override this method if strategy supports pause/resume.
         """
-        pass
 
     async def resume(self) -> None:
         """
@@ -229,4 +227,3 @@ class EvolutionStrategy(ABC):
 
         Override this method if strategy supports pause/resume.
         """
-        pass

@@ -29,8 +29,8 @@ from src.database.redis_program_storage import (
     RedisProgramStorageConfig,
 )
 from src.evolution.engine import EngineConfig, EvolutionEngine
-from src.evolution.mutation.parent_selector import RandomParentSelector
 from src.evolution.mutation.llm import LLMMutationOperator
+from src.evolution.mutation.parent_selector import RandomParentSelector
 from src.evolution.strategies.map_elites import (
     BehaviorSpace,
     BinningType,
@@ -38,11 +38,6 @@ from src.evolution.strategies.map_elites import (
     FitnessProportionalEliteSelector,
     IslandConfig,
     MapElitesMultiIsland,
-    ParetoFrontArchiveRemoverDropOldest,
-    ParetoFrontMigrantSelector,
-    RandomMigrantSelector,
-    ParetoFrontSelector,
-    ParetoTournamentEliteSelector,
     SumArchiveSelector,
     TopFitnessMigrantSelector,
 )
@@ -50,11 +45,10 @@ from src.llm.wrapper import LLMConfig, LLMWrapper, MultiModelLLMWrapper
 from src.programs.automata import ExecutionOrderDependency
 from src.programs.program import Program
 from src.programs.stages.base import Stage
-from src.programs.stages.complexity import ComputeComplexityStage
 from src.programs.stages.execution import (
     RunCodeStage,
-    RunValidationStage,
     RunPythonCode,
+    RunValidationStage,
 )
 from src.programs.stages.insights import (
     GenerateLLMInsightsStage,
@@ -579,7 +573,7 @@ def create_dag_stages(
                 fitness_selector_higher_is_better=True,
             ),
             storage=redis_storage,
-            timeout=240,  
+            timeout=240,
         )
 
     stages["LLMInsights"] = create_insights_stage

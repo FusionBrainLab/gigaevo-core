@@ -12,26 +12,25 @@ Only internal layout changed; logic is identical (except for import paths).
 """
 
 import asyncio
+from datetime import datetime, timezone
 import gc
+import random
 from typing import List, Optional
 
 from loguru import logger
-import random
-from datetime import datetime, timezone
 
 from src.database.program_storage import ProgramStorage
+from src.evolution.engine.config import EngineConfig
+from src.evolution.engine.metrics import EngineMetrics
+from src.evolution.engine.mutation import generate_mutations
+from src.evolution.engine.prometheus import EnginePrometheusExporter
+from src.evolution.engine.validation import validate_program
 from src.evolution.mutation.base import MutationOperator
 from src.evolution.strategies.base import EvolutionStrategy
 from src.exceptions import EvolutionError, ensure_not_none
 from src.programs.program import Program
-from src.programs.state_manager import ProgramStateManager
 from src.programs.program_state import ProgramState
-from src.evolution.engine.config import EngineConfig
-from src.evolution.engine.metrics import EngineMetrics
-from src.evolution.engine.validation import validate_program
-from src.evolution.engine.mutation import generate_mutations
-from src.evolution.engine.prometheus import EnginePrometheusExporter
-
+from src.programs.state_manager import ProgramStateManager
 
 __all__ = [
     "EvolutionEngine",
@@ -79,8 +78,14 @@ class EvolutionEngine:
                     await asyncio.sleep(self.config.loop_interval)
                     continue
 
-                if self.config.max_generations is not None and self.metrics.total_generations >= self.config.max_generations:
-                    logger.info(f"[EvolutionEngine] Reached max_generations limit ({self.config.max_generations}) - stopping evolution")
+                if (
+                    self.config.max_generations is not None
+                    and self.metrics.total_generations
+                    >= self.config.max_generations
+                ):
+                    logger.info(
+                        f"[EvolutionEngine] Reached max_generations limit ({self.config.max_generations}) - stopping evolution"
+                    )
                     break
 
                 try:
@@ -96,7 +101,8 @@ class EvolutionEngine:
                     self._consecutive_errors = 0
 
                     if (
-                        self.metrics.total_generations % self.config.log_interval
+                        self.metrics.total_generations
+                        % self.config.log_interval
                         == 0
                     ):
                         await self._log_metrics()
@@ -128,7 +134,9 @@ class EvolutionEngine:
                 await asyncio.sleep(self.config.loop_interval)
 
         except KeyboardInterrupt:
-            logger.info("[EvolutionEngine] Received interrupt signal – stopping")
+            logger.info(
+                "[EvolutionEngine] Received interrupt signal – stopping"
+            )
         finally:
             self._running = False
             logger.info("[EvolutionEngine] Evolution loop stopped")
@@ -139,10 +147,14 @@ class EvolutionEngine:
 
         try:
             if await self._should_skip_evolution_due_to_incomplete_dags():
-                logger.info("[EvolutionEngine] Skipping evolution step - waiting for DAG processing to complete")
+                logger.info(
+                    "[EvolutionEngine] Skipping evolution step - waiting for DAG processing to complete"
+                )
                 return
 
-            novel_programs = await self.storage.get_all_by_status(ProgramState.DAG_PROCESSING_COMPLETED.value)
+            novel_programs = await self.storage.get_all_by_status(
+                ProgramState.DAG_PROCESSING_COMPLETED.value
+            )
 
             if novel_programs:
                 await self._process_novel_programs(novel_programs)
@@ -159,8 +171,6 @@ class EvolutionEngine:
         except Exception as exc:  # pylint: disable=broad-except
             raise EvolutionError(f"Evolution step failed: {exc}") from exc
 
-
-
     async def _process_novel_programs(
         self, novel_programs: List[Program]
     ) -> None:
@@ -176,26 +186,37 @@ class EvolutionEngine:
         for prog in novel_programs:
             try:
                 if not await self._validate_program(prog):
-                    await self.program_state_manager.set_program_state(prog, ProgramState.DISCARDED)
+                    await self.program_state_manager.set_program_state(
+                        prog, ProgramState.DISCARDED
+                    )
                     continue
 
                 success = await self.strategy.add(prog)
                 if success:
                     added += 1
-                    await self.program_state_manager.set_program_state(prog, ProgramState.EVOLVING)
+                    await self.program_state_manager.set_program_state(
+                        prog, ProgramState.EVOLVING
+                    )
                 else:
-                    await self.program_state_manager.set_program_state(prog, ProgramState.DISCARDED)
+                    await self.program_state_manager.set_program_state(
+                        prog, ProgramState.DISCARDED
+                    )
 
             except Exception as exc:
-                logger.error(f"[EvolutionEngine] Failed to process program {prog.id}: {exc}")
+                logger.error(
+                    f"[EvolutionEngine] Failed to process program {prog.id}: {exc}"
+                )
                 try:
-                    await self.program_state_manager.set_program_state(prog, ProgramState.DISCARDED)
+                    await self.program_state_manager.set_program_state(
+                        prog, ProgramState.DISCARDED
+                    )
                 except Exception:
                     pass
 
         self.metrics.programs_processed += added
-        logger.info(f"[EvolutionEngine] Successfully added {added}/{len(novel_programs)} programs.")
-
+        logger.info(
+            f"[EvolutionEngine] Successfully added {added}/{len(novel_programs)} programs."
+        )
 
     async def _validate_program(self, program: Program) -> bool:
         validation_result = await asyncio.to_thread(
@@ -205,10 +226,16 @@ class EvolutionEngine:
         )
 
         if not validation_result.is_valid:
-            logger.warning(f"[EvolutionEngine] {validation_result.contract_summary}")
-            logger.debug(f"[EvolutionEngine] {validation_result.detailed_message}")
+            logger.warning(
+                f"[EvolutionEngine] {validation_result.contract_summary}"
+            )
+            logger.debug(
+                f"[EvolutionEngine] {validation_result.detailed_message}"
+            )
         elif validation_result.is_valid:
-            logger.debug(f"[EvolutionEngine] {validation_result.contract_summary}")
+            logger.debug(
+                f"[EvolutionEngine] {validation_result.contract_summary}"
+            )
 
         return validation_result
 
@@ -218,9 +245,7 @@ class EvolutionEngine:
             elites = await self.strategy.select_elites(
                 total=self.config.max_elites_per_generation
             )
-            logger.debug(
-                f"[EvolutionEngine] Selected {len(elites)} elites"
-            )
+            logger.debug(f"[EvolutionEngine] Selected {len(elites)} elites")
             return elites
         except Exception as exc:  # pylint: disable=broad-except
             logger.error(f"[EvolutionEngine] Elite selection failed: {exc}")
@@ -255,17 +280,23 @@ class EvolutionEngine:
 
     async def _should_skip_evolution_due_to_incomplete_dags(self) -> bool:
         """Check if evolution step should be skipped due to incomplete DAG processing.
-        
+
         This implements backpressure control to ensure evolution decisions are made
         only when complete fitness information is available.
         """
         try:
             all_programs = await self.storage.get_all()
-            fresh_count = sum(1 for p in all_programs if p.state == ProgramState.FRESH)
-            processing_count = sum(1 for p in all_programs if p.state == ProgramState.DAG_PROCESSING_STARTED)
-            
+            fresh_count = sum(
+                1 for p in all_programs if p.state == ProgramState.FRESH
+            )
+            processing_count = sum(
+                1
+                for p in all_programs
+                if p.state == ProgramState.DAG_PROCESSING_STARTED
+            )
+
             pending_count = fresh_count + processing_count
-            
+
             if pending_count > 0:
                 logger.debug(
                     f"[EvolutionEngine] Found {pending_count} incomplete DAGs "
@@ -274,11 +305,15 @@ class EvolutionEngine:
                 )
                 return True
             else:
-                logger.debug("[EvolutionEngine] All DAGs completed. Proceeding with evolution step.")
+                logger.debug(
+                    "[EvolutionEngine] All DAGs completed. Proceeding with evolution step."
+                )
                 return False
-                
+
         except Exception as exc:
-            logger.error(f"[EvolutionEngine] Failed to check DAG completion status: {exc}")
+            logger.error(
+                f"[EvolutionEngine] Failed to check DAG completion status: {exc}"
+            )
             return True
 
     def _handle_error(self, error_msg: str):

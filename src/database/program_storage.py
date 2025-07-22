@@ -34,4 +34,3 @@ class ProgramStorage(ABC):
 
     @abstractmethod
     async def get_all_by_status(self, status: str) -> List[Program]: ...
-

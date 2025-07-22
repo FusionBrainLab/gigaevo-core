@@ -1,15 +1,15 @@
 import numpy as np
 
+
 def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     """
     Place 9 circles on a jittered 3×3 grid inside the unit square.
     Each circle is adjusted to avoid boundary violation and potential overlap.
-    
+
     Returns:
         centers: (9, 2) ndarray of (x, y) positions
         radii:   (9,) ndarray of radii
     """
-    n = 9
     grid_size = 3
     spacing = 1.0 / (grid_size + 1)
     jitter = 0.05

@@ -13,25 +13,32 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from src.exceptions import MetaEvolveError, SecurityViolationError
 from src.programs.stages.prometheus import StagePrometheusExporter
 from src.programs.stages.state import ProgramStageResult, StageState
 from src.programs.utils import build_stage_result
-from src.exceptions import MetaEvolveError, SecurityViolationError
 
 if TYPE_CHECKING:  # pragma: no cover
-    from src.programs.stages.base import Stage
     from src.programs.program import Program
+    from src.programs.stages.base import Stage
 
 
-async def _run_stage_with_monitoring(stage: "Stage", program: "Program", started_at: datetime) -> ProgramStageResult:
+async def _run_stage_with_monitoring(
+    stage: "Stage", program: "Program", started_at: datetime
+) -> ProgramStageResult:
     """Execute stage with resource monitoring - extracted to allow timeout to cover everything."""
-    async with stage._resource_monitor(program):  # pylint: disable=protected-access
-        return await stage._execute_stage(program, started_at)  # pylint: disable=protected-access
+    async with stage._resource_monitor(
+        program
+    ):  # pylint: disable=protected-access
+        return await stage._execute_stage(
+            program, started_at
+        )  # pylint: disable=protected-access
 
 
-async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:  # noqa: D401
-    """Run *stage* on *program* with uniform guarantees.
-    """
+async def stage_guard(
+    stage: "Stage", program: "Program"
+) -> ProgramStageResult:  # noqa: D401
+    """Run *stage* on *program* with uniform guarantees."""
 
     started_at = datetime.now(timezone.utc)
     duration: float = 0.0
@@ -78,7 +85,9 @@ async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
             context="Security violation detected",
         )
 
-    except MetaEvolveError as exc:  # includes ValidationError, ResourceError, etc.
+    except (
+        MetaEvolveError
+    ) as exc:  # includes ValidationError, ResourceError, etc.
         duration = (datetime.now(timezone.utc) - started_at).total_seconds()
         stage.metrics.record_execution(duration, False)
         StagePrometheusExporter.record(stage.stage_name, duration, False)
@@ -103,4 +112,4 @@ async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
             error=exc,
             stage_name=stage.stage_name,
             context="Unexpected exception",
-        ) 
+        )

@@ -8,17 +8,22 @@ from pydantic import (
     field_serializer,
 )
 
-from src.programs.stages.utils import pickle_b64_deserialize, pickle_b64_serialize
+from src.programs.stages.utils import (
+    pickle_b64_deserialize,
+    pickle_b64_serialize,
+)
 
 
 class StageState(str, Enum):
     """Status of a processing stage."""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    SKIPPED = "skipped" 
+    SKIPPED = "skipped"
+
 
 class ProgramStageResult(BaseModel):
     """Result of a program processing stage."""

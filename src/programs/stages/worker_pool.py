@@ -8,10 +8,9 @@ or executors themselves.
 """
 
 import asyncio
-import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime
+import os
 
 from loguru import logger
 
@@ -80,4 +79,4 @@ class WorkerPoolStage(Stage):
         self, program: "Program", result: ProgramStageResult
     ) -> ProgramStageResult:
         """Optional async post-processing step executed back in the event loop."""
-        return result 
+        return result

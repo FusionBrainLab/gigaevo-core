@@ -9,7 +9,6 @@ from loguru import logger
 
 from src.exceptions import (
     SecurityViolationError,
-    ValidationError,
     ensure_positive,
 )
 from src.programs.constants import DANGEROUS_PATTERNS
@@ -82,9 +81,11 @@ class ValidateCodeStage(Stage):
         try:
             compile(code, "<string>", "exec")
         except SyntaxError as e:
-            error_msg = f"SyntaxError on line {e.lineno}, offset {e.offset}: {e.msg}"
+            error_msg = (
+                f"SyntaxError on line {e.lineno}, offset {e.offset}: {e.msg}"
+            )
             code_line = e.text.strip() if e.text else "<source unavailable>"
-            
+
             return build_stage_result(
                 status=StageState.FAILED,
                 started_at=started_at,
