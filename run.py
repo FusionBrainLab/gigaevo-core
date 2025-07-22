@@ -462,7 +462,7 @@ def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
             "fitness": (args.min_fitness, args.max_fitness),
             "is_valid": (-0.01, 1.01),
         },
-        resolution={"fitness": 50, "is_valid": 2},
+        resolution={"fitness": 150, "is_valid": 2},
         binning_types={
             "fitness": BinningType.LINEAR,
             "is_valid": BinningType.LINEAR,
@@ -481,13 +481,13 @@ def create_island_configs(
 
     configs = IslandConfig(
         island_id="fitness_island",
-        max_size=40,
+        max_size=75,
         behavior_space=behavior_spaces[0],
         archive_selector=SumArchiveSelector(["fitness"]),
         elite_selector=FitnessProportionalEliteSelector("fitness"),
         archive_remover=FitnessArchiveRemover("fitness"),
         migrant_selector=TopFitnessMigrantSelector("fitness"),
-        migration_rate=0.05,
+        migration_rate=0.0,
     )
 
     return [
@@ -865,7 +865,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 edges=dag_edges,
                 entry_points=entry_points,
                 exec_order_deps=execution_order_deps,
-                dag_timeout=1200,
+                dag_timeout=900,
                 max_parallel_stages=3,
             ),
             storage=redis_storage,
