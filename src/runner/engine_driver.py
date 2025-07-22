@@ -32,7 +32,9 @@ class EngineDriver:
     def start(self) -> None:
         """Launch the engine's ``run`` coroutine in the background (idempotent)."""
         if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._engine.run(), name="evolution-engine")
+            self._task = asyncio.create_task(
+                self._engine.run(), name="evolution-engine"
+            )
             logger.info("[EngineDriver] Evolution engine started")
 
     async def stop(self) -> None:
@@ -69,7 +71,7 @@ class EngineDriver:
 
     @property
     def task(self) -> Optional[asyncio.Task]:
-        return self._task 
+        return self._task
 
     # ------------------------------------------------------------------
     # Internal helper
@@ -88,4 +90,4 @@ class EngineDriver:
                     prev_gen = gen
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
-            pass 
+            pass

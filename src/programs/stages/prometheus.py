@@ -116,4 +116,4 @@ class StagePrometheusExporter:  # pylint: disable=too-few-public-methods
             return
         succ, fail, lat = cls._children(stage_name)
         (succ if success else fail).inc()
-        lat.observe(duration_s) 
+        lat.observe(duration_s)

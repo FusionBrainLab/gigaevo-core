@@ -5,6 +5,7 @@ located in `src.runner` to avoid circular or hard imports.  If
 `prometheus_client` (and therefore `MetricsService`) is not installed, all
 methods degrade to no-ops.
 """
+
 from __future__ import annotations
 
 
@@ -27,4 +28,4 @@ class EnginePrometheusExporter:
 
             MetricsService.inc_evolution_error(n)
         except ImportError:  # pragma: no cover
-            pass 
+            pass

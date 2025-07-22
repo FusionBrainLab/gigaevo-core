@@ -1,9 +1,8 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
-import uuid
 import math
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+import uuid
 
-from loguru import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -12,17 +11,22 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from src.programs.stages.state import StageState
-from src.programs.stages.base import ProgramStageResult
-from src.programs.stages.utils import pickle_b64_deserialize, pickle_b64_serialize
-from src.programs.utils import pretty_print_error
+
 from src.programs.program_state import ProgramState
+from src.programs.stages.base import ProgramStageResult
+from src.programs.stages.state import StageState
+from src.programs.stages.utils import (
+    pickle_b64_deserialize,
+    pickle_b64_serialize,
+)
+from src.programs.utils import pretty_print_error
 
 if TYPE_CHECKING:
     from src.evolution.mutation.base import MutationSpec
 
 MAX_METRIC_VALUE = 1e9
 MIN_METRIC_VALUE = -1e9
+
 
 class Lineage(BaseModel):
     """Represents the evolutionary lineage of a program."""
@@ -206,7 +210,11 @@ class Program(BaseModel):
                     f"=== Stage: {stage} ===\n{error_summary}"
                 )
 
-        return "\n\n".join(error_summaries) if error_summaries else "Failed stages found but no error details available."
+        return (
+            "\n\n".join(error_summaries)
+            if error_summaries
+            else "Failed stages found but no error details available."
+        )
 
     def get_age_seconds(self) -> float:
         """Get the age of the program in seconds."""
@@ -263,7 +271,7 @@ class Program(BaseModel):
         )
 
         return cls(code=code, lineage=lineage, name=name)
-    
+
     @classmethod
     def from_mutation_spec(cls, spec: "MutationSpec") -> "Program":
         name = ""
@@ -273,7 +281,9 @@ class Program(BaseModel):
                 name += " -> "
             else:
                 name += f" (mutation: {spec.name})"
-        return cls.create_child(parents=spec.parents, code=spec.code, mutation=spec.name, name=name)
+        return cls.create_child(
+            parents=spec.parents, code=spec.code, mutation=spec.name, name=name
+        )
 
     def copy_with_code(
         self, code: str, mutation: Optional[str] = None
@@ -425,5 +435,3 @@ class Program(BaseModel):
     def is_discarded(self) -> bool:
         """Check if program is discarded."""
         return self.state == ProgramState.DISCARDED
-
-

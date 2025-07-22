@@ -4,11 +4,12 @@ This module provides `DagFactory`, a utility that produces fresh DAG
 instances from immutable templates. It guarantees that per-program DAGs do
 not share mutable `Stage` objects which could leak state across runs.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 from src.programs.dag import DAG
 from src.programs.state_manager import ProgramStateManager
+
 from .dag_spec import DAGSpec
 
 __all__ = ["DagFactory"]
@@ -33,7 +34,9 @@ class DagFactory:
 
     def create(self, state_manager: ProgramStateManager) -> DAG:
         """Return a brand-new `DAG` instance whose `Stage`s are independent."""
-        new_nodes = {name: factory() for name, factory in self._spec.nodes.items()}
+        new_nodes = {
+            name: factory() for name, factory in self._spec.nodes.items()
+        }
 
         return DAG(
             nodes=new_nodes,
@@ -43,4 +46,4 @@ class DagFactory:
             execution_order_deps=self._spec.exec_order_deps,
             max_parallel_stages=self._spec.max_parallel_stages,
             dag_timeout=self._spec.dag_timeout,
-        ) 
+        )

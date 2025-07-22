@@ -4,6 +4,7 @@ import base64
 import pickle
 from typing import Any, Dict
 
+
 def pickle_b64_serialize(value: Any) -> str:
     return base64.b64encode(
         pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)

@@ -1,7 +1,7 @@
 """Base classes for MetaEvolve stages."""
 
-from dataclasses import dataclass
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -97,7 +97,7 @@ class Stage:
             try:
                 memory_delta = process.memory_info().rss - initial_memory
                 memory_mb = memory_delta / (1024 * 1024)
-                
+
                 logger.debug(
                     f"[{self.stage_name}] Program {program.id}: "
                     f"Memory delta: {memory_mb:.1f}MB"
@@ -111,7 +111,9 @@ class Stage:
                     )
 
             except Exception as e:
-                logger.warning(f"[{self.stage_name}] Resource monitoring error: {e}")
+                logger.warning(
+                    f"[{self.stage_name}] Resource monitoring error: {e}"
+                )
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get stage execution metrics."""

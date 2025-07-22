@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime
 from typing import Any, Dict
 
 from pydantic import BaseModel, Field
-from collections import deque
+
 
 class EngineMetrics(BaseModel):
     """Simplified metrics tracking (extracted)."""
@@ -32,8 +33,8 @@ class EngineMetrics(BaseModel):
     @property
     def avg_novel_programs(self) -> float:
         """Average number of novel programs over the rolling window."""
-        return (
-            sum(self.novel_programs_per_generation) / max(1, len(self.novel_programs_per_generation))
+        return sum(self.novel_programs_per_generation) / max(
+            1, len(self.novel_programs_per_generation)
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -41,4 +42,4 @@ class EngineMetrics(BaseModel):
         data["avg_novel_programs"] = self.avg_novel_programs
         return data
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "allow"} 
+    model_config = {"arbitrary_types_allowed": True, "extra": "allow"}

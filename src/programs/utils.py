@@ -9,7 +9,6 @@ import traceback
 from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger
-from src.exceptions import StageError
 
 from src.programs.stages.state import ProgramStageResult, StageState
 
@@ -171,29 +170,35 @@ async def run_python_snippet(
             proc.communicate(), timeout=timeout
         )
     except asyncio.TimeoutError:
-        logger.warning(f"Subprocess timed out after {timeout}s, attempting termination")
-        
+        logger.warning(
+            f"Subprocess timed out after {timeout}s, attempting termination"
+        )
+
         try:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=5.0)
             logger.debug("Subprocess terminated gracefully")
         except asyncio.TimeoutError:
             # If graceful termination fails, force kill
-            logger.warning("Graceful termination failed, force killing subprocess")
+            logger.warning(
+                "Graceful termination failed, force killing subprocess"
+            )
             try:
                 proc.kill()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
                 logger.debug("Subprocess force killed")
             except asyncio.TimeoutError:
                 # Last resort - log and continue (process might be in uninterruptible state)
-                logger.error("Failed to kill subprocess - process may be stuck in uninterruptible state")
+                logger.error(
+                    "Failed to kill subprocess - process may be stuck in uninterruptible state"
+                )
             except ProcessLookupError:
                 # Process already died
                 logger.debug("Subprocess already terminated")
         except ProcessLookupError:
             # Process already died
             logger.debug("Subprocess already terminated")
-            
+
         logger.error("Subprocess timed out and was terminated.")
         return build_stage_result(
             status=StageState.FAILED,

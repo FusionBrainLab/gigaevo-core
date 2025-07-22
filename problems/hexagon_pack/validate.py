@@ -1,8 +1,6 @@
+from helper import check_hexagon_overlap_two, compute_outer_hex_side_length
 import numpy as np
-from helper import (
-    compute_outer_hex_side_length,
-    check_hexagon_overlap_two
-)
+
 
 def validate(data):
     """
@@ -26,11 +24,15 @@ def validate(data):
     angles = np.asarray(angles, dtype=float)
 
     if centers.ndim != 2 or centers.shape[1] != 2:
-        raise ValueError(f"Invalid shape for centers: expected (n, 2), got {centers.shape}")
+        raise ValueError(
+            f"Invalid shape for centers: expected (n, 2), got {centers.shape}"
+        )
     if angles.ndim != 1:
         raise ValueError(f"Angles must be a 1D array, got shape {angles.shape}")
     if centers.shape[0] != angles.shape[0]:
-        raise ValueError(f"Mismatch: {centers.shape[0]} centers vs {angles.shape[0]} angles")
+        raise ValueError(
+            f"Mismatch: {centers.shape[0]} centers vs {angles.shape[0]} angles"
+        )
     if centers.shape[0] != 11:
         raise ValueError(f"Expected 11 hexagons, got {centers.shape[0]}")
     if not np.all(np.isfinite(centers)):
@@ -42,7 +44,9 @@ def validate(data):
     n = centers.shape[0]
     for i in range(n):
         for j in range(i + 1, n):
-            if check_hexagon_overlap_two(centers[i], angles[i], centers[j], angles[j]):
+            if check_hexagon_overlap_two(
+                centers[i], angles[i], centers[j], angles[j]
+            ):
                 raise ValueError(
                     f"Hexagon {i} and {j} overlap.\n"
                     f"  Centers: ({centers[i][0]:.3f}, {centers[i][1]:.3f}) vs ({centers[j][0]:.3f}, {centers[j][1]:.3f})\n"

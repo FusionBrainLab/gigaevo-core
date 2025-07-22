@@ -1,9 +1,11 @@
-from helper import get_unit_triangle, get_smallest_triangle_area, is_inside_triangle
-import numpy as np
 import random
+
+from helper import get_unit_triangle
+import numpy as np
 
 np.random.seed(42)
 random.seed(42)
+
 
 def entrypoint() -> np.ndarray:
     tri = get_unit_triangle()
@@ -17,4 +19,3 @@ def entrypoint() -> np.ndarray:
         P = (1 - r1 - r2) * A + r1 * B + r2 * C
         points.append(P)
     return np.array(points)
-

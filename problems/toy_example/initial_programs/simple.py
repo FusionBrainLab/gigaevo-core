@@ -1,5 +1,5 @@
 import numpy as np
-import random
+
 
 def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     """

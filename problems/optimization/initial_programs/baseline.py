@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
+
 def entrypoint(context: dict[str, np.ndarray]) -> np.ndarray:
     """
     Fit a linear regression model and predict the target values.

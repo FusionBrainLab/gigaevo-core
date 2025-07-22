@@ -5,6 +5,7 @@ fall back to the standard :pymod:`json` module otherwise.  The selected backend
 module is also exposed via the attribute :data:`json` so that legacy code can
 still access the underlying implementation directly.
 """
+
 from __future__ import annotations
 
 from typing import Any, Union
@@ -32,4 +33,4 @@ except ModuleNotFoundError:  # pragma: no cover – dev/test envs without orjson
         """Deserialize *data* using the stdlib *json* module."""
         return _backend.loads(data)
 
-    json = _backend  # type: ignore 
+    json = _backend  # type: ignore

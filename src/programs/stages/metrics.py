@@ -1,8 +1,8 @@
 """Metrics-related stages for MetaEvolve."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Callable, Union, Tuple
 import math
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from loguru import logger
 
@@ -11,9 +11,15 @@ from src.exceptions import (
     StageError,
     ValidationError,
 )
-from src.programs.program import Program, ProgramStageResult, StageState, MIN_METRIC_VALUE, MAX_METRIC_VALUE
-from src.programs.utils import build_stage_result
+from src.programs.program import (
+    MAX_METRIC_VALUE,
+    MIN_METRIC_VALUE,
+    Program,
+    ProgramStageResult,
+    StageState,
+)
 from src.programs.stages.base import Stage
+from src.programs.utils import build_stage_result
 
 
 class FactoryMetricsStage(Stage):
@@ -72,14 +78,20 @@ class FactoryMetricsStage(Stage):
     def _get_metrics(self, program: Program) -> Tuple[Dict[str, Any], str]:
         """Get metrics from previous stage or factory. Returns (metrics_dict, source)."""
         prev_result = program.stage_results.get(self.stage_to_extract_metrics)
-        
-        if prev_result and prev_result.is_completed() and isinstance(prev_result.output, dict):
+
+        if (
+            prev_result
+            and prev_result.is_completed()
+            and isinstance(prev_result.output, dict)
+        ):
             metrics = prev_result.output
             if self._has_required_keys(metrics):
                 return metrics, "previous_stage"
             else:
-                logger.debug(f"[{self.stage_name}] Previous stage missing required keys, using factory")
-        
+                logger.debug(
+                    f"[{self.stage_name}] Previous stage missing required keys, using factory"
+                )
+
         factory_metrics = self._get_factory_metrics()
         return factory_metrics, "factory"
 
@@ -97,7 +109,7 @@ class FactoryMetricsStage(Stage):
                 metrics = self.metrics_factory()
             else:
                 metrics = self.metrics_factory.copy()
-            
+
             if not isinstance(metrics, dict):
                 raise ValidationError(
                     f"Factory must return a dictionary, got {type(metrics).__name__}",
@@ -105,7 +117,7 @@ class FactoryMetricsStage(Stage):
                     value=metrics,
                 )
             return metrics
-            
+
         except Exception as e:
             raise StageError(
                 f"Factory function failed: {e}",
@@ -114,7 +126,9 @@ class FactoryMetricsStage(Stage):
                 cause=e,
             )
 
-    def _process_metrics(self, program: Program, metrics: Dict[str, Any]) -> Dict[str, Any]:
+    def _process_metrics(
+        self, program: Program, metrics: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Clean and filter metrics to only include required keys."""
         # Clean metrics (handle unsupported types and non-finite values)
         metrics, dropped = clean_metrics(
@@ -123,7 +137,9 @@ class FactoryMetricsStage(Stage):
             stage_name=self.stage_name,
         )
         if dropped:
-            logger.debug(f"[{self.stage_name}] Dropped {len(dropped)} metrics due to type validation")
+            logger.debug(
+                f"[{self.stage_name}] Dropped {len(dropped)} metrics due to type validation"
+            )
 
         # Filter to only required keys
         return filter_required_keys(
@@ -157,27 +173,37 @@ def clean_metrics(
                 )
                 cleaned[key] = str(val)
             else:
-                logger.warning(f"[{stage_name}] Dropping unsupported metric '{key}'")
+                logger.warning(
+                    f"[{stage_name}] Dropping unsupported metric '{key}'"
+                )
                 cleaned.pop(key)
                 dropped.append(key)
             continue
 
         if isinstance(val, float) and not math.isfinite(val):
             if drop_non_finite:
-                logger.warning(f"[{stage_name}] Dropping non-finite metric '{key}': {val}")
+                logger.warning(
+                    f"[{stage_name}] Dropping non-finite metric '{key}': {val}"
+                )
                 cleaned.pop(key)
                 dropped.append(key)
             else:
                 clamped = MAX_METRIC_VALUE if val > 0 else MIN_METRIC_VALUE
                 cleaned[key] = clamped
-                logger.warning(f"[{stage_name}] Clamped non-finite metric '{key}' -> {clamped}")
+                logger.warning(
+                    f"[{stage_name}] Clamped non-finite metric '{key}' -> {clamped}"
+                )
 
     if dropped:
         try:
             existing = program.get_metadata(metadata_key) or []
-            program.set_metadata(metadata_key, sorted(set(existing) | set(dropped)))
+            program.set_metadata(
+                metadata_key, sorted(set(existing) | set(dropped))
+            )
         except Exception as exc:
-            logger.debug(f"[{stage_name}] Failed to persist {metadata_key}: {exc}")
+            logger.debug(
+                f"[{stage_name}] Failed to persist {metadata_key}: {exc}"
+            )
 
     return cleaned, dropped
 
@@ -198,5 +224,7 @@ def filter_required_keys(
         if k in required:
             filtered[k] = v
         else:
-            logger.debug(f"[{stage_name}] Ignoring metric key not in required set: {k}")
+            logger.debug(
+                f"[{stage_name}] Ignoring metric key not in required set: {k}"
+            )
     return filtered

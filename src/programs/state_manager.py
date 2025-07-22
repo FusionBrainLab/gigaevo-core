@@ -1,14 +1,15 @@
-from datetime import datetime, timezone
-from loguru import logger
 import asyncio
-import weakref
-from typing import Optional, List, Dict
+from datetime import datetime, timezone
+from typing import Dict, Optional
 
+from loguru import logger
+
+from src.database.program_storage import ProgramStorage
 from src.programs.program import Program
+from src.programs.program_state import ProgramState
 from src.programs.stages.base import ProgramStageResult
 from src.programs.stages.state import StageState
-from src.database.program_storage import ProgramStorage
-from src.programs.program_state import ProgramState
+
 
 class ProgramStateManager:
     """
@@ -22,38 +23,43 @@ class ProgramStateManager:
         # Use WeakValueDictionary to automatically clean up locks when programs are garbage collected
         self._locks: Dict[str, asyncio.Lock] = {}
         self._lock_cleanup_counter = 0
-        self._max_locks_before_cleanup = 1000  # Cleanup when we hit this many locks
+        self._max_locks_before_cleanup = (
+            1000  # Cleanup when we hit this many locks
+        )
 
     def _get_lock(self, program_id: str) -> asyncio.Lock:
         """Get a lock for a given program ID with automatic cleanup."""
         if program_id not in self._locks:
             self._locks[program_id] = asyncio.Lock()
-            
+
             # Periodic cleanup to prevent unbounded memory growth
             self._lock_cleanup_counter += 1
             if self._lock_cleanup_counter >= self._max_locks_before_cleanup:
                 self._cleanup_unused_locks()
                 self._lock_cleanup_counter = 0
-                
+
         return self._locks[program_id]
-    
+
     def _cleanup_unused_locks(self) -> None:
         """Clean up locks for programs that are likely no longer active."""
         # Remove locks that are not currently acquired (indicating the program is idle)
         # This is a heuristic cleanup - locks for truly active programs will be recreated quickly
         idle_locks = [
-            program_id for program_id, lock in self._locks.items() 
+            program_id
+            for program_id, lock in self._locks.items()
             if not lock.locked()
         ]
-        
+
         # Keep some recent locks but clean up older ones
         if len(idle_locks) > self._max_locks_before_cleanup // 2:
             # Remove the oldest half of idle locks
-            to_remove = idle_locks[:len(idle_locks) // 2]
+            to_remove = idle_locks[: len(idle_locks) // 2]
             for program_id in to_remove:
                 self._locks.pop(program_id, None)
-            
-            logger.debug(f"[StateManager] Cleaned up {len(to_remove)} idle locks, {len(self._locks)} remaining")
+
+            logger.debug(
+                f"[StateManager] Cleaned up {len(to_remove)} idle locks, {len(self._locks)} remaining"
+            )
 
     async def mark_stage_running(
         self,
@@ -84,7 +90,9 @@ class ProgramStateManager:
             program.stage_results[stage_name] = result
             await self.storage.update(program)
 
-    async def set_program_state(self, program: Program, new_state: ProgramState) -> None:
+    async def set_program_state(
+        self, program: Program, new_state: ProgramState
+    ) -> None:
         """Update *program* to *new_state* and persist (publishes event)."""
         async with self._get_lock(program.id):
             if program.state == new_state:

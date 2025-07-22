@@ -6,12 +6,13 @@ implementation details to sub-modules.  Importing from
 
     from src.evolution.engine import EvolutionEngine, EngineConfig
 """
+
 from __future__ import annotations
 
 from .config import EngineConfig
-from .metrics import EngineMetrics
-from .validation import ValidationFailureReason, ProgramValidationResult
 from .core import EvolutionEngine  # noqa: F401  (public symbol)
+from .metrics import EngineMetrics
+from .validation import ProgramValidationResult, ValidationFailureReason
 
 __all__ = [
     "EngineConfig",
@@ -19,4 +20,4 @@ __all__ = [
     "ValidationFailureReason",
     "ProgramValidationResult",
     "EvolutionEngine",
-] 
+]

@@ -1,14 +1,18 @@
-import numpy as np
 import itertools
-from scipy.spatial.distance import pdist
+
 from helper import get_unit_triangle
+import numpy as np
+from scipy.spatial.distance import pdist
+
 
 def validate(coordinates):
     coordinates = np.asarray(coordinates, dtype=float)
 
     # --- Input shape checks ---
     if coordinates.ndim != 2 or coordinates.shape[1] != 2:
-        raise ValueError(f"Invalid shape for coordinates: expected (n, 2), got {coordinates.shape}")
+        raise ValueError(
+            f"Invalid shape for coordinates: expected (n, 2), got {coordinates.shape}"
+        )
     if coordinates.shape[0] != 11:
         raise ValueError(f"Expected 11 points, got {coordinates.shape[0]}")
     if not np.all(np.isfinite(coordinates)):
@@ -40,7 +44,7 @@ def validate(coordinates):
 
     if not is_inside_triangle(coordinates, A, B, C):
         raise ValueError("Some coordinates are outside the triangle.")
-    
+
     dists = pdist(coordinates)
     min_dist = np.min(dists)
 
@@ -57,9 +61,11 @@ def validate(coordinates):
     c = pts[:, 2, :]
 
     areas = 0.5 * np.abs(
-        (a[:, 0] * (b[:, 1] - c[:, 1]) +
-         b[:, 0] * (c[:, 1] - a[:, 1]) +
-         c[:, 0] * (a[:, 1] - b[:, 1]))
+        (
+            a[:, 0] * (b[:, 1] - c[:, 1])
+            + b[:, 0] * (c[:, 1] - a[:, 1])
+            + c[:, 0] * (a[:, 1] - b[:, 1])
+        )
     )
 
     min_area = np.min(areas)

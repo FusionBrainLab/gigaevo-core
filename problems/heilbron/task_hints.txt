@@ -1,28 +1,6 @@
-💡 DESIGN HINTS FOR OPTIMAL POINT LAYOUT
+🚫 COMMON FAILURE MODES
 
-- **Triplet-aware spacing**: Optimize for triangle robustness by preventing any group of 3 points from forming a very small or flat triangle. This requires angular as well as spatial separation.
-
-- **Asymmetric edge loading**: It’s acceptable to place points near triangle edges or corners, but avoid doing so symmetrically — symmetry often creates repeating degeneracies in triangle area.
-
-- **Broken symmetry beats perfect order**: Partial or near-symmetries (e.g., arcs or spirals) can be used, but they must be distorted or perturbed enough to avoid triplet collapses.
-
-- **Angular robustness**: Favor configurations where triangle angles are diverse and well-spread. Avoid layouts where many triangles share a nearly collinear anchor point.
-
-- **Tension-based distribution**: Use repulsion, local neighborhood shaping, or progressive placement schemes that space apart likely-degenerate triplets early in the generation process.
-
-🚫 FAILURE MODES TO AVOID
-
-- Do NOT align multiple points along a single triangle edge (→ collinearity → zero-area triangles)
-- Avoid stacking many points at triangle vertices (→ high-density → degeneracies)
-- Never reuse exact (x, y) coordinates — even small noise is better than duplication
-
-✅ STRATEGIES TO PREVENT COLLAPSE
-
-- Apply small perturbations to edge-aligned or patterned placements to break collinearity
-- Consider triangle area quality during generation — reject or adjust placements that cause poor triplets
-- When using arcs or edge-following structures, introduce curvature or angular irregularity to maintain triangle diversity
-
-📈 GOAL
-
-Construct a configuration where the **minimum triangle area among all point triplets is maximized**.  
-Prioritize **triplet robustness** over symmetry. Trade geometric regularity for layouts that yield **globally spread, locally stable** triangles.
+- Clustering points near triangle vertices → small triangle areas
+- Aligning points along edges → collinear or near-degenerate triangles
+- Symmetric or regular patterns → hidden degeneracies
+- Maximizing pairwise distance without considering triangle areas

@@ -1,17 +1,16 @@
+from datetime import datetime
 import json
 import re
-from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, field_validator
 from loguru import logger
+from pydantic import BaseModel, field_validator
 
+from src.exceptions import StageError
+from src.llm.wrapper import LLMInterface
 from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
-from src.llm.wrapper import LLMInterface
-from src.exceptions import StageError
-
 
 STRICT_SCORE_PROMPT_TEMPLATE = """
 You are evaluating the following Python program based on the trait:
@@ -55,16 +54,24 @@ class GenerateLLMScoreStage(Stage):
     def __init__(self, config: ScoreStageConfig, **kwargs):
         super().__init__(**kwargs)
         self.config = config
-        self.prompt_template = config.prompt_template or STRICT_SCORE_PROMPT_TEMPLATE
+        self.prompt_template = (
+            config.prompt_template or STRICT_SCORE_PROMPT_TEMPLATE
+        )
 
-    async def _execute_stage(self, program: Program, started_at: datetime) -> ProgramStageResult:
+    async def _execute_stage(
+        self, program: Program, started_at: datetime
+    ) -> ProgramStageResult:
         try:
-            logger.debug(f"[{self.stage_name}] Generating score for {self.config.score_metric_name} on program {program.id}")
+            logger.debug(
+                f"[{self.stage_name}] Generating score for {self.config.score_metric_name} on program {program.id}"
+            )
             user_prompt = self._render_user_prompt(program)
             response = await self.config.llm_wrapper.generate_async(user_prompt)
 
             parsed_score = self._parse_score(response)
-            logger.info(f"[{self.stage_name}] Parsed score = {parsed_score:.3f}")
+            logger.info(
+                f"[{self.stage_name}] Parsed score = {parsed_score:.3f}"
+            )
 
             program.metrics[self.config.score_metric_name] = parsed_score
 
@@ -105,7 +112,9 @@ class GenerateLLMScoreStage(Stage):
                     if isinstance(score_value, (int, float)):
                         return float(score_value)
                     else:
-                        raise ValueError(f"Score value is not numeric: {score_value}")
+                        raise ValueError(
+                            f"Score value is not numeric: {score_value}"
+                        )
         except json.JSONDecodeError as e:
             logger.debug(f"[{self.stage_name}] JSON parsing failed: {e}")
         except (ValueError, TypeError, KeyError) as e:
@@ -115,12 +124,16 @@ class GenerateLLMScoreStage(Stage):
         # Fixed regex pattern - removed double backslashes
         match = re.search(r"[-+]?\d*\.?\d+", raw)
         if not match:
-            raise StageError(f"Could not extract float score from LLM response: '{raw}'")
+            raise StageError(
+                f"Could not extract float score from LLM response: '{raw}'"
+            )
 
         try:
             value = float(match.group())
         except ValueError as e:
-            raise StageError(f"Could not convert matched string to float: '{match.group()}' from '{raw}'") from e
+            raise StageError(
+                f"Could not convert matched string to float: '{match.group()}' from '{raw}'"
+            ) from e
 
         # Clamp to valid range [0, max_expected_score]
         return min(max(value, 0.0), self.config.max_expected_score)

@@ -1,9 +1,9 @@
 """Code complexity analysis for MetaEvolve."""
 
 import ast
+from collections import Counter
 from datetime import datetime
 import math
-from collections import Counter
 from typing import Any, Dict
 
 from loguru import logger
@@ -23,7 +23,9 @@ class GetCodeLengthStage(WorkerPoolStage):
         super().__init__(**kwargs)
         self._requires_code = True
 
-    def _work(self, program: Program, started_at: datetime) -> ProgramStageResult:
+    def _work(
+        self, program: Program, started_at: datetime
+    ) -> ProgramStageResult:
         """Synchronous computation executed inside the shared thread pool."""
         logger.debug(
             f"[{self.stage_name}] Program {program.id}: Computing complexity metrics"
@@ -183,14 +185,14 @@ def compute_complexity_score(features: Dict[str, Any]) -> float:
 
     # Weighted complexity calculation
     weights = {
-        "call_count": 0.15,              # Use of abstraction / reusability
-        "binop_count": 0.1,              # Raw computational work
-        "loop_count": 0.15,              # Iterative complexity
-        "condition_count": 0.15,         # Branching complexity
-        "function_def_count": 0.1,       # Structural modularity
-        "class_def_count": 0.05,         # OOP, if applicable
-        "max_depth": 0.2,                # Nesting depth = semantic burden
-        "unique_identifiers": 0.1        # Diversity of state/symbols
+        "call_count": 0.15,  # Use of abstraction / reusability
+        "binop_count": 0.1,  # Raw computational work
+        "loop_count": 0.15,  # Iterative complexity
+        "condition_count": 0.15,  # Branching complexity
+        "function_def_count": 0.1,  # Structural modularity
+        "class_def_count": 0.05,  # OOP, if applicable
+        "max_depth": 0.2,  # Nesting depth = semantic burden
+        "unique_identifiers": 0.1,  # Diversity of state/symbols
     }
 
     # Optional: normalize some features to prevent extreme scaling
@@ -225,7 +227,9 @@ class ComputeComplexityStage(WorkerPoolStage):
         super().__init__(**kwargs)
         self._requires_code = True
 
-    def _work(self, program: Program, started_at: datetime) -> ProgramStageResult:
+    def _work(
+        self, program: Program, started_at: datetime
+    ) -> ProgramStageResult:
         """Synchronous computation executed inside the shared thread pool."""
         logger.debug(
             f"[{self.stage_name}] Program {program.id}: Computing complexity metrics"
@@ -241,7 +245,7 @@ class ComputeComplexityStage(WorkerPoolStage):
                 output={
                     **features,
                     "complexity_score": score,
-                    "negative_complexity_score": -score
+                    "negative_complexity_score": -score,
                 },
             )
 

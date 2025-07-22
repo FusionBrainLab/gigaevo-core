@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional, Set, Dict, Any
+from typing import Any, Optional, Set
 
 from pydantic import BaseModel, Field, computed_field
 
 from src.programs.program_state import ProgramState
+
 
 class ValidationFailureReason(str, Enum):
     """Specific reasons why a program failed validation (mirrors previous monolith)."""
@@ -23,7 +24,9 @@ class ProgramValidationResult(BaseModel):
     """Detailed result of program validation with explicit contract information."""
 
     is_valid: bool = Field(description="Whether the program passed validation")
-    program_id: str | None = Field(default=None, description="ID of the validated program")
+    program_id: str | None = Field(
+        default=None, description="ID of the validated program"
+    )
     reason: Optional[ValidationFailureReason] = Field(
         default=None, description="Specific reason for validation failure"
     )
@@ -43,7 +46,9 @@ class ProgramValidationResult(BaseModel):
         default=None, description="Short summary derived from validation result"
     )
     detailed_message: str | None = Field(
-        default=None, description="Human-readable explanation of validation result", repr=False
+        default=None,
+        description="Human-readable explanation of validation result",
+        repr=False,
     )
 
     model_config = {
@@ -81,7 +86,7 @@ class ProgramValidationResult(BaseModel):
 # High-level validation helper (extracted from EvolutionEngine.core)
 # ---------------------------------------------------------------------------
 
-from typing import Set, Any  # after pydantic imports to avoid circular
+from typing import Any, Set  # after pydantic imports to avoid circular
 
 
 def validate_program(
@@ -153,7 +158,7 @@ def validate_program(
             is_complete=True,
             available_keys=set(program.metrics.keys()),
             contract_summary=f"metrics={len(program.metrics)} ✅ (has metrics - eligible for evolution)",
-            detailed_message=f"Program {program.id} passed all validation checks"
+            detailed_message=f"Program {program.id} passed all validation checks",
         )
 
     except Exception as exc:  # pylint: disable=broad-except

@@ -1,5 +1,7 @@
-import numpy as np
 import itertools
+
+import numpy as np
+
 
 def get_unit_triangle() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     unit_area_side = np.sqrt(4 / np.sqrt(3))  # scale for unit area
@@ -20,15 +22,20 @@ def get_smallest_triangle_area(coordinates: np.ndarray) -> float:
     c = pts[:, 2, :]
 
     areas = 0.5 * np.abs(
-        (a[:, 0] * (b[:, 1] - c[:, 1]) +
-         b[:, 0] * (c[:, 1] - a[:, 1]) +
-         c[:, 0] * (a[:, 1] - b[:, 1]))
+        (
+            a[:, 0] * (b[:, 1] - c[:, 1])
+            + b[:, 0] * (c[:, 1] - a[:, 1])
+            + c[:, 0] * (a[:, 1] - b[:, 1])
+        )
     )
 
     min_area = np.min(areas)
     return min_area
 
-def is_inside_triangle(points: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> bool:
+
+def is_inside_triangle(
+    points: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray
+) -> bool:
     # Compute barycentric coordinates
     v0 = c - a
     v1 = b - a

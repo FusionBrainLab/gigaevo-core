@@ -72,6 +72,6 @@ conda activate "$CONDA_ENV"
 
 while true; do
   echo "[$(date)] Running evolution_fitness_analyzer..."
-  python evolution_fitness_analyzer.py --output-folder "$OUTPUT_FOLDER" --redis-db "$REDIS_DB" --redis-prefix "$REDIS_PREFIX"
+  PYTHONPATH=. python tools/evolution_fitness_analyzer.py --output-folder "$OUTPUT_FOLDER" --redis-db "$REDIS_DB" --redis-prefix "$REDIS_PREFIX"
   sleep 300
 done
