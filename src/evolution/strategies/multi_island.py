@@ -2,7 +2,7 @@ import random
 from typing import Dict, List, Optional, Tuple
 from loguru import logger
 
-from src.database.program_storage import RedisProgramStorage
+from src.database.redis_program_storage import RedisProgramStorage
 from src.evolution.strategies.base import (
     EvolutionStrategy,
     StrategyStatus,

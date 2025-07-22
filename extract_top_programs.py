@@ -22,11 +22,11 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List
 from datetime import datetime
 
 from loguru import logger
-from src.database.program_storage import RedisProgramStorage
+from src.database.redis_program_storage import RedisProgramStorage, RedisProgramStorageConfig
 from src.programs.program import Program
 
 
@@ -39,13 +39,13 @@ class TopProgramExtractor:
         self.redis_db = redis_db
         
         # Create Redis storage connection
-        self.redis_storage = RedisProgramStorage({
-            "redis_url": f"redis://{redis_host}:{redis_port}/{redis_db}",
-            "key_prefix": "hexagon_pack_evolution",
-            "max_connections": 50,
-            "connection_pool_timeout": 30.0,
-            "health_check_interval": 60,
-        })
+        self.redis_storage = RedisProgramStorage(RedisProgramStorageConfig(
+            redis_url=f"redis://{redis_host}:{redis_port}/{redis_db}",
+            key_prefix=args.key_prefix,
+            max_connections=50,
+            connection_pool_timeout=30.0,
+            health_check_interval=60,
+        ))
         
         logger.info(f"Initialized extractor for Redis at {redis_host}:{redis_port}/{redis_db}")
     
@@ -219,6 +219,7 @@ async def main():
     parser.add_argument("--redis-host", type=str, default="localhost", help="Redis host (default: localhost)")
     parser.add_argument("--redis-port", type=int, default=6379, help="Redis port (default: 6379)")
     parser.add_argument("--redis-db", type=int, default=0, help="Redis database number (default: 0)")
+    parser.add_argument("--key-prefix", type=str, required=True, help="Redis key prefix")
     parser.add_argument("--fitness-metric", type=str, default="fitness", help="Name of the fitness metric to use (default: fitness)")
     
     args = parser.parse_args()

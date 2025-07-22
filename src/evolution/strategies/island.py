@@ -6,7 +6,7 @@ import asyncio
 
 from src.evolution.storage.archive_storage import RedisArchiveStorage
 from src.evolution.strategies.metadata_manager import MetadataManager
-from src.database.program_storage import RedisProgramStorage
+from src.database.redis_program_storage import RedisProgramStorage
 from src.programs.program import Program
 from .models import BehaviorSpace, QualityDiversityMetrics, SelectionMode, DEFAULT_MIGRATION_RATE
 from .selectors import ArchiveSelector

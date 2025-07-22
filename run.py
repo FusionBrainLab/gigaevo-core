@@ -24,8 +24,12 @@ from typing import Any, Dict, List
 # Main imports
 from loguru import logger
 
-from src.database.program_storage import RedisProgramStorage
+from src.database.redis_program_storage import (
+    RedisProgramStorage,
+    RedisProgramStorageConfig,
+)
 from src.evolution.engine import EngineConfig, EvolutionEngine
+from src.evolution.mutation.parent_selector import RandomParentSelector
 from src.evolution.mutation.llm import LLMMutationOperator
 from src.evolution.strategies.map_elites import (
     BehaviorSpace,
@@ -47,7 +51,11 @@ from src.programs.automata import ExecutionOrderDependency
 from src.programs.program import Program
 from src.programs.stages.base import Stage
 from src.programs.stages.complexity import ComputeComplexityStage
-from src.programs.stages.execution import RunCodeStage, RunValidationStage, RunPythonCode
+from src.programs.stages.execution import (
+    RunCodeStage,
+    RunValidationStage,
+    RunPythonCode,
+)
 from src.programs.stages.insights import (
     GenerateLLMInsightsStage,
     InsightsConfig,
@@ -152,7 +160,9 @@ Examples:
     )
 
     # Redis selection configuration
-    redis_selection_group = parser.add_argument_group("Redis Selection Configuration")
+    redis_selection_group = parser.add_argument_group(
+        "Redis Selection Configuration"
+    )
     redis_selection_group.add_argument(
         "--use-redis-selection",
         action="store_true",
@@ -201,7 +211,9 @@ Examples:
     return parser.parse_args()
 
 
-def validate_problem_directory(problem_dir: Path, add_context: bool = False) -> None:
+def validate_problem_directory(
+    problem_dir: Path, add_context: bool = False
+) -> None:
     """Validate that the problem directory contains required files and directories."""
     required_files = [
         "task_description.txt",
@@ -249,7 +261,6 @@ def load_problem_file(problem_dir: Path, filename: str) -> str:
         raise FileNotFoundError(f"Problem file not found: {file_path}")
 
     return file_path.read_text().strip()
-
 
 
 # Configuration constants
@@ -347,7 +358,7 @@ async def select_top_programs_from_redis(
 ) -> List[Program]:
     """
     Select top programs by fitness from an existing Redis database.
-    
+
     Args:
         redis_storage: Target Redis storage where selected programs will be added
         source_redis_host: Host of the source Redis database
@@ -355,52 +366,60 @@ async def select_top_programs_from_redis(
         source_redis_db: Database number of the source Redis database
         problem_dir: Problem directory path (used to construct key prefix)
         top_n: Number of top programs to select
-    
+
     Returns:
         List of selected programs added to target database
     """
-    logger.info(f"🔍 Selecting top {top_n} programs from Redis {source_redis_host}:{source_redis_port}/{source_redis_db}...")
-    
+    logger.info(
+        f"🔍 Selecting top {top_n} programs from Redis {source_redis_host}:{source_redis_port}/{source_redis_db}..."
+    )
+
     # Create source Redis storage connection with same key prefix construction
-    source_storage = RedisProgramStorage({
-        "redis_url": f"redis://{source_redis_host}:{source_redis_port}/{source_redis_db}",
-        "key_prefix": f"{problem_dir.name}_evolution",
-        "max_connections": 50,
-        "connection_pool_timeout": 30.0,
-        "health_check_interval": 60,
-    })
-    
+    source_storage = RedisProgramStorage(
+        RedisProgramStorageConfig(
+            redis_url=f"redis://{source_redis_host}:{source_redis_port}/{source_redis_db}",
+            key_prefix=f"{problem_dir.name}_evolution",
+            max_connections=50,
+            connection_pool_timeout=30.0,
+            health_check_interval=60,
+        )
+    )
+
     try:
         # Get all programs from source database
         logger.info("📥 Retrieving all programs from source database...")
         all_programs = await source_storage.get_all()
-        logger.info(f"📊 Found {len(all_programs)} total programs in source database")
-        
+        logger.info(
+            f"📊 Found {len(all_programs)} total programs in source database"
+        )
+
         if not all_programs:
             logger.warning("⚠️ No programs found in source database")
             return []
-        
+
         # Filter programs that have fitness metrics
         programs_with_fitness = []
         for program in all_programs:
             if program.metrics and "fitness" in program.metrics:
                 programs_with_fitness.append(program)
-        
-        logger.info(f"🔄 Found {len(programs_with_fitness)} programs with fitness metrics")
-        
+
+        logger.info(
+            f"🔄 Found {len(programs_with_fitness)} programs with fitness metrics"
+        )
+
         if not programs_with_fitness:
             logger.warning("⚠️ No programs with fitness metrics found")
             return []
-        
-        # Sort by fitness (descending) and take top N
+
         programs_with_fitness.sort(
-            key=lambda p: p.metrics.get("fitness", -1000.0), 
-            reverse=True
+            key=lambda p: p.metrics.get("fitness", -float("inf")), reverse=True
         )
         selected_programs = programs_with_fitness[:top_n]
-        
-        logger.info(f"🎯 Selected {len(selected_programs)} top programs by fitness")
-        
+
+        logger.info(
+            f"🎯 Selected {len(selected_programs)} top programs by fitness"
+        )
+
         # Add selected programs to target database
         added_programs = []
         for i, program in enumerate(selected_programs):
@@ -412,17 +431,21 @@ async def select_top_programs_from_redis(
                 "selection_rank": i + 1,
                 "original_id": program.id,
             }
-            
+
             # Add to target database
             await redis_storage.add(program_to_add)
             added_programs.append(program_to_add)
-            
+
             fitness = program.metrics.get("fitness", "N/A")
-            logger.info(f"  ✅ Added program {i+1}/{len(selected_programs)}: fitness={fitness}")
-        
-        logger.info(f"🎯 Successfully selected and added {len(added_programs)} top programs")
+            logger.info(
+                f"  ✅ Added program {i+1}/{len(selected_programs)}: fitness={fitness}"
+            )
+
+        logger.info(
+            f"🎯 Successfully selected and added {len(added_programs)} top programs"
+        )
         return added_programs
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to select top programs: {e}")
         raise
@@ -435,7 +458,9 @@ async def select_top_programs_from_redis(
 
 
 def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
-    """Improved behavior spaces for four diverse islands with better fitness coverage and resolution balance."""
+    """
+    One island with fitness and validity metrics. Good enough for now.
+    """
 
     # 🏝️ 1. Fitness–Validity Island
     fitness_validity_space = BehaviorSpace(
@@ -443,93 +468,37 @@ def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
             "fitness": (args.min_fitness, args.max_fitness),
             "is_valid": (-0.01, 1.01),
         },
-        resolution={"fitness": 60, "is_valid": 2},
+        resolution={"fitness": 50, "is_valid": 2},
         binning_types={
             "fitness": BinningType.LINEAR,
             "is_valid": BinningType.LINEAR,
         },
     )
 
-    # 🏝️ 2. Simplicity Island
-    simplicity_space = BehaviorSpace(
-        feature_bounds={
-            "fitness": (args.min_fitness, args.max_fitness),
-            "complexity_score": (0.5, 20),
-            "is_valid": (-0.01, 1.01),
-        },
-        resolution={
-            "fitness": 12,
-            "complexity_score": 12,
-            "is_valid": 2,
-        },
-        binning_types={
-            "fitness": BinningType.LINEAR,
-            "complexity_score": BinningType.LOGARITHMIC,
-            "is_valid": BinningType.LINEAR,
-        },
-    )
-
-    # 🏝️ 3. Entropy Island
-    entropy_space = BehaviorSpace(
-        feature_bounds={
-            "fitness": (args.min_fitness, args.max_fitness),
-            "ast_entropy": (3.0, 4.0),
-            "is_valid": (-0.01, 1.01),
-        },
-        resolution={
-            "fitness": 10,
-            "ast_entropy": 6,
-            "is_valid": 2,
-        },
-        binning_types={
-            "fitness": BinningType.LINEAR,
-            "ast_entropy": BinningType.LOGARITHMIC,
-            "is_valid": BinningType.LINEAR,
-        },
-    )
-
-    return [fitness_validity_space, simplicity_space, entropy_space]
+    return [
+        fitness_validity_space,
+    ]
 
 
 def create_island_configs(
     behavior_spaces: List[BehaviorSpace],
 ) -> List[IslandConfig]:
-    """Create 4 island configurations with improved resolution balance and migration strategies."""
+    """Create 1 island configurations with improved resolution balance and migration strategies."""
 
-    configs = [
-        IslandConfig(
-            island_id="fitness_island",
-            max_size=50,
-            behavior_space=behavior_spaces[0],
-            archive_selector=SumArchiveSelector(["fitness"]),
-            elite_selector=FitnessProportionalEliteSelector("fitness"),
-            archive_remover=FitnessArchiveRemover("fitness"),
-            migrant_selector=TopFitnessMigrantSelector("fitness"),
-            migration_rate=0.05,
-        ),
-        IslandConfig(
-            island_id="simplicity_island",
-            max_size=50,
-            behavior_space=behavior_spaces[1],
-            archive_selector=ParetoFrontSelector(["fitness", "complexity_score"], fitness_key_higher_is_better={"fitness": True, "complexity_score": False}),
-            elite_selector=ParetoTournamentEliteSelector(["fitness", "complexity_score"], fitness_key_higher_is_better={"fitness": True, "complexity_score": False}),
-            archive_remover=ParetoFrontArchiveRemoverDropOldest(["fitness", "complexity_score"], fitness_key_higher_is_better={"fitness": True, "complexity_score": False}),
-            migrant_selector=ParetoFrontMigrantSelector(["fitness", "complexity_score"], fitness_key_higher_is_better={"fitness": True, "complexity_score": False}),
-            migration_rate=0.15,
-        ),
-        IslandConfig(
-            island_id="entropy_island",
-            max_size=50,
-            behavior_space=behavior_spaces[2],
-            archive_selector=ParetoFrontSelector(["fitness", "ast_entropy"]),
-            elite_selector=ParetoTournamentEliteSelector(["fitness", "ast_entropy"]),
-            archive_remover=ParetoFrontArchiveRemoverDropOldest(["fitness", "ast_entropy"]),
-            migrant_selector=RandomMigrantSelector(),
-            migration_rate=0.1,
-        ),
+    configs = IslandConfig(
+        island_id="fitness_island",
+        max_size=40,
+        behavior_space=behavior_spaces[0],
+        archive_selector=SumArchiveSelector(["fitness"]),
+        elite_selector=FitnessProportionalEliteSelector("fitness"),
+        archive_remover=FitnessArchiveRemover("fitness"),
+        migrant_selector=TopFitnessMigrantSelector("fitness"),
+        migration_rate=0.05,
+    )
+
+    return [
+        configs,
     ]
-
-    return configs
 
 
 def create_dag_stages(
@@ -543,11 +512,10 @@ def create_dag_stages(
 
     stages = {}
 
-    # Stage 1: Validate that code compiles (FAST - 30s timeout)
     stages["ValidateCompiles"] = lambda: ValidateCodeStage(
         stage_name="ValidateCompiles",
-        max_code_length=13000,
-        timeout=30.0,  # OPTIMIZED: Reduced timeout for fast operations
+        max_code_length=18000,
+        timeout=30.0,
         safe_mode=True,
     )
 
@@ -561,24 +529,15 @@ def create_dag_stages(
             max_memory_mb=1024,
         )
 
-
-    # Stage 2: Execute the code to get results
     stages["ExecuteCode"] = lambda: RunCodeStage(
         stage_name="ExecuteCode",
         function_name="entrypoint",
         context_stage="AddContext" if add_context else None,
         python_path=[problem_dir.resolve()],
-        timeout=300.0,
+        timeout=600.0,
         max_memory_mb=512,
     )
 
-    # Stage 2.5: Compute complexity metrics (FAST - 30s timeout)
-    stages["ComputeComplexity"] = lambda: ComputeComplexityStage(
-        stage_name="ComputeComplexity",
-        timeout=60.0,
-    )
-
-    # Stage 3: Run validation against the output (MEDIUM - 60s timeout)
     validator_path = problem_dir / "validate.py"
     stages["RunValidation"] = lambda: RunValidationStage(
         stage_name="RunValidation",
@@ -605,7 +564,7 @@ def create_dag_stages(
                     "ComplexityMetricUpdate",
                 ],
             ),
-            timeout=240.0,  # OPTIMIZED: Reduced from 120s
+            timeout=120.0,
         )
 
     def create_lineage_insights_stage():
@@ -620,7 +579,7 @@ def create_dag_stages(
                 fitness_selector_higher_is_better=True,
             ),
             storage=redis_storage,
-            timeout=240,  # OPTIMIZED: Reduced from 120s
+            timeout=240,  
         )
 
     stages["LLMInsights"] = create_insights_stage
@@ -639,47 +598,6 @@ def create_dag_stages(
         stage_to_extract_metrics="RunValidation",
         metrics_factory=validation_metrics_factory,
         required_keys=["fitness", "is_valid"],
-        timeout=15.0,  # OPTIMIZED: Reduced for fast metric updates
-    )
-
-    # Stage 5b: Complexity metrics factory (FAST - 15s timeout)
-    def complexity_metrics_factory() -> Dict[str, Any]:
-        """Factory function that creates default complexity metrics when complexity computation fails."""
-        return {
-            "complexity_score": 0.0,
-            "negative_complexity_score": 0.0,
-            "total_nodes": 0,
-            "max_depth": 0,
-            "loop_count": 0,
-            "call_count": 0,
-            "unique_identifiers": 0,
-            "binop_count": 0,
-            "subscript_count": 0,
-            "condition_count": 0,
-            "function_def_count": 0,
-            "class_def_count": 0,
-            "ast_entropy": 0,
-        }
-
-    stages["ComplexityMetricUpdate"] = lambda: FactoryMetricsStage(
-        stage_name="ComplexityMetricUpdate",
-        stage_to_extract_metrics="ComputeComplexity",
-        metrics_factory=complexity_metrics_factory,
-        required_keys=[
-            "complexity_score",
-            "negative_complexity_score",
-            "ast_entropy",
-            "loop_count",
-            "total_nodes",
-            "max_depth",
-            "call_count",
-            "unique_identifiers",
-            "binop_count",
-            "subscript_count",
-            "condition_count",
-            "function_def_count",
-            "class_def_count",
-        ],
         timeout=15.0,
     )
 
@@ -688,49 +606,42 @@ def create_dag_stages(
 
 def create_dag_edges(add_context: bool = False) -> Dict[str, List[str]]:
     """Define the DAG execution dependencies."""
-    base_dag =  {
+    base_dag = {
         "ValidateCompiles": [
             "ExecuteCode",
-            "ComputeComplexity",
         ],  # Both can run after validation
         "ExecuteCode": ["RunValidation"],
-        "ComputeComplexity": [],  # Complexity feeds into insights
         "RunValidation": [],
         "LLMInsights": [],  # Terminal stage
         "LineageInsights": [],  # Terminal stage
         "ValidationMetricUpdate": [],  # Independent terminal stage
         "ComplexityMetricUpdate": [],  # Independent terminal stage - NO dependency on ValidationMetricUpdate
+        "FutureLineageInsights": [],  # Terminal stage
     }
     if add_context:
         # first create code, then everything else
-        base_dag["AddContext"] = ["ValidateCompiles",]
+        base_dag["AddContext"] = [
+            "ValidateCompiles",
+        ]
     return base_dag
 
 
 def create_execution_order_deps() -> Dict[str, List[ExecutionOrderDependency]]:
     """Define execution order dependencies for stages that should run under special conditions."""
     return {
-        # ValidationMetricUpdate should ALWAYS run after validation pipeline, regardless of success/failure
         "ValidationMetricUpdate": [
             ExecutionOrderDependency.always_after("ValidateCompiles"),
             ExecutionOrderDependency.always_after("ExecuteCode"),
             ExecutionOrderDependency.always_after("RunValidation"),
         ],
-        # ComplexityMetricUpdate should ALWAYS run after complexity computation, regardless of success/failure
-        "ComplexityMetricUpdate": [
-            ExecutionOrderDependency.always_after("ValidateCompiles"),
-            ExecutionOrderDependency.always_after("ComputeComplexity"),
-        ],
         "LLMInsights": [
             ExecutionOrderDependency.always_after("ValidateCompiles"),
-            ExecutionOrderDependency.always_after("ComputeComplexity"),
             ExecutionOrderDependency.always_after("ExecuteCode"),
             ExecutionOrderDependency.always_after("RunValidation"),
             ExecutionOrderDependency.always_after("ValidationMetricUpdate"),
         ],
         "LineageInsights": [
             ExecutionOrderDependency.always_after("ValidateCompiles"),
-            ExecutionOrderDependency.always_after("ComputeComplexity"),
             ExecutionOrderDependency.always_after("ExecuteCode"),
             ExecutionOrderDependency.always_after("RunValidation"),
             ExecutionOrderDependency.always_after("ValidationMetricUpdate"),
@@ -742,7 +653,6 @@ async def create_evolution_strategy(
     redis_storage: RedisProgramStorage,
     args: argparse.Namespace,
 ) -> MapElitesMultiIsland:
-    """Create the multi-island MAP-Elites evolution strategy with standard behavior spaces."""
 
     behavior_spaces = create_behavior_spaces(args)
     island_configs = create_island_configs(behavior_spaces)
@@ -752,7 +662,7 @@ async def create_evolution_strategy(
         program_storage=redis_storage,
         migration_interval=25,
         enable_migration=True,
-        max_migrants_per_island=5,      
+        max_migrants_per_island=5,
     )
 
     return strategy
@@ -777,36 +687,33 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
             "top_p": 0.85,
         },
         "mutation": {
-            "temperature": 0.7,
+            "temperature": 0.70,
             "max_tokens": 10000,
-            "top_p": 0.85,
+            "top_p": 0.9,
         },
     }
 
     def build_wrapper_with_params(
+        stage: str,
         params: dict[str, float],
     ) -> MultiModelLLMWrapper:
+
         return MultiModelLLMWrapper(
             models=[
-                "google/gemini-2.5-flash:nitro",       # fast, good for insights
-                "anthropic/claude-sonnet-4:nitro",         # deep context for lineage/mutation
+                "Qwen3-235B-A22B-Instruct-2507",
             ],
-            probabilities=[0.8, 0.2],  # favor Gemini unless structure is needed
+            probabilities=[1.0],
             api_key=LLM_API_KEY,
             configs=[
                 LLMConfig(
                     **params,
-                    api_endpoint="https://openrouter.ai/api/v1",
-                ),
-                LLMConfig(
-                    **params,
-                    api_endpoint="https://openrouter.ai/api/v1",
+                    api_endpoint="http://0.0.0.0:8999/v1",
                 ),
             ],
         )
 
     res = {
-        stage: build_wrapper_with_params(params)
+        stage: build_wrapper_with_params(stage, params)
         for stage, params in settings_per_stage.items()
     }
     return res
@@ -833,15 +740,15 @@ async def run_evolution_experiment(args: argparse.Namespace):
 
     # Setup Redis storage
     redis_storage = RedisProgramStorage(
-        {
-            "redis_url": f"redis://{args.redis_host}:{args.redis_port}/{args.redis_db}",
-            "key_prefix": f"{problem_dir.name}_evolution",
-            "max_connections": 150,
-            "connection_pool_timeout": 45.0,
-            "health_check_interval": 120,
-            "max_retries": 5,
-            "retry_delay": 0.5,
-        }
+        RedisProgramStorageConfig(
+            redis_url=f"redis://{args.redis_host}:{args.redis_port}/{args.redis_db}",
+            key_prefix=f"{problem_dir.name}_evolution",
+            max_connections=150,
+            connection_pool_timeout=45.0,
+            health_check_interval=120,
+            max_retries=5,
+            retry_delay=0.5,
+        )
     )
 
     try:
@@ -855,7 +762,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
 
         # Initialize new DB with initial programs
         if args.use_redis_selection:
-            logger.info("🔍 Initializing database with selected programs from Redis...")
+            logger.info(
+                "🔍 Initializing database with selected programs from Redis..."
+            )
             programs = await select_top_programs_from_redis(
                 redis_storage=redis_storage,
                 source_redis_host=args.redis_host,
@@ -866,21 +775,25 @@ async def run_evolution_experiment(args: argparse.Namespace):
             )
         else:
             logger.info("🌱 Initializing database with initial programs...")
-            programs = await create_initial_population(redis_storage, problem_dir)
+            programs = await create_initial_population(
+                redis_storage, problem_dir
+            )
 
         task_description = load_problem_file(
             problem_dir, "task_description.txt"
         )
         task_hints = load_problem_file(problem_dir, "task_hints.txt")
 
-        # Setup LLM
         logger.info("Setting up LLM wrapper...")
         llm_wrapper = await setup_llm_wrapper()
 
-        # Create DAG pipeline
         logger.info("Creating DAG pipeline...")
         dag_stages = create_dag_stages(
-            llm_wrapper, redis_storage, task_description, problem_dir, args.add_context
+            llm_wrapper,
+            redis_storage,
+            task_description,
+            problem_dir,
+            args.add_context,
         )
         dag_edges = create_dag_edges(args.add_context)
         execution_order_deps = create_execution_order_deps()
@@ -888,7 +801,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
 
         # Create evolution strategy
         logger.info("Creating evolution strategy...")
-        evolution_strategy = await create_evolution_strategy(redis_storage, args)
+        evolution_strategy = await create_evolution_strategy(
+            redis_storage, args
+        )
 
         # Create LLM mutation operator
         logger.info("Creating LLM mutation operator...")
@@ -902,13 +817,12 @@ async def run_evolution_experiment(args: argparse.Namespace):
             fetch_lineage_insights_fn=lambda x: x.metadata.get(
                 "lineage_insights", "No lineage insights available."
             ),
-            max_parents=1,
             task_definition=task_description,
             task_hints=task_hints,
             system_prompt_template=load_problem_file(
                 problem_dir, "mutation_system_prompt.txt"
             ),
-            user_prompt_template_rewrite=load_problem_file(
+            user_prompt_template=load_problem_file(
                 problem_dir, "mutation_user_prompt.txt"
             ),
             metric_descriptions={
@@ -918,18 +832,20 @@ async def run_evolution_experiment(args: argparse.Namespace):
         )
         required_behavior_keys = set()
         for island in evolution_strategy.islands.values():
-            required_behavior_keys |= set(island.config.behavior_space.behavior_keys)
+            required_behavior_keys |= set(
+                island.config.behavior_space.behavior_keys
+            )
 
         # TODO refactor? Create an abstraction for `function filter` which drops unsuitable programs; e.g. when metrics are missing
         logger.info("Creating evolution engine...")
 
         engine_config = EngineConfig(
             loop_interval=1.0,
-            max_elites_per_generation=6,  # INCREASED: More elites for better diversity preservation
+            max_elites_per_generation=5,  # INCREASED: More elites for better diversity preservation
             max_mutations_per_generation=8,  # INCREASED: More mutations per generation for faster exploration
             max_generations=args.max_generations,  # Pass max_generations from command line
             required_behavior_keys=required_behavior_keys,
-            log_validation_failures=True,
+            parent_selector=RandomParentSelector(num_parents=1),
         )
 
         evolution_engine = EvolutionEngine(
@@ -945,7 +861,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             poll_interval=5.0,
             max_concurrent_dags=args.max_concurrent_dags,
             log_interval=15,
-            dag_timeout=600,
+            dag_timeout=900,
         )
 
         runner = RunnerManager(
@@ -955,7 +871,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 edges=dag_edges,
                 entry_points=entry_points,
                 exec_order_deps=execution_order_deps,
-                dag_timeout=600,
+                dag_timeout=1200,
                 max_parallel_stages=3,
             ),
             storage=redis_storage,
@@ -967,7 +883,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
         logger.info(f"  - Problem directory: {problem_dir}")
         logger.info(f"  - Target DB: {args.redis_db}")
         logger.info(f"  - Initial population: {len(programs)} programs")
-        logger.info(f"  - Max generations: {args.max_generations if args.max_generations else 'unlimited'}")
+        logger.info(
+            f"  - Max generations: {args.max_generations if args.max_generations else 'unlimited'}"
+        )
         logger.info(f"  - DAG stages: {list(dag_stages.keys())}")
 
         await runner.run()

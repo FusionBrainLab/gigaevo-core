@@ -14,7 +14,7 @@ import random
 from loguru import logger
 from redis import asyncio as aioredis
 
-from src.database.program_storage import (
+from src.database.redis_program_storage import (
     RedisProgramStorage,
 )
 from src.programs.program import Program

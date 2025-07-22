@@ -59,14 +59,8 @@ class RedisProgramStorageConfig(BaseModel):
 class RedisProgramStorage(ProgramStorage):
     """Redis-based :class:`ProgramStorage` using flexible, template-driven key layout."""
 
-    def __init__(self, config: Union[RedisProgramStorageConfig, Dict[str, Any], None] = None):
-        if config is None:
-            self.config = RedisProgramStorageConfig()
-        elif isinstance(config, dict):
-            self.config = RedisProgramStorageConfig(**config)
-        else:
-            self.config = config
-
+    def __init__(self, config: RedisProgramStorageConfig | None = None):
+        self.config = config or RedisProgramStorageConfig()
         self._merge_strategy = resolve_merge_strategy(self.config.merge_strategy)
         self._redis: Optional[aioredis.Redis] = None
         self._lock = asyncio.Lock()

@@ -5,7 +5,7 @@ from pydantic import ConfigDict
 from pydantic import BaseModel
 
 from src.programs.program import Program
-
+from src.evolution.mutation.parent_selector import ParentSelector
 
 
 class MutationSpec(BaseModel):
@@ -25,15 +25,15 @@ class MutationOperator(ABC):
     """Abstract mutation operator that produces child programs from parents."""
 
     @abstractmethod
-    async def mutate_batch(self, parents: list[Program]) -> list[MutationSpec]:
-        """Return child programs derived from *parents*."""
+    async def mutate_single(self, available_parents: List[Program], parent_selector: ParentSelector) -> Optional[MutationSpec]:
+        """Generate a single mutation using the parent selector.
+        
+        Args:
+            available_parents: List of parent programs available for mutation
+            parent_selector: Strategy for selecting which parents to use
+            
+        Returns:
+            MutationSpec if successful, None if no mutation could be generated
+        """
+        pass
 
-
-class DummyMutationOperator(MutationOperator):
-    async def mutate_batch(self, parents: List[Program]) -> List[MutationSpec]:
-        """Return trivial children that append a comment."""
-        children: List[Program] = []
-        for p in parents:
-            new_code = p.code + "\n# mutated"
-            children.append(Program.from_mutation_spec(MutationSpec(code=new_code, parents=[p], name="append comment")))
-        return children

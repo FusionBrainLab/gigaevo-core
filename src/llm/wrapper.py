@@ -8,10 +8,12 @@ from abc import ABC, abstractmethod
 import asyncio
 import random
 from typing import Any, Dict, List, Optional
+import httpx
 
 from loguru import logger
-from openai import OpenAI, AsyncOpenAI
 from openai import (
+    OpenAI, 
+    AsyncOpenAI,
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
@@ -20,7 +22,7 @@ from openai import (
     InternalServerError,
     RateLimitError,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from src.exceptions import LLMAPIError, LLMValidationError, ensure_not_none
 
@@ -47,6 +49,25 @@ class LLMConfig(BaseModel):
     api_endpoint: Optional[str] = Field(
         default=None, description="Custom API endpoint URL"
     )
+    proxy_user: Optional[str] = Field(
+        default=None, description="Proxy username"
+    )
+    proxy_password: Optional[str] = Field(
+        default=None, description="Proxy password"
+    )
+    proxy_host: Optional[str] = Field(
+        default=None, description="Proxy host"
+    )
+    proxy_port: Optional[int] = Field(
+        default=None, description="Proxy port"
+    )
+
+    @computed_field
+    @property
+    def proxy_url(self) -> Optional[str]:
+        if self.proxy_host is None or self.proxy_port is None:
+            return None
+        return f"socks5://{self.proxy_user}:{self.proxy_password}@{self.proxy_host}:{self.proxy_port}"
 
 
 class LLMInterface(ABC):
@@ -101,9 +122,9 @@ class LLMWrapper(LLMInterface):
             client_kwargs["api_key"] = api_key
         if self.config.api_endpoint:
             client_kwargs["base_url"] = self.config.api_endpoint
-            
-        self.sync_client = OpenAI(**client_kwargs)
-        self.async_client = AsyncOpenAI(**client_kwargs)
+
+        self.sync_client = OpenAI(**client_kwargs, http_client=httpx.Client(proxy=self.config.proxy_url) if self.config.proxy_url else None)
+        self.async_client = AsyncOpenAI(**client_kwargs, http_client=httpx.AsyncClient(proxy=self.config.proxy_url) if self.config.proxy_url else None)
         
         logger.info(f"[LLMWrapper] Initialized with model: {model}")
 

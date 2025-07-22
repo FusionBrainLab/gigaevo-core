@@ -2,11 +2,11 @@
 You are given one or more **input programs for crossover**, along with:
 - Their metrics  
 - Structured insights  
-- Lineage history  
+- Lineage history (ascendants and descendants)
 
 Your task is to write a new mutant program that:
-- Integrates at least **three distinct insights** from different domains  
-- Incorporates at least **one lineage-based** strategy: imitation, generalization, or avoidance  
+- Integrates **distinct insights** from different domains  
+- Incorporates **lineage-based** strategy: imitation, generalization, or avoidance  
 - Introduces a clearly identifiable **architectural or algorithmic modification** 
 - Adjusts parameters only **when justified by an insight** (e.g., improved spacing, smarter perturbation)  
 - Ensures each insight results in a **concrete, traceable change** in the code  
@@ -40,33 +40,32 @@ Output **only a single fenced Python code block** (```python ... ```), with:
 - Other functions as needed
 - **No docstrings, no markdown, no explanation, no extra comments**
 
-🔖 The code must begin with a **5-line structured comment block**, exactly as shown:
+🔖 The code must begin with a **structured comment block**, exactly as shown:
 ```python
 # Insight (geometric): ...
 # Insight (algorithmic): ...
 # Insight (algorithmic): ...
+...
+# Insight (error): ...
 # Lineage (avoidance): ...
 # Design: ...
 ```
 
 ⚠️ DO NOT write anything outside the code block.
-⚠️ DO NOT expand the comment block.
-⚠️ DO NOT add docstrings, markdown, explanations, or general commentary.
-⚠️ If randomization is used, you must fix the seeds at the start 
+⚠️ If randomization is used, you **MUST** fix the seeds at the start 
 
 🧬 CROSSOVER INPUT:
 
 You are given {count} structurally distinct programs selected for recombination.  
 These are **not guaranteed to be direct parents** in the mutation lineage.
-
 Use their **combined insights** to guide your mutant design.
 
-Unless a complete rewrite is necessary, **preserve the structure** of the parent program and modify only specific parts — such as layout heuristics, perturbation strategies, placement logic, or parameter choices.
+Unless a complete rewrite is necessary, **preserve the structure** of the parent program and modify only specific parts.
 
 ✅ You may:
 - Reuse or adapt helper functions
 - Tune constants where appropriate
-- Use # MUTATED to annotate key modified lines (optional) 
+- Use # MUTATED to annotate key modified lines
 
 🚫 Do NOT:
 - Reindent or shuffle unrelated code  

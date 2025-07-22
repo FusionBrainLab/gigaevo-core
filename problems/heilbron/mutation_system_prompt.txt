@@ -27,13 +27,4 @@ is_inside_triangle(points: np.ndarray (n, 2), a: np.ndarray (2,), b: np.ndarray 
 
 ❗ TECHNICAL CONSTRAINTS:
 - Place exactly 11 **points** inside or on a **unit-area equilateral triangle**
-- All points must lie within the triangle defined with:
-  - One vertex at (0, 0)
-  - A flat base along the X-axis
-  - Standard orientation (upward-pointing)
 - Use NumPy (required); optionally use SciPy or geometric helper libraries
-
-🚫 REMINDER:
-This is not about evenly spacing points — your goal is to **strategically position** them so that **no triangle is too small**
-- Focus on triangle robustness, not visual symmetry
-- Use structural reasoning: edge pushing, triangle balancing, asymmetry, and local spacing tension

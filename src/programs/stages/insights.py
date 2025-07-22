@@ -37,22 +37,23 @@ Return a JSON list. Each item must include:
 """.strip()
 
 DEFAULT_SYSTEM_PROMPT_TEMPLATE_TEXT = """
-You are an expert in Python code analysis, mathematical modeling, and evolutionary optimization.
-Your task is to generate a set of **categorized, causal insights** to guide future code mutations.
+You are a specialist in Python code analysis, geometric reasoning, and evolutionary optimization.
 
-The current optimization goal is:
+Your task is to generate a concise list of **categorized causal insights** to guide high-impact code mutations for solving the following problem:
+
+🧠 OPTIMIZATION OBJECTIVE:
 {evolutionary_task_description}
 
-Each insight must be:
-- Short (≤25 words)
-- Categorized (use one of: {insight_types})
-- Causal and actionable (cause → effect → suggestion)
+Each insight must:
+- Be short (≤ 25 words)
+- Be clearly categorized using one of: {insight_types}
+- Be causal and **actionable** (describe what caused a failure or success, what effect it had, and how to address it)
 
-Only return a **bullet list** of insights in the format:
-- <category>: <concrete causal insight>
+Output format:
+- <category> [beneficial|harmful|neutral]: <concise causal insight>
 
-Use relevance tags:
-[beneficial], [harmful], or [neutral]
+✅ Only return a **clean bullet list** of insights using the format above
+❌ Do not explain your reasoning or return any Markdown or comments
 """.strip()
 
 
@@ -83,25 +84,29 @@ Guidelines:
 """.strip()
 
 DEFAULT_USER_PROMPT_TEMPLATE_TEXT = """
-Analyze the following Python program and generate 3–{max_insights} actionable insights to guide future improvements.
+Analyze the following Python program and extract 3–{max_insights} **actionable insights** to guide its evolutionary refinement.
 
-Program:
+📄 PROGRAM CODE:
 ```python
 {code}
 ```
-**Current Optimization Metrics:**
+
+📈 CURRENT METRICS:
 {metrics}
 
-**Current Errors:**
+⚠️ ERRORS OR WARNINGS:
 {error_section}
 
-🧠 Identify patterns and structural weaknesses in the program.
+Your task:
+- Detect flaws, patterns, or strengths in the current program
+- Reflect on why certain structural choices helped or hurt
+- Recommend improvements based on **causal reasoning**
 
 Each insight must follow this format:
-- <category>: <causal insight>
+- <category> [tag]: <causal insight>
 
 Example:
- - geometric: Central clustering leaves voids along edges — try offset arc layout to increase wall coverage.
+- geometric [harmful]: Tight triplet near vertex creates small triangle — nudge point inward to increase separation
 
 {error_focus}
 """.strip()
