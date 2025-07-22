@@ -45,7 +45,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns  # professional styling
 from loguru import logger
-from src.database.program_storage import RedisProgramStorage
+from src.database.redis_program_storage import RedisProgramStorage, RedisProgramStorageConfig
 import numpy as np
 
 
@@ -69,13 +69,13 @@ class EvolutionFitnessAnalyzer:
         self._configure_plotting_style()
         
         # Create Redis storage connection
-        self.redis_storage = RedisProgramStorage({
-            "redis_url": f"redis://{redis_host}:{redis_port}/{redis_db}",
-            "key_prefix": redis_prefix,
-            "max_connections": 50,
-            "connection_pool_timeout": 30.0,
-            "health_check_interval": 60,
-        })
+        self.redis_storage = RedisProgramStorage(RedisProgramStorageConfig(
+            redis_url=f"redis://{redis_host}:{redis_port}/{redis_db}",
+            key_prefix=redis_prefix,
+            max_connections=50,
+            connection_pool_timeout=30.0,
+            health_check_interval=60,
+        ))
         
         logger.info(f"Initialized analyzer for Redis at {redis_host}:{redis_port}/{redis_db}")
     
