@@ -342,6 +342,7 @@ metrics_*.log
 evolution_experiment_*/
 experiment_*/
 run_*/
+benchmark
 
 # Program archives
 program_archive/
