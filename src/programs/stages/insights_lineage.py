@@ -26,13 +26,12 @@ Your task is to analyze a single **code transition** from a parent Python progra
 - Lineage (generalization): → for potentially reusable or adaptable patterns
 
 🧠 Each insight must:
-- Include the **direction and magnitude** of the metric change (e.g., “+0.23”, “–0.17”)
-- Reference a **specific architectural or algorithmic change** (use line numbers or function names when helpful)
+- Reference a **specific architectural or algorithmic change** (use function names when helpful)
 - Be ≤ 25 words
 - Avoid vague, stylistic, or speculative claims
 
 ✅ Example:
-Lineage (imitation): +0.28 from line 35 — added jitter to spacing → reduced cluster collapse.""".strip()
+Lineage (imitation): added jitter to spacing → reduced cluster collapse → metric improved.""".strip()
 
 DEFAULT_USER_PROMPT_LINEAGE_TEXT = """
 Analyze the following code transition between a parent and child Python program.
@@ -42,7 +41,7 @@ The transition includes the metric delta and a unified diff. Write exactly **3 c
 👇 Output:
 - One line per insight
 - Each line must start with: `Lineage (imitation):`, `Lineage (avoidance):`, or `Lineage (generalization):`
-- Each insight must include the metric change (e.g., “+0.12”) and reference concrete code changes (line number, function, or operation)
+- Each insight must reference concrete code changes (function or operation or short piece of code)
 - Use no more than 25 words per insight
 
 --- TRANSITION CONTEXT ---
