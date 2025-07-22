@@ -15,50 +15,12 @@ The implementation is split across multiple modules for maintainability:
 - multi_island.py: Multi-island orchestration
 """
 
-from .island import (
-    IslandConfig,
-    MapElitesIsland,
-)
-
-# Core imports
-from .models import (
-    DEFAULT_MIGRATION_RATE,
-    DEFAULT_REDIS_PREFIX,
-    MIN_COORDINATE,
-    BehaviorSpace,
-    BinningType,
-    QualityDiversityMetrics,
-    SelectionMode,
-)
-from .multi_island import (
-    MapElitesMultiIsland,
-)
-from .selectors import (
-    ArchiveSelector,
-    ArchiveSelectorProtocol,
-    ParetoFrontSelector,
-    SumArchiveSelector,
-)
-
-# Expose all classes at module level
-__all__ = [
-    # Enums and Constants
-    "SelectionMode",
-    "BinningType",
-    "DEFAULT_REDIS_PREFIX",
-    "MIN_COORDINATE",
-    "DEFAULT_MIGRATION_RATE",
-    # Core Models
-    "QualityDiversityMetrics",
-    "BehaviorSpace",
-    # Selectors
-    "ArchiveSelector",
-    "ArchiveSelectorProtocol",
-    "SumArchiveSelector",
-    "ParetoFrontSelector",
-    # Island Components
-    "IslandConfig",
-    "MapElitesIsland",
-    # Multi-Island Implementation
-    "MapElitesMultiIsland",
-]
+from .models import *
+from .selectors import *
+from .multi_island import *
+from .island import *
+from .removers import *
+from .mutant_router import *
+from .migrant_selectors import *
+from .island_selector import *
+from .elite_selectors import *
