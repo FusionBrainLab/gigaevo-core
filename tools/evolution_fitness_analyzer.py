@@ -4,18 +4,21 @@ Evolution Fitness Analyzer
 
 This script extracts running programs from the MetaEvolve evolution system
 and creates comprehensive visualizations including:
-- Fitness evolution over time
+- Fitness evolution over time with running mean and standard deviation
 - Program state statistics (failed/completed/running/etc.)
 - Time since last update analysis (how long programs have been in their current state)
 - DAG stage results statistics (individual stage execution analysis)
 - Island statistics (distribution of programs across evolution islands)
 - Top performing programs analysis
+- Comprehensive JSON export for cross-run comparison
 
 It connects to Redis, extracts all programs, analyzes their fitness data,
-and creates comprehensive visualizations and reports.
+and creates comprehensive visualizations and reports. Running statistics
+(mean, std dev) are calculated using a configurable rolling window and
+exported to JSON for easy comparison between different evolution runs.
 
 Usage:
-    python evolution_fitness_analyzer.py --output-folder results [--redis-host localhost] [--redis-port 6379] [--redis-db 0]
+    python evolution_fitness_analyzer.py --redis-prefix PREFIX --output-folder results [options]
 
 Plot Options:
     --no-plots              Skip all plotting (just export data)
@@ -32,6 +35,15 @@ Outlier Detection Options:
     --extreme-threshold     Threshold for extreme outliers (default: -10000.0)
     --outlier-multiplier    IQR multiplier for outlier detection (default: 3.0)
     --no-outlier-removal    Skip outlier removal (keep all fitness values)
+
+Running Statistics Options:
+    --rolling-window        Rolling window size for running mean/std calculations (default: 50)
+
+Export Format:
+    - CSV files for raw data
+    - JSON files (full and compact) for cross-run comparison
+    - PNG and PDF plots for visualization
+    - Text summaries and statistics
 """
 
 import argparse
@@ -458,77 +470,177 @@ class EvolutionFitnessAnalyzer:
         fitness_analysis: Dict[str, Any],
         output_folder: Path,
         save_plots: bool = True,
+        rolling_window: int = 50,  # Number of programs for rolling statistics
     ):
-        """Create comprehensive fitness evolution plots."""
+        """Create comprehensive fitness evolution plots including running mean and std."""
 
         if not fitness_analysis:
             logger.warning("No fitness data to plot")
             return
 
-        timeline_df = fitness_analysis["timeline_df"]
+        timeline_df = fitness_analysis["timeline_df"].copy()
         fitness_col = fitness_analysis["fitness_col"]
 
-        # Create main figure with subplots - increased size for better readability
-        fig, axes = plt.subplots(2, 2, figsize=(18, 14))
-        fig.suptitle(
-            "Evolution Fitness Analysis", fontsize=18, fontweight="bold"
+        # Sort by time to ensure proper rolling calculations
+        timeline_df = timeline_df.sort_values("time_since_start").reset_index(drop=True)
+
+        # Calculate running statistics
+        logger.info(f"📊 Calculating running statistics with window size: {rolling_window}")
+        
+        # Running best fitness (cumulative max)
+        timeline_df["running_best_fitness"] = timeline_df[fitness_col].expanding().max()
+        
+        # Running mean and std with rolling window
+        timeline_df["running_mean_fitness"] = timeline_df[fitness_col].rolling(
+            window=rolling_window, min_periods=1, center=False
+        ).mean()
+        
+        timeline_df["running_std_fitness"] = timeline_df[fitness_col].rolling(
+            window=rolling_window, min_periods=1, center=False
+        ).std()
+        
+        # Calculate confidence intervals (mean ± std)
+        timeline_df["running_mean_plus_std"] = (
+            timeline_df["running_mean_fitness"] + timeline_df["running_std_fitness"]
+        )
+        timeline_df["running_mean_minus_std"] = (
+            timeline_df["running_mean_fitness"] - timeline_df["running_std_fitness"]
         )
 
-        # 1. Best Fitness vs Time
+        # Store running statistics in fitness_analysis for JSON export
+        fitness_analysis["running_statistics"] = {
+            "rolling_window": rolling_window,
+            "timeline_data": timeline_df[[
+                "time_since_start", 
+                "running_best_fitness", 
+                "running_mean_fitness", 
+                "running_std_fitness",
+                "running_mean_plus_std",
+                "running_mean_minus_std",
+                fitness_col
+            ]].to_dict('records')
+        }
+
+        # Create main figure with subplots - increased size for better readability
+        fig, axes = plt.subplots(3, 2, figsize=(18, 18))
+        fig.suptitle(
+            "Evolution Fitness Analysis with Running Statistics", fontsize=18, fontweight="bold"
+        )
+
+        # 1. Best Fitness vs Time with Running Mean
         ax1 = axes[0, 0]
         ax1.plot(
             timeline_df["time_since_start"],
             timeline_df["running_best_fitness"],
-            linewidth=2,
+            linewidth=3,
             color="green",
             label="Running Best Fitness",
+        )
+        ax1.plot(
+            timeline_df["time_since_start"],
+            timeline_df["running_mean_fitness"],
+            linewidth=2,
+            color="orange",
+            label=f"Running Mean (n={rolling_window})",
         )
         ax1.scatter(
             timeline_df["time_since_start"],
             timeline_df[fitness_col],
-            alpha=0.6,
-            s=20,
+            alpha=0.4,
+            s=15,
             color="blue",
             label="Individual Fitness",
         )
         ax1.set_xlabel("Time Since Start (seconds)")
         ax1.set_ylabel("Fitness (negative enclosing hexagon side length)")
-        ax1.set_title("Best Fitness vs Time")
+        ax1.set_title("Best Fitness and Running Mean vs Time")
         ax1.legend()
         ax1.grid(True, alpha=0.3)
 
-        # 2. Fitness Distribution
+        # 2. Running Mean with Confidence Band
         ax2 = axes[0, 1]
-        ax2.hist(
+        ax2.plot(
+            timeline_df["time_since_start"],
+            timeline_df["running_mean_fitness"],
+            linewidth=2,
+            color="orange",
+            label=f"Running Mean (n={rolling_window})",
+        )
+        ax2.fill_between(
+            timeline_df["time_since_start"],
+            timeline_df["running_mean_minus_std"],
+            timeline_df["running_mean_plus_std"],
+            alpha=0.3,
+            color="orange",
+            label="Mean ± 1 Std Dev",
+        )
+        ax2.scatter(
+            timeline_df["time_since_start"],
+            timeline_df[fitness_col],
+            alpha=0.2,
+            s=10,
+            color="blue",
+            label="Individual Fitness",
+        )
+        ax2.set_xlabel("Time Since Start (seconds)")
+        ax2.set_ylabel("Fitness")
+        ax2.set_title("Running Mean with Standard Deviation Band")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Running Standard Deviation
+        ax3 = axes[1, 0]
+        ax3.plot(
+            timeline_df["time_since_start"],
+            timeline_df["running_std_fitness"],
+            linewidth=2,
+            color="red",
+            label=f"Running Std Dev (n={rolling_window})",
+        )
+        ax3.set_xlabel("Time Since Start (seconds)")
+        ax3.set_ylabel("Standard Deviation")
+        ax3.set_title("Running Standard Deviation vs Time")
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # 4. Fitness Distribution
+        ax4 = axes[1, 1]
+        ax4.hist(
             timeline_df[fitness_col],
             bins=30,
             alpha=0.7,
             color="skyblue",
             edgecolor="black",
         )
-        ax2.axvline(
+        ax4.axvline(
             timeline_df[fitness_col].mean(),
             color="red",
             linestyle="--",
-            label=f"Mean: {timeline_df[fitness_col].mean():.3f}",
+            label=f"Overall Mean: {timeline_df[fitness_col].mean():.3f}",
         )
-        ax2.axvline(
+        ax4.axvline(
             timeline_df[fitness_col].max(),
             color="green",
             linestyle="--",
             label=f"Best: {timeline_df[fitness_col].max():.3f}",
         )
-        ax2.set_xlabel("Fitness")
-        ax2.set_ylabel("Frequency")
-        ax2.set_title("Fitness Distribution")
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
+        ax4.axvline(
+            timeline_df["running_mean_fitness"].iloc[-1],
+            color="orange",
+            linestyle="--",
+            label=f"Final Running Mean: {timeline_df['running_mean_fitness'].iloc[-1]:.3f}",
+        )
+        ax4.set_xlabel("Fitness")
+        ax4.set_ylabel("Frequency")
+        ax4.set_title("Fitness Distribution")
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
 
-        # 3. Generation-based analysis (if available)
-        ax3 = axes[1, 0]
+        # 5. Generation-based analysis (if available)
+        ax5 = axes[2, 0]
         if fitness_analysis["generation_stats"] is not None:
             gen_stats = fitness_analysis["generation_stats"]
-            ax3.plot(
+            ax5.plot(
                 gen_stats["generation"],
                 gen_stats["max_fitness"],
                 marker="o",
@@ -536,7 +648,7 @@ class EvolutionFitnessAnalyzer:
                 color="green",
                 label="Best Fitness",
             )
-            ax3.plot(
+            ax5.plot(
                 gen_stats["generation"],
                 gen_stats["mean_fitness"],
                 marker="s",
@@ -544,7 +656,7 @@ class EvolutionFitnessAnalyzer:
                 color="orange",
                 label="Mean Fitness",
             )
-            ax3.fill_between(
+            ax5.fill_between(
                 gen_stats["generation"],
                 gen_stats["min_fitness"],
                 gen_stats["max_fitness"],
@@ -552,50 +664,50 @@ class EvolutionFitnessAnalyzer:
                 color="blue",
                 label="Fitness Range",
             )
-            ax3.set_xlabel("Generation")
-            ax3.set_ylabel("Fitness")
-            ax3.set_title("Fitness by Generation")
-            ax3.legend()
-            ax3.grid(True, alpha=0.3)
+            ax5.set_xlabel("Generation")
+            ax5.set_ylabel("Fitness")
+            ax5.set_title("Fitness by Generation")
+            ax5.legend()
+            ax5.grid(True, alpha=0.3)
         else:
-            ax3.text(
+            ax5.text(
                 0.5,
                 0.5,
                 "No generation data available",
                 ha="center",
                 va="center",
-                transform=ax3.transAxes,
+                transform=ax5.transAxes,
                 fontsize=12,
             )
-            ax3.set_title("Fitness by Generation")
+            ax5.set_title("Fitness by Generation")
 
-        # 4. Program State Analysis
-        ax4 = axes[1, 1]
+        # 6. Program State Analysis
+        ax6 = axes[2, 1]
         if "state" in timeline_df.columns:
             # Use the full dataset for state distribution, not just valid fitness programs
             full_df = fitness_analysis.get(
                 "full_df", timeline_df
             )  # Fallback to timeline_df if full_df not available
             state_counts = full_df["state"].value_counts()
-            ax4.pie(
+            ax6.pie(
                 state_counts.values,
                 labels=state_counts.index,
                 autopct="%1.1f%%",
                 startangle=90,
                 colors=plt.cm.Set3.colors,
             )
-            ax4.set_title("Program States Distribution")
+            ax6.set_title("Program States Distribution")
         else:
-            ax4.text(
+            ax6.text(
                 0.5,
                 0.5,
                 "No state data available",
                 ha="center",
                 va="center",
-                transform=ax4.transAxes,
+                transform=ax6.transAxes,
                 fontsize=12,
             )
-            ax4.set_title("Program States Distribution")
+            ax6.set_title("Program States Distribution")
 
         plt.tight_layout(pad=2.0)  # Increased padding for better spacing
 
@@ -604,21 +716,24 @@ class EvolutionFitnessAnalyzer:
 
         plt.show()
 
-        # Additional detailed plot: Fitness improvement over time
-        plt.figure(figsize=(12, 6))
+        # Additional detailed plot: Comprehensive fitness timeline
+        plt.figure(figsize=(16, 10))
 
-        # Plot individual fitness points
-        plt.scatter(
+        # Create subplots for detailed timeline
+        fig2, (ax_top, ax_bottom) = plt.subplots(2, 1, figsize=(16, 12), sharex=True)
+
+        # Top subplot: All fitness metrics
+        ax_top.scatter(
             timeline_df["time_since_start"],
             timeline_df[fitness_col],
-            alpha=0.4,
-            s=30,
+            alpha=0.3,
+            s=20,
             color="lightblue",
             label="Individual Programs",
         )
 
         # Plot running best with thicker line
-        plt.plot(
+        ax_top.plot(
             timeline_df["time_since_start"],
             timeline_df["running_best_fitness"],
             linewidth=3,
@@ -626,11 +741,30 @@ class EvolutionFitnessAnalyzer:
             label="Running Best Fitness",
         )
 
+        # Plot running mean
+        ax_top.plot(
+            timeline_df["time_since_start"],
+            timeline_df["running_mean_fitness"],
+            linewidth=2,
+            color="orange",
+            label=f"Running Mean (n={rolling_window})",
+        )
+
+        # Add confidence band
+        ax_top.fill_between(
+            timeline_df["time_since_start"],
+            timeline_df["running_mean_minus_std"],
+            timeline_df["running_mean_plus_std"],
+            alpha=0.2,
+            color="orange",
+            label="Mean ± 1 Std Dev",
+        )
+
         # Highlight improvements
         improvements = timeline_df[
             timeline_df[fitness_col] == timeline_df["running_best_fitness"]
         ]
-        plt.scatter(
+        ax_top.scatter(
             improvements["time_since_start"],
             improvements[fitness_col],
             color="red",
@@ -639,21 +773,50 @@ class EvolutionFitnessAnalyzer:
             label="New Best Fitness",
         )
 
-        plt.xlabel("Time Since Start (seconds)")
-        plt.ylabel("Fitness (negative enclosing hexagon side length)")
-        plt.title(
-            "Fitness Evolution Over Time\n(Red dots = New best fitness achieved)"
+        ax_top.set_ylabel("Fitness (negative enclosing hexagon side length)")
+        ax_top.set_title(
+            f"Comprehensive Fitness Evolution Over Time\n(Rolling window: {rolling_window} programs)"
         )
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout(pad=2.0)  # Increased padding for better spacing
+        ax_top.legend()
+        ax_top.grid(True, alpha=0.3)
+
+        # Bottom subplot: Running standard deviation
+        ax_bottom.plot(
+            timeline_df["time_since_start"],
+            timeline_df["running_std_fitness"],
+            linewidth=2,
+            color="red",
+            label=f"Running Std Dev (n={rolling_window})",
+        )
+        ax_bottom.set_xlabel("Time Since Start (seconds)")
+        ax_bottom.set_ylabel("Standard Deviation")
+        ax_bottom.set_title("Running Standard Deviation Over Time")
+        ax_bottom.legend()
+        ax_bottom.grid(True, alpha=0.3)
+
+        plt.tight_layout(pad=2.0)
 
         if save_plots:
             self._save_fig(
-                plt.gcf(), output_folder / "fitness_evolution_timeline"
+                fig2, output_folder / "comprehensive_fitness_evolution_timeline"
             )
 
         plt.show()
+
+        # Log running statistics summary
+        logger.info(f"\n📊 RUNNING STATISTICS SUMMARY (window={rolling_window}):")
+        logger.info("=" * 80)
+        logger.info(f"  Final running mean: {timeline_df['running_mean_fitness'].iloc[-1]:.4f}")
+        logger.info(f"  Final running std: {timeline_df['running_std_fitness'].iloc[-1]:.4f}")
+        logger.info(f"  Overall best fitness: {timeline_df['running_best_fitness'].iloc[-1]:.4f}")
+        logger.info(f"  Mean improvement rate: {(timeline_df['running_best_fitness'].iloc[-1] - timeline_df['running_best_fitness'].iloc[0]) / len(timeline_df):.6f} per program")
+
+        # Calculate and log key milestones
+        if len(timeline_df) > rolling_window:
+            early_mean = timeline_df['running_mean_fitness'].iloc[rolling_window-1]
+            late_mean = timeline_df['running_mean_fitness'].iloc[-1]
+            mean_improvement = late_mean - early_mean
+            logger.info(f"  Mean fitness improvement: {mean_improvement:.4f} (from {early_mean:.4f} to {late_mean:.4f})")
 
         # New plot: Full timeline showing all programs (including failed ones)
         # Get the full dataset
@@ -678,7 +841,7 @@ class EvolutionFitnessAnalyzer:
         ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
         ax1.grid(True, alpha=0.3)
 
-        # Bottom subplot: Fitness programs only
+        # Bottom subplot: Fitness programs with running statistics
         ax2.scatter(
             timeline_df["time_since_start"],
             timeline_df[fitness_col],
@@ -693,6 +856,13 @@ class EvolutionFitnessAnalyzer:
             linewidth=3,
             color="darkgreen",
             label="Running Best Fitness",
+        )
+        ax2.plot(
+            timeline_df["time_since_start"],
+            timeline_df["running_mean_fitness"],
+            linewidth=2,
+            color="orange",
+            label=f"Running Mean (n={rolling_window})",
         )
 
         # Highlight improvements
@@ -710,7 +880,7 @@ class EvolutionFitnessAnalyzer:
 
         ax2.set_xlabel("Time Since Start (seconds)")
         ax2.set_ylabel("Fitness (negative enclosing hexagon side length)")
-        ax2.set_title("Fitness Evolution Over Time")
+        ax2.set_title("Fitness Evolution with Running Mean")
         ax2.legend()
         ax2.grid(True, alpha=0.3)
 
@@ -2268,7 +2438,7 @@ class EvolutionFitnessAnalyzer:
         output_folder: Path,
         base_filename: str = "evolution_data",
     ):
-        """Export the evolution data to CSV for further analysis."""
+        """Export the evolution data to CSV and JSON for further analysis."""
 
         if not fitness_analysis:
             logger.warning("No data to export")
@@ -2316,6 +2486,198 @@ class EvolutionFitnessAnalyzer:
             f.write(f"Analysis Time: {summary['analysis_timestamp']}\n")
 
         logger.info(f"✅ Exported summary to {summary_path}")
+
+        # Export JSON data for easy comparison between runs
+        self.export_json_data(fitness_analysis, output_folder, base_filename)
+
+    def export_json_data(
+        self,
+        fitness_analysis: Dict[str, Any],
+        output_folder: Path,
+        base_filename: str = "evolution_data",
+    ):
+        """Export comprehensive evolution data to JSON for easy comparison between runs."""
+
+        if not fitness_analysis:
+            logger.warning("No data to export to JSON")
+            return
+
+        import json
+        from datetime import datetime, timezone
+
+        # Prepare comprehensive JSON data structure
+        json_data = {
+            "metadata": {
+                "analysis_timestamp": datetime.now(timezone.utc).isoformat(),
+                "redis_host": self.redis_host,
+                "redis_port": self.redis_port,
+                "redis_db": self.redis_db,
+                "redis_prefix": self.redis_prefix,
+                "extreme_threshold": self.extreme_threshold,
+                "outlier_multiplier": self.outlier_multiplier,
+                "outlier_removal_enabled": self.remove_outliers,
+                "fitness_column": fitness_analysis.get("fitness_col", "metric_fitness"),
+                "start_time": fitness_analysis["start_time"].isoformat() if fitness_analysis.get("start_time") else None,
+            },
+            "summary_statistics": {
+                "total_programs_with_fitness": fitness_analysis["total_programs"],
+                "total_all_programs": fitness_analysis["total_all_programs"],
+                "best_fitness": fitness_analysis["best_fitness"],
+                "worst_fitness": fitness_analysis["worst_fitness"],
+                "mean_fitness": fitness_analysis["mean_fitness"],
+                "success_rate_percent": (
+                    fitness_analysis["total_programs"] / fitness_analysis["total_all_programs"] * 100
+                    if fitness_analysis["total_all_programs"] > 0 else 0
+                ),
+            },
+            "running_statistics": None,
+            "generation_statistics": None,
+            "timeline_summary": None,
+        }
+
+        # Add running statistics if available
+        if "running_statistics" in fitness_analysis:
+            running_stats = fitness_analysis["running_statistics"]
+            timeline_data = running_stats["timeline_data"]
+            
+            # Calculate summary statistics from running data
+            final_idx = len(timeline_data) - 1
+            if final_idx >= 0:
+                final_running_mean = timeline_data[final_idx].get("running_mean_fitness")
+                final_running_std = timeline_data[final_idx].get("running_std_fitness")
+                final_running_best = timeline_data[final_idx].get("running_best_fitness")
+                
+                # Calculate improvement metrics
+                first_valid_mean_idx = 0
+                for i, data_point in enumerate(timeline_data):
+                    if data_point.get("running_mean_fitness") is not None:
+                        first_valid_mean_idx = i
+                        break
+                
+                initial_running_mean = timeline_data[first_valid_mean_idx].get("running_mean_fitness", 0)
+                mean_improvement = final_running_mean - initial_running_mean if final_running_mean and initial_running_mean else 0
+                
+                # Calculate time span
+                total_time = timeline_data[final_idx].get("time_since_start", 0) - timeline_data[0].get("time_since_start", 0)
+                
+                json_data["running_statistics"] = {
+                    "rolling_window": running_stats["rolling_window"],
+                    "summary": {
+                        "final_running_mean": final_running_mean,
+                        "final_running_std": final_running_std,
+                        "final_running_best": final_running_best,
+                        "initial_running_mean": initial_running_mean,
+                        "mean_improvement": mean_improvement,
+                        "total_time_seconds": total_time,
+                        "mean_improvement_rate_per_second": mean_improvement / total_time if total_time > 0 else 0,
+                        "programs_analyzed": len(timeline_data),
+                    },
+                    "timeline_data": timeline_data,  # Full timeline for detailed comparison
+                }
+            else:
+                json_data["running_statistics"] = {
+                    "rolling_window": running_stats["rolling_window"],
+                    "summary": {},
+                    "timeline_data": timeline_data,
+                }
+
+        # Add generation statistics if available
+        if fitness_analysis.get("generation_stats") is not None:
+            gen_stats = fitness_analysis["generation_stats"]
+            json_data["generation_statistics"] = {
+                "summary": {
+                    "total_generations": len(gen_stats),
+                    "max_generation": gen_stats["generation"].max() if not gen_stats.empty else 0,
+                    "programs_per_generation_mean": gen_stats["program_count"].mean() if not gen_stats.empty else 0,
+                    "best_fitness_by_generation": gen_stats["max_fitness"].max() if not gen_stats.empty else None,
+                    "mean_fitness_trend": {
+                        "first_generation": gen_stats["mean_fitness"].iloc[0] if not gen_stats.empty else None,
+                        "last_generation": gen_stats["mean_fitness"].iloc[-1] if not gen_stats.empty else None,
+                        "improvement": (
+                            gen_stats["mean_fitness"].iloc[-1] - gen_stats["mean_fitness"].iloc[0]
+                            if len(gen_stats) > 1 else 0
+                        ),
+                    },
+                },
+                "generation_data": gen_stats.to_dict('records') if not gen_stats.empty else [],
+            }
+
+        # Add timeline summary (key milestones)
+        timeline_df = fitness_analysis["timeline_df"]
+        if not timeline_df.empty:
+            # Find fitness improvements (new best fitness achieved)
+            improvements = timeline_df[
+                timeline_df[fitness_analysis["fitness_col"]] == timeline_df.get("running_best_fitness", timeline_df[fitness_analysis["fitness_col"]].expanding().max())
+            ].copy()
+            
+            milestones = []
+            for _, improvement in improvements.iterrows():
+                milestones.append({
+                    "time_since_start": improvement["time_since_start"],
+                    "fitness": improvement[fitness_analysis["fitness_col"]],
+                    "program_id": improvement.get("program_id", "unknown"),
+                    "generation": improvement.get("generation", None),
+                    "created_at": improvement.get("created_at").isoformat() if improvement.get("created_at") else None,
+                })
+
+            json_data["timeline_summary"] = {
+                "total_time_span_seconds": timeline_df["time_since_start"].max() - timeline_df["time_since_start"].min(),
+                "fitness_improvements_count": len(improvements),
+                "milestones": milestones,
+            }
+
+        # Export main JSON file
+        json_path = output_folder / f"{base_filename}.json"
+        with open(json_path, "w") as f:
+            json.dump(json_data, f, indent=2, default=str)
+        logger.info(f"✅ Exported comprehensive JSON data to {json_path}")
+
+        # Also export a compact version for quick comparison
+        compact_data = {
+            "metadata": json_data["metadata"],
+            "summary": json_data["summary_statistics"],
+        }
+        
+        # Add running statistics summary only
+        if json_data["running_statistics"]:
+            compact_data["running_summary"] = json_data["running_statistics"]["summary"]
+        
+        # Add generation summary only
+        if json_data["generation_statistics"]:
+            compact_data["generation_summary"] = json_data["generation_statistics"]["summary"]
+
+        # Add key milestones only (first 10)
+        if json_data["timeline_summary"]:
+            compact_data["timeline_summary"] = json_data["timeline_summary"].copy()
+            if len(compact_data["timeline_summary"]["milestones"]) > 10:
+                compact_data["timeline_summary"]["milestones"] = compact_data["timeline_summary"]["milestones"][:10]
+                compact_data["timeline_summary"]["milestones_truncated"] = True
+
+        compact_path = output_folder / f"{base_filename}_compact.json"
+        with open(compact_path, "w") as f:
+            json.dump(compact_data, f, indent=2, default=str)
+        logger.info(f"✅ Exported compact JSON summary to {compact_path}")
+
+        # Log JSON export summary
+        logger.info(f"\n📊 JSON EXPORT SUMMARY:")
+        logger.info("=" * 50)
+        logger.info(f"  Main JSON file: {json_path.name}")
+        logger.info(f"  Compact JSON file: {compact_path.name}")
+        
+        if json_data["running_statistics"]:
+            rs = json_data["running_statistics"]["summary"]
+            logger.info(f"  Running statistics window: {json_data['running_statistics']['rolling_window']} programs")
+            logger.info(f"  Final running mean: {rs.get('final_running_mean', 'N/A')}")
+            logger.info(f"  Mean improvement: {rs.get('mean_improvement', 'N/A')}")
+        
+        if json_data["generation_statistics"]:
+            gs = json_data["generation_statistics"]["summary"]
+            logger.info(f"  Generations analyzed: {gs.get('total_generations', 'N/A')}")
+        
+        if json_data["timeline_summary"]:
+            ts = json_data["timeline_summary"]
+            logger.info(f"  Fitness improvements: {ts.get('fitness_improvements_count', 'N/A')}")
+            logger.info(f"  Total time span: {ts.get('total_time_span_seconds', 'N/A'):.1f}s")
 
     async def cleanup(self):
         """Clean up Redis connections."""
@@ -3448,6 +3810,12 @@ async def main():
         action="store_true",
         help="Skip outlier removal (keep all fitness values)",
     )
+    parser.add_argument(
+        "--rolling-window",
+        type=int,
+        default=50,
+        help="Rolling window size for running mean/std calculations (default: 50)",
+    )
 
     args = parser.parse_args()
 
@@ -3500,7 +3868,7 @@ async def main():
             if not args.no_fitness_plots:
                 try:
                     analyzer.plot_fitness_evolution(
-                        fitness_analysis, output_folder
+                        fitness_analysis, output_folder, rolling_window=args.rolling_window
                     )
                     logger.info("✅ Fitness evolution plots completed")
                 except Exception as e:

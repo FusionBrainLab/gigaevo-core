@@ -1,73 +1,73 @@
 🔬 MUTATION MANDATE:
 You are given one or more **input programs for crossover**, along with:
-- Their metrics  
-- Structured insights  
-- Lineage history (ascendants and descendants)
+- Their performance metrics  
+- Structured lineage insights (including diffs and code snippets)  
+- Lineage history showing both improvements and degradations
 
-Your task is to write a new mutant program that:
-- Integrates **1 - 3 distinct insights** from different domains  
-- Incorporates **a single lineage-based** strategy: imitation, generalization, or avoidance  
-- Introduces a clearly identifiable **architectural or algorithmic modification** 
-- Adjusts parameters only **when justified by an insight** (e.g., improved spacing, smarter perturbation)  
-- Ensures each insight results in a **concrete, traceable change** in the code  
-- Emulates a **surgical diff**: targeted, meaningful edits without rewriting unrelated logic
+Your task is to write a new **mutant program** that:
+- Integrates **1–3 distinct insights** from different domains  
+- Applies exactly **one lineage strategy**: imitation, generalization, or avoidance  
+- Introduces a **clearly identifiable algorithmic or architectural modification**  
+- Performs **parameter changes only when explicitly justified by an insight**  
+- Ensures that **each selected insight leads to a concrete, traceable code change**
 
-📚 INSIGHT SOURCES:
+---
 
-### 💡 PROGRAM INSIGHTS (categorized):
-Examples include:
-- **geometric**: triplet conflicts, degeneracy near edges or vertices  
-- **algorithmic**: layout heuristics, point placement schemes  
-- **evolutionary**: stagnation, fitness regression, mode collapse  
-- **mathematical**: symmetry patterns, area scaling, triangle degeneracy  
-- **implementation**: randomization schemes, projection, revalidation  
-- **error**: invalid placements, outside-triangle points, collapsed triplets  
+🧠 INSIGHT FORMAT:
 
-### 🧬 LINEAGE HISTORY (performance deltas):
-Each entry includes:
-- A fitness delta (e.g., "+0.0019", "–0.0142")  
-- An explanation of structural success or failure (e.g., "edge-aligned triplet collapsed", "clustered spiral improved area") 
+Each insight includes:
+- `strategy`: how to treat the code change (`imitation`, `avoidance`, or `generalization`)  
+- `description`: brief explanation of the likely effect  
+- `impact`: the metric delta caused by the change (e.g., `+0.019`)  
+- `diff`: a minimal unified diff representing the original change (for reference)  
+- `parent_reference` / `child_reference`: code location and snippet (if available)
 
-You must:
-- Reflect on at least one **improvement** and one **degradation**  
-- Choose whether to **imitate**, **avoid**, or **generalize** a prior strategy  
-- Summarize the lineage insight in a single `Lineage (type): ...` comment line
+Use these insights to:
+- Understand specific past modifications
+- Selectively reuse or avoid patterns
+- Guide **targeted edits** in your new mutant
+
+---
 
 ✍️ OUTPUT FORMAT — STRICT:
 
-Output **only a single fenced Python code block** (```python ... ```), with:
-- A single entry point: `entrypoint()`
-- Other functions as needed
-- **No docstrings, no markdown, no explanation, no extra comments**
+Produce **only a single fenced Python code block**:
 
-🔖 The code must begin with a **structured comment block**, exactly as shown:
 ```python
-# Insight (geometric): ...
-# Insight (algorithmic): ...
-# Insight (error): ...
-# Lineage (avoidance): ...
-# Design: ...
+# Must include an `entrypoint()` function
+# May define additional helpers
 ```
 
-⚠️ DO NOT write anything outside the code block.
-⚠️ If randomization is used, you **MUST** fix the seeds at the start 
+- Do **not** include explanations, comments, docstrings, or markdown  
+- Do **not** include anything outside the code block  
+- If randomness is used, **set a fixed seed** for reproducibility  
+- You may optionally annotate changes with `# MUTATED`
 
-🧬 CROSSOVER INPUT:
+---
 
-You are given {count} structurally distinct programs selected for recombination.  
-These are **not guaranteed to be direct parents** in the mutation lineage.
-Use their **combined insights** to guide your mutant design.
+🎯 STRATEGIC MINDSET:
 
-Unless a complete rewrite is necessary, **preserve the structure** of the parent program and modify only specific parts.
+Your edits should emulate a **surgical diff**:
+- Modify only the regions motivated by selected insights  
+- Do not reformat, shuffle, or rewrite unrelated logic  
+- Preserve structure and flow unless a complete overhaul is explicitly justified
+
+---
+
+🧬 CROSSOVER CONTEXT:
+
+You are provided with `{count}` structurally diverse crossover candidates.
 
 ✅ You may:
-- Reuse or adapt helper functions
-- Tune constants where appropriate
-- Use # MUTATED to annotate key modified lines
+- Reuse helper functions  
+- Tune constants with justification  
+- Insert new logic when guided by insights  
 
 🚫 Do NOT:
+- Introduce cosmetic edits  
 - Reindent or shuffle unrelated code  
-- Perform cosmetic refactors  
-- Rewrite the entire program without strong justification 
+- Rewrite the whole program without clear rationale
+
+📥 Programs provided below:
 
 {parent_blocks}
