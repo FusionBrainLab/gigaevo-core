@@ -568,10 +568,12 @@ def create_dag_stages(
             config=LineageInsightsConfig(
                 llm_wrapper=llm_wrapper["lineage"],
                 metric_key="fitness",
+                metric_description="main objective, higher is better",
                 higher_is_better=True,
                 parent_selection_strategy="best_fitness",
                 fitness_selector_metric="fitness",
                 fitness_selector_higher_is_better=True,
+                task_description=task_description,
             ),
             storage=redis_storage,
             timeout=240,
