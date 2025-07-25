@@ -51,18 +51,6 @@ For each block:
 """.strip()
 
 
-# def _format_code_reference(side: str, ref: Dict[str, Any]) -> List[str]:
-#     """Format a code reference snippet if present."""
-#     lines = []
-#     if "code_snippet" in ref:
-#         label = "Parent" if side == "parent_reference" else "Child"
-#         lines.append(f"**{label} Code Snippet:**")
-#         lines.append("```python")
-#         lines.append(ref["code_snippet"].strip())
-#         lines.append("```")
-#     return lines
-
-
 def _format_insight(insight: Dict[str, Any]) -> List[str]:
     """Format a single insight with its diff and references."""
     lines = []
@@ -79,11 +67,6 @@ def _format_insight(insight: Dict[str, Any]) -> List[str]:
     description = insight.get('description', 'No description')
     impact = insight.get('impact', 'unknown')
     lines.append(f"- **[{strategy}]** {description} ({impact})")
-    
-    # # Add code references if present
-    # for side in ["parent_reference", "child_reference"]:
-    #     ref = insight.get(side, {})
-    #     lines.extend(_format_code_reference(side, ref))
     
     return lines
 
