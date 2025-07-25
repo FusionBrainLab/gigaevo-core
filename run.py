@@ -294,6 +294,7 @@ def load_initial_programs_from_directory(problem_dir: Path) -> List[Program]:
                 "source": "initial_program",
                 "strategy_name": program_file.stem,
                 "file_path": str(program_file),
+                "iteration": 0,
             }
             programs.append(program)
             logger.info(f"  ✅ Loaded initial program: {program_file.stem}")
@@ -424,6 +425,7 @@ async def select_top_programs_from_redis(
                 "source_db": source_redis_db,
                 "selection_rank": i + 1,
                 "original_id": program.id,
+                "iteration": 0,
             }
 
             # Add to target database

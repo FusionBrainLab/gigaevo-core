@@ -21,6 +21,7 @@ async def generate_mutations(
     storage: ProgramStorage,
     parent_selector: ParentSelector,
     limit: int,
+    iteration: int,
 ) -> int:
     """Generate at most *limit* mutations from *elites* and persist them immediately.
 
@@ -34,7 +35,7 @@ async def generate_mutations(
         storage: Storage backend for persisting mutations
         parent_selector: Strategy for selecting parents from elites
         limit: Maximum number of mutations to generate
-
+        iteration: Current iteration number
     Returns:
         Number of persisted mutations.
     """
@@ -69,6 +70,7 @@ async def generate_mutations(
 
                 # Immediately persist the mutation
                 program = Program.from_mutation_spec(mutation_spec)
+                program.set_metadata("iteration", iteration)
                 await storage.add(program)
                 persisted += 1
 

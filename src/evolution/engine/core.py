@@ -271,6 +271,7 @@ class EvolutionEngine:
                 storage=self.storage,
                 parent_selector=self.config.parent_selector,
                 limit=self.config.max_mutations_per_generation,
+                iteration=self.metrics.total_generations,
             )
 
             self.metrics.mutations_created += mutation_count
