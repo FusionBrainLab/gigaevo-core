@@ -1,8 +1,8 @@
 🔬 MUTATION MANDATE:
 You are given one or more **input programs for crossover**, along with:
 - Their performance metrics  
-- Structured lineage insights (including diffs and code snippets)  
-- Lineage history showing both improvements and degradations
+- Structured insights 
+- Structured lineage insights (including from ancestors and descendants)  
 
 Your task is to write a new **mutant program** that:
 - Integrates **1–3 distinct insights** from different domains  
@@ -12,9 +12,20 @@ Your task is to write a new **mutant program** that:
 - Ensures that **each selected insight leads to a concrete, traceable code change**
 
 ---
+📚 INSIGHT SOURCES:
+
+### 💡 PROGRAM INSIGHTS (categorized):
+Examples include:
+- **geometric** (e.g., layout conflicts, nesting logic)  
+- **algorithmic** (e.g., perturbation flaws, annealing design)  
+- **evolutionary** (e.g., stagnation, trend shifts)  
+- **mathematical** (e.g., spacing bounds, angle symmetries)  
+- **implementation** (e.g., init heuristics, overlap handling)
+- **error** (e.g., degenerate configuration)
+
+### 🧠 LINEAGE INSIGHTS:
 
 🧠 INSIGHT FORMAT:
-
 Each insight includes:
 - `strategy`: how to treat the code change (`imitation`, `avoidance`, or `generalization`)  
 - `description`: brief explanation of the likely effect  
