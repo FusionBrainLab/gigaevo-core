@@ -46,6 +46,9 @@ class LLMConfig(BaseModel):
     top_p: float = Field(
         default=1.0, ge=0.0, le=1.0, description="Top-p sampling"
     )
+    top_k: Optional[int] = Field(
+        default=None, ge=1, description="Top-k sampling"
+    )
     max_prompt_length: int = Field(
         default=100000, gt=0, description="Maximum prompt length"
     )
@@ -257,6 +260,7 @@ class LLMWrapper(LLMInterface):
             "messages": prepared_messages,
             "temperature": self.config.temperature,
             "top_p": self.config.top_p,
+            "top_k": self.config.top_k,
             **kwargs,
         }
 

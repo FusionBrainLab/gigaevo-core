@@ -16,7 +16,6 @@ import diffpatch
 from loguru import logger
 
 from src.evolution.mutation.base import MutationOperator, MutationSpec
-from src.evolution.mutation.parent_selector import ParentSelector
 from src.exceptions import MutationError
 from src.llm.wrapper import LLMInterface
 from src.programs.program import Program
@@ -179,22 +178,19 @@ class LLMMutationOperator(MutationOperator):
         self.user_prompt_template = user_prompt_template
 
     async def mutate_single(
-        self, available_parents: List[Program], parent_selector: ParentSelector
+        self, selected_parents: List[Program]
     ) -> Optional[MutationSpec]:
-        """Generate a single mutation using the parent selector.
+        """Generate a single mutation from the selected parents.
 
         Args:
-            available_parents: List of parent programs available for mutation
-            parent_selector: Strategy for selecting which parents to use
+            selected_parents: List of parent programs to mutate
 
         Returns:
             MutationSpec if successful, None if no mutation could be generated
         """
-        # Select parents using the selector
-        selected_parents = parent_selector.select_parents(available_parents)
         if not selected_parents:
             logger.warning(
-                f"[LLMMutationOperator] Parent selector returned no parents"
+                f"[LLMMutationOperator] No parents provided for mutation"
             )
             return None
 

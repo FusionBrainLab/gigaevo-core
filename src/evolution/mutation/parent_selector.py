@@ -57,6 +57,7 @@ class AllCombinationsParentSelector(ParentSelector):
     def __init__(self, num_parents: int = 1):
         self.num_parents = num_parents
         self.current_index = 0
+        self.available_parents = []
         self.all_combinations = []
 
     def select_parents(
@@ -65,22 +66,27 @@ class AllCombinationsParentSelector(ParentSelector):
         if len(available_parents) < self.num_parents:
             return None
 
-        # Generate combinations if not already done or parents changed
-        expected_combinations = list(
-            combinations(available_parents, self.num_parents)
-        )
-        if self.all_combinations != expected_combinations:
-            self.all_combinations = expected_combinations
+        current_ids = sorted([p.id for p in self.available_parents])
+        new_ids = sorted([p.id for p in available_parents])
+        
+        if current_ids != new_ids:
+            self.available_parents = available_parents
             self.current_index = 0
+            
+            # Pre-compute combinations
+            if self.num_parents == 1:
+                self.all_combinations = [[p] for p in available_parents]
+            else:
+                self.all_combinations = [list(combo) for combo in combinations(available_parents, self.num_parents)]
 
-        if self.current_index >= len(self.all_combinations):
-            return None
-
-        selected = list(self.all_combinations[self.current_index])
+        selected = self.all_combinations[self.current_index]
         self.current_index += 1
         return selected
 
     def has_more_selections(self) -> bool:
+        # If combinations haven't been computed yet, assume we have selections
+        if not self.all_combinations:
+            return True
         return self.current_index < len(self.all_combinations)
 
     def reset(self) -> None:

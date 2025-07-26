@@ -17,26 +17,40 @@ from src.programs.utils import build_stage_result
 DEFAULT_SYSTEM_PROMPT_LINEAGE_TEXT = """
 You are an expert in evolutionary programming and performance-guided code optimization.
 
-You will analyze a transition between two Python programs based on a set of unified diff blocks. Your goal is to extract high-level causal insights about how the changes may have contributed to a metric change.
+Your task is to analyze a code transition between two Python programs. You are given unified diff blocks and a performance metric delta showing how the child's behavior changed relative to its parent.
 
-🎯 Return 3–5 short insights, each describing a structural or algorithmic change and its likely effect on performance.
+🎯 Return **3–5 concise, causal insights** explaining how specific changes likely contributed to the metric change.
 
-Each insight must be:
-- Prefixed with a `strategy`: "imitation", "avoidance", or "generalization"
-- Followed by a concise `description` (≤ 25 words)
+Each insight must:
+- Be formatted as a JSON object with:
+  - `"strategy"`: one of `"imitation"`, `"avoidance"`, or `"generalization"`
+  - `"description"`: a **brief, causal explanation** of a specific architectural or algorithmic change and how it may have affected performance
+- Be ≤ 25 words and focus on concrete mechanisms (e.g., perturbation logic, layout symmetry, parameter adaptation)
+- **Optionally** include a diff range in the description, like: `(@@ -32,7 +33,9 @@)`
 
-📦 Respond with a **JSON list** of objects like:
+📦 Example response:
 [
   {
-    "strategy": "generalization",
-    "description": "Replaced hardcoded parameters with computed values, enabling adaptive behavior."
+    "strategy": "imitation",
+    "description": "(@@ -45,10 +45,12 @@) Introduced adaptive sampling interval, improving convergence stability and diversity of explored solutions."
   },
-  ...
+  {
+    "strategy": "avoidance",
+    "description": "Removed annealing schedule, causing premature convergence and degraded triangle distribution."
+  }
 ]
 
-🛑 Do not include the diffs or metric change — those will be handled separately.
+🛑 Do NOT include:
+- Diffs
+- Metric values
 
-Respond with **valid JSON only** — no markdown or text commentary.
+⚠️ Avoid these types of weak insights:
+- "This change improved the metric"
+- "Better performance due to optimization"
+- "Improved speed or accuracy"
+- Any vague statement without a concrete architectural reference
+
+Respond with **only valid JSON**, no markdown or extra text.
 """.strip()
 
 DEFAULT_USER_PROMPT_LINEAGE_TEXT = """
@@ -44,14 +58,16 @@ DEFAULT_USER_PROMPT_LINEAGE_TEXT = """
 {task_description}
 
 📈 METRIC:
-Optimization target = `{metric_name} ({metric_description})`
-Delta = {delta:+.5f}
+Optimization target = `{metric_name}` ({metric_description})  
+Observed change = {delta:+.5f}
 
-The following diff blocks show the changes from the parent to the child program:
+Below are unified diff blocks showing changes from the parent to the child program. Each block begins with a line like:
+
+  @@ -32,7 +33,9 @@
+
+Analyze these diffs and return high-quality causal insights explaining how the changes likely led to the metric delta. Each insight may optionally mention the diff range it relates to.
 
 {diff_blocks}
-
-Analyze the diffs and summarize the key architectural or algorithmic changes that likely caused the observed metric shift.
 """.strip()
 
 
@@ -61,12 +77,13 @@ def format_structured_insight_block(
 ) -> str:
     lines = []
 
+    # Always show ancestors section, even if empty, for consistency
+    lines.append("## ANCESTORS")
     if ancestor_insights:
-        lines.append("## ANCESTORS")
         for ancestor in ancestor_insights:
-            from_id = ancestor.get("from", "unknown")
             delta = ancestor.get("delta", "unknown")
-            lines.append(f"### From Parent `{from_id}` (Δ {delta})")
+            title = _generate_readable_title("parent", delta)
+            lines.append(f"### {title}")
 
             insights = ancestor.get("insights", [])
             for insight in insights:
@@ -82,12 +99,15 @@ def format_structured_insight_block(
                     lines.append(f"--- Diff Block {i+1} ---\n```diff\n{block}\n```")
 
             lines.append("")
+    else:
+        lines.append("*No ancestor information available (likely initial/seed program)*")
+        lines.append("")
 
     if child_insights:
         lines.append("## DESCENDANTS")
-        to_id = child_insights.get("to", "unknown")
         delta = child_insights.get("delta", "unknown")
-        lines.append(f"### To Child `{to_id}` (Δ {delta})")
+        title = _generate_readable_title("child", delta)
+        lines.append(f"### {title}")
 
         insights = child_insights.get("insights", [])
         for insight in insights:
@@ -102,10 +122,39 @@ def format_structured_insight_block(
             for i, block in enumerate(diff_blocks):
                 lines.append(f"--- Diff Block {i+1} ---\n```diff\n{block}\n```")
 
-    if not lines:
+    if not child_insights and not ancestor_insights:
         lines.append("*No lineage information available*")
 
     return "\n".join(lines)
+
+
+def _generate_readable_title(relationship: str, delta: str) -> str:
+    """Generate human-readable titles for lineage transitions instead of showing program hashes."""
+    try:
+        delta_value = float(delta.replace("+", ""))
+    except (ValueError, AttributeError):
+        delta_value = 0.0
+    
+    # Determine performance change direction (magnitude-agnostic)
+    if abs(delta_value) < 1e-6:  # Essentially zero
+        change_desc = "No Change"
+    elif delta_value > 0:
+        change_desc = "Improvement"
+    else:
+        change_desc = "Decline"
+    
+    # Create descriptive title based on relationship
+    if relationship == "parent":
+        base = "Direct Parent"
+    else:  # child
+        if delta_value > 0:
+            base = "Improved Child"
+        elif delta_value < 0:
+            base = "Child Variant"
+        else:
+            base = "Unchanged Child"
+    
+    return f"{base} ({change_desc} Δ{delta})"
 
 
 class LineageInsightsConfig(BaseModel):
@@ -135,32 +184,62 @@ class GenerateLineageInsightsStage(Stage):
         self.storage = storage
 
     async def _select_parent_id(self, program: Program) -> Optional[str]:
+        """Select parent ID based on configured strategy."""
         if not program.lineage or not program.lineage.parents:
             return None
-        parents = program.lineage.parents
-        if self.config.parent_selection_strategy == "first":
-            return parents[0]
-        elif self.config.parent_selection_strategy == "random":
-            return random.choice(parents)
-        elif self.config.parent_selection_strategy == "best_fitness":
-            return await self._select_best_fitness_parent(parents)
-        return parents[0]
 
-    async def _select_best_fitness_parent(self, parent_ids: List[str]) -> Optional[str]:
-        metric = self.config.fitness_selector_metric or self.config.metric_key
-        better = self.config.fitness_selector_higher_is_better if self.config.fitness_selector_higher_is_better is not None else self.config.higher_is_better
-        best_id, best_val = None, None
-        for pid in parent_ids:
-            parent = await self.storage.get(pid)
-            if parent is None:
-                continue
-            try:
-                val = float(parent.metrics[metric])
-                if best_val is None or (val > best_val if better else val < best_val):
-                    best_id, best_val = pid, val
-            except Exception:
-                continue
-        return best_id
+        if self.config.parent_selection_strategy == "first":
+            return program.lineage.parents[0]
+        elif self.config.parent_selection_strategy == "random":
+            return random.choice(program.lineage.parents)
+        elif self.config.parent_selection_strategy == "best_fitness":
+            # Find parent with highest fitness (or lowest if higher_is_better=False)
+            best_parent_id = None
+            best_fitness = None
+            fitness_key = self.config.fitness_selector_metric or self.config.metric_key
+            higher_better = self.config.fitness_selector_higher_is_better
+            if higher_better is None:
+                higher_better = self.config.higher_is_better
+
+            for parent_id in program.lineage.parents:
+                parent = await self.storage.get(parent_id)
+                if parent and fitness_key in parent.metrics:
+                    fitness = float(parent.metrics[fitness_key])
+                    if best_fitness is None or (
+                        (higher_better and fitness > best_fitness) or
+                        (not higher_better and fitness < best_fitness)
+                    ):
+                        best_fitness = fitness
+                        best_parent_id = parent_id
+            return best_parent_id
+        else:
+            raise ValueError(f"Unknown parent selection strategy: {self.config.parent_selection_strategy}")
+
+    async def _set_empty_lineage_and_return(self, program: Program, started_at: datetime, message: str):
+        """Helper to set empty lineage metadata, persist to storage, and return completed result."""
+        program.set_metadata(self.config.metadata_key_raw, {"ancestors": [], "descendants": []})
+        program.set_metadata(self.config.metadata_key, format_structured_insight_block(None, []))
+        await self.storage.update(program)
+        return build_stage_result(StageState.COMPLETED, started_at, message, self.stage_name)
+
+    async def _set_child_lineage_and_return(self, program: Program, child_ancestors: List, child_insights: Dict, started_at: datetime, parent_id: str):
+        """Helper to set child lineage metadata, persist to storage, and return completed result."""
+        raw_key = self.config.metadata_key_raw
+        program.set_metadata(raw_key, {"ancestors": child_ancestors})
+        program.set_metadata(self.config.metadata_key, format_structured_insight_block(None, child_ancestors))
+        await self.storage.update(program)
+        
+        return build_stage_result(
+            status=StageState.COMPLETED,
+            started_at=started_at,
+            output=child_insights,
+            stage_name=self.stage_name,
+            metadata={
+                self.config.metadata_key: child_insights,
+                "parent_id": parent_id,
+                "selected_parent_strategy": self.config.parent_selection_strategy,
+            },
+        )
 
     def _compute_diff_blocks(self, parent_code: str, child_code: str) -> List[str]:
         if parent_code.strip() == child_code.strip():
@@ -212,10 +291,13 @@ class GenerateLineageInsightsStage(Stage):
         try:
             parent_id = await self._select_parent_id(program)
             if not parent_id:
-                return build_stage_result(StageState.COMPLETED, started_at, "<No valid parent>", self.stage_name)
+                # Handle programs with no parents (initial/seed programs) by setting empty lineage insights
+                return await self._set_empty_lineage_and_return(program, started_at, "<No valid parent - initial program>")
+            
             parent = await self.storage.get(parent_id)
             if not parent:
-                return build_stage_result(StageState.COMPLETED, started_at, f"<Parent {parent_id} not found>", self.stage_name)
+                # Set empty lineage insights even when parent not found
+                return await self._set_empty_lineage_and_return(program, started_at, f"<Parent {parent_id} not found>")
 
             metric_key = self.config.metric_key
             pm = float(parent.metrics[metric_key])
@@ -224,15 +306,18 @@ class GenerateLineageInsightsStage(Stage):
 
             diff_blocks = self._compute_diff_blocks(parent.code, program.code)
             if not diff_blocks:
-                return build_stage_result(StageState.COMPLETED, started_at, "<No code differences found>", self.stage_name)
+                # Even with no code differences, we still have a lineage relationship
+                # Continue with empty diff_blocks and empty insights
+                diff_blocks = []
+                insights = []
+            else:
+                prompt = self._render_user_prompt(delta, diff_blocks)
+                response = await self.config.llm_wrapper.generate_async(prompt, system_prompt=self.config.system_prompt_template)
 
-            prompt = self._render_user_prompt(delta, diff_blocks)
-            response = await self.config.llm_wrapper.generate_async(prompt, system_prompt=self.config.system_prompt_template)
-
-            try:
-                insights = json.loads(response)
-            except Exception as e:
-                raise StageError(f"Failed to parse LLM JSON output: {e}\nRaw output:\n{response}") from e
+                try:
+                    insights = json.loads(response)
+                except Exception as e:
+                    raise StageError(f"Failed to parse LLM JSON output: {e}\nRaw output:\n{response}") from e
 
             child_insights = {
                 "from": parent.id,
@@ -257,20 +342,9 @@ class GenerateLineageInsightsStage(Stage):
             parent.set_metadata(self.config.metadata_key, format_structured_insight_block(child_insights, ancestor_block))
             await self.storage.update(parent)
 
-            program.set_metadata(raw_key, {"ancestors": [child_insights]})
-            program.set_metadata(self.config.metadata_key, format_structured_insight_block(None, [child_insights]))
-
-            return build_stage_result(
-                status=StageState.COMPLETED,
-                started_at=started_at,
-                output=child_insights,
-                stage_name=self.stage_name,
-                metadata={
-                    self.config.metadata_key: child_insights,
-                    "parent_id": parent.id,
-                    "selected_parent_strategy": self.config.parent_selection_strategy,
-                },
-            )
+            # Only store immediate parent (depth 1 ancestors)
+            child_ancestors = [child_insights]
+            return await self._set_child_lineage_and_return(program, child_ancestors, child_insights, started_at, parent.id)
 
         except Exception as e:
             raise StageError(f"[{self.stage_name}] Failed: {e}") from e
