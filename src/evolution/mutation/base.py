@@ -3,7 +3,6 @@ from typing import Iterable, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from src.evolution.mutation.parent_selector import ParentSelector
 from src.programs.program import Program
 
 
@@ -27,13 +26,12 @@ class MutationOperator(ABC):
 
     @abstractmethod
     async def mutate_single(
-        self, available_parents: List[Program], parent_selector: ParentSelector
+        self, selected_parents: List[Program]
     ) -> Optional[MutationSpec]:
-        """Generate a single mutation using the parent selector.
+        """Generate a single mutation from the selected parents.
 
         Args:
-            available_parents: List of parent programs available for mutation
-            parent_selector: Strategy for selecting which parents to use
+            selected_parents: List of parent programs to mutate
 
         Returns:
             MutationSpec if successful, None if no mutation could be generated

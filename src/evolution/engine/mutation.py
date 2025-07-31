@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import List
 
 from loguru import logger
@@ -25,9 +26,8 @@ async def generate_mutations(
 ) -> int:
     """Generate at most *limit* mutations from *elites* and persist them immediately.
 
-    This function now uses a parent selector for clean parent selection logic,
-    and persists mutations one by one as they're generated, preventing
-    loss of expensive LLM work when timeouts occur.
+    This function now uses parallel execution for efficient mutation generation
+    while maintaining proper error handling and respecting the limit.
 
     Args:
         elites: List of elite programs to use as parents
@@ -42,70 +42,60 @@ async def generate_mutations(
     if not elites or limit <= 0:
         return 0
 
-    persisted = 0
-
     try:
-        # Reset the parent selector to start fresh
-        parent_selector.reset()
+        # Create parent iterator - no need for reset/state management
+        parent_iterator = parent_selector.create_parent_iterator(elites)
 
-        while persisted < limit:
+        # Collect parent selections up to the limit
+        parent_selections = []
+        for parents in parent_iterator:
+            if len(parent_selections) >= limit:
+                break
+            parent_selections.append(parents)
+
+        if not parent_selections:
+            logger.info("[mutation] No valid parent selections available")
+            return 0
+
+        logger.info(f"[mutation] Generated {len(parent_selections)} parent selections for parallel mutation")
+
+        # Create mutation tasks for parallel execution
+        async def generate_and_persist_mutation(parents: List[Program], task_id: int) -> bool:
+            """Generate a single mutation and persist it. Returns True if successful."""
             try:
-                # Generate a single mutation using the parent selector
-                mutation_spec = await mutator.mutate_single(
-                    elites, parent_selector
-                )
+                mutation_spec = await mutator.mutate_single(parents)
 
                 if mutation_spec is None:
-                    # No mutation could be generated
-                    if not parent_selector.has_more_selections():
-                        logger.info(
-                            f"[mutation] Parent selector exhausted after {persisted} mutations"
-                        )
-                        break
-                    else:
-                        logger.debug(
-                            f"[mutation] Failed to generate mutation, but parent selector has more options"
-                        )
-                        continue
+                    logger.debug(f"[mutation] Task {task_id}: Failed to generate mutation")
+                    return False
 
                 # Immediately persist the mutation
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
                 await storage.add(program)
-                persisted += 1
 
-                logger.debug(
-                    f"[mutation] Persisted mutation {persisted}/{limit}: {mutation_spec.name}"
-                )
-
-                # Check if we should continue (for exhaustive selectors)
-                if not parent_selector.has_more_selections():
-                    logger.info(
-                        f"[mutation] No more parent selections available after {persisted} mutations"
-                    )
-                    break
+                logger.debug(f"[mutation] Task {task_id}: Persisted mutation: {mutation_spec.name}")
+                return True
 
             except Exception as exc:
-                logger.error(
-                    f"[mutation] Failed to generate/persist mutation {persisted + 1}: {exc}"
-                )
+                logger.error(f"[mutation] Task {task_id}: Failed to generate/persist mutation: {exc}")
+                return False
 
-                # For exhaustive selectors, we might want to continue with remaining combinations
-                if parent_selector.has_more_selections():
-                    logger.debug(
-                        "[mutation] Continuing with next parent selection"
-                    )
-                    continue
-                else:
-                    logger.info(
-                        "[mutation] No more parent selections available after error"
-                    )
-                    break
+        # Execute mutations in parallel
+        tasks = [
+            generate_and_persist_mutation(parents, i) 
+            for i, parents in enumerate(parent_selections)
+        ]
+
+        # Use gather with return_exceptions=True to handle individual failures gracefully
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Count successful mutations
+        persisted = sum(1 for result in results if result is True)
+
+        logger.info(f"[mutation] Created {persisted} mutations in parallel (immediately persisted)")
+        return persisted
 
     except Exception as exc:  # pragma: no cover
         logger.error(f"[mutation] Mutation generation failed: {exc}.")
-
-    logger.info(
-        f"[mutation] Created {persisted} mutations (immediately persisted)"
-    )
-    return persisted
+        return 0

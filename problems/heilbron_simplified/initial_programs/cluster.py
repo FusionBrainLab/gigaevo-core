@@ -1,6 +1,6 @@
 import random
 
-from helper import get_unit_triangle
+from helper import get_unit_triangle, get_smallest_triangle_area, is_inside_triangle
 import numpy as np
 
 np.random.seed(42)
@@ -13,7 +13,7 @@ def entrypoint() -> np.ndarray:
     center = (A + B + C) / 3
     points = [center]
     radius = 0.2 * np.linalg.norm(B - A)
-    for i in range(11):
+    for i in range(10):
         angle = 2 * np.pi * i / 10
         offset = np.array([np.cos(angle), np.sin(angle)]) * radius
         P = center + offset

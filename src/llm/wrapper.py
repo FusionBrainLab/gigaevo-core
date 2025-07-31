@@ -40,11 +40,17 @@ class LLMConfig(BaseModel):
     max_tokens: Optional[int] = Field(
         default=None, ge=1, description="Maximum tokens in response"
     )
+    max_reasoning_tokens: Optional[int] = Field(
+        default=None, ge=1, description="Maximum reasoning tokens in response"
+    )
     temperature: float = Field(
         default=0.7, ge=0.0, le=2.0, description="Sampling temperature"
     )
     top_p: float = Field(
         default=1.0, ge=0.0, le=1.0, description="Top-p sampling"
+    )
+    top_k: Optional[int] = Field(
+        default=None, ge=1, description="Top-k sampling"
     )
     max_prompt_length: int = Field(
         default=100000, gt=0, description="Maximum prompt length"
@@ -257,11 +263,15 @@ class LLMWrapper(LLMInterface):
             "messages": prepared_messages,
             "temperature": self.config.temperature,
             "top_p": self.config.top_p,
+            "top_k": self.config.top_k,
             **kwargs,
         }
 
         if self.config.max_tokens:
             api_params["max_tokens"] = self.config.max_tokens
+
+        if self.config.max_reasoning_tokens:
+            api_params["reasoning"] = {"max_tokens": self.config.max_reasoning_tokens}
 
         last_error = None
 

@@ -1,0 +1,31 @@
+TASK DEFINITION – HEILBRONN TRIANGLE PROBLEM
+
+Problem Type: Evolutionary Geometric Optimization
+Challenge: Design 11-point layouts that maximize the area of the smallest triangle formed by any three points.
+
+PROBLEM COMPLEXITY
+
+This is a high-dimensional, non-convex optimization problem with sharp local minima. Small changes to point coordinates can drastically reduce the smallest triangle area due to geometric degeneracies. The search space includes both discrete failure regions (e.g. exact alignments) and continuous low-fitness basins (e.g. clustered configurations). Effective solutions must balance global dispersion with local spacing constraints under strict boundary and uniqueness conditions.
+
+OBJECTIVE:
+Implement a Python function that returns 11 distinct 2D coordinates inside a unit-area equilateral triangle, such that the minimum area among all C(11, 3) = 165 triangles formed by point triplets is as large as possible.
+
+- Output shape: (11, 2) NumPy array
+- Fitness: Area of the smallest triangle formed by any 3 points
+- Goal: Maximize this minimum triangle area
+
+GEOMETRIC SETUP:
+- Enclosing triangle: Equilateral, area = 1.0
+- Orientation: Flat-bottomed, base along x-axis, vertex at (0, 0)
+- Point configuration: All 11 points must lie strictly inside or on the boundary
+
+CONSTRAINTS:
+- All points must be distinct
+- All points must lie within or on the boundary of the enclosing triangle
+- No three points may be collinear
+- Numerical precision matters for geometric computations
+
+EVOLUTIONARY APPROACH:
+- Use program insights to identify patterns affecting performance
+- Leverage lineage outcomes to guide decisions
+- Apply evidence-driven mutations based on performance data

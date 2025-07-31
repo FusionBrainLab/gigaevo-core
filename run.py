@@ -30,7 +30,7 @@ from src.database.redis_program_storage import (
 )
 from src.evolution.engine import EngineConfig, EvolutionEngine
 from src.evolution.mutation.llm import LLMMutationOperator
-from src.evolution.mutation.parent_selector import RandomParentSelector
+from src.evolution.mutation.parent_selector import AllCombinationsParentSelector, WeightedRandomParentSelector
 from src.evolution.strategies.map_elites import (
     BehaviorSpace,
     BinningType,
@@ -510,7 +510,7 @@ def create_dag_stages(
 
     stages["ValidateCompiles"] = lambda: ValidateCodeStage(
         stage_name="ValidateCompiles",
-        max_code_length=18000,
+        max_code_length=24000,
         timeout=30.0,
         safe_mode=True,
     )
@@ -552,7 +552,8 @@ def create_dag_stages(
                 max_insights=8,
                 output_format="text",
                 metrics_to_display={
-                    "fitness": "main objective, higher is better",
+                    "fitness": "Main objective, higher is better",
+                    "is_valid": "Whether the program is valid 1 if valid, 0 if invalid",
                 },
                 metadata_key="insights",
                 excluded_error_stages=[
@@ -560,7 +561,7 @@ def create_dag_stages(
                     "ComplexityMetricUpdate",
                 ],
             ),
-            timeout=120.0,
+            timeout=600.0,
         )
 
     def create_lineage_insights_stage():
@@ -568,13 +569,16 @@ def create_dag_stages(
             config=LineageInsightsConfig(
                 llm_wrapper=llm_wrapper["lineage"],
                 metric_key="fitness",
+                metric_description="main objective, higher is better",
                 higher_is_better=True,
                 parent_selection_strategy="best_fitness",
                 fitness_selector_metric="fitness",
                 fitness_selector_higher_is_better=True,
+                task_description=task_description,
+                additional_metrics={},
             ),
             storage=redis_storage,
-            timeout=240,
+            timeout=600,
         )
 
     stages["LLMInsights"] = create_insights_stage
@@ -672,19 +676,22 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     # Updated for longer programs and better model alignment
     settings_per_stage = {
         "insights": {
-            "temperature": 0.65,
-            "max_tokens": 4096,
-            "top_p": 0.85,
+            "temperature": 0.6,
+            "max_tokens": 32768,
+            "top_p": 0.95,
+            "top_k": 20,
         },
         "lineage": {
             "temperature": 0.6,
-            "max_tokens": 8192,
-            "top_p": 0.85,
+            "max_tokens": 32768,
+            "top_p": 0.95,
+            "top_k": 20,
         },
         "mutation": {
-            "temperature": 0.70,
-            "max_tokens": 10000,
-            "top_p": 0.9,
+            "temperature": 0.6,
+            "max_tokens": 32768,
+            "top_p": 0.95,
+            "top_k": 20,
         },
     }
 
@@ -695,15 +702,15 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
 
         return MultiModelLLMWrapper(
             models=[
-                "Qwen3-235B-A22B-Instruct-2507",
+                "Qwen3-235B-A22B-Thinking-2507"
             ],
             probabilities=[1.0],
             api_key=LLM_API_KEY,
             configs=[
                 LLMConfig(
                     **params,
-                    api_endpoint="http://0.0.0.0:8999/v1",
-                ),
+                    api_endpoint="http://localhost:8999/v1",
+                )
             ],
         )
 
@@ -817,13 +824,14 @@ async def run_evolution_experiment(args: argparse.Namespace):
             system_prompt_template=load_problem_file(
                 problem_dir, "mutation_system_prompt.txt"
             ),
-            user_prompt_template=load_problem_file(
+            user_prompt_templates=[load_problem_file(
                 problem_dir, "mutation_user_prompt.txt"
-            ),
+            )], # optionally use a list of templates with weights to be randomly selected
+            user_prompt_template_weights_factory=lambda x: [1.0],
             metric_descriptions={
-                "fitness": "main objective, higher is better",
-                "is_valid": "whether the program is valid, 1 if valid, 0 if invalid",
-            },
+                "fitness": "Main objective, higher is better",
+                "is_valid": "Whether the program is valid 1 if valid, 0 if invalid",
+            }
         )
         required_behavior_keys = set()
         for island in evolution_strategy.islands.values():
@@ -840,7 +848,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             max_mutations_per_generation=8,  # INCREASED: More mutations per generation for faster exploration
             max_generations=args.max_generations,  # Pass max_generations from command line
             required_behavior_keys=required_behavior_keys,
-            parent_selector=RandomParentSelector(num_parents=1),
+            parent_selector=AllCombinationsParentSelector(num_parents=1),
         )
 
         evolution_engine = EvolutionEngine(
@@ -856,7 +864,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             poll_interval=5.0,
             max_concurrent_dags=args.max_concurrent_dags,
             log_interval=15,
-            dag_timeout=900,
+            dag_timeout=1800,
         )
 
         runner = RunnerManager(
@@ -866,8 +874,8 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 edges=dag_edges,
                 entry_points=entry_points,
                 exec_order_deps=execution_order_deps,
-                dag_timeout=900,
-                max_parallel_stages=3,
+                dag_timeout=1800,
+                max_parallel_stages=8,  
             ),
             storage=redis_storage,
             config=runner_config,

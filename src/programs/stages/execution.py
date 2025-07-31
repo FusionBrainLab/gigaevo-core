@@ -24,12 +24,11 @@ from src.programs.utils import (
 )
 
 from .base import Stage
-from .decorators import retry, semaphore
+from .decorators import retry
 
 INPUT_SIZE_THRESHOLD = 8 * 1024
 
 
-@semaphore(limit=6)
 class RunPythonCode(Stage):
     def __init__(
         self,

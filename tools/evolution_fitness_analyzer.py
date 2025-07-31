@@ -5,10 +5,11 @@ Evolution Fitness Analyzer
 This script extracts running programs from the MetaEvolve evolution system
 and creates comprehensive visualizations including:
 - Fitness evolution over time with running mean and standard deviation
+- Fitness evolution by iteration number (if iteration metadata is available)
 - Program state statistics (failed/completed/running/etc.)
 - Time since last update analysis (how long programs have been in their current state)
 - DAG stage results statistics (individual stage execution analysis)
-- Island statistics (distribution of programs across evolution islands)
+- Island statistics (distribution of programs across evolution islands, both time and iteration-based)
 - Top performing programs analysis
 - Comprehensive JSON export for cross-run comparison
 
@@ -23,10 +24,11 @@ Usage:
 Plot Options:
     --no-plots              Skip all plotting (just export data)
     --no-fitness-plots      Skip fitness evolution plots
+    --no-iteration-plots    Skip iteration-based fitness evolution plots
     --no-stage-plots        Skip program state statistics plots
     --no-persistence-plots  Skip time since last update analysis plots
     --no-dag-stage-plots    Skip DAG stage results statistics plots
-    --no-island-plots       Skip island statistics plots
+    --no-island-plots       Skip island statistics plots (includes iteration-based)
     --no-metric-plots       Skip metric correlation plots
     --no-validity-plots     Skip validity distribution plots
     --no-metric-distribution-plots  Skip metric distribution plots
@@ -38,6 +40,7 @@ Outlier Detection Options:
 
 Running Statistics Options:
     --rolling-window        Rolling window size for running mean/std calculations (default: 50)
+    --iteration-rolling-window  Rolling window size for iteration-based running mean/std calculations (default: 5)
 
 Export Format:
     - CSV files for raw data
@@ -206,7 +209,7 @@ class EvolutionFitnessAnalyzer:
             logger.error(f"❌ Error extracting data: {e}")
             return pd.DataFrame()
 
-    def analyze_fitness_data(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def analyze_fitness_data(self, df: pd.DataFrame, iteration_rolling_window: int = 5) -> Dict[str, Any]:
         """Analyze fitness data and prepare for plotting."""
 
         if df.empty:
@@ -247,6 +250,17 @@ class EvolutionFitnessAnalyzer:
         full_df_sorted["time_since_start"] = (
             full_df_sorted["created_at"] - evolution_start_time
         ).dt.total_seconds()
+
+        # Check if iteration data is available
+        iteration_col = "meta_iteration"
+        has_iteration_data = iteration_col in full_df_sorted.columns and full_df_sorted[iteration_col].notna().any()
+        
+        if has_iteration_data:
+            logger.info("📊 Found iteration metadata - iteration-based analysis will be available")
+            # Convert iteration to numeric if it's not already
+            full_df_sorted[iteration_col] = pd.to_numeric(full_df_sorted[iteration_col], errors='coerce')
+        else:
+            logger.info("⚠️ No iteration metadata found - iteration-based plots will be skipped")
 
         # Filter programs with valid fitness values (exclude failures and extreme outliers)
         # First, remove known failure values (-1000.0)
@@ -452,6 +466,34 @@ class EvolutionFitnessAnalyzer:
             logger.info(f"📈 Generation Statistics:")
             logger.info(generation_stats)
 
+        # Calculate iteration-based running statistics if available
+        iteration_running_statistics = None
+        if has_iteration_data:
+            iteration_df = timeline_df[timeline_df[iteration_col].notna()].copy()
+            if not iteration_df.empty:
+                iteration_df = iteration_df.sort_values(iteration_col).reset_index(drop=True)
+                
+                # Calculate iteration-based running statistics
+                iteration_df["running_best_fitness_iter"] = iteration_df[fitness_col].expanding().max()
+                iteration_df["running_mean_fitness_iter"] = iteration_df[fitness_col].rolling(
+                    window=iteration_rolling_window, min_periods=1, center=False
+                ).mean()
+                iteration_df["running_std_fitness_iter"] = iteration_df[fitness_col].rolling(
+                    window=iteration_rolling_window, min_periods=1, center=False
+                ).std()
+                
+                iteration_running_statistics = {
+                    "rolling_window": iteration_rolling_window,
+                    "iteration_col": iteration_col,
+                    "iteration_data": iteration_df[[
+                        iteration_col,
+                        "running_best_fitness_iter", 
+                        "running_mean_fitness_iter", 
+                        "running_std_fitness_iter",
+                        fitness_col
+                    ]].to_dict('records')
+                }
+
         return {
             "timeline_df": timeline_df,
             "full_df": full_df_sorted,  # Include full dataset with proper timeline
@@ -463,6 +505,9 @@ class EvolutionFitnessAnalyzer:
             "best_fitness": valid_fitness[fitness_col].max(),
             "worst_fitness": valid_fitness[fitness_col].min(),
             "mean_fitness": valid_fitness[fitness_col].mean(),
+            "has_iteration_data": has_iteration_data,
+            "iteration_col": iteration_col if has_iteration_data else None,
+            "iteration_running_statistics": iteration_running_statistics,
         }
 
     def plot_fitness_evolution(
@@ -890,6 +935,335 @@ class EvolutionFitnessAnalyzer:
             self._save_fig(fig, output_folder / "full_timeline_analysis")
 
         plt.show()
+
+    def plot_fitness_evolution_by_iteration(
+        self,
+        fitness_analysis: Dict[str, Any],
+        output_folder: Path,
+        save_plots: bool = True,
+        rolling_window: int = 50,
+        iteration_rolling_window: int = 5,
+    ):
+        """Create comprehensive fitness evolution plots using iteration numbers instead of time."""
+
+        if not fitness_analysis:
+            logger.warning("No fitness data to plot")
+            return
+
+        if not fitness_analysis.get("has_iteration_data", False):
+            logger.warning("No iteration data available for iteration-based plots")
+            return
+
+        timeline_df = fitness_analysis["timeline_df"].copy()
+        fitness_col = fitness_analysis["fitness_col"]
+        iteration_col = fitness_analysis["iteration_col"]
+
+        # Filter programs that have iteration data
+        iteration_df = timeline_df[timeline_df[iteration_col].notna()].copy()
+        
+        if iteration_df.empty:
+            logger.warning("No programs with iteration data found")
+            return
+
+        # Sort by iteration to ensure proper rolling calculations
+        iteration_df = iteration_df.sort_values(iteration_col).reset_index(drop=True)
+
+        # Use the specific iteration rolling window parameter passed in
+        
+        logger.info(f"📊 Creating iteration-based plots with {len(iteration_df)} programs")
+        logger.info(f"📊 Iteration range: {iteration_df[iteration_col].min():.0f} to {iteration_df[iteration_col].max():.0f}")
+        
+        # Calculate running statistics based on iteration order
+        logger.info(f"📊 Calculating iteration-based running statistics with window size: {iteration_rolling_window}")
+        
+        # Running best fitness (cumulative max)
+        iteration_df["running_best_fitness"] = iteration_df[fitness_col].expanding().max()
+        
+        # Running mean and std with rolling window
+        iteration_df["running_mean_fitness"] = iteration_df[fitness_col].rolling(
+            window=iteration_rolling_window, min_periods=1, center=False
+        ).mean()
+        
+        iteration_df["running_std_fitness"] = iteration_df[fitness_col].rolling(
+            window=iteration_rolling_window, min_periods=1, center=False
+        ).std()
+        
+        # Calculate confidence intervals (mean ± std)
+        iteration_df["running_mean_plus_std"] = (
+            iteration_df["running_mean_fitness"] + iteration_df["running_std_fitness"]
+        )
+        iteration_df["running_mean_minus_std"] = (
+            iteration_df["running_mean_fitness"] - iteration_df["running_std_fitness"]
+        )
+
+        # Create main figure with subplots
+        fig, axes = plt.subplots(3, 2, figsize=(18, 18))
+        fig.suptitle(
+            "Evolution Fitness Analysis by Iteration with Running Statistics", 
+            fontsize=18, fontweight="bold"
+        )
+
+        # 1. Best Fitness vs Iteration with Running Mean
+        ax1 = axes[0, 0]
+        ax1.plot(
+            iteration_df[iteration_col],
+            iteration_df["running_best_fitness"],
+            linewidth=3,
+            color="green",
+            label="Running Best Fitness",
+        )
+        ax1.plot(
+            iteration_df[iteration_col],
+            iteration_df["running_mean_fitness"],
+            linewidth=2,
+            color="orange",
+            label=f"Running Mean (n={iteration_rolling_window})",
+        )
+        ax1.scatter(
+            iteration_df[iteration_col],
+            iteration_df[fitness_col],
+            alpha=0.4,
+            s=15,
+            color="blue",
+            label="Individual Fitness",
+        )
+        ax1.set_xlabel("Iteration Number")
+        ax1.set_ylabel("Fitness (negative enclosing hexagon side length)")
+        ax1.set_title("Best Fitness and Running Mean vs Iteration")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # 2. Running Mean with Confidence Band
+        ax2 = axes[0, 1]
+        ax2.plot(
+            iteration_df[iteration_col],
+            iteration_df["running_mean_fitness"],
+            linewidth=2,
+            color="orange",
+            label=f"Running Mean (n={iteration_rolling_window})",
+        )
+        ax2.fill_between(
+            iteration_df[iteration_col],
+            iteration_df["running_mean_minus_std"],
+            iteration_df["running_mean_plus_std"],
+            alpha=0.3,
+            color="orange",
+            label="Mean ± 1 Std Dev",
+        )
+        ax2.scatter(
+            iteration_df[iteration_col],
+            iteration_df[fitness_col],
+            alpha=0.2,
+            s=10,
+            color="blue",
+            label="Individual Fitness",
+        )
+        ax2.set_xlabel("Iteration Number")
+        ax2.set_ylabel("Fitness")
+        ax2.set_title("Running Mean with Standard Deviation Band vs Iteration")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Running Standard Deviation
+        ax3 = axes[1, 0]
+        ax3.plot(
+            iteration_df[iteration_col],
+            iteration_df["running_std_fitness"],
+            linewidth=2,
+            color="red",
+            label=f"Running Std Dev (n={iteration_rolling_window})",
+        )
+        ax3.set_xlabel("Iteration Number")
+        ax3.set_ylabel("Standard Deviation")
+        ax3.set_title("Running Standard Deviation vs Iteration")
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # 4. Fitness Distribution (same as time-based)
+        ax4 = axes[1, 1]
+        ax4.hist(
+            iteration_df[fitness_col],
+            bins=30,
+            alpha=0.7,
+            color="skyblue",
+            edgecolor="black",
+        )
+        ax4.axvline(
+            iteration_df[fitness_col].mean(),
+            color="red",
+            linestyle="--",
+            label=f"Overall Mean: {iteration_df[fitness_col].mean():.3f}",
+        )
+        ax4.axvline(
+            iteration_df[fitness_col].max(),
+            color="green",
+            linestyle="--",
+            label=f"Best: {iteration_df[fitness_col].max():.3f}",
+        )
+        ax4.axvline(
+            iteration_df["running_mean_fitness"].iloc[-1],
+            color="orange",
+            linestyle="--",
+            label=f"Final Running Mean: {iteration_df['running_mean_fitness'].iloc[-1]:.3f}",
+        )
+        ax4.set_xlabel("Fitness")
+        ax4.set_ylabel("Frequency")
+        ax4.set_title("Fitness Distribution (Iteration-based Analysis)")
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+        # 5. Iteration Progress Rate
+        ax5 = axes[2, 0]
+        # Calculate iteration gaps to show progress rate
+        iteration_diffs = iteration_df[iteration_col].diff().dropna()
+        ax5.plot(
+            iteration_df[iteration_col].iloc[1:],
+            iteration_diffs,
+            linewidth=2,
+            color="purple",
+            label="Iteration Step Size",
+        )
+        ax5.set_xlabel("Iteration Number")
+        ax5.set_ylabel("Iteration Step Size")
+        ax5.set_title("Iteration Progress Rate")
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+
+        # 6. Fitness Improvement Rate by Iteration
+        ax6 = axes[2, 1]
+        # Calculate fitness improvement rate
+        fitness_diffs = iteration_df["running_best_fitness"].diff().dropna()
+        ax6.plot(
+            iteration_df[iteration_col].iloc[1:],
+            fitness_diffs,
+            linewidth=2,
+            color="darkgreen",
+            label="Best Fitness Improvement",
+        )
+        ax6.axhline(
+            y=0,
+            color="black",
+            linestyle="--",
+            alpha=0.5,
+            label="No Improvement"
+        )
+        ax6.set_xlabel("Iteration Number")
+        ax6.set_ylabel("Fitness Improvement")
+        ax6.set_title("Fitness Improvement Rate vs Iteration")
+        ax6.legend()
+        ax6.grid(True, alpha=0.3)
+
+        plt.tight_layout(pad=2.0)
+
+        if save_plots:
+            self._save_fig(fig, output_folder / "evolution_analysis_by_iteration")
+
+        plt.show()
+
+        # Create detailed iteration timeline plot
+        fig2, (ax_top, ax_bottom) = plt.subplots(2, 1, figsize=(16, 12), sharex=True)
+
+        # Top subplot: All fitness metrics by iteration
+        ax_top.scatter(
+            iteration_df[iteration_col],
+            iteration_df[fitness_col],
+            alpha=0.3,
+            s=20,
+            color="lightblue",
+            label="Individual Programs",
+        )
+
+        # Plot running best with thicker line
+        ax_top.plot(
+            iteration_df[iteration_col],
+            iteration_df["running_best_fitness"],
+            linewidth=3,
+            color="darkgreen",
+            label="Running Best Fitness",
+        )
+
+        # Plot running mean
+        ax_top.plot(
+            iteration_df[iteration_col],
+            iteration_df["running_mean_fitness"],
+            linewidth=2,
+            color="orange",
+            label=f"Running Mean (n={iteration_rolling_window})",
+        )
+
+        # Add confidence band
+        ax_top.fill_between(
+            iteration_df[iteration_col],
+            iteration_df["running_mean_minus_std"],
+            iteration_df["running_mean_plus_std"],
+            alpha=0.2,
+            color="orange",
+            label="Mean ± 1 Std Dev",
+        )
+
+        # Highlight improvements
+        improvements = iteration_df[
+            iteration_df[fitness_col] == iteration_df["running_best_fitness"]
+        ]
+        ax_top.scatter(
+            improvements[iteration_col],
+            improvements[fitness_col],
+            color="red",
+            s=100,
+            zorder=5,
+            label="New Best Fitness",
+        )
+
+        ax_top.set_ylabel("Fitness (negative enclosing hexagon side length)")
+        ax_top.set_title(
+            f"Comprehensive Fitness Evolution by Iteration\n(Rolling window: {iteration_rolling_window} programs)"
+        )
+        ax_top.legend()
+        ax_top.grid(True, alpha=0.3)
+
+        # Bottom subplot: Running standard deviation by iteration
+        ax_bottom.plot(
+            iteration_df[iteration_col],
+            iteration_df["running_std_fitness"],
+            linewidth=2,
+            color="red",
+            label=f"Running Std Dev (n={iteration_rolling_window})",
+        )
+        ax_bottom.set_xlabel("Iteration Number")
+        ax_bottom.set_ylabel("Standard Deviation")
+        ax_bottom.set_title("Running Standard Deviation by Iteration")
+        ax_bottom.legend()
+        ax_bottom.grid(True, alpha=0.3)
+
+        plt.tight_layout(pad=2.0)
+
+        if save_plots:
+            self._save_fig(fig2, output_folder / "comprehensive_fitness_evolution_by_iteration")
+
+        plt.show()
+
+        # Log iteration-based statistics summary
+        logger.info(f"\n📊 ITERATION-BASED STATISTICS SUMMARY (window={iteration_rolling_window}):")
+        logger.info("=" * 80)
+        logger.info(f"  Iteration range: {iteration_df[iteration_col].min():.0f} - {iteration_df[iteration_col].max():.0f}")
+        logger.info(f"  Programs with iteration data: {len(iteration_df)}")
+        logger.info(f"  Final running mean: {iteration_df['running_mean_fitness'].iloc[-1]:.4f}")
+        logger.info(f"  Final running std: {iteration_df['running_std_fitness'].iloc[-1]:.4f}")
+        logger.info(f"  Overall best fitness: {iteration_df['running_best_fitness'].iloc[-1]:.4f}")
+        
+        # Calculate improvement rate per iteration
+        total_iterations = iteration_df[iteration_col].max() - iteration_df[iteration_col].min()
+        if total_iterations > 0:
+            fitness_improvement = iteration_df['running_best_fitness'].iloc[-1] - iteration_df['running_best_fitness'].iloc[0]
+            logger.info(f"  Total iterations: {total_iterations:.0f}")
+            logger.info(f"  Fitness improvement per iteration: {fitness_improvement / total_iterations:.6f}")
+
+        # Calculate and log key iteration milestones
+        if len(iteration_df) > iteration_rolling_window:
+            early_mean = iteration_df['running_mean_fitness'].iloc[iteration_rolling_window-1]
+            late_mean = iteration_df['running_mean_fitness'].iloc[-1]
+            mean_improvement = late_mean - early_mean
+            logger.info(f"  Mean fitness improvement: {mean_improvement:.4f} (from {early_mean:.4f} to {late_mean:.4f})")
 
     def plot_program_stage_statistics(
         self,
@@ -1840,6 +2214,280 @@ class EvolutionFitnessAnalyzer:
             f"✅ Saved detailed island statistics to {island_stats_file_path}"
         )
 
+    def plot_island_statistics_by_iteration(
+        self,
+        fitness_analysis: Dict[str, Any],
+        output_folder: Path,
+        save_plots: bool = True,
+    ):
+        """Create island statistics analysis using iteration numbers."""
+
+        if not fitness_analysis:
+            logger.warning("No data to plot")
+            return
+
+        if not fitness_analysis.get("has_iteration_data", False):
+            logger.warning("No iteration data available for iteration-based island plots")
+            return
+
+        full_df = fitness_analysis["full_df"]
+        iteration_col = fitness_analysis["iteration_col"]
+
+        # Check if island data is available
+        island_col = "meta_current_island"
+        if island_col not in full_df.columns:
+            logger.warning(
+                f"⚠️ No island data found. Available metadata columns: {[col for col in full_df.columns if col.startswith('meta_')]}"
+            )
+            return
+
+        # Filter out programs without island data or iteration data
+        island_iteration_data = full_df[
+            full_df[island_col].notna() & full_df[iteration_col].notna()
+        ]
+
+        if island_iteration_data.empty:
+            logger.warning("No programs with both island and iteration data found")
+            return
+
+        # IMPORTANT: For island visualization, only consider EVOLVING programs
+        evolving_island_iteration_data = island_iteration_data[
+            island_iteration_data["state"] == "evolving"
+        ]
+
+        if evolving_island_iteration_data.empty:
+            logger.warning("No EVOLVING programs with both island and iteration data found")
+            return
+
+        logger.info(
+            f"📊 Found {len(island_iteration_data)} total programs with island and iteration data"
+        )
+        logger.info(
+            f"📊 Found {len(evolving_island_iteration_data)} EVOLVING programs with island and iteration data"
+        )
+
+        # Set up the plotting style
+        plt.style.use("seaborn-v0_8")
+
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle(
+            "Island Statistics Analysis by Iteration (EVOLVING Programs Only)",
+            fontsize=18,
+            fontweight="bold",
+        )
+
+        # 1. Island Timeline by Iteration (when EVOLVING programs were created)
+        ax1 = axes[0, 0]
+
+        # Consistent y-axis ordering for islands
+        islands_sorted = sorted(evolving_island_iteration_data[island_col].unique())
+        island_to_y = {name: idx for idx, name in enumerate(islands_sorted)}
+
+        for island in islands_sorted:
+            island_programs = evolving_island_iteration_data[
+                evolving_island_iteration_data[island_col] == island
+            ]
+            y = np.full(len(island_programs), island_to_y[island])
+            ax1.scatter(
+                island_programs[iteration_col],
+                y,
+                alpha=0.6,
+                s=20,
+                label=f"{island} ({len(island_programs)} programs)",
+            )
+
+        ax1.set_xlabel("Iteration Number")
+        ax1.set_ylabel("Island")
+        ax1.set_title("EVOLVING Program Creation by Island vs Iteration")
+        ax1.set_yticks(list(island_to_y.values()))
+        ax1.set_yticklabels(islands_sorted)
+        ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax1.grid(True, alpha=0.3, axis="x")
+
+        # 2. Iteration Progress by Island (show how each island progresses over iterations)
+        ax2 = axes[0, 1]
+
+        # Plot iteration distribution for each island
+        for i, island in enumerate(islands_sorted):
+            island_programs = evolving_island_iteration_data[
+                evolving_island_iteration_data[island_col] == island
+            ]
+            iteration_counts = island_programs[iteration_col].value_counts().sort_index()
+            
+            if not iteration_counts.empty:
+                ax2.plot(
+                    iteration_counts.index,
+                    iteration_counts.values,
+                    marker='o',
+                    linewidth=2,
+                    label=f"{island}",
+                    alpha=0.7
+                )
+
+        ax2.set_xlabel("Iteration Number")
+        ax2.set_ylabel("Number of Programs Created")
+        ax2.set_title("Program Creation Rate by Island vs Iteration")
+        ax2.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Fitness by Island vs Iteration
+        ax3 = axes[1, 0]
+        fitness_col = fitness_analysis.get("fitness_col", "metric_fitness")
+
+        if fitness_col in evolving_island_iteration_data.columns:
+            # Filter programs with valid fitness
+            valid_fitness_islands = evolving_island_iteration_data[
+                evolving_island_iteration_data[fitness_col].notna()
+                & (evolving_island_iteration_data[fitness_col] != -1000.0)
+            ]
+
+            if not valid_fitness_islands.empty:
+                # Create scatter plot of fitness vs iteration, colored by island
+                colors = plt.cm.Set3.colors[:len(islands_sorted)]
+                
+                for i, island in enumerate(islands_sorted):
+                    island_data = valid_fitness_islands[
+                        valid_fitness_islands[island_col] == island
+                    ]
+                    if not island_data.empty:
+                        ax3.scatter(
+                            island_data[iteration_col],
+                            island_data[fitness_col],
+                            alpha=0.6,
+                            s=30,
+                            label=f"{island}",
+                            color=colors[i % len(colors)]
+                        )
+
+                ax3.set_xlabel("Iteration Number")
+                ax3.set_ylabel("Fitness")
+                ax3.set_title("EVOLVING Program Fitness vs Iteration by Island")
+                ax3.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+                ax3.grid(True, alpha=0.3)
+            else:
+                ax3.text(
+                    0.5,
+                    0.5,
+                    "No valid fitness data available",
+                    ha="center",
+                    va="center",
+                    transform=ax3.transAxes,
+                    fontsize=12,
+                )
+                ax3.set_title("EVOLVING Program Fitness vs Iteration by Island")
+        else:
+            ax3.text(
+                0.5,
+                0.5,
+                "No fitness data available",
+                ha="center",
+                va="center",
+                transform=ax3.transAxes,
+                fontsize=12,
+            )
+            ax3.set_title("EVOLVING Program Fitness vs Iteration by Island")
+
+        # 4. Island Activity Timeline (cumulative program count by iteration)
+        ax4 = axes[1, 1]
+
+        for i, island in enumerate(islands_sorted):
+            island_programs = evolving_island_iteration_data[
+                evolving_island_iteration_data[island_col] == island
+            ].sort_values(iteration_col)
+            
+            if not island_programs.empty:
+                # Calculate cumulative count
+                cumulative_data = []
+                current_count = 0
+                
+                for iteration in sorted(island_programs[iteration_col].unique()):
+                    programs_at_iteration = len(island_programs[island_programs[iteration_col] == iteration])
+                    current_count += programs_at_iteration
+                    cumulative_data.append((iteration, current_count))
+                
+                if cumulative_data:
+                    iterations, counts = zip(*cumulative_data)
+                    ax4.plot(
+                        iterations,
+                        counts,
+                        marker='o',
+                        linewidth=2,
+                        label=f"{island}",
+                        alpha=0.7
+                    )
+
+        ax4.set_xlabel("Iteration Number")
+        ax4.set_ylabel("Cumulative Program Count")
+        ax4.set_title("Cumulative EVOLVING Programs by Island vs Iteration")
+        ax4.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax4.grid(True, alpha=0.3)
+
+        plt.tight_layout(pad=3.0)
+
+        if save_plots:
+            self._save_fig(fig, output_folder / "island_statistics_by_iteration")
+
+        plt.show()
+
+        # Log iteration-based island analysis
+        logger.info("\n🏝️ ITERATION-BASED ISLAND STATISTICS (EVOLVING PROGRAMS):")
+        logger.info("=" * 80)
+
+        for island in islands_sorted:
+            island_data = evolving_island_iteration_data[
+                evolving_island_iteration_data[island_col] == island
+            ]
+            
+            if not island_data.empty:
+                iteration_range = f"{island_data[iteration_col].min():.0f} - {island_data[iteration_col].max():.0f}"
+                logger.info(f"\n{island.upper()}:")
+                logger.info(f"  EVOLVING programs: {len(island_data)}")
+                logger.info(f"  Iteration range: {iteration_range}")
+                
+                if fitness_col in island_data.columns:
+                    valid_fitness = island_data[
+                        island_data[fitness_col].notna() & (island_data[fitness_col] != -1000.0)
+                    ]
+                    if not valid_fitness.empty:
+                        logger.info(f"  Mean fitness: {valid_fitness[fitness_col].mean():.3f}")
+                        logger.info(f"  Best fitness: {valid_fitness[fitness_col].max():.3f}")
+
+        # Save detailed iteration-based island statistics to file
+        island_iteration_stats_path = output_folder / "island_statistics_by_iteration.txt"
+        with open(island_iteration_stats_path, "w") as f:
+            f.write("Island Statistics by Iteration Analysis\n")
+            f.write("=" * 50 + "\n\n")
+
+            f.write(f"OVERALL STATISTICS:\n")
+            f.write(f"  Total EVOLVING programs with island and iteration data: {len(evolving_island_iteration_data)}\n")
+            f.write(f"  Iteration range: {evolving_island_iteration_data[iteration_col].min():.0f} - {evolving_island_iteration_data[iteration_col].max():.0f}\n")
+            f.write(f"  Unique islands: {len(islands_sorted)}\n\n")
+
+            f.write(f"ISLAND-BY-ISLAND ANALYSIS:\n")
+            for island in islands_sorted:
+                island_data = evolving_island_iteration_data[
+                    evolving_island_iteration_data[island_col] == island
+                ]
+                
+                if not island_data.empty:
+                    iteration_range = f"{island_data[iteration_col].min():.0f} - {island_data[iteration_col].max():.0f}"
+                    f.write(f"\n{island.upper()}:\n")
+                    f.write(f"  EVOLVING programs: {len(island_data)}\n")
+                    f.write(f"  Iteration range: {iteration_range}\n")
+                    
+                    if fitness_col in island_data.columns:
+                        valid_fitness = island_data[
+                            island_data[fitness_col].notna() & (island_data[fitness_col] != -1000.0)
+                        ]
+                        if not valid_fitness.empty:
+                            f.write(f"  Mean fitness: {valid_fitness[fitness_col].mean():.3f}\n")
+                            f.write(f"  Best fitness: {valid_fitness[fitness_col].max():.3f}\n")
+
+        logger.info(
+            f"✅ Saved detailed iteration-based island statistics to {island_iteration_stats_path}"
+        )
+
     def plot_stage_results_statistics(
         self,
         fitness_analysis: Dict[str, Any],
@@ -2581,6 +3229,57 @@ class EvolutionFitnessAnalyzer:
                     "timeline_data": timeline_data,
                 }
 
+        # Add iteration-based running statistics if available
+        if "iteration_running_statistics" in fitness_analysis and fitness_analysis["iteration_running_statistics"]:
+            iter_running_stats = fitness_analysis["iteration_running_statistics"]
+            iter_data = iter_running_stats["iteration_data"]
+            
+            # Calculate summary statistics from iteration data
+            final_idx = len(iter_data) - 1
+            if final_idx >= 0:
+                final_running_mean = iter_data[final_idx].get("running_mean_fitness_iter")
+                final_running_std = iter_data[final_idx].get("running_std_fitness_iter")
+                final_running_best = iter_data[final_idx].get("running_best_fitness_iter")
+                
+                # Calculate improvement metrics
+                first_valid_mean_idx = 0
+                for i, data_point in enumerate(iter_data):
+                    if data_point.get("running_mean_fitness_iter") is not None:
+                        first_valid_mean_idx = i
+                        break
+                
+                initial_running_mean = iter_data[first_valid_mean_idx].get("running_mean_fitness_iter", 0)
+                mean_improvement = final_running_mean - initial_running_mean if final_running_mean and initial_running_mean else 0
+                
+                # Calculate iteration span
+                iteration_col = iter_running_stats["iteration_col"]
+                total_iterations = iter_data[final_idx].get(iteration_col, 0) - iter_data[0].get(iteration_col, 0)
+                
+                json_data["iteration_running_statistics"] = {
+                    "rolling_window": iter_running_stats["rolling_window"],
+                    "iteration_col": iteration_col,
+                    "summary": {
+                        "final_running_mean": final_running_mean,
+                        "final_running_std": final_running_std,
+                        "final_running_best": final_running_best,
+                        "initial_running_mean": initial_running_mean,
+                        "mean_improvement": mean_improvement,
+                        "total_iterations": total_iterations,
+                        "mean_improvement_rate_per_iteration": mean_improvement / total_iterations if total_iterations > 0 else 0,
+                        "programs_analyzed": len(iter_data),
+                    },
+                    "iteration_data": iter_data,  # Full iteration data for detailed comparison
+                }
+            else:
+                json_data["iteration_running_statistics"] = {
+                    "rolling_window": iter_running_stats["rolling_window"],
+                    "iteration_col": iter_running_stats["iteration_col"],
+                    "summary": {},
+                    "iteration_data": iter_data,
+                }
+        else:
+            json_data["iteration_running_statistics"] = None
+
         # Add generation statistics if available
         if fitness_analysis.get("generation_stats") is not None:
             gen_stats = fitness_analysis["generation_stats"]
@@ -2642,6 +3341,10 @@ class EvolutionFitnessAnalyzer:
         if json_data["running_statistics"]:
             compact_data["running_summary"] = json_data["running_statistics"]["summary"]
         
+        # Add iteration running statistics summary only
+        if json_data["iteration_running_statistics"]:
+            compact_data["iteration_running_summary"] = json_data["iteration_running_statistics"]["summary"]
+        
         # Add generation summary only
         if json_data["generation_statistics"]:
             compact_data["generation_summary"] = json_data["generation_statistics"]["summary"]
@@ -2669,6 +3372,13 @@ class EvolutionFitnessAnalyzer:
             logger.info(f"  Running statistics window: {json_data['running_statistics']['rolling_window']} programs")
             logger.info(f"  Final running mean: {rs.get('final_running_mean', 'N/A')}")
             logger.info(f"  Mean improvement: {rs.get('mean_improvement', 'N/A')}")
+        
+        if json_data["iteration_running_statistics"]:
+            irs = json_data["iteration_running_statistics"]["summary"]
+            logger.info(f"  Iteration statistics window: {json_data['iteration_running_statistics']['rolling_window']} programs")
+            logger.info(f"  Final iteration running mean: {irs.get('final_running_mean', 'N/A')}")
+            logger.info(f"  Iteration mean improvement: {irs.get('mean_improvement', 'N/A')}")
+            logger.info(f"  Total iterations: {irs.get('total_iterations', 'N/A')}")
         
         if json_data["generation_statistics"]:
             gs = json_data["generation_statistics"]["summary"]
@@ -3784,6 +4494,11 @@ async def main():
         help="Skip metric distribution plots",
     )
     parser.add_argument(
+        "--no-iteration-plots",
+        action="store_true",
+        help="Skip iteration-based fitness evolution plots",
+    )
+    parser.add_argument(
         "--output-folder",
         required=True,
         help="Output folder for all results (required)",
@@ -3816,6 +4531,12 @@ async def main():
         default=50,
         help="Rolling window size for running mean/std calculations (default: 50)",
     )
+    parser.add_argument(
+        "--iteration-rolling-window",
+        type=int,
+        default=5,
+        help="Rolling window size for iteration-based running mean/std calculations (default: 5)",
+    )
 
     args = parser.parse_args()
 
@@ -3844,7 +4565,7 @@ async def main():
             return
 
         # Analyze fitness data
-        fitness_analysis = analyzer.analyze_fitness_data(evolution_df)
+        fitness_analysis = analyzer.analyze_fitness_data(evolution_df, iteration_rolling_window=args.iteration_rolling_window)
 
         if not fitness_analysis:
             logger.error("No valid fitness data found. Exiting.")
@@ -3868,12 +4589,27 @@ async def main():
             if not args.no_fitness_plots:
                 try:
                     analyzer.plot_fitness_evolution(
-                        fitness_analysis, output_folder, rolling_window=args.rolling_window
+                        fitness_analysis, output_folder, 
+                        rolling_window=args.rolling_window
                     )
                     logger.info("✅ Fitness evolution plots completed")
                 except Exception as e:
                     logger.error(
                         f"❌ Error creating fitness evolution plots: {e}"
+                    )
+
+            # Create iteration-based fitness evolution plots
+            if not args.no_iteration_plots:
+                try:
+                    analyzer.plot_fitness_evolution_by_iteration(
+                        fitness_analysis, output_folder, 
+                        rolling_window=args.rolling_window,
+                        iteration_rolling_window=args.iteration_rolling_window
+                    )
+                    logger.info("✅ Iteration-based fitness evolution plots completed")
+                except Exception as e:
+                    logger.error(
+                        f"❌ Error creating iteration-based fitness evolution plots: {e}"
                     )
 
             # Create program stage statistics plots
@@ -3926,6 +4662,17 @@ async def main():
                 except Exception as e:
                     logger.error(
                         f"❌ Error creating island statistics plots: {e}"
+                    )
+
+                # Also create iteration-based island statistics if iteration data is available
+                try:
+                    analyzer.plot_island_statistics_by_iteration(
+                        fitness_analysis, output_folder
+                    )
+                    logger.info("✅ Iteration-based island statistics plots completed")
+                except Exception as e:
+                    logger.error(
+                        f"❌ Error creating iteration-based island statistics plots: {e}"
                     )
 
             # Create metric correlation heatmap
