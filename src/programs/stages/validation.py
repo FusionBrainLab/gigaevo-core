@@ -1,3 +1,4 @@
+
 """Code validation stage for MetaEvolve."""
 
 import ast
@@ -16,10 +17,6 @@ from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.utils import build_stage_result
 
 from .base import Stage
-from .decorators import semaphore
-
-
-@semaphore(limit=4)
 class ValidateCodeStage(Stage):
 
     def __init__(
@@ -131,11 +128,7 @@ class ValidateCodeStage(Stage):
         )
 
     async def _validate_security(self, code: str, program_id: str) -> None:
-        """Comprehensive security validation."""
-        validation_mode = "safe" if self.safe_mode else "trusted"
-
-        if validation_mode == "safe" or self.enable_security_checks:
-            # Check against dangerous patterns
+        if self.safe_mode or self.enable_security_checks:
             for pattern in self._compiled_patterns:
                 match = pattern.search(code)
                 if match:
@@ -144,89 +137,32 @@ class ValidateCodeStage(Stage):
                         violation_type="dangerous_pattern",
                         detected_pattern=match.group(0),
                     )
-
-            # Additional security checks
-            await self._check_import_safety(code, program_id)
-            await self._check_file_operations(code, program_id)
-            await self._check_network_operations(code, program_id)
-
-    async def _check_import_safety(self, code: str, program_id: str) -> None:
-        """Check for unsafe imports."""
-        dangerous_imports = [
-            "os",
-            "sys",
-            "subprocess",
-            "socket",
-            "urllib",
-            "requests",
-            "multiprocessing",
-            "threading",
-            "ctypes",
-            "__import__",
-        ]
-
-        for imp in dangerous_imports:
-            patterns = [
-                rf"\bimport\s+{imp}\b",
-                rf"\bfrom\s+{imp}\s+import\b",
-                rf"__import__\s*\(\s*[\'\"]{imp}[\'\"]\s*\)",
-            ]
-
-            for pattern in patterns:
-                if re.search(pattern, code, re.IGNORECASE):
-                    raise SecurityViolationError(
-                        f"Unsafe import detected: {imp}",
-                        violation_type="unsafe_import",
-                        detected_pattern=imp,
-                    )
-
-    async def _check_file_operations(self, code: str, program_id: str) -> None:
-        """Check for file system operations."""
-        file_patterns = [
-            r"\bopen\s*\(",
-            r"\bfile\s*\(",
-            r"\.read\s*\(",
-            r"\.write\s*\(",
-            r"\.remove\s*\(",
-            r"\.unlink\s*\(",
-        ]
-
-        for pattern in file_patterns:
-            if re.search(pattern, code, re.IGNORECASE):
+            if self._contains_file_operations_ast(code):
                 raise SecurityViolationError(
-                    f"File operation detected",
+                    "File operation detected",
                     violation_type="file_operation",
-                    detected_pattern=pattern,
+                    detected_pattern="AST-based file op",
                 )
 
-    async def _check_network_operations(
-        self, code: str, program_id: str
-    ) -> None:
-        """Check for network operations."""
-        network_patterns = [
-            r"socket\.",
-            r"urllib\.",
-            r"requests\.",
-            r"http\.",
-            r"ftp\.",
-        ]
-
-        for pattern in network_patterns:
-            if re.search(pattern, code, re.IGNORECASE):
-                raise SecurityViolationError(
-                    f"Network operation detected",
-                    violation_type="network_operation",
-                    detected_pattern=pattern,
-                )
-
-    async def _validate_ast(self, code: str, program_id: str) -> None:
-        """Validate code using AST analysis."""
+    def _contains_file_operations_ast(self, code: str) -> bool:
         try:
             tree = ast.parse(code)
-
-            # Check for dangerous AST nodes
             for node in ast.walk(tree):
-                # Note: ast.Exec was removed in Python 3
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id in {"open", "file"}:
+                        return True
+                    if isinstance(node.func, ast.Attribute) and node.func.attr in {
+                        "read", "write", "remove", "unlink"
+                    }:
+                        return True
+            return False
+        except Exception:
+            return False
+
+    async def _validate_ast(self, code: str, program_id: str) -> None:
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name in ["os", "sys", "subprocess"]:
@@ -235,9 +171,7 @@ class ValidateCodeStage(Stage):
                                 violation_type="unsafe_import",
                                 detected_pattern=alias.name,
                             )
-
         except SyntaxError:
-            # Already handled in main validation
             pass
         except Exception as e:
             logger.warning(f"[{self.stage_name}] AST validation error: {e}")

@@ -10,6 +10,7 @@ from datetime import datetime
 import json
 import os
 import re
+import random
 from typing import Callable, List, Optional
 
 import diffpatch
@@ -34,7 +35,7 @@ def format_metrics(
         set(metrics.keys())
     ), "metric_descriptions is not a subset of metrics"
     return "\n".join(
-        f"- {k}: {metrics[k]} ({v})" for k, v in metric_descriptions.items()
+        f"- {k}: {metrics[k]:.5f} ({v})" for k, v in metric_descriptions.items()
     )
 
 
@@ -160,7 +161,8 @@ class LLMMutationOperator(MutationOperator):
         ] = lambda x: x.metadata.get(
             "lineage_insights", "No lineage insights available."
         ),
-        user_prompt_template: str,
+        user_prompt_templates: list[str],
+        user_prompt_template_weights_factory: Callable[[List[Program]], list[float]],
         system_prompt_template: str,
         task_definition: str = "The goal is to numerically approximate solutions to complex mathematical problems.",
         task_hints: str = "Prioritize numerical stability, convergence speed, and algorithmic originality.",
@@ -175,7 +177,8 @@ class LLMMutationOperator(MutationOperator):
             task_definition=task_definition,
             task_hints=task_hints,
         )
-        self.user_prompt_template = user_prompt_template
+        self.user_prompt_templates = user_prompt_templates
+        self.user_prompt_template_weights_factory = user_prompt_template_weights_factory
 
     async def mutate_single(
         self, selected_parents: List[Program]
@@ -275,7 +278,10 @@ class LLMMutationOperator(MutationOperator):
 {self.fetch_lineage_insights_fn(p)}
 """
             parent_blocks.append(block)
-        return self.user_prompt_template.format(
+        weights = self.user_prompt_template_weights_factory(parents)
+        assert len(weights) == len(self.user_prompt_templates), "Number of weights must match number of templates"
+        template = random.choices(self.user_prompt_templates, weights=weights, k=1)[0]
+        return template.format(
             count=len(parents), parent_blocks="\n\n".join(parent_blocks)
         )
 

@@ -40,6 +40,9 @@ class LLMConfig(BaseModel):
     max_tokens: Optional[int] = Field(
         default=None, ge=1, description="Maximum tokens in response"
     )
+    max_reasoning_tokens: Optional[int] = Field(
+        default=None, ge=1, description="Maximum reasoning tokens in response"
+    )
     temperature: float = Field(
         default=0.7, ge=0.0, le=2.0, description="Sampling temperature"
     )
@@ -266,6 +269,9 @@ class LLMWrapper(LLMInterface):
 
         if self.config.max_tokens:
             api_params["max_tokens"] = self.config.max_tokens
+
+        if self.config.max_reasoning_tokens:
+            api_params["reasoning"] = {"max_tokens": self.config.max_reasoning_tokens}
 
         last_error = None
 

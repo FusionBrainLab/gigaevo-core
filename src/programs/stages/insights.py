@@ -12,100 +12,98 @@ from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
 
 DEFAULT_SYSTEM_PROMPT_TEMPLATE_JSON = """
-You are an expert in Python code analysis, mathematical modeling, and software evolution.
+You are an expert in Python code analysis and evolutionary optimization.
 
-You operate within an autonomous system that evolves Python programs to solve complex scientific or mathematical problems.
-Your task is to extract structured, mutation-relevant insights that guide future improvements.
+TASK: Extract structured insights to guide program evolution for: {evolutionary_task_description}
 
-You must:
-- Analyze the program's logic, abstractions, and algorithmic structure
-- Detect flaws, bottlenecks, or fragilities that impair performance or scalability
-- Identify missed opportunities for generalization, modularity, or reuse
-- Spot dangerous or fragile constructs (e.g., hardcoded logic, undefined cases)
-- Suggest improvements that increase robustness and evolvability
+ANALYZE:
+- Logic, abstractions, and algorithmic structure
+- Flaws, bottlenecks, or fragilities affecting performance
+- Missed opportunities for generalization or modularity
+- Fragile constructs (hardcoded logic, undefined cases)
 
-Avoid high-level summaries, vague advice, or cosmetic style comments.
-Focus strictly on algorithmic, structural, or mathematical substance.
-
-The current optimization objective is:
-{evolutionary_task_description}
-
-Return a JSON list. Each item must include:
-- "type": one of {insight_types}
-- "insight": a short, specific suggestion (≤ 25 words)
+REQUIREMENTS:
+- Return JSON list with "type" (one of {insight_types}) and "insight" (≤25 words)
+- Focus on algorithmic/structural substance, not style
+- Provide specific, actionable suggestions
 """.strip()
 
 DEFAULT_SYSTEM_PROMPT_TEMPLATE_TEXT = """
-You are a specialist in Python code analysis, geometric reasoning, and evolutionary optimization.
+You are an expert in Python code analysis and evolutionary optimization.
 
-Your task is to generate a concise list of **categorized causal insights** to guide high-impact code mutations for solving the following problem:
+TASK: Generate causal insights to guide code mutations for: {evolutionary_task_description}
 
-🧠 OPTIMIZATION OBJECTIVE:
-{evolutionary_task_description}
+CATEGORIES ({insight_types}):
+- structural: code architecture, modularity, control flow patterns limiting effectiveness
+- algorithmic: point placement logic, geometric construction methods, optimization procedures
+- optimization: search strategy weaknesses, local minima traps, exploration vs exploitation imbalance
+- numerical: parameter sensitivity, precision issues, convergence criteria, scaling problems
+- semantic: geometric assumptions, constraint violations, domain-specific logic flaws
+- error_handling: edge cases, validation gaps, robustness failures under boundary conditions
 
-Each insight must:
-- Be short (≤ 25 words)
-- Be clearly categorized using one of: {insight_types}
-- Be causal and **actionable** (describe what caused a failure or success, what effect it had, and how to address it)
+REQUIREMENTS:
+- Each insight ≤25 words with concrete evidence (values, metrics, structures)
+- Be causal and actionable - link cause, effect, and solution
+- Ground observations in code/metrics/errors, not speculation
+- **Prioritize fitness-impacting patterns** over minor refinements
 
-Output format:
-- <category> [beneficial|harmful|neutral]: <concise causal insight>
+Strict rules:
+- Do **not** suggest changes based on speculative efficiency (e.g., "this is faster") unless directly tied to the optimization objective
+- You do **not** have access to runtime speed — avoid assumptions about performance or memory usage
+- Do **not** hallucinate structural flaws without evidence from code, metrics, or error outputs
+- Do **not** include summaries, general advice, or stylistic feedback
+- **Focus on geometric reasoning** - triangle areas, point distributions, constraint satisfaction
 
-✅ Only return a **clean bullet list** of insights using the format above
-❌ Do not explain your reasoning or return any Markdown or comments
+✅ Only recommend structural or numerical improvements that clearly support maximizing minimum triangle area
+
+TAGS: beneficial, harmful, neutral, fragile, rigid
+SEVERITY: high (direct fitness impact), medium (geometric reasoning), low (implementation details)
+
+**TAG DEFINITIONS (evolutionary action guidance)**:
+- **beneficial**: Current pattern is good - PRESERVE/EXTEND this approach
+- **harmful**: Current pattern is bad - REMOVE/AVOID this approach  
+- **fragile**: Current pattern is risky - IMPROVE/ROBUSTIFY this approach
+- **rigid**: Current pattern is inflexible - MAKE MORE ADAPTABLE
+- **neutral**: Current pattern has no clear impact - IGNORE for evolution
+
+FORMAT: - <category> [tag] (severity): <insight with evidence>
+EXAMPLE: - algorithmic [harmful] (high): Grid placement creates systematic collinearity at y=0.33, min_area=0.001 vs target>0.01
 """.strip()
 
 
 DEFAULT_USER_PROMPT_TEMPLATE_JSON = """
-Analyze the following Python program and extract structured insights to guide further evolution.
+Analyze this Python program and extract 3-{max_insights} structured insights for evolution.
 
-Program:
+PROGRAM:
 ```python
 {code}
 ```
-**Current Optimization Metrics:**
-{metrics}
 
-**Current Errors:**
-{error_section}
+METRICS: {metrics}
+ERRORS: {error_section}
 
-Return a list of 3–{max_insights} insights in JSON format like:
+Return JSON format:
 [
-  {"type": "geometric", "insight": "Try recursive Apollonian packing instead of radial symmetry."},
+  {{"type": "category", "insight": "specific suggestion with evidence (≤25 words)"}},
   ...
 ]
 
-Guidelines:
-- Do not repeat generic patterns unless they are applied in novel ways
-- Avoid vague advice or stylistic feedback
-- Each insight must be concise, actionable, and materially impactful
+Requirements: concise, actionable, evidence-based insights only.
 {error_focus}
 """.strip()
 
 DEFAULT_USER_PROMPT_TEMPLATE_TEXT = """
-Analyze the following Python program and extract 3–{max_insights} **actionable insights** to guide its evolutionary refinement.
+Analyze this program and extract 3-{max_insights} actionable insights for evolutionary refinement.
 
-📄 PROGRAM CODE:
+PROGRAM:
 ```python
 {code}
 ```
 
-📈 CURRENT METRICS:
-{metrics}
+METRICS: {metrics}
+ERRORS: {error_section}
 
-⚠️ ERRORS OR WARNINGS:
-{error_section}
-
-Your task:
-- Detect flaws, patterns, or strengths in the current program
-- Reflect on why certain structural choices helped or hurt
-- Recommend improvements based on **causal reasoning**
-
-Each insight must follow this format:
-- <category> [tag]: <causal insight>
-
-Example:
-- geometric [harmful]: Tight triplet near vertex creates small triangle — nudge point inward to increase separation
+Extract insights with concrete evidence from code/metrics/errors only. No speculation.
 
 {error_focus}
 """.strip()
@@ -120,21 +118,21 @@ class InsightsConfig(BaseModel):
     max_insights: int = 7
     insight_types: List[
         Literal[
-            "geometric",
+            "structural",
             "algorithmic",
-            "evolution",
-            "math",
-            "implementation",
-            "error_fix",
+            "optimization",
+            "numerical",
+            "semantic",
+            "error_handling",
         ]
     ] = Field(
         default_factory=lambda: [
-            "geometric",
+            "structural",
             "algorithmic",
-            "evolution",
-            "math",
-            "implementation",
-            "error_fix",
+            "optimization",
+            "numerical",
+            "semantic",
+            "error_handling",
         ]
     )
     metrics_to_display: Dict[str, str] = Field(default_factory=dict)
@@ -266,7 +264,7 @@ class GenerateLLMInsightsStage(Stage):
             metric_description,
         ) in self.config.metrics_to_display.items():
             v = metrics[metric_key]
-            lines.append(f"- {metric_key} : {v} ({metric_description})")
+            lines.append(f"- {metric_key} : {v:.5f} ({metric_description})")
         return "\n".join(lines)
 
     def _get_filtered_failed_stages(self, program: Program) -> List[str]:

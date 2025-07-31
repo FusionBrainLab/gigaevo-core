@@ -5,6 +5,7 @@ import random
 from typing import Any, Dict, List, Literal, Optional
 
 from loguru import logger
+import re
 from pydantic import BaseModel
 
 from src.database.program_storage import ProgramStorage
@@ -14,60 +15,99 @@ from src.programs.program import Program, StageState
 from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
 
+def safe_json_extract_from_llm_output(text: str):
+    """
+    Extracts and safely parses a JSON array from an LLM response,
+    even if it's wrapped in markdown or slightly malformed.
+    """
+    # Remove markdown fences
+    text = re.sub(r"^```json\s*|\s*```$", "", text.strip(), flags=re.MULTILINE)
+
+    # Try to extract valid JSON array
+    try:
+        # Remove trailing commas before closing brackets/braces
+        text = re.sub(r",\s*(\]|\})", r"\1", text)
+
+        # Optionally: trim to first matching [ ... ] block (for safety)
+        array_match = re.search(r"\[\s*{.*?}\s*\]", text, re.DOTALL)
+        if array_match:
+            text = array_match.group(0)
+
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON from LLM output: {e}\n---\n{text}")
+
 DEFAULT_SYSTEM_PROMPT_LINEAGE_TEXT = """
-You are an expert in evolutionary programming and performance-guided code optimization.
+You are an expert in evolutionary programming analyzing code transitions between parent-child programs.
 
-Your task is to analyze a code transition between two Python programs. You are given unified diff blocks and a performance metric delta showing how the child's behavior changed relative to its parent.
+TASK: Produce 3-5 JSON insights analyzing what strategies were used in code changes and how they contributed to observed metric/error changes.
 
-🎯 Return **3–5 concise, causal insights** explaining how specific changes likely contributed to the metric change.
+STRATEGY TYPES (describing what the child did):
+- "imitation": preserved/extended parent logic (kept successful patterns)
+- "avoidance": removed/bypassed parent logic (eliminated failing patterns)
+- "generalization": added abstraction/parameterization (made approach more flexible)
+- "exploration": introduced novel mechanisms (tried completely new approaches)
 
-Each insight must:
-- Be formatted as a JSON object with:
-  - `"strategy"`: one of `"imitation"`, `"avoidance"`, or `"generalization"`
-  - `"description"`: a **brief, causal explanation** of a specific architectural or algorithmic change and how it may have affected performance
-- Be ≤ 25 words and focus on concrete mechanisms (e.g., perturbation logic, layout symmetry, parameter adaptation)
-- **Optionally** include a diff range in the description, like: `(@@ -32,7 +33,9 @@)`
+ANALYSIS FOCUS:
+- **Causal mechanisms**: How specific code changes led to metric delta
+- **Geometric impact**: How changes affected point distribution, triangle areas, constraints
+- **Risk assessment**: Whether changes introduced fragility or improved robustness
+- **Success patterns**: What made positive changes work and negative changes fail
 
-📦 Example response:
+REQUIREMENTS:
+- Each insight: JSON object with "strategy" and "description" (≤30 words for complex geometric reasoning)
+- Reference diff blocks (e.g., "(@@ -32,7 +33,9 @@)") when possible
+- Cite concrete evidence (code lines, metric deltas, error messages, geometric properties)
+- Focus on causal relationships with **quantified impact** when available
+- One focused change per insight - don't combine multiple modifications
+
+EXAMPLE:
 [
   {
-    "strategy": "imitation",
-    "description": "(@@ -45,10 +45,12 @@) Introduced adaptive sampling interval, improving convergence stability and diversity of explored solutions."
+    "strategy": "imitation", 
+    "description": "(@@ -45,10 +47,12 @@) Preserved parent's boundary-aware placement, maintaining min_distance>0.1; explains +0.012 improvement."
   },
   {
     "strategy": "avoidance",
-    "description": "Removed annealing schedule, causing premature convergence and degraded triangle distribution."
+    "description": "(@@ -78,6 +0,0 @@) Removed fixed grid causing collinearity, eliminating systematic zero-area triangles."
+  },
+  {
+    "strategy": "generalization",
+    "description": "(@@ -22,1 +24,3 @@) Parameterized step_size via alpha, enabling adaptive convergence; correlates with +0.007 gain."
   }
 ]
 
-🛑 Do NOT include:
-- Diffs
-- Metric values
-
-⚠️ Avoid these types of weak insights:
-- "This change improved the metric"
-- "Better performance due to optimization"
-- "Improved speed or accuracy"
-- Any vague statement without a concrete architectural reference
-
-Respond with **only valid JSON**, no markdown or extra text.
+Respond with only valid JSON, no commentary.
 """.strip()
 
 DEFAULT_USER_PROMPT_LINEAGE_TEXT = """
-🔬 TASK CONTEXT:
-{task_description}
+TASK: {task_description}
 
-📈 METRIC:
-Optimization target = `{metric_name}` ({metric_description})  
-Observed change = {delta:+.5f}
+METRIC TARGET: {metric_name} ({metric_description})
+Observed delta (child - parent): {delta:+.5f}
 
-Below are unified diff blocks showing changes from the parent to the child program. Each block begins with a line like:
+ADDITIONAL METRICS:
+{additional_metrics}
 
-  @@ -32,7 +33,9 @@
+ERROR CHANGES:
+Parent Errors: {parent_errors}
+Child Errors: {child_errors}
 
-Analyze these diffs and return high-quality causal insights explaining how the changes likely led to the metric delta. Each insight may optionally mention the diff range it relates to.
+**ANALYSIS INSTRUCTIONS:**
+Analyze what strategies the child used compared to the parent and how these changes contributed to the metric delta or error changes. 
+
+For POSITIVE deltas (+): Focus on what successful patterns were preserved, what failing patterns were removed, or what new mechanisms were introduced that led to improvement.
+
+For NEGATIVE deltas (-): Focus on what successful patterns were lost, what problematic patterns were introduced, or what mechanisms failed.
+
+For ERROR changes: Identify how code modifications resolved errors (positive) or introduced new failures (negative).
 
 {diff_blocks}
+
+PARENT PROGRAM (reference):
+```python
+{parent_code}
+```
 """.strip()
 
 
@@ -75,53 +115,83 @@ def format_structured_insight_block(
     child_insights: Optional[Dict[str, Any]],
     ancestor_insights: List[Dict[str, Any]]
 ) -> str:
+    """
+    Format structured lineage insights into a readable markdown block
+    with distinct ANCESTORS and DESCENDANTS sections, each including:
+    - Performance delta and type (Improvement, Decline, etc.)
+    - Strategy-tagged insights with optional diff ranges
+    - Diff blocks for context (separated from insights)
+    """
     lines = []
 
-    # Always show ancestors section, even if empty, for consistency
+    # === ANCESTORS SECTION ===
     lines.append("## ANCESTORS")
     if ancestor_insights:
         for ancestor in ancestor_insights:
             delta = ancestor.get("delta", "unknown")
             title = _generate_readable_title("parent", delta)
-            lines.append(f"### {title}")
+            lines.append(f"### Transition from Ancestor → Child ({title})")
+
+            # Include additional metrics (if any)
+            add_mets = ancestor.get("additional_metric_deltas", {})
+            if add_mets:
+                lines.append("#### Additional Metrics")
+                for m_key, m_delta in add_mets.items():
+                    lines.append(f"- {m_key}: Δ{m_delta}")
 
             insights = ancestor.get("insights", [])
-            for insight in insights:
-                strategy = insight.get("strategy", "unknown")
-                description = insight.get("description", "No description")
-                lines.append(f"- **[{strategy}]** {description}")
+            if insights:
+                lines.append("#### Insights")
+                for insight in insights:
+                    strategy = insight.get("strategy", "unknown")
+                    description = insight.get("description", "No description")
+                    lines.append(f"- **[{strategy}]** {description}")
+            else:
+                lines.append("*No extracted insights.*")
 
-            diff_blocks = ancestor.get("diff_blocks", [])
-            if diff_blocks:
-                lines.append("")
-                lines.append("#### Diff Blocks")
-                for i, block in enumerate(diff_blocks):
-                    lines.append(f"--- Diff Block {i+1} ---\n```diff\n{block}\n```")
-
-            lines.append("")
+            # diff_blocks = ancestor.get("diff_blocks", [])
+            # if diff_blocks:
+            #     lines.append("")
+            #     lines.append("#### Diff Blocks")
+            #     for i, block in enumerate(diff_blocks):
+            #         lines.append(f"--- Diff Block {i+1} ---\n```diff\n{block}\n```")
+            # lines.append("")
     else:
         lines.append("*No ancestor information available (likely initial/seed program)*")
         lines.append("")
 
+    # === DESCENDANTS SECTION ===
     if child_insights:
         lines.append("## DESCENDANTS")
         delta = child_insights.get("delta", "unknown")
         title = _generate_readable_title("child", delta)
-        lines.append(f"### {title}")
+        lines.append(f"### Transition from Parent → Child ({title})")
+
+        # Include additional metrics for child transition
+        child_add_mets = child_insights.get("additional_metric_deltas", {})
+        if child_add_mets:
+            lines.append("#### Additional Metrics")
+            for m_key, m_delta in child_add_mets.items():
+                lines.append(f"- {m_key}: Δ{m_delta}")
 
         insights = child_insights.get("insights", [])
-        for insight in insights:
-            strategy = insight.get("strategy", "unknown")
-            description = insight.get("description", "No description")
-            lines.append(f"- **[{strategy}]** {description}")
+        if insights:
+            lines.append("#### Insights")
+            for insight in insights:
+                strategy = insight.get("strategy", "unknown")
+                description = insight.get("description", "No description")
+                lines.append(f"- **[{strategy}]** {description}")
+        else:
+            lines.append("*No extracted insights.*")
 
-        diff_blocks = child_insights.get("diff_blocks", [])
-        if diff_blocks:
-            lines.append("")
-            lines.append("#### Diff Blocks")
-            for i, block in enumerate(diff_blocks):
-                lines.append(f"--- Diff Block {i+1} ---\n```diff\n{block}\n```")
+        # diff_blocks = child_insights.get("diff_blocks", [])
+        # if diff_blocks:
+        #     lines.append("")
+        #     lines.append("#### Diff Blocks")
+        #     for i, block in enumerate(diff_blocks):
+        #         lines.append(f"--- Diff Block {i+1} ---\n```diff\n{block}\n```")
 
+    # Final fallback if empty
     if not child_insights and not ancestor_insights:
         lines.append("*No lineage information available*")
 
@@ -169,6 +239,7 @@ class LineageInsightsConfig(BaseModel):
     user_prompt_template: str = DEFAULT_USER_PROMPT_LINEAGE_TEXT
     fitness_selector_metric: Optional[str] = None
     fitness_selector_higher_is_better: Optional[bool] = None
+    additional_metrics: Dict[str, str] = {}
     task_description: str
 
     class Config:
@@ -277,14 +348,42 @@ class GenerateLineageInsightsStage(Stage):
     def _hunk_has_changes(self, hunk_lines: List[str]) -> bool:
         return any(line.startswith(('+', '-')) and not line.startswith(('+++', '---')) for line in hunk_lines)
 
-    def _render_user_prompt(self, delta: float, diff_blocks: List[str]) -> str:
+    def _render_user_prompt(self, delta: float, diff_blocks: List[str], parent: Program, child: Program) -> str:
         rendered_blocks = "\n\n".join([f"--- Block {i+1} ---\n```diff\n{b}\n```" for i, b in enumerate(diff_blocks)])
+        
+        # Get error summaries for both programs
+        parent_errors = parent.get_all_errors_summary()
+        child_errors = child.get_all_errors_summary()
+
+        # Build additional metrics overview (apart from the primary optimisation metric)
+        add_metrics_lines: List[str] = []
+        for m_key, m_desc in self.config.additional_metrics.items():
+            # Skip the main optimisation metric if it appears in this mapping to avoid duplication
+            if m_key == self.config.metric_key:
+                continue
+
+            try:
+                parent_val = float(parent.metrics[m_key])
+                child_val = float(child.metrics[m_key])
+                m_delta = child_val - parent_val
+                add_metrics_lines.append(f"- {m_key} ({m_desc}) {m_delta:+.5f}")
+            except (KeyError, ValueError):
+                # If the metric is missing or cannot be converted to float we silently ignore it
+                continue
+
+        # Join into a single string expected by the template placeholder
+        additional_metrics_str = "\n".join(add_metrics_lines) if add_metrics_lines else "N/A"
+ 
         return self.config.user_prompt_template.format(
             task_description=self.config.task_description,
             metric_name=self.config.metric_key,
             metric_description=self.config.metric_description,
             delta=delta,
+            parent_errors=parent_errors,
+            child_errors=child_errors,
+            additional_metrics=additional_metrics_str,
             diff_blocks=rendered_blocks,
+            parent_code=parent.code,
         )
 
     async def _execute_stage(self, program: Program, started_at: datetime):
@@ -311,18 +410,35 @@ class GenerateLineageInsightsStage(Stage):
                 diff_blocks = []
                 insights = []
             else:
-                prompt = self._render_user_prompt(delta, diff_blocks)
+                prompt = self._render_user_prompt(delta, diff_blocks, parent, program)
                 response = await self.config.llm_wrapper.generate_async(prompt, system_prompt=self.config.system_prompt_template)
 
                 try:
-                    insights = json.loads(response)
+                    insights = safe_json_extract_from_llm_output(response)
                 except Exception as e:
                     raise StageError(f"Failed to parse LLM JSON output: {e}\nRaw output:\n{response}") from e
+
+            # Calculate deltas for any configured additional metrics (excluding the primary metric)
+            additional_metric_deltas: Dict[str, str] = {}
+            for m_key in self.config.additional_metrics.keys():
+                if m_key == self.config.metric_key:
+                    # Skip the primary metric; it's already captured by the 'delta' field
+                    continue
+
+                try:
+                    parent_val = float(parent.metrics[m_key])
+                    child_val = float(program.metrics[m_key])
+                    additional_metric_deltas[m_key] = f"{child_val - parent_val:+.5f}"
+                except (KeyError, ValueError):
+                    # Ignore metrics that are missing or non-numeric
+                    continue
 
             child_insights = {
                 "from": parent.id,
                 "to": program.id,
-                "delta": f"{delta:+.4f}",
+                "delta": f"{delta:+.5f}",
+                # Include per-metric deltas for configured additional metrics
+                "additional_metric_deltas": additional_metric_deltas,
                 "diff_blocks": diff_blocks,
                 "insights": insights,
             }
@@ -337,8 +453,12 @@ class GenerateLineageInsightsStage(Stage):
             if len(parent_descendants) >= self.MAX_DESCENDANTS:
                 parent_descendants = parent_descendants[-(self.MAX_DESCENDANTS - 1):]
             parent_descendants.append(child_insights)
-            parent.set_metadata(raw_key, {"descendants": parent_descendants})
             ancestor_block = parent_raw.get("ancestors", [])
+            # Fix: Preserve existing ancestors data when updating descendants
+            parent.set_metadata(raw_key, {
+                "descendants": parent_descendants,
+                "ancestors": ancestor_block
+            })
             parent.set_metadata(self.config.metadata_key, format_structured_insight_block(child_insights, ancestor_block))
             await self.storage.update(parent)
 

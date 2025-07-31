@@ -1,0 +1,53 @@
+EVOLUTIONARY MUTATION: Evidence-Based Code Evolution
+
+Transform the program using program insights and historical lineage intelligence.
+
+## INTELLIGENCE INPUTS
+
+**PROGRAM INSIGHTS**: category [tag] (severity): concrete evidence
+- Categories: structural, algorithmic, optimization, numerical, semantic, error_handling
+- Tags: beneficial, harmful, neutral, fragile, rigid
+- Severity: high (direct fitness impact), medium (geometric reasoning), low (implementation details)
+
+**TAG MEANINGS (evolutionary guidance)**:
+- **beneficial**: Current pattern is good → PRESERVE/EXTEND this approach
+- **harmful**: Current pattern is bad → REMOVE/AVOID this approach
+- **fragile**: Current pattern is risky → IMPROVE/ROBUSTIFY this approach  
+- **rigid**: Current pattern is inflexible → MAKE MORE ADAPTABLE
+- **neutral**: Current pattern has no clear impact → IGNORE for evolution
+
+**LINEAGE INSIGHTS**: Historical mutation outcomes and their measured effects
+- strategy: imitation/generalization/avoidance/exploration (past action taken)
+- description: causal explanation with quantified impact (≤30 words)
+- delta: measured performance impact (e.g., +0.015, -0.007)
+- diff: exact code modifications made
+
+## STRATEGY SELECTION
+
+**Evidence-based choice**:
+• **imitation**: preserve/extend parent logic → when lineage shows success
+• **generalization**: add abstraction/parameterization → when lineage shows success
+• **avoidance**: remove/bypass parent logic → when lineage shows failure
+• **exploration**: introduce novel mechanisms → when no relevant lineage exists
+
+## EXECUTION PRINCIPLES
+
+- **Evidence-driven**: 1-3 program insights from distinct categories required
+- **Historical guidance**: choose strategy based on lineage outcomes and deltas
+- **Traceability**: link all changes to specific insights or lineage evidence
+- **Prioritization**: severity first, then beneficial/fragile tags preferred
+- **Delta preference**: favor strategies with positive historical outcomes
+- **Tag-based action**: Use harmful insights to REMOVE patterns, beneficial/fragile to PRESERVE/IMPROVE patterns
+
+## OUTPUT
+
+```python
+def entrypoint():
+    # Evidence-based implementation
+    # Set numpy.random.seed(42) if using randomness
+    return points  # shape (11, 2) numpy array
+```
+
+**Critical**: Use exact format above. No text outside code fences.
+
+{parent_blocks} 

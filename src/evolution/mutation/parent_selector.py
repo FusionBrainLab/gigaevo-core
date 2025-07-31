@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from itertools import combinations
 import random
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 from src.programs.program import Program
 
@@ -10,45 +10,37 @@ class ParentSelector(ABC):
     """Abstract base class for selecting parents for mutation."""
 
     @abstractmethod
-    def select_parents(
+    def create_parent_iterator(
         self, available_parents: List[Program]
-    ) -> Optional[List[Program]]:
-        """Select parents from the available pool.
+    ) -> Iterator[List[Program]]:
+        """Create an iterator that yields parent selections.
 
         Args:
             available_parents: List of programs available for selection
 
         Returns:
-            Selected parents for mutation, or None if no valid selection can be made
+            Iterator that yields selected parents for mutation
         """
-
-    @abstractmethod
-    def has_more_selections(self) -> bool:
-        """Check if more parent selections are available."""
-
-    @abstractmethod
-    def reset(self) -> None:
-        """Reset the selector to start from the beginning."""
 
 
 class RandomParentSelector(ParentSelector):
     """Randomly selects parents from the available pool."""
 
-    def __init__(self, num_parents: int = 1):
+    def __init__(self, num_parents: int = 1, max_selections: Optional[int] = None):
         self.num_parents = num_parents
+        self.max_selections = max_selections
 
-    def select_parents(
+    def create_parent_iterator(
         self, available_parents: List[Program]
-    ) -> Optional[List[Program]]:
+    ) -> Iterator[List[Program]]:
+        """Create iterator for random parent selection."""
         if len(available_parents) < self.num_parents:
-            return None
-        return random.sample(available_parents, self.num_parents)
-
-    def has_more_selections(self) -> bool:
-        return True  # Random selection always has more possibilities
-
-    def reset(self) -> None:
-        pass  # Nothing to reset for random selection
+            return
+        
+        count = 0
+        while self.max_selections is None or count < self.max_selections:
+            yield random.sample(available_parents, self.num_parents)
+            count += 1
 
 
 class AllCombinationsParentSelector(ParentSelector):
@@ -56,41 +48,22 @@ class AllCombinationsParentSelector(ParentSelector):
 
     def __init__(self, num_parents: int = 1):
         self.num_parents = num_parents
-        self.current_index = 0
-        self.available_parents = []
-        self.all_combinations = []
 
-    def select_parents(
+    def create_parent_iterator(
         self, available_parents: List[Program]
-    ) -> Optional[List[Program]]:
+    ) -> Iterator[List[Program]]:
+        """Create iterator for all combinations of parents."""
         if len(available_parents) < self.num_parents:
-            return None
-
-        current_ids = sorted([p.id for p in self.available_parents])
-        new_ids = sorted([p.id for p in available_parents])
+            return
         
-        if current_ids != new_ids:
-            self.available_parents = available_parents
-            self.current_index = 0
-            
-            # Pre-compute combinations
-            if self.num_parents == 1:
-                self.all_combinations = [[p] for p in available_parents]
-            else:
-                self.all_combinations = [list(combo) for combo in combinations(available_parents, self.num_parents)]
-
-        selected = self.all_combinations[self.current_index]
-        self.current_index += 1
-        return selected
-
-    def has_more_selections(self) -> bool:
-        # If combinations haven't been computed yet, assume we have selections
-        if not self.all_combinations:
-            return True
-        return self.current_index < len(self.all_combinations)
-
-    def reset(self) -> None:
-        self.current_index = 0
+        if self.num_parents == 1:
+            # Yield each parent individually
+            for parent in available_parents:
+                yield [parent]
+        else:
+            # Yield all combinations
+            for combo in combinations(available_parents, self.num_parents):
+                yield list(combo)
 
 
 class WeightedRandomParentSelector(ParentSelector):
@@ -101,16 +74,19 @@ class WeightedRandomParentSelector(ParentSelector):
         num_parents: int = 1,
         fitness_key: str = "fitness",
         higher_is_better: bool = True,
+        max_selections: Optional[int] = None,
     ):
         self.num_parents = num_parents
         self.fitness_key = fitness_key
         self.higher_is_better = higher_is_better
+        self.max_selections = max_selections
 
-    def select_parents(
+    def create_parent_iterator(
         self, available_parents: List[Program]
-    ) -> Optional[List[Program]]:
+    ) -> Iterator[List[Program]]:
+        """Create iterator for weighted random parent selection."""
         if len(available_parents) < self.num_parents:
-            return None
+            return
 
         # Extract fitness values
         fitnesses = []
@@ -127,35 +103,37 @@ class WeightedRandomParentSelector(ParentSelector):
                 valid_parents.append(parent)
 
         if len(valid_parents) < self.num_parents:
-            return None
+            return
 
         # Handle case where all fitnesses are zero
         if all(f == 0 for f in fitnesses):
-            return random.sample(valid_parents, self.num_parents)
+            count = 0
+            while self.max_selections is None or count < self.max_selections:
+                yield random.sample(valid_parents, self.num_parents)
+                count += 1
+            return
 
-        # Weighted selection without replacement
-        selected = []
-        remaining_parents = valid_parents.copy()
-        remaining_fitnesses = fitnesses.copy()
+        # Weighted selection with replacement (since we want multiple selections)
+        count = 0
+        while self.max_selections is None or count < self.max_selections:
+            selected = []
+            remaining_parents = valid_parents.copy()
+            remaining_fitnesses = fitnesses.copy()
 
-        for _ in range(self.num_parents):
-            if not remaining_parents:
-                break
+            for _ in range(self.num_parents):
+                if not remaining_parents:
+                    break
 
-            chosen = random.choices(
-                remaining_parents, weights=remaining_fitnesses, k=1
-            )[0]
-            selected.append(chosen)
+                chosen = random.choices(
+                    remaining_parents, weights=remaining_fitnesses, k=1
+                )[0]
+                selected.append(chosen)
 
-            # Remove from remaining pools
-            idx = remaining_parents.index(chosen)
-            remaining_parents.pop(idx)
-            remaining_fitnesses.pop(idx)
+                # Remove from remaining pools for selection without replacement within this group
+                idx = remaining_parents.index(chosen)
+                remaining_parents.pop(idx)
+                remaining_fitnesses.pop(idx)
 
-        return selected if len(selected) == self.num_parents else None
-
-    def has_more_selections(self) -> bool:
-        return True  # Weighted random selection always has more possibilities
-
-    def reset(self) -> None:
-        pass  # Nothing to reset for weighted random selection
+            if len(selected) == self.num_parents:
+                yield selected
+            count += 1

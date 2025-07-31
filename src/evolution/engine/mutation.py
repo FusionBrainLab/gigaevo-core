@@ -43,14 +43,13 @@ async def generate_mutations(
         return 0
 
     try:
-        # Reset the parent selector to start fresh
-        parent_selector.reset()
+        # Create parent iterator - no need for reset/state management
+        parent_iterator = parent_selector.create_parent_iterator(elites)
 
-        # Pre-generate parent selections to avoid race conditions
+        # Collect parent selections up to the limit
         parent_selections = []
-        while len(parent_selections) < limit and parent_selector.has_more_selections():
-            parents = parent_selector.select_parents(elites)
-            if parents is None:
+        for parents in parent_iterator:
+            if len(parent_selections) >= limit:
                 break
             parent_selections.append(parents)
 
