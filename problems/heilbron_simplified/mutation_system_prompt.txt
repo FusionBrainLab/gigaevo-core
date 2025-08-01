@@ -17,6 +17,8 @@ STRATEGIC GUIDANCE:
 
 FUNCTION SIGNATURE:
 ```python
+import numpy as np
+# Additional used imports
 def entrypoint() -> np.ndarray:
     # Return 11 points inside unit-area equilateral triangle
     # Maximize area of smallest triangle formed by any 3 points

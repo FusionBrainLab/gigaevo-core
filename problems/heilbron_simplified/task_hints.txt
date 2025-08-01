@@ -9,12 +9,6 @@ Failure Modes:
 - Overlap: Duplicate or nearly identical coordinates
 - Boundary violations: Points placed outside the triangle
 
-Constraints:
-- All 11 points must be distinct
-- All must lie within or on the enclosing triangle
-- No three points may be collinear
-- Numerical precision matters
-
 Evaluation Details:
 - Fitness = minimum triangle area across all 165 combinations
 - Higher minimum area → better performance

@@ -98,6 +98,8 @@ Choose your evolutionary approach based on evidence strength and risk tolerance:
 
 **Code**:
 ```python
+import numpy as np
+# Additional used imports
 def entrypoint():
     # Archetype-appropriate implementation
     # Set numpy.random.seed(42) if using randomness
