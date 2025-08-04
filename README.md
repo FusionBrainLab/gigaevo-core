@@ -35,6 +35,12 @@ export OPENROUTER_API_KEY=your_openrouter_api_key_here
 
 ### Basic Usage
 
+First we need to launch redis-server as a separate process.
+
+```bash
+redis-server
+```
+
 ```bash
 # Run evolution on the hexagon packing problem
 python run.py --problem-dir problems/hexagon_pack --min-fitness -7 --max-fitness -3.9
