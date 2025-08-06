@@ -35,7 +35,7 @@ class RunPythonCode(Stage):
         function_name: str = "run_code",
         python_path: Optional[List[Path]] = None,
         input_obj: Optional[Any] = None,
-        code: str = None,
+        code: Optional[str] = None,
         enable_sandboxing: bool = False,
         max_output_size: int = 1024 * 1024 * 64,
         **kwargs,
