@@ -35,6 +35,7 @@ class RunPythonCode(Stage):
         function_name: str = "run_code",
         python_path: Optional[List[Path]] = None,
         input_obj: Optional[Any] = None,
+        code: Optional[str] = None,
         enable_sandboxing: bool = False,
         max_output_size: int = 1024 * 1024 * 64,
         **kwargs,
@@ -45,6 +46,7 @@ class RunPythonCode(Stage):
         self.input_obj = input_obj
         self.enable_sandboxing = enable_sandboxing
         self.max_output_size = max_output_size
+        self.code = code
 
     async def _execute_stage(
         self, program: Program, started_at: datetime
@@ -82,8 +84,9 @@ class RunPythonCode(Stage):
 
         try:
             # Execute code
+            input_code = self.code if self.code is not None else self._get_code(program)
             exec_code = construct_exec_code(
-                user_code=dedent_code(self._get_code(program)),
+                user_code=dedent_code(input_code),
                 function_name=self.function_name,
                 input_b64=input_b64,
                 input_file_path=input_file_path,
