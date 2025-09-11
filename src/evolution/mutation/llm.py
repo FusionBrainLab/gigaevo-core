@@ -286,10 +286,29 @@ class LLMMutationOperator(MutationOperator):
         )
 
     def _extract_code_block(self, text: str) -> str:
-        # Match ```python ... ``` or just ``` ... ```
-        pattern = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
-        match = pattern.search(text)
-        return match.group(1).strip() if match else text.strip()
+        """Extract the outer fenced code block, ignoring inner backticks.
+
+        This method treats only fences that start at the beginning of a line as
+        valid open/close markers. This avoids prematurely closing when triple
+        backticks appear inside the code (e.g., within Python docstrings).
+        """
+        # Find the first opening fence at start-of-line: ` or ```python
+        open_match = re.search(r"(?m)^```(?:[a-zA-Z0-9_+\-]+)?\s*$", text)
+        if not open_match:
+            return text.strip()
+
+        # Search for the closing fence at start-of-line after the opener
+        after_open = text[open_match.end():]
+        close_match = re.search(r"(?m)^```\s*$", after_open)
+        if not close_match:
+            # If no proper closing fence, fall back to returning the whole text
+            return text.strip()
+
+        code_block = after_open[: close_match.start()]
+        # Trim a single leading newline if present and trailing whitespace
+        if code_block.startswith("\n"):
+            code_block = code_block[1:]
+        return code_block.rstrip()
 
     def _apply_diff_and_extract(
         self, original_code: str, response_text: str
