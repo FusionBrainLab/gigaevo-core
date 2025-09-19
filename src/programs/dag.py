@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
+from collections import defaultdict
+import networkx as nx
 
 from loguru import logger
 
@@ -10,7 +12,6 @@ from src.programs.program import (
     ProgramStageResult,
     StageState,
 )
-from src.programs.program_state import ProgramState
 from src.programs.stages.base import Stage
 from src.programs.state_manager import ProgramStateManager
 from src.programs.utils import format_error_for_llm
@@ -23,17 +24,6 @@ FINAL_STATES = {
 }
 
 
-def all_stages_finalized(program: Program, all_stage_names: Set[str]) -> bool:
-    for stage in all_stage_names:
-        res = program.stage_results.get(stage)
-        if res is None or res.status not in FINAL_STATES:
-            logger.debug(
-                f"[DAG] Stage '{stage}' not finalized (status={res.status if res else 'missing'})"
-            )
-            return False
-    return True
-
-
 class DAG:
     def __init__(
         self,
@@ -41,7 +31,6 @@ class DAG:
         edges: Dict[str, List[str]],
         state_manager: ProgramStateManager,
         *,
-        entry_points: Optional[List[str]] = None,
         execution_order_deps: Optional[
             Dict[str, List[ExecutionOrderDependency]]
         ] = None,
@@ -51,13 +40,63 @@ class DAG:
         self.nodes = nodes
         self.edges = edges
         self.state_manager = state_manager
-        self.entry_points = entry_points or list(nodes.keys())
         self.dag_timeout = dag_timeout
+        self._stage_names: Set[str] = set(self.nodes.keys())
         self.automata = DAGAutomata()
+        # Validate configuration early (nodes/edges/entry points/exec deps/types)
+        self._validate_graph_integrity(execution_order_deps or {})
+        # Build transition rules
         self._setup_automata(execution_order_deps or {})
-        self._validate_no_cycles()
+        self._validate_acyclic_graph()
         self._validate_dependencies()
         self._stage_sema = asyncio.Semaphore(max(1, max_parallel_stages))
+
+    def _validate_graph_integrity(
+        self, execution_order_deps: Dict[str, List[ExecutionOrderDependency]]
+    ) -> None:
+        # Validate node types
+        bad_nodes = [name for name, obj in self.nodes.items() if not isinstance(obj, Stage)]
+        if bad_nodes:
+            raise ValueError(
+                f"Non-Stage objects registered as nodes: {', '.join(sorted(bad_nodes))}"
+            )
+
+        stage_names = self._stage_names
+
+        # Validate edges sources and destinations
+        unknown_sources = [src for src in self.edges.keys() if src not in stage_names]
+        if unknown_sources:
+            raise ValueError(
+                f"Edges contain unknown source stage(s): {', '.join(sorted(set(unknown_sources)))}"
+            )
+        unknown_dests = [dst for dsts in self.edges.values() for dst in dsts if dst not in stage_names]
+        if unknown_dests:
+            raise ValueError(
+                f"Edges reference unknown destination stage(s): {', '.join(sorted(set(unknown_dests)))}"
+            )
+
+        # Validate execution order dependencies
+        if execution_order_deps:
+            unknown_exec_keys = [k for k in execution_order_deps.keys() if k not in stage_names]
+            if unknown_exec_keys:
+                raise ValueError(
+                    f"Execution-order deps contain unknown target stage(s): {', '.join(sorted(set(unknown_exec_keys)))}"
+                )
+            unknown_exec_targets = [
+                dep.stage_name
+                for deps in execution_order_deps.values()
+                for dep in deps
+                if dep.stage_name not in stage_names
+            ]
+            if unknown_exec_targets:
+                raise ValueError(
+                    f"Execution-order deps reference unknown stage(s): {', '.join(sorted(set(unknown_exec_targets)))}"
+                )
+
+        # Sanity check timeouts and parallelism
+        if self.dag_timeout is not None and self.dag_timeout <= 0:
+            raise ValueError("dag_timeout must be positive or None")
+        # max_parallel_stages validated in __init__ when creating semaphore
 
     def _setup_automata(
         self, execution_order_deps: Dict[str, List[ExecutionOrderDependency]]
@@ -70,27 +109,54 @@ class DAG:
                 self.automata.add_execution_order_dependency(stage_name, dep)
 
     def _validate_dependencies(self) -> None:
-        errors = self.automata.validate_dependencies(set(self.nodes.keys()))
+        errors = self.automata.validate_dependencies(self._stage_names)
+        # Ensure all transition rule targets exist among nodes
+        invalid_rule_targets = [
+            stage_name
+            for stage_name in self.automata.transition_rules.keys()
+            if stage_name not in self.nodes
+        ]
+        if invalid_rule_targets:
+            errors.append(
+                "Transition rules defined for non-existent stage(s): "
+                + ", ".join(sorted(invalid_rule_targets))
+            )
         if errors:
             raise ValueError(f"Invalid dependencies found: {'; '.join(errors)}")
 
     async def run(
         self, program: Program, timeout: Optional[float] = None
     ) -> None:
+        """Run the DAG for a given program, respecting an optional timeout.
+
+        Raises asyncio.TimeoutError to let the caller decide lifecycle updates.
+        """
         try:
             await asyncio.wait_for(
                 self._run_internal(program), timeout=timeout or self.dag_timeout
             )
         except asyncio.TimeoutError:
             logger.error(f"[DAG] DAG run for program {program.id} timed out.")
-            await self.state_manager.set_program_state(
-                program, ProgramState.DAG_PROCESSING_COMPLETED
-            )
+            raise
 
     async def _run_internal(self, program: Program) -> None:
+        """Main scheduling loop: computes ready stages, launches tasks, and collects results."""
         logger.info(f"[DAG] Starting DAG run for program {program.id}")
-        ready, running = set(self.entry_points), set()
+        running = set()
         done, skipped = set(program.stage_results.keys()), set()
+
+        def _compute_done_skipped() -> None:
+            nonlocal done, skipped
+            done = {
+                name
+                for name, result in program.stage_results.items()
+                if result.status in FINAL_STATES
+            }
+            skipped = {
+                name
+                for name, result in program.stage_results.items()
+                if result.status == StageState.SKIPPED
+            }
 
         while True:
             try:
@@ -103,25 +169,17 @@ class DAG:
                 )
 
             # Refresh done/skipped state
-            done = {
-                name
-                for name, result in program.stage_results.items()
-                if result.status in FINAL_STATES
-            }
-            skipped = {
-                name
-                for name, result in program.stage_results.items()
-                if result.status == StageState.SKIPPED
-            }
+            _compute_done_skipped()
 
-            # Compute ready and to_skip *before launching*
+            # Compute ready and to_skip
             ready = self.automata.get_ready_stages(
-                program, set(self.nodes.keys()), done, running, skipped
+                program, self._stage_names, done, running, skipped
             )
             to_skip = self.automata.get_stages_to_skip(
-                program, set(self.nodes.keys()), done, running, skipped
+                program, self._stage_names, done, running, skipped
             )
 
+            progress_made = False
             for stage_name in to_skip:
                 if stage_name not in program.stage_results:
                     skip_result = self.automata.create_skip_result(
@@ -134,24 +192,34 @@ class DAG:
                     logger.warning(
                         f"[DAG] Program {program.id}: Stage '{stage_name}' skipped due to failed dependency."
                     )
+                    progress_made = True
+
+            # Recompute ready after applying skips, as they can unlock stages
+            if to_skip:
+                _compute_done_skipped()
+                ready = self.automata.get_ready_stages(
+                    program, self._stage_names, done, running, skipped
+                )
 
             tasks = await self._launch_ready_stages(program, ready)
-            running.update(ready)
-            ready.clear()
+            if tasks:
+                running.update(ready)
+                progress_made = progress_made or bool(ready)
 
             if tasks:
-                results = await self._collect_results(
+                await self._collect_results(
                     program, tasks, done, running
                 )
 
-            if (
-                not ready
-                and not running
-                and all_stages_finalized(program, set(self.nodes.keys()))
-            ):
-                # Fallback: force-skip unresolved
-                for stage_name in self.nodes:
-                    if stage_name not in program.stage_results:
+            if not ready and not running:
+                # If nothing can progress and no progress was made this iteration, force-skip unresolved
+                unresolved = [
+                    stage_name
+                    for stage_name in self.nodes
+                    if stage_name not in program.stage_results
+                ]
+                if unresolved and not progress_made:
+                    for stage_name in unresolved:
                         logger.warning(
                             f"[DAG] Program {program.id}: Forcing skip of unresolved stage '{stage_name}'"
                         )
@@ -177,9 +245,7 @@ class DAG:
             analysis = self._analyze_completion_failures(program)
             logger.info(f"[DAG] Failure Analysis: {analysis}")
 
-        await self.state_manager.set_program_state(
-            program, ProgramState.DAG_PROCESSING_COMPLETED
-        )
+        # Do not change Program.state here; caller (scheduler) is responsible
 
     async def _launch_ready_stages(
         self, program: Program, ready: Set[str]
@@ -192,9 +258,9 @@ class DAG:
             )
             logger.info(f"[DAG] Program {program.id}: Stage '{name}' started.")
 
-            async def _run_stage(stage_name=name):
+            async def _run_stage(stage_name=name, prog=program):
                 async with self._stage_sema:
-                    return await self.nodes[stage_name].run(program)
+                    return await self.nodes[stage_name].run(prog)
 
             tasks[name] = asyncio.create_task(
                 _run_stage(), name=f"stage-{name[:8]}"
@@ -307,30 +373,46 @@ class DAG:
             else "No specific failure patterns identified"
         )
 
-    def get_stage_dependencies(self, stage_name: str) -> Dict[str, any]:
-        return self.automata.get_stage_dependencies(stage_name)
+    def _validate_acyclic_graph(self) -> None:
+        """Validate there are no cycles in the combined graph (regular + exec-order deps)."""
+        G = self._build_combined_graph()
+        if not nx.is_directed_acyclic_graph(G):
+            try:
+                cycle_edges = nx.find_cycle(G, orientation="original")
+                cycle_nodes = [cycle_edges[0][0]] + [v for (_, v, *_) in cycle_edges]
+                cycle_desc = " -> ".join(cycle_nodes)
+            except Exception:
+                cycle_desc = "(could not extract cycle nodes)"
+            raise ValueError(
+                f"Cycle detected in DAG (including exec-order deps): {cycle_desc}"
+            )
 
-    def _validate_no_cycles(self):
-        visited, stack = set(), set()
-
-        def visit(node: str):
-            if node in stack:
-                raise ValueError(f"Cycle detected in DAG at stage: {node}")
-            if node in visited:
-                return
-            visited.add(node)
-            stack.add(node)
-            for neighbor in self.edges.get(node, []):
-                visit(neighbor)
-            stack.remove(node)
-
-        for node in self.nodes:
-            visit(node)
-
-    def to_dot(self) -> str:
-        lines = ["digraph DAG {"]
+    def _build_combined_graph(self) -> nx.DiGraph:
+        """Build a combined NetworkX DiGraph of regular and exec-order dependencies."""
+        G = nx.DiGraph()
+        G.add_nodes_from(self.nodes.keys())
         for src, dsts in self.edges.items():
             for dst in dsts:
-                lines.append(f'  "{src}" -> "{dst}";')
-        lines.append("}")
-        return "\n".join(lines)
+                G.add_edge(src, dst)
+        for stage_name, rule in self.automata.transition_rules.items():
+            for dep in rule.execution_order_dependencies:
+                G.add_edge(dep.stage_name, stage_name)
+        return G
+
+    def _build_adjacency(self) -> Dict[str, List[str]]:
+        """Return adjacency list for combined graph using defaultdict(list)."""
+        adjacency = defaultdict(list)
+        for name in self.nodes.keys():
+            _ = adjacency[name]
+        for src, dsts in self.edges.items():
+            adjacency[src].extend(dsts)
+        for stage_name, rule in self.automata.transition_rules.items():
+            for dep in rule.execution_order_dependencies:
+                adjacency[dep.stage_name].append(stage_name)
+        return dict(adjacency)
+
+    def get_topological_order(self) -> List[str]:
+        """Return a topological order of the combined graph for debugging/metrics."""
+        G = self._build_combined_graph()
+        return list(nx.topological_sort(G))
+

@@ -26,9 +26,6 @@ class DAGSpec(BaseModel):
     edges: Dict[str, List[str]] = Field(
         ..., description="DAG edges mapping source to destinations"
     )
-    entry_points: Optional[List[str]] = Field(
-        None, description="Entry point stage names"
-    )
     exec_order_deps: Optional[Dict[str, List[ExecutionOrderDependency]]] = (
         Field(None, description="Execution order dependencies by stage name")
     )
@@ -129,7 +126,7 @@ class DAGSpec(BaseModel):
         colors = []
         node_labels = {}
 
-        entry_points_set = set(self.entry_points or [])
+        entry_points_set: set[str] = set()
         exec_order_stages = set()
         if self.exec_order_deps:
             for deps in self.exec_order_deps.values():
@@ -362,11 +359,9 @@ class DAGSpec(BaseModel):
         """
         # Calculate layer for each node based on longest path from entry points
         layers = {}
-        entry_points = set(self.entry_points or [])
+        entry_points: set[str] = set()
 
-        # Initialize layers for entry points
-        for node in entry_points:
-            layers[node] = 0
+        # Without entry points, initialize layers from predecessors only
 
         # Calculate layer for each node
         for node in topo_order:
@@ -450,7 +445,7 @@ class DAGSpec(BaseModel):
             for dest in destinations:
                 G.add_edge(source, dest)
 
-        entry_points_set = set(self.entry_points or [])
+        entry_points_set: set[str] = set()
         exec_order_stages = set()
         exec_order_details = {}
 
@@ -469,7 +464,7 @@ class DAGSpec(BaseModel):
         return {
             "total_nodes": len(G.nodes()),
             "total_edges": len(G.edges()),
-            "entry_points": list(entry_points_set),
+            "entry_points": [],
             "execution_order_dependencies": list(exec_order_stages),
             "execution_order_details": exec_order_details,
             "is_dag": nx.is_directed_acyclic_graph(G),

@@ -42,7 +42,6 @@ class DagFactory:
             nodes=new_nodes,
             edges=self._spec.edges,
             state_manager=state_manager,
-            entry_points=self._spec.entry_points or list(new_nodes.keys()),
             execution_order_deps=self._spec.exec_order_deps,
             max_parallel_stages=self._spec.max_parallel_stages,
             dag_timeout=self._spec.dag_timeout,

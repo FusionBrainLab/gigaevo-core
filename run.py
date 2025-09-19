@@ -558,7 +558,6 @@ def create_dag_stages(
                 metadata_key="insights",
                 excluded_error_stages=[
                     "FactoryMetricUpdate",
-                    "ComplexityMetricUpdate",
                 ],
             ),
             timeout=600.0,
@@ -614,8 +613,6 @@ def create_dag_edges(add_context: bool = False) -> Dict[str, List[str]]:
         "LLMInsights": [],  # Terminal stage
         "LineageInsights": [],  # Terminal stage
         "ValidationMetricUpdate": [],  # Independent terminal stage
-        "ComplexityMetricUpdate": [],  # Independent terminal stage - NO dependency on ValidationMetricUpdate
-        "FutureLineageInsights": [],  # Terminal stage
     }
     if add_context:
         # first create code, then everything else
@@ -799,7 +796,6 @@ async def run_evolution_experiment(args: argparse.Namespace):
         )
         dag_edges = create_dag_edges(args.add_context)
         execution_order_deps = create_execution_order_deps()
-        entry_points = ["ValidateCompiles"]
 
         # Create evolution strategy
         logger.info("Creating evolution strategy...")
@@ -872,7 +868,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             dag_spec=DAGSpec(
                 nodes=dag_stages,
                 edges=dag_edges,
-                entry_points=entry_points,
+                
                 exec_order_deps=execution_order_deps,
                 dag_timeout=1800,
                 max_parallel_stages=8,  
