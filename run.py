@@ -15,11 +15,13 @@ Usage:
 
 import argparse
 import asyncio
+import json
 from datetime import datetime, timezone
 import os
 from pathlib import Path
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+import yaml
 
 # Main imports
 from loguru import logger
@@ -58,7 +60,9 @@ from src.programs.stages.insights_lineage import (
     GenerateLineageInsightsStage,
     LineageInsightsConfig,
 )
-from src.programs.stages.metrics import FactoryMetricsStage
+from src.programs.metrics.context import MetricsContext
+from src.programs.metrics.formatter import MetricsFormatter
+from src.programs.stages.metrics import EnsureMetricsStage
 from src.programs.stages.validation import ValidateCodeStage
 from src.runner.dag_spec import DAGSpec
 from src.runner.manager import RunnerConfig, RunnerManager
@@ -137,20 +141,6 @@ Examples:
         type=int,
         default=None,
         help="Initial population size (default: auto-determined)",
-    )
-
-    # TODO: Will be replaced with config files, command line arguments are temporary
-    evolution_group.add_argument(
-        "--min-fitness",
-        type=float,
-        required=True,
-        help="Minimum fitness value for program to be considered",
-    )
-    evolution_group.add_argument(
-        "--max-fitness",
-        type=float,
-        required=True,
-        help="Maximum fitness value for program to be considered",
     )
 
     # Redis selection configuration
@@ -350,6 +340,7 @@ async def select_top_programs_from_redis(
     source_redis_db: int,
     problem_dir: Path,
     top_n: int = 50,
+    metric_key: str = "fitness",
 ) -> List[Program]:
     """
     Select top programs by fitness from an existing Redis database.
@@ -392,10 +383,10 @@ async def select_top_programs_from_redis(
             logger.warning("⚠️ No programs found in source database")
             return []
 
-        # Filter programs that have fitness metrics
+        # Filter programs that have the selected metric
         programs_with_fitness = []
         for program in all_programs:
-            if program.metrics and "fitness" in program.metrics:
+            if program.metrics and metric_key in program.metrics:
                 programs_with_fitness.append(program)
 
         logger.info(
@@ -405,9 +396,9 @@ async def select_top_programs_from_redis(
         if not programs_with_fitness:
             logger.warning("⚠️ No programs with fitness metrics found")
             return []
-
+        sentinel = -float("inf") if metrics_context.is_higher_better(metric_key) else float("inf")
         programs_with_fitness.sort(
-            key=lambda p: p.metrics.get("fitness", -float("inf")), reverse=True
+            key=lambda p: p.metrics.get(metric_key, sentinel), reverse=True if metrics_context.is_higher_better(metric_key) else False
         )
         selected_programs = programs_with_fitness[:top_n]
 
@@ -432,7 +423,7 @@ async def select_top_programs_from_redis(
             await redis_storage.add(program_to_add)
             added_programs.append(program_to_add)
 
-            fitness = program.metrics.get("fitness", "N/A")
+            fitness = program.metrics.get(metric_key, "N/A")
             logger.info(
                 f"  ✅ Added program {i+1}/{len(selected_programs)}: fitness={fitness}"
             )
@@ -453,20 +444,26 @@ async def select_top_programs_from_redis(
             logger.warning(f"⚠️ Error closing source storage: {e}")
 
 
-def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
-    """
-    One island with fitness and validity metrics. Good enough for now.
-    """
+def create_behavior_spaces(metrics_context: MetricsContext) -> List[BehaviorSpace]:
+    """Create behavior spaces using bounds from MetricsContext."""
 
-    # 🏝️ 1. Fitness–Validity Island
+    primary_key = metrics_context.get_primary_spec().key
+    primary_bounds = metrics_context.get_bounds(primary_key)
+    valid_bounds = metrics_context.get_bounds("is_valid")
+
+    if primary_bounds is None:
+        raise ValueError(f"Primary metric '{primary_key}' must define lower_bound and upper_bound in metrics.yaml")
+    if valid_bounds is None:
+        raise ValueError("'is_valid' must define lower_bound and upper_bound in metrics.yaml")
+
     fitness_validity_space = BehaviorSpace(
         feature_bounds={
-            "fitness": (args.min_fitness, args.max_fitness),
-            "is_valid": (-0.01, 1.01),
+            primary_key: primary_bounds,
+            "is_valid": valid_bounds,
         },
-        resolution={"fitness": 150, "is_valid": 2},
+        resolution={primary_key: 150, "is_valid": 2},
         binning_types={
-            "fitness": BinningType.LINEAR,
+            primary_key: BinningType.LINEAR,
             "is_valid": BinningType.LINEAR,
         },
     )
@@ -477,18 +474,33 @@ def create_behavior_spaces(args: argparse.Namespace) -> List[BehaviorSpace]:
 
 
 def create_island_configs(
-    behavior_spaces: List[BehaviorSpace],
+    behavior_spaces: List[BehaviorSpace], metrics_context: MetricsContext
 ) -> List[IslandConfig]:
     """Create 1 island configurations with improved resolution balance and migration strategies."""
 
+    primary_key = metrics_context.get_primary_spec().key
     configs = IslandConfig(
         island_id="fitness_island",
         max_size=75,
         behavior_space=behavior_spaces[0],
-        archive_selector=SumArchiveSelector(["fitness"]),
-        elite_selector=FitnessProportionalEliteSelector("fitness"),
-        archive_remover=FitnessArchiveRemover("fitness"),
-        migrant_selector=TopFitnessMigrantSelector("fitness"),
+        archive_selector=SumArchiveSelector(
+            [primary_key],
+            fitness_key_higher_is_better={
+                primary_key: metrics_context.is_higher_better(primary_key)
+            },
+        ),
+        elite_selector=FitnessProportionalEliteSelector(
+            primary_key,
+            metrics_context.is_higher_better(primary_key),
+        ),
+        archive_remover=FitnessArchiveRemover(
+            primary_key,
+            metrics_context.is_higher_better(primary_key),
+        ),
+        migrant_selector=TopFitnessMigrantSelector(
+            primary_key,
+            metrics_context.is_higher_better(primary_key),
+        ),
         migration_rate=0.0,
     )
 
@@ -502,6 +514,8 @@ def create_dag_stages(
     redis_storage: RedisProgramStorage,
     task_description: str,
     problem_dir: Path,
+    metrics_context: MetricsContext,
+    metrics_formatter: Optional[MetricsFormatter] = None,
     add_context: bool = False,
 ) -> Dict[str, Stage]:
     """Create optimized DAG stages with stage-specific timeouts and resource allocation."""
@@ -544,6 +558,8 @@ def create_dag_stages(
         timeout=60.0,
     )
 
+    # MetricsContext is provided by caller
+
     def create_insights_stage():
         return GenerateLLMInsightsStage(
             config=InsightsConfig(
@@ -551,10 +567,8 @@ def create_dag_stages(
                 evolutionary_task_description=task_description,
                 max_insights=8,
                 output_format="text",
-                metrics_to_display={
-                    "fitness": "Main objective, higher is better",
-                    "is_valid": "Whether the program is valid 1 if valid, 0 if invalid",
-                },
+                metrics_context=metrics_context,
+                metrics_formatter=metrics_formatter,
                 metadata_key="insights",
                 excluded_error_stages=[
                     "FactoryMetricUpdate",
@@ -567,14 +581,10 @@ def create_dag_stages(
         return GenerateLineageInsightsStage(
             config=LineageInsightsConfig(
                 llm_wrapper=llm_wrapper["lineage"],
-                metric_key="fitness",
-                metric_description="main objective, higher is better",
-                higher_is_better=True,
+                metrics_context=metrics_context,
+                metrics_formatter=metrics_formatter,
                 parent_selection_strategy="best_fitness",
-                fitness_selector_metric="fitness",
-                fitness_selector_higher_is_better=True,
                 task_description=task_description,
-                additional_metrics={},
             ),
             storage=redis_storage,
             timeout=600,
@@ -591,11 +601,11 @@ def create_dag_stages(
             "is_valid": 0,
         }
 
-    stages["ValidationMetricUpdate"] = lambda: FactoryMetricsStage(
+    stages["ValidationMetricUpdate"] = lambda: EnsureMetricsStage(
         stage_name="ValidationMetricUpdate",
         stage_to_extract_metrics="RunValidation",
         metrics_factory=validation_metrics_factory,
-        required_keys=["fitness", "is_valid"],
+        metrics_context=metrics_context,
         timeout=15.0,
     )
 
@@ -612,7 +622,7 @@ def create_dag_edges(add_context: bool = False) -> Dict[str, List[str]]:
         "RunValidation": [],
         "LLMInsights": [],  # Terminal stage
         "LineageInsights": [],  # Terminal stage
-        "ValidationMetricUpdate": [],  # Independent terminal stage
+        "ValidationMetricUpdate": [],
     }
     if add_context:
         # first create code, then everything else
@@ -648,10 +658,11 @@ def create_execution_order_deps() -> Dict[str, List[ExecutionOrderDependency]]:
 async def create_evolution_strategy(
     redis_storage: RedisProgramStorage,
     args: argparse.Namespace,
+    metrics_context: MetricsContext,
 ) -> MapElitesMultiIsland:
 
-    behavior_spaces = create_behavior_spaces(args)
-    island_configs = create_island_configs(behavior_spaces)
+    behavior_spaces = create_behavior_spaces(metrics_context)
+    island_configs = create_island_configs(behavior_spaces, metrics_context)
 
     strategy = MapElitesMultiIsland(
         island_configs=island_configs,
@@ -706,7 +717,7 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
             configs=[
                 LLMConfig(
                     **params,
-                    api_endpoint="http://localhost:8999/v1",
+                    api_endpoint="http://localhost:8777/v1",
                 )
             ],
         )
@@ -716,6 +727,39 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
         for stage, params in settings_per_stage.items()
     }
     return res
+
+
+def load_metrics_context_for_problem(problem_dir: Path) -> MetricsContext:
+    """Load MetricsContext from problems/*/metrics.yaml (mandatory)."""
+    metrics_path = problem_dir / "metrics.yaml"
+    if not metrics_path.exists():
+        raise FileNotFoundError(f"Missing metrics.yaml in {problem_dir}")
+    try:
+        data = yaml.safe_load(metrics_path.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("metrics.yaml must be a mapping")
+        specs = data.get("specs") or {k: v for k, v in data.items() if k != "display_order"}
+        display_order = data.get("display_order")
+        ctx = MetricsContext.from_dict(specs=specs, display_order=display_order)
+        # Strict validation beyond pydantic
+        # 1) Exactly one primary (already enforced by model) — we add bounds checks
+        primary = ctx.get_primary_spec()
+        pb = ctx.get_bounds(primary.key)
+        if pb is None:
+            raise ValueError(
+                f"metrics.yaml error in {metrics_path}: Primary metric '{primary.key}' must define lower_bound and upper_bound"
+            )
+        # 2) is_valid exists and has [0,1] bounds
+        if "is_valid" not in ctx.specs:
+            raise ValueError(f"metrics.yaml error in {metrics_path}: Missing required 'is_valid' metric spec")
+        vb = ctx.get_bounds("is_valid")
+        if vb is None or vb != (0.0, 1.0):
+            raise ValueError(
+                f"metrics.yaml error in {metrics_path}: 'is_valid' must have lower_bound=0.0 and upper_bound=1.0"
+            )
+        return ctx
+    except Exception as e:
+        raise ValueError(f"Failed to parse metrics.yaml: {e}") from e
 
 
 async def run_evolution_experiment(args: argparse.Namespace):
@@ -759,6 +803,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
         await redis_conn.flushdb()
         logger.info(f"✓ Redis database {args.redis_db} cleared")
 
+        # Load metrics context first (used for selection and configuration)
+        metrics_context = load_metrics_context_for_problem(problem_dir)
+
         # Initialize new DB with initial programs
         if args.use_redis_selection:
             logger.info(
@@ -771,6 +818,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 source_redis_db=args.source_redis_db,
                 problem_dir=problem_dir,
                 top_n=args.top_n,
+                metric_key=metrics_context.get_primary_spec().key,
             )
         else:
             logger.info("🌱 Initializing database with initial programs...")
@@ -787,11 +835,15 @@ async def run_evolution_experiment(args: argparse.Namespace):
         llm_wrapper = await setup_llm_wrapper()
 
         logger.info("Creating DAG pipeline...")
+        metrics_formatter = MetricsFormatter(metrics_context, use_range_normalization=False)
+
         dag_stages = create_dag_stages(
             llm_wrapper,
             redis_storage,
             task_description,
             problem_dir,
+            metrics_context,
+            metrics_formatter,
             args.add_context,
         )
         dag_edges = create_dag_edges(args.add_context)
@@ -800,7 +852,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
         # Create evolution strategy
         logger.info("Creating evolution strategy...")
         evolution_strategy = await create_evolution_strategy(
-            redis_storage, args
+            redis_storage, args, metrics_context
         )
 
         # Create LLM mutation operator
@@ -824,10 +876,8 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 problem_dir, "mutation_user_prompt.txt"
             )], # optionally use a list of templates with weights to be randomly selected
             user_prompt_template_weights_factory=lambda x: [1.0],
-            metric_descriptions={
-                "fitness": "Main objective, higher is better",
-                "is_valid": "Whether the program is valid 1 if valid, 0 if invalid",
-            }
+            metrics_context=metrics_context,
+            metrics_formatter=metrics_formatter,
         )
         required_behavior_keys = set()
         for island in evolution_strategy.islands.values():
@@ -844,7 +894,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             max_mutations_per_generation=8,  # INCREASED: More mutations per generation for faster exploration
             max_generations=args.max_generations,  # Pass max_generations from command line
             required_behavior_keys=required_behavior_keys,
-            parent_selector=AllCombinationsParentSelector(num_parents=1),
+            parent_selector=AllCombinationsParentSelector(num_parents=2),
         )
 
         evolution_engine = EvolutionEngine(

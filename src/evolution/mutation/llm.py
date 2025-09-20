@@ -11,7 +11,7 @@ import json
 import os
 import re
 import random
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 import diffpatch
 from loguru import logger
@@ -20,23 +20,9 @@ from src.evolution.mutation.base import MutationOperator, MutationSpec
 from src.exceptions import MutationError
 from src.llm.wrapper import LLMInterface
 from src.programs.program import Program
+from src.programs.metrics.context import MetricsContext
+from src.programs.metrics.formatter import MetricsFormatter
 
-
-def format_metrics(
-    metrics: dict[str, float], metric_descriptions: dict[str, str]
-) -> str:
-    """Convert a metrics dictionary into a human-readable bulleted string.
-
-    If *metric_descriptions* is provided, each metric key will be annotated with a
-    short textual description.  Missing descriptions are replaced with the
-    placeholder "No description available".
-    """
-    assert set(metric_descriptions.keys()).issubset(
-        set(metrics.keys())
-    ), "metric_descriptions is not a subset of metrics"
-    return "\n".join(
-        f"- {k}: {metrics[k]:.5f} ({v})" for k, v in metric_descriptions.items()
-    )
 
 
 # Create logs directory if it doesn't exist
@@ -150,7 +136,7 @@ class LLMMutationOperator(MutationOperator):
         self,
         *,
         llm_wrapper: LLMInterface,
-        metric_descriptions: dict[str, str],
+        metrics_context: MetricsContext,
         mutation_mode: str = "rewrite",
         fallback_to_rewrite: bool = True,
         fetch_insights_fn: Callable[[Program], str] = lambda x: x.metadata.get(
@@ -162,26 +148,30 @@ class LLMMutationOperator(MutationOperator):
             "lineage_insights", "No lineage insights available."
         ),
         user_prompt_templates: list[str],
-        user_prompt_template_weights_factory: Callable[[List[Program]], list[float]],
+        user_prompt_template_weights_factory: Callable[[list[Program]], list[float]],
         system_prompt_template: str,
         task_definition: str = "The goal is to numerically approximate solutions to complex mathematical problems.",
         task_hints: str = "Prioritize numerical stability, convergence speed, and algorithmic originality.",
+        metrics_formatter: Optional[MetricsFormatter] = None,
     ):
         self.llm_wrapper = llm_wrapper
         self.mutation_mode = mutation_mode
         self.fallback_to_rewrite = fallback_to_rewrite
         self.fetch_insights_fn = fetch_insights_fn
         self.fetch_lineage_insights_fn = fetch_lineage_insights_fn
-        self.metric_descriptions = metric_descriptions
+        self.metrics_context = metrics_context
+        self.metrics_formatter = metrics_formatter or MetricsFormatter(metrics_context)
+        metrics_description = self.metrics_formatter.format_metrics_description()
         self.system_prompt = system_prompt_template.format(
             task_definition=task_definition,
             task_hints=task_hints,
+            metrics_description=metrics_description,
         )
         self.user_prompt_templates = user_prompt_templates
         self.user_prompt_template_weights_factory = user_prompt_template_weights_factory
 
     async def mutate_single(
-        self, selected_parents: List[Program]
+        self, selected_parents: list[Program]
     ) -> Optional[MutationSpec]:
         """Generate a single mutation from the selected parents.
 
@@ -260,7 +250,7 @@ class LLMMutationOperator(MutationOperator):
             log_mutation_summary(failure_label, 0, 0, 0, False)
             raise MutationError(f"LLM-based mutation failed: {e}") from e
 
-    def _build_prompt(self, parents: List[Program]) -> str:
+    def _build_prompt(self, parents: list[Program]) -> str:
         parent_blocks = []
         for i, p in enumerate(parents):
             block = f"""=== Parent {i+1} ===
@@ -269,7 +259,7 @@ class LLMMutationOperator(MutationOperator):
 ```
 
 === Metrics ===
-{format_metrics(p.metrics, self.metric_descriptions)}
+{self.metrics_formatter.format_metrics_block(p.metrics)}
 
 === Insights ===
 {self.fetch_insights_fn(p)}

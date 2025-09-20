@@ -31,13 +31,13 @@ MIN_METRIC_VALUE = -1e9
 class Lineage(BaseModel):
     """Represents the evolutionary lineage of a program."""
 
-    parents: List[str] = Field(
+    parents: list[str] = Field(
         ..., min_length=1, description="List of parent program IDs"
     )
-    mutation: Optional[str] = Field(
+    mutation: str | None = Field(
         None, description="Description of the mutation applied"
     )
-    generation: Optional[int] = Field(
+    generation: int | None = Field(
         None, ge=0, description="Generation number"
     )
 
@@ -59,20 +59,20 @@ class Program(BaseModel):
     )
     code: str = Field(..., min_length=1, description="The program code")
 
-    name: Optional[str] = Field(
+    name: str | None = Field(
         default=None,
         description="Optional human-readable label or experiment tag",
     )
 
-    stage_results: Dict[str, ProgramStageResult] = Field(
+    stage_results: dict[str, ProgramStageResult] = Field(
         default_factory=dict,
         description="Results of each processing stage",
     )
-    metrics: Dict[str, float] = Field(
+    metrics: dict[str, float] = Field(
         default_factory=dict, description="Performance metrics"
     )
 
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict, description="Additional metadata"
     )
 
@@ -84,7 +84,7 @@ class Program(BaseModel):
         description="Lifecycle state of the program",
     )
 
-    lineage: Optional[Lineage] = Field(
+    lineage: Lineage | None = Field(
         default=None, description="Lineage of the program"
     )
 
@@ -117,22 +117,23 @@ class Program(BaseModel):
 
     @field_validator("metrics")
     @classmethod
-    def validate_metrics(cls, v: Dict[str, float]) -> Dict[str, float]:
+    def validate_metrics(cls, v: dict[str, float]) -> dict[str, float]:
         """Validate metric values."""
+        out: dict[str, float] = {}
         for k, val in v.items():
             if not isinstance(k, str) or not k.strip():
                 raise ValueError("Metric key must be a non-empty string")
             if not isinstance(val, (int, float)):
                 raise ValueError(f"Metric value must be numeric: {k}={val}")
-
-            if isinstance(val, float) and not math.isfinite(val):
+            fval = float(val)
+            if not math.isfinite(fval):
                 raise ValueError(f"Metric '{k}' must be finite, but got {val}")
-
-            if not (MIN_METRIC_VALUE <= val <= MAX_METRIC_VALUE):
+            if not (MIN_METRIC_VALUE <= fval <= MAX_METRIC_VALUE):
                 raise ValueError(
                     f"Metric value out of reasonable range: {k}={val}"
                 )
-        return v
+            out[k] = fval
+        return out
 
     @model_validator(mode="after")  # type: ignore[arg-type]
     def validate_timestamps(self) -> "Program":
@@ -142,7 +143,7 @@ class Program(BaseModel):
         return self
 
     @field_serializer("metadata", when_used="json")
-    def serialize_metadata(self, value: Dict[str, Any]) -> str:
+    def serialize_metadata(self, value: dict[str, Any]) -> str:
         """Serialize metadata to a JSON string, ensuring safety."""
         return pickle_b64_serialize(value)
 
@@ -150,19 +151,20 @@ class Program(BaseModel):
         """Update the updated_at timestamp."""
         self.updated_at = datetime.now(timezone.utc)
 
-    def add_metric(self, name: str, value: float) -> None:
+    def add_metric(self, name: str, value: float | int) -> None:
         """Add or update a metric."""
-        self.metrics[name] = value
+        self.metrics[name] = float(value)
         self.update_timestamp()
 
-    def add_metrics(self, metrics: Dict[str, float]) -> None:
+    def add_metrics(self, metrics: dict[str, float | int]) -> None:
         """Add multiple metrics at once."""
-        self.metrics.update(metrics)
+        for k, v in metrics.items():
+            self.metrics[k] = float(v)
         self.update_timestamp()
 
     def get_metric(
-        self, name: str, default: Optional[float] = None
-    ) -> Optional[float]:
+        self, name: str, default: float | None = None
+    ) -> float | None:
         """Get a metric value by name."""
         return self.metrics.get(name, default)
 
@@ -171,7 +173,7 @@ class Program(BaseModel):
         self.metadata[key] = value
         self.update_timestamp()
 
-    def get_metadata(self, key: str) -> Optional[Any]:
+    def get_metadata(self, key: str) -> Any | None:
         """Get metadata for this program."""
         return self.metadata.get(key)
 
@@ -180,7 +182,7 @@ class Program(BaseModel):
         self.stage_results[stage] = result
         self.update_timestamp()
 
-    def get_stage_result(self, stage: str) -> Optional[ProgramStageResult]:
+    def get_stage_result(self, stage: str) -> ProgramStageResult | None:
         """Get the result for a specific stage."""
         return self.stage_results.get(stage)
 
@@ -189,7 +191,7 @@ class Program(BaseModel):
         result = self.stage_results.get(stage)
         return result.status if result else StageState.PENDING
 
-    def get_stage_error_summary(self, stage: str) -> Optional[str]:
+    def get_stage_error_summary(self, stage: str) -> str | None:
         """Get a formatted error summary for a failed stage that's LLM-parseable."""
         result = self.stage_results.get(stage)
         if not result or not result.is_failed():
@@ -224,12 +226,12 @@ class Program(BaseModel):
         """Get the time since last update in seconds."""
         return (datetime.now(timezone.utc) - self.updated_at).total_seconds()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert the program to a dictionary."""
         return self.model_dump(mode="json")
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Program":
+    def from_dict(cls, data: dict[str, Any]) -> "Program":
         """Create a Program from a dictionary."""
         data = dict(data)
         for key in ("metadata",):
@@ -246,10 +248,10 @@ class Program(BaseModel):
     @classmethod
     def create_child(
         cls,
-        parents: List["Program"],
+        parents: list["Program"],
         code: str,
-        mutation: Optional[str] = None,
-        name: Optional[str] = None,
+        mutation: str | None = None,
+        name: str | None = None,
     ) -> "Program":
         """Create a child program from parent programs."""
         if not parents:
@@ -286,7 +288,7 @@ class Program(BaseModel):
         )
 
     def copy_with_code(
-        self, code: str, mutation: Optional[str] = None
+        self, code: str, mutation: str | None = None
     ) -> "Program":
         """Create a copy of this program with new code."""
         return Program(
@@ -320,7 +322,7 @@ class Program(BaseModel):
         else:
             return f'  "{self.id}" [label="{label}"];'
 
-    def to_dot_edges(self) -> List[str]:
+    def to_dot_edges(self) -> list[str]:
         """Generate DOT edge representations."""
         if not self.lineage:
             return []
@@ -336,7 +338,7 @@ class Program(BaseModel):
         """Equality based on program ID."""
         return isinstance(other, Program) and self.id == other.id
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Get a summary of the program."""
         return {
             "id": self.id,
@@ -379,7 +381,7 @@ class Program(BaseModel):
             for result in self.stage_results.values()
         )
 
-    def get_completed_stages(self) -> List[str]:
+    def get_completed_stages(self) -> list[str]:
         """Get list of completed stages."""
         return [
             stage
@@ -387,7 +389,7 @@ class Program(BaseModel):
             if result.status == StageState.COMPLETED
         ]
 
-    def get_failed_stages(self) -> List[str]:
+    def get_failed_stages(self) -> list[str]:
         """Get list of failed stages."""
         return [
             stage
@@ -395,7 +397,7 @@ class Program(BaseModel):
             if result.status == StageState.FAILED
         ]
 
-    def get_pending_stages(self) -> List[str]:
+    def get_pending_stages(self) -> list[str]:
         """Get the names of all stages that are pending."""
         return [
             name
@@ -408,7 +410,7 @@ class Program(BaseModel):
         return f"program:{self.id}"
 
     @property
-    def generation(self) -> Optional[int]:
+    def generation(self) -> int | None:
         """Get the generation number."""
         return self.lineage.generation if self.lineage else None
 

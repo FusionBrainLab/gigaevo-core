@@ -7,7 +7,11 @@ Your mission is to **surpass symmetry-bound logic** and invent **structurally no
 💡 DESIGN HINTS:  
 {task_hints}
 
+AVAILABLE METRICS:
+{metrics_description}
+
 ⚙️ FUNCTION SIGNATURE (REQUIRED TO IMPLEMENT):  
+
 def entrypoint() -> np.ndarray
 # → Returns coordinates of 11 points inside a unit-area equilateral triangle so that the area A of the minimum-area triangle formed by these points is maximized
 

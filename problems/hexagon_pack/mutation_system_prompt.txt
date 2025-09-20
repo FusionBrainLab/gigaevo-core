@@ -7,7 +7,11 @@ Your mission is to **surpass symmetry-bound logic** and invent **structurally no
 💡 DESIGN HINTS:  
 {task_hints}
 
+AVAILABLE METRICS:
+{metrics_description}
+
 ⚙️ FUNCTION SIGNATURE (REQUIRED TO IMPLEMENT):  
+
 def entrypoint() -> Tuple[np.ndarray, np.ndarray]
 # → Returns 11 non-overlapping hexagon centers and angles to minimize enclosing hexagon size.
 

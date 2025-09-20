@@ -7,7 +7,11 @@ Your mission is to **transcend grid-based and symmetric layouts**, discovering *
 💡 DESIGN HINTS:  
 {task_hints}
 
+AVAILABLE METRICS:
+{metrics_description}
+
 ⚙️ FUNCTION SIGNATURE (REQUIRED):  
+
 def entrypoint(context: dict[str, np.ndarray]) -> np.ndarray
 # context is a dictionary containing
 # X_train (N, 8); y_train (N, 8)

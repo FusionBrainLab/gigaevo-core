@@ -1,6 +1,6 @@
 from datetime import datetime
 import json
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Optional, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
@@ -10,6 +10,8 @@ from src.llm.wrapper import LLMInterface
 from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
+from src.programs.metrics.context import MetricsContext
+from src.programs.metrics.formatter import MetricsFormatter
 
 DEFAULT_SYSTEM_PROMPT_TEMPLATE_JSON = """
 You are an expert in Python code analysis and evolutionary optimization.
@@ -112,11 +114,11 @@ Extract insights with concrete evidence from code/metrics/errors only. No specul
 class InsightsConfig(BaseModel):
     llm_wrapper: LLMInterface
     evolutionary_task_description: str
-    excluded_error_stages: Optional[List[str]] = None
+    excluded_error_stages: Optional[list[str]] = None
     metadata_key: str = "insights"
     output_format: Literal["json", "text"] = "text"
     max_insights: int = 7
-    insight_types: List[
+    insight_types: list[
         Literal[
             "structural",
             "algorithmic",
@@ -135,7 +137,8 @@ class InsightsConfig(BaseModel):
             "error_handling",
         ]
     )
-    metrics_to_display: Dict[str, str] = Field(default_factory=dict)
+    metrics_context: MetricsContext
+    metrics_formatter: Optional[MetricsFormatter] = None
     system_prompt_template: Optional[str] = None
     user_prompt_template: Optional[str] = None
 
@@ -153,6 +156,9 @@ class GenerateLLMInsightsStage(Stage):
     def __init__(self, config: InsightsConfig, **kwargs):
         super().__init__(**kwargs)
         self.config = config
+        self.formatter = config.metrics_formatter or MetricsFormatter(
+            config.metrics_context, use_range_normalization=False
+        )
 
         # Select templates based on output format
         self.system_prompt_template = self._select_template(
@@ -246,8 +252,8 @@ class GenerateLLMInsightsStage(Stage):
             raise StageError(error_msg) from e
 
     def _render_user_prompt(self, program: Program) -> str:
-        """Render the user prompt with program data."""
-        metrics_str = self._format_metrics(program.metrics)
+        """Render the user prompt with program data using the configured formatter."""
+        metrics_str = self.formatter.format_metrics_block(program.metrics)
         return self.user_prompt_template.format(
             code=program.code,
             metrics=metrics_str,
@@ -256,18 +262,7 @@ class GenerateLLMInsightsStage(Stage):
             max_insights=self.config.max_insights,
         )
 
-    def _format_metrics(self, metrics: Dict[str, Any]) -> str:
-        """Format metrics for display in prompt."""
-        lines = []
-        for (
-            metric_key,
-            metric_description,
-        ) in self.config.metrics_to_display.items():
-            v = metrics[metric_key]
-            lines.append(f"- {metric_key} : {v:.5f} ({metric_description})")
-        return "\n".join(lines)
-
-    def _get_filtered_failed_stages(self, program: Program) -> List[str]:
+    def _get_filtered_failed_stages(self, program: Program) -> list[str]:
         """Get failed stages excluding configured exclusions."""
         excluded = set(self.config.excluded_error_stages or [])
         return [s for s in program.get_failed_stages() if s not in excluded]

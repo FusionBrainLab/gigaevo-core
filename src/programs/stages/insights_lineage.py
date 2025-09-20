@@ -2,7 +2,7 @@ from datetime import datetime
 import difflib
 import json
 import random
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Optional, Literal
 
 from loguru import logger
 import re
@@ -14,6 +14,9 @@ from src.llm.wrapper import LLMInterface
 from src.programs.program import Program, StageState
 from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
+from src.programs.metrics.context import MetricsContext
+from src.programs.metrics.formatter import MetricsFormatter
+
 
 def safe_json_extract_from_llm_output(text: str):
     """
@@ -112,8 +115,8 @@ PARENT PROGRAM (reference):
 
 
 def format_structured_insight_block(
-    child_insights: Optional[Dict[str, Any]],
-    ancestor_insights: List[Dict[str, Any]]
+    child_insights: Optional[dict[str, Any]],
+    ancestor_insights: list[dict[str, Any]]
 ) -> str:
     """
     Format structured lineage insights into a readable markdown block
@@ -229,17 +232,13 @@ def _generate_readable_title(relationship: str, delta: str) -> str:
 
 class LineageInsightsConfig(BaseModel):
     llm_wrapper: LLMInterface
-    metric_key: str
-    metric_description: str
+    metrics_context: MetricsContext
+    metrics_formatter: Optional[MetricsFormatter] = None
     metadata_key_raw: str = "lineage_insights_raw"
     metadata_key: str = "lineage_insights"
     parent_selection_strategy: Literal["first", "random", "best_fitness"] = "first"
-    higher_is_better: bool = True
     system_prompt_template: str = DEFAULT_SYSTEM_PROMPT_LINEAGE_TEXT
     user_prompt_template: str = DEFAULT_USER_PROMPT_LINEAGE_TEXT
-    fitness_selector_metric: Optional[str] = None
-    fitness_selector_higher_is_better: Optional[bool] = None
-    additional_metrics: Dict[str, str] = {}
     task_description: str
 
     class Config:
@@ -253,6 +252,9 @@ class GenerateLineageInsightsStage(Stage):
         super().__init__(**kwargs)
         self.config = config
         self.storage = storage
+        self.formatter = config.metrics_formatter or MetricsFormatter(
+            config.metrics_context, use_range_normalization=False
+        )
 
     async def _select_parent_id(self, program: Program) -> Optional[str]:
         """Select parent ID based on configured strategy."""
@@ -267,10 +269,8 @@ class GenerateLineageInsightsStage(Stage):
             # Find parent with highest fitness (or lowest if higher_is_better=False)
             best_parent_id = None
             best_fitness = None
-            fitness_key = self.config.fitness_selector_metric or self.config.metric_key
-            higher_better = self.config.fitness_selector_higher_is_better
-            if higher_better is None:
-                higher_better = self.config.higher_is_better
+            fitness_key = self.config.metrics_context.get_primary_spec().key
+            higher_better = bool(self.config.metrics_context.get_primary_spec().higher_is_better)
 
             for parent_id in program.lineage.parents:
                 parent = await self.storage.get(parent_id)
@@ -293,7 +293,7 @@ class GenerateLineageInsightsStage(Stage):
         await self.storage.update(program)
         return build_stage_result(StageState.COMPLETED, started_at, message, self.stage_name)
 
-    async def _set_child_lineage_and_return(self, program: Program, child_ancestors: List, child_insights: Dict, started_at: datetime, parent_id: str):
+    async def _set_child_lineage_and_return(self, program: Program, child_ancestors: list[dict[str, Any]], child_insights: dict[str, Any], started_at: datetime, parent_id: str):
         """Helper to set child lineage metadata, persist to storage, and return completed result."""
         raw_key = self.config.metadata_key_raw
         program.set_metadata(raw_key, {"ancestors": child_ancestors})
@@ -312,7 +312,7 @@ class GenerateLineageInsightsStage(Stage):
             },
         )
 
-    def _compute_diff_blocks(self, parent_code: str, child_code: str) -> List[str]:
+    def _compute_diff_blocks(self, parent_code: str, child_code: str) -> list[str]:
         if parent_code.strip() == child_code.strip():
             return []
 
@@ -330,8 +330,8 @@ class GenerateLineageInsightsStage(Stage):
         if not content:
             return []
 
-        hunks = []
-        current_hunk = []
+        hunks: list[str] = []
+        current_hunk: list[str] = []
         for line in content:
             if line.startswith('@@'):
                 if current_hunk:
@@ -345,39 +345,26 @@ class GenerateLineageInsightsStage(Stage):
 
         return hunks
 
-    def _hunk_has_changes(self, hunk_lines: List[str]) -> bool:
+    def _hunk_has_changes(self, hunk_lines: list[str]) -> bool:
         return any(line.startswith(('+', '-')) and not line.startswith(('+++', '---')) for line in hunk_lines)
 
-    def _render_user_prompt(self, delta: float, diff_blocks: List[str], parent: Program, child: Program) -> str:
+    def _render_user_prompt(self, delta: float, diff_blocks: list[str], parent: Program, child: Program) -> str:
         rendered_blocks = "\n\n".join([f"--- Block {i+1} ---\n```diff\n{b}\n```" for i, b in enumerate(diff_blocks)])
         
         # Get error summaries for both programs
         parent_errors = parent.get_all_errors_summary()
         child_errors = child.get_all_errors_summary()
 
-        # Build additional metrics overview (apart from the primary optimisation metric)
-        add_metrics_lines: List[str] = []
-        for m_key, m_desc in self.config.additional_metrics.items():
-            # Skip the main optimisation metric if it appears in this mapping to avoid duplication
-            if m_key == self.config.metric_key:
-                continue
-
-            try:
-                parent_val = float(parent.metrics[m_key])
-                child_val = float(child.metrics[m_key])
-                m_delta = child_val - parent_val
-                add_metrics_lines.append(f"- {m_key} ({m_desc}) {m_delta:+.5f}")
-            except (KeyError, ValueError):
-                # If the metric is missing or cannot be converted to float we silently ignore it
-                continue
-
-        # Join into a single string expected by the template placeholder
-        additional_metrics_str = "\n".join(add_metrics_lines) if add_metrics_lines else "N/A"
+        # Build additional metrics overview using shared formatter
+        additional_metrics_str = self.formatter.format_delta_block(
+            parent=parent.metrics, child=child.metrics, include_primary=False
+        )
  
+        primary_spec = self.config.metrics_context.get_primary_spec()
         return self.config.user_prompt_template.format(
             task_description=self.config.task_description,
-            metric_name=self.config.metric_key,
-            metric_description=self.config.metric_description,
+            metric_name=primary_spec.key,
+            metric_description=primary_spec.description,
             delta=delta,
             parent_errors=parent_errors,
             child_errors=child_errors,
@@ -398,7 +385,7 @@ class GenerateLineageInsightsStage(Stage):
                 # Set empty lineage insights even when parent not found
                 return await self._set_empty_lineage_and_return(program, started_at, f"<Parent {parent_id} not found>")
 
-            metric_key = self.config.metric_key
+            metric_key = self.config.metrics_context.get_primary_spec().key
             pm = float(parent.metrics[metric_key])
             cm = float(program.metrics[metric_key])
             delta = cm - pm
@@ -419,16 +406,18 @@ class GenerateLineageInsightsStage(Stage):
                     raise StageError(f"Failed to parse LLM JSON output: {e}\nRaw output:\n{response}") from e
 
             # Calculate deltas for any configured additional metrics (excluding the primary metric)
-            additional_metric_deltas: Dict[str, str] = {}
-            for m_key in self.config.additional_metrics.keys():
-                if m_key == self.config.metric_key:
+            additional_metric_deltas: dict[str, str] = {}
+            primary_key = self.config.metrics_context.get_primary_spec().key
+            for m_key in self.config.metrics_context.additional_metrics().keys():
+                if m_key == primary_key:
                     # Skip the primary metric; it's already captured by the 'delta' field
                     continue
 
                 try:
                     parent_val = float(parent.metrics[m_key])
                     child_val = float(program.metrics[m_key])
-                    additional_metric_deltas[m_key] = f"{child_val - parent_val:+.5f}"
+                    decimals = self.config.metrics_context.get_decimals(m_key)
+                    additional_metric_deltas[m_key] = f"{child_val - parent_val:+.{decimals}f}"
                 except (KeyError, ValueError):
                     # Ignore metrics that are missing or non-numeric
                     continue
@@ -448,7 +437,7 @@ class GenerateLineageInsightsStage(Stage):
             parent_descendants = sorted(
                 parent_raw.get("descendants", []), 
                 key=lambda x: float(x.get("delta", "0").replace("+", "")), 
-                reverse=self.config.higher_is_better
+                reverse=bool(self.config.metrics_context.get_primary_spec().higher_is_better)
             )
             if len(parent_descendants) >= self.MAX_DESCENDANTS:
                 parent_descendants = parent_descendants[-(self.MAX_DESCENDANTS - 1):]
