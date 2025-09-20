@@ -31,7 +31,10 @@ from src.database.redis_program_storage import (
 )
 from src.evolution.engine import EngineConfig, EvolutionEngine
 from src.evolution.mutation.llm import LLMMutationOperator
-from src.evolution.mutation.parent_selector import AllCombinationsParentSelector, WeightedRandomParentSelector
+from src.evolution.mutation.parent_selector import (
+    AllCombinationsParentSelector,
+    WeightedRandomParentSelector,
+)
 from src.evolution.strategies.map_elites import (
     BehaviorSpace,
     BinningType,
@@ -63,7 +66,10 @@ from src.programs.metrics.context import MetricsContext
 from src.programs.metrics.formatter import MetricsFormatter
 from src.problems.context import ProblemContext
 from src.problems.layout import ProblemLayout as PL
-from src.problems.initial_loaders import DirectoryProgramLoader, RedisTopProgramsLoader
+from src.problems.initial_loaders import (
+    DirectoryProgramLoader,
+    RedisTopProgramsLoader,
+)
 from src.programs.stages.metrics import EnsureMetricsStage
 from src.programs.stages.validation import ValidateCodeStage
 from src.runner.dag_spec import DAGSpec
@@ -197,9 +203,6 @@ Examples:
     return parser.parse_args()
 
 
-# Removed: validation is provided by ProblemContext.validate()
-
-
 # Configuration constants
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
@@ -208,51 +211,9 @@ REDIS_DB = os.getenv("REDIS_DB", "0")
 LLM_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 
-async def create_initial_population(
-    redis_storage: RedisProgramStorage, problem_dir: Path
-) -> List[Program]:
-    """
-    Create initial population from programs in the initial_programs directory.
-
-    Args:
-        redis_storage: Target Redis storage
-        problem_dir: Problem directory path
-
-    Returns:
-        List of programs added to database
-    """
-    # Deprecated: replaced by DirectoryProgramLoader
-    raise NotImplementedError
-
-
-async def select_top_programs_from_redis(
-    redis_storage: RedisProgramStorage,
-    source_redis_host: str,
-    source_redis_port: int,
-    source_redis_db: int,
-    problem_dir: Path,
-    top_n: int = 50,
-    metric_key: str = "fitness",
-) -> List[Program]:
-    """
-    Select top programs by fitness from an existing Redis database.
-
-    Args:
-        redis_storage: Target Redis storage where selected programs will be added
-        source_redis_host: Host of the source Redis database
-        source_redis_port: Port of the source Redis database
-        source_redis_db: Database number of the source Redis database
-        problem_dir: Problem directory path (used to construct key prefix)
-        top_n: Number of top programs to select
-
-    Returns:
-        List of selected programs added to target database
-    """
-    # Deprecated: replaced by RedisTopProgramsLoader
-    raise NotImplementedError
-
-
-def create_behavior_spaces(metrics_context: MetricsContext) -> list[BehaviorSpace]:
+def create_behavior_spaces(
+    metrics_context: MetricsContext,
+) -> list[BehaviorSpace]:
     """Create behavior spaces using bounds from MetricsContext."""
 
     primary_key = metrics_context.get_primary_spec().key
@@ -260,9 +221,13 @@ def create_behavior_spaces(metrics_context: MetricsContext) -> list[BehaviorSpac
     valid_bounds = metrics_context.get_bounds("is_valid")
 
     if primary_bounds is None:
-        raise ValueError(f"Primary metric '{primary_key}' must define lower_bound and upper_bound in metrics.yaml")
+        raise ValueError(
+            f"Primary metric '{primary_key}' must define lower_bound and upper_bound in metrics.yaml"
+        )
     if valid_bounds is None:
-        raise ValueError("'is_valid' must define lower_bound and upper_bound in metrics.yaml")
+        raise ValueError(
+            "'is_valid' must define lower_bound and upper_bound in metrics.yaml"
+        )
 
     fitness_validity_space = BehaviorSpace(
         feature_bounds={
@@ -523,10 +488,7 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
             probabilities=[1.0],
             api_key=LLM_API_KEY,
             configs=[
-                LLMConfig(
-                    **params,
-                    api_endpoint="http://localhost:8777/v1"
-                ),
+                LLMConfig(**params, api_endpoint="http://localhost:8777/v1"),
             ],
         )
 
@@ -535,9 +497,6 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
         for stage, params in settings_per_stage.items()
     }
     return res
-
-
-# Deprecated: in favor of ProblemContext
 
 
 async def run_evolution_experiment(args: argparse.Namespace):
@@ -603,7 +562,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
             programs = await loader.load(redis_storage)
         else:
             logger.info("🌱 Initializing database with initial programs...")
-            programs = await DirectoryProgramLoader(problem_dir).load(redis_storage)
+            programs = await DirectoryProgramLoader(problem_dir).load(
+                redis_storage
+            )
 
         task_description = problem_ctx.task_description
         task_hints = problem_ctx.task_hints
@@ -612,7 +573,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
         llm_wrapper = await setup_llm_wrapper()
 
         logger.info("Creating DAG pipeline...")
-        metrics_formatter = MetricsFormatter(metrics_context, use_range_normalization=False)
+        metrics_formatter = MetricsFormatter(
+            metrics_context, use_range_normalization=False
+        )
 
         dag_stages = create_dag_stages(
             llm_wrapper,
@@ -647,7 +610,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
             task_definition=task_description,
             task_hints=task_hints,
             system_prompt_template=problem_ctx.mutation_system_prompt,
-            user_prompt_templates=[problem_ctx.mutation_user_prompt], # optionally use a list of templates with weights to be randomly selected
+            user_prompt_templates=[
+                problem_ctx.mutation_user_prompt
+            ],  # optionally use a list of templates with weights to be randomly selected
             user_prompt_template_weights_factory=lambda x: [1.0],
             metrics_context=metrics_context,
             metrics_formatter=metrics_formatter,
@@ -691,10 +656,9 @@ async def run_evolution_experiment(args: argparse.Namespace):
             dag_spec=DAGSpec(
                 nodes=dag_stages,
                 edges=dag_edges,
-                
                 exec_order_deps=execution_order_deps,
                 dag_timeout=1800,
-                max_parallel_stages=8,  
+                max_parallel_stages=8,
             ),
             storage=redis_storage,
             config=runner_config,
