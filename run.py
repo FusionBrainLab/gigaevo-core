@@ -20,8 +20,7 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import time
-from typing import Any, Dict, List, Optional
-import yaml
+from typing import Any
 
 # Main imports
 from loguru import logger
@@ -62,6 +61,9 @@ from src.programs.stages.insights_lineage import (
 )
 from src.programs.metrics.context import MetricsContext
 from src.programs.metrics.formatter import MetricsFormatter
+from src.problems.context import ProblemContext
+from src.problems.layout import ProblemLayout as PL
+from src.problems.initial_loaders import DirectoryProgramLoader, RedisTopProgramsLoader
 from src.programs.stages.metrics import EnsureMetricsStage
 from src.programs.stages.validation import ValidateCodeStage
 from src.runner.dag_spec import DAGSpec
@@ -195,56 +197,7 @@ Examples:
     return parser.parse_args()
 
 
-def validate_problem_directory(
-    problem_dir: Path, add_context: bool = False
-) -> None:
-    """Validate that the problem directory contains required files and directories."""
-    required_files = [
-        "task_description.txt",
-        "task_hints.txt",
-        "validate.py",
-        "mutation_system_prompt.txt",
-        "mutation_user_prompt.txt",
-    ]
-
-    if add_context:
-        required_files.append("context.py")
-
-    required_directories = ["initial_programs"]
-
-    missing_files = []
-    for filename in required_files:
-        if not (problem_dir / filename).exists():
-            missing_files.append(filename)
-
-    missing_directories = []
-    for dirname in required_directories:
-        if not (problem_dir / dirname).exists():
-            missing_directories.append(dirname)
-
-    if missing_files or missing_directories:
-        missing_items = missing_files + [f"{d}/" for d in missing_directories]
-        raise FileNotFoundError(
-            f"Missing required files/directories in {problem_dir}: {', '.join(missing_items)}"
-        )
-
-    # Validate that initial_programs directory has at least one Python file
-    initial_programs_dir = problem_dir / "initial_programs"
-    python_files = list(initial_programs_dir.glob("*.py"))
-    if not python_files:
-        raise FileNotFoundError(
-            f"No Python files found in {initial_programs_dir}. "
-            "At least one initial program is required."
-        )
-
-
-def load_problem_file(problem_dir: Path, filename: str) -> str:
-    """Load a text file from the problem directory."""
-    file_path = problem_dir / filename
-    if not file_path.exists():
-        raise FileNotFoundError(f"Problem file not found: {file_path}")
-
-    return file_path.read_text().strip()
+# Removed: validation is provided by ProblemContext.validate()
 
 
 # Configuration constants
@@ -253,45 +206,6 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = os.getenv("REDIS_DB", "0")
 
 LLM_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
-
-def load_initial_programs_from_directory(problem_dir: Path) -> List[Program]:
-    """Load initial programs from the initial_programs subdirectory."""
-    initial_programs_dir = problem_dir / "initial_programs"
-
-    if not initial_programs_dir.exists():
-        logger.warning(f"No initial_programs directory found in {problem_dir}")
-        return []
-
-    programs = []
-
-    # Load all Python files from the initial_programs directory
-    python_files = list(initial_programs_dir.glob("*.py"))
-
-    if not python_files:
-        logger.warning(f"No Python files found in {initial_programs_dir}")
-        return []
-
-    logger.info(
-        f"Loading {len(python_files)} initial programs from {initial_programs_dir}"
-    )
-
-    for program_file in python_files:
-        try:
-            program_code = program_file.read_text()
-            program = Program(code=program_code)
-            program.metadata = {
-                "source": "initial_program",
-                "strategy_name": program_file.stem,
-                "file_path": str(program_file),
-                "iteration": 0,
-            }
-            programs.append(program)
-            logger.info(f"  ✅ Loaded initial program: {program_file.stem}")
-        except Exception as e:
-            logger.warning(f"  ⚠️ Failed to load {program_file}: {e}")
-
-    return programs
 
 
 async def create_initial_population(
@@ -307,30 +221,8 @@ async def create_initial_population(
     Returns:
         List of programs added to database
     """
-    logger.info("🌱 Creating initial population...")
-
-    # Load all initial programs from the initial_programs directory
-    initial_programs = load_initial_programs_from_directory(problem_dir)
-
-    if not initial_programs:
-        raise RuntimeError(
-            f"No initial programs found in {problem_dir}/initial_programs/. "
-            "At least one Python file is required."
-        )
-
-    programs = []
-
-    # Add all initial programs to the database
-    for program in initial_programs:
-        await redis_storage.add(program)
-        programs.append(program)
-        strategy_name = program.metadata.get("strategy_name", "unknown")
-        logger.info(f"  ✅ Added initial program: {strategy_name}")
-
-    logger.info(
-        f"🎯 Successfully created initial population of {len(programs)} programs"
-    )
-    return programs
+    # Deprecated: replaced by DirectoryProgramLoader
+    raise NotImplementedError
 
 
 async def select_top_programs_from_redis(
@@ -356,95 +248,11 @@ async def select_top_programs_from_redis(
     Returns:
         List of selected programs added to target database
     """
-    logger.info(
-        f"🔍 Selecting top {top_n} programs from Redis {source_redis_host}:{source_redis_port}/{source_redis_db}..."
-    )
-
-    # Create source Redis storage connection with same key prefix construction
-    source_storage = RedisProgramStorage(
-        RedisProgramStorageConfig(
-            redis_url=f"redis://{source_redis_host}:{source_redis_port}/{source_redis_db}",
-            key_prefix=f"{problem_dir.name}_evolution",
-            max_connections=50,
-            connection_pool_timeout=30.0,
-            health_check_interval=60,
-        )
-    )
-
-    try:
-        # Get all programs from source database
-        logger.info("📥 Retrieving all programs from source database...")
-        all_programs = await source_storage.get_all()
-        logger.info(
-            f"📊 Found {len(all_programs)} total programs in source database"
-        )
-
-        if not all_programs:
-            logger.warning("⚠️ No programs found in source database")
-            return []
-
-        # Filter programs that have the selected metric
-        programs_with_fitness = []
-        for program in all_programs:
-            if program.metrics and metric_key in program.metrics:
-                programs_with_fitness.append(program)
-
-        logger.info(
-            f"🔄 Found {len(programs_with_fitness)} programs with fitness metrics"
-        )
-
-        if not programs_with_fitness:
-            logger.warning("⚠️ No programs with fitness metrics found")
-            return []
-        sentinel = -float("inf") if metrics_context.is_higher_better(metric_key) else float("inf")
-        programs_with_fitness.sort(
-            key=lambda p: p.metrics.get(metric_key, sentinel), reverse=True if metrics_context.is_higher_better(metric_key) else False
-        )
-        selected_programs = programs_with_fitness[:top_n]
-
-        logger.info(
-            f"🎯 Selected {len(selected_programs)} top programs by fitness"
-        )
-
-        # Add selected programs to target database
-        added_programs = []
-        for i, program in enumerate(selected_programs):
-            program_to_add = Program(code=program.code)
-            # Update metadata to indicate source
-            program_to_add.metadata = {
-                "source": "redis_selection",
-                "source_db": source_redis_db,
-                "selection_rank": i + 1,
-                "original_id": program.id,
-                "iteration": 0,
-            }
-
-            # Add to target database
-            await redis_storage.add(program_to_add)
-            added_programs.append(program_to_add)
-
-            fitness = program.metrics.get(metric_key, "N/A")
-            logger.info(
-                f"  ✅ Added program {i+1}/{len(selected_programs)}: fitness={fitness}"
-            )
-
-        logger.info(
-            f"🎯 Successfully selected and added {len(added_programs)} top programs"
-        )
-        return added_programs
-
-    except Exception as e:
-        logger.error(f"❌ Failed to select top programs: {e}")
-        raise
-    finally:
-        # Clean up source connection
-        try:
-            await source_storage.close()
-        except Exception as e:
-            logger.warning(f"⚠️ Error closing source storage: {e}")
+    # Deprecated: replaced by RedisTopProgramsLoader
+    raise NotImplementedError
 
 
-def create_behavior_spaces(metrics_context: MetricsContext) -> List[BehaviorSpace]:
+def create_behavior_spaces(metrics_context: MetricsContext) -> list[BehaviorSpace]:
     """Create behavior spaces using bounds from MetricsContext."""
 
     primary_key = metrics_context.get_primary_spec().key
@@ -474,8 +282,8 @@ def create_behavior_spaces(metrics_context: MetricsContext) -> List[BehaviorSpac
 
 
 def create_island_configs(
-    behavior_spaces: List[BehaviorSpace], metrics_context: MetricsContext
-) -> List[IslandConfig]:
+    behavior_spaces: list[BehaviorSpace], metrics_context: MetricsContext
+) -> list[IslandConfig]:
     """Create 1 island configurations with improved resolution balance and migration strategies."""
 
     primary_key = metrics_context.get_primary_spec().key
@@ -513,11 +321,11 @@ def create_dag_stages(
     llm_wrapper: dict[str, LLMWrapper],
     redis_storage: RedisProgramStorage,
     task_description: str,
-    problem_dir: Path,
+    problem_ctx: ProblemContext,
     metrics_context: MetricsContext,
-    metrics_formatter: Optional[MetricsFormatter] = None,
+    metrics_formatter: MetricsFormatter | None = None,
     add_context: bool = False,
-) -> Dict[str, Stage]:
+) -> dict[str, Stage]:
     """Create optimized DAG stages with stage-specific timeouts and resource allocation."""
 
     stages = {}
@@ -531,10 +339,10 @@ def create_dag_stages(
 
     if add_context:
         stages["AddContext"] = lambda: RunPythonCode(
-            code=load_problem_file(problem_dir, "context.py"),
+            code=problem_ctx.load_text("context.py"),
             stage_name="AddContext",
             function_name="build_context",
-            python_path=[problem_dir.resolve()],
+            python_path=[problem_ctx.problem_dir.resolve()],
             timeout=120.0,
             max_memory_mb=1024,
         )
@@ -543,12 +351,12 @@ def create_dag_stages(
         stage_name="ExecuteCode",
         function_name="entrypoint",
         context_stage="AddContext" if add_context else None,
-        python_path=[problem_dir.resolve()],
+        python_path=[problem_ctx.problem_dir.resolve()],
         timeout=600.0,
         max_memory_mb=512,
     )
 
-    validator_path = problem_dir / "validate.py"
+    validator_path = problem_ctx.problem_dir / "validate.py"
     stages["RunValidation"] = lambda: RunValidationStage(
         stage_name="RunValidation",
         validator_path=validator_path,
@@ -612,7 +420,7 @@ def create_dag_stages(
     return stages
 
 
-def create_dag_edges(add_context: bool = False) -> Dict[str, List[str]]:
+def create_dag_edges(add_context: bool = False) -> dict[str, list[str]]:
     """Define the DAG execution dependencies."""
     base_dag = {
         "ValidateCompiles": [
@@ -632,7 +440,7 @@ def create_dag_edges(add_context: bool = False) -> Dict[str, List[str]]:
     return base_dag
 
 
-def create_execution_order_deps() -> Dict[str, List[ExecutionOrderDependency]]:
+def create_execution_order_deps() -> dict[str, list[ExecutionOrderDependency]]:
     """Define execution order dependencies for stages that should run under special conditions."""
     return {
         "ValidationMetricUpdate": [
@@ -710,15 +518,15 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
 
         return MultiModelLLMWrapper(
             models=[
-                "Qwen3-235B-A22B-Thinking-2507"
+                "Qwen3-235B-A22B-Thinking-2507",
             ],
             probabilities=[1.0],
             api_key=LLM_API_KEY,
             configs=[
                 LLMConfig(
                     **params,
-                    api_endpoint="http://localhost:8777/v1",
-                )
+                    api_endpoint="http://localhost:8777/v1"
+                ),
             ],
         )
 
@@ -729,37 +537,7 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     return res
 
 
-def load_metrics_context_for_problem(problem_dir: Path) -> MetricsContext:
-    """Load MetricsContext from problems/*/metrics.yaml (mandatory)."""
-    metrics_path = problem_dir / "metrics.yaml"
-    if not metrics_path.exists():
-        raise FileNotFoundError(f"Missing metrics.yaml in {problem_dir}")
-    try:
-        data = yaml.safe_load(metrics_path.read_text())
-        if not isinstance(data, dict):
-            raise ValueError("metrics.yaml must be a mapping")
-        specs = data.get("specs") or {k: v for k, v in data.items() if k != "display_order"}
-        display_order = data.get("display_order")
-        ctx = MetricsContext.from_dict(specs=specs, display_order=display_order)
-        # Strict validation beyond pydantic
-        # 1) Exactly one primary (already enforced by model) — we add bounds checks
-        primary = ctx.get_primary_spec()
-        pb = ctx.get_bounds(primary.key)
-        if pb is None:
-            raise ValueError(
-                f"metrics.yaml error in {metrics_path}: Primary metric '{primary.key}' must define lower_bound and upper_bound"
-            )
-        # 2) is_valid exists and has [0,1] bounds
-        if "is_valid" not in ctx.specs:
-            raise ValueError(f"metrics.yaml error in {metrics_path}: Missing required 'is_valid' metric spec")
-        vb = ctx.get_bounds("is_valid")
-        if vb is None or vb != (0.0, 1.0):
-            raise ValueError(
-                f"metrics.yaml error in {metrics_path}: 'is_valid' must have lower_bound=0.0 and upper_bound=1.0"
-            )
-        return ctx
-    except Exception as e:
-        raise ValueError(f"Failed to parse metrics.yaml: {e}") from e
+# Deprecated: in favor of ProblemContext
 
 
 async def run_evolution_experiment(args: argparse.Namespace):
@@ -803,33 +581,32 @@ async def run_evolution_experiment(args: argparse.Namespace):
         await redis_conn.flushdb()
         logger.info(f"✓ Redis database {args.redis_db} cleared")
 
-        # Load metrics context first (used for selection and configuration)
-        metrics_context = load_metrics_context_for_problem(problem_dir)
+        # Build problem context (centralized assets)
+        problem_ctx = ProblemContext(problem_dir)
+        metrics_context = problem_ctx.metrics_context
 
         # Initialize new DB with initial programs
         if args.use_redis_selection:
             logger.info(
                 "🔍 Initializing database with selected programs from Redis..."
             )
-            programs = await select_top_programs_from_redis(
-                redis_storage=redis_storage,
-                source_redis_host=args.redis_host,
-                source_redis_port=args.redis_port,
-                source_redis_db=args.source_redis_db,
-                problem_dir=problem_dir,
+            primary_key = metrics_context.get_primary_spec().key
+            loader = RedisTopProgramsLoader(
+                source_host=args.redis_host,
+                source_port=args.redis_port,
+                source_db=args.source_redis_db,
+                key_prefix=f"{problem_dir.name}_evolution",
+                metric_key=primary_key,
+                higher_is_better=metrics_context.is_higher_better(primary_key),
                 top_n=args.top_n,
-                metric_key=metrics_context.get_primary_spec().key,
             )
+            programs = await loader.load(redis_storage)
         else:
             logger.info("🌱 Initializing database with initial programs...")
-            programs = await create_initial_population(
-                redis_storage, problem_dir
-            )
+            programs = await DirectoryProgramLoader(problem_dir).load(redis_storage)
 
-        task_description = load_problem_file(
-            problem_dir, "task_description.txt"
-        )
-        task_hints = load_problem_file(problem_dir, "task_hints.txt")
+        task_description = problem_ctx.task_description
+        task_hints = problem_ctx.task_hints
 
         logger.info("Setting up LLM wrapper...")
         llm_wrapper = await setup_llm_wrapper()
@@ -841,7 +618,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
             llm_wrapper,
             redis_storage,
             task_description,
-            problem_dir,
+            problem_ctx,
             metrics_context,
             metrics_formatter,
             args.add_context,
@@ -869,12 +646,8 @@ async def run_evolution_experiment(args: argparse.Namespace):
             ),
             task_definition=task_description,
             task_hints=task_hints,
-            system_prompt_template=load_problem_file(
-                problem_dir, "mutation_system_prompt.txt"
-            ),
-            user_prompt_templates=[load_problem_file(
-                problem_dir, "mutation_user_prompt.txt"
-            )], # optionally use a list of templates with weights to be randomly selected
+            system_prompt_template=problem_ctx.mutation_system_prompt,
+            user_prompt_templates=[problem_ctx.mutation_user_prompt], # optionally use a list of templates with weights to be randomly selected
             user_prompt_template_weights_factory=lambda x: [1.0],
             metrics_context=metrics_context,
             metrics_formatter=metrics_formatter,

@@ -271,7 +271,7 @@ class LLMWrapper(LLMInterface):
             api_params["max_tokens"] = self.config.max_tokens
 
         if self.config.max_reasoning_tokens:
-            api_params["reasoning"] = {"max_tokens": self.config.max_reasoning_tokens}
+            api_params["reasoning"] = {"max_tokens": self.config.max_reasoning_tokens, "enabled": True}
 
         last_error = None
 

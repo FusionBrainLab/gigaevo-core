@@ -1,12 +1,12 @@
 display_order: [fitness, is_valid]
 specs:
   fitness:
-    description: Main objective, higher is better
+    description: Main objective [area of the smallest triangle]
     decimals: 5
     is_primary: true
     higher_is_better: true
     lower_bound: 0.0
-    upper_bound: 100.0
+    upper_bound: 0.0365
     include_in_prompts: true
     significant_change: 1.0e-6
   is_valid:

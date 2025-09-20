@@ -395,26 +395,33 @@ The system maintains three specialized islands:
 
 ## Creating New Problems
 
-### Step 1: Create Problem Directory
+### Step 1: Scaffold with Wizard (recommended)
 
 ```bash
-mkdir problems/my_problem
+# Minimal scaffold
+python tools/wizard.py problems/my_problem
+
+# Include context.py and overwrite existing files
+python tools/wizard.py problems/my_problem --add-context --overwrite
+
+# With custom texts
+python tools/wizard.py problems/my_problem \
+  --task-description "Optimize X under Y" \
+  --task-hints "Use A; consider B; avoid C" \
+  --system-prompt "... {task_definition} ... {task_hints} ... {metrics_description} ..." \
+  --user-prompt "=== Parents ({count}) ===\n{parent_blocks}\n"
 ```
 
-### Step 2: Create Required Files and Directories
+### Manual Setup (alternative)
 
 ```bash
-# Create basic problem files
+mkdir -p problems/my_problem/initial_programs
 touch problems/my_problem/task_description.txt
 touch problems/my_problem/task_hints.txt
 touch problems/my_problem/validate.py
 touch problems/my_problem/mutation_system_prompt.txt
 touch problems/my_problem/mutation_user_prompt.txt
-
-# Create initial programs directory
-mkdir problems/my_problem/initial_programs
-
-# Optional: Create context file for problems requiring external data
+# Optional:
 touch problems/my_problem/context.py
 ```
 

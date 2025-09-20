@@ -1,5 +1,18 @@
-## 0.6.0 (2025-09-20)
+## 0.7.0 (2025-09-20)
 
+- Problem scaffolding and layout standardization:
+  - Added `ProblemLayout` with centralized filenames/dirs and `scaffold()` utility
+  - Introduced `ProblemContext` (moved to `src/problems/context.py`) and integrated into `run.py`
+  - Added `tools/wizard.py` CLI to scaffold new problems with optional custom texts
+  - Prompts scaffolding now includes all placeholders: `{task_definition}`, `{task_hints}`, `{metrics_description}`, `{count}`, `{parent_blocks}`
+- Initial population loaders (OOP):
+  - `DirectoryProgramLoader` and `RedisTopProgramsLoader` for clean, configurable population sourcing
+  - Redis loader params (connections, timeouts) are user-configurable
+- Cleanups:
+  - Removed hardcoded paths/strings in favor of `ProblemLayout`
+  - Deprecated inlined helpers in `run.py` to prevent drift
+
+## 0.6.0 (2025-09-20)
 - Centralized metrics into OOP classes:
   - Added `MetricSpec` and `MetricsContext` with strict validation (exactly one primary; bounds; orientation).
   - Introduced `MetricsFormatter` to render metrics, deltas, and a metrics description block for prompts.
