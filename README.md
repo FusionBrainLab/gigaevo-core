@@ -399,13 +399,13 @@ The system maintains three specialized islands:
 
 ```bash
 # Minimal scaffold
-python tools/wizard.py problems/my_problem
+PYTHONPATH=. python tools/wizard.py problems/my_problem
 
 # Include context.py and overwrite existing files
-python tools/wizard.py problems/my_problem --add-context --overwrite
+PYTHONPATH=. python tools/wizard.py problems/my_problem --add-context --overwrite
 
 # With custom texts
-python tools/wizard.py problems/my_problem \
+PYTHONPATH=. python tools/wizard.py problems/my_problem \
   --task-description "Optimize X under Y" \
   --task-hints "Use A; consider B; avoid C" \
   --system-prompt "... {task_definition} ... {task_hints} ... {metrics_description} ..." \

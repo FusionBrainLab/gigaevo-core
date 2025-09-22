@@ -367,7 +367,7 @@ def create_dag_stages(
     stages["LineageInsights"] = create_lineage_insights_stage
 
     # Stage 5a: Validation metrics factory (FAST - 15s timeout)
-    def validation_metrics_factory() -> Dict[str, Any]:
+    def validation_metrics_factory() -> dict[str, Any]:
         """Factory function that creates default validation metrics when validation fails."""
         return {
             "fitness": -1000.0,  # Very bad fitness for failed programs
@@ -510,14 +510,6 @@ async def run_evolution_experiment(args: argparse.Namespace):
     logger.info(f"📁 Log file: {log_file_path}")
     logger.info(f"🕐 Start time: {datetime.now(timezone.utc).isoformat()}")
 
-    # Validate problem directory
-    try:
-        validate_problem_directory(problem_dir, args.add_context)
-        logger.info("✅ Problem directory validated")
-    except Exception as e:
-        logger.error(f"❌ Problem directory validation failed: {e}")
-        return
-
     # Setup Redis storage
     redis_storage = RedisProgramStorage(
         RedisProgramStorageConfig(
@@ -542,6 +534,7 @@ async def run_evolution_experiment(args: argparse.Namespace):
 
         # Build problem context (centralized assets)
         problem_ctx = ProblemContext(problem_dir)
+        problem_ctx.validate(add_context=args.add_context)
         metrics_context = problem_ctx.metrics_context
 
         # Initialize new DB with initial programs
@@ -732,13 +725,6 @@ if __name__ == "__main__":
     problem_dir = Path(args.problem_dir)
     if not problem_dir.exists():
         logger.error(f"❌ Problem directory not found: {problem_dir}")
-        exit(1)
-
-    # Validate problem directory structure
-    try:
-        validate_problem_directory(problem_dir)
-    except Exception as e:
-        logger.error(f"❌ Problem directory validation failed: {e}")
         exit(1)
 
     # Run the evolution experiment
