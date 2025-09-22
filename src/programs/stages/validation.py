@@ -1,4 +1,3 @@
-
 """Code validation stage for MetaEvolve."""
 
 import ast
@@ -17,6 +16,8 @@ from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.utils import build_stage_result
 
 from .base import Stage
+
+
 class ValidateCodeStage(Stage):
 
     def __init__(
@@ -128,12 +129,12 @@ class ValidateCodeStage(Stage):
         )
 
     async def _validate_security(self, code: str, program_id: str) -> None:
-        if self.safe_mode or self.enable_security_checks:
+        if self.safe_mode:
             for pattern in self._compiled_patterns:
                 match = pattern.search(code)
                 if match:
                     raise SecurityViolationError(
-                        f"Potentially dangerous operation detected",
+                        "Potentially dangerous operation detected",
                         violation_type="dangerous_pattern",
                         detected_pattern=match.group(0),
                     )
@@ -149,10 +150,18 @@ class ValidateCodeStage(Stage):
             tree = ast.parse(code)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Name) and node.func.id in {"open", "file"}:
+                    if isinstance(node.func, ast.Name) and node.func.id in {
+                        "open",
+                        "file",
+                    }:
                         return True
-                    if isinstance(node.func, ast.Attribute) and node.func.attr in {
-                        "read", "write", "remove", "unlink"
+                    if isinstance(
+                        node.func, ast.Attribute
+                    ) and node.func.attr in {
+                        "read",
+                        "write",
+                        "remove",
+                        "unlink",
                     }:
                         return True
             return False

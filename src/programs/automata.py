@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
-from typing import Dict, List, Literal, Optional, Set
-
+from typing import Dict, List, Literal, Optional, Set, cast
 from pydantic import BaseModel, Field
 
 from src.programs.program import Program, ProgramStageResult, StageState
+
+# pylint: disable=E1101  # Pydantic Field type confusion for transition_rules
 from src.programs.utils import format_error_for_llm
 
 
@@ -54,17 +55,13 @@ class StageTransitionRule(BaseModel):
     )
 
     def can_transition_to_ready(self, program: Program) -> bool:
-        if (
-            not self.regular_dependencies
-            and not self.execution_order_dependencies
-        ):
-            return True
+        """Decide readiness based on execution-order dependencies only.
 
-        # Regular: must all be COMPLETED
-        for dep in self.regular_dependencies:
-            result = program.stage_results.get(dep)
-            if result is None or result.status != StageState.COMPLETED:
-                return False
+        Regular (dataflow) edges do not gate readiness. Readiness for dataflow
+        is handled by the DAG runner using join policy and input bounds.
+        """
+        if not self.execution_order_dependencies:
+            return True
 
         # Execution-order: each must be satisfied
         for dep in self.execution_order_dependencies:
@@ -75,20 +72,13 @@ class StageTransitionRule(BaseModel):
         return True
 
     def should_skip(self, program: Program) -> bool:
-        if (
-            not self.regular_dependencies
-            and not self.execution_order_dependencies
-        ):
-            return False
+        """Decide auto-skip only based on execution-order deps not satisfied.
 
-        for dep in self.regular_dependencies:
-            result = program.stage_results.get(dep)
-            if result and result.status in (
-                StageState.FAILED,
-                StageState.CANCELLED,
-                StageState.SKIPPED,
-            ):
-                return True
+        Regular (dataflow) edges never cause auto-skip. The DAG runner will
+        skip a stage if its join policy and input bounds are not met at launch.
+        """
+        if not self.execution_order_dependencies:
+            return False
 
         for dep in self.execution_order_dependencies:
             result = program.stage_results.get(dep.stage_name)
@@ -108,14 +98,16 @@ class DAGAutomata(BaseModel):
     )
 
     def add_regular_dependency(self, stage_name: str, dependency: str) -> None:
-        self.transition_rules.setdefault(
+        rules = cast(Dict[str, StageTransitionRule], self.transition_rules)
+        rules.setdefault(
             stage_name, StageTransitionRule(stage_name=stage_name)
         ).regular_dependencies.add(dependency)
 
     def add_execution_order_dependency(
         self, stage_name: str, dependency: ExecutionOrderDependency
     ) -> None:
-        self.transition_rules.setdefault(
+        rules = cast(Dict[str, StageTransitionRule], self.transition_rules)
+        rules.setdefault(
             stage_name, StageTransitionRule(stage_name=stage_name)
         ).execution_order_dependencies.append(dependency)
 
@@ -127,10 +119,11 @@ class DAGAutomata(BaseModel):
         running: Set[str],
         skipped: Set[str],
     ) -> Set[str]:
+        rules = cast(Dict[str, StageTransitionRule], self.transition_rules)
         return {
             stage_name
             for stage_name in available_stages - done - running - skipped
-            if (rule := self.transition_rules.get(stage_name)) is None
+            if (rule := rules.get(stage_name)) is None
             or rule.can_transition_to_ready(program)
         }
 
@@ -142,17 +135,18 @@ class DAGAutomata(BaseModel):
         running: Set[str],
         skipped: Set[str],
     ) -> Set[str]:
+        rules = cast(Dict[str, StageTransitionRule], self.transition_rules)
         return {
             stage_name
             for stage_name in available_stages - done - running - skipped
-            if (rule := self.transition_rules.get(stage_name))
-            and rule.should_skip(program)
+            if (rule := rules.get(stage_name)) and rule.should_skip(program)
         }
 
     def create_skip_result(
         self, stage_name: str, program: Program
     ) -> ProgramStageResult:
-        rule = self.transition_rules.get(stage_name)
+        rules = cast(Dict[str, StageTransitionRule], self.transition_rules)
+        rule = rules.get(stage_name)
         failed_deps = [
             dep
             for dep in (rule.regular_dependencies if rule else [])
@@ -187,7 +181,8 @@ class DAGAutomata(BaseModel):
         )
 
     def get_stage_dependencies(self, stage_name: str) -> Dict[str, any]:
-        rule = self.transition_rules.get(stage_name)
+        rules = cast(Dict[str, StageTransitionRule], self.transition_rules)
+        rule = rules.get(stage_name)
         return {
             "regular": list(rule.regular_dependencies) if rule else [],
             "execution_order": [
@@ -198,7 +193,8 @@ class DAGAutomata(BaseModel):
 
     def validate_dependencies(self, available_stages: Set[str]) -> List[str]:
         errors = []
-        for stage_name, rule in self.transition_rules.items():
+        rules = cast(Dict[str, StageTransitionRule], self.transition_rules)
+        for stage_name, rule in rules.items():
             for dep in rule.regular_dependencies:
                 if dep not in available_stages:
                     errors.append(

@@ -354,6 +354,12 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._execute("get_all", _get_all)
 
+    async def flushdb(self) -> None:
+        async def _flush(redis):
+            await redis.flushdb()
+
+        await self._execute("flushdb", _flush)
+
     async def get_connection_info(self) -> Dict[str, Any]:
         """Get connection pool information for monitoring."""
         try:

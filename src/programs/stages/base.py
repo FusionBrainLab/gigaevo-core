@@ -63,6 +63,8 @@ class Stage:
         self.enable_resource_monitoring = enable_resource_monitoring
         self.stage_name = stage_name or self.__class__.__name__
         self.metrics = StageMetrics()
+        self._edge_inputs_by_name: Dict[str, Any] = {}
+        self._edge_inputs_seq: list[Any] = []
 
         logger.debug(
             f"[{self.stage_name}] Initialized with timeout={timeout}s, max_memory={max_memory_mb}MB"
@@ -118,3 +120,25 @@ class Stage:
     def get_metrics(self) -> Dict[str, Any]:
         """Get stage execution metrics."""
         return self.metrics.to_dict()
+
+    def set_edge_inputs(
+        self, inputs_by_name: Dict[str, Any], inputs_seq: list[Any]
+    ) -> None:
+        self._edge_inputs_by_name = inputs_by_name or {}
+        self._edge_inputs_seq = inputs_seq or []
+
+    def get_inputs_by_name(self) -> Dict[str, Any]:
+        return self._edge_inputs_by_name
+
+    def get_inputs_seq(self) -> list[Any]:
+        return self._edge_inputs_seq
+
+    def required_input_counts(self) -> tuple[int, int]:
+        """Return (mandatory_count, optional_max) for inputs via edges.
+
+        - mandatory_count: number of successful upstream outputs required to run
+        - optional_max: how many additional successful upstream outputs to accept
+
+        Selection and ordering follow incoming-edge order. Defaults to (0, 1_000_000_000).
+        """
+        return (0, 1_000_000_000)

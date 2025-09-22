@@ -1,3 +1,27 @@
+"""DAG runner: scheduling vs dataflow
+
+Concepts
+- Execution-order dependencies: control when a stage is allowed to start.
+  They do not carry data. Used for sequencing (e.g., always_after, on_success).
+- Regular edges: carry data only. They never gate readiness or auto-skip.
+  The runner collects predecessor outputs according to the stage's
+  join_policy() and required_input_bounds().
+
+Interplay
+- Readiness is decided using execution-order deps only.
+- At launch, the runner selects predecessor outputs:
+  - join_policy == "all": require that all predecessors completed successfully
+    with outputs; otherwise the stage is skipped (data contract not met).
+  - join_policy == "any": take any available successful outputs (possibly none).
+- The collected inputs are validated against required_input_bounds(). If the
+  count is outside [min, max], the stage is skipped with an explicit reason.
+
+Soft edges
+- If a stage declares join_policy=="any" and min_inputs==0, its incoming
+  edges are treated as soft: they will not block readiness nor cause skip when
+  upstream fails; the stage may fall back to internal defaults.
+"""
+
 import asyncio
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
@@ -14,7 +38,7 @@ from src.programs.program import (
 )
 from src.programs.stages.base import Stage
 from src.programs.state_manager import ProgramStateManager
-from src.programs.utils import format_error_for_llm
+from src.programs.utils import format_error_for_llm, build_stage_result
 
 FINAL_STATES = {
     StageState.COMPLETED,
@@ -49,13 +73,18 @@ class DAG:
         self._setup_automata(execution_order_deps or {})
         self._validate_acyclic_graph()
         self._validate_dependencies()
+        self._validate_mandatory_feasibility()
         self._stage_sema = asyncio.Semaphore(max(1, max_parallel_stages))
 
     def _validate_graph_integrity(
         self, execution_order_deps: Dict[str, List[ExecutionOrderDependency]]
     ) -> None:
         # Validate node types
-        bad_nodes = [name for name, obj in self.nodes.items() if not isinstance(obj, Stage)]
+        bad_nodes = [
+            name
+            for name, obj in self.nodes.items()
+            if not isinstance(obj, Stage)
+        ]
         if bad_nodes:
             raise ValueError(
                 f"Non-Stage objects registered as nodes: {', '.join(sorted(bad_nodes))}"
@@ -64,12 +93,19 @@ class DAG:
         stage_names = self._stage_names
 
         # Validate edges sources and destinations
-        unknown_sources = [src for src in self.edges.keys() if src not in stage_names]
+        unknown_sources = [
+            src for src in self.edges.keys() if src not in stage_names
+        ]
         if unknown_sources:
             raise ValueError(
                 f"Edges contain unknown source stage(s): {', '.join(sorted(set(unknown_sources)))}"
             )
-        unknown_dests = [dst for dsts in self.edges.values() for dst in dsts if dst not in stage_names]
+        unknown_dests = [
+            dst
+            for dsts in self.edges.values()
+            for dst in dsts
+            if dst not in stage_names
+        ]
         if unknown_dests:
             raise ValueError(
                 f"Edges reference unknown destination stage(s): {', '.join(sorted(set(unknown_dests)))}"
@@ -77,7 +113,9 @@ class DAG:
 
         # Validate execution order dependencies
         if execution_order_deps:
-            unknown_exec_keys = [k for k in execution_order_deps.keys() if k not in stage_names]
+            unknown_exec_keys = [
+                k for k in execution_order_deps.keys() if k not in stage_names
+            ]
             if unknown_exec_keys:
                 raise ValueError(
                     f"Execution-order deps contain unknown target stage(s): {', '.join(sorted(set(unknown_exec_keys)))}"
@@ -101,9 +139,7 @@ class DAG:
     def _setup_automata(
         self, execution_order_deps: Dict[str, List[ExecutionOrderDependency]]
     ) -> None:
-        for src, dsts in self.edges.items():
-            for dst in dsts:
-                self.automata.add_regular_dependency(dst, src)
+        # Regular edges do not gate readiness; only execution-order deps do.
         for stage_name, deps in execution_order_deps.items():
             for dep in deps:
                 self.automata.add_execution_order_dependency(stage_name, dep)
@@ -113,7 +149,7 @@ class DAG:
         # Ensure all transition rule targets exist among nodes
         invalid_rule_targets = [
             stage_name
-            for stage_name in self.automata.transition_rules.keys()
+            for stage_name in dict(self.automata.transition_rules).keys()
             if stage_name not in self.nodes
         ]
         if invalid_rule_targets:
@@ -175,6 +211,21 @@ class DAG:
             ready = self.automata.get_ready_stages(
                 program, self._stage_names, done, running, skipped
             )
+            # Additional rule: wait until all regular predecessors finished (any final state)
+            if ready:
+                gated = set()
+                for stage_name in list(ready):
+                    preds = self._get_predecessors_in_order(stage_name)
+                    if preds:
+                        all_final = True
+                        for p in preds:
+                            res = program.stage_results.get(p)
+                            if res is None or res.status not in FINAL_STATES:
+                                all_final = False
+                                break
+                        if not all_final:
+                            gated.add(stage_name)
+                ready -= gated
             to_skip = self.automata.get_stages_to_skip(
                 program, self._stage_names, done, running, skipped
             )
@@ -207,9 +258,7 @@ class DAG:
                 progress_made = progress_made or bool(ready)
 
             if tasks:
-                await self._collect_results(
-                    program, tasks, done, running
-                )
+                await self._collect_results(program, tasks, done, running)
 
             if not ready and not running:
                 # If nothing can progress and no progress was made this iteration, force-skip unresolved
@@ -247,6 +296,13 @@ class DAG:
 
         # Do not change Program.state here; caller (scheduler) is responsible
 
+    def _get_predecessors_in_order(self, stage_name: str) -> List[str]:
+        preds = []
+        for src, dsts in self.edges.items():
+            if stage_name in dsts:
+                preds.append(src)
+        return preds
+
     async def _launch_ready_stages(
         self, program: Program, ready: Set[str]
     ) -> Dict[str, asyncio.Task]:
@@ -260,7 +316,54 @@ class DAG:
 
             async def _run_stage(stage_name=name, prog=program):
                 async with self._stage_sema:
-                    return await self.nodes[stage_name].run(prog)
+                    stage = self.nodes[stage_name]
+                    preds = self._get_predecessors_in_order(stage_name)
+                    # Select successful predecessors and enforce mandatory kinds
+                    successful_pred_names: List[str] = []
+                    for p in preds:
+                        res = prog.stage_results.get(p)
+                        if (
+                            res
+                            and res.status == StageState.COMPLETED
+                            and res.output is not None
+                        ):
+                            successful_pred_names.append(p)
+
+                    # Enforce mandatory/optional counts
+                    mandatory, optional_max = stage.required_input_counts()
+                    if len(successful_pred_names) < mandatory:
+                        return build_stage_result(
+                            status=StageState.SKIPPED,
+                            started_at=now_ts,
+                            error=(
+                                f"Insufficient inputs: have {len(successful_pred_names)}; "
+                                f"required {mandatory}"
+                            ),
+                            stage_name=stage_name,
+                        )
+                    take = mandatory + optional_max
+                    selected_pred_names = successful_pred_names[:take]
+
+                    inputs_seq = [
+                        prog.stage_results[p].output
+                        for p in selected_pred_names
+                    ]
+                    inputs_by_name = {
+                        p: prog.stage_results[p].output
+                        for p in selected_pred_names
+                    }
+                    stage.set_edge_inputs(inputs_by_name, inputs_seq)
+                    # Defensive recheck
+                    m, o = stage.required_input_counts()
+                    num_inputs = len(inputs_seq)
+                    if num_inputs < m or num_inputs > (m + o):
+                        return build_stage_result(
+                            status=StageState.SKIPPED,
+                            started_at=now_ts,
+                            error=f"Invalid number of inputs: {num_inputs} (expected {m}..{m+o})",
+                            stage_name=stage_name,
+                        )
+                    return await stage.run(prog)
 
             tasks[name] = asyncio.create_task(
                 _run_stage(), name=f"stage-{name[:8]}"
@@ -379,7 +482,9 @@ class DAG:
         if not nx.is_directed_acyclic_graph(G):
             try:
                 cycle_edges = nx.find_cycle(G, orientation="original")
-                cycle_nodes = [cycle_edges[0][0]] + [v for (_, v, *_) in cycle_edges]
+                cycle_nodes = [cycle_edges[0][0]] + [
+                    v for (_, v, *_) in cycle_edges
+                ]
                 cycle_desc = " -> ".join(cycle_nodes)
             except Exception:
                 cycle_desc = "(could not extract cycle nodes)"
@@ -391,10 +496,14 @@ class DAG:
         """Build a combined NetworkX DiGraph of regular and exec-order dependencies."""
         G = nx.DiGraph()
         G.add_nodes_from(self.nodes.keys())
-        for src, dsts in self.edges.items():
+        for src, dsts in list(self.edges.items()):
             for dst in dsts:
                 G.add_edge(src, dst)
-        for stage_name, rule in self.automata.transition_rules.items():
+        rules = self.automata.transition_rules
+        for stage_name in list(rules):
+            rule = rules[stage_name] if stage_name in rules else None
+            if not rule:
+                continue
             for dep in rule.execution_order_dependencies:
                 G.add_edge(dep.stage_name, stage_name)
         return G
@@ -402,17 +511,39 @@ class DAG:
     def _build_adjacency(self) -> Dict[str, List[str]]:
         """Return adjacency list for combined graph using defaultdict(list)."""
         adjacency = defaultdict(list)
-        for name in self.nodes.keys():
+        for name in list(self.nodes.keys()):
             _ = adjacency[name]
-        for src, dsts in self.edges.items():
+        for src, dsts in list(self.edges.items()):
             adjacency[src].extend(dsts)
-        for stage_name, rule in self.automata.transition_rules.items():
+        rules = self.automata.transition_rules
+        for stage_name in list(rules):
+            rule = rules[stage_name] if stage_name in rules else None
+            if not rule:
+                continue
             for dep in rule.execution_order_dependencies:
                 adjacency[dep.stage_name].append(stage_name)
         return dict(adjacency)
+
+    def _validate_mandatory_feasibility(self) -> None:
+        """Ensure each stage can possibly satisfy its mandatory input count.
+
+        If a stage declares mandatory > number of incoming regular edges,
+        fail fast with a clear error.
+        """
+        errors: List[str] = []
+        for stage_name, stage in self.nodes.items():
+            incoming = [
+                src for src, dsts in self.edges.items() if stage_name in dsts
+            ]
+            mandatory, _optional = stage.required_input_counts()
+            if len(incoming) < mandatory:
+                errors.append(
+                    f"Stage '{stage_name}' requires {mandatory} inputs but only {len(incoming)} incoming edges"
+                )
+        if errors:
+            raise ValueError("; ".join(errors))
 
     def get_topological_order(self) -> List[str]:
         """Return a topological order of the combined graph for debugging/metrics."""
         G = self._build_combined_graph()
         return list(nx.topological_sort(G))
-

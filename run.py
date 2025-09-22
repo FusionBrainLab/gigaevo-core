@@ -15,12 +15,11 @@ Usage:
 
 import argparse
 import asyncio
-import json
 from datetime import datetime, timezone
 import os
 from pathlib import Path
 import time
-from typing import Any
+from urllib.parse import urlsplit
 
 # Main imports
 from loguru import logger
@@ -33,7 +32,6 @@ from src.evolution.engine import EngineConfig, EvolutionEngine
 from src.evolution.mutation.llm import LLMMutationOperator
 from src.evolution.mutation.parent_selector import (
     AllCombinationsParentSelector,
-    WeightedRandomParentSelector,
 )
 from src.evolution.strategies.map_elites import (
     BehaviorSpace,
@@ -45,35 +43,20 @@ from src.evolution.strategies.map_elites import (
     SumArchiveSelector,
     TopFitnessMigrantSelector,
 )
-from src.llm.wrapper import LLMConfig, LLMWrapper, MultiModelLLMWrapper
-from src.programs.automata import ExecutionOrderDependency
-from src.programs.program import Program
-from src.programs.stages.base import Stage
-from src.programs.stages.execution import (
-    RunCodeStage,
-    RunPythonCode,
-    RunValidationStage,
-)
-from src.programs.stages.insights import (
-    GenerateLLMInsightsStage,
-    InsightsConfig,
-)
-from src.programs.stages.insights_lineage import (
-    GenerateLineageInsightsStage,
-    LineageInsightsConfig,
-)
+from src.llm.wrapper import LLMConfig, MultiModelLLMWrapper
 from src.programs.metrics.context import MetricsContext
 from src.programs.metrics.formatter import MetricsFormatter
 from src.problems.context import ProblemContext
-from src.problems.layout import ProblemLayout as PL
 from src.problems.initial_loaders import (
     DirectoryProgramLoader,
     RedisTopProgramsLoader,
 )
-from src.programs.stages.metrics import EnsureMetricsStage
-from src.programs.stages.validation import ValidateCodeStage
-from src.runner.dag_spec import DAGSpec
 from src.runner.manager import RunnerConfig, RunnerManager
+from src.runner.pipeline_factory import (
+    PipelineContext,
+    DefaultPipelineBuilder,
+    ContextPipelineBuilder,
+)
 
 # Setup logging first
 from src.utils.logger_setup import setup_logger
@@ -93,12 +76,12 @@ def parse_arguments() -> argparse.Namespace:
         epilog="""
 Examples:
   # Use initial programs from directory
-  %(prog)s --problem-dir problems/hexagon_pack --min-fitness 0 --max-fitness 100
-  %(prog)s --problem-dir problems/hexagon_pack --redis-db 1 --verbose --min-fitness 0 --max-fitness 100
+  %(prog)s --problem-dir problems/hexagon_pack
+  %(prog)s --problem-dir problems/hexagon_pack --redis-db 1
   
   # Use top programs from existing Redis database (by fitness)
-  %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --source-redis-db 0 --top-n 30 --min-fitness 0 --max-fitness 100
-  %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --redis-host remote-host --redis-port 6379 --source-redis-db 2 --top-n 50 --min-fitness 0 --max-fitness 100
+  %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --source-redis-db 0 --top-n 30
+  %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --redis-host remote-host --redis-port 6379 --source-redis-db 2 --top-n 50
         """,
     )
 
@@ -117,6 +100,12 @@ Examples:
 
     # Redis configuration
     redis_group = parser.add_argument_group("Redis Configuration")
+    redis_group.add_argument(
+        "--redis-url",
+        type=str,
+        default=None,
+        help="Redis URL, e.g. redis://host:port/db (overrides host/port/db flags)",
+    )
     redis_group.add_argument(
         "--redis-host",
         type=str,
@@ -161,6 +150,12 @@ Examples:
         help="Use Redis selection instead of initial programs directory",
     )
     redis_selection_group.add_argument(
+        "--source-redis-url",
+        type=str,
+        default=None,
+        help="Source Redis URL for program selection (overrides source host/port/db)",
+    )
+    redis_selection_group.add_argument(
         "--source-redis-db",
         type=int,
         default=0,
@@ -186,9 +181,6 @@ Examples:
         type=str,
         default="logs",
         help="Directory for log files (default: logs)",
-    )
-    logging_group.add_argument(
-        "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
 
     # Performance configuration
@@ -282,155 +274,8 @@ def create_island_configs(
     ]
 
 
-def create_dag_stages(
-    llm_wrapper: dict[str, LLMWrapper],
-    redis_storage: RedisProgramStorage,
-    task_description: str,
-    problem_ctx: ProblemContext,
-    metrics_context: MetricsContext,
-    metrics_formatter: MetricsFormatter | None = None,
-    add_context: bool = False,
-) -> dict[str, Stage]:
-    """Create optimized DAG stages with stage-specific timeouts and resource allocation."""
-
-    stages = {}
-
-    stages["ValidateCompiles"] = lambda: ValidateCodeStage(
-        stage_name="ValidateCompiles",
-        max_code_length=24000,
-        timeout=30.0,
-        safe_mode=True,
-    )
-
-    if add_context:
-        stages["AddContext"] = lambda: RunPythonCode(
-            code=problem_ctx.load_text("context.py"),
-            stage_name="AddContext",
-            function_name="build_context",
-            python_path=[problem_ctx.problem_dir.resolve()],
-            timeout=120.0,
-            max_memory_mb=1024,
-        )
-
-    stages["ExecuteCode"] = lambda: RunCodeStage(
-        stage_name="ExecuteCode",
-        function_name="entrypoint",
-        context_stage="AddContext" if add_context else None,
-        python_path=[problem_ctx.problem_dir.resolve()],
-        timeout=600.0,
-        max_memory_mb=512,
-    )
-
-    validator_path = problem_ctx.problem_dir / "validate.py"
-    stages["RunValidation"] = lambda: RunValidationStage(
-        stage_name="RunValidation",
-        validator_path=validator_path,
-        data_to_validate_stage="ExecuteCode",
-        context_stage="AddContext" if add_context else None,
-        function_name="validate",
-        timeout=60.0,
-    )
-
-    # MetricsContext is provided by caller
-
-    def create_insights_stage():
-        return GenerateLLMInsightsStage(
-            config=InsightsConfig(
-                llm_wrapper=llm_wrapper["insights"],
-                evolutionary_task_description=task_description,
-                max_insights=8,
-                output_format="text",
-                metrics_context=metrics_context,
-                metrics_formatter=metrics_formatter,
-                metadata_key="insights",
-                excluded_error_stages=[
-                    "FactoryMetricUpdate",
-                ],
-            ),
-            timeout=600.0,
-        )
-
-    def create_lineage_insights_stage():
-        return GenerateLineageInsightsStage(
-            config=LineageInsightsConfig(
-                llm_wrapper=llm_wrapper["lineage"],
-                metrics_context=metrics_context,
-                metrics_formatter=metrics_formatter,
-                parent_selection_strategy="best_fitness",
-                task_description=task_description,
-            ),
-            storage=redis_storage,
-            timeout=600,
-        )
-
-    stages["LLMInsights"] = create_insights_stage
-    stages["LineageInsights"] = create_lineage_insights_stage
-
-    # Stage 5a: Validation metrics factory (FAST - 15s timeout)
-    def validation_metrics_factory() -> dict[str, Any]:
-        """Factory function that creates default validation metrics when validation fails."""
-        return {
-            "fitness": -1000.0,  # Very bad fitness for failed programs
-            "is_valid": 0,
-        }
-
-    stages["ValidationMetricUpdate"] = lambda: EnsureMetricsStage(
-        stage_name="ValidationMetricUpdate",
-        stage_to_extract_metrics="RunValidation",
-        metrics_factory=validation_metrics_factory,
-        metrics_context=metrics_context,
-        timeout=15.0,
-    )
-
-    return stages
-
-
-def create_dag_edges(add_context: bool = False) -> dict[str, list[str]]:
-    """Define the DAG execution dependencies."""
-    base_dag = {
-        "ValidateCompiles": [
-            "ExecuteCode",
-        ],  # Both can run after validation
-        "ExecuteCode": ["RunValidation"],
-        "RunValidation": [],
-        "LLMInsights": [],  # Terminal stage
-        "LineageInsights": [],  # Terminal stage
-        "ValidationMetricUpdate": [],
-    }
-    if add_context:
-        # first create code, then everything else
-        base_dag["AddContext"] = [
-            "ValidateCompiles",
-        ]
-    return base_dag
-
-
-def create_execution_order_deps() -> dict[str, list[ExecutionOrderDependency]]:
-    """Define execution order dependencies for stages that should run under special conditions."""
-    return {
-        "ValidationMetricUpdate": [
-            ExecutionOrderDependency.always_after("ValidateCompiles"),
-            ExecutionOrderDependency.always_after("ExecuteCode"),
-            ExecutionOrderDependency.always_after("RunValidation"),
-        ],
-        "LLMInsights": [
-            ExecutionOrderDependency.always_after("ValidateCompiles"),
-            ExecutionOrderDependency.always_after("ExecuteCode"),
-            ExecutionOrderDependency.always_after("RunValidation"),
-            ExecutionOrderDependency.always_after("ValidationMetricUpdate"),
-        ],
-        "LineageInsights": [
-            ExecutionOrderDependency.always_after("ValidateCompiles"),
-            ExecutionOrderDependency.always_after("ExecuteCode"),
-            ExecutionOrderDependency.always_after("RunValidation"),
-            ExecutionOrderDependency.always_after("ValidationMetricUpdate"),
-        ],
-    }
-
-
 async def create_evolution_strategy(
     redis_storage: RedisProgramStorage,
-    args: argparse.Namespace,
     metrics_context: MetricsContext,
 ) -> MapElitesMultiIsland:
 
@@ -477,7 +322,6 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     }
 
     def build_wrapper_with_params(
-        stage: str,
         params: dict[str, float],
     ) -> MultiModelLLMWrapper:
 
@@ -493,17 +337,41 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
         )
 
     res = {
-        stage: build_wrapper_with_params(stage, params)
+        stage: build_wrapper_with_params(params)
         for stage, params in settings_per_stage.items()
     }
     return res
 
 
-async def run_evolution_experiment(args: argparse.Namespace):
+def _resolve_redis_url(
+    host: str, port: int, db: int, url_override: str | None
+) -> str:
+    """Build a Redis URL from host/port/db unless an override is provided."""
+    if url_override:
+        return url_override
+    return f"redis://{host}:{port}/{db}"
+
+
+def _parse_redis_url(url: str) -> tuple[str, int, int]:
+    """Parse a redis://host:port/db URL into components."""
+    parts = urlsplit(url)
+    host = parts.hostname or "localhost"
+    port = parts.port or 6379
+    db: int
+    try:
+        db = int((parts.path or "/0").lstrip("/"))
+    except ValueError:
+        db = 0
+    return host, port, db
+
+
+async def run_evolution_experiment(
+    cli_args: argparse.Namespace, log_file_path: str
+):
     """Run the complete evolution experiment with provided configuration."""
 
     start_time = time.time()
-    problem_dir = Path(args.problem_dir)
+    problem_dir = Path(cli_args.problem_dir)
 
     logger.info("🔄 Starting MetaEvolve Evolution Experiment")
     logger.info(f"📁 Problem directory: {problem_dir}")
@@ -511,9 +379,15 @@ async def run_evolution_experiment(args: argparse.Namespace):
     logger.info(f"🕐 Start time: {datetime.now(timezone.utc).isoformat()}")
 
     # Setup Redis storage
+    target_redis_url = _resolve_redis_url(
+        cli_args.redis_host,
+        cli_args.redis_port,
+        cli_args.redis_db,
+        cli_args.redis_url,
+    )
     redis_storage = RedisProgramStorage(
         RedisProgramStorageConfig(
-            redis_url=f"redis://{args.redis_host}:{args.redis_port}/{args.redis_db}",
+            redis_url=target_redis_url,
             key_prefix=f"{problem_dir.name}_evolution",
             max_connections=150,
             connection_pool_timeout=45.0,
@@ -526,31 +400,37 @@ async def run_evolution_experiment(args: argparse.Namespace):
     try:
         # Clear the target database to start fresh
         logger.info(
-            f"🧹 Clearing Redis database {args.redis_db} for restart..."
+            f"🧹 Clearing Redis database {cli_args.redis_db} for restart..."
         )
-        redis_conn = await redis_storage._conn()
-        await redis_conn.flushdb()
-        logger.info(f"✓ Redis database {args.redis_db} cleared")
+        await redis_storage.flushdb()
+        logger.info(f"✓ Redis database {cli_args.redis_db} cleared")
 
         # Build problem context (centralized assets)
         problem_ctx = ProblemContext(problem_dir)
-        problem_ctx.validate(add_context=args.add_context)
+        problem_ctx.validate(add_context=cli_args.add_context)
         metrics_context = problem_ctx.metrics_context
 
         # Initialize new DB with initial programs
-        if args.use_redis_selection:
+        if cli_args.use_redis_selection:
             logger.info(
                 "🔍 Initializing database with selected programs from Redis..."
             )
             primary_key = metrics_context.get_primary_spec().key
+            source_host = cli_args.redis_host
+            source_port = cli_args.redis_port
+            source_db = cli_args.source_redis_db
+            if cli_args.source_redis_url:
+                source_host, source_port, source_db = _parse_redis_url(
+                    cli_args.source_redis_url
+                )
             loader = RedisTopProgramsLoader(
-                source_host=args.redis_host,
-                source_port=args.redis_port,
-                source_db=args.source_redis_db,
+                source_host=source_host,
+                source_port=source_port,
+                source_db=source_db,
                 key_prefix=f"{problem_dir.name}_evolution",
                 metric_key=primary_key,
                 higher_is_better=metrics_context.is_higher_better(primary_key),
-                top_n=args.top_n,
+                top_n=cli_args.top_n,
             )
             programs = await loader.load(redis_storage)
         else:
@@ -570,22 +450,27 @@ async def run_evolution_experiment(args: argparse.Namespace):
             metrics_context, use_range_normalization=False
         )
 
-        dag_stages = create_dag_stages(
-            llm_wrapper,
-            redis_storage,
-            task_description,
-            problem_ctx,
-            metrics_context,
-            metrics_formatter,
-            args.add_context,
+        pctx = PipelineContext(
+            problem_ctx=problem_ctx,
+            metrics_context=metrics_context,
+            metrics_formatter=metrics_formatter,
+            llm_wrapper=llm_wrapper,
+            storage=redis_storage,
+            task_description=task_description,
+            add_context=cli_args.add_context,
         )
-        dag_edges = create_dag_edges(args.add_context)
-        execution_order_deps = create_execution_order_deps()
+        if cli_args.add_context:
+            builder = ContextPipelineBuilder(pctx)
+        else:
+            builder = DefaultPipelineBuilder(pctx)
+        dag_spec = builder.set_limits(
+            dag_timeout=1800, max_parallel=8
+        ).build_spec()
 
         # Create evolution strategy
         logger.info("Creating evolution strategy...")
         evolution_strategy = await create_evolution_strategy(
-            redis_storage, args, metrics_context
+            redis_storage, metrics_context
         )
 
         # Create LLM mutation operator
@@ -616,14 +501,15 @@ async def run_evolution_experiment(args: argparse.Namespace):
                 island.config.behavior_space.behavior_keys
             )
 
-        # TODO refactor? Create an abstraction for `function filter` which drops unsuitable programs; e.g. when metrics are missing
+        # Note: Consider an abstraction for a function filter to drop unsuitable programs
+        # (e.g., when metrics are missing).
         logger.info("Creating evolution engine...")
 
         engine_config = EngineConfig(
             loop_interval=1.0,
             max_elites_per_generation=5,  # INCREASED: More elites for better diversity preservation
             max_mutations_per_generation=8,  # INCREASED: More mutations per generation for faster exploration
-            max_generations=args.max_generations,  # Pass max_generations from command line
+            max_generations=cli_args.max_generations,  # Pass max_generations from command line
             required_behavior_keys=required_behavior_keys,
             parent_selector=AllCombinationsParentSelector(num_parents=2),
         )
@@ -639,20 +525,14 @@ async def run_evolution_experiment(args: argparse.Namespace):
         logger.info("Creating runner...")
         runner_config = RunnerConfig(
             poll_interval=5.0,
-            max_concurrent_dags=args.max_concurrent_dags,
+            max_concurrent_dags=cli_args.max_concurrent_dags,
             log_interval=15,
             dag_timeout=1800,
         )
 
         runner = RunnerManager(
             engine=evolution_engine,
-            dag_spec=DAGSpec(
-                nodes=dag_stages,
-                edges=dag_edges,
-                exec_order_deps=execution_order_deps,
-                dag_timeout=1800,
-                max_parallel_stages=8,
-            ),
+            dag_spec=dag_spec,
             storage=redis_storage,
             config=runner_config,
         )
@@ -660,34 +540,27 @@ async def run_evolution_experiment(args: argparse.Namespace):
         logger.info("🎯 Starting evolution run...")
         logger.info("Configuration:")
         logger.info(f"  - Problem directory: {problem_dir}")
-        logger.info(f"  - Target DB: {args.redis_db}")
+        logger.info(f"  - Target DB: {cli_args.redis_db}")
         logger.info(f"  - Initial population: {len(programs)} programs")
         logger.info(
-            f"  - Max generations: {args.max_generations if args.max_generations else 'unlimited'}"
+            f"  - Max generations: {cli_args.max_generations if cli_args.max_generations else 'unlimited'}"
         )
-        logger.info(f"  - DAG stages: {list(dag_stages.keys())}")
+        logger.info(f"  - DAG stages: {list(dag_spec.nodes)}")
 
         await runner.run()
 
     except KeyboardInterrupt:
         logger.info("🛑 Evolution experiment interrupted by user")
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logger.error(f"❌ Evolution experiment failed: {e}")
         raise
     finally:
         # Improved cleanup with connection pool closure
         logger.info("🧹 Starting cleanup...")
         try:
-            redis_conn = await redis_storage._conn()
-            if redis_conn:
-                # Close the connection pool properly
-                if hasattr(redis_conn, "connection_pool"):
-                    await redis_conn.connection_pool.disconnect()
-                    logger.info("✓ Redis connection pool closed")
-                if hasattr(redis_conn, "close"):
-                    await redis_conn.close()
-                    logger.info("✓ Redis connection closed")
-        except Exception as cleanup_error:
+            await redis_storage.close()
+            logger.info("✓ Redis connection closed")
+        except Exception as cleanup_error:  # pylint: disable=broad-except
             logger.warning(f"⚠️ Redis cleanup warning: {cleanup_error}")
         logger.info("🧹 Cleanup completed")
 
@@ -699,20 +572,15 @@ async def run_evolution_experiment(args: argparse.Namespace):
         logger.info(f"🕐 End time: {datetime.now(timezone.utc).isoformat()}")
 
 
-if __name__ == "__main__":
+def main() -> int:
+    """CLI entrypoint for running MetaEvolve experiment."""
     # Parse command-line arguments
-    args = parse_arguments()
-
-    # Setup logging based on arguments
-    if args.verbose:
-        log_level = "DEBUG"
-    else:
-        log_level = args.log_level
+    cli_args = parse_arguments()
 
     # Reconfigure logging with user preferences
     log_file_path = setup_logger(
-        log_dir=args.log_dir,
-        level=log_level,
+        log_dir=cli_args.log_dir,
+        level=cli_args.log_level,
         rotation="50 MB",
         retention="30 days",
     )
@@ -720,12 +588,17 @@ if __name__ == "__main__":
     # Check prerequisites
     if not os.getenv("OPENROUTER_API_KEY"):
         logger.error("❌ OPENROUTER_API_KEY environment variable must be set")
-        exit(1)
+        raise SystemExit(1)
 
-    problem_dir = Path(args.problem_dir)
-    if not problem_dir.exists():
-        logger.error(f"❌ Problem directory not found: {problem_dir}")
-        exit(1)
+    cli_problem_dir = Path(cli_args.problem_dir)
+    if not cli_problem_dir.exists():
+        logger.error(f"❌ Problem directory not found: {cli_problem_dir}")
+        raise SystemExit(1)
 
     # Run the evolution experiment
-    asyncio.run(run_evolution_experiment(args))
+    asyncio.run(run_evolution_experiment(cli_args, log_file_path))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

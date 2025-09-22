@@ -31,35 +31,41 @@ class EnsureMetricsStage(Stage):
 
     def __init__(
         self,
-        stage_to_extract_metrics: str,
         metrics_factory: dict[str, Any] | Callable[[], dict[str, Any]],
         metrics_context: MetricsContext,
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.stage_to_extract_metrics = stage_to_extract_metrics
         self.metrics_factory = metrics_factory
         # Always derive required keys from metrics context
         self.required_keys = set(metrics_context.specs.keys())
         self.metrics_context = metrics_context
 
+    def required_input_counts(self) -> tuple[int, int]:
+        # 0 required, 1 optional metrics input
+        return (0, 1)
+
     async def _execute_stage(
         self, program: Program, started_at: datetime
     ) -> ProgramStageResult:
-        logger.debug(f"[{self.stage_name}] Using source='{self.stage_to_extract_metrics}'")
+        # Prefer first upstream dict payload; otherwise use factory defaults
+        inputs = self.get_inputs_seq()
+        if inputs and isinstance(c := inputs[0], dict):
+            metrics_input, src = c, "previous_stage"
+        else:
+            metrics_input, src = self._get_factory_metrics(), "factory"
 
-        metrics_dict, source = self._get_metrics(program)
-        final_metrics = self._process_metrics(program, metrics_dict)
+        final_metrics = self._process_metrics(metrics_input)
         program.add_metrics(final_metrics)
 
         # Export numeric metrics to Prometheus (optional no-op when disabled)
         try:
             MetricsService.export_dict("program", program.metrics)
-        except Exception:
-            pass
+        except Exception as exc:  # best-effort export
+            logger.debug(f"[{self.stage_name}] Metrics export skipped: {exc}")
 
         logger.debug(
-            f"[{self.stage_name}] Program {program.id}: Updated {len(final_metrics)} metrics from {source}"
+            f"[{self.stage_name}] Program {program.id}: Updated {len(final_metrics)} metrics from {src}"
         )
 
         return build_stage_result(
@@ -69,24 +75,9 @@ class EnsureMetricsStage(Stage):
                 "stored_metrics": True,
                 "metrics_count": len(final_metrics),
                 "metrics_keys": list(final_metrics.keys()),
-                "metrics_source": source,
+                "metrics_source": src,
             },
         )
-
-    def _get_metrics(self, program: Program) -> tuple[dict[str, Any], str]:
-        """Return a metrics dict and its source ('previous_stage' or 'factory')."""
-        if (prev_result := program.stage_results.get(self.stage_to_extract_metrics)) and prev_result.is_completed() and isinstance(prev_result.output, dict):
-            metrics = prev_result.output
-            logger.debug(f"[{self.stage_name}] Prev-stage keys={list(metrics.keys())}")
-            if self._has_required_keys(metrics):
-                return metrics, "previous_stage"
-            else:
-                missing = list(self.required_keys - set(metrics.keys()))
-                logger.debug(f"[{self.stage_name}] Missing keys {missing} → fallback to factory")
-
-        fm = self._get_factory_metrics()
-        logger.debug(f"[{self.stage_name}] Factory keys={list(fm.keys())}")
-        return fm, "factory"
 
     def _has_required_keys(self, metrics: dict[str, Any]) -> bool:
         """Check that all required keys are present in the given mapping."""
@@ -96,7 +87,11 @@ class EnsureMetricsStage(Stage):
 
     def _get_factory_metrics(self) -> dict[str, Any]:
         """Safely call/copy the metrics factory and return a dict."""
-        metrics = self.metrics_factory() if callable(self.metrics_factory) else dict(self.metrics_factory)
+        metrics = (
+            self.metrics_factory()
+            if callable(self.metrics_factory)
+            else dict(self.metrics_factory)
+        )
         if not isinstance(metrics, dict):
             raise StageError(
                 f"Factory must return a dictionary, got {type(metrics).__name__}",
@@ -109,12 +104,12 @@ class EnsureMetricsStage(Stage):
         """Convert to float, ensure finiteness, and clamp to bounds for a single metric."""
         try:
             value = float(raw_value)
-        except Exception:
+        except Exception as exc:
             raise StageError(
                 f"Metric '{key}' must be numeric, got {type(raw_value).__name__}",
                 stage_name=self.stage_name,
                 stage_type="metrics_type",
-            )
+            ) from exc
 
         if not math.isfinite(value):
             raise StageError(
@@ -131,10 +126,12 @@ class EnsureMetricsStage(Stage):
                 value = hi
         return value
 
-    def _process_metrics(self, program: Program, metrics: dict[str, Any]) -> dict[str, float]:
+    def _process_metrics(self, metrics: dict[str, Any]) -> dict[str, float]:
         """Select required keys and normalize each value via _coerce_and_clamp."""
         required = list(self.required_keys)
-        logger.debug(f"[{self.stage_name}] Required={required} | available={list(metrics.keys())}")
+        logger.debug(
+            f"[{self.stage_name}] Required={required} | available={list(metrics.keys())}"
+        )
 
         # Presence check first for clear error messages
         missing = [k for k in required if metrics.get(k) is None]
@@ -157,12 +154,19 @@ class NormalizeMetricsStage(Stage):
     - Optionally compute an aggregate score as the mean of normalized metrics.
     """
 
-    def __init__(self, metrics_context: MetricsContext, aggregate_key: str = "normalized_score", **kwargs):
+    def __init__(
+        self,
+        metrics_context: MetricsContext,
+        aggregate_key: str = "normalized_score",
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
         self.aggregate_key = aggregate_key
 
-    async def _execute_stage(self, program: Program, started_at: datetime) -> ProgramStageResult:
+    async def _execute_stage(
+        self, program: Program, started_at: datetime
+    ) -> ProgramStageResult:
         normalized: dict[str, float] = {}
         for key, _spec in self.metrics_context.specs.items():
             if (bounds := self.metrics_context.get_bounds(key)) is None:
@@ -191,7 +195,10 @@ class NormalizeMetricsStage(Stage):
         return build_stage_result(
             status=StageState.COMPLETED,
             started_at=started_at,
-            output={"normalized_keys": list(normalized.keys()), "aggregate": program.metrics.get(self.aggregate_key)},
+            output={
+                "normalized_keys": list(normalized.keys()),
+                "aggregate": program.metrics.get(self.aggregate_key),
+            },
         )
 
     # NormalizeMetricsStage intentionally contains only normalization logic
