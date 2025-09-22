@@ -1,25 +1,22 @@
-"""DAG runner: scheduling vs dataflow
+"""DAG runner: execution-order vs dataflow (mandatory/optional inputs)
 
 Concepts
 - Execution-order dependencies: control when a stage is allowed to start.
-  They do not carry data. Used for sequencing (e.g., always_after, on_success).
+  They do not carry data. Use for sequencing (e.g., always_after, on_success).
 - Regular edges: carry data only. They never gate readiness or auto-skip.
-  The runner collects predecessor outputs according to the stage's
-  join_policy() and required_input_bounds().
+  The runner collects predecessor outputs strictly in incoming-edge order.
 
 Interplay
 - Readiness is decided using execution-order deps only.
-- At launch, the runner selects predecessor outputs:
-  - join_policy == "all": require that all predecessors completed successfully
-    with outputs; otherwise the stage is skipped (data contract not met).
-  - join_policy == "any": take any available successful outputs (possibly none).
-- The collected inputs are validated against required_input_bounds(). If the
-  count is outside [min, max], the stage is skipped with an explicit reason.
+- At launch, the runner waits until all predecessors reach a final state and
+  collects all successful predecessor outputs in edge order.
+- Each stage declares required_input_counts() -> (mandatory, optional_max).
+  - If fewer than 'mandatory' inputs are available, the stage is skipped.
+  - Otherwise, the stage receives up to mandatory + optional_max inputs.
 
-Soft edges
-- If a stage declares join_policy=="any" and min_inputs==0, its incoming
-  edges are treated as soft: they will not block readiness nor cause skip when
-  upstream fails; the stage may fall back to internal defaults.
+Notes
+- This replaces earlier join-policy/bounds; the model is simpler and explicit.
+- Edges remain data-only; sequencing is expressed via execution-order deps.
 """
 
 import asyncio

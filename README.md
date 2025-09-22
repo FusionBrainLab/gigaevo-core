@@ -283,10 +283,13 @@ High-performance evolutionary loop with configurable strategies:
 
 #### 2. DAG Pipeline System
 Flexible program execution pipeline with parallel processing:
-- **Code Validation**: Syntax checking and compilation verification
-- **Sandboxed Execution**: Safe program execution with resource limits
-- **Multi-Stage Evaluation**: Custom fitness, behavior, and complexity evaluation
-- **Metrics Collection**: Comprehensive performance and structural analysis
+- Execution-order deps: sequencing only (on_success/always_after)
+- Dataflow via edges: edges carry data only, never gate readiness
+- Mandatory/optional inputs: each stage declares (mandatory, optional_max)
+- Code Validation: Syntax checking and compilation verification
+- Sandboxed Execution: Safe program execution with resource limits
+- Multi-Stage Evaluation: Custom fitness, behavior, and complexity evaluation
+- Metrics Collection: Comprehensive performance and structural analysis
 
 #### 3. Runner Orchestration
 Coordinates evolution and execution with high concurrency:
@@ -310,12 +313,11 @@ The system uses three specialized islands:
 
 ### Execution Pipeline
 
-1. **Validation**: Check code compilation and syntax
-2. **Execution**: Run the program to generate solutions
-3. **Complexity Analysis**: Compute structural metrics
-4. **Validation**: Evaluate solution quality
-5. **Insights Generation**: Generate LLM-based insights
-6. **Metrics Collection**: Aggregate performance data
+1. Validation: Check code compilation and syntax
+2. Execution: Run the program to generate solutions
+3. Domain Validation: Evaluate solution quality (fixed validator code)
+4. Insights Generation: Generate LLM-based insights
+5. Metrics Collection: Aggregate performance data
 
 ## 🔄 How It Works
 
