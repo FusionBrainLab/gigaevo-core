@@ -1,3 +1,28 @@
+## 0.9.0 (2025-01-XX)
+
+### DAG Builder GUI Enhancements
+- **Unique Name Management**: Implemented automatic counter appending for duplicate stage names (e.g., `TestStage`, `TestStage_1`, `TestStage_2`) to prevent export errors
+- **Real-time Validation**: Added client-side validation in Stage Editor to prevent duplicate custom names with visual feedback
+- **Connection Validation**: Fixed port type compatibility - execution edges only snap to execution ports, data edges only to data input ports
+- **Color Consistency**: Fixed color calculation across all components (StageNode, MiniMap, NodeDetails) to use original stage type instead of unique names
+- **Event Handling**: Added click debouncing and removed double-click handlers to prevent accidental duplicate stage creation
+- **Backend Validation**: Enhanced DAG export validation to check for unique stage names and prevent faulty graph exports
+
+### Development Infrastructure
+- **Node.js Support**: Added comprehensive `.gitignore` patterns for Node.js dependencies, build outputs, and cache files
+- **Installation Guide**: Updated README with detailed setup instructions for both Python backend and React frontend
+- **Requirements Management**: Added `requirements.txt` for Python dependencies and improved startup scripts
+
+### Technical Improvements
+- **State Management**: Improved React state handling to prevent race conditions and duplicate node creation
+- **Port System**: Enhanced connection validation with proper source/target handle checking
+- **Export System**: Fixed edge mapping to use unique names for proper DAG structure validation
+
+Notes:
+- All duplicate stage instances now maintain consistent colors based on original stage type
+- Connection system enforces proper port type compatibility with visual feedback
+- Backend validation prevents export of DAGs with duplicate stage identifiers
+
 ## 0.7.0 (2025-09-20)
 
 - Problem scaffolding and layout standardization:
