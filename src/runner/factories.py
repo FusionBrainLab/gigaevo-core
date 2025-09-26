@@ -40,7 +40,7 @@ class DagFactory:
 
         return DAG(
             nodes=new_nodes,
-            edges=self._spec.edges,
+            data_flow_edges=self._spec.data_flow_edges,
             state_manager=state_manager,
             execution_order_deps=self._spec.exec_order_deps,
             max_parallel_stages=self._spec.max_parallel_stages,

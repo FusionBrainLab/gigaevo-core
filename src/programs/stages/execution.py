@@ -22,9 +22,8 @@ from src.programs.utils import (
     dedent_code,
     run_python_snippet,
 )
-
-from .base import Stage
-from .decorators import retry
+from src.programs.stages.base import Stage
+from src.runner.stage_registry import StageRegistry
 
 INPUT_SIZE_THRESHOLD = 8 * 1024
 
@@ -186,18 +185,37 @@ class PythonCodeExecutor(Stage):
         raise NotImplementedError
 
 
+@StageRegistry.register(
+    description="Execute program code with optional inputs"
+)
 class RunProgramCodeWithOptionalProducedData(PythonCodeExecutor):
     """Execute program.code with up to one optional data input from DAG edges."""
 
-    def required_input_counts(self) -> tuple[int, int]:
-        # 0 mandatory, up to 1 optional
-        return (0, 1)
+    @classmethod
+    def mandatory_inputs(cls) -> list[str]:
+        return []
+
+    @classmethod
+    def optional_inputs(cls) -> list[str]:
+        return ["program_output", "context_data"]
 
     async def _execute_stage(
         self, program: Program, started_at: datetime
     ) -> ProgramStageResult:
-        inputs = self.get_inputs_seq()
-        arg = inputs[0] if inputs else None
+        # Get optional inputs
+        program_output = self.get_input_optional("program_output")
+        context_data = self.get_input_optional("context_data")
+        
+        # If we have context_data, pass it as the argument
+        # If we have program_output, pass it as the argument
+        # If we have both, pass them as a tuple
+        if context_data is not None and program_output is not None:
+            arg = (program_output, context_data)
+        elif context_data is not None:
+            arg = context_data
+        else:
+            arg = program_output
+            
         code_str = program.code
         return await self._run_with(
             program=program,
@@ -216,9 +234,13 @@ class RunProgramCodeWithConstantData(PythonCodeExecutor):
         super().__init__(**kwargs)
         self._constant_data = constant_data
 
-    def required_input_counts(self) -> tuple[int, int]:
-        # All data comes from constructor; do not accept edge inputs
-        return (0, 0)
+    @classmethod
+    def mandatory_inputs(cls) -> list[str]:
+        return []
+
+    @classmethod
+    def optional_inputs(cls) -> list[str]:
+        return []
 
     async def _execute_stage(
         self, program: Program, started_at: datetime
@@ -232,7 +254,51 @@ class RunProgramCodeWithConstantData(PythonCodeExecutor):
         )
 
 
-@retry(times=2, backoff=0.1)
+@StageRegistry.register(
+    description="Run constant Python code from a file"
+)
+class RunConstantPythonCode(PythonCodeExecutor):
+    """Run a constant Python file function (e.g., build_context) with no inputs.
+
+    Produces whatever the function returns as this stage's output.
+    """
+
+    def __init__(self, *, context_path: Path, function_name: str = "build_context", **kwargs):
+        self.context_path = Path(context_path)
+        if not self.context_path.exists():
+            raise ValidationError(f"Context file not found: {self.context_path}")
+        try:
+            self.context_code = self.context_path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise ValidationError(f"Failed to read context file: {e}") from e
+
+        super().__init__(
+            function_name=function_name,
+            python_path=[self.context_path.parent],
+            **kwargs,
+        )
+
+    @classmethod
+    def mandatory_inputs(cls) -> list[str]:
+        return []
+
+    @classmethod
+    def optional_inputs(cls) -> list[str]:
+        return []
+
+    async def _execute_stage(
+        self, program: Program, started_at: datetime
+    ) -> ProgramStageResult:
+        return await self._run_with(
+            program=program,
+            started_at=started_at,
+            code_str=self.context_code,
+            argument=None,
+        )
+
+@StageRegistry.register(
+    description="Run validation code on program output"
+)
 class ValidatorCodeExecutor(PythonCodeExecutor):
     """Run fixed validator code (from file path) on 1 required + 1 optional input."""
 
@@ -260,20 +326,26 @@ class ValidatorCodeExecutor(PythonCodeExecutor):
             **kwargs,
         )
 
-    def required_input_counts(self) -> tuple[int, int]:
-        return (1, 1)
+    @classmethod
+    def mandatory_inputs(cls) -> list[str]:
+        return ["program_output"]
+
+    @classmethod
+    def optional_inputs(cls) -> list[str]:
+        return ["context_data"]
+
 
     async def _execute_stage(
         self, program: Program, started_at: datetime
     ) -> ProgramStageResult:
-        inputs = self.get_inputs_seq()
-        if not inputs:
-            raise StageError(
-                "Validation requires at least one upstream output",
-                stage_name=self.stage_name,
-                stage_type="validation",
-            )
-        arg: Any = inputs[0] if len(inputs) == 1 else (inputs[0], inputs[1])
+        # Get inputs by semantic name
+        program_output = self.get_input("program_output")
+        context_data = self.get_input_optional("context_data")
+        
+        # Validation function expects (context, output_of_program)
+        # So context should be first, program_output should be second
+        arg = program_output if context_data is None else (context_data, program_output)
+        
         return await self._run_with(
             program=program,
             started_at=started_at,

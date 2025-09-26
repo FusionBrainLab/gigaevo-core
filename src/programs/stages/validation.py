@@ -14,10 +14,14 @@ from src.exceptions import (
 from src.programs.constants import DANGEROUS_PATTERNS
 from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.utils import build_stage_result
+from src.runner.stage_registry import StageRegistry
 
 from .base import Stage
 
 
+@StageRegistry.register(
+    description="Validate program code for syntax and security"
+)
 class ValidateCodeStage(Stage):
 
     def __init__(

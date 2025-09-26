@@ -8,6 +8,28 @@ from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.utils import format_error_for_llm
 
 
+class DataFlowEdge(BaseModel):
+    """Represents a data flow connection between stages with semantic input naming."""
+    source_stage: str = Field(
+        ..., description="Name of the source stage that produces data"
+    )
+    destination_stage: str = Field(
+        ..., description="Name of the destination stage that consumes data"
+    )
+    input_name: str = Field(
+        ..., description="Semantic name for this input in the destination stage"
+    )
+
+    @classmethod
+    def create(cls, source: str, destination: str, input_name: str) -> "DataFlowEdge":
+        """Create a data flow edge with explicit naming."""
+        return cls(
+            source_stage=source,
+            destination_stage=destination,
+            input_name=input_name
+        )
+
+
 class ExecutionOrderDependency(BaseModel):
     stage_name: str = Field(
         ..., description="Name of the stage this dependency refers to"

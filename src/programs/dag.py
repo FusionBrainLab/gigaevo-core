@@ -10,9 +10,9 @@ Interplay
 - Readiness is decided using execution-order deps only.
 - At launch, the runner waits until all predecessors reach a final state and
   collects all successful predecessor outputs in edge order.
-- Each stage declares required_input_counts() -> (mandatory, optional_max).
-  - If fewer than 'mandatory' inputs are available, the stage is skipped.
-  - Otherwise, the stage receives up to mandatory + optional_max inputs.
+- Each stage declares mandatory_inputs() and optional_inputs() as lists of input names.
+  - If any mandatory inputs are missing, the stage is skipped.
+  - Otherwise, the stage receives all mandatory inputs and any available optional inputs.
 
 Notes
 - This replaces earlier join-policy/bounds; the model is simpler and explicit.
@@ -27,7 +27,7 @@ import networkx as nx
 
 from loguru import logger
 
-from src.programs.automata import DAGAutomata, ExecutionOrderDependency
+from src.programs.automata import DAGAutomata, ExecutionOrderDependency, DataFlowEdge
 from src.programs.program import (
     Program,
     ProgramStageResult,
@@ -49,7 +49,7 @@ class DAG:
     def __init__(
         self,
         nodes: Dict[str, Stage],
-        edges: Dict[str, List[str]],
+        data_flow_edges: List[DataFlowEdge],
         state_manager: ProgramStateManager,
         *,
         execution_order_deps: Optional[
@@ -59,18 +59,24 @@ class DAG:
         dag_timeout: Optional[float] = 2400.0,
     ):
         self.nodes = nodes
-        self.edges = edges
+        self.data_flow_edges = data_flow_edges
         self.state_manager = state_manager
         self.dag_timeout = dag_timeout
         self._stage_names: Set[str] = set(self.nodes.keys())
         self.automata = DAGAutomata()
+        
+        # Build data flow mapping for semantic input names
+        self._data_flow_map = {}
+        for edge in data_flow_edges:
+            # Map: (source_stage, destination_stage) -> input_name
+            self._data_flow_map[(edge.source_stage, edge.destination_stage)] = edge.input_name
         # Validate configuration early (nodes/edges/entry points/exec deps/types)
         self._validate_graph_integrity(execution_order_deps or {})
         # Build transition rules
         self._setup_automata(execution_order_deps or {})
         self._validate_acyclic_graph()
         self._validate_dependencies()
-        self._validate_mandatory_feasibility()
+        self._validate_input_topology_consistency()
         self._stage_sema = asyncio.Semaphore(max(1, max_parallel_stages))
 
     def _validate_graph_integrity(
@@ -89,23 +95,20 @@ class DAG:
 
         stage_names = self._stage_names
 
-        # Validate edges sources and destinations
+        # Validate data flow edges sources and destinations
         unknown_sources = [
-            src for src in self.edges.keys() if src not in stage_names
+            edge.source_stage for edge in self.data_flow_edges if edge.source_stage not in stage_names
         ]
         if unknown_sources:
             raise ValueError(
-                f"Edges contain unknown source stage(s): {', '.join(sorted(set(unknown_sources)))}"
+                f"Data flow edges contain unknown source stage(s): {', '.join(sorted(set(unknown_sources)))}"
             )
         unknown_dests = [
-            dst
-            for dsts in self.edges.values()
-            for dst in dsts
-            if dst not in stage_names
+            edge.destination_stage for edge in self.data_flow_edges if edge.destination_stage not in stage_names
         ]
         if unknown_dests:
             raise ValueError(
-                f"Edges reference unknown destination stage(s): {', '.join(sorted(set(unknown_dests)))}"
+                f"Data flow edges reference unknown destination stage(s): {', '.join(sorted(set(unknown_dests)))}"
             )
 
         # Validate execution order dependencies
@@ -294,10 +297,11 @@ class DAG:
         # Do not change Program.state here; caller (scheduler) is responsible
 
     def _get_predecessors_in_order(self, stage_name: str) -> List[str]:
+        """Get predecessors based on data flow edges."""
         preds = []
-        for src, dsts in self.edges.items():
-            if stage_name in dsts:
-                preds.append(src)
+        for edge in self.data_flow_edges:
+            if edge.destination_stage == stage_name:
+                preds.append(edge.source_stage)
         return preds
 
     async def _launch_ready_stages(
@@ -326,38 +330,26 @@ class DAG:
                         ):
                             successful_pred_names.append(p)
 
-                    # Enforce mandatory/optional counts
-                    mandatory, optional_max = stage.required_input_counts()
-                    if len(successful_pred_names) < mandatory:
+                    # Build named inputs from data flow edges
+                    named_inputs = {}
+                    for edge in self.data_flow_edges:
+                        if edge.destination_stage == stage_name:
+                            # Check if the source stage completed successfully
+                            source_result = prog.stage_results.get(edge.source_stage)
+                            if (source_result and 
+                                source_result.status == StageState.COMPLETED and 
+                                source_result.output is not None):
+                                named_inputs[edge.input_name] = source_result.output
+                    
+                    stage.set_named_inputs(named_inputs)
+                    # Validate mandatory inputs are present
+                    mandatory_inputs = stage.__class__.mandatory_inputs()
+                    missing_mandatory = [name for name in mandatory_inputs if name not in named_inputs]
+                    if missing_mandatory:
                         return build_stage_result(
                             status=StageState.SKIPPED,
                             started_at=now_ts,
-                            error=(
-                                f"Insufficient inputs: have {len(successful_pred_names)}; "
-                                f"required {mandatory}"
-                            ),
-                            stage_name=stage_name,
-                        )
-                    take = mandatory + optional_max
-                    selected_pred_names = successful_pred_names[:take]
-
-                    inputs_seq = [
-                        prog.stage_results[p].output
-                        for p in selected_pred_names
-                    ]
-                    inputs_by_name = {
-                        p: prog.stage_results[p].output
-                        for p in selected_pred_names
-                    }
-                    stage.set_edge_inputs(inputs_by_name, inputs_seq)
-                    # Defensive recheck
-                    m, o = stage.required_input_counts()
-                    num_inputs = len(inputs_seq)
-                    if num_inputs < m or num_inputs > (m + o):
-                        return build_stage_result(
-                            status=StageState.SKIPPED,
-                            started_at=now_ts,
-                            error=f"Invalid number of inputs: {num_inputs} (expected {m}..{m+o})",
+                            error=f"Missing mandatory inputs: {missing_mandatory}",
                             stage_name=stage_name,
                         )
                     return await stage.run(prog)
@@ -490,12 +482,15 @@ class DAG:
             )
 
     def _build_combined_graph(self) -> nx.DiGraph:
-        """Build a combined NetworkX DiGraph of regular and exec-order dependencies."""
+        """Build a combined NetworkX DiGraph of data flow and exec-order dependencies."""
         G = nx.DiGraph()
         G.add_nodes_from(self.nodes.keys())
-        for src, dsts in list(self.edges.items()):
-            for dst in dsts:
-                G.add_edge(src, dst)
+        
+        # Add data flow edges
+        for edge in self.data_flow_edges:
+            G.add_edge(edge.source_stage, edge.destination_stage)
+        
+        # Add execution order dependencies
         rules = self.automata.transition_rules
         for stage_name in list(rules):
             rule = rules[stage_name] if stage_name in rules else None
@@ -503,6 +498,7 @@ class DAG:
                 continue
             for dep in rule.execution_order_dependencies:
                 G.add_edge(dep.stage_name, stage_name)
+        
         return G
 
     def _build_adjacency(self) -> Dict[str, List[str]]:
@@ -510,8 +506,12 @@ class DAG:
         adjacency = defaultdict(list)
         for name in list(self.nodes.keys()):
             _ = adjacency[name]
-        for src, dsts in list(self.edges.items()):
-            adjacency[src].extend(dsts)
+        
+        # Add data flow edges
+        for edge in self.data_flow_edges:
+            adjacency[edge.source_stage].append(edge.destination_stage)
+        
+        # Add execution order dependencies
         rules = self.automata.transition_rules
         for stage_name in list(rules):
             rule = rules[stage_name] if stage_name in rules else None
@@ -521,24 +521,59 @@ class DAG:
                 adjacency[dep.stage_name].append(stage_name)
         return dict(adjacency)
 
-    def _validate_mandatory_feasibility(self) -> None:
-        """Ensure each stage can possibly satisfy its mandatory input count.
 
-        If a stage declares mandatory > number of incoming regular edges,
-        fail fast with a clear error.
+    def _validate_input_topology_consistency(self) -> None:
+        """Ensure stage input declarations are consistent with data flow topology.
+        
+        Validates that each stage's mandatory inputs are provided by data flow edges,
+        and that provided inputs match declared input names.
         """
         errors: List[str] = []
+        
         for stage_name, stage in self.nodes.items():
-            incoming = [
-                src for src, dsts in self.edges.items() if stage_name in dsts
+            # Find incoming data flow edges
+            incoming_edges = [
+                edge for edge in self.data_flow_edges 
+                if edge.destination_stage == stage_name
             ]
-            mandatory, _optional = stage.required_input_counts()
-            if len(incoming) < mandatory:
+            incoming_count = len(incoming_edges)
+            
+            mandatory_inputs = stage.__class__.mandatory_inputs()
+            optional_inputs = stage.__class__.optional_inputs()
+            all_declared_inputs = set(mandatory_inputs + optional_inputs)
+            
+            # Error: Stage declares no inputs but has incoming data flow edges
+            if not all_declared_inputs and incoming_count > 0:
                 errors.append(
-                    f"Stage '{stage_name}' requires {mandatory} inputs but only {len(incoming)} incoming edges"
+                    f"Stage '{stage_name}' declares no inputs but has {incoming_count} incoming data flow edges. "
+                    f"Either update the stage to accept inputs or remove the unnecessary edges."
                 )
+            
+            # Build what input names will be provided
+            provided_input_names = set()
+            for edge in incoming_edges:
+                provided_input_names.add(edge.input_name)
+            
+            # Check for missing mandatory inputs
+            missing_mandatory = set(mandatory_inputs) - provided_input_names
+            if missing_mandatory:
+                errors.append(
+                    f"Stage '{stage_name}' requires mandatory inputs {missing_mandatory} but they are not provided by data flow edges. "
+                    f"Provided inputs: {provided_input_names}"
+                )
+            
+            # Check for unexpected inputs (not declared by stage)
+            unexpected_inputs = provided_input_names - all_declared_inputs
+            if unexpected_inputs:
+                errors.append(
+                    f"Stage '{stage_name}' will receive unexpected inputs {unexpected_inputs} not declared in mandatory_inputs() or optional_inputs(). "
+                    f"Declared inputs: {all_declared_inputs}, Provided inputs: {provided_input_names}"
+                )
+        
+        # Fail fast on errors (actual constraint violations)
         if errors:
-            raise ValueError("; ".join(errors))
+            raise ValueError(f"Input/topology validation failed: {'; '.join(errors)}")
+        
 
     def get_topological_order(self) -> List[str]:
         """Return a topological order of the combined graph for debugging/metrics."""

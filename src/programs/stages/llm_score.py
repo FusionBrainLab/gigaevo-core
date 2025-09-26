@@ -11,6 +11,7 @@ from src.llm.wrapper import LLMInterface
 from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
+from src.runner.stage_registry import StageRegistry
 
 STRICT_SCORE_PROMPT_TEMPLATE = """
 You are evaluating the following Python program based on the trait:
@@ -50,6 +51,9 @@ class ScoreStageConfig(BaseModel):
         return v
 
 
+@StageRegistry.register(
+    description="Generate LLM-based scores for program evaluation"
+)
 class GenerateLLMScoreStage(Stage):
     def __init__(self, config: ScoreStageConfig, **kwargs):
         super().__init__(**kwargs)

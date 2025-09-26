@@ -1,0 +1,16 @@
+# MetaEvolve DAG Builder Requirements
+# Install with: pip install -r requirements.txt
+
+# Core FastAPI dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# CORS support
+python-multipart>=0.0.6
+
+# Optional: For better performance
+python-json-logger>=2.0.0
+
+
+

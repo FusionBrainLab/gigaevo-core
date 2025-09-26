@@ -12,16 +12,16 @@ from src.exceptions import StageError
 from src.programs.program import Program
 from src.programs.stages.state import ProgramStageResult, StageState
 from src.programs.utils import build_stage_result
+from src.runner.stage_registry import StageRegistry
 
-from .worker_pool import WorkerPoolStage
+from src.programs.stages.worker_pool import WorkerPoolStage
 
 
+@StageRegistry.register(
+    description="Get the length of program code"
+)
 class GetCodeLengthStage(WorkerPoolStage):
-    """Bulletproof stage for getting the length of the code."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._requires_code = True
+    """A stage for getting the length of the code."""
 
     def _work(
         self, program: Program, started_at: datetime
@@ -214,18 +214,11 @@ def compute_complexity_score(features: Dict[str, Any]) -> float:
 
     return score
 
-
-# ---------------------------------------------------------------------------
-# Public stage implementation
-# ---------------------------------------------------------------------------
-
-
+@StageRegistry.register(
+    description="Compute code complexity metrics"
+)
 class ComputeComplexityStage(WorkerPoolStage):
-    """Bulletproof stage for computing code complexity metrics."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._requires_code = True
+    """Stage for computing code complexity metrics."""
 
     def _work(
         self, program: Program, started_at: datetime

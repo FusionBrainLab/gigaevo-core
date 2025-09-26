@@ -13,8 +13,11 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from pydantic import BaseModel, Field, field_validator
 
-from src.programs.automata import ExecutionOrderDependency
+from src.programs.automata import ExecutionOrderDependency, DataFlowEdge
 from src.programs.stages.base import Stage
+
+
+# DataFlowEdge is now imported from automata.py
 
 
 class DAGSpec(BaseModel):
@@ -23,8 +26,8 @@ class DAGSpec(BaseModel):
     nodes: Dict[str, Callable[[], Stage]] = Field(
         ..., description="Stage factories by name"
     )
-    edges: Dict[str, List[str]] = Field(
-        ..., description="DAG edges mapping source to destinations"
+    data_flow_edges: List[DataFlowEdge] = Field(
+        ..., description="Data flow edges with semantic input names"
     )
     exec_order_deps: Optional[Dict[str, List[ExecutionOrderDependency]]] = (
         Field(None, description="Execution order dependencies by stage name")
@@ -34,22 +37,27 @@ class DAGSpec(BaseModel):
     )
     dag_timeout: float = Field(2400.0, description="Timeout for DAG execution")
 
-    @field_validator("edges")
+    @field_validator("data_flow_edges")
     @classmethod
-    def validate_edges(
-        cls, v: Dict[str, List[str]], info
-    ) -> Dict[str, List[str]]:
-        """Validate that all referenced stages in edges exist in nodes."""
+    def validate_data_flow_edges(
+        cls, v: List[DataFlowEdge], info
+    ) -> List[DataFlowEdge]:
+        """Validate that all referenced stages in data_flow_edges exist in nodes."""
         if "nodes" not in info.data:
             return v
 
         nodes = info.data["nodes"]
-        unknown = {
-            dst for dsts in v.values() for dst in dsts if dst not in nodes
+        unknown_sources = {
+            edge.source_stage for edge in v if edge.source_stage not in nodes
         }
+        unknown_destinations = {
+            edge.destination_stage for edge in v if edge.destination_stage not in nodes
+        }
+        unknown = unknown_sources | unknown_destinations
+        
         if unknown:
             raise ValueError(
-                f"Edges reference unknown stage(s): {', '.join(sorted(unknown))}"
+                f"Data flow edges reference unknown stage(s): {', '.join(sorted(unknown))}"
             )
         return v
 
@@ -87,10 +95,9 @@ class DAGSpec(BaseModel):
         for node_name in self.nodes.keys():
             G.add_node(node_name)
 
-        # Add regular edges
-        for source, destinations in self.edges.items():
-            for dest in destinations:
-                G.add_edge(source, dest, edge_type="regular")
+        # Add data flow edges
+        for edge in self.data_flow_edges:
+            G.add_edge(edge.source_stage, edge.destination_stage, edge_type="data_flow")
 
         # Add execution order dependency edges
         if self.exec_order_deps:
@@ -158,10 +165,10 @@ class DAGSpec(BaseModel):
         )
 
         # Draw edges with different styles based on type and condition
-        regular_edges = [
+        data_flow_edges = [
             (u, v)
             for (u, v, d) in G.edges(data=True)
-            if d.get("edge_type") == "regular"
+            if d.get("edge_type") == "data_flow"
         ]
         exec_order_edges = [
             (u, v)
@@ -169,12 +176,12 @@ class DAGSpec(BaseModel):
             if d.get("edge_type") == "exec_order"
         ]
 
-        # Draw regular edges with curved routing
-        if regular_edges:
+        # Draw data flow edges with curved routing
+        if data_flow_edges:
             nx.draw_networkx_edges(
                 G,
                 pos,
-                edgelist=regular_edges,
+                edgelist=data_flow_edges,
                 edge_color="gray",
                 width=2,
                 arrows=True,
@@ -441,9 +448,8 @@ class DAGSpec(BaseModel):
         for node_name in self.nodes.keys():
             G.add_node(node_name)
 
-        for source, destinations in self.edges.items():
-            for dest in destinations:
-                G.add_edge(source, dest)
+        for edge in self.data_flow_edges:
+            G.add_edge(edge.source_stage, edge.destination_stage)
 
         entry_points_set: set[str] = set()
         exec_order_stages = set()

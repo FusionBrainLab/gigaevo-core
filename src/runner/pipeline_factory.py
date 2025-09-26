@@ -17,6 +17,7 @@ from src.programs.stages.base import Stage
 from src.programs.stages.execution import (
     RunProgramCodeWithOptionalProducedData,
     ValidatorCodeExecutor,
+    RunConstantPythonCode,
 )
 from src.programs.stages.insights import (
     GenerateLLMInsightsStage,
@@ -29,8 +30,10 @@ from src.programs.stages.insights_lineage import (
 from src.programs.stages.metrics import EnsureMetricsStage
 from src.programs.stages.validation import ValidateCodeStage
 from src.problems.context import ProblemContext
+from src.problems.layout import ProblemLayout
 from src.llm.wrapper import LLMWrapper
 from src.runner.dag_spec import DAGSpec
+from src.programs.automata import DataFlowEdge
 
 
 StageFactory = Callable[[], Stage]
@@ -53,7 +56,7 @@ class PipelineBuilder:
     def __init__(self, ctx: PipelineContext):
         self.ctx = ctx
         self._nodes: Dict[str, StageFactory] = {}
-        self._edges: Dict[str, List[str]] = {}
+        self._data_flow_edges: List[DataFlowEdge] = []
         self._deps: Dict[str, List[ExecutionOrderDependency]] = {}
         self._dag_timeout: float = 1800.0
         self._max_parallel: int = 8
@@ -71,23 +74,30 @@ class PipelineBuilder:
 
     def remove_stage(self, name: str) -> "PipelineBuilder":
         self._nodes.pop(name, None)
-        # Remove edges and deps that reference this stage
-        self._edges.pop(name, None)
-        for src, dsts in list(self._edges.items()):
-            self._edges[src] = [d for d in dsts if d != name]
+        # Remove data flow edges that reference this stage
+        self._data_flow_edges = [
+            edge for edge in self._data_flow_edges 
+            if edge.source_stage != name and edge.destination_stage != name
+        ]
+        # Remove deps that reference this stage
         self._deps.pop(name, None)
         for stage, deps in list(self._deps.items()):
             self._deps[stage] = [d for d in deps if d.stage_name != name]
         return self
 
-    # Edge operations
-    def add_edge(self, src: str, dst: str) -> "PipelineBuilder":
-        self._edges.setdefault(src, []).append(dst)
+    # Data flow operations
+    def add_data_flow_edge(self, src: str, dst: str, input_name: str) -> "PipelineBuilder":
+        """Add a data flow edge with semantic input naming."""
+        self._data_flow_edges.append(DataFlowEdge.create(
+            source=src,
+            destination=dst,
+            input_name=input_name
+        ))
         return self
 
-    def remove_edge(self, src: str, dst: str) -> "PipelineBuilder":
-        if src in self._edges:
-            self._edges[src] = [d for d in self._edges[src] if d != dst]
+    def remove_data_flow_edge(self, src: str, dst: str) -> "PipelineBuilder":
+        """Remove a data flow edge."""
+        self._data_flow_edges = [e for e in self._data_flow_edges if not (e.source_stage == src and e.destination_stage == dst)]
         return self
 
     # Execution order dependency operations
@@ -116,7 +126,7 @@ class PipelineBuilder:
     def build_spec(self) -> DAGSpec:
         return DAGSpec(
             nodes=self._nodes,
-            edges=self._edges,
+            data_flow_edges=self._data_flow_edges,
             exec_order_deps=self._deps or None,
             dag_timeout=self._dag_timeout,
             max_parallel_stages=self._max_parallel,
@@ -143,7 +153,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
 
         # ValidateCompiles
         self.add_stage(
-            "ValidateCompiles",
+            "ValidateCodeStage",
             lambda: ValidateCodeStage(
                 stage_name="ValidateCompiles",
                 max_code_length=24000,
@@ -154,7 +164,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
 
         # ExecuteCode: run program.code with optional data from DAG
         self.add_stage(
-            "ExecuteCode",
+            "RunProgramCodeWithOptionalProducedData",
             lambda: RunProgramCodeWithOptionalProducedData(
                 stage_name="ExecuteCode",
                 function_name="entrypoint",
@@ -167,7 +177,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
         # RunValidation
         validator_path = problem_ctx.problem_dir / "validate.py"
         self.add_stage(
-            "RunValidation",
+            "ValidatorCodeExecutor",
             lambda: ValidatorCodeExecutor(
                 stage_name="RunValidation",
                 validator_path=validator_path,
@@ -178,7 +188,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
 
         # Insights stages
         self.add_stage(
-            "LLMInsights",
+            "GenerateLLMInsightsStage",
             lambda: GenerateLLMInsightsStage(
                 config=InsightsConfig(
                     llm_wrapper=llm_wrapper["insights"],
@@ -197,7 +207,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
         self.add_stage(
-            "LineageInsights",
+            "GenerateLineageInsightsStage",
             lambda: GenerateLineageInsightsStage(
                 config=LineageInsightsConfig(
                     llm_wrapper=llm_wrapper["lineage"],
@@ -215,16 +225,15 @@ class DefaultPipelineBuilder(PipelineBuilder):
         def _validation_metrics_factory() -> dict[str, Any]:
             primary_spec = metrics_context.get_primary_spec()
             return {
-                primary_spec.key: (
+                primary_spec.key: 
                     primary_spec.lower_bound
                     if primary_spec.higher_is_better
-                    else primary_spec.upper_bound
-                ),
+                    else primary_spec.upper_bound,
                 "is_valid": 0,
             }
 
         self.add_stage(
-            "ValidationMetricUpdate",
+            "EnsureMetricsStage",
             lambda: EnsureMetricsStage(
                 stage_name="ValidationMetricUpdate",
                 metrics_factory=_validation_metrics_factory,
@@ -234,37 +243,20 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
     def _contribute_default_edges(self) -> None:
-        # Default DAG without AddContext
-        self._edges = {
-            "ValidateCompiles": [],
-            "ExecuteCode": ["RunValidation"],
-            "RunValidation": ["ValidationMetricUpdate"],
-            "LLMInsights": [],
-            "LineageInsights": [],
-            "ValidationMetricUpdate": [],
-        }
+        # Add semantic data flow edges for better data flow clarity
+        self.add_data_flow_edge("RunProgramCodeWithOptionalProducedData", "ValidatorCodeExecutor", "program_output")
+        self.add_data_flow_edge("ValidatorCodeExecutor", "EnsureMetricsStage", "validation_result")
 
     def _contribute_default_deps(self) -> None:
         self._deps = {
-            "ExecuteCode": [
-                ExecutionOrderDependency.on_success("ValidateCompiles"),
+            "RunProgramCodeWithOptionalProducedData": [
+                ExecutionOrderDependency.on_success("ValidateCodeStage")
             ],
-            "ValidationMetricUpdate": [
-                ExecutionOrderDependency.always_after("ValidateCompiles"),
-                ExecutionOrderDependency.always_after("ExecuteCode"),
-                ExecutionOrderDependency.always_after("RunValidation"),
+            "GenerateLLMInsightsStage": [
+                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
             ],
-            "LLMInsights": [
-                ExecutionOrderDependency.always_after("ValidateCompiles"),
-                ExecutionOrderDependency.always_after("ExecuteCode"),
-                ExecutionOrderDependency.always_after("RunValidation"),
-                ExecutionOrderDependency.always_after("ValidationMetricUpdate"),
-            ],
-            "LineageInsights": [
-                ExecutionOrderDependency.always_after("ValidateCompiles"),
-                ExecutionOrderDependency.always_after("ExecuteCode"),
-                ExecutionOrderDependency.always_after("RunValidation"),
-                ExecutionOrderDependency.always_after("ValidationMetricUpdate"),
+            "GenerateLineageInsightsStage": [
+                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
             ],
         }
 
@@ -277,24 +269,23 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
         self._add_context_stage_and_edges()
 
     def _add_context_stage_and_edges(self) -> None:
-        # Using existing context from parent; no local variables needed
+        problem_ctx = self.ctx.problem_ctx
 
-        # No replacements; context is provided by edges only
+        # AddContext stage: runs build_context from context.py to produce a dict
+        self.add_stage(
+            "AddContext",
+            lambda: RunConstantPythonCode(
+                stage_name="AddContext",
+                context_path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
+                function_name="build_context",
+                timeout=30.0,
+            ),
+        )
 
-        # Wire AddContext → ValidateCompiles
-        self._edges.setdefault("AddContext", []).append("ValidateCompiles")
-        # Ensure ExecuteCode runs after ValidateCompiles; provide data and optional context
-        self._deps.setdefault("ExecuteCode", []).append(
-            ExecutionOrderDependency.on_success("ValidateCompiles")
-        )
-        self._edges.setdefault("ExecuteCode", []).append("RunValidation")
-        # Wire context and data to validation in positional order: context first, then data
-        self._edges.setdefault("AddContext", []).append("ExecuteCode")
-        self._edges.setdefault("AddContext", []).append("RunValidation")
-        # Ensure metrics consumes validation output via regular edge
-        self._edges.setdefault("RunValidation", []).append(
-            "ValidationMetricUpdate"
-        )
+        # Provide context to ExecuteCode and RunValidation with semantic names
+        self.add_data_flow_edge("AddContext", "RunProgramCodeWithOptionalProducedData", "context_data")
+        self.add_data_flow_edge("AddContext", "ValidatorCodeExecutor", "context_data")
+
 
 
 class CustomPipelineBuilder(PipelineBuilder):

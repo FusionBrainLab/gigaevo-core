@@ -16,6 +16,7 @@ from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
 from src.programs.metrics.context import MetricsContext
 from src.programs.metrics.formatter import MetricsFormatter
+from src.runner.stage_registry import StageRegistry
 
 
 def safe_json_extract_from_llm_output(text: str):
@@ -245,6 +246,9 @@ class LineageInsightsConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
+@StageRegistry.register(
+    description="Generate insights based on program lineage and evolution history"
+)
 class GenerateLineageInsightsStage(Stage):
     MAX_DESCENDANTS = 3
 

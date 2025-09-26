@@ -63,8 +63,7 @@ class Stage:
         self.enable_resource_monitoring = enable_resource_monitoring
         self.stage_name = stage_name or self.__class__.__name__
         self.metrics = StageMetrics()
-        self._edge_inputs_by_name: Dict[str, Any] = {}
-        self._edge_inputs_seq: list[Any] = []
+        self._named_inputs: Dict[str, Any] = {}
 
         logger.debug(
             f"[{self.stage_name}] Initialized with timeout={timeout}s, max_memory={max_memory_mb}MB"
@@ -121,24 +120,76 @@ class Stage:
         """Get stage execution metrics."""
         return self.metrics.to_dict()
 
-    def set_edge_inputs(
-        self, inputs_by_name: Dict[str, Any], inputs_seq: list[Any]
-    ) -> None:
-        self._edge_inputs_by_name = inputs_by_name or {}
-        self._edge_inputs_seq = inputs_seq or []
-
-    def get_inputs_by_name(self) -> Dict[str, Any]:
-        return self._edge_inputs_by_name
-
-    def get_inputs_seq(self) -> list[Any]:
-        return self._edge_inputs_seq
-
-    def required_input_counts(self) -> tuple[int, int]:
-        """Return (mandatory_count, optional_max) for inputs via edges.
-
-        - mandatory_count: number of successful upstream outputs required to run
-        - optional_max: how many additional successful upstream outputs to accept
-
-        Selection and ordering follow incoming-edge order. Defaults to (0, 1_000_000_000).
+    def set_named_inputs(self, inputs: Dict[str, Any]) -> None:
+        """Set the named inputs for this stage.
+        
+        Args:
+            inputs: Dictionary mapping input names to their values
         """
-        return (0, 1_000_000_000)
+        self._named_inputs = inputs or {}
+
+    def get_input(self, input_name: str) -> Any:
+        """Get input by semantic name.
+        
+        Args:
+            input_name: The semantic name of the input as declared in mandatory_inputs() or optional_inputs()
+            
+        Returns:
+            The input data for the named input
+            
+        Raises:
+            KeyError: If the input_name is not found
+        """
+        if input_name not in self._named_inputs:
+            available = list(self._named_inputs.keys())
+            declared_mandatory = self.__class__.mandatory_inputs()
+            declared_optional = self.__class__.optional_inputs()
+            raise KeyError(
+                f"Input '{input_name}' not found. Available inputs: {available}. "
+                f"Declared mandatory inputs: {declared_mandatory}, optional inputs: {declared_optional}"
+            )
+        return self._named_inputs[input_name]
+
+    def get_input_optional(self, input_name: str, default: Any = None) -> Any:
+        """Get input by semantic name, returning default if not present.
+        
+        Args:
+            input_name: The semantic name of the input
+            default: Value to return if input is not present
+            
+        Returns:
+            The input data or default value
+        """
+        return self._named_inputs.get(input_name, default)
+
+    def get_all_inputs(self) -> Dict[str, Any]:
+        """Get all named inputs.
+        
+        Returns:
+            Dictionary of all available inputs
+        """
+        return self._named_inputs.copy()
+
+    @classmethod
+    def mandatory_inputs(cls) -> list[str]:
+        """Return list of mandatory input names.
+        
+        These inputs must be provided for the stage to run successfully.
+        
+        Returns:
+            List of mandatory input names
+        """
+        return []
+
+    @classmethod
+    def optional_inputs(cls) -> list[str]:
+        """Return list of optional input names.
+        
+        These inputs may be provided but are not required for the stage to run.
+        
+        Returns:
+            List of optional input names
+        """
+        return []
+
+

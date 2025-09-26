@@ -12,6 +12,7 @@ from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
 from src.programs.metrics.context import MetricsContext
 from src.programs.metrics.formatter import MetricsFormatter
+from src.runner.stage_registry import StageRegistry
 
 DEFAULT_SYSTEM_PROMPT_TEMPLATE_JSON = """
 You are an expert in Python code analysis and evolutionary optimization.
@@ -152,6 +153,9 @@ class InsightsConfig(BaseModel):
         return v
 
 
+@StageRegistry.register(
+    description="Generate LLM insights for program evolution"
+)
 class GenerateLLMInsightsStage(Stage):
     def __init__(self, config: InsightsConfig, **kwargs):
         super().__init__(**kwargs)
