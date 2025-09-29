@@ -182,7 +182,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 stage_name="RunValidation",
                 validator_path=validator_path,
                 function_name="validate",
-                timeout=60.0,
+                timeout=240.0,
             ),
         )
 
@@ -221,22 +221,11 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ),
         )
 
-        # ValidationMetricUpdate
-        def _validation_metrics_factory() -> dict[str, Any]:
-            primary_spec = metrics_context.get_primary_spec()
-            return {
-                primary_spec.key: 
-                    primary_spec.lower_bound
-                    if primary_spec.higher_is_better
-                    else primary_spec.upper_bound,
-                "is_valid": 0,
-            }
-
         self.add_stage(
             "EnsureMetricsStage",
             lambda: EnsureMetricsStage(
                 stage_name="ValidationMetricUpdate",
-                metrics_factory=_validation_metrics_factory,
+                metrics_factory=metrics_context.get_worst_with_coalesce,
                 metrics_context=metrics_context,
                 timeout=15.0,
             ),

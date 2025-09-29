@@ -12,13 +12,8 @@ from pydantic import (
     model_validator,
 )
 
+from src.programs.core_types import ProgramStageResult, StageState, _pickle_b64_deserialize, _pickle_b64_serialize
 from src.programs.program_state import ProgramState
-from src.programs.stages.base import ProgramStageResult
-from src.programs.stages.state import StageState
-from src.programs.stages.utils import (
-    pickle_b64_deserialize,
-    pickle_b64_serialize,
-)
 from src.programs.utils import pretty_print_error
 
 if TYPE_CHECKING:
@@ -145,7 +140,7 @@ class Program(BaseModel):
     @field_serializer("metadata", when_used="json")
     def serialize_metadata(self, value: dict[str, Any]) -> str:
         """Serialize metadata to a JSON string, ensuring safety."""
-        return pickle_b64_serialize(value)
+        return _pickle_b64_serialize(value)
 
     def update_timestamp(self) -> None:
         """Update the updated_at timestamp."""
@@ -236,7 +231,7 @@ class Program(BaseModel):
         data = dict(data)
         for key in ("metadata",):
             if key in data and isinstance(data[key], str):
-                data[key] = pickle_b64_deserialize(data[key])
+                data[key] = _pickle_b64_deserialize(data[key])
         if "stage_results" in data and isinstance(data["stage_results"], dict):
             data["stage_results"] = {
                 k: ProgramStageResult.from_dict(v) if isinstance(v, dict) else v
@@ -276,6 +271,9 @@ class Program(BaseModel):
 
     @classmethod
     def from_mutation_spec(cls, spec: "MutationSpec") -> "Program":
+        # Import here to avoid circular import
+        from src.evolution.mutation.base import MutationSpec
+        
         name = ""
         for i, parent in enumerate(spec.parents):
             name += f"{parent.id}"
@@ -404,10 +402,6 @@ class Program(BaseModel):
             for name, result in self.stage_results.items()
             if result.status == StageState.PENDING
         ]
-
-    def redis_key(self) -> str:
-        """Get the Redis key for this program."""
-        return f"program:{self.id}"
 
     @property
     def generation(self) -> int | None:

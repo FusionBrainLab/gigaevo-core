@@ -47,7 +47,7 @@ class MetricsFormatter:
             self.use_range_normalization if use_range_normalization is None else use_range_normalization
         )
         lines: list[str] = []
-        primary_key = self.context.get_primary_spec().key
+        primary_key = self.context.get_primary_key()
         for key in self.context.prompt_keys():
             if not include_primary and key == primary_key:
                 continue
@@ -86,7 +86,7 @@ class MetricsFormatter:
         - is_valid: Whether program is valid (↑ better; [0.0, 1.0] range; unit="")
         """
         ordered_keys = self.context.prompt_keys()
-        primary_key = self.context.get_primary_spec().key
+        primary_key = self.context.get_primary_key()
         keys: list[str] = [primary_key] + [k for k in ordered_keys if k != primary_key]
         lines: list[str] = []
         for key in keys:

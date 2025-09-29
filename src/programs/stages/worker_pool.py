@@ -15,7 +15,7 @@ import os
 from loguru import logger
 
 from src.programs.stages.base import Stage
-from src.programs.stages.state import ProgramStageResult
+from src.programs.core_types import ProgramStageResult
 
 __all__ = ["WorkerPoolStage"]
 
@@ -71,7 +71,7 @@ class WorkerPoolStage(Stage):
     ) -> ProgramStageResult:
         """Pure Python implementation executed inside a thread.
 
-        Must return a :class:`~src.programs.stages.state.ProgramStageResult`.
+        Must return a :class:`~src.programs.core_types.ProgramStageResult`.
         """
         raise NotImplementedError
 

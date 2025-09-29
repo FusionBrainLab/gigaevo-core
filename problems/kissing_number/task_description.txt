@@ -1,0 +1,33 @@
+TASK DEFINITION – KISSING NUMBER PROBLEM IN DIMENSION 12 (INTEGRAL CONSTRUCTION)
+
+Problem Type: Evolutionary Geometric Optimization
+Challenge: Construct a large set of disjoint unit spheres in 12D, all tangent to a central unit sphere, via integer coordinates. Known lower bound: 840.
+
+PROBLEM COMPLEXITY
+High-dimensional sphere packing with rigid separation. Single-shell (equal-norm) structure is essential; small integer edits can break feasibility.
+
+OBJECTIVE
+Return distinct non-zero integer 12D vectors {x_i} ⊂ Z^12 such that:
+1) (Single shell) ||x_i||^2 = r^2 for all i and some r^2 > 0.
+2) (Separation) min_{i≠j} ||x_i - x_j||^2 ≥ r^2.
+This scale-invariant certificate yields a valid kissing configuration after scaling by t = 2/√(r^2).
+
+Output: (N, 12) NumPy int array
+Fitness: N (set size)
+Goal: reach N ≥ 840
+
+GEOMETRIC SETUP
+- Central unit sphere at origin
+- Candidate centers: integer vectors in Z^12, non-zero, equal norm
+- Realization: scale by t = 2/√(r^2) → all centers at radius 2; pairwise distances ≥ 2
+
+CONSTRAINTS
+- Integer coordinates only
+- Distinct, non-zero rows
+- Exact integer arithmetic
+- Single-shell constraint (||x_i||^2 constant)
+
+VALIDATION & RIGOR
+- Check all norms equal
+- Compute d^2_min; accept iff d^2_min ≥ r^2
+

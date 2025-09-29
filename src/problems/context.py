@@ -84,11 +84,11 @@ class ProblemContext:
             )
 
             # Strict validation: primary bounds and is_valid [0,1]
-            primary = ctx.get_primary_spec()
-            pb = ctx.get_bounds(primary.key)
+            primary_key = ctx.get_primary_key()
+            pb = ctx.get_bounds(primary_key)
             if pb is None:
                 raise ValueError(
-                    f"metrics.yaml error in {metrics_path}: Primary metric '{primary.key}' must define lower_bound and upper_bound"
+                    f"metrics.yaml error in {metrics_path}: Primary metric '{primary_key}' must define lower_bound and upper_bound"
                 )
             if "is_valid" not in ctx.specs:
                 raise ValueError(

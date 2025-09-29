@@ -7,8 +7,7 @@ from loguru import logger
 from src.database.program_storage import ProgramStorage
 from src.programs.program import Program
 from src.programs.program_state import ProgramState
-from src.programs.stages.base import ProgramStageResult
-from src.programs.stages.state import StageState
+from src.programs.core_types import ProgramStageResult, StageState
 
 
 class ProgramStateManager:

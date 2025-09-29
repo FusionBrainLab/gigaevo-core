@@ -12,7 +12,7 @@ from typing import Callable, Type, TypeVar
 
 from loguru import logger
 
-from src.programs.stages.state import StageState
+from src.programs.core_types import StageState
 from src.programs.utils import build_stage_result
 
 from .base import Stage

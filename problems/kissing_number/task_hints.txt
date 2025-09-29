@@ -1,0 +1,21 @@
+OPTIMIZATION OBJECTIVE
+
+Fitness Metric
+Maximize N = number of distinct non-zero integer vectors x_i ∈ Z^12 satisfying:
+    ||x_i||^2 = r^2 (constant) and min_{i≠j} ||x_i − x_j||^2 ≥ r^2
+(After rescaling by t = 2/sqrt(r^2), all centers lie on radius 2 and pairwise distances ≥ 2.)
+
+Failure Modes
+- Norm inconsistency (not single-shell)
+- Certificate violation: d2_min < r^2
+- Duplicate vectors or inclusion of zero vector
+- Symmetry duplicates (sign/permutation copies)
+- Non-integer coordinates
+- Float-based checks instead of exact integers
+
+Evaluation Details
+- r^2 = ||x_i||^2 (common squared norm)
+- d2_min = min_{i≠j} ||x_i − x_j||^2
+- Valid iff d2_min ≥ r^2
+- Fitness = N; secondary metric: margin δ = d2_min − r^2
+- Target: N ≥ 840

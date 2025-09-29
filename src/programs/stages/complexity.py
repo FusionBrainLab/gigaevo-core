@@ -10,7 +10,7 @@ from loguru import logger
 
 from src.exceptions import StageError
 from src.programs.program import Program
-from src.programs.stages.state import ProgramStageResult, StageState
+from src.programs.core_types import ProgramStageResult, StageState
 from src.programs.utils import build_stage_result
 from src.runner.stage_registry import StageRegistry
 

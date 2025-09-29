@@ -273,7 +273,7 @@ class GenerateLineageInsightsStage(Stage):
             # Find parent with highest fitness (or lowest if higher_is_better=False)
             best_parent_id = None
             best_fitness = None
-            fitness_key = self.config.metrics_context.get_primary_spec().key
+            fitness_key = self.config.metrics_context.get_primary_key()
             higher_better = bool(self.config.metrics_context.get_primary_spec().higher_is_better)
 
             for parent_id in program.lineage.parents:
@@ -367,7 +367,7 @@ class GenerateLineageInsightsStage(Stage):
         primary_spec = self.config.metrics_context.get_primary_spec()
         return self.config.user_prompt_template.format(
             task_description=self.config.task_description,
-            metric_name=primary_spec.key,
+            metric_name=primary_key,
             metric_description=primary_spec.description,
             delta=delta,
             parent_errors=parent_errors,
@@ -389,7 +389,7 @@ class GenerateLineageInsightsStage(Stage):
                 # Set empty lineage insights even when parent not found
                 return await self._set_empty_lineage_and_return(program, started_at, f"<Parent {parent_id} not found>")
 
-            metric_key = self.config.metrics_context.get_primary_spec().key
+            metric_key = self.config.metrics_context.get_primary_key()
             pm = float(parent.metrics[metric_key])
             cm = float(program.metrics[metric_key])
             delta = cm - pm
@@ -411,7 +411,7 @@ class GenerateLineageInsightsStage(Stage):
 
             # Calculate deltas for any configured additional metrics (excluding the primary metric)
             additional_metric_deltas: dict[str, str] = {}
-            primary_key = self.config.metrics_context.get_primary_spec().key
+            primary_key = self.config.metrics_context.get_primary_key()
             for m_key in self.config.metrics_context.additional_metrics().keys():
                 if m_key == primary_key:
                     # Skip the primary metric; it's already captured by the 'delta' field

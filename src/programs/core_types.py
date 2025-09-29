@@ -1,3 +1,11 @@
+"""Core data types for MetaEvolve programs.
+
+This module contains fundamental data structures that are used across the system
+but don't depend on other modules to avoid circular imports.
+"""
+
+import base64
+import pickle
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -8,10 +16,17 @@ from pydantic import (
     field_serializer,
 )
 
-from src.programs.stages.utils import (
-    pickle_b64_deserialize,
-    pickle_b64_serialize,
-)
+
+def _pickle_b64_serialize(value: Any) -> str:
+    """Serialize a value to base64-encoded pickle string."""
+    return base64.b64encode(
+        pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+    ).decode("utf-8")
+
+
+def _pickle_b64_deserialize(value: str) -> Any:
+    """Deserialize a base64-encoded pickle string to a value."""
+    return pickle.loads(base64.b64decode(value.encode("utf-8")))
 
 
 class StageState(str, Enum):
@@ -98,15 +113,15 @@ class ProgramStageResult(BaseModel):
 
     @field_serializer("output", when_used="json")
     def serialize_output(self, value: Any) -> Optional[str]:
-        return pickle_b64_serialize(value) if value is not None else None
+        return _pickle_b64_serialize(value) if value is not None else None
 
     @field_serializer("error", when_used="json")
     def serialize_error(self, value: Any) -> Optional[str]:
-        return pickle_b64_serialize(value) if value is not None else None
+        return _pickle_b64_serialize(value) if value is not None else None
 
     @field_serializer("metadata", when_used="json")
     def serialize_metadata(self, value: Any) -> Optional[str]:
-        return pickle_b64_serialize(value) if value is not None else None
+        return _pickle_b64_serialize(value) if value is not None else None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProgramStageResult":
@@ -114,5 +129,6 @@ class ProgramStageResult(BaseModel):
         data = dict(data)
         for key in ("output", "error", "metadata"):
             if isinstance(data.get(key), str):
-                data[key] = pickle_b64_deserialize(data[key])
+                data[key] = _pickle_b64_deserialize(data[key])
         return cls.model_validate(data)
+

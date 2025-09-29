@@ -14,7 +14,7 @@ from src.exceptions import (
 )
 from src.programs.constants import DEFAULT_STAGE_TIMEOUT
 from src.programs.stages.guard import stage_guard
-from src.programs.stages.state import ProgramStageResult
+from src.programs.core_types import ProgramStageResult
 
 if TYPE_CHECKING:
     from src.programs.program import Program

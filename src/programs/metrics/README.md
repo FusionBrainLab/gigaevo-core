@@ -3,7 +3,6 @@
 This module centralizes metric definitions and prompt formatting.
 
 - MetricSpec: per-metric schema
-  - key: unique name
   - description: short human description for prompts
   - decimals: numeric precision when rendering
   - is_primary: exactly one metric across specs must be primary
@@ -16,6 +15,7 @@ This module centralizes metric definitions and prompt formatting.
 - MetricsContext: single source of truth
   - Built from problems/<name>/metrics.yaml via `from_dict`
   - `get_primary_spec()` → MetricSpec of the primary metric
+  - `get_primary_key()` → key of the primary metric
   - `prompt_keys()` → ordered list of metric keys to render in prompts (respects `display_order` and `include_in_prompts`)
   - `get_bounds(key)` → (lower, upper) when available
   - `is_higher_better(key)` → bool orientation for a metric

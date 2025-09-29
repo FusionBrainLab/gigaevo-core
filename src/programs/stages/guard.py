@@ -15,7 +15,7 @@ from loguru import logger
 
 from src.exceptions import MetaEvolveError, SecurityViolationError
 from src.programs.stages.prometheus import StagePrometheusExporter
-from src.programs.stages.state import ProgramStageResult, StageState
+from src.programs.core_types import ProgramStageResult, StageState
 from src.programs.utils import build_stage_result
 
 if TYPE_CHECKING:  # pragma: no cover

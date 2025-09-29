@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger
 
-from src.programs.stages.state import ProgramStageResult, StageState
+from src.programs.core_types import ProgramStageResult, StageState
 
 EXECUTION_SUCCESS_SIGNAL = "EXECUTION_SUCCESS"
 
