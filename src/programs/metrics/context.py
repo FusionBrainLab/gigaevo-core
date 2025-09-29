@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, model_validator
 
 MAX_VALUE_DEFAULT = 1e7
 MIN_VALUE_DEFAULT = -1e7
+VALIDITY_KEY = "is_valid"
 
 
 class MetricSpec(BaseModel):

@@ -44,7 +44,7 @@ from src.evolution.strategies.map_elites import (
     TopFitnessMigrantSelector,
 )
 from src.llm.wrapper import LLMConfig, MultiModelLLMWrapper
-from src.programs.metrics.context import MetricsContext
+from src.programs.metrics.context import MetricsContext, VALIDITY_KEY
 from src.programs.metrics.formatter import MetricsFormatter
 from src.problems.context import ProblemContext
 from src.problems.initial_loaders import (
@@ -208,9 +208,9 @@ def create_behavior_spaces(
 ) -> list[BehaviorSpace]:
     """Create behavior spaces using bounds from MetricsContext."""
 
-    primary_key = metrics_context.get_primary_spec().key
+    primary_key = metrics_context.get_primary_key()
     primary_bounds = metrics_context.get_bounds(primary_key)
-    valid_bounds = metrics_context.get_bounds("is_valid")
+    valid_bounds = metrics_context.get_bounds(VALIDITY_KEY)
 
     if primary_bounds is None:
         raise ValueError(
@@ -218,18 +218,18 @@ def create_behavior_spaces(
         )
     if valid_bounds is None:
         raise ValueError(
-            "'is_valid' must define lower_bound and upper_bound in metrics.yaml"
+            f"'{VALIDITY_KEY}' must define lower_bound and upper_bound in metrics.yaml"
         )
 
     fitness_validity_space = BehaviorSpace(
         feature_bounds={
             primary_key: primary_bounds,
-            "is_valid": valid_bounds,
+            VALIDITY_KEY: valid_bounds,
         },
-        resolution={primary_key: 150, "is_valid": 2},
+        resolution={primary_key: 150, VALIDITY_KEY: 2},
         binning_types={
             primary_key: BinningType.LINEAR,
-            "is_valid": BinningType.LINEAR,
+            VALIDITY_KEY: BinningType.LINEAR,
         },
     )
 
@@ -243,7 +243,7 @@ def create_island_configs(
 ) -> list[IslandConfig]:
     """Create 1 island configurations with improved resolution balance and migration strategies."""
 
-    primary_key = metrics_context.get_primary_spec().key
+    primary_key = metrics_context.get_primary_key()
     configs = IslandConfig(
         island_id="fitness_island",
         max_size=75,
@@ -415,7 +415,7 @@ async def run_evolution_experiment(
             logger.info(
                 "🔍 Initializing database with selected programs from Redis..."
             )
-            primary_key = metrics_context.get_primary_spec().key
+            primary_key = metrics_context.get_primary_key()
             source_host = cli_args.redis_host
             source_port = cli_args.redis_port
             source_db = cli_args.source_redis_db

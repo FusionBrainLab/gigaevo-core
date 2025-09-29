@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import yaml
 
-from src.programs.metrics.context import MetricsContext
+from src.programs.metrics.context import MetricsContext, VALIDITY_KEY
 from src.problems.layout import ProblemLayout as PL
 
 
@@ -90,14 +90,14 @@ class ProblemContext:
                 raise ValueError(
                     f"metrics.yaml error in {metrics_path}: Primary metric '{primary_key}' must define lower_bound and upper_bound"
                 )
-            if "is_valid" not in ctx.specs:
+            if VALIDITY_KEY not in ctx.specs:
                 raise ValueError(
-                    f"metrics.yaml error in {metrics_path}: Missing required 'is_valid' metric spec"
+                    f"metrics.yaml error in {metrics_path}: Missing required '{VALIDITY_KEY}' metric spec"
                 )
-            vb = ctx.get_bounds("is_valid")
+            vb = ctx.get_bounds(VALIDITY_KEY)
             if vb is None or vb != (0.0, 1.0):
                 raise ValueError(
-                    f"metrics.yaml error in {metrics_path}: 'is_valid' must have lower_bound=0.0 and upper_bound=1.0"
+                    f"metrics.yaml error in {metrics_path}: '{VALIDITY_KEY}' must have lower_bound=0.0 and upper_bound=1.0"
                 )
 
             return ctx
