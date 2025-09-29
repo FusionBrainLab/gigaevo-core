@@ -23,7 +23,6 @@ from src.database.program_storage import ProgramStorage
 from src.evolution.engine.config import EngineConfig
 from src.evolution.engine.metrics import EngineMetrics
 from src.evolution.engine.mutation import generate_mutations
-from src.evolution.engine.prometheus import EnginePrometheusExporter
 from src.evolution.engine.validation import validate_program
 from src.evolution.mutation.base import MutationOperator
 from src.evolution.strategies.base import EvolutionStrategy
@@ -114,7 +113,6 @@ class EvolutionEngine:
                     ):
                         gc.collect()
 
-                    EnginePrometheusExporter.inc_generation()
 
                 except asyncio.TimeoutError:
                     self._handle_error("Generation timeout")
@@ -166,7 +164,6 @@ class EvolutionEngine:
 
             self.metrics.total_generations += 1
 
-            EnginePrometheusExporter.inc_generation()
 
         except Exception as exc:  # pylint: disable=broad-except
             raise EvolutionError(f"Evolution step failed: {exc}") from exc
@@ -320,7 +317,6 @@ class EvolutionEngine:
     def _handle_error(self, error_msg: str):
         self._consecutive_errors += 1
         self.metrics.errors_encountered += 1
-        EnginePrometheusExporter.inc_error()
 
         logger.error(
             f"[EvolutionEngine] Error #{self._consecutive_errors}: {error_msg}"

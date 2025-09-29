@@ -43,7 +43,7 @@ Notes:
   - Introduced `MetricsFormatter` to render metrics, deltas, and a metrics description block for prompts.
   - Added range-normalized delta option and significance markers; included orientation (↑/↓ better).
 - Pipeline and stages refactor:
-  - Replaced `FactoryMetricsStage` with `EnsureMetricsStage` (strict selection, coercion, clamping, Prometheus export).
+  - Replaced `FactoryMetricsStage` with `EnsureMetricsStage` (strict selection, coercion, clamping).
   - Added `NormalizeMetricsStage` (not enabled by default) for 0–1 normalization and aggregate scoring.
   - Updated `GenerateLLMInsightsStage` and `GenerateLineageInsightsStage` to use `MetricsContext` and `MetricsFormatter`.
 - Configuration & UX:

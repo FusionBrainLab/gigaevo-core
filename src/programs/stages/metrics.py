@@ -16,7 +16,6 @@ from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.stages.base import Stage
 from src.programs.utils import build_stage_result
 from src.programs.metrics.context import MetricsContext
-from src.runner.metrics import MetricsService
 from src.runner.stage_registry import StageRegistry
 
 
@@ -30,7 +29,7 @@ class EnsureMetricsStage(Stage):
     - Read metrics from a previous stage's output (a dict)
     - Fallback to a factory when missing/incomplete
     - Coerce values to float, ensure finiteness, and clamp to bounds
-    - Store results on the program and export to Prometheus
+    - Store results on the program
     """
 
     def __init__(
@@ -67,11 +66,6 @@ class EnsureMetricsStage(Stage):
         final_metrics = self._process_metrics(metrics_input)
         program.add_metrics(final_metrics)
 
-        # Export numeric metrics to Prometheus (optional no-op when disabled)
-        try:
-            MetricsService.export_dict("program", program.metrics)
-        except Exception as exc:  # best-effort export
-            logger.debug(f"[{self.stage_name}] Metrics export skipped: {exc}")
 
         logger.debug(
             f"[{self.stage_name}] Program {program.id}: Updated {len(final_metrics)} metrics from {src}"

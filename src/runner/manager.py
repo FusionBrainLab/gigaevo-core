@@ -18,7 +18,6 @@ from src.programs.state_manager import ProgramStateManager
 from src.runner.dag_spec import DAGSpec
 from src.runner.engine_driver import EngineDriver
 from src.runner.factories import DagFactory
-from src.runner.metrics import MetricsService
 from src.runner.scheduler import DagScheduler
 
 __all__ = [
@@ -50,13 +49,6 @@ class RunnerConfig(BaseModel):
         gt=0,
         le=10000,
         description="Log stats every N polling iterations",
-    )
-
-    prometheus_port: int | None = Field(
-        default=None,
-        ge=1024,
-        le=65535,
-        description="If set, Runner exports Prometheus metrics on this port.",
     )
 
     dag_timeout: float = Field(
@@ -204,8 +196,6 @@ class RunnerManager:
         self.config = config or RunnerConfig()
         self.metrics = RunnerMetrics()
 
-        # Metrics exporter
-        MetricsService.init(self.config.prometheus_port)
 
         # Helper for persisting stage updates
         self._state_manager = ProgramStateManager(self.storage)
@@ -223,7 +213,6 @@ class RunnerManager:
 
         # Background task when used as async context manager
         self._bg_task: Optional[asyncio.Task] = None
-        self._prom_task: Optional[asyncio.Task] = None
 
         logger.info(
             "[RunnerManager] Created (poll_interval={:.2f}s, max_concurrent_dags={})".format(
@@ -249,10 +238,6 @@ class RunnerManager:
         # start scheduler run-loop
         self._scheduler.start()
 
-        # start periodic metrics export
-        self._prom_task = asyncio.create_task(
-            self._export_metrics_loop(), name="prom-export"
-        )
 
         # Filter out None tasks for robustness
         tasks = [
@@ -260,7 +245,6 @@ class RunnerManager:
             for task in [
                 self._engine_driver.task,
                 self._scheduler._task,
-                self._prom_task,
             ]
             if task is not None
         ]
@@ -331,10 +315,6 @@ class RunnerManager:
 
         await self._scheduler.stop()
 
-        if self._prom_task is not None:
-            self._prom_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._prom_task
 
         if self._bg_task is not None:
             with contextlib.suppress(asyncio.CancelledError):
@@ -404,27 +384,3 @@ class RunnerManager:
                 await self._bg_task
             self._bg_task = None
 
-    # ------------------------------------------------------------------
-    # Internal metrics export loop
-    # ------------------------------------------------------------------
-
-    async def _export_metrics_loop(self):
-        try:
-            while self._running and not self._stopping:
-                MetricsService.tick_uptime()
-                MetricsService.export_dict(
-                    "engine", self.engine.metrics.to_dict()
-                )
-
-                strategy = getattr(self.engine, "strategy", None)
-                if strategy is not None and hasattr(strategy, "metrics"):
-                    try:
-                        MetricsService.export_dict(
-                            "strategy", strategy.metrics.to_dict()
-                        )
-                    except Exception:  # pragma: no cover – defensive
-                        pass
-
-                await asyncio.sleep(1.0)
-        except asyncio.CancelledError:
-            pass

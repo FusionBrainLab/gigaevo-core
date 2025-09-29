@@ -14,7 +14,6 @@ from src.programs.program_state import ProgramState
 from src.programs.state_manager import ProgramStateManager
 
 from .factories import DagFactory
-from .metrics import MetricsService
 
 if TYPE_CHECKING:
     from .manager import RunnerConfig, RunnerMetrics
@@ -82,7 +81,6 @@ class DagScheduler:
                     )
 
                 await self._wait_for_trigger()
-                MetricsService.tick_uptime()
         except asyncio.CancelledError:
             logger.debug("[DagScheduler] Cancelled")
         except Exception as exc:
@@ -130,7 +128,6 @@ class DagScheduler:
                 )
 
             await self._metrics.increment_dag_errors()
-            MetricsService.inc_dag_error()
 
     async def _launch_missing_dags(self):
         try:
@@ -160,7 +157,6 @@ class DagScheduler:
                             f"[DagScheduler] Orphaned program {orphaned_program.id} marked as discarded"
                         )
                         await self._metrics.increment_dag_errors()
-                        MetricsService.inc_dag_error()
                     except Exception as e:
                         logger.error(
                             f"[DagScheduler] Failed to mark orphaned program {orphaned_program.id} as discarded: {e}"
@@ -214,7 +210,6 @@ class DagScheduler:
             )
 
             await self._metrics.increment_dag_runs_started()
-            MetricsService.inc_dag_started()
 
             try:
                 await self._state_manager.set_program_state(
@@ -241,13 +236,11 @@ class DagScheduler:
                 try:
                     task_info.task.result()
                     await self._metrics.increment_dag_runs_completed()
-                    MetricsService.inc_dag_completed()
                     logger.debug(
                         f"[DagScheduler] DAG for program {pid} completed successfully"
                     )
                 except Exception as e:
                     await self._metrics.increment_dag_errors()
-                    MetricsService.inc_dag_error()
                     logger.error(
                         f"[DagScheduler] DAG for program {pid} failed: {e}"
                     )

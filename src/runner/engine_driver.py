@@ -78,15 +78,12 @@ class EngineDriver:
     # ------------------------------------------------------------------
 
     async def _monitor_metrics(self):
-        """Poll engine metrics periodically and update Prometheus counters."""
-        from src.runner.metrics import MetricsService
-
+        """Poll engine metrics periodically."""
         prev_gen = 0
         try:
             while self._engine.is_running():
                 gen = self._engine.metrics.total_generations
                 if gen > prev_gen:
-                    MetricsService.inc_generation(gen - prev_gen)
                     prev_gen = gen
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
