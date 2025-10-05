@@ -13,7 +13,8 @@ def reconcstruct_from_tensoralpha(tensoralpha_res):
     T = (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
     return T
 
-def reconstruct_from_factor(f: jnp.ndarray) -> jnp.ndarray:
+def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
+    f = f.astype(jnp.uint8)
     return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
 
 class Data:
@@ -22,7 +23,7 @@ class Data:
         self.tensor = tensor
         self.sota_rank = rank
 
-def reconstruct_from_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
     spec = "ar,br,cr->abcr"
     and_per_r = jnp.einsum(spec, b,b,b).astype(jnp.uint8)
     return (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
@@ -30,7 +31,7 @@ def reconstruct_from_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
 def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
     if T2 is None:
         return int(jnp.sum(T1))
-    return int(jnp.sum(T1 ^ T2))
+    return jnp.sum(T1 ^ T2)
 
 # это для теста нужно было
 def matmul_tensor_4x4():

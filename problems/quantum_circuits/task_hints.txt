@@ -4,16 +4,12 @@
 - **Search Moves**
   - Use **multiple initializations** to improve exploration.
   - Develop **heuristics** for stronger initial guesses.
-  - Propose new components and accept them only if they **reduce the residual**.
-  - Apply **small local edits** (few bit flips) to refine components.
-  - Periodically **remove** components that do not change the reconstruction.
+  - Propose new methods for new factor guesses .
 
 - **Signals to Optimize**
   - Minimize the **residual Hamming weight** (mismatched bits).
-  - Prefer components with **compact support** (few 1s) and **low overlap** to avoid cancellations.
 
 - **Rank Pressure**
-  - Keep the number of components **as small as possible**: prune weak or redundant components after improvements.
   - When multiple exact solutions exist, prefer the one with **smaller rank** and **simpler components**.
 
 - **Optimization**

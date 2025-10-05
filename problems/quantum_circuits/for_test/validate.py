@@ -1,5 +1,5 @@
 import numpy as np
-from helper import get_residual_num, reconstruct_from_binary_factors
+from helper import get_residual_num, reconstruct_from_multi_binary_factors
 
 def validate(
     payload: tuple[list[object], list[dict[str, np.ndarray]]],
@@ -10,7 +10,7 @@ def validate(
     context, result = payload
     score = 0
     for con, res in zip(context, result):
-        T_rec = reconstruct_from_binary_factors(res["factors"])
+        T_rec = reconstruct_from_multi_binary_factors(res["factors"])
         residual = get_residual_num(con.tensor, T_rec)
         rank = res["factors"].shape[-1]
         if residual == 0:

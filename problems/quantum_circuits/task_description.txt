@@ -29,6 +29,5 @@ For each item in `context`, return a dictionary:
 {{
   "rank": int,    # minimal rank found
   "residual": int,      # Hamming errors after reconstruction (must be 0 for exact)
-  "factors": jnp.array 
-  "steps": steps_used
+  "factors": jnp.array  # shape = [n,r]
 }}

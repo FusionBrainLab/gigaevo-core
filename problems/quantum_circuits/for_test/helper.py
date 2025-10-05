@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from typing import List, Tuple
 
 
-def reconstruct_from_binary_factors(b: jnp.ndarray, dim: int=3) -> jnp.ndarray:
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray, dim: int=3) -> jnp.ndarray:
     letters = ''.join(chr(97 + i) for i in range(dim))
     spec = ','.join(f"{chr(97+i)}r" for i in range(dim)) + "->" + letters + "r"
     and_per_r = jnp.einsum(spec, *([b] * dim)).astype(jnp.uint8)

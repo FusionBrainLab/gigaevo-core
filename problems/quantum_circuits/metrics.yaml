@@ -10,15 +10,6 @@ specs:
     include_in_prompts: true
     significant_change: 1
 
-  normed_steps:
-    description: Margin (squared-distance gap; larger is better)
-    decimals: 0
-    is_primary: false
-    higher_is_better: false
-    include_in_prompts: true
-    significant_change: 1
-    lower_bound: 0
-
   is_valid:
     description: Program validity (1 valid, 0 invalid)
     decimals: 0

@@ -1,13 +1,12 @@
-# from __future__ import annotations
 
-
+# don't delete imports
 import jax
 import jax.numpy as jnp
 from jax import lax
 from jax.nn import sigmoid
 import optax
 from typing import Tuple, List, Any, Dict
-from helper import reconstruct_from_binary_factors, get_residual_num, Data  # ensure JAX impls for speed
+from helper import reconstruct_from_single_binary_factor, reconstruct_from_multi_binary_factors, get_residual_num, Data  # ensure JAX impls for speed
 
 DIM = 3
 
@@ -70,19 +69,17 @@ def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
         base_key = jax.random.PRNGKey(seed)
 
         best = {"rank": None, "residual": T.size, "factors": None, "steps": 0}
-        steps_used = 0
 
         run_steps = make_trainer(T.astype(jnp.float32),  lr)
         for r in range(start, end + 1):
             for s in range(restarts):
                 F0 = generate_finit((n, r), base_key, seed=s)
                 F, used = run_steps(F0, per_rank_steps)
-                steps_used += int(used)
                 binF = to_binary_factors(F)
-                T_hat = reconstruct_from_binary_factors(binF)
+                T_hat = reconstruct_from_multi_binary_factors(binF)
                 residual = get_residual_num(T, T_hat)
                 if (residual < best["residual"]) or (residual == best["residual"] and (best["rank"] is None or r < best["rank"])):
-                    best = {"rank": r, "residual": int(residual), "factors": binF, "steps": steps_used}
+                    best = {"rank": r, "residual": int(residual), "factors": binF}
                 if residual == 0:
                     return best
         return best

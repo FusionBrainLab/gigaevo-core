@@ -330,6 +330,10 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
         return MultiModelLLMWrapper(
             models=[
                 "deepseek/deepseek-chat-v3.1:free",
+                # "google/gemini-2.0-flash-exp:free"
+                # "tngtech/deepseek-r1t2-chimera:free"
+                # "qwen/qwen3-coder:free"
+                # "z-ai/glm-4.5-air:free"
             ],
             probabilities=[1.0],
             api_key=LLM_API_KEY,
@@ -394,7 +398,7 @@ async def run_evolution_experiment(
             max_connections=150,
             connection_pool_timeout=45.0,
             health_check_interval=120,
-            max_retries=5,
+            max_retries=20,
             retry_delay=0.5,
         )
     )
@@ -466,7 +470,7 @@ async def run_evolution_experiment(
         else:
             builder = DefaultPipelineBuilder(pctx)
         dag_spec = builder.set_limits(
-            dag_timeout=1800, max_parallel=8
+            dag_timeout=2000, max_parallel=8
         ).build_spec()
 
         # Create evolution strategy

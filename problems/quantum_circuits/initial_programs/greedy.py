@@ -1,6 +1,6 @@
 import jax, jax.numpy as jnp
 from typing import List, Dict, Any
-from helper import reconstruct_from_binary_factors, reconstruct_from_factor, get_residual_num, Data  # JAX-ready
+from helper import reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num, Data  
 
 
 
@@ -18,7 +18,7 @@ def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
         best_score, best = jnp.inf, None
         for _ in range(samples):
             key, cand = _sample_rank1(key, residual.shape[0])
-            sc = get_residual_num(residual, reconstruct_from_factor(cand))
+            sc = get_residual_num(residual, reconstruct_from_single_binary_factor(cand))
             if float(sc) < float(best_score):
                 best_score, best = sc, cand
         return key, best, float(best_score)
@@ -32,10 +32,10 @@ def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
         for _ in range(max_rank):
             key, best, sc = _choose_best(key, R, samples)
             if best is None or cur < tol: break
-            R = R - reconstruct_from_factor(best)
+            R = R - reconstruct_from_single_binary_factor(best)
             decomposed.append(best); cur = sc
             if cur < tol: break
-        return {"rank": len(decomposed), "residual": get_residual_num(R), "factors": jnp.array(decomposed, dtype=jnp.uint8).T, "steps": max_rank * samples}
+        return {"rank": len(decomposed), "residual": get_residual_num(R), "factors": jnp.array(decomposed, dtype=jnp.uint8).T}
 
     out = []
     for i, item in enumerate(context):

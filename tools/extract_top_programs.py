@@ -38,6 +38,7 @@ class TopProgramExtractor:
 
     def __init__(
         self,
+        redis_prefix: str,
         redis_host: str = "localhost",
         redis_port: int = 6379,
         redis_db: int = 0,
@@ -50,7 +51,7 @@ class TopProgramExtractor:
         self.redis_storage = RedisProgramStorage(
             RedisProgramStorageConfig(
                 redis_url=f"redis://{redis_host}:{redis_port}/{redis_db}",
-                key_prefix=args.key_prefix,
+                key_prefix=redis_prefix,
                 max_connections=50,
                 connection_pool_timeout=30.0,
                 health_check_interval=60,
@@ -315,7 +316,7 @@ async def main():
         help="Redis database number (default: 0)",
     )
     parser.add_argument(
-        "--key-prefix", type=str, required=True, help="Redis key prefix"
+        "--redis-prefix", type=str, required=True, help="Redis key prefix"
     )
     parser.add_argument(
         "--fitness-metric",
@@ -335,6 +336,7 @@ async def main():
 
     # Create extractor
     extractor = TopProgramExtractor(
+        redis_prefix=args.redis_prefix,
         redis_host=args.redis_host,
         redis_port=args.redis_port,
         redis_db=args.redis_db,

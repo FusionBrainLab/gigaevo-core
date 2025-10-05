@@ -157,7 +157,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: ValidateCodeStage(
                 stage_name="ValidateCompiles",
                 max_code_length=24000,
-                timeout=30.0,
+                timeout=120.0,
                 safe_mode=True,
             ),
         )
@@ -169,7 +169,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 stage_name="ExecuteCode",
                 function_name="entrypoint",
                 python_path=[problem_ctx.problem_dir.resolve()],
-                timeout=600.0,
+                timeout=1200.0,
                 max_memory_mb=512,
             ),
         )
@@ -202,7 +202,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                         "FactoryMetricUpdate",
                     ],
                 ),
-                timeout=600.0,
+                timeout=1200.0,
             ),
         )
 
@@ -217,7 +217,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     task_description=task_description,
                 ),
                 storage=storage,
-                timeout=600,
+                timeout=1200,
             ),
         )
 
@@ -227,7 +227,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 stage_name="ValidationMetricUpdate",
                 metrics_factory=metrics_context.get_worst_with_coalesce,
                 metrics_context=metrics_context,
-                timeout=15.0,
+                timeout=120.0,
             ),
         )
 
@@ -267,7 +267,7 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
                 stage_name="AddContext",
                 context_path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
                 function_name="build_context",
-                timeout=30.0,
+                timeout=120.0,
             ),
         )
 

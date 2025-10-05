@@ -5,7 +5,7 @@ from jax import lax
 from jax.nn import sigmoid
 import optax
 from typing import Tuple, List, Any, Dict
-from helper import reconstruct_from_binary_factors, get_residual_num  # ensure JAX impls for speed
+from helper import reconstruct_from_multi_binary_factors, get_residual_num  # ensure JAX impls for speed
 
 DIM = 3
 
@@ -93,7 +93,7 @@ def entrypoint(context: List[jnp.ndarray]) -> List[Dict[str, Any]]:
                     r = int(F.shape[1])
 
                 binF = to_binary_factors(F)
-                T_hat = reconstruct_from_binary_factors(binF, DIM)
+                T_hat = reconstruct_from_multi_binary_factors(binF, DIM)
                 residual = get_residual_num(T, T_hat)
                 if (residual < best["residual"]) or (residual == best["residual"] and (best["rank"] is None or r < best["rank"])):
                     best = {"rank": r, "residual": int(residual), "factors": binF, "steps": steps_used}

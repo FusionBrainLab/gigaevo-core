@@ -32,7 +32,7 @@ class LLMConfig(BaseModel):
     """Configuration for LLM wrapper with Pydantic validation."""
 
     max_retries: int = Field(
-        default=3, ge=0, description="Maximum number of retries"
+        default=10, ge=0, description="Maximum number of retries"
     )
     retry_delay: float = Field(
         default=1.0, ge=0, description="Base delay between retries"
