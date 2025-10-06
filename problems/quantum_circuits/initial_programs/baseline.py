@@ -6,14 +6,13 @@ from jax import lax
 from jax.nn import sigmoid
 import optax
 from typing import Tuple, List, Any, Dict
-from helper import reconstruct_from_single_binary_factor, reconstruct_from_multi_binary_factors, get_residual_num, Data  # ensure JAX impls for speed
+from helper import reconstruct_from_single_binary_factor, reconstruct_from_multi_binary_factors, get_residual_num, Data  
 
-DIM = 3
 
 def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
     def smooth_reconstruction(factors: jnp.ndarray) -> jnp.ndarray:
         p = sigmoid(factors)
-        and_per_r = jnp.einsum("ar,br,cr->abcr", *([p] * DIM))
+        and_per_r = jnp.einsum("ar,br,cr->abcr", p,p,p)
         return 0.5 * (1.0 - jnp.prod(1.0 - 2.0 * and_per_r, axis=-1))
 
     def bce_loss_from_probs(target: jnp.ndarray, P: jnp.ndarray) -> jnp.ndarray:

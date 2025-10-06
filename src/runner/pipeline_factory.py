@@ -169,7 +169,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 stage_name="ExecuteCode",
                 function_name="entrypoint",
                 python_path=[problem_ctx.problem_dir.resolve()],
-                timeout=1200.0,
+                timeout=1800.0,
                 max_memory_mb=512,
             ),
         )
@@ -202,7 +202,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                         "FactoryMetricUpdate",
                     ],
                 ),
-                timeout=1200.0,
+                timeout=1800.0,
             ),
         )
 
@@ -217,7 +217,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     task_description=task_description,
                 ),
                 storage=storage,
-                timeout=1200,
+                timeout=1800,
             ),
         )
 

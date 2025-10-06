@@ -330,15 +330,16 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
         return MultiModelLLMWrapper(
             models=[
                 "deepseek/deepseek-chat-v3.1:free",
-                # "google/gemini-2.0-flash-exp:free"
+                # "google/gemini-2.0-flash-exp:free",
                 # "tngtech/deepseek-r1t2-chimera:free"
                 # "qwen/qwen3-coder:free"
-                # "z-ai/glm-4.5-air:free"
             ],
-            probabilities=[1.0],
+            probabilities=[1],
             api_key=LLM_API_KEY,
             configs=[
                 LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
+                # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
+                # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
             ],
         )
 

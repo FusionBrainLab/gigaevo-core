@@ -3,7 +3,6 @@ from typing import List, Dict, Any
 from helper import reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num, Data  
 
 
-
 def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
     def _sample_rank1(key, d: int):
         """List of D binary vectors, one per mode; ensure each is nonzero."""

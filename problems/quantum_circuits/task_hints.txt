@@ -1,5 +1,5 @@
 - **Representation**
-  - Each component is a float vector **a** which translates to binary via sigmoid; its rank-1 tensor is the symmetric power **\(a^{{\otimes d}}\)**.
+  - When optimization is used each component is a float vector **a** which translates to binary via sigmoid;
 
 - **Search Moves**
   - Use **multiple initializations** to improve exploration.
@@ -14,8 +14,8 @@
 
 - **Optimization**
   - Expect **many local minima** and **barren plateaus**; diversify restarts.
-  - Tune **optimizer hyperparameters** and schedules.
-  - Shape the **loss** to improve the landscape and convergence.
+  - Tune **optimizer hyperparameters**.
+  - Shape the **loss** to improve the landscape and convergence but keep it working with float types.
   - Choose the **number of steps** to balance solution quality and runtime.
 
 - **Termination**

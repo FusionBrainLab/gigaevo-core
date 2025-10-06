@@ -1,19 +1,6 @@
 ## OBJECTIVE
 Write a Python function that finds an **exact** Waring decomposition of a **Boolean, symmetric** tensor over **GF(2)** (XOR algebra) with the **smallest possible rank**.
 
----
-
-## RULES
-- **Algebra:** Work strictly in **GF(2)** — addition is **XOR**, multiplication is **AND** on `{{0,1}}`.
-- **Symmetry / Degree:** Tensors are **degree 3** (order-3) and already **symmetrized**.
-- **Atoms:** Each rank-1 component is a float vector which approximate binary one via sigmoid.
-- **Decomposition:**
-  \[
-    T \equiv \bigoplus_{{r=1}}^{{R}} a_r^{{\otimes 3}} \quad \text{{over GF(2)}},
-  \]
-  where `⊕` is XOR. The goal is **exact reconstruction** with **minimal R**.
-- there should be balance with runtime and exactness.
----
 
 ## INPUT
 - context: List[Data]:
