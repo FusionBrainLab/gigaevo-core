@@ -277,7 +277,7 @@ class EvolutionFitnessAnalyzer:
 
         # Apply outlier removal if enabled
         if self.remove_outliers:
-            # Remove extreme outliers that disrupt plotting
+            # Remove only extreme failure values (<= -1000), keep all other fitness values
             fitness_values = valid_fitness_basic[fitness_col]
 
             # Log fitness value distribution before outlier removal
@@ -288,64 +288,28 @@ class EvolutionFitnessAnalyzer:
             logger.info(f"   Median: {fitness_values.median():.4f}")
             logger.info(f"   Std: {fitness_values.std():.4f}")
 
-            # 1. Remove extremely negative values (likely errors)
-            extreme_outliers = fitness_values < self.extreme_threshold
-
-            # 2. Use IQR method for additional outlier detection on remaining values
-            non_extreme = fitness_values[
-                fitness_values >= self.extreme_threshold
-            ]
-
-            if len(non_extreme) > 0:
-                Q1 = non_extreme.quantile(0.25)
-                Q3 = non_extreme.quantile(0.75)
-                IQR = Q3 - Q1
-
-                # Use configurable multiplier for outlier detection
-                lower_bound = Q1 - self.outlier_multiplier * IQR
-                upper_bound = Q3 + self.outlier_multiplier * IQR
-
-                # Since fitness values are negative (smaller is worse), we're mainly concerned with the lower bound
-                statistical_outliers = (fitness_values < lower_bound) | (
-                    fitness_values > upper_bound
-                )
-            else:
-                statistical_outliers = pd.Series(
-                    [False] * len(fitness_values), index=fitness_values.index
-                )
-                lower_bound = self.extreme_threshold
-                upper_bound = 0.0
-
-            # Combine outlier detection methods
-            all_outliers = extreme_outliers | statistical_outliers
+            # Only remove extreme failure values (<= -1000), keep all other values including high fitness
+            failure_threshold = -100.0
+            extreme_outliers = fitness_values <= failure_threshold
 
             # Log outlier detection results
             num_extreme = extreme_outliers.sum()
-            num_statistical = statistical_outliers.sum()
-            num_total_outliers = all_outliers.sum()
+            num_total_outliers = num_extreme
 
             logger.info(f"🔍 Outlier detection results:")
-            logger.info(f"   Extreme threshold: {self.extreme_threshold}")
-            logger.info(f"   IQR multiplier: {self.outlier_multiplier}")
-            logger.info(
-                f"   Extreme outliers (< {self.extreme_threshold}): {num_extreme}"
-            )
-            logger.info(
-                f"   Statistical outliers (IQR method): {num_statistical}"
-            )
+            logger.info(f"   Failure threshold: {failure_threshold}")
+            logger.info(f"   Extreme outliers (<= {failure_threshold}): {num_extreme}")
             logger.info(f"   Total outliers removed: {num_total_outliers}")
-            logger.info(
-                f"   Fitness range for analysis: {lower_bound:.4f} to {upper_bound:.4f}"
-            )
+            logger.info(f"   Fitness range for analysis: {fitness_values[~extreme_outliers].min():.4f} to {fitness_values[~extreme_outliers].max():.4f}")
 
             if num_total_outliers > 0:
-                outlier_examples = fitness_values[all_outliers].head(5)
+                outlier_examples = fitness_values[extreme_outliers].head(5)
                 logger.info(
                     f"   Examples of removed outliers: {list(outlier_examples.values)}"
                 )
 
-            # Filter out outliers
-            valid_fitness = valid_fitness_basic[~all_outliers]
+            # Filter out only failure values
+            valid_fitness = valid_fitness_basic[~extreme_outliers]
 
             if valid_fitness.empty:
                 logger.warning(
@@ -2991,7 +2955,7 @@ class EvolutionFitnessAnalyzer:
             f.write("=" * 80 + "\n\n")
 
             for i, (_, program) in enumerate(top_programs.iterrows(), 1):
-                f.write(f"{i}. Program ID: {program['program_id'][:12]}...\n")
+                f.write(f"{i}. Program ID: {program['program_id']}...\n")
                 f.write(f"   Fitness: {program[fitness_col]:.4f}\n")
                 f.write(f"   Created: {program['created_at']}\n")
                 f.write(f"   Generation: {program['generation']}\n")
@@ -3484,33 +3448,14 @@ class EvolutionFitnessAnalyzer:
         if self.remove_outliers:
             fitness_values = validity_analysis[fitness_col]
 
-            # Apply same outlier detection as in main analysis
-            extreme_outliers = fitness_values < self.extreme_threshold
-
-            # IQR method for statistical outliers
-            non_extreme = fitness_values[
-                fitness_values >= self.extreme_threshold
-            ]
-            if len(non_extreme) > 0:
-                Q1 = non_extreme.quantile(0.25)
-                Q3 = non_extreme.quantile(0.75)
-                IQR = Q3 - Q1
-
-                if IQR > 0:
-                    lower_bound = Q1 - self.outlier_multiplier * IQR
-                    upper_bound = Q3 + self.outlier_multiplier * IQR
-                    statistical_outliers = (fitness_values < lower_bound) | (
-                        fitness_values > upper_bound
-                    )
-                else:
-                    statistical_outliers = pd.Series(
-                        [False] * len(fitness_values),
-                        index=fitness_values.index,
-                    )
-            else:
-                statistical_outliers = pd.Series(
-                    [False] * len(fitness_values), index=fitness_values.index
-                )
+            # Apply same outlier detection as in main analysis - only remove failure values
+            failure_threshold = -1000.0
+            extreme_outliers = fitness_values <= failure_threshold
+            
+            # No statistical outliers - only remove failure values
+            statistical_outliers = pd.Series(
+                [False] * len(fitness_values), index=fitness_values.index
+            )
 
             all_outliers = extreme_outliers | statistical_outliers
             validity_analysis["is_outlier"] = all_outliers
@@ -3867,34 +3812,19 @@ class EvolutionFitnessAnalyzer:
                     col in df_filtered.columns
                     and df_filtered[col].notna().sum() > 0
                 ):
-                    values = df_filtered[col].dropna()
-
-                    # Remove extreme outliers using IQR method
-                    Q1 = values.quantile(0.25)
-                    Q3 = values.quantile(0.75)
-                    IQR = Q3 - Q1
-
-                    if IQR > 0:  # Only apply if there's variation
-                        lower_bound = Q1 - self.outlier_multiplier * IQR
-                        upper_bound = Q3 + self.outlier_multiplier * IQR
-
-                        # For fitness column, also apply extreme threshold
-                        if col == "metric_fitness":
-                            lower_bound = max(
-                                lower_bound, self.extreme_threshold
-                            )
-
-                        outliers = (df_filtered[col] < lower_bound) | (
-                            df_filtered[col] > upper_bound
-                        )
+                    # Only remove failure values (<= -1000) for fitness column
+                    if col == "metric_fitness":
+                        failure_threshold = -1000.0
+                        outliers = df_filtered[col] <= failure_threshold
                         outliers_in_col = outliers.sum()
 
                         if outliers_in_col > 0:
                             df_filtered.loc[outliers, col] = np.nan
                             outliers_removed += outliers_in_col
                             logger.info(
-                                f"   Removed {outliers_in_col} outliers from {col} (range: {lower_bound:.2f} to {upper_bound:.2f})"
+                                f"   Removed {outliers_in_col} failure values from {col} (<= {failure_threshold})"
                             )
+                    # For other metrics, don't remove outliers to preserve data integrity
 
             if outliers_removed > 0:
                 logger.info(
@@ -3972,58 +3902,19 @@ class EvolutionFitnessAnalyzer:
 
             # Apply outlier removal if enabled
             if self.remove_outliers:
-                # Remove extreme outliers that disrupt plotting
-                values = metric_data.copy()
-
-                # For fitness metric, apply extreme threshold
+                # Only remove failure values (<= -1000) for fitness metric
                 if metric_col == "metric_fitness":
-                    extreme_outliers = values < self.extreme_threshold
-                    non_extreme = values[values >= self.extreme_threshold]
-                else:
-                    # For other metrics, use a more general approach
-                    extreme_outliers = pd.Series(
-                        [False] * len(values), index=values.index
-                    )
-                    non_extreme = values
-
-                # Use IQR method for additional outlier detection
-                if len(non_extreme) > 0:
-                    Q1 = non_extreme.quantile(0.25)
-                    Q3 = non_extreme.quantile(0.75)
-                    IQR = Q3 - Q1
-
-                    if IQR > 0:
-                        lower_bound = Q1 - self.outlier_multiplier * IQR
-                        upper_bound = Q3 + self.outlier_multiplier * IQR
-                        statistical_outliers = (values < lower_bound) | (
-                            values > upper_bound
-                        )
-                    else:
-                        statistical_outliers = pd.Series(
-                            [False] * len(values), index=values.index
-                        )
-                else:
-                    statistical_outliers = pd.Series(
-                        [False] * len(values), index=values.index
-                    )
-
-                # Combine outlier detection methods
-                all_outliers = extreme_outliers | statistical_outliers
-
-                # Log outlier detection results
-                num_extreme = extreme_outliers.sum()
-                num_statistical = statistical_outliers.sum()
-                num_total_outliers = all_outliers.sum()
-
-                logger.info(f"   🔍 {metric_name} outlier detection:")
-                logger.info(f"      Extreme outliers: {num_extreme}")
-                logger.info(f"      Statistical outliers: {num_statistical}")
-                logger.info(
-                    f"      Total outliers removed: {num_total_outliers}"
-                )
-
-                # Filter out outliers
-                metric_data = values[~all_outliers]
+                    failure_threshold = -1000.0
+                    extreme_outliers = metric_data <= failure_threshold
+                    
+                    # Log outlier detection results
+                    num_extreme = extreme_outliers.sum()
+                    logger.info(f"   🔍 {metric_name} outlier detection:")
+                    logger.info(f"      Failure values removed: {num_extreme}")
+                    
+                    # Filter out only failure values
+                    metric_data = metric_data[~extreme_outliers]
+                # For other metrics, don't remove outliers to preserve data integrity
 
                 if metric_data.empty:
                     logger.warning(
