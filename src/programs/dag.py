@@ -19,25 +19,26 @@ Notes
 - Edges remain data-only; sequencing is expressed via execution-order deps.
 """
 
-import asyncio
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set
-from collections import defaultdict
-import networkx as nx
+from __future__ import annotations
 
+import asyncio
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any
+
+import networkx as nx
 from loguru import logger
 
-from src.programs.automata import DAGAutomata, ExecutionOrderDependency, DataFlowEdge
-from src.programs.program import (
-    Program,
-    ProgramStageResult,
-    StageState,
-)
+from src.programs.automata import DAGAutomata, DataFlowEdge, ExecutionOrderDependency
+from src.programs.program import Program, ProgramStageResult, StageState
 from src.programs.stages.base import Stage
 from src.programs.state_manager import ProgramStateManager
-from src.programs.utils import format_error_for_llm, build_stage_result
+from src.programs.utils import build_stage_result, format_error_for_llm
 
-FINAL_STATES = {
+__all__ = ["DAG"]
+
+# Final states that indicate a stage has completed execution
+FINAL_STATES: set[StageState] = {
     StageState.COMPLETED,
     StageState.SKIPPED,
     StageState.CANCELLED,
@@ -46,33 +47,47 @@ FINAL_STATES = {
 
 
 class DAG:
+    """Directed Acyclic Graph executor for program stages.
+    
+    Manages execution order dependencies and data flow between stages,
+    ensuring proper sequencing and input validation.
+    """
+
     def __init__(
         self,
-        nodes: Dict[str, Stage],
-        data_flow_edges: List[DataFlowEdge],
+        nodes: dict[str, Stage],
+        data_flow_edges: list[DataFlowEdge],
         state_manager: ProgramStateManager,
         *,
-        execution_order_deps: Optional[
-            Dict[str, List[ExecutionOrderDependency]]
-        ] = None,
+        execution_order_deps: dict[str, list[ExecutionOrderDependency]] | None = None,
         max_parallel_stages: int = 8,
-        dag_timeout: Optional[float] = 2400.0,
-    ):
+        dag_timeout: float | None = 2400.0,
+    ) -> None:
+        """Initialize the DAG executor.
+        
+        Args:
+            nodes: Mapping of stage names to Stage instances
+            data_flow_edges: List of data flow edges between stages
+            state_manager: Manager for program state persistence
+            execution_order_deps: Optional execution order dependencies
+            max_parallel_stages: Maximum number of stages to run concurrently
+            dag_timeout: Timeout in seconds for entire DAG execution (None for no timeout)
+        """
         self.nodes = nodes
         self.data_flow_edges = data_flow_edges
         self.state_manager = state_manager
         self.dag_timeout = dag_timeout
-        self._stage_names: Set[str] = set(self.nodes.keys())
+        self._stage_names: set[str] = set(self.nodes.keys())
         self.automata = DAGAutomata()
         
         # Build data flow mapping for semantic input names
-        self._data_flow_map = {}
+        self._data_flow_map: dict[tuple[str, str], str] = {}
         for edge in data_flow_edges:
             # Map: (source_stage, destination_stage) -> input_name
             self._data_flow_map[(edge.source_stage, edge.destination_stage)] = edge.input_name
-        # Validate configuration early (nodes/edges/entry points/exec deps/types)
+        
+        # Validate configuration early
         self._validate_graph_integrity(execution_order_deps or {})
-        # Build transition rules
         self._setup_automata(execution_order_deps or {})
         self._validate_acyclic_graph()
         self._validate_dependencies()
@@ -80,13 +95,22 @@ class DAG:
         self._stage_sema = asyncio.Semaphore(max(1, max_parallel_stages))
 
     def _validate_graph_integrity(
-        self, execution_order_deps: Dict[str, List[ExecutionOrderDependency]]
+        self, execution_order_deps: dict[str, list[ExecutionOrderDependency]]
     ) -> None:
+        """Validate graph structure and configuration.
+        
+        Checks that all nodes are Stage instances, edges reference valid stages,
+        and configuration parameters are sensible.
+        
+        Args:
+            execution_order_deps: Execution order dependencies to validate
+            
+        Raises:
+            ValueError: If validation fails
+        """
         # Validate node types
-        bad_nodes = [
-            name
-            for name, obj in self.nodes.items()
-            if not isinstance(obj, Stage)
+        bad_nodes: list[str] = [
+            name for name, obj in self.nodes.items() if not isinstance(obj, Stage)
         ]
         if bad_nodes:
             raise ValueError(
@@ -95,16 +119,20 @@ class DAG:
 
         stage_names = self._stage_names
 
-        # Validate data flow edges sources and destinations
-        unknown_sources = [
-            edge.source_stage for edge in self.data_flow_edges if edge.source_stage not in stage_names
+        # Validate data flow edge sources and destinations
+        unknown_sources: list[str] = [
+            edge.source_stage
+            for edge in self.data_flow_edges
+            if edge.source_stage not in stage_names
         ]
         if unknown_sources:
             raise ValueError(
                 f"Data flow edges contain unknown source stage(s): {', '.join(sorted(set(unknown_sources)))}"
             )
-        unknown_dests = [
-            edge.destination_stage for edge in self.data_flow_edges if edge.destination_stage not in stage_names
+        unknown_dests: list[str] = [
+            edge.destination_stage
+            for edge in self.data_flow_edges
+            if edge.destination_stage not in stage_names
         ]
         if unknown_dests:
             raise ValueError(
@@ -113,14 +141,14 @@ class DAG:
 
         # Validate execution order dependencies
         if execution_order_deps:
-            unknown_exec_keys = [
+            unknown_exec_keys: list[str] = [
                 k for k in execution_order_deps.keys() if k not in stage_names
             ]
             if unknown_exec_keys:
                 raise ValueError(
                     f"Execution-order deps contain unknown target stage(s): {', '.join(sorted(set(unknown_exec_keys)))}"
                 )
-            unknown_exec_targets = [
+            unknown_exec_targets: list[str] = [
                 dep.stage_name
                 for deps in execution_order_deps.values()
                 for dep in deps
@@ -137,17 +165,27 @@ class DAG:
         # max_parallel_stages validated in __init__ when creating semaphore
 
     def _setup_automata(
-        self, execution_order_deps: Dict[str, List[ExecutionOrderDependency]]
+        self, execution_order_deps: dict[str, list[ExecutionOrderDependency]]
     ) -> None:
-        # Regular edges do not gate readiness; only execution-order deps do.
+        """Configure the automata with execution order dependencies.
+        
+        Args:
+            execution_order_deps: Execution order dependencies to add to automata
+        """
+        # Regular edges do not gate readiness; only execution-order deps do
         for stage_name, deps in execution_order_deps.items():
             for dep in deps:
                 self.automata.add_execution_order_dependency(stage_name, dep)
 
     def _validate_dependencies(self) -> None:
+        """Validate that all dependencies reference existing stages.
+        
+        Raises:
+            ValueError: If invalid dependencies are found
+        """
         errors = self.automata.validate_dependencies(self._stage_names)
         # Ensure all transition rule targets exist among nodes
-        invalid_rule_targets = [
+        invalid_rule_targets: list[str] = [
             stage_name
             for stage_name in dict(self.automata.transition_rules).keys()
             if stage_name not in self.nodes
@@ -160,23 +198,29 @@ class DAG:
         if errors:
             raise ValueError(f"Invalid dependencies found: {'; '.join(errors)}")
 
-    async def run(
-        self, program: Program, timeout: Optional[float] = None
-    ) -> None:
+    async def run(self, program: Program) -> None:
         """Run the DAG for a given program, respecting an optional timeout.
-
-        Raises asyncio.TimeoutError to let the caller decide lifecycle updates.
+        
+        Args:
+            program: The program to execute through the DAG
+            
+        Raises:
+            asyncio.TimeoutError: If DAG execution exceeds configured timeout
         """
         try:
             await asyncio.wait_for(
-                self._run_internal(program), timeout=timeout or self.dag_timeout
+                self._run_internal(program), timeout=self.dag_timeout
             )
         except asyncio.TimeoutError:
             logger.error(f"[DAG] DAG run for program {program.id} timed out.")
             raise
 
     async def _run_internal(self, program: Program) -> None:
-        """Main scheduling loop: computes ready stages, launches tasks, and collects results."""
+        """Main scheduling loop: computes ready stages, launches tasks, and collects results.
+        
+        Args:
+            program: The program to execute
+        """
         logger.info(f"[DAG] Starting DAG run for program {program.id}")
         running = set()
         done, skipped = set(program.stage_results.keys()), set()
@@ -211,7 +255,7 @@ class DAG:
             ready = self.automata.get_ready_stages(
                 program, self._stage_names, done, running, skipped
             )
-            # Additional rule: wait until all regular predecessors finished (any final state)
+
             if ready:
                 gated = set()
                 for stage_name in list(ready):
@@ -262,7 +306,7 @@ class DAG:
 
             if not ready and not running:
                 # If nothing can progress and no progress was made this iteration, force-skip unresolved
-                unresolved = [
+                unresolved: list[str] = [
                     stage_name
                     for stage_name in self.nodes
                     if stage_name not in program.stage_results
@@ -294,10 +338,15 @@ class DAG:
             analysis = self._analyze_completion_failures(program)
             logger.info(f"[DAG] Failure Analysis: {analysis}")
 
-        # Do not change Program.state here; caller (scheduler) is responsible
-
-    def _get_predecessors_in_order(self, stage_name: str) -> List[str]:
-        """Get predecessors based on data flow edges."""
+    def _get_predecessors_in_order(self, stage_name: str) -> list[str]:
+        """Get predecessors based on data flow edges.
+        
+        Args:
+            stage_name: Name of the stage to get predecessors for
+            
+        Returns:
+            List of predecessor stage names in order
+        """
         preds = []
         for edge in self.data_flow_edges:
             if edge.destination_stage == stage_name:
@@ -305,9 +354,9 @@ class DAG:
         return preds
 
     async def _launch_ready_stages(
-        self, program: Program, ready: Set[str]
-    ) -> Dict[str, asyncio.Task]:
-        tasks = {}
+        self, program: Program, ready: set[str]
+    ) -> dict[str, asyncio.Task]:
+        tasks: dict[str, asyncio.Task] = {}
         now_ts = datetime.now(timezone.utc)
         for name in ready:
             await self.state_manager.mark_stage_running(
@@ -320,7 +369,7 @@ class DAG:
                     stage = self.nodes[stage_name]
                     preds = self._get_predecessors_in_order(stage_name)
                     # Select successful predecessors and enforce mandatory kinds
-                    successful_pred_names: List[str] = []
+                    successful_pred_names: list[str] = []
                     for p in preds:
                         res = prog.stage_results.get(p)
                         if (
@@ -331,20 +380,24 @@ class DAG:
                             successful_pred_names.append(p)
 
                     # Build named inputs from data flow edges
-                    named_inputs = {}
+                    named_inputs: dict[str, Any] = {}
                     for edge in self.data_flow_edges:
                         if edge.destination_stage == stage_name:
                             # Check if the source stage completed successfully
                             source_result = prog.stage_results.get(edge.source_stage)
-                            if (source_result and 
-                                source_result.status == StageState.COMPLETED and 
-                                source_result.output is not None):
+                            if (
+                                source_result
+                                and source_result.status == StageState.COMPLETED
+                                and source_result.output is not None
+                            ):
                                 named_inputs[edge.input_name] = source_result.output
                     
                     stage.set_named_inputs(named_inputs)
                     # Validate mandatory inputs are present
                     mandatory_inputs = stage.__class__.mandatory_inputs()
-                    missing_mandatory = [name for name in mandatory_inputs if name not in named_inputs]
+                    missing_mandatory: list[str] = [
+                        name for name in mandatory_inputs if name not in named_inputs
+                    ]
                     if missing_mandatory:
                         return build_stage_result(
                             status=StageState.SKIPPED,
@@ -362,12 +415,12 @@ class DAG:
     async def _collect_results(
         self,
         program: Program,
-        tasks: Dict[str, asyncio.Task],
-        done: Set[str],
-        running: Set[str],
-    ) -> Dict[str, ProgramStageResult]:
+        tasks: dict[str, asyncio.Task],
+        done: set[str],
+        running: set[str],
+    ) -> dict[str, ProgramStageResult]:
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-        outcomes = {}
+        outcomes: dict[str, ProgramStageResult] = {}
         for name, result in zip(tasks.keys(), results):
             running.discard(name)
             done.add(name)
@@ -391,7 +444,7 @@ class DAG:
                     f"[DAG] Program {program.id}: Stage '{name}' failed with unexpected exception: {result}"
                 )
             else:
-                stage_result = result
+                stage_result: ProgramStageResult = result
                 if stage_result.is_failed():
                     logger.error(
                         f"[DAG] Program {program.id}: Stage '{name}' failed: {stage_result.error}"
@@ -416,6 +469,15 @@ class DAG:
     def _generate_completion_summary(
         self, program: Program, all_succeeded: bool
     ) -> str:
+        """Generate a summary of DAG execution results.
+        
+        Args:
+            program: The executed program
+            all_succeeded: Whether all stages completed successfully
+            
+        Returns:
+            Human-readable summary string
+        """
         status = "SUCCESS" if all_succeeded else "PARTIAL"
         completed = sum(
             1 for r in program.stage_results.values() if r.is_completed()
@@ -439,6 +501,14 @@ class DAG:
         return summary
 
     def _analyze_completion_failures(self, program: Program) -> str:
+        """Analyze what went wrong during DAG execution.
+        
+        Args:
+            program: The executed program
+            
+        Returns:
+            Analysis string describing failure patterns
+        """
         analysis = []
         failed_stages = [
             s for s, r in program.stage_results.items() if r.is_failed()
@@ -466,7 +536,13 @@ class DAG:
         )
 
     def _validate_acyclic_graph(self) -> None:
-        """Validate there are no cycles in the combined graph (regular + exec-order deps)."""
+        """Validate there are no cycles in the combined graph.
+        
+        Checks both regular data flow edges and execution order dependencies.
+        
+        Raises:
+            ValueError: If a cycle is detected
+        """
         G = self._build_combined_graph()
         if not nx.is_directed_acyclic_graph(G):
             try:
@@ -482,7 +558,11 @@ class DAG:
             )
 
     def _build_combined_graph(self) -> nx.DiGraph:
-        """Build a combined NetworkX DiGraph of data flow and exec-order dependencies."""
+        """Build a combined NetworkX DiGraph of data flow and exec-order dependencies.
+        
+        Returns:
+            NetworkX directed graph containing all edges
+        """
         G = nx.DiGraph()
         G.add_nodes_from(self.nodes.keys())
         
@@ -501,8 +581,12 @@ class DAG:
         
         return G
 
-    def _build_adjacency(self) -> Dict[str, List[str]]:
-        """Return adjacency list for combined graph using defaultdict(list)."""
+    def _build_adjacency(self) -> dict[str, list[str]]:
+        """Return adjacency list for combined graph.
+        
+        Returns:
+            Dictionary mapping stage names to lists of successor stage names
+        """
         adjacency = defaultdict(list)
         for name in list(self.nodes.keys()):
             _ = adjacency[name]
@@ -528,7 +612,7 @@ class DAG:
         Validates that each stage's mandatory inputs are provided by data flow edges,
         and that provided inputs match declared input names.
         """
-        errors: List[str] = []
+        errors: list[str] = []
         
         for stage_name, stage in self.nodes.items():
             # Find incoming data flow edges
@@ -575,7 +659,11 @@ class DAG:
             raise ValueError(f"Input/topology validation failed: {'; '.join(errors)}")
         
 
-    def get_topological_order(self) -> List[str]:
-        """Return a topological order of the combined graph for debugging/metrics."""
+    def get_topological_order(self) -> list[str]:
+        """Return a topological order of the combined graph for debugging/metrics.
+        
+        Returns:
+            List of stage names in topological order
+        """
         G = self._build_combined_graph()
         return list(nx.topological_sort(G))

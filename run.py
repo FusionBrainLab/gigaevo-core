@@ -28,7 +28,7 @@ from src.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
-from src.evolution.engine import EngineConfig, EvolutionEngine
+from src.evolution.engine import EngineConfig, EvolutionEngine, RequiredBehaviorKeysAcceptor
 from src.evolution.mutation.llm import LLMMutationOperator
 from src.evolution.mutation.parent_selector import (
     AllCombinationsParentSelector,
@@ -222,11 +222,8 @@ def create_behavior_spaces(
         )
 
     fitness_validity_space = BehaviorSpace(
-        feature_bounds={
-            primary_key: primary_bounds,
-            VALIDITY_KEY: valid_bounds,
-        },
-        resolution={primary_key: 150, VALIDITY_KEY: 2},
+        feature_bounds={primary_key: primary_bounds, VALIDITY_KEY: valid_bounds},
+        resolution={primary_key: 150, VALIDITY_KEY: 2}, 
         binning_types={
             primary_key: BinningType.LINEAR,
             VALIDITY_KEY: BinningType.LINEAR,
@@ -244,33 +241,23 @@ def create_island_configs(
     """Create 1 island configurations with improved resolution balance and migration strategies."""
 
     primary_key = metrics_context.get_primary_key()
-    configs = IslandConfig(
+    hi_better = metrics_context.is_higher_better(primary_key)
+    island_exploit = IslandConfig(
         island_id="fitness_island",
-        max_size=75,
+        max_size=75,  # tighter, exploit-focused
         behavior_space=behavior_spaces[0],
         archive_selector=SumArchiveSelector(
             [primary_key],
-            fitness_key_higher_is_better={
-                primary_key: metrics_context.is_higher_better(primary_key)
-            },
+            fitness_key_higher_is_better={primary_key: hi_better},
         ),
-        elite_selector=FitnessProportionalEliteSelector(
-            primary_key,
-            metrics_context.is_higher_better(primary_key),
-        ),
-        archive_remover=FitnessArchiveRemover(
-            primary_key,
-            metrics_context.is_higher_better(primary_key),
-        ),
-        migrant_selector=TopFitnessMigrantSelector(
-            primary_key,
-            metrics_context.is_higher_better(primary_key),
-        ),
-        migration_rate=0.0,
+        elite_selector=FitnessProportionalEliteSelector(primary_key, hi_better),
+        archive_remover=FitnessArchiveRemover(primary_key, hi_better),
+        migrant_selector=TopFitnessMigrantSelector(primary_key, hi_better),
+        migration_rate=0.10,
     )
 
     return [
-        configs,
+        island_exploit,
     ]
 
 
@@ -463,9 +450,9 @@ async def run_evolution_experiment(
             builder = ContextPipelineBuilder(pctx)
         else:
             builder = DefaultPipelineBuilder(pctx)
-        dag_spec = builder.set_limits(
+        dag_blueprint = builder.set_limits(
             dag_timeout=1800, max_parallel=8
-        ).build_spec()
+        ).build_blueprint()
 
         # Create evolution strategy
         logger.info("Creating evolution strategy...")
@@ -507,10 +494,10 @@ async def run_evolution_experiment(
 
         engine_config = EngineConfig(
             loop_interval=1.0,
-            max_elites_per_generation=5,  # INCREASED: More elites for better diversity preservation
-            max_mutations_per_generation=8,  # INCREASED: More mutations per generation for faster exploration
-            max_generations=cli_args.max_generations,  # Pass max_generations from command line
-            required_behavior_keys=required_behavior_keys,
+            max_elites_per_generation=5,
+            max_mutations_per_generation=8,
+            max_generations=cli_args.max_generations, 
+            program_acceptor=RequiredBehaviorKeysAcceptor(required_behavior_keys=required_behavior_keys),
             parent_selector=AllCombinationsParentSelector(num_parents=2),
         )
 
@@ -532,7 +519,7 @@ async def run_evolution_experiment(
 
         runner = RunnerManager(
             engine=evolution_engine,
-            dag_spec=dag_spec,
+            dag_blueprint=dag_blueprint,
             storage=redis_storage,
             config=runner_config,
         )
@@ -545,7 +532,7 @@ async def run_evolution_experiment(
         logger.info(
             f"  - Max generations: {cli_args.max_generations if cli_args.max_generations else 'unlimited'}"
         )
-        logger.info(f"  - DAG stages: {list(dag_spec.nodes)}")
+        logger.info(f"  - DAG stages: {list(dag_blueprint.nodes.keys())}")
 
         await runner.run()
 

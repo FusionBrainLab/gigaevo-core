@@ -59,8 +59,10 @@ class EnsureMetricsStage(Stage):
         # Get validation result by semantic name, fallback to factory if not available
         validation_data = self.get_input_optional("validation_result")
         if validation_data is not None and isinstance(validation_data, dict):
+            logger.debug(f"[{self.stage_name}] Validation result found.")
             metrics_input, src = validation_data, "validation_stage"
         else:
+            logger.debug(f"[{self.stage_name}] No validation result found, using factory.")
             metrics_input, src = self._get_factory_metrics(), "factory"
 
         final_metrics = self._process_metrics(metrics_input)
@@ -78,6 +80,7 @@ class EnsureMetricsStage(Stage):
                 "stored_metrics": True,
                 "metrics_count": len(final_metrics),
                 "metrics_keys": list(final_metrics.keys()),
+                **final_metrics,
                 "metrics_source": src,
             },
         )
@@ -121,8 +124,12 @@ class EnsureMetricsStage(Stage):
                 stage_type="metrics_finiteness",
             )
 
-        # Only apply bounds if the metric is defined in the context
-        if (bounds := self.metrics_context.get_bounds(key)) is not None:
+        # Get metric spec to check if this is a sentinel value
+        spec = self.metrics_context.specs.get(key)
+        is_sentinel = spec.is_sentinel(value)
+
+        # Only apply bounds if the metric is defined in the context AND it's not a sentinel value
+        if not is_sentinel and (bounds := self.metrics_context.get_bounds(key)) is not None:
             lo, hi = bounds
             if lo is not None and value < lo:
                 value = lo
@@ -208,5 +215,3 @@ class NormalizeMetricsStage(Stage):
                 "aggregate": program.metrics.get(self.aggregate_key),
             },
         )
-
-    # NormalizeMetricsStage intentionally contains only normalization logic

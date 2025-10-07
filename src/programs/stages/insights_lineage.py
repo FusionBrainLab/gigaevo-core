@@ -4,7 +4,6 @@ import json
 import random
 from typing import Any, Optional, Literal
 
-from loguru import logger
 import re
 from pydantic import BaseModel
 
@@ -365,6 +364,7 @@ class GenerateLineageInsightsStage(Stage):
         )
  
         primary_spec = self.config.metrics_context.get_primary_spec()
+        primary_key = self.config.metrics_context.get_primary_key()
         return self.config.user_prompt_template.format(
             task_description=self.config.task_description,
             metric_name=primary_key,

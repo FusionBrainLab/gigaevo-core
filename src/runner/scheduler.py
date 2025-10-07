@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from typing import TYPE_CHECKING, Dict, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
@@ -12,8 +12,7 @@ from src.programs.dag import DAG
 from src.programs.program import Program
 from src.programs.program_state import ProgramState
 from src.programs.state_manager import ProgramStateManager
-
-from .factories import DagFactory
+from src.runner.dag_blueprint import DAGBlueprint
 
 if TYPE_CHECKING:
     from .manager import RunnerConfig, RunnerMetrics
@@ -24,32 +23,37 @@ __all__ = ["DagScheduler"]
 class TaskInfo(NamedTuple):
     task: asyncio.Task
     program_id: str
-    start_time: float
+    started_at: float  # monotonic seconds
 
 
 class DagScheduler:
     def __init__(
         self,
         storage: ProgramStorage,
-        dag_factory: DagFactory,
+        dag_blueprint: DAGBlueprint,
         state_manager: ProgramStateManager,
         metrics: RunnerMetrics,
         config: RunnerConfig,
     ) -> None:
         self._storage = storage
-        self._factory = dag_factory
+        self._dag_blueprint = dag_blueprint
         self._state_manager = state_manager
         self._metrics = metrics
         self._config = config
 
-        self._active_tasks: Dict[str, TaskInfo] = {}
+        self._active: dict[str, TaskInfo] = {}
         self._sema = asyncio.Semaphore(self._config.max_concurrent_dags)
         self._task: asyncio.Task | None = None
         self._stopping = False
 
+    @property
+    def task(self) -> asyncio.Task | None:
+        return self._task
+
     def start(self) -> None:
-        if self._task is None:
-            self._task = asyncio.create_task(self._run(), name="dag-scheduler")
+        if self._task:
+            return
+        self._task = asyncio.create_task(self._run(), name="dag-scheduler")
 
     async def stop(self) -> None:
         self._stopping = True
@@ -57,290 +61,148 @@ class DagScheduler:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-        for task_info in list(self._active_tasks.values()):
-            await self._cancel_task_safely(task_info)
-        self._active_tasks.clear()
+            self._task = None
+
+        for info in list(self._active.values()):
+            await self._cancel_task(info)
+        self._active.clear()
 
     def active_count(self) -> int:
-        return len(self._active_tasks)
+        return len(self._active)
 
     async def _run(self) -> None:
         try:
             while not self._stopping:
                 await self._metrics.increment_loop_iterations()
-                await self._cleanup_timed_out_tasks()
-                await self._launch_missing_dags()
-                await self._cleanup_finished_dags()
 
-                if (
-                    self._metrics.loop_iterations % self._config.log_interval
-                    == 0
-                ):
+                await self._maintain()   # timeouts + harvest
+                await self._launch()     # start new DAGs up to capacity
+
+                if self._metrics.loop_iterations % self._config.log_interval == 0:
                     logger.info(
-                        f"[DagScheduler] {self._metrics.to_dict()} (active={len(self._active_tasks)})"
+                        "[DagScheduler] active={} metrics={}",
+                        len(self._active),
+                        self._metrics.to_dict(),
                     )
 
-                await self._wait_for_trigger()
+                await self._storage.wait_for_activity(self._config.poll_interval)
+
         except asyncio.CancelledError:
-            logger.debug("[DagScheduler] Cancelled")
+            logger.debug("[DagScheduler] cancelled")
         except Exception as exc:
-            logger.exception(f"[DagScheduler] Unhandled exception: {exc}")
+            logger.exception("[DagScheduler] unhandled exception: {}", exc)
             raise
 
-    async def _cleanup_timed_out_tasks(self):
-        current_time = time.time()
-        timed_out_tasks = []
 
-        for program_id, task_info in self._active_tasks.items():
-            elapsed = current_time - task_info.start_time
-            if elapsed > self._config.dag_timeout * 0.75:
-                if elapsed > self._config.dag_timeout:
-                    timed_out_tasks.append((program_id, task_info, elapsed))
-                else:
-                    # Warn about tasks approaching timeout
-                    logger.warning(
-                        f"[DagScheduler] Task for program {program_id} approaching timeout "
-                        f"({elapsed:.1f}s / {self._config.dag_timeout}s) - {(elapsed/self._config.dag_timeout)*100:.1f}% complete"
-                    )
+    async def _maintain(self) -> None:
+        now = time.monotonic()
+        finished: list[TaskInfo] = []
+        timed_out: list[TaskInfo] = []
 
-        for program_id, task_info, elapsed in timed_out_tasks:
-            logger.error(
-                f"[DagScheduler] Task for program {program_id} exceeded timeout "
-                f"({elapsed:.1f}s > {self._config.dag_timeout}s) - force cancelling and discarding"
-            )
+        for pid, info in list(self._active.items()):
+            if info.task.done():
+                finished.append(info)
+            elif (now - info.started_at) > self._config.dag_timeout:
+                timed_out.append(info)
 
-            # IMPROVED: More aggressive task cancellation
-            await self._cancel_task_safely(task_info)
-            self._active_tasks.pop(program_id, None)
-
+        for info in timed_out:
+            await self._cancel_task(info)
+            self._active.pop(info.program_id, None)
             try:
-                program = await self._storage.get(program_id)
-                if program:
-                    await self._state_manager.set_program_state(
-                        program, ProgramState.DISCARDED
-                    )
-                    logger.info(
-                        f"[DagScheduler] Program {program_id} marked as discarded due to timeout"
-                    )
+                prog = await self._storage.get(info.program_id)
+                if prog:
+                    await self._state_manager.set_program_state(prog, ProgramState.DISCARDED)
+                await self._metrics.increment_dag_errors()
+                logger.error("[DagScheduler] program {} timed out", info.program_id)
             except Exception as e:
-                logger.error(
-                    f"[DagScheduler] Failed to mark timed-out program {program_id} as discarded: {e}"
-                )
+                logger.error("[DagScheduler] discard after timeout failed for {}: {}", info.program_id, e)
 
-            await self._metrics.increment_dag_errors()
+        for info in finished:
+            self._active.pop(info.program_id, None)
+            try:
+                info.task.result()
+                await self._metrics.increment_dag_runs_completed()
+                logger.debug("[DagScheduler] program {} completed", info.program_id)
+            except Exception as e:
+                await self._metrics.increment_dag_errors()
+                logger.error("[DagScheduler] program {} failed: {}", info.program_id, e)
 
-    async def _launch_missing_dags(self):
+    # -------------------- launching --------------------
+
+    async def _launch(self) -> None:
         try:
-            all_programs = await self._storage.get_all()
-            candidates = [
-                p for p in all_programs if p.state == ProgramState.FRESH
-            ]
-            orphaned = [
-                p
-                for p in all_programs
-                if p.state == ProgramState.DAG_PROCESSING_STARTED
-                and p.id not in self._active_tasks
-            ]
-
-            if orphaned:
-                logger.warning(
-                    f"[DagScheduler] Found {len(orphaned)} orphaned DAG_PROCESSING_STARTED programs. "
-                    f"Cleaning them up now."
-                )
-
-                for orphaned_program in orphaned:
-                    try:
-                        await self._state_manager.set_program_state(
-                            orphaned_program, ProgramState.DISCARDED
-                        )
-                        logger.info(
-                            f"[DagScheduler] Orphaned program {orphaned_program.id} marked as discarded"
-                        )
-                        await self._metrics.increment_dag_errors()
-                    except Exception as e:
-                        logger.error(
-                            f"[DagScheduler] Failed to mark orphaned program {orphaned_program.id} as discarded: {e}"
-                        )
-
+            fresh = await self._storage.get_all_by_status(ProgramState.FRESH.value)
+            processing = await self._storage.get_all_by_status(ProgramState.DAG_PROCESSING_STARTED.value)
         except Exception as e:
-            logger.error(f"[DagScheduler] Failed to fetch programs: {e}")
+            logger.error("[DagScheduler] fetch-by-status failed: {}", e)
             return
 
-        for program in candidates:
-            if program.id in self._active_tasks:
-                continue
+        for p in processing:
+            if p.id not in self._active:
+                try:
+                    await self._state_manager.set_program_state(p, ProgramState.DISCARDED)
+                    await self._metrics.increment_dag_errors()
+                    logger.warning("[DagScheduler] orphaned program {} discarded", p.id)
+                except Exception as se:
+                    logger.error("[DagScheduler] orphan discard failed for {}: {}", p.id, se)
 
-            if len(self._active_tasks) >= self._config.max_concurrent_dags:
+        capacity = self._config.max_concurrent_dags - len(self._active)
+        if capacity <= 0:
+            return
+
+        for program in fresh:
+            if capacity <= 0:
                 break
+            if program.id in self._active:
+                continue
 
             try:
-                dag: DAG = self._factory.create(self._state_manager)
+                dag: DAG = self._dag_blueprint.build(self._state_manager)
             except Exception as e:
-                logger.error(
-                    f"[DagScheduler] Failed to create DAG for program {program.id}: {e}"
-                )
+                logger.error("[DagScheduler] DAG build failed for {}: {}", program.id, e)
                 try:
-                    await self._state_manager.set_program_state(
-                        program, ProgramState.DISCARDED
-                    )
-                    logger.info(
-                        f"[DagScheduler] Program {program.id} marked as discarded due to DAG creation failure"
-                    )
-                except Exception as state_error:
-                    logger.error(
-                        f"[DagScheduler] Failed to mark program {program.id} as discarded: {state_error}"
-                    )
+                    await self._state_manager.set_program_state(program, ProgramState.DISCARDED)
+                    await self._metrics.increment_dag_errors()
+                except Exception as se:
+                    logger.error("[DagScheduler] state update failed for {}: {}", program.id, se)
                 continue
 
-            async def _run_with_guaranteed_cleanup(
-                prog: Program = program, dag_inst: DAG = dag
-            ):
+            async def _run_one(prog: Program = program, dag_inst: DAG = dag) -> None:
                 async with self._sema:
-                    await self._execute_dag_with_guaranteed_state_update(
-                        dag_inst, prog
-                    )
+                    await self._execute_dag(dag_inst, prog)
 
-            start_time = time.time()
-            task = asyncio.create_task(
-                _run_with_guaranteed_cleanup(), name=f"dag-{program.id[:8]}"
-            )
-
-            self._active_tasks[program.id] = TaskInfo(
-                task, program.id, start_time
-            )
-
+            task = asyncio.create_task(_run_one(), name=f"dag-{program.id[:8]}")
+            self._active[program.id] = TaskInfo(task, program.id, time.monotonic())
+            capacity -= 1
             await self._metrics.increment_dag_runs_started()
 
             try:
-                await self._state_manager.set_program_state(
-                    program, ProgramState.DAG_PROCESSING_STARTED
-                )
-                logger.info(
-                    f"[DagScheduler] Launched DAG for program {program.id}"
-                )
+                await self._state_manager.set_program_state(program, ProgramState.DAG_PROCESSING_STARTED)
+                logger.info("[DagScheduler] launched {}", program.id)
             except Exception as e:
-                logger.error(
-                    f"[DagScheduler] Failed to mark program {program.id} as started: {e}"
-                )
+                logger.error("[DagScheduler] mark-started failed for {}: {}", program.id, e)
                 task.cancel()
-                self._active_tasks.pop(program.id, None)
+                self._active.pop(program.id, None)
 
-    async def _cleanup_finished_dags(self):
-        finished_task_infos = {}
-        for pid, task_info in list(self._active_tasks.items()):
-            if task_info.task.done():
-                finished_task_infos[pid] = self._active_tasks.pop(pid)
 
-        if finished_task_infos:
-            for pid, task_info in finished_task_infos.items():
-                try:
-                    task_info.task.result()
-                    await self._metrics.increment_dag_runs_completed()
-                    logger.debug(
-                        f"[DagScheduler] DAG for program {pid} completed successfully"
-                    )
-                except Exception as e:
-                    await self._metrics.increment_dag_errors()
-                    logger.error(
-                        f"[DagScheduler] DAG for program {pid} failed: {e}"
-                    )
-
-    async def _execute_dag_with_guaranteed_state_update(
-        self, dag: DAG, program: Program
-    ):
-        success = False
+    async def _execute_dag(self, dag: DAG, program: Program) -> None:
+        ok = True
         try:
             await dag.run(program)
-            success = True
         except Exception as exc:
-            logger.error(
-                f"[DagScheduler] DAG execution failed for program {program.id}: {exc}"
-            )
-            success = False
+            ok = False
+            logger.error("[DagScheduler] DAG run failed for {}: {}", program.id, exc)
 
         try:
-            if success:
-                await self._state_manager.set_program_state(
-                    program, ProgramState.DAG_PROCESSING_COMPLETED
-                )
-                logger.debug(
-                    f"[DagScheduler] Program {program.id} completed successfully"
-                )
-            else:
-                await self._state_manager.set_program_state(
-                    program, ProgramState.DISCARDED
-                )
-                logger.info(
-                    f"[DagScheduler] Program {program.id} marked as discarded due to DAG failure"
-                )
-        except Exception as state_error:
-            logger.critical(
-                f"[DagScheduler] CRITICAL: Failed to update state for program {program.id}: {state_error}. "
-                f"Program may become orphaned!"
-            )
-            raise RuntimeError(
-                f"Critical state update failure for program {program.id}: {state_error}"
-            )
+            new_state = ProgramState.DAG_PROCESSING_COMPLETED if ok else ProgramState.DISCARDED
+            await self._state_manager.set_program_state(program, new_state)
+        except Exception as se:
+            await self._metrics.increment_dag_errors()
+            logger.error("[DagScheduler] state update failed for {}: {}", program.id, se)
 
-    async def _wait_for_trigger(self):
-        poll_ms = int(self._config.poll_interval * 1000)
-        if hasattr(self._storage, "_stream_key") and hasattr(
-            self._storage, "_conn"
-        ):
-            try:
-                redis = await self._storage._conn()
-                if hasattr(redis, "xread"):
-                    stream_key = self._storage._stream_key()
-                    await redis.xread({stream_key: "$"}, block=poll_ms, count=1)
-                    return
-            except asyncio.TimeoutError:
-                logger.debug("Redis xread timed out, falling back to sleep")
-            except Exception as e:
-                logger.debug(f"Redis xread failed, falling back to sleep: {e}")
-
-        await asyncio.sleep(self._config.poll_interval)
-
-    async def _cancel_task_safely(self, task_info: TaskInfo):
-        """IMPROVED: More aggressive task cancellation to handle stuck DAGs."""
-        if task_info.task.done():
+    async def _cancel_task(self, info: TaskInfo) -> None:
+        if info.task.done():
             return
-
-        logger.debug(
-            f"[DagScheduler] Cancelling task for program {task_info.program_id}"
-        )
-        task_info.task.cancel()
-
-        try:
-            # IMPROVED: Shorter timeout for cancellation, then escalate
-            await asyncio.wait_for(task_info.task, timeout=2.0)
-            logger.debug(
-                f"[DagScheduler] Task for program {task_info.program_id} cancelled gracefully"
-            )
-        except asyncio.CancelledError:
-            logger.debug(
-                f"[DagScheduler] Task for program {task_info.program_id} cancelled"
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"[DagScheduler] Task for program {task_info.program_id} did not respond to cancellation within 2s"
-            )
-            # Task is stuck and not responding to cancellation
-            # This indicates a serious issue like subprocess in uninterruptible state
-        except Exception as e:
-            logger.error(
-                f"[DagScheduler] Error cancelling task for program {task_info.program_id}: {e}"
-            )
-
-        try:
-            program = await self._storage.get(task_info.program_id)
-            if program and program.state != ProgramState.DISCARDED:
-                await self._state_manager.set_program_state(
-                    program, ProgramState.DISCARDED
-                )
-                logger.info(
-                    f"[DagScheduler] Program {task_info.program_id} marked as discarded after task cancellation"
-                )
-        except Exception as e:
-            logger.error(
-                f"[DagScheduler] Failed to mark cancelled program {task_info.program_id} as discarded: {e}"
-            )
+        info.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+            await asyncio.wait_for(info.task, timeout=2.0)

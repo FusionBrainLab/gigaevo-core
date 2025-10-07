@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional, Set
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.evolution.engine.acceptor import (
+    DefaultProgramEvolutionAcceptor,
+    ProgramEvolutionAcceptor,
+)
 from src.evolution.mutation.parent_selector import (
     ParentSelector,
     RandomParentSelector,
@@ -25,8 +29,11 @@ class EngineConfig(BaseModel):
         gt=0,
         description="Maximum number of generations to run (None = unlimited)",
     )
-    required_behavior_keys: Set[str] = Field(default_factory=set)
     parent_selector: ParentSelector = Field(
         default_factory=lambda: RandomParentSelector(num_parents=1)
+    )
+    program_acceptor: ProgramEvolutionAcceptor = Field(
+        default_factory=lambda: DefaultProgramEvolutionAcceptor(),
+        description="Acceptor for determining if programs should be accepted for evolution"
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)

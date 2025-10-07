@@ -9,15 +9,16 @@ implementation details to sub-modules.  Importing from
 
 from __future__ import annotations
 
+from .acceptor import ProgramEvolutionAcceptor, DefaultProgramEvolutionAcceptor, RequiredBehaviorKeysAcceptor
 from .config import EngineConfig
 from .core import EvolutionEngine  # noqa: F401  (public symbol)
 from .metrics import EngineMetrics
-from .validation import ProgramValidationResult, ValidationFailureReason
 
 __all__ = [
     "EngineConfig",
     "EngineMetrics",
-    "ValidationFailureReason",
-    "ProgramValidationResult",
+    "ProgramEvolutionAcceptor",
+    "DefaultProgramEvolutionAcceptor",
+    "RequiredBehaviorKeysAcceptor",
     "EvolutionEngine",
 ]

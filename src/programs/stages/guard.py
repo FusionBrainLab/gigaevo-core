@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-"""Central execution guard shared by all Stage objects.
-
-Encapsulates timeout, resource monitoring, error mapping,
-and metrics recording in a single place so every Stage
-inherits identical robust behaviour.
-"""
+"""Shared execution guard for Stage objects (lean)."""
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -22,56 +18,47 @@ if TYPE_CHECKING:  # pragma: no cover
     from src.programs.stages.base import Stage
 
 
-async def _run_stage_with_monitoring(
-    stage: "Stage", program: "Program", started_at: datetime
-) -> ProgramStageResult:
-    """Execute stage with resource monitoring - extracted to allow timeout to cover everything."""
-    async with stage._resource_monitor(
-        program
-    ):  # pylint: disable=protected-access
-        return await stage._execute_stage(
-            program, started_at
-        )  # pylint: disable=protected-access
-
-
-async def stage_guard(
-    stage: "Stage", program: "Program"
-) -> ProgramStageResult:  # noqa: D401
-    """Run *stage* on *program* with uniform guarantees."""
-
+async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
+    """Run *stage* with timeout and consistent error mapping."""
     started_at = datetime.now(timezone.utc)
-    duration: float = 0.0
+    t0 = time.monotonic()
 
     try:
         result = await asyncio.wait_for(
-            _run_stage_with_monitoring(stage, program, started_at),
+            stage._execute_stage(program, started_at),  # pylint: disable=protected-access
             timeout=stage.timeout,
         )
-
-        duration = (datetime.now(timezone.utc) - started_at).total_seconds()
-        stage.metrics.record_execution(duration, True)
         logger.debug(
-            f"[{stage.stage_name}] Program {program.id}: Completed in {duration:.2f}s"
+            "[{stage}] Program {pid}: ok in {dur:.2f}s",
+            stage=stage.stage_name,
+            pid=program.id,
+            dur=(time.monotonic() - t0),
         )
         return result
 
     except asyncio.TimeoutError:
-        duration = (datetime.now(timezone.utc) - started_at).total_seconds()
-        stage.metrics.record_execution(duration, False)
-        err = f"Stage timeout after {stage.timeout}s (includes semaphore wait)"
-        logger.error(f"[{stage.stage_name}] Program {program.id}: {err}")
+        err = f"Stage timeout after {stage.timeout:.2f}s"
+        logger.error(
+            "[{stage}] Program {pid}: {err} (ran {dur:.2f}s)",
+            stage=stage.stage_name,
+            pid=program.id,
+            err=err,
+            dur=(time.monotonic() - t0),
+        )
         return build_stage_result(
             status=StageState.FAILED,
             started_at=started_at,
             error=err,
             stage_name=stage.stage_name,
-            context=f"Timeout after {stage.timeout} seconds - may have been waiting for semaphore",
+            context="Timed out while running stage",
         )
 
     except SecurityViolationError as exc:
-        stage.metrics.record_execution(0, False)
         logger.error(
-            f"[{stage.stage_name}] Program {program.id}: Security violation - {exc}"
+            "[{stage}] Program {pid}: security violation: {exc}",
+            stage=stage.stage_name,
+            pid=program.id,
+            exc=exc,
         )
         return build_stage_result(
             status=StageState.FAILED,
@@ -81,12 +68,14 @@ async def stage_guard(
             context="Security violation detected",
         )
 
-    except (
-        MetaEvolveError
-    ) as exc:  # includes ValidationError, ResourceError, etc.
-        duration = (datetime.now(timezone.utc) - started_at).total_seconds()
-        stage.metrics.record_execution(duration, False)
-        logger.error(f"[{stage.stage_name}] Program {program.id}: {exc}")
+    except MetaEvolveError as exc:
+        logger.error(
+            "[{stage}] Program {pid}: {exc} (ran {dur:.2f}s)",
+            stage=stage.stage_name,
+            pid=program.id,
+            exc=exc,
+            dur=(time.monotonic() - t0),
+        )
         return build_stage_result(
             status=StageState.FAILED,
             started_at=started_at,
@@ -94,11 +83,12 @@ async def stage_guard(
             stage_name=stage.stage_name,
         )
 
-    except Exception as exc:  # pragma: no cover – unexpected
-        duration = (datetime.now(timezone.utc) - started_at).total_seconds()
-        stage.metrics.record_execution(duration, False)
-        logger.error(
-            f"[{stage.stage_name}] Program {program.id}: Unexpected error - {exc}"
+    except Exception as exc:  # pragma: no cover
+        logger.exception(
+            "[{stage}] Program {pid}: unexpected error after {dur:.2f}s",
+            stage=stage.stage_name,
+            pid=program.id,
+            dur=(time.monotonic() - t0),
         )
         return build_stage_result(
             status=StageState.FAILED,

@@ -1,8 +1,5 @@
 from __future__ import annotations
-
-from typing import Any
-
-from .context import MetricsContext
+from src.programs.metrics.context import MetricsContext, VALIDITY_KEY
 
 
 class MetricsFormatter:
@@ -24,6 +21,7 @@ class MetricsFormatter:
 
     def format_metrics_block(self, metrics: dict[str, float]) -> str:
         lines: list[str] = []
+        
         for key in self.context.prompt_keys():
             spec = self.context.specs[key]
             decimals = spec.decimals
@@ -32,7 +30,11 @@ class MetricsFormatter:
             orient = "↑" if self.context.is_higher_better(key) else "↓"
             value = metrics[key]
             unit_str = f" {unit}" if unit else ""
-            lines.append(f"- {key} : {value:.{decimals}f}{unit_str} ({desc}; {orient} better)")
+            # Use the new is_sentinel method to detect sentinel values
+            is_sentinel_value = spec.is_sentinel(value)
+            sentinel = " [sentinel]" if is_sentinel_value and key != VALIDITY_KEY else ""
+            
+            lines.append(f"- {key} : {value:.{decimals}f}{unit_str} ({desc}; {orient} better){sentinel}")
         return "\n".join(lines)
 
     def format_delta_block(

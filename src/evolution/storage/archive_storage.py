@@ -1,46 +1,35 @@
-"""Archive storage abstraction for MAP-Elites islands.
-
-Phase-1: purely an interface wrapper so we can inject a storage object
-without touching the existing `MapElitesIsland` implementation.  The
-actual Redis calls are still made directly by the islands; we merely
-hand them the underlying redis client via `_conn()`.
-"""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-import random
-from typing import Callable, List, Optional, Tuple
+from typing import Callable
 
 from loguru import logger
-from redis import asyncio as aioredis
 
-from src.database.redis_program_storage import (
-    RedisProgramStorage,
-)
+from src.database.redis_program_storage import RedisProgramStorage
 from src.programs.program import Program
-from src.programs.state_manager import ProgramStateManager
+
+CellDescriptor = tuple[int, ...]
+
+__all__ = ["ArchiveStorage", "RedisArchiveStorage"]
 
 
 class ArchiveStorage(ABC):
-    """Abstract persistence interface for island archives."""
-
     @abstractmethod
-    async def get_elite(self, cell: Tuple[int, ...]) -> Optional[Program]: ...
+    async def get_elite(self, cell: CellDescriptor) -> Program | None: ...
 
     @abstractmethod
     async def add_elite(
         self,
-        cell: Tuple[int, ...],
+        cell: CellDescriptor,
         program: Program,
-        is_better: Callable[[Program, Optional[Program]], bool],
+        is_better: Callable[[Program, Program | None], bool],
     ) -> bool: ...
 
     @abstractmethod
-    async def remove_elite(self, cell: Tuple[int, ...]) -> bool: ...
+    async def remove_elite(self, cell: CellDescriptor) -> bool: ...
 
     @abstractmethod
-    async def get_all_elites(self) -> List[Program]: ...
+    async def get_all_elites(self) -> list[Program]: ...
 
     @abstractmethod
     async def remove_elite_by_id(self, program_id: str) -> bool: ...
@@ -50,222 +39,85 @@ class ArchiveStorage(ABC):
 
 
 class RedisArchiveStorage(ArchiveStorage):
-    """
-    Redis-backed archive storage for MAP-Elites islands.
-    Stores only program IDs, with all program data in RedisProgramStorage.
-    """
+    def __init__(self, program_storage: RedisProgramStorage, key_prefix: str | None = None) -> None:
+        self._storage = program_storage
+        prefix = key_prefix or program_storage.config.key_prefix
+        self._key = f"{prefix}:archive"
 
-    def __init__(
-        self,
-        program_storage: RedisProgramStorage,
-        key_prefix: str = "metaevolve",
-    ):
-        self._program_storage = program_storage
-        self.key_prefix = key_prefix
-        self._state_manager = ProgramStateManager(program_storage)
-
-    def cell_key_from_tuple(self, cell: Tuple[int, ...]) -> str:
-        """Convert a cell coordinate tuple to a Redis cell key string (e.g., '0,1,2')."""
+    @staticmethod
+    def _field(cell: CellDescriptor) -> str:
         return ",".join(map(str, cell))
 
-    def _redis_cell_key(self, cell: Tuple[int, ...]) -> str:
-        """Get the full Redis key for a cell tuple."""
-        return f"{self.key_prefix}:archive:{self.cell_key_from_tuple(cell)}"
+    async def get_elite(self, cell: CellDescriptor) -> Program | None:
+        field = self._field(cell)
+
+        async def _get(r):
+            return await r.hget(self._key, field)
+
+        pid = await self._storage._with_redis("archive_get_elite", _get)
+        return await self._storage.get(pid) if pid else None
 
     async def add_elite(
         self,
-        cell: Tuple[int, ...],
+        cell: CellDescriptor,
         program: Program,
-        is_better: Callable[[Program, Optional[Program]], bool],
+        is_better: Callable[[Program, Program | None], bool],
     ) -> bool:
-        """
-        Add or replace the elite in the given cell if the new program is better.
-        Returns True if the program was added/replaced, False otherwise.
-        """
-        # Check if program exists in storage before adding as elite
-        try:
-            stored_program = await self._program_storage.get(program.id)
-            if stored_program is None:
-                logger.error(
-                    f"Cannot add program {program.id} as elite - program not found in storage"
-                )
-                return False
-        except Exception as e:
-            logger.error(
-                f"Failed to check program existence for {program.id}: {e}"
-            )
+        if not await self._storage.exists(program.id):
+            logger.debug("archive add ignored: program {} not in storage", program.id)
             return False
 
-        redis_key = self._redis_cell_key(cell)
+        field = self._field(cell)
 
-        async def _tx(redis):
-            if not hasattr(redis, "watch"):
-                current_id = await redis.get(redis_key)
-                current = await self._get_program_by_id(current_id)
+        async def _put(r):
+            current_id = await r.hget(self._key, field)
+            if current_id:
+                current = await self._storage.get(current_id)
                 if current and not is_better(program, current):
                     return False
-                await redis.set(redis_key, program.id)
-                logger.debug(
-                    f"Added/replaced elite {program.id} in cell {cell}"
-                )
-                return True
-            while True:
-                try:
-                    await redis.watch(redis_key)
-                    current_id = await redis.get(redis_key)
-                    current = await self._get_program_by_id(current_id)
-                    if current and not is_better(program, current):
-                        await redis.unwatch()
-                        return False
-                    pipe = redis.pipeline(transaction=True)
-                    pipe.set(redis_key, program.id)
-                    await pipe.execute()
-                    logger.debug(
-                        f"Added/replaced elite {program.id} in cell {cell}"
-                    )
-                    return True
-                except aioredis.WatchError:
-                    continue  # retry
+            await r.hset(self._key, field, program.id)
+            return True
 
-        return await self._program_storage._execute("archive_add_elite", _tx)
+        ok = await self._storage._with_redis("archive_add_elite", _put)
+        if ok:
+            logger.debug("archive cell {} -> {}", field, program.id)
+        return ok
 
-    async def get_elite(self, cell: Tuple[int, ...]) -> Optional[Program]:
-        """
-        Retrieve the elite program for the given cell, or None if empty.
-        """
-        redis_key = self._redis_cell_key(cell)
+    async def remove_elite(self, cell: CellDescriptor) -> bool:
+        field = self._field(cell)
 
-        async def _inner(redis):
-            program_id = await redis.get(redis_key)
-            return await self._get_program_by_id(program_id)
+        async def _del(r):
+            return (await r.hdel(self._key, field)) > 0
 
-        return await self._program_storage._execute("archive_get_elite", _inner)
+        return await self._storage._with_redis("archive_remove_elite", _del)
 
-    async def remove_elite(self, cell: Tuple[int, ...]) -> bool:
-        """
-        Remove the elite from the given cell. Returns True if removed, False if not found.
-        """
-        redis_key = self._redis_cell_key(cell)
+    async def get_all_elites(self) -> list[Program]:
+        async def _vals(r):
+            return await r.hvals(self._key)
 
-        async def _inner(redis):
-            result = await redis.delete(redis_key)
-            return result > 0
-
-        removed = await self._program_storage._execute(
-            "archive_remove_elite", _inner
-        )
-        if removed:
-            logger.debug(f"Removed elite from cell {cell}")
-        else:
-            logger.debug(f"No elite found to remove in cell {cell}")
-        return removed
-
-    async def get_all_elites(self) -> List[Program]:
-        """
-        Retrieve all elite programs in the archive.
-        """
-        pattern = f"{self.key_prefix}:archive:*"
-
-        async def _scan(redis):
-            cursor = "0"
-            program_ids: List[str] = []
-            while True:
-                cursor, keys = await redis.scan(
-                    cursor=cursor, match=pattern, count=1000
-                )
-                if keys:
-                    pipe = redis.pipeline()
-                    for k in keys:
-                        pipe.get(k)
-                    raw_ids = await pipe.execute()
-                    program_ids.extend(rid for rid in raw_ids if rid)
-                if cursor in ("0", 0):
-                    break
-            if not program_ids:
-                return []
-
-            random.shuffle(program_ids)
-
-            return await self._program_storage.mget(program_ids)
-
-        elites = await self._program_storage._execute(
-            "archive_get_all_elites", _scan
-        )
-        logger.debug(f"Retrieved {len(elites)} elites from archive.")
-        return elites
+        ids = await self._storage._with_redis("archive_hvals", _vals)
+        if not ids:
+            return []
+        # dedupe while preserving order
+        seen = set[str]()
+        unique_ids = [i for i in ids if not (i in seen or seen.add(i))]
+        return await self._storage.mget(unique_ids)
 
     async def remove_elite_by_id(self, program_id: str) -> bool:
-        """
-        Remove an elite from the archive by its program ID. Returns True if removed, False if not found.
-        """
-        pattern = f"{self.key_prefix}:archive:*"
+        async def _find_and_del(r):
+            mapping = await r.hgetall(self._key)
+            fields = [k for k, v in mapping.items() if v == program_id]
+            if not fields:
+                return False
+            await r.hdel(self._key, *fields)
+            return True
 
-        async def _inner(redis):
-            cursor = "0"
-            while True:
-                cursor, keys = await redis.scan(
-                    cursor=cursor, match=pattern, count=1000
-                )
-                if keys:
-                    pipe = redis.pipeline()
-                    for k in keys:
-                        pipe.get(k)
-                    raw_ids = await pipe.execute()
-                    for k, rid in zip(keys, raw_ids):
-                        if rid and rid == program_id:
-                            await redis.delete(k)
-                            logger.debug(
-                                f"Removed elite with program_id {program_id} from archive."
-                            )
-                            return True
-                if cursor in ("0", 0):
-                    break
-            return False
-
-        removed = await self._program_storage._execute(
-            "archive_remove_by_id", _inner
-        )
-        if not removed:
-            logger.warning(
-                f"Program ID {program_id} not found in archive for removal."
-            )
-        return removed
+        return await self._storage._with_redis("archive_remove_by_id", _find_and_del)
 
     async def clear_all_elites(self) -> int:
-        """
-        Remove all elites from the archive. Returns the number of removed entries.
-        """
-        pattern = f"{self.key_prefix}:archive:*"
+        async def _clear(r):
+            n = await r.hlen(self._key)
+            await r.delete(self._key)
+            return n
 
-        async def _inner(redis):
-            cursor = "0"
-            total = 0
-            while True:
-                cursor, keys = await redis.scan(
-                    cursor=cursor, match=pattern, count=1000
-                )
-                if keys:
-                    await redis.delete(*keys)
-                    total += len(keys)
-                if cursor in ("0", 0):
-                    break
-            return total
-
-        total = await self._program_storage._execute(
-            "archive_clear_all", _inner
-        )
-        logger.info(f"Cleared {total} elites from the archive.")
-        return total
-
-    async def _get_program_by_id(
-        self, program_id: Optional[str]
-    ) -> Optional[Program]:
-        if not program_id:
-            return None
-        try:
-            return await self._program_storage.get(program_id)
-        except Exception as exc:
-            logger.error(
-                f"[RedisArchiveStorage] Failed to fetch program ID: {exc}"
-            )
-            return None
+        return await self._storage._with_redis("archive_clear_all", _clear)

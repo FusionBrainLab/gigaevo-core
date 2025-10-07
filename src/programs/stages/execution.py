@@ -164,7 +164,7 @@ class PythonCodeExecutor(Stage):
 
     async def _set_resource_limits(self) -> None:
         try:
-            memory_limit = self.max_memory_mb * 1024 * 1024
+            memory_limit = 512 * 1024 * 1024
             resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
             resource.setrlimit(
                 resource.RLIMIT_CPU,

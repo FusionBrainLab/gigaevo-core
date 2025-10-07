@@ -1,13 +1,7 @@
 from __future__ import annotations
 
-# Pipeline builders that produce DAGSpec using small, composable classes.
-#
-# DefaultPipelineBuilder reproduces the current default pipeline from run.py.
-# ContextPipelineBuilder extends the default with an AddContext stage and wiring.
-# CustomPipelineBuilder starts empty for fully user-defined pipelines.
-
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List
+from typing import Callable
 
 from src.database.redis_program_storage import RedisProgramStorage
 from src.programs.automata import ExecutionOrderDependency
@@ -19,6 +13,7 @@ from src.programs.stages.execution import (
     ValidatorCodeExecutor,
     RunConstantPythonCode,
 )
+from src.programs.stages.ancestry_selector import AncestrySelector
 from src.programs.stages.insights import (
     GenerateLLMInsightsStage,
     InsightsConfig,
@@ -32,7 +27,7 @@ from src.programs.stages.validation import ValidateCodeStage
 from src.problems.context import ProblemContext
 from src.problems.layout import ProblemLayout
 from src.llm.wrapper import LLMWrapper
-from src.runner.dag_spec import DAGSpec
+from src.runner.dag_blueprint import DAGBlueprint
 from src.programs.automata import DataFlowEdge
 
 
@@ -51,13 +46,13 @@ class PipelineContext:
 
 
 class PipelineBuilder:
-    """Mutable builder for pipeline nodes/edges/deps producing a DAGSpec."""
+    """Mutable builder for pipeline nodes/edges/deps producing a DAGBlueprint."""
 
     def __init__(self, ctx: PipelineContext):
         self.ctx = ctx
-        self._nodes: Dict[str, StageFactory] = {}
-        self._data_flow_edges: List[DataFlowEdge] = []
-        self._deps: Dict[str, List[ExecutionOrderDependency]] = {}
+        self._nodes: dict[str, StageFactory] = {}
+        self._data_flow_edges: list[DataFlowEdge] = []
+        self._deps: dict[str, list[ExecutionOrderDependency]] = {}
         self._dag_timeout: float = 1800.0
         self._max_parallel: int = 8
 
@@ -123,8 +118,8 @@ class PipelineBuilder:
             self._max_parallel = max_parallel
         return self
 
-    def build_spec(self) -> DAGSpec:
-        return DAGSpec(
+    def build_blueprint(self) -> DAGBlueprint:
+        return DAGBlueprint(
             nodes=self._nodes,
             data_flow_edges=self._data_flow_edges,
             exec_order_deps=self._deps or None,
@@ -170,7 +165,6 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 function_name="entrypoint",
                 python_path=[problem_ctx.problem_dir.resolve()],
                 timeout=600.0,
-                max_memory_mb=512,
             ),
         )
 
@@ -198,9 +192,6 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     metrics_context=metrics_context,
                     metrics_formatter=metrics_formatter,
                     metadata_key="insights",
-                    excluded_error_stages=[
-                        "FactoryMetricUpdate",
-                    ],
                 ),
                 timeout=600.0,
             ),
@@ -213,8 +204,13 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     llm_wrapper=llm_wrapper["lineage"],
                     metrics_context=metrics_context,
                     metrics_formatter=metrics_formatter,
-                    parent_selection_strategy="best_fitness",
                     task_description=task_description,
+                    ancestry_selector=AncestrySelector(
+                        storage=storage,
+                        metrics_context=metrics_context,
+                        strategy="best_fitness",
+                        max_parents=1,
+                    ),
                 ),
                 storage=storage,
                 timeout=600,
@@ -225,7 +221,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             "EnsureMetricsStage",
             lambda: EnsureMetricsStage(
                 stage_name="ValidationMetricUpdate",
-                metrics_factory=metrics_context.get_worst_with_coalesce,
+                metrics_factory=metrics_context.get_sentinels,
                 metrics_context=metrics_context,
                 timeout=15.0,
             ),

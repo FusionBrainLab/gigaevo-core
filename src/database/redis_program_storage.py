@@ -7,30 +7,22 @@ abstract interface to stay lightweight.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from typing import (
     Any,
     Awaitable,
     Callable,
-    Dict,
-    List,
-    Optional,
+    Iterable,
     TypeVar,
-    Union,
 )
-
+from itertools import islice
 from loguru import logger
 from pydantic import AnyUrl, BaseModel, Field
 from redis import asyncio as aioredis
 
 from src.database.merge_strategies import resolve_merge_strategy
 from src.database.program_storage import ProgramStorage
-from src.exceptions import StorageError, ensure_not_none
+from src.exceptions import StorageError
 from src.programs.program import Program
-from src.utils.error_handling import (
-    RetryConfig,
-    resilient_operation,
-)
 from src.utils.json import dumps as _dumps
 from src.utils.json import loads as _loads
 
@@ -43,83 +35,53 @@ T = TypeVar("T")
 
 
 class RedisProgramStorageConfig(BaseModel):
-    """Configuration for :class:`RedisProgramStorage`."""
+    """Minimal, predictable Redis settings (unchanged key schema)."""
+    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")
+    key_prefix: str = Field(default="metaevolve")
 
-    redis_url: AnyUrl = Field(
-        default="redis://localhost:6379/0", description="Redis connection URL"
-    )
-    key_prefix: str = Field(
-        default="metaevolve", description="Namespace prefix"
-    )
-    program_key_tpl: str = Field(
-        default="{prefix}:program:{pid}",
-        description="Template for individual program keys",
-    )
-    status_stream_tpl: str = Field(
-        default="{prefix}:status_events",
-        description="Redis stream for program events",
-    )
-    status_set_tpl: str = Field(
-        default="{prefix}:status:{status}",
-        description="Redis set for tracking program IDs by status",
-    )
+    program_key_tpl: str = Field(default="{prefix}:program:{pid}")
+    status_stream_tpl: str = Field(default="{prefix}:status_events")
+    status_set_tpl: str = Field(default="{prefix}:status:{status}")
 
+    # Behavior
     max_retries: int = Field(default=5, ge=1)
     retry_delay: float = Field(default=0.2, ge=0.0)
     max_connections: int = Field(default=100, ge=10)
     connection_pool_timeout: float = Field(default=60.0, ge=1.0)
     health_check_interval: int = Field(default=180, ge=1)
 
-    merge_strategy: Union[
-        str, Callable[[Optional[Program], Program], Program]
-    ] = Field(
-        default="additive", description="Merge policy for concurrent updates"
-    )
-
-    completion_statuses: set[str] = Field(
-        default_factory=lambda: {"dag_processing_completed"}
-    )
-    discard_statuses: set[str] = Field(default_factory=lambda: {"discarded"})
+    merge_strategy: str | Callable[[Program | None, Program], Program] = Field(default="additive")
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
 
-class RedisProgramStorage(ProgramStorage):
-    """Redis-based :class:`ProgramStorage` using flexible, template-driven key layout."""
+# --------------------------- Storage ---------------------------
 
-    def __init__(self, config: RedisProgramStorageConfig | None = None):
-        self.config = config or RedisProgramStorageConfig()
-        self._merge_strategy = resolve_merge_strategy(
-            self.config.merge_strategy
-        )
-        self._redis: Optional[aioredis.Redis] = None
+class RedisProgramStorage(ProgramStorage):
+
+    _MGET_CHUNK: int = 1024
+
+    def __init__(self, config: RedisProgramStorageConfig):
+        self.config = config
+        self._merge = resolve_merge_strategy(self.config.merge_strategy)
+        self._redis: aioredis.Redis | None = None
         self._lock = asyncio.Lock()
 
-    def _prog_key(self, pid: str) -> str:
-        return self.config.program_key_tpl.format(
-            prefix=self.config.key_prefix, pid=pid
-        )
+    def _k_program(self, pid: str) -> str:
+        return self.config.program_key_tpl.format(prefix=self.config.key_prefix, pid=pid)
 
-    def _stream_key(self) -> str:
-        return self.config.status_stream_tpl.format(
-            prefix=self.config.key_prefix
-        )
+    def _k_stream(self) -> str:
+        return self.config.status_stream_tpl.format(prefix=self.config.key_prefix)
 
-    def _status_set_key(self, status: str) -> str:
-        return self.config.status_set_tpl.format(
-            prefix=self.config.key_prefix, status=status
-        )
-
-    def hash_code(self, code: str) -> str:
-        return hashlib.sha256(code.encode("utf-8")).hexdigest()
+    def _k_status(self, status: str) -> str:
+        return self.config.status_set_tpl.format(prefix=self.config.key_prefix, status=status)
 
     async def _conn(self) -> aioredis.Redis:
         if self._redis is not None:
             return self._redis
-
         async with self._lock:
             if self._redis is None:
-                redis = aioredis.from_url(
+                r = aioredis.from_url(
                     str(self.config.redis_url),
                     decode_responses=True,
                     max_connections=self.config.max_connections,
@@ -128,261 +90,178 @@ class RedisProgramStorage(ProgramStorage):
                     socket_timeout=self.config.connection_pool_timeout,
                     retry_on_timeout=True,
                 )
+                await r.ping()
+                logger.debug("[RedisProgramStorage] connected {}", self.config.redis_url)
+                self._redis = r
+        return self._redis
 
-                # Test connection
-                try:
-                    await redis.ping()
-                    logger.info(
-                        f"[RedisProgramStorage] Connected to Redis at {self.config.redis_url} with {self.config.max_connections} max connections"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"[RedisProgramStorage] Failed to connect to Redis: {e}"
-                    )
-                    raise
-
-                self._redis = redis
-            return self._redis
-
-    async def _execute(
-        self, name: str, fn: Callable[[aioredis.Redis], Awaitable[T]]
-    ) -> T:
-        for attempt in range(self.config.max_retries):
+    async def _with_redis(self, name: str, fn: Callable[[aioredis.Redis], Awaitable[T]]) -> T:
+        delay = self.config.retry_delay
+        for attempt in range(1, self.config.max_retries + 1):
             try:
-                redis = await self._conn()
-                return await fn(redis)
+                return await fn(await self._conn())
             except Exception as e:
-                error_msg = str(e).lower()
-                if "too many connections" in error_msg:
-                    logger.warning(
-                        f"[RedisProgramStorage] Connection pool exhausted for operation {name} (attempt {attempt + 1}/{self.config.max_retries})"
-                    )
-                    # Add exponential backoff for connection pool exhaustion
-                    await asyncio.sleep(
-                        self.config.retry_delay * (2**attempt) + 0.1
-                    )
-                elif "connection" in error_msg or "timeout" in error_msg:
-                    logger.warning(
-                        f"[RedisProgramStorage] Connection issue for operation {name} (attempt {attempt + 1}/{self.config.max_retries}): {e}"
-                    )
-                    await asyncio.sleep(self.config.retry_delay * (2**attempt))
-                else:
-                    logger.error(
-                        f"[RedisProgramStorage] Non-connection error for operation {name}: {e}"
-                    )
-                    if attempt == self.config.max_retries - 1:
-                        raise StorageError(
-                            f"Redis op {name} failed: {e}"
-                        ) from e
-                    await asyncio.sleep(self.config.retry_delay)
+                if attempt == self.config.max_retries:
+                    # Keep the log calm; raise a clear error.
+                    logger.debug("[RedisProgramStorage] {} failed: {}", name, e)
+                    raise StorageError(f"Redis op {name} failed: {e}") from e
+                await asyncio.sleep(min(delay, 1.0))
+                delay *= 2
 
-        raise StorageError(
-            f"Redis op {name} failed after {self.config.max_retries} attempts"
-        )
+    @staticmethod
+    def _chunks(items: Iterable[str], n: int) -> Iterable[list[str]]:
+        it = iter(items)
+        while (batch := list(islice(it, n))):
+            yield batch
 
-    @resilient_operation(
-        retry_config=RetryConfig(max_attempts=5, base_delay=0.2),
-        circuit_breaker_name="redis_write",
-        operation_name="redis_add",
-    )
-    async def add(self, program: Program) -> None:
-        ensure_not_none(program, "program")
-
-        async def _add(redis):
-            await redis.set(
-                self._prog_key(program.id), _dumps(program.to_dict())
-            )
-
-        await self._execute("add", _add)
-
-    @resilient_operation(
-        retry_config=RetryConfig(max_attempts=5, base_delay=0.2),
-        circuit_breaker_name="redis_write",
-        operation_name="redis_update",
-    )
-    async def update(self, program: Program) -> None:
-        ensure_not_none(program, "program")
-
-        async def _merge(redis):
-            key = self._prog_key(program.id)
-            existing_raw = await redis.get(key)
-            existing_prog = (
-                Program.from_dict(_loads(existing_raw))
-                if existing_raw
-                else None
-            )
-            merged = self._merge_strategy(existing_prog, program)
-            await redis.set(key, _dumps(merged.to_dict()))
-
-        await self._execute("update", _merge)
-
-    @resilient_operation(
-        retry_config=RetryConfig(max_attempts=3, base_delay=0.1),
-        circuit_breaker_name="redis_get",
-        operation_name="redis_get",
-    )
-    async def get(self, program_id: str) -> Optional[Program]:
-        async def _get(redis):
-            raw = await redis.get(self._prog_key(program_id))
-            if raw:
-                try:
-                    return Program.from_dict(_loads(raw))
-                except Exception as e:
-                    logger.error(
-                        f"Failed to deserialize program {program_id}: {e}"
-                    )
+    @staticmethod
+    def _safe_deserialize(raw: str, ctx: str) -> Program | None:
+        try:
+            return Program.from_dict(_loads(raw))
+        except Exception as e:
+            # Soft log; skip the broken record.
+            logger.debug("[RedisProgramStorage] bad JSON in {}: {}", ctx, e)
             return None
 
-        return await self._execute("get", _get)
+    async def _mget_by_keys(self, r: aioredis.Redis, keys: list[str], ctx: str) -> list[Program]:
+        out: list[Program] = []
+        for batch in self._chunks(keys, self._MGET_CHUNK):
+            blobs = await r.mget(*batch)
+            for raw in blobs:
+                if raw:
+                    p = self._safe_deserialize(raw, ctx)
+                    if p is not None:
+                        out.append(p)
+        return out
+
+    async def add(self, program: Program) -> None:
+        async def _add(r: aioredis.Redis):
+            key = self._k_program(program.id)
+            status = program.state.value
+            pipe = r.pipeline(transaction=False)
+            pipe.set(key, _dumps(program.to_dict()))
+            pipe.sadd(self._k_status(status), program.id)
+            pipe.xadd(self._k_stream(), {"id": program.id, "status": status, "event": "created"},
+                    maxlen=10_000, approximate=True)
+            await pipe.execute()
+        await self._with_redis("add", _add)
+
+    async def update(self, program: Program):
+        async def _update(r: aioredis.Redis):
+            key = self._k_program(program.id)
+            existing_raw = await r.get(key)
+            existing = self._safe_deserialize(existing_raw, "update/get") if existing_raw else None
+            merged = self._merge(existing, program)
+            await r.set(key, _dumps(merged.to_dict()))
+        await self._with_redis("update", _update)
+
+    async def get(self, program_id: str) -> Program | None:
+        async def _get(r: aioredis.Redis):
+            raw = await r.get(self._k_program(program_id))
+            return self._safe_deserialize(raw, f"get:{program_id}") if raw else None
+        return await self._with_redis("get", _get)
 
     async def exists(self, program_id: str) -> bool:
-        async def _exists(redis):
-            return bool(await redis.exists(self._prog_key(program_id)))
+        async def _exists(r: aioredis.Redis):
+            return bool(await r.exists(self._k_program(program_id)))
+        return await self._with_redis("exists", _exists)
 
-        return await self._execute("exists", _exists)
+    async def remove(self, program_id: str):
+        async def _del(r: aioredis.Redis):
+            await r.delete(self._k_program(program_id))
+        await self._with_redis("remove", _del)
 
-    async def remove(self, program_id: str) -> None:
-        async def _del(redis):
-            await redis.delete(self._prog_key(program_id))
-
-        await self._execute("remove", _del)
+    async def transition_status(self, program_id: str, old: str | None, new: str) -> None:
+        async def _tx(r: aioredis.Redis):
+            pipe = r.pipeline(transaction=False)
+            if old:
+                pipe.srem(self._k_status(old), program_id)
+            pipe.sadd(self._k_status(new), program_id)
+            await pipe.execute()
+        await self._with_redis("transition_status", _tx)
 
     async def publish_status_event(
         self,
         status: str,
         program_id: str,
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
-        async def _pipe(redis):
+        async def _event(r: aioredis.Redis):
             data = {"id": program_id, "status": status, **(extra or {})}
-            pipe = redis.pipeline()
-            try:
-                pipe.xadd(
-                    self._stream_key(), data, maxlen=10_000, approximate=True
-                )
-            except TypeError:
-                pipe.xadd(self._stream_key(), data)
-            pipe.sadd(self._status_set_key(status), program_id)
+            pipe = r.pipeline(transaction=False)
+            pipe.xadd(self._k_stream(), data, maxlen=10_000, approximate=True)
+            pipe.sadd(self._k_status(status), program_id)
             await pipe.execute()
+        await self._with_redis("publish_status_event", _event)
 
-        await self._execute("publish_status_event", _pipe)
+    async def _ids_for_status(self, status: str) -> list[str]:
+        async def _members(r: aioredis.Redis):
+            return list(await r.smembers(self._k_status(status)))
+        return await self._with_redis("_ids_for_status", _members)
 
-    async def _get_ids_for_status(self, status: str) -> List[str]:
-        async def _members(redis):
-            return await redis.smembers(self._status_set_key(status))
-
-        return await self._execute("_get_ids_for_status", _members)
-
-    async def get_all_by_status(self, status: str) -> List[Program]:
-        if status == "fresh":
-            all_programs = await self.get_all()
-            return [p for p in all_programs if p.state == status]
-
-        ids = await self._get_ids_for_status(status)
+    async def get_all_by_status(self, status: str) -> list[Program]:
+        ids = await self._ids_for_status(status)
         if not ids:
             return []
 
-        async def _mget(redis):
-            keys = [self._prog_key(pid) for pid in ids]
-            pipe = redis.pipeline()
-            for k in keys:
-                pipe.get(k)
-            blobs = await pipe.execute()
+        async def _by_status(r: aioredis.Redis):
+            keys = [self._k_program(pid) for pid in ids]
+            programs = await self._mget_by_keys(r, keys, f"get_all_by_status:{status}")
+            # If the set drifted, keep only exact matches.
+            return [p for p in programs if p.state == status]
 
-            programs = []
-            for raw in blobs:
-                if raw:
-                    try:
-                        program = Program.from_dict(_loads(raw))
-                        if program.state == status:
-                            programs.append(program)
-                    except Exception as exc:
-                        logger.error(
-                            "[RedisProgramStorage] Deserialization error: %s",
-                            exc,
-                        )
-            return programs
+        return await self._with_redis("get_all_by_status", _by_status)
 
-        return await self._execute("get_all_by_status", _mget)
-
-    async def mget(self, program_ids: List[str]) -> List[Program]:
+    async def mget(self, program_ids: list[str]) -> list[Program]:
         if not program_ids:
             return []
 
-        async def _mget(redis):
-            keys = [self._prog_key(pid) for pid in program_ids]
-            blobs = await redis.mget(*keys)
+        async def _mget(r: aioredis.Redis):
+            keys = [self._k_program(pid) for pid in program_ids]
+            return await self._mget_by_keys(r, keys, "mget")
 
-            programs = []
-            for raw in blobs:
-                if raw:
-                    try:
-                        programs.append(Program.from_dict(_loads(raw)))
-                    except Exception as exc:
-                        logger.error(
-                            f"[RedisProgramStorage] Deserialization error in mget: {exc}"
-                        )
-            return programs
+        return await self._with_redis("mget", _mget)
 
-        return await self._execute("mget", _mget)
-
-    async def get_all(self) -> List[Program]:
-        async def _get_all(redis):
-            keys = await redis.keys(self._prog_key("*"))
-
+    async def get_all(self) -> list[Program]:
+        """SCAN keys then fetch values via chunked MGET."""
+        async def _scan_then_mget(r: aioredis.Redis):
+            match = self._k_program("*")
+            cursor = 0
+            keys: list[str] = []
+            while True:
+                cursor, batch = await r.scan(cursor=cursor, match=match, count=1000)
+                if batch:
+                    keys.extend(batch)
+                if cursor == 0:
+                    break
             if not keys:
                 return []
+            return await self._mget_by_keys(r, keys, "get_all")
 
-            # Use pipeline for batch operations instead of concurrent individual gets
-            pipe = redis.pipeline()
-            for key in keys:
-                pipe.get(key)
+        return await self._with_redis("get_all", _scan_then_mget)
 
-            blobs = await pipe.execute()
-
-            programs = []
-            for raw in blobs:
-                if raw:
-                    try:
-                        programs.append(Program.from_dict(_loads(raw)))
-                    except Exception as exc:
-                        logger.error(
-                            f"[RedisProgramStorage] Deserialization error in get_all: {exc}"
-                        )
-
-            return programs
-
-        return await self._execute("get_all", _get_all)
-
-    async def flushdb(self) -> None:
-        async def _flush(redis):
-            await redis.flushdb()
-
-        await self._execute("flushdb", _flush)
-
-    async def get_connection_info(self) -> Dict[str, Any]:
-        """Get connection pool information for monitoring."""
+    async def wait_for_activity(self, timeout: float):
+        """Wait using Redis stream; fall back to sleep on errors/timeouts."""
+        poll_ms = max(1, int(timeout * 1000))
         try:
             redis = await self._conn()
-            if hasattr(redis, "connection_pool"):
-                pool = redis.connection_pool
-                return {
-                    "max_connections": getattr(
-                        pool, "max_connections", "unknown"
-                    ),
-                    "created_connections": getattr(
-                        pool, "created_connections", "unknown"
-                    ),
-                    "available_connections": getattr(
-                        pool, "available_connections", "unknown"
-                    ),
-                    "in_use_connections": getattr(
-                        pool, "in_use_connections", "unknown"
-                    ),
-                }
-            return {"status": "connection_pool_not_available"}
+            stream = self._k_stream()
+            _ = await redis.xread({stream: "$"}, block=poll_ms, count=1)
+            return
         except Exception as e:
-            return {"error": str(e)}
+            logger.debug("[RedisProgramStorage] wait_for_activity fallback: {}", e)
+            await asyncio.sleep(timeout)
+
+    async def flushdb(self):
+        async def _flush(r: aioredis.Redis):
+            await r.flushdb()
+        await self._with_redis("flushdb", _flush)
 
     async def close(self):
-        await (await self._conn()).close()
+        if self._redis is not None:
+            await self._redis.close()
+            self._redis = None
+
+    
+
+

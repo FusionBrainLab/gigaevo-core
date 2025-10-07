@@ -1,13 +1,8 @@
-# RunnerManager: Combined orchestrator for EvolutionEngine and DAG execution.
-# Provides lifecycle management, metrics collection, and graceful shutdown
-# for distributed evolutionary computation workloads.
-
 from __future__ import annotations
 
 import asyncio
 import contextlib
 from datetime import datetime, timezone
-from typing import Dict, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field, computed_field, field_validator
@@ -15,124 +10,70 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 from src.database.program_storage import ProgramStorage
 from src.evolution.engine import EvolutionEngine
 from src.programs.state_manager import ProgramStateManager
-from src.runner.dag_spec import DAGSpec
+from src.runner.dag_blueprint import DAGBlueprint
 from src.runner.engine_driver import EngineDriver
-from src.runner.factories import DagFactory
 from src.runner.scheduler import DagScheduler
 
-__all__ = [
-    "RunnerConfig",
-    "RunnerMetrics",
-    "RunnerManager",
-]
+__all__ = ["RunnerConfig", "RunnerMetrics", "RunnerManager"]
 
 
 class RunnerConfig(BaseModel):
-    """Configuration options controlling concurrent execution of DAGs and evolutionary engine."""
-
-    poll_interval: float = Field(
-        default=0.5,
-        gt=0,
-        le=60.0,
-        description="How often to poll Redis for new programs (seconds)",
-    )
-
-    max_concurrent_dags: int = Field(
-        default=8,
-        gt=0,
-        le=1000,
-        description="Maximum number of programs to execute concurrently",
-    )
-
-    log_interval: int = Field(
-        default=10,
-        gt=0,
-        le=10000,
-        description="Log stats every N polling iterations",
-    )
-
-    dag_timeout: float = Field(
-        default=2400,  # Increased from 900 to 2400 (40 minutes) to match DAG timeout
-        gt=0,
-        le=3600.0,  # Max 60 minutes
-        description="How long to wait for a DAG to complete (seconds). Programs stuck for 2x this time get discarded.",
-    )
+    poll_interval: float = Field(default=0.5, gt=0, le=60.0)
+    max_concurrent_dags: int = Field(default=8, gt=0, le=1000)
+    log_interval: int = Field(default=10, gt=0, le=10000)
+    dag_timeout: float = Field(default=2400, gt=0, le=3600.0)
 
     @field_validator("poll_interval")
     @classmethod
-    def validate_poll_interval_reasonable(
-        cls, v
-    ):  # noqa: D401 – pydantic naming
+    def _validate_poll_interval(cls, v: float) -> float:
         if v < 0.01:
-            raise ValueError(
-                "poll_interval too small, minimum 0.01s recommended"
-            )
+            raise ValueError("poll_interval must be >= 0.01s")
         if v > 30.0:
-            logger.debug(
-                f"Large poll_interval ({v}s) may cause slow response times"
-            )
+            logger.debug("Large poll_interval ({}s) may slow responsiveness", v)
         return v
 
     @field_validator("max_concurrent_dags")
     @classmethod
-    def validate_concurrency_limits(cls, v):  # noqa: D401
+    def _validate_concurrency(cls, v: int) -> int:
         import os
-
-        cpu_count = os.cpu_count() or 4
-        if v > cpu_count * 4:
-            logger.warning(
-                f"max_concurrent_dags ({v}) exceeds 4x CPU count ({cpu_count})"
-            )
+        cpu = os.cpu_count() or 4
+        if v > cpu * 4:
+            logger.warning("max_concurrent_dags ({}) > 4x CPU count ({})", v, cpu)
         return v
 
 
 class RunnerMetrics(BaseModel):
-    """Light-weight runtime metrics for the combined evolution & DAG runner."""
-
     model_config = {"arbitrary_types_allowed": True}
 
-    started_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     loop_iterations: int = 0
     dag_runs_started: int = 0
     dag_runs_completed: int = 0
     dag_errors: int = 0
-    lock: asyncio.Lock = Field(
-        default_factory=asyncio.Lock, repr=False, exclude=True
-    )
+    lock: asyncio.Lock = Field(default_factory=asyncio.Lock, repr=False, exclude=True)
 
     @computed_field
     @property
-    def uptime_seconds(self) -> int:  # noqa: D401
-        return int(
-            (datetime.now(timezone.utc) - self.started_at).total_seconds()
-        )
+    def uptime_seconds(self) -> int:
+        return int((datetime.now(timezone.utc) - self.started_at).total_seconds())
 
     @computed_field
     @property
-    def dag_runs_active(self) -> int:  # noqa: D401
-        return max(
-            0, self.dag_runs_started - self.dag_runs_completed - self.dag_errors
-        )
+    def dag_runs_active(self) -> int:
+        return max(0, self.dag_runs_started - self.dag_runs_completed - self.dag_errors)
 
     @computed_field
     @property
-    def success_rate(self) -> float:  # noqa: D401
-        total_finished = self.dag_runs_completed + self.dag_errors
-        return (
-            1.0
-            if total_finished == 0
-            else self.dag_runs_completed / total_finished
-        )
+    def success_rate(self) -> float:
+        finished = self.dag_runs_completed + self.dag_errors
+        return 1.0 if finished == 0 else self.dag_runs_completed / finished
 
     @computed_field
     @property
-    def average_iterations_per_second(self) -> float:  # noqa: D401
-        uptime = self.uptime_seconds
-        return 0.0 if uptime == 0 else self.loop_iterations / uptime
+    def average_iterations_per_second(self) -> float:
+        return 0.0 if self.uptime_seconds == 0 else self.loop_iterations / self.uptime_seconds
 
-    def to_dict(self) -> Dict[str, int | float | str]:
+    def to_dict(self) -> dict[str, int | float | str]:
         return {
             "uptime_seconds": self.uptime_seconds,
             "loop_iterations": self.loop_iterations,
@@ -141,246 +82,163 @@ class RunnerMetrics(BaseModel):
             "dag_runs_active": self.dag_runs_active,
             "dag_errors": self.dag_errors,
             "success_rate": round(self.success_rate, 3),
-            "avg_iterations_per_sec": round(
-                self.average_iterations_per_second, 2
-            ),
+            "avg_iterations_per_sec": round(self.average_iterations_per_second, 2),
             "started_at": self.started_at.isoformat(),
         }
 
-    async def increment_loop_iterations(self):
+    async def increment_loop_iterations(self) -> None:
         async with self.lock:
             self.loop_iterations += 1
 
-    async def increment_dag_runs_started(self):
+    async def increment_dag_runs_started(self) -> None:
         async with self.lock:
             self.dag_runs_started += 1
 
-    async def increment_dag_runs_completed(self):
+    async def increment_dag_runs_completed(self) -> None:
         async with self.lock:
             self.dag_runs_completed += 1
 
-    async def increment_dag_errors(self):
+    async def increment_dag_errors(self) -> None:
         async with self.lock:
             self.dag_errors += 1
 
 
 class RunnerManager:
-    """Combined orchestrator for EvolutionEngine and asynchronous DAG execution.
-
-    This class orchestrates the execution of the evolution engine alongside
-    asynchronous DAG processing using a dedicated DagScheduler for improved
-    separation of concerns and better resource management.
-    """
-
-    # ---------------------------------------------------------------------
-    # Constructor & basic state
-    # ---------------------------------------------------------------------
-
     def __init__(
         self,
-        *,  # force keyword-only for clarity going forward
+        *,
         engine: EvolutionEngine,
-        dag_spec: DAGSpec,
-        storage: ProgramStorage | None = None,
-        config: Optional[RunnerConfig] = None,
+        dag_blueprint: DAGBlueprint,
+        storage: ProgramStorage,
+        config: RunnerConfig,
     ) -> None:
-        if storage is None:
-            raise ValueError("A 'storage' instance is required.")
-
         self.storage = storage
         self.engine = engine
-        self._dag_spec = dag_spec
-        self._dag_factory = DagFactory(
-            dag_spec=self._dag_spec,
-        )
-        self.config = config or RunnerConfig()
+        self.dag_blueprint = dag_blueprint
+        self.config = config
         self.metrics = RunnerMetrics()
 
-
-        # Helper for persisting stage updates
-        self._state_manager = ProgramStateManager(self.storage)
-
-        self._engine_driver = EngineDriver(engine)
-        self._scheduler: DagScheduler = DagScheduler(
-            self.storage,
-            self._dag_factory,
-            self._state_manager,
-            self.metrics,
-            self.config,
+        self.state_manager = ProgramStateManager(self.storage)
+        self.engine_driver = EngineDriver(self.engine)
+        self.scheduler = DagScheduler(
+            self.storage, self.dag_blueprint, self.state_manager, self.metrics, self.config
         )
+
         self._running = False
         self._stopping = False
-
-        # Background task when used as async context manager
-        self._bg_task: Optional[asyncio.Task] = None
+        self._bg_task: asyncio.Task | None = None
 
         logger.info(
-            "[RunnerManager] Created (poll_interval={:.2f}s, max_concurrent_dags={})".format(
-                self.config.poll_interval, self.config.max_concurrent_dags
-            )
+            "[RunnerManager] init (poll_interval={:.2f}s, max_concurrent_dags={})",
+            self.config.poll_interval,
+            self.config.max_concurrent_dags,
         )
 
-    # ------------------------------------------------------------------
-    # Public lifecycle
-    # ------------------------------------------------------------------
-
     async def run(self) -> None:
-        """Start the evolution engine and the DAG scheduler."""
         if self._running:
-            logger.warning("[RunnerManager] Already running – ignoring run()")
+            logger.warning("[RunnerManager] already running")
             return
-
         self._running = True
-        logger.info("[RunnerManager] Starting …")
+        logger.info("[RunnerManager] starting")
 
-        # start background components
-        self._engine_driver.start()
-        # start scheduler run-loop
-        self._scheduler.start()
+        self.engine_driver.start()
+        self.scheduler.start()
 
-
-        # Filter out None tasks for robustness
-        tasks = [
-            task
-            for task in [
-                self._engine_driver.task,
-                self._scheduler._task,
-            ]
-            if task is not None
-        ]
-
+        tasks = [t for t in (self.engine_driver.task, self.scheduler.task) if isinstance(t, asyncio.Task)]
         if not tasks:
-            logger.error("[RunnerManager] No valid tasks to run!")
+            logger.error("[RunnerManager] no tasks to supervise")
+            self._running = False
             return
 
         try:
-            # Wait for any task to complete or fail
-            done, pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
-            # Check if any task finished unexpectedly
-            for task in done:
-                task_name = (
-                    task.get_name() if hasattr(task, "get_name") else "unknown"
-                )
+            for t in done:
+                name = self._task_name(t)
                 try:
-                    task.result()  # This will raise an exception if the task failed
-                    logger.warning(
-                        f"Task '{task_name}' finished unexpectedly (this usually indicates an error)"
-                    )
+                    t.result()
+                    logger.warning("background task '{}' finished unexpectedly", name)
                 except Exception as e:
-                    logger.error(
-                        f"Task '{task_name}' failed with error: {e}",
-                        exc_info=True,
-                    )
+                    logger.error("background task '{}' failed: {}", name, e, exc_info=True)
 
-            # Gracefully shutdown remaining tasks
-            if pending:
-                logger.info(
-                    "Initiating graceful shutdown of remaining tasks..."
-                )
-                for task in pending:
-                    await self._cancel_task(task)
+            for t in pending:
+                await self._cancel_task(t)
 
         except asyncio.CancelledError:
-            logger.info("RunnerManager run() was cancelled.")
+            logger.info("[RunnerManager] run() cancelled")
         except Exception as e:
-            logger.error(
-                f"Unexpected error in RunnerManager.run(): {e}", exc_info=True
-            )
+            logger.error("[RunnerManager] supervisor error: {}", e, exc_info=True)
         finally:
-            # Ensure all tasks are cleaned up
-            for task in tasks:
-                await self._cancel_task(task)
+            for t in [t for t in (self.engine_driver.task, self.scheduler.task) if isinstance(t, asyncio.Task)]:
+                await self._cancel_task(t)
+            self._running = False
+            logger.info("[RunnerManager] stopped")
 
     async def stop(self) -> None:
-        """Request graceful shutdown and wait for completion."""
         if not self._running or self._stopping:
             return
-
         self._stopping = True
-        logger.info("[RunnerManager] Stopping …")
+        logger.info("[RunnerManager] stopping")
 
-        if self._scheduler._task:
-            self._scheduler._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._scheduler._task
-
-        # Stop engine
-        await self._engine_driver.stop()
-
-        self._running = False
-        logger.info("[RunnerManager] Shutdown complete")
-
-        await self._scheduler.stop()
-
+        await self.engine_driver.stop()
+        await self.scheduler.stop()
 
         if self._bg_task is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._bg_task
             self._bg_task = None
 
-    # Pause / resume simply forward to engine for now
-    def pause_engine(self):
-        self._engine_driver.pause()
+        self._stopping = False
+        self._running = False
+        logger.info("[RunnerManager] shutdown complete")
 
-    def resume_engine(self):
-        self._engine_driver.resume()
+    def pause_engine(self) -> None:
+        self.engine_driver.pause()
 
-    # ------------------------------------------------------------------
-    # Introspection helpers
-    # ------------------------------------------------------------------
+    def resume_engine(self) -> None:
+        self.engine_driver.resume()
 
-    def get_metrics(self):
+    def get_metrics(self) -> dict[str, int | float | str]:
         return self.metrics.to_dict()
 
-    async def get_status(self):
-        status = {
+    async def get_status(self) -> dict[str, object]:
+        status: dict[str, object] = {
             "running": self._running,
-            "engine_running": self._engine_driver.is_running(),
-            "active_dag_count": self._scheduler.active_count(),
-            "metrics": self.get_metrics(),
+            "engine_running": self.engine_driver.is_running(),
+            "active_dag_count": self.scheduler.active_count(),
+            **self.get_metrics(),
         }
         try:
-            status["engine_status"] = await self._engine_driver.get_status()
-        except Exception as e:  # noqa: BLE001 – defensive
+            status["engine_status"] = await self.engine_driver.get_status()
+        except Exception as e:
             status["engine_status"] = {"error": str(e)}
         return status
 
-    # ------------------------------------------------------------------
-    # Async helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
-    async def _cancel_task(task: Optional[asyncio.Task]) -> None:
-        if task is None or task.done():
+    async def _cancel_task(task: asyncio.Task | None) -> None:
+        if not task or task.done():
             return
         try:
             task.cancel()
             await task
         except asyncio.CancelledError:
-            pass  # Expected
+            pass
         except Exception as e:
-            logger.warning(
-                f"Error while cancelling task {task.get_name()}: {e}"
-            )
+            logger.warning("error cancelling task {}: {}", task.get_name(), e)
 
-    # ------------------------------------------------------------------
-    # Async context-manager helpers
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _task_name(task: asyncio.Task) -> str:
+        try:
+            return task.get_name()
+        except Exception:
+            return "task"
 
     async def __aenter__(self):
-        """Start the runner as a context manager."""
         self._bg_task = asyncio.create_task(self.run(), name="runner-bg")
-        # Small sleep ensures tasks actually start, helpful for tests
         await asyncio.sleep(0)
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
         await self.stop()
-        if self._bg_task is not None:
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._bg_task
-            self._bg_task = None
+
 
