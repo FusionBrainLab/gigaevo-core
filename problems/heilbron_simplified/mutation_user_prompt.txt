@@ -87,6 +87,11 @@ Choose your evolutionary approach based on evidence strength and risk tolerance:
   - Exploration: Meaningful structural novelty required
   - Hybrid: Balance proven elements with targeted innovations
 
+## LIGHTWEIGHT ADDITIONS (ADAPTIVE)
+- **Plateau trigger:** If recent lineage shows small |Δfitness| magnitudes, prefer **Exploration** for this mutation.
+- **Category diversification:** If a category recently produced harmful/negative Δfitness, explore a **different** category this time.
+- **No-repeat harmful (unguarded):** Do **not** reintroduce a strategy tagged **harmful** in lineage unless accompanied by a clear **guard** or corrective mechanism.
+
 ## OUTPUT
 
 **Archetype Selection**: [Selected archetype] - [1 sentence justification]
