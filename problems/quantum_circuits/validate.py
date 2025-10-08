@@ -17,7 +17,7 @@ def validate(
         T_rec = reconstruct_from_multi_binary_factors(res["factors"])
         residual = get_residual_num(con.tensor, T_rec)
         rank = res["factors"].shape[-1]
-        score += 5*(1 - 1*residual/len(T_rec))
+        score += 5*(1 - residual/T_rec.size)
         if residual == 0:
             score += W_EXACT
             if rank == con.sota_rank:
