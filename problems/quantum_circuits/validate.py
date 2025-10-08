@@ -5,9 +5,9 @@ from helper import get_residual_num, reconstruct_from_multi_binary_factors
 
 def validate(
     payload: tuple[list[object], list[dict[str, np.ndarray]]],
-    W_EXACT: float = 100.0,      # bonus for residual==0
-    W_UNDER_SOTA: float = 500.0,   # extra bonus if rank < sota
-    W_AT_SOTA: float = 300.0,       # blonus if rank == sota
+    W_EXACT: float = 20.0,      # bonus for residual==0
+    W_UNDER_SOTA: float = 100.0,   # extra bonus if rank < sota
+    W_AT_SOTA: float = 50.0,       # blonus if rank == sota
 ) -> dict[str, float]:
     context, result = payload
     score = 0
@@ -17,7 +17,7 @@ def validate(
         T_rec = reconstruct_from_multi_binary_factors(res["factors"])
         residual = get_residual_num(con.tensor, T_rec)
         rank = res["factors"].shape[-1]
-        score += 5 - residual/500
+        score += 5*(1 - 1*residual/len(T_rec))
         if residual == 0:
             score += W_EXACT
             if rank == con.sota_rank:
