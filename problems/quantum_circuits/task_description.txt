@@ -32,6 +32,20 @@ You may edit **only** python code between the markers:
 - Non-differentiable ops in the loss; Python control flow on tracers.  
 - Casting traced values to Python scalars in traced regions.
 
+**INPUT**
+You will be given list[Data] and helper function from helper.py which you must use and not redefine
+class Data:
+  sota_rank: int
+  tensor: jnp.ndarray
+  name: str
+
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
+    b.shape = (n,r)
+def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
+    b.shape = (n)
+def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None) -> int:
+    return T1 & T2
+
 Task
 - Algebra: Work strictly in GF(2) — addition is XOR, multiplication is AND on {{0,1}}.
 - Symmetry  Degree: Tensors are degree 3 (order-3) and already symmetrized.
