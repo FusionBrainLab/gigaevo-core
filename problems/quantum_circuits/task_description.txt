@@ -1,12 +1,18 @@
 ## OBJECTIVE
 Write a Python function that finds an exact Waring decomposition of a Boolean, symmetric tensor over GF(2) (XOR algebra) with the smallest possible rank.
 
-HARD CONSTRAINTS (JAX / OPTAX)
+HARD HARD CONSTRAINTS:
+1. Avoid this error: "jit-wrapped function was called with a non-array argument". YOU MUST BE VERY CAUTIOS WITH RIGHT JAX SINTAXES
+2. AVOID: The problematic value is of type <class 'function'> and was passed to the function at path optimizer.init for optax optimizers.
+3. ENSURE that shapes and dtypes are the coreect during get_residual_num, reconstruct_from_multi_binary_factors 
+4. USE uint8 when and avoid using bool values.
+
+HARD CONSTRAINTS (JAX / OPTAX). You are an expert which must follow the rules.
 1. **Differentiability:** Any code participating in gradients must use **float32** and **differentiable ops** only.  
    - No XOR / equality / rounding / argmax in the **loss path**.
 2. **Types:** Convert discrete tensors to `jnp.uint8` **outside** gradient paths. Convert to `jnp.float32` for optimization.
 3. **jit/grad safety:**  
-   - `@jit` or `grad` functions accept **arrays/pytrees only** (no Python callables, no optimizers, no classes).  
+   - `@jit` or `grad` functions accept **arrays/pytrees only** (no Python callables, no optimizers, no classes).  THIS IS VERY IMPORTANT
    - **No Python scalar extraction** (`int/float/len`) inside `jit/grad`.  
    - **No Python `if/while` on tracers.** Use `lax.cond`, `lax.while_loop`, `lax.fori_loop`.
 4. **Optimizer discipline:**  
@@ -15,17 +21,12 @@ HARD CONSTRAINTS (JAX / OPTAX)
 5. **JAX API versioning:** Use **JAX 0.7.2–compatible** syntax. Do **not** use `jax.experimental.*`. Use **Optax** for optimizers.
 6. **Device stability:** No host-device ping-pong in loops. Keep tensors on device; don’t call `.block_until_ready()` unless necessary.
 
-**ALLOWED**
-- Introduce **differentiable surrogates** for GF(2) objectives; threshold only when evaluating residuals.
 
-**DISALLOWED**
-- Changing code **outside** EVOLVE - BLOCK .  
+**UNPERMITTED**
 - Creating optimizers or Python callables **inside** `jit`.  
 - Non-differentiable ops in the loss; Python control flow on tracers.  
 - Casting traced values to Python scalars in traced regions.
 
-**COMMENTS**
-- You are not allowed to leave comments beside the insights in the beginning and not more than 20 words per function. for insigts
 
 **HELPER**
 This is helper utils which are imported from helper.py. You have to use it via import from helper.py. 
@@ -35,13 +36,12 @@ class Data:
   sota_rank: int
   tensor: jnp.ndarray
   name: str
-def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
-    b.shape = (n,r)
-def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
-    b.shape = (n)
-def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None) -> int:
-    return T1 & T2
+!!! strictly follow these functions SIGNATURE !!
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray: # b.shape == (n, r)
+def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray: # b.shape == (n, )
+def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None) -> int: #return T1 & T2
 '''
+
 Task
 - Algebra: Work strictly in GF(2) — addition is XOR, multiplication is AND on {{0,1}}.
 - Symmetry  Degree: Tensors are degree 3 (order-3) and already symmetrized.

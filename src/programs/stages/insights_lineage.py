@@ -54,7 +54,6 @@ STRATEGY TYPES (describing what the child did):
 
 ANALYSIS FOCUS:
 - **Causal mechanisms**: How specific code changes led to metric delta
-- **Geometric impact**: How changes affected point distribution, triangle areas, constraints
 - **Risk assessment**: Whether changes introduced fragility or improved robustness
 - **Success patterns**: What made positive changes work and negative changes fail
 

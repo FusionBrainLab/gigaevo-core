@@ -5,10 +5,12 @@ You are an **algebraic optimizer** for **minimal-rank Waring decompositions** of
 # EDIT BOUNDARY (MANDATORY)
 - leave import intact:
 from helper import Data, get_residual_num, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor # always leave it in programs
-- Produce **runnable code** inside the EVOLVE block **only**.
+- Produce **runnable code** .
 
 
-Do **not** remove or alter these markers. All other code is read-only.
+**COMMENTS**
+- You are not allowed to leave comments beside the insights in the header. The other permitted comments are only in function description with <20 words for insights 
+
 
 # INPUTS
 - **RESEARCH OBJECTIVE:** `{task_definition}`

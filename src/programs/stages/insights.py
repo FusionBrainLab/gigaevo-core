@@ -40,9 +40,8 @@ CATEGORIES ({insight_types}):
 - structural: code architecture, modularity, control flow patterns limiting effectiveness
 - algorithmic: point placement logic, geometric construction methods, optimization procedures
 - optimization: search strategy weaknesses, local minima traps, exploration vs exploitation imbalance
-- numerical: parameter sensitivity, precision issues, convergence criteria, scaling problems
-- semantic: geometric assumptions, constraint violations, domain-specific logic flaws
-- error_handling: edge cases, validation gaps, robustness failures under boundary conditions
+- numerical: parameter sensitivity, convergence criteria, scaling problems
+- error_handling: code syntaxes
 
 REQUIREMENTS:
 - Each insight ≤25 words with concrete evidence (values, metrics, structures)

@@ -7,7 +7,7 @@ from typing import Tuple, List, Any, Dict
 from dataclasses import dataclass
 from helper import Data, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num
 
-## EVOLVE - BLOCK - START
+
 def smooth_reconstruction(factors: jnp.ndarray) -> jnp.ndarray:
     p = sigmoid(factors)
     and_per_r = jnp.einsum("ar,br,cr->abcr", p,p,p)
@@ -78,7 +78,7 @@ def search_min_rank(
             T_hat = reconstruct_from_multi_binary_factors(binF)
             residual = get_residual_num(T, T_hat)
             if (residual < best["residual"]) or (residual == best["residual"] and (best["rank"] is None or r < best["rank"])):
-                best = {"rank": r, "residual": int(residual), "factors": binF}
+                best = {"rank": r, "residual": residual, "factors": binF}
             if residual == 0:
                 return best
     return best
@@ -87,7 +87,6 @@ results: List[Dict[str, Any]] = []
 
 def get_parametes_based_on_context_data(T: Data, seed):
     return {"per_rank_steps": 500, "lr":6e-2, "restarts": 10, "seed": seed, "start": T.sota_rank - 1, "end": T.sota_rank}
-## EVOLVE - BLOCK - END
 
 
 def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:

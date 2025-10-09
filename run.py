@@ -304,21 +304,21 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     # Updated for longer programs and better model alignment
     settings_per_stage = {
         "insights": {
-            "temperature": 0.6,
-            "max_tokens": 32768,
-            "top_p": 0.95,
-            "top_k": 20,
+            "temperature": 0.8,
+            "max_tokens": 32768//8,
+            "top_p": 0.9,
+            "top_k": None,
         },
         "lineage": {
-            "temperature": 0.6,
-            "max_tokens": 32768,
+            "temperature": 0.2,
+            "max_tokens": 32768//8,
             "top_p": 0.95,
-            "top_k": 20,
+            "top_k": None,
         },
         "mutation": {
             "temperature": 0.6,
-            "max_tokens": 32768,
-            "top_p": 0.95,
+            "max_tokens": 32768//2,
+            "top_p": 0.97,
             "top_k": 20,
         },
     }
@@ -330,8 +330,9 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
         return MultiModelLLMWrapper(
             models=[
                 # "deepseek/deepseek-chat-v3.1:free",
-                # "google/gemini-2.5-flash"
-                "google/gemini-2.0-flash-exp:free",
+                "google/gemini-2.5-flash"
+                # "google/gemini-2.0-flash-001"
+                # "google/gemini-2.0-flash-exp:free",
                 # "tngtech/deepseek-r1t2-chimera:free"
                 # "z-ai/glm-4.5-air:free"
                 # "qwen/qwen3-235b-a22b:free"
@@ -517,8 +518,8 @@ async def run_evolution_experiment(
 
         engine_config = EngineConfig(
             loop_interval=1.0,
-            max_elites_per_generation=5,  # INCREASED: More elites for better diversity preservation
-            max_mutations_per_generation=8,  # INCREASED: More mutations per generation for faster exploration
+            max_elites_per_generation=3,  # INCREASED: More elites for better diversity preservation
+            max_mutations_per_generation=4,  # INCREASED: More mutations per generation for faster exploration
             max_generations=cli_args.max_generations,  # Pass max_generations from command line
             required_behavior_keys=required_behavior_keys,
             parent_selector=AllCombinationsParentSelector(num_parents=2),
@@ -537,7 +538,7 @@ async def run_evolution_experiment(
             poll_interval=5.0,
             max_concurrent_dags=cli_args.max_concurrent_dags,
             log_interval=15,
-            dag_timeout=1800,
+            dag_timeout=7200,
         )
 
         runner = RunnerManager(

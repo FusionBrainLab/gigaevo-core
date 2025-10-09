@@ -5,4 +5,15 @@
 - Propose new methods for new factor guesses .
 - You can propose some greedy heuristics for finding decomposition. 
 
-
+**HELPER**
+This is helper utils which are imported from helper.py. You have to use it via import from helper.py. 
+from helper import Data, get_residual_num, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor # always leave it in programs
+'''
+class Data:
+  sota_rank: int
+  tensor: jnp.ndarray
+  name: str
+!!! strictly follow these functions SIGNATURE !!
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray: # b.shape == (n, r)
+def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray: # b.shape == (n, )
+def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None) -> int: #return T1 & T2
