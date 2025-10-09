@@ -1,10 +1,12 @@
 - **Representation**
   - When optimization is used each component is a float vector **a** which translates to binary via sigmoid;
+  - The rank of the decomposition can be much greater than rank of the tensor, during search tend to use sota_rank + displ for upper limit of rank.
 
 - **Search Moves**
   - Use **multiple initializations** to improve exploration.
   - Develop **heuristics** for stronger initial guesses.
   - Propose new methods for new factor guesses .
+  - You can propose some greedy heuristics for finding decomposition. 
 
 - **Signals to Optimize**
   - Minimize the **residual Hamming weight** (mismatched bits).

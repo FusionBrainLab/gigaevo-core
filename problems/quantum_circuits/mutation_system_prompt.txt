@@ -8,25 +8,10 @@ Your mission: invent algorithm for finding **exact (zero-residual)** decompositi
 - check all the types is logically valid (translate to bool when necessary and use float in optimization)
 - unpermitted less/greater (condition) in jit compile
 
-Task
-- Algebra: Work strictly in **GF(2)** — addition is XOR, multiplication is AND on {{0,1}}.
-- Symmetry  Degree: Tensors are degree 3 (order-3) and already symmetrized.
-- Atoms: Each rank-1 component is a float vector which approximate binary one via sigmoid.
-- Decomposition:
-  \[
-    T \equiv \bigoplus_{{r=1}}^{{R}} a_r^{{\otimes 3}} \quad \text{{over GF(2)}},
-  \]
-  The goal is **exact reconstruction** with **minimal R**.
-- there should be balance with runtime and exactness.
-- You should to focus on enhancing of optimizer hyperparameters, loss function construction (to reduce local minimu number, plateaus)
-suggest, new initialization strategy, enhance choice function and etc
-
-
 REQUIRED FUNCTION  
 def entrypoint(context: list[Data]) -> list[dict]  
 
-# Helper function prompts from helper.py
-
+# Helper function  
 reconstruct_from_multi_binary_factors(b: jnp.ndarray)
 - **Goal:** Rebuild bool T with shape (n,n,n) as a GF(2) sum (XOR) of rank-1 terms.
 - **Input:** bool b with shape (n, r) each column `b[:,k]` is a factor.

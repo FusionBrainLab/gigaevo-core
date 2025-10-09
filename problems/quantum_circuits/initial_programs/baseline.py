@@ -6,7 +6,36 @@ from jax import lax
 from jax.nn import sigmoid
 import optax
 from typing import Tuple, List, Any, Dict
-from helper import reconstruct_from_single_binary_factor, reconstruct_from_multi_binary_factors, get_residual_num, Data  
+from dataclasses import dataclass
+
+@dataclass
+class Data:
+    name: str
+    sota_rank: int
+    tensor: jnp.array
+
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray):
+    n, r = b.shape
+    result = jnp.zeros((n, n, n), dtype=jnp.bool_)
+    for i in range(r):
+        factor = b[:, i]
+        result = jnp.bitwise_xor(result, jnp.outer(jnp.outer(factor, factor), factor).reshape((n, n, n)))
+    return result
+
+def reconstruct_from_single_binary_factor(f):
+    n = f.shape[0]
+    return jnp.outer(jnp.outer(f, f), f).reshape((n, n, n))
+
+def get_residual_num(T1, T2=None):
+    if T2 is None:
+        T2 = jnp.zeros_like(T1)
+    return jnp.sum(jnp.bitwise_xor(T1, T2))
+
+def sigmoid(x):
+  return 1.0 / (1.0 + jnp.exp(-x))
+
+def binary_cross_entropy_with_logits(logits, labels):
+  return jnp.mean(jnp.maximum(logits, 0) - logits * labels + jnp.log(1 + jnp.exp(-jnp.abs(logits))))
 
 
 def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
