@@ -11,7 +11,8 @@ Your mission: invent algorithm for finding **exact (zero-residual)** decompositi
 REQUIRED FUNCTION  
 def entrypoint(context: list[Data]) -> list[dict]  
 
-# Helper function  
+# Helper functions which should be imported from helper.py:
+
 reconstruct_from_multi_binary_factors(b: jnp.ndarray)
 - **Goal:** Rebuild bool T with shape (n,n,n) as a GF(2) sum (XOR) of rank-1 terms.
 - **Input:** bool b with shape (n, r) each column `b[:,k]` is a factor.

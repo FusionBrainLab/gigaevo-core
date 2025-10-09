@@ -8,29 +8,7 @@ from jax import jit, grad
 from dataclasses import dataclass
 from typing import List, Dict
 import numpy as np
-
-@dataclass
-class Data:
-    name: str
-    sota_rank: int
-    tensor: jnp.array
-
-def reconstruct_from_multi_binary_factors(b: jnp.ndarray):
-    n, r = b.shape
-    result = jnp.zeros((n, n, n), dtype=jnp.bool_)
-    for i in range(r):
-        factor = b[:, i]
-        result = jnp.bitwise_xor(result, jnp.outer(jnp.outer(factor, factor), factor).reshape((n, n, n)))
-    return result
-
-def reconstruct_from_single_binary_factor(f):
-    n = f.shape[0]
-    return jnp.outer(jnp.outer(f, f), f).reshape((n, n, n))
-
-def get_residual_num(T1, T2=None):
-    if T2 is None:
-        T2 = jnp.zeros_like(T1)
-    return jnp.sum(jnp.bitwise_xor(T1, T2))
+from helper import Data, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num
 
 def sigmoid(x):
   return 1.0 / (1.0 + jnp.exp(-x))
