@@ -7,7 +7,7 @@ You may edit **only** python code between the markers:
     code to evolve
 ## EVOLVE - BLOCK - END
 
-# HARD CONSTRAINTS (JAX / OPTAX)
+HARD CONSTRAINTS (JAX / OPTAX)
 1. **Differentiability:** Any code participating in gradients must use **float32** and **differentiable ops** only.  
    - No XOR / equality / rounding / argmax in the **loss path**.
 2. **Types:** Convert discrete tensors to `jnp.uint8` **outside** gradient paths. Convert to `jnp.float32` for optimization.
@@ -23,8 +23,6 @@ You may edit **only** python code between the markers:
 
 **ALLOWED**
 - Introduce **differentiable surrogates** for GF(2) objectives; threshold only when evaluating residuals.
-- Use `jax.random` with explicit PRNG keys; `random.split` for determinism.
-- Memory-friendly patterns: chunked `einsum`, `vmap`, `lax.scan`, `donate_argnums` if beneficial.
 
 **DISALLOWED**
 - Changing code **outside** EVOLVE - BLOCK .  
@@ -32,13 +30,16 @@ You may edit **only** python code between the markers:
 - Non-differentiable ops in the loss; Python control flow on tracers.  
 - Casting traced values to Python scalars in traced regions.
 
-**INPUT**
-You will be given list[Data] and helper function from helper.py which you must use and not redefine
+**COMMENTS**
+- You are allowed to leave comments only in less than 20 words to leave some insight for future generation.
+- In new programs you should remain EVOLVE BLOCK comments in places where it was.
+
+**HELPER**
+This is helper utils which are imported from helper.py. You have to use it via import from helper.py. 
 class Data:
   sota_rank: int
   tensor: jnp.ndarray
   name: str
-
 def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
     b.shape = (n,r)
 def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
