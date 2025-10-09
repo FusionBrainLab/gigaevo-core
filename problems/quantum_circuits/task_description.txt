@@ -13,11 +13,3 @@ Task
 - there should be balance with runtime and exactness.
 - You should to focus on enhancing of optimizer hyperparameters, loss function construction (to reduce local minimu number, plateaus)
 suggest, new initialization strategy, enhance choice function and etc
-
-## OUTPUT
-For each item in `context`, return a dictionary:
-{{
-  "rank": int,    # minimal rank found
-  "residual": int,      # Hamming errors after reconstruction (must be 0 for exact)
-  "factors": jnp.array  # shape = [n,r]
-}}
