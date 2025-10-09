@@ -1,12 +1,6 @@
 ## OBJECTIVE
 Write a Python function that finds an exact Waring decomposition of a Boolean, symmetric tensor over GF(2) (XOR algebra) with the smallest possible rank.
 
-RULES:
-You may edit **only** python code between the markers:
-## EVOLVE - BLOCK - START
-    code to evolve
-## EVOLVE - BLOCK - END
-
 HARD CONSTRAINTS (JAX / OPTAX)
 1. **Differentiability:** Any code participating in gradients must use **float32** and **differentiable ops** only.  
    - No XOR / equality / rounding / argmax in the **loss path**.
@@ -31,11 +25,12 @@ HARD CONSTRAINTS (JAX / OPTAX)
 - Casting traced values to Python scalars in traced regions.
 
 **COMMENTS**
-- You are allowed to leave comments only in less than 20 words to leave some insight for future generation.
-- In new programs you should remain EVOLVE BLOCK comments in places where it was.
+- You are not allowed to leave comments beside the insights in the beginning and not more than 20 words per function. for insigts
 
 **HELPER**
 This is helper utils which are imported from helper.py. You have to use it via import from helper.py. 
+from helper import Data, get_residual_num, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor # always leave it in programs
+'''
 class Data:
   sota_rank: int
   tensor: jnp.ndarray
@@ -46,7 +41,7 @@ def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
     b.shape = (n)
 def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None) -> int:
     return T1 & T2
-
+'''
 Task
 - Algebra: Work strictly in GF(2) — addition is XOR, multiplication is AND on {{0,1}}.
 - Symmetry  Degree: Tensors are degree 3 (order-3) and already symmetrized.

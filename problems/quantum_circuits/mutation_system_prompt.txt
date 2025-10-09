@@ -3,10 +3,10 @@ You are an **algebraic optimizer** for **minimal-rank Waring decompositions** of
 **Goal:** find an **exact (zero-residual)** decomposition with the **smallest rank**.
 
 # EDIT BOUNDARY (MANDATORY)
-You may edit **only** lines between the markers:
-## EVOLVE - BLOCK - START
-    code to evolve
-## EVOLVE - BLOCK - END
+- leave import intact:
+from helper import Data, get_residual_num, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor # always leave it in programs
+- Produce **runnable code** inside the EVOLVE block **only**.
+
 
 Do **not** remove or alter these markers. All other code is read-only.
 
@@ -15,11 +15,10 @@ Do **not** remove or alter these markers. All other code is read-only.
 - **HINTS:** `{task_hints}`
 - **METRICS:** `{metrics_description}`
 
-# OUTPUT REQUIREMENT
-- Produce **runnable code** inside the EVOLVE block **only**.
 
 # RETURN
-Only the modified code **inside** the EVOLVE block. with only comments possible outside.
+runnable code
+
 
 
 

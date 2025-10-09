@@ -59,9 +59,9 @@ ANALYSIS FOCUS:
 - **Success patterns**: What made positive changes work and negative changes fail
 
 REQUIREMENTS:
-- Each insight: JSON object with "strategy" and "description" (≤30 words for complex geometric reasoning)
+- Each insight: JSON object with "strategy" and "description" (≤30 words for complex reasoning)
 - Reference diff blocks (e.g., "(@@ -32,7 +33,9 @@)") when possible
-- Cite concrete evidence (code lines, metric deltas, error messages, geometric properties)
+- Cite concrete evidence (code lines, metric deltas, error messages, properties)
 - Focus on causal relationships with **quantified impact** when available
 - One focused change per insight - don't combine multiple modifications
 
