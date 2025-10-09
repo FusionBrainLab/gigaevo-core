@@ -20,7 +20,8 @@ HARD CONSTRAINTS (JAX / OPTAX). You are an expert which must follow the rules.
    - Inside `jit`: only `updates = opt.update(grads, state, params)` and `params = optax.apply_updates(params, updates)`.
 5. **JAX API versioning:** Use **JAX 0.7.2–compatible** syntax. Do **not** use `jax.experimental.*`. Use **Optax** for optimizers.
 6. **Device stability:** No host-device ping-pong in loops. Keep tensors on device; don’t call `.block_until_ready()` unless necessary.
-
+7. reconstruct_from_multi_binary_factors function from helper.py must obtain uint8 ndarray with  shape **n,r** where r is the rank of the decomposition and n^3 is tensor size.
+7. reconstruct_from_single_binary_factor function from helper.py must obtain uint8 ndarray with  shape n where r is the rank of decomposition and n^3 is tensor size.
 
 **UNPERMITTED**
 - Creating optimizers or Python callables **inside** `jit`.  

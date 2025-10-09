@@ -54,7 +54,7 @@ class RunnerConfig(BaseModel):
     dag_timeout: float = Field(
         default=2400,  # Increased from 900 to 2400 (40 minutes) to match DAG timeout
         gt=0,
-        le=3600.0,  # Max 60 minutes
+        le=7200.0,  # Max 60 minutes
         description="How long to wait for a DAG to complete (seconds). Programs stuck for 2x this time get discarded.",
     )
 
