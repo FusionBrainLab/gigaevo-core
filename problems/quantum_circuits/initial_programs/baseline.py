@@ -3,10 +3,9 @@
 import jax
 import jax.numpy as jnp
 from jax import lax
-from jax.nn import sigmoid
-import optax
+import optax # this module keeps optimizators dont use jax experimental
+
 from typing import Tuple, List, Any, Dict
-from dataclasses import dataclass
 from helper import Data, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num
 
 
@@ -101,7 +100,7 @@ def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
             lr=6e-2,
             restarts=10,
             seed=idx,
-            start=max_rank - 3,
+            start=max_rank - 3, # dont use start = 1, as it lead to too long computations
             end=max_rank + 3,
         )
         results.append(res)

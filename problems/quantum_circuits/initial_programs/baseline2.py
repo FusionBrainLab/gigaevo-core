@@ -4,10 +4,9 @@
 # Design: Precompute tensor slices for faster residual calculation; adaptive learning rate; rank initialization based on tensor size.
 import jax
 import jax.numpy as jnp
-from jax import jit, grad
-from dataclasses import dataclass
+from jax import jit
+import optax
 from typing import List, Dict
-import numpy as np
 from helper import Data, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num
 
 def sigmoid(x):
@@ -55,13 +54,11 @@ def entrypoint(context: List[Data]) -> List[Dict]:
         best_residual = float('inf')
         best_factors = None
 
-        for rank in range(1, sota_rank + 5): # Imitate rank increase
+        for rank in range(sota_rank - 5, sota_rank + 5): # # dont use start = 1, as it lead to too long computations
             params = jax.random.normal(jax.random.PRNGKey(0), (n, rank)) * 0.1
             precomputed_slices = precompute_tensor_slices(T)
 
             global optimizer
-            global optax
-            import optax
             optimizer = optax.adam(learning_rate=0.1)
             optimizer_state = optimizer.init(params)
 
