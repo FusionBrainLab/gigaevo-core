@@ -2,7 +2,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 from typing import List, Tuple
-
+from dataclasses import dataclass
 
 def reconcstruct_from_tensoralpha(tensoralpha_res):
     dim = 3
@@ -17,11 +17,11 @@ def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
     f = f.astype(jnp.uint8)
     return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
 
+@dataclass
 class Data:
-    def __init__(self, name, tensor, rank):
-        self.name = name
-        self.tensor = tensor
-        self.sota_rank = rank
+    name: str
+    tensor: jnp.ndarray
+    sota_rank: int
 
 def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
     spec = "ar,br,cr->abcr"

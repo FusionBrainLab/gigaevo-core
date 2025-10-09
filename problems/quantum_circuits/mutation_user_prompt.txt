@@ -4,36 +4,23 @@ You are given one or more input programs for crossover, plus:
 - structured insights
 - lineage history
 
-Your task is to write a new **mutant program** that:
-- Integrates at least **two insights** from different domains
-- Uses at least **one lineage-based insight** (imitation, generalization, or avoidance)
-- Applies a **clearly traceable architectural change** (not just hyperparameter tweaks)
-
-📚 INSIGHT SOURCES (for this GF(2) Waring task):
-
-### 💡 PROGRAM INSIGHTS (categorized):
-- **algebraic** (e.g., GF(2) parity composition, symmetry constraints a^{{\otimes d}})
-- **optimization** (e.g., relaxed parity loss vs greedy flips, annealing, pruning cadence)
-- **evolutionary** (e.g., restart policy, rank growth/shrink schedules, beam width)
-- **implementation** (e.g., bitset kernels, deterministic RNG, residual caching)
-
-### 🧬 LINEAGE HISTORY (performance deltas):
-Each entry includes:
-- a fitness delta (e.g., “–0.130”, “+0.275”)
-- a structural explanation (e.g., “late hardening reduced residual”, “overlap cancellation increased residual”)
+Your task is to write a new mutant program that:
+- Integrates at least two insights from different domains
+- Uses at least one lineage-based insight (imitation, generalization, or avoidance)
+- Applies a clearly traceable architectural change (not just hyperparameter tweaks)
 
 You must:
-- Reflect on at least one **improvement** and one **degradation**
-- Decide whether to **imitate**, **avoid**, or **generalize** a prior strategy
+- Reflect on at least one improvement and one degradation
+- Decide whether to imitate, avoid, or generalize a prior strategy
 - Summarize this in a line: `Lineage (type): ...`
 
 ✍️ OUTPUT FORMAT — STRICT:
-Output **only a single fenced Python code block** (```python ... ```), with:
+Output only a single fenced Python code block (```python ... ```), with:
 - A single entry point: `entrypoint(context: list[Data]) -> list[dict]`
 - Other functions as needed
-- **No docstrings, no markdown, no extra comments** beyond the 4-line header
+- No docstrings, no markdown, no extra comments beyond the 4-line header
 
-🔖 The code must begin with a **4-line structured comment block**, exactly:
+🔖 The code must begin with a 4-line structured comment block, exactly:
 ```python
 # Insight (algebraic): ...
 # Insight (optimization): ...

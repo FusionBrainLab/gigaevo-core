@@ -1,7 +1,7 @@
 display_order: [fitness, is_valid]
 specs:
   fitness:
-    description: Primary objective (size of certified set)
+    description: Primary objective. Less residual of found decompositon greater score. greater reward for residaul == 0
     decimals: 0
     is_primary: true
     higher_is_better: true

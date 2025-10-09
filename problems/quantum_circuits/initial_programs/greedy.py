@@ -1,9 +1,42 @@
+#example of greedy algorithm
 import jax, jax.numpy as jnp
 from typing import List, Dict, Any
-from helper import reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num, Data  
+from jax.nn import sigmoid
+from dataclasses import dataclass
+
+
+def reconcstruct_from_tensoralpha(tensoralpha_res):
+    dim = 3
+    factors = [tensoralpha_res[0,:,:].T for r in range(dim)]
+    letters = ''.join(chr(97 + i) for i in range(dim))
+    spec = ','.join(f"{chr(97 + i)}r" for i in range(dim)) + f"->{letters}r"
+    and_per_r = jnp.einsum(spec, *factors, optimize=True).astype(jnp.uint8)
+    T = (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
+    return T
+
+def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
+    f = f.astype(jnp.uint8)
+    return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
+
+@dataclass
+class Data:
+    name: str
+    tensor: jnp.ndarray
+    sota_rank: int
+
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
+    spec = "ar,br,cr->abcr"
+    and_per_r = jnp.einsum(spec, b,b,b).astype(jnp.uint8)
+    return (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
+
+def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
+    if T2 is None:
+        return int(jnp.sum(T1))
+    return jnp.sum(T1 ^ T2)
 
 
 def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
+    ## EVOLVE - BLOCK - START
     def _sample_rank1(key, d: int):
         """List of D binary vectors, one per mode; ensure each is nonzero."""
         ks = jax.random.split(key, 1)
@@ -36,10 +69,11 @@ def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
             if cur < tol: break
         return {"rank": len(decomposed), "residual": get_residual_num(R), "factors": jnp.array(decomposed, dtype=jnp.uint8).T}
 
-    out = []
-    for i, item in enumerate(context):
-        T = item.tensor
-        hint = item.sota_rank
-        max_r = int(min(2*hint, 256))
-        out.append(search_min_rank(T=jnp.asarray(T), samples=20, max_rank=max_r, tol=1e-6, seed=i+1))
-    return out
+    def get_parametes_based_on_context_data(data: Data, seed: int):
+        return {"samples": 20, "max_rank": data.sota_rank, "tol": 1e-6, "seed":seed+1}
+    
+    ## EVOLVE - BLOCK - END
+    res = []
+    for i, data in enumerate(context):
+        res.append(search_min_rank(T=data.tensor, **get_parametes_based_on_context_data(data, seed=i+1)))
+    return res

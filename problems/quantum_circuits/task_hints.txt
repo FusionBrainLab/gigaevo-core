@@ -1,25 +1,8 @@
-- **Representation**
-  - When optimization is used each component is a float vector **a** which translates to binary via sigmoid;
-  - The rank of the decomposition can be much greater than rank of the tensor, during search tend to use sota_rank + displ for upper limit of rank.
+- When optimization is used each component is a float vector **a** which translates to binary via sigmoid;
+- The rank of the decomposition can be much greater than rank of the tensor, during search tend to use sota_rank + displ for upper limit of rank.
+- Use **multiple initializations** to improve exploration.
+- Develop **heuristics** for stronger initial guesses.
+- Propose new methods for new factor guesses .
+- You can propose some greedy heuristics for finding decomposition. 
 
-- **Search Moves**
-  - Use **multiple initializations** to improve exploration.
-  - Develop **heuristics** for stronger initial guesses.
-  - Propose new methods for new factor guesses .
-  - You can propose some greedy heuristics for finding decomposition. 
 
-- **Signals to Optimize**
-  - Minimize the **residual Hamming weight** (mismatched bits).
-
-- **Rank Pressure**
-  - When multiple exact solutions exist, prefer the one with **smaller rank** and **simpler components**.
-
-- **Optimization**
-  - Expect **many local minima** and **barren plateaus**; diversify restarts.
-  - Tune **optimizer hyperparameters**.
-  - Shape the **loss** to improve the landscape and convergence but keep it working with float types.
-  - Choose the **number of steps** to balance solution quality and runtime.
-
-- **Termination**
-  - Stop when the residual is **exactly zero** and no single add/remove/edit can further reduce rank or improve correctness.
-  - Otherwise, stop when a predefined **early-stopping criterion** (time, steps, or plateau) is met.
