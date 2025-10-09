@@ -5,37 +5,7 @@ from jax.nn import sigmoid
 from jax import lax
 from typing import Tuple, List, Any, Dict
 from dataclasses import dataclass
-
-
-def reconcstruct_from_tensoralpha(tensoralpha_res):
-    dim = 3
-    factors = [tensoralpha_res[0,:,:].T for r in range(dim)]
-    letters = ''.join(chr(97 + i) for i in range(dim))
-    spec = ','.join(f"{chr(97 + i)}r" for i in range(dim)) + f"->{letters}r"
-    and_per_r = jnp.einsum(spec, *factors, optimize=True).astype(jnp.uint8)
-    T = (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
-    return T
-
-def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
-    f = f.astype(jnp.uint8)
-    return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
-
-@dataclass
-class Data:
-    name: str
-    tensor: jnp.ndarray
-    sota_rank: int
-
-def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
-    spec = "ar,br,cr->abcr"
-    and_per_r = jnp.einsum(spec, b,b,b).astype(jnp.uint8)
-    return (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
-
-def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
-    if T2 is None:
-        return int(jnp.sum(T1))
-    return jnp.sum(T1 ^ T2)
-
+from helper import Data, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num
 
 ## EVOLVE - BLOCK - START
 def smooth_reconstruction(factors: jnp.ndarray) -> jnp.ndarray:

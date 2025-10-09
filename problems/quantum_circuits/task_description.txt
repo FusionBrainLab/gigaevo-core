@@ -1,6 +1,37 @@
 ## OBJECTIVE
 Write a Python function that finds an exact Waring decomposition of a Boolean, symmetric tensor over GF(2) (XOR algebra) with the smallest possible rank.
 
+RULES:
+You may edit **only** python code between the markers:
+## EVOLVE - BLOCK - START
+    code to evolve
+## EVOLVE - BLOCK - END
+
+# HARD CONSTRAINTS (JAX / OPTAX)
+1. **Differentiability:** Any code participating in gradients must use **float32** and **differentiable ops** only.  
+   - No XOR / equality / rounding / argmax in the **loss path**.
+2. **Types:** Convert discrete tensors to `jnp.uint8` **outside** gradient paths. Convert to `jnp.float32` for optimization.
+3. **jit/grad safety:**  
+   - `@jit` or `grad` functions accept **arrays/pytrees only** (no Python callables, no optimizers, no classes).  
+   - **No Python scalar extraction** (`int/float/len`) inside `jit/grad`.  
+   - **No Python `if/while` on tracers.** Use `lax.cond`, `lax.while_loop`, `lax.fori_loop`.
+4. **Optimizer discipline:**  
+   - Instantiate optimizers **outside** any `jit`.  
+   - Inside `jit`: only `updates = opt.update(grads, state, params)` and `params = optax.apply_updates(params, updates)`.
+5. **JAX API versioning:** Use **JAX 0.7.2–compatible** syntax. Do **not** use `jax.experimental.*`. Use **Optax** for optimizers.
+6. **Device stability:** No host-device ping-pong in loops. Keep tensors on device; don’t call `.block_until_ready()` unless necessary.
+
+**ALLOWED**
+- Introduce **differentiable surrogates** for GF(2) objectives; threshold only when evaluating residuals.
+- Use `jax.random` with explicit PRNG keys; `random.split` for determinism.
+- Memory-friendly patterns: chunked `einsum`, `vmap`, `lax.scan`, `donate_argnums` if beneficial.
+
+**DISALLOWED**
+- Changing code **outside** EVOLVE - BLOCK .  
+- Creating optimizers or Python callables **inside** `jit`.  
+- Non-differentiable ops in the loss; Python control flow on tracers.  
+- Casting traced values to Python scalars in traced regions.
+
 Task
 - Algebra: Work strictly in GF(2) — addition is XOR, multiplication is AND on {{0,1}}.
 - Symmetry  Degree: Tensors are degree 3 (order-3) and already symmetrized.

@@ -17,54 +17,9 @@ Do **not** remove or alter these markers. All other code is read-only.
 
 # OUTPUT REQUIREMENT
 - Produce **runnable code** inside the EVOLVE block **only**.
-- Keep comments minimal and focused on what you changed and why.
-- Do **not** print or log large tensors.
-
-# HARD CONSTRAINTS (JAX / OPTAX)
-1. **Differentiability:** Any code participating in gradients must use **float32** and **differentiable ops** only.  
-   - No XOR / equality / rounding / argmax in the **loss path**.
-2. **Types:** Convert discrete tensors to `jnp.uint8` **outside** gradient paths. Convert to `jnp.float32` for optimization.
-3. **jit/grad safety:**  
-   - `@jit` or `grad` functions accept **arrays/pytrees only** (no Python callables, no optimizers, no classes).  
-   - **No Python scalar extraction** (`int/float/len`) inside `jit/grad`.  
-   - **No Python `if/while` on tracers.** Use `lax.cond`, `lax.while_loop`, `lax.fori_loop`.
-4. **Optimizer discipline:**  
-   - Instantiate optimizers **outside** any `jit`.  
-   - Inside `jit`: only `updates = opt.update(grads, state, params)` and `params = optax.apply_updates(params, updates)`.
-5. **JAX API versioning:** Use **JAX 0.7.2–compatible** syntax. Do **not** use `jax.experimental.*`. Use **Optax** for optimizers.
-6. **Device stability:** No host-device ping-pong in loops. Keep tensors on device; don’t call `.block_until_ready()` unless necessary.
-
-# ALLOWED / DISALLOWED
-**ALLOWED**
-- Introduce **differentiable surrogates** for GF(2) objectives; threshold only when evaluating residuals.
-- Use `jax.random` with explicit PRNG keys; `random.split` for determinism.
-- Memory-friendly patterns: chunked `einsum`, `vmap`, `lax.scan`, `donate_argnums` if beneficial.
-
-**DISALLOWED**
-- Changing code **outside** EVOLVE block.  
-- Creating optimizers or Python callables **inside** `jit`.  
-- Non-differentiable ops in the loss; Python control flow on tracers.  
-- Casting traced values to Python scalars in traced regions.
-
-# SUCCESS CRITERIA
-- **Primary:** residual == 0 (exact GF(2) reconstruction) with **minimum rank** found.
-- **Secondary:** stable runtime (no OOM, no recompilation storms), no JAX tracing errors.
-
-# SELF-CHECKLIST (must pass before returning)
-- [ ] All grad-path tensors are `float32`; discrete ops only **outside** grad.  
-- [ ] No `int()/len()/float()` on traced values inside `jit/grad`.  
-- [ ] No Python `if/while` on traced values (use `lax.*`).  
-- [ ] Optimizer created **outside** `jit`; only `update/apply_updates` inside.  
-- [ ] Shapes static across `jit` calls (or guarded).  
-- [ ] Residual evaluation uses GF(2) (`^` / XOR) with `uint8` **outside** grad.
-
-# IMPLEMENTATION HINTS (optional to use)
-- Use smooth XOR surrogate: for AND-per-rank `A_r`, probability of XOR: `P = 0.5 * (1 - prod_r (1 - 2*A_r))`.  
-- Evaluate residual with `uint8` tensors: `int(jnp.sum(T1 ^ T2))` **outside** jit.  
-- If memory-bound, stream over rank (`fori_loop` + per-chunk `einsum`) instead of building `(n,n,n,r)`.
 
 # RETURN
-Only the modified code **inside** the EVOLVE block. No extra text.
+Only the modified code **inside** the EVOLVE block. with only comments possible outside.
 
 
 
