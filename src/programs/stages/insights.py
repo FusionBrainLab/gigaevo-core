@@ -26,7 +26,7 @@ ANALYZE:
 - Fragile constructs (hardcoded logic, undefined cases)
 
 REQUIREMENTS:
-- Return JSON list with "type" (one of {insight_types}) and "insight" (≤25 words)
+- Return JSON list with "type" (one of {insight_types}) and "insight" (≤60 words)
 - Focus on algorithmic/structural substance, not style
 - Provide specific, actionable suggestions
 """.strip()

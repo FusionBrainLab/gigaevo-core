@@ -305,20 +305,20 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     settings_per_stage = {
         "insights": {
             "temperature": 0.8,
-            "max_tokens": 32768//8,
+            "max_tokens": 32768//4,
             "top_p": 0.9,
-            "top_k": None,
+            "top_k": 20,
         },
         "lineage": {
-            "temperature": 0.2,
-            "max_tokens": 32768//8,
+            "temperature": 0.4,
+            "max_tokens": 32768//4,
             "top_p": 0.95,
-            "top_k": None,
+            "top_k": 20,
         },
         "mutation": {
-            "temperature": 0.6,
+            "temperature": 0.7,
             "max_tokens": 32768//2,
-            "top_p": 0.97,
+            "top_p": 0.95,
             "top_k": 20,
         },
     }

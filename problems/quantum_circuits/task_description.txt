@@ -52,6 +52,6 @@ Task
     T \equiv \bigoplus_{{r=1}}^{{R}} a_r^{{\otimes 3}} \quad \text{{over GF(2)}},
   \]
   The goal is exact reconstruction with minimal R.
-- there should be balance with runtime and exactness.
+- You can insrease runtime for better exploration in reasanable limits
 - You should to focus on enhancing of optimizer hyperparameters, loss function construction (to reduce local minimu number, plateaus)
 suggest, new initialization strategy, enhance choice function and etc

@@ -99,3 +99,25 @@ def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
         results.append(res)
 
     return results
+
+# you are not perrmitted to change this code 
+def evaluate(
+    payload: tuple[list[Data], list[dict[str, jnp.ndarray]]],
+    W_EXACT: float = 10.0,      # bonus for residual==0
+    W_UNDER_SOTA: float = 50.0,   # extra bonus if rank < sota
+    W_AT_SOTA: float = 10.0,       # blonus if rank == sota
+) -> dict[str, float]:
+    context, result = payload
+    score = 0
+    for con, res in zip(context, result):
+        T_rec = reconstruct_from_multi_binary_factors(res["factors"])
+        residual = get_residual_num(con.tensor, T_rec)
+        rank = res["factors"].shape[-1]
+        score += 5*(1 - residual/T_rec.size)
+        if residual == 0:
+            score += W_EXACT
+            if rank == con.sota_rank:
+                score += W_AT_SOTA
+            if rank < con.sota_rank:
+                score += W_UNDER_SOTA
+    return {"fitness": score, "is_valid": 1}

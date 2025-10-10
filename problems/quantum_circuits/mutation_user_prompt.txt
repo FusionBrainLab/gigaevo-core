@@ -6,7 +6,6 @@ You are given one or more input programs for crossover, plus:
 
 Your task is to write a new mutant program that:
 - Integrates at least two insights from different domains
-- Applies a clearly traceable architectural change (not just hyperparameter tweaks)
 
 You must:
 - Reflect on at least one improvement and one degradation

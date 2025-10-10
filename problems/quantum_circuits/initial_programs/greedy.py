@@ -1,14 +1,10 @@
 #example of greedy algorithm
 import jax
 import jax.numpy as jnp
-import optax
-from jax import lax
 from typing import List, Dict, Any
-from jax.nn import sigmoid
 from helper import Data, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num
 
 
-## EVOLVE - BLOCK - START
 def _sample_rank1(key, d: int):
     """List of D binary vectors, one per mode; ensure each is nonzero."""
     ks = jax.random.split(key, 1)
@@ -44,10 +40,32 @@ def search_min_rank(T: jnp.ndarray, samples=128, max_rank=64, tol=1e-6, seed=0) 
 def get_parametes_based_on_context_data(data: Data, seed: int):
     return {"samples": 20, "max_rank": data.sota_rank, "tol": 1e-6, "seed":seed+1}
 
-## EVOLVE - BLOCK - END
 def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
 
     res = []
     for i, data in enumerate(context):
         res.append(search_min_rank(T=data.tensor, **get_parametes_based_on_context_data(data, seed=i+1)))
     return res
+
+
+# you are not permitted to change this code 
+def evaluate(
+    payload: tuple[list[Data], list[dict[str, jnp.ndarray]]],
+    W_EXACT: float = 10.0,      # bonus for residual==0
+    W_UNDER_SOTA: float = 50.0,   # extra bonus if rank < sota
+    W_AT_SOTA: float = 10.0,       # blonus if rank == sota
+) -> dict[str, float]:
+    context, result = payload
+    score = 0
+    for con, res in zip(context, result):
+        T_rec = reconstruct_from_multi_binary_factors(res["factors"])
+        residual = get_residual_num(con.tensor, T_rec)
+        rank = res["factors"].shape[-1]
+        score += 5*(1 - residual/T_rec.size)
+        if residual == 0:
+            score += W_EXACT
+            if rank == con.sota_rank:
+                score += W_AT_SOTA
+            if rank < con.sota_rank:
+                score += W_UNDER_SOTA
+    return {"fitness": score, "is_valid": 1}
