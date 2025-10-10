@@ -330,9 +330,10 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
         return MultiModelLLMWrapper(
             models=[
                 # "deepseek/deepseek-chat-v3.1:free",
-                "google/gemini-2.5-flash"
+                # "google/gemini-2.5-flash"
                 # "google/gemini-2.0-flash-001"
                 # "google/gemini-2.0-flash-exp:free",
+                "deepseek/deepseek-v3.2-exp"
                 # "tngtech/deepseek-r1t2-chimera:free"
                 # "z-ai/glm-4.5-air:free"
                 # "qwen/qwen3-235b-a22b:free"

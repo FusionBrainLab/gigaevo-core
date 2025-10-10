@@ -14,10 +14,15 @@ You must:
 
 ✍️ OUTPUT FORMAT — STRICT:
 Output only a single fenced Python code block (```python ... ```), with:
-- A single entry point: `entrypoint(context: list[Data]) -> list[dict]`. Where every dict consist of rank, residual and decomposition :
-best = {{"rank": r, "residual": int, "factors": jnp.ndarray with shape (n,r)}} # must exist in every program
-- No docstrings, no markdown, no extra comments beyond the 4-line header. You are allowed to leave function descriptions with < 20 words.
+- A single entry point: `entrypoint(context: list[Data]) -> list[jnp.array]`. Where every jnp.array is a decomposition of shape (n,r) where r is obrained rank:
 
+INPUT
+1. 2 parent programs with their main fitness, additional metrics and headers with insights, code outside EVOLVE-BLOCK you can't change (but can leave small comments) and code inside EVOLVE-BLOCK you can evolve.  
+2. The entrypoint function would be given list[Data], where the class Data keep tensor to decompose and known best rank (sota_rank) of waring decomposition for this tensor. 
+3. You can't change evaluate function but can see for better context understanding
+
+OUTPUT
+1. Evolved child program.
 🔖 The code must begin with a 4-line structured comment block, exactly:
 ```python
 # Insight (algebraic): ...

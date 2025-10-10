@@ -1,13 +1,33 @@
 import jax
 import jax.numpy as jnp
-import optax 
+import optax # Here is all the optimizer to use
 from jax.nn import sigmoid
 from jax import lax
-from typing import Tuple, List, Any, Dict
 from dataclasses import dataclass
-from helper import Data, reconstruct_from_multi_binary_factors, reconstruct_from_single_binary_factor, get_residual_num
+from typing import Tuple, List, Any, Dict
+
+@dataclass
+class Data:
+    name: str
+    tensor: jnp.ndarray
+    sota_rank: int
+
+def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
+    f = f.astype(jnp.uint8)
+    return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
 
 
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
+    spec = "ar,br,cr->abcr"
+    and_per_r = jnp.einsum(spec, b,b,b).astype(jnp.uint8)
+    return (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
+
+def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
+    if T2 is None:
+        return int(jnp.sum(T1))
+    return jnp.sum(T1 ^ T2)
+
+# EVOLVE-START-END
 def smooth_reconstruction(factors: jnp.ndarray) -> jnp.ndarray:
     p = sigmoid(factors)
     and_per_r = jnp.einsum("ar,br,cr->abcr", p,p,p)
@@ -27,7 +47,6 @@ def generate_finit(shape, base_key, seed: int):
     return jax.random.normal(key, shape) * sigma_coef
 
 def get_optimizer(lr):
-    # choosing and setting optimizer
     return optax.adam(lr)
 
 def make_trainer(target: jnp.ndarray, lr: float):
@@ -50,6 +69,7 @@ def make_trainer(target: jnp.ndarray, lr: float):
             f, s = carry
             f, s = step(f, s)
             return (f, s)
+        # use jitted loops for step for better speed 
         f_final, _ = lax.fori_loop(0, steps, body, (f_init, state))
         return f_final, steps
     return run_steps
@@ -80,44 +100,47 @@ def search_min_rank(
             if (residual < best["residual"]) or (residual == best["residual"] and (best["rank"] is None or r < best["rank"])):
                 best = {"rank": r, "residual": residual, "factors": binF}
             if residual == 0:
-                return best
-    return best
+                return best["factors"]
+    return best["factors"]
 
 results: List[Dict[str, Any]] = []
 
 def get_parametes_based_on_context_data(T: Data, seed):
     return {"per_rank_steps": 500, "lr":6e-2, "restarts": 10, "seed": seed, "start": T.sota_rank - 1, "end": T.sota_rank}
-
+# EVOLVE-BLOCK-END
 
 def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
     # cylce to find solution for all the problems from the context 
     for idx, data in enumerate(context):
         res = search_min_rank(
             T=data.tensor,
-            **get_parametes_based_on_context_data(data, idx), # it is gauranteed the exist solution with T.sota_rank
+            **get_parametes_based_on_context_data(data, idx), # it is gauranteed there exist solution with T.sota_rank
         )
         results.append(res)
-
     return results
 
-# you are not perrmitted to change this code 
+# You are not perrmitted to change this code. This function is called from outside of the program
 def evaluate(
-    payload: tuple[list[Data], list[dict[str, jnp.ndarray]]],
+    payload: tuple[list[Data], list[jnp.ndarray]],
     W_EXACT: float = 10.0,      # bonus for residual==0
     W_UNDER_SOTA: float = 50.0,   # extra bonus if rank < sota
     W_AT_SOTA: float = 10.0,       # blonus if rank == sota
 ) -> dict[str, float]:
     context, result = payload
     score = 0
+    exact_num = 0
+    under_sota_num = 0 
     for con, res in zip(context, result):
-        T_rec = reconstruct_from_multi_binary_factors(res["factors"])
+        T_rec = reconstruct_from_multi_binary_factors(res)
         residual = get_residual_num(con.tensor, T_rec)
-        rank = res["factors"].shape[-1]
+        rank = res.shape[-1]
         score += 5*(1 - residual/T_rec.size)
         if residual == 0:
+            exact_num = +1
             score += W_EXACT
             if rank == con.sota_rank:
                 score += W_AT_SOTA
             if rank < con.sota_rank:
+                under_sota_num += 1
                 score += W_UNDER_SOTA
-    return {"fitness": score, "is_valid": 1}
+    return {"fitness": score, "exact_num": exact_num, "under_sota": under_sota_num, "is_valid": 1}

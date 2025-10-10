@@ -26,7 +26,7 @@ ANALYZE:
 - Fragile constructs (hardcoded logic, undefined cases)
 
 REQUIREMENTS:
-- Return JSON list with "type" (one of {insight_types}) and "insight" (≤60 words)
+- Return JSON list with "type" (one of {insight_types}) and "insight" (≤50 words)
 - Focus on algorithmic/structural substance, not style
 - Provide specific, actionable suggestions
 """.strip()
@@ -44,7 +44,7 @@ CATEGORIES ({insight_types}):
 - error_handling: code syntaxes
 
 REQUIREMENTS:
-- Each insight ≤25 words with concrete evidence (values, metrics, structures)
+- Each insight ≤50 words with concrete evidence (values, metrics, structures)
 - Be causal and actionable - link cause, effect, and solution
 - Ground observations in code/metrics/errors, not speculation
 - **Prioritize fitness-impacting patterns** over minor refinements
@@ -54,7 +54,6 @@ Strict rules:
 - You do **not** have access to runtime speed — avoid assumptions about performance or memory usage
 - Do **not** hallucinate structural flaws without evidence from code, metrics, or error outputs
 - Do **not** include summaries, general advice, or stylistic feedback
-- **Focus on geometric reasoning** - triangle areas, point distributions, constraint satisfaction
 
 ✅ Only recommend structural or numerical improvements that clearly support maximizing minimum triangle area
 
