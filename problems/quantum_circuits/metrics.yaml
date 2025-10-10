@@ -5,8 +5,8 @@ specs:
     decimals: 0
     is_primary: true
     higher_is_better: true
-    lower_bound: 0
-    upper_bound: 100
+    lower_bound: -5
+    upper_bound: 20
     include_in_prompts: true
     significant_change: 1
 

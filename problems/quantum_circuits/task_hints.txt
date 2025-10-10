@@ -4,3 +4,8 @@
 - Develop **heuristics** for stronger initial guesses.
 - Propose new methods for new factor guesses.
 - You can propose some greedy heuristics for finding decomposition. 
+- You can incrementally increase steps if it can allow to obtain better decomposition
+
+Fitness Metric
+- minimize number of residual terms:
+- You are additionaly awarded for exact decompositions.

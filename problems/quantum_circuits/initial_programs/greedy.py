@@ -43,7 +43,7 @@ def _choose_best(key, residual, samples: int):
             best_score, best = sc, cand
     return key, best, float(best_score)
 
-def search_min_rank(T: jnp.ndarray, samples=128, max_rank=64, tol=1e-6, seed=0) -> Dict[str, Any]:
+def search_min_rank(T: jnp.ndarray, samples=128, max_rank=64, tol=1e-6, seed=0) -> jnp.array:
     key = jax.random.PRNGKey(seed)
     R = jnp.array(T)
     decomposed: List[List[jnp.ndarray]] = []
@@ -61,34 +61,8 @@ def get_parametes_based_on_context_data(data: Data, seed: int):
 # EVOLVE-BLOCK-END
 
 
-def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
+def entrypoint(context: List[Data]) -> List[jnp.array]:
     res = []
     for i, data in enumerate(context):
         res.append(search_min_rank(T=data.tensor, **get_parametes_based_on_context_data(data, seed=i+1)))
     return res
-
-# You are not perrmitted to change this code. This function is called from outside of the program
-def evaluate(
-    payload: tuple[list[Data], list[jnp.ndarray]],
-    W_EXACT: float = 10.0,      # bonus for residual==0
-    W_UNDER_SOTA: float = 50.0,   # extra bonus if rank < sota
-    W_AT_SOTA: float = 10.0,       # blonus if rank == sota
-) -> dict[str, float]:
-    context, result = payload
-    score = 0
-    exact_num = 0
-    under_sota_num = 0 
-    for con, res in zip(context, result):
-        T_rec = reconstruct_from_multi_binary_factors(res)
-        residual = get_residual_num(con.tensor, T_rec)
-        rank = res.shape[-1]
-        score += 5*(1 - residual/T_rec.size)
-        if residual == 0:
-            exact_num = +1
-            score += W_EXACT
-            if rank == con.sota_rank:
-                score += W_AT_SOTA
-            if rank < con.sota_rank:
-                under_sota_num += 1
-                score += W_UNDER_SOTA
-    return {"fitness": score, "exact_num": exact_num, "under_sota": under_sota_num, "is_valid": 1}

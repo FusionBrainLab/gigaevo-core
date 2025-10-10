@@ -27,7 +27,7 @@ def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
         return int(jnp.sum(T1))
     return jnp.sum(T1 ^ T2)
 
-# EVOLVE-START-END
+# EVOLVE-BLOCK-START
 def smooth_reconstruction(factors: jnp.ndarray) -> jnp.ndarray:
     p = sigmoid(factors)
     and_per_r = jnp.einsum("ar,br,cr->abcr", p,p,p)
@@ -82,7 +82,7 @@ def search_min_rank(
     seed: int = 1,
     start: int = 10,
     end: int = 11,
-) -> Dict[str, Any]:
+) -> jnp.array:
     n = T.shape[0]
     base_key = jax.random.PRNGKey(seed)
 
@@ -109,7 +109,7 @@ def get_parametes_based_on_context_data(T: Data, seed):
     return {"per_rank_steps": 500, "lr":6e-2, "restarts": 10, "seed": seed, "start": T.sota_rank - 1, "end": T.sota_rank}
 # EVOLVE-BLOCK-END
 
-def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
+def entrypoint(context: List[Data]) -> List[jnp.array]:
     # cylce to find solution for all the problems from the context 
     for idx, data in enumerate(context):
         res = search_min_rank(
@@ -118,29 +118,3 @@ def entrypoint(context: List[Data]) -> List[Dict[str, Any]]:
         )
         results.append(res)
     return results
-
-# You are not perrmitted to change this code. This function is called from outside of the program
-def evaluate(
-    payload: tuple[list[Data], list[jnp.ndarray]],
-    W_EXACT: float = 10.0,      # bonus for residual==0
-    W_UNDER_SOTA: float = 50.0,   # extra bonus if rank < sota
-    W_AT_SOTA: float = 10.0,       # blonus if rank == sota
-) -> dict[str, float]:
-    context, result = payload
-    score = 0
-    exact_num = 0
-    under_sota_num = 0 
-    for con, res in zip(context, result):
-        T_rec = reconstruct_from_multi_binary_factors(res)
-        residual = get_residual_num(con.tensor, T_rec)
-        rank = res.shape[-1]
-        score += 5*(1 - residual/T_rec.size)
-        if residual == 0:
-            exact_num = +1
-            score += W_EXACT
-            if rank == con.sota_rank:
-                score += W_AT_SOTA
-            if rank < con.sota_rank:
-                under_sota_num += 1
-                score += W_UNDER_SOTA
-    return {"fitness": score, "exact_num": exact_num, "under_sota": under_sota_num, "is_valid": 1}
