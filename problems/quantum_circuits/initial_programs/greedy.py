@@ -58,7 +58,6 @@ def search_min_rank(T: jnp.ndarray, samples=128, max_rank=64, tol=1e-6, seed=0) 
 
 def get_parametes_based_on_context_data(data: Data, seed: int):
     return {"samples": 20, "max_rank": data.sota_rank, "tol": 1e-6, "seed":seed+1}
-# EVOLVE-BLOCK-END
 
 
 def entrypoint(context: List[Data]) -> List[jnp.array]:
@@ -66,3 +65,4 @@ def entrypoint(context: List[Data]) -> List[jnp.array]:
     for i, data in enumerate(context):
         res.append(search_min_rank(T=data.tensor, **get_parametes_based_on_context_data(data, seed=i+1)))
     return res
+# EVOLVE-BLOCK-END

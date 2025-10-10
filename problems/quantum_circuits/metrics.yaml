@@ -1,14 +1,14 @@
-display_order: [fitness, is_valid]
+display_order: [fitness,exact_num, under_sota, at_sota is_valid]
 specs:
   fitness:
     description: Primary objective. Less residual of found decompositon greater score. greater reward for residaul == 0
-    decimals: 0
+    decimals: 3
     is_primary: true
     higher_is_better: true
     lower_bound: -5
-    upper_bound: 20
+    upper_bound: 30
     include_in_prompts: true
-    significant_change: 1
+    significant_change: 0.4
 
   exact_num:
     description: Number of exact found decomposition
@@ -22,6 +22,16 @@ specs:
 
   under_sota:
     description: Number of decompositions under the sota rank
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0
+    upper_bound: 10
+    include_in_prompts: true
+    significant_change: 1
+
+  at_sota:
+    description: Number of decompositions at the sota rank
     decimals: 0
     is_primary: false
     higher_is_better: true

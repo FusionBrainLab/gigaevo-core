@@ -305,19 +305,19 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
     settings_per_stage = {
         "insights": {
             "temperature": 0.8,
-            "max_tokens": 32768//4,
+            "max_tokens": 32768//2,
             "top_p": 0.9,
             "top_k": 20,
         },
         "lineage": {
             "temperature": 0.4,
-            "max_tokens": 32768//4,
+            "max_tokens": 32768//2,
             "top_p": 0.95,
             "top_k": 20,
         },
         "mutation": {
             "temperature": 0.7,
-            "max_tokens": 32768//2,
+            "max_tokens": 32768,
             "top_p": 0.95,
             "top_k": 20,
         },
@@ -332,18 +332,20 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
                 # "deepseek/deepseek-chat-v3.1:free",
                 # "google/gemini-2.5-flash"
                 # "google/gemini-2.0-flash-001"
-                # "google/gemini-2.0-flash-exp:free",
-                "deepseek/deepseek-v3.2-exp"
-                # "tngtech/deepseek-r1t2-chimera:free"
+                "google/gemini-2.0-flash-exp:free",
+                # "deepseek/deepseek-v3.2-exp"
+                "tngtech/deepseek-r1t2-chimera:free",
+                "deepseek/deepseek-r1-0528:free"
                 # "z-ai/glm-4.5-air:free"
                 # "qwen/qwen3-235b-a22b:free"
                 # "qwen/qwen3-coder:free"
             ],
-            probabilities=[1],
+            probabilities=[1,1,1],
             api_key=LLM_API_KEY,
             configs=[
                 LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
-                # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
+                LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
+                LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
                 # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
             ],
         )
@@ -404,7 +406,7 @@ async def run_evolution_experiment(
             max_connections=150,
             connection_pool_timeout=45.0,
             health_check_interval=120,
-            max_retries=20,
+            max_retries=6,
             retry_delay=0.5,
         )
     )

@@ -107,7 +107,6 @@ results: List[Dict[str, Any]] = []
 
 def get_parametes_based_on_context_data(T: Data, seed):
     return {"per_rank_steps": 500, "lr":6e-2, "restarts": 10, "seed": seed, "start": T.sota_rank - 1, "end": T.sota_rank}
-# EVOLVE-BLOCK-END
 
 def entrypoint(context: List[Data]) -> List[jnp.array]:
     # cylce to find solution for all the problems from the context 
@@ -118,3 +117,4 @@ def entrypoint(context: List[Data]) -> List[jnp.array]:
         )
         results.append(res)
     return results
+# EVOLVE-BLOCK-END

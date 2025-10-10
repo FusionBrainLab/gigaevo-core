@@ -13,6 +13,7 @@ def validate(
     score = 0
     exact_num = 0
     under_sota_num = 0 
+    at_sota_num = 0
     for con, res in zip(context, result):
         T_rec = reconstruct_from_multi_binary_factors(res)
         residual = get_residual_num(con.tensor, T_rec)
@@ -22,8 +23,9 @@ def validate(
             exact_num = +1
             score += W_EXACT
             if rank == con.sota_rank:
+                at_sota_num += 1
                 score += W_AT_SOTA
             if rank < con.sota_rank:
                 under_sota_num += 1
                 score += W_UNDER_SOTA
-    return {"fitness": score, "exact_num": exact_num, "under_sota": under_sota_num, "is_valid": 1}
+    return {"fitness": score, "exact_num": exact_num, "under_sota": under_sota_num, "at_sota": at_sota_num, "is_valid": 1}
