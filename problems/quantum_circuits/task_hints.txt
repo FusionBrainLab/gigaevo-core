@@ -8,4 +8,4 @@
 
 Fitness Metric
 - minimize number of residual terms:
-- You are additionaly awarded for exact decompositions.
+- You are additionaly awarded for exact decompositions, decomposition at sota rank and under sota rank.
