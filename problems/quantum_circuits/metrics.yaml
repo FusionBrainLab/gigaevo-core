@@ -1,4 +1,4 @@
-display_order: [fitness,exact_num, under_sota, at_sota is_valid]
+display_order: [fitness, exact_num, under_sota, at_sota, is_valid]
 specs:
   fitness:
     description: Primary objective. Less residual of found decompositon greater score. greater reward for residaul == 0
@@ -8,7 +8,7 @@ specs:
     lower_bound: -5
     upper_bound: 30
     include_in_prompts: true
-    significant_change: 0.4
+    significant_change: 0.05
 
   exact_num:
     description: Number of exact found decomposition
