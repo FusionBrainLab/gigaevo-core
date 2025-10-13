@@ -329,11 +329,11 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
 
         return MultiModelLLMWrapper(
             models=[
-                "baidu/ernie-4.5-21b-a3b-thinking",
-                "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+                # "baidu/ernie-4.5-21b-a3b-thinking",
+                # "nvidia/llama-3.3-nemotron-super-49b-v1.5"
                 # "deepseek/deepseek-chat-v3.1:free",
                 # "google/gemini-2.5-flash"
-                # "google/gemini-2.0-flash-001"
+                "google/gemini-2.0-flash-001"
                 # "google/gemini-2.0-flash-exp:free",
                 # "deepseek/deepseek-v3.2-exp"
                 # "tngtech/deepseek-r1t2-chimera:free",
@@ -342,11 +342,11 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
                 # "qwen/qwen3-235b-a22b:free"
                 # "qwen/qwen3-coder:free"
             ],
-            probabilities=[1,1],
+            probabilities=[1],
             api_key=LLM_API_KEY,
             configs=[
                 LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
-                LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
+                # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
                 # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
                 # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
             ],

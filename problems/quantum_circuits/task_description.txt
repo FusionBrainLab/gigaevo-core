@@ -16,7 +16,6 @@ CODING RULES
 4. You are allowed to do and edit coments only with """, i.e. example: {{""" some comments """}}.
 5. You are only allowed to change code starting after {{# EVOLVE-BLOCK-START}} and before {{# EVOLVE-BLOCK-END}}, outside of code you can add only reasanable comments. All the other code is just for you context.
 6. You are forbidded to move and change the code outside the EVOLVE-BLOCK
-7. !!!Number of opening ( must be equal to the number of closing ) in python code. Dont hallucinate with it!!!
 
 
 VALIDATION & RIGOR
