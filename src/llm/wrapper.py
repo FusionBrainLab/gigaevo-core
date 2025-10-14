@@ -97,6 +97,10 @@ class LLMWrapper(LLMInterface):
     Always creates both sync and async clients for maximum flexibility.
     """
 
+    # Class-level semaphore shared across all instances
+    _shared_semaphore: asyncio.Semaphore | None = None
+    _semaphore_limit: int = 8  # Default limit
+
     def __init__(
         self,
         model: str,
@@ -119,6 +123,20 @@ class LLMWrapper(LLMInterface):
         self._model = model
         self.system_prompt = system_prompt
         self.config = config or LLMConfig()
+
+        # Initialize shared semaphore for concurrent request limiting (once)
+        # This is shared across ALL LLMWrapper instances
+        if LLMWrapper._shared_semaphore is None:
+            LLMWrapper._shared_semaphore = asyncio.Semaphore(
+                LLMWrapper._semaphore_limit
+            )
+            logger.info(
+                f"[LLMWrapper] Created shared semaphore with limit: {LLMWrapper._semaphore_limit} (semaphore id: {id(LLMWrapper._shared_semaphore)})"
+            )
+        else:
+            logger.info(
+                f"[LLMWrapper] Reusing existing shared semaphore (semaphore id: {id(LLMWrapper._shared_semaphore)}, limit: {LLMWrapper._semaphore_limit})"
+            )
 
         # Initialize both clients
         client_kwargs = {}
@@ -144,7 +162,9 @@ class LLMWrapper(LLMInterface):
             ),
         )
 
-        logger.info(f"[LLMWrapper] Initialized with model: {model}")
+        logger.info(
+            f"[LLMWrapper] Initialized with model: {model}"
+        )
 
     def _validate_user_prompt(self, user_prompt: str) -> None:
         """Validate user prompt input."""
@@ -359,20 +379,29 @@ class LLMWrapper(LLMInterface):
                     f"[LLMWrapper] Attempting async generation (attempt {attempt + 1})"
                 )
 
-                response = await self.async_client.chat.completions.create(
-                    **api_params
+                # Use shared semaphore to limit concurrent requests across all instances
+                logger.debug(
+                    f"[LLMWrapper] Waiting for semaphore slot... (current value: {LLMWrapper._shared_semaphore._value}, limit: {LLMWrapper._semaphore_limit})"
                 )
+                async with LLMWrapper._shared_semaphore:
+                    logger.debug(
+                        f"[LLMWrapper] Acquired shared semaphore slot (attempt {attempt + 1}, slots in use: {LLMWrapper._semaphore_limit - LLMWrapper._shared_semaphore._value})"
+                    )
+                    
+                    response = await self.async_client.chat.completions.create(
+                        **api_params
+                    )
 
-                if not response.choices:
-                    raise LLMAPIError("API returned no choices")
+                    if not response.choices:
+                        raise LLMAPIError("API returned no choices")
 
-                content = response.choices[0].message.content
+                    content = response.choices[0].message.content
 
-                if content is None:
-                    raise LLMAPIError("API returned None content")
+                    if content is None:
+                        raise LLMAPIError("API returned None content")
 
-                logger.debug("[LLMWrapper] Async generation successful")
-                return content
+                    logger.debug("[LLMWrapper] Async generation successful")
+                    return content
 
             except Exception as error:
                 last_error = error

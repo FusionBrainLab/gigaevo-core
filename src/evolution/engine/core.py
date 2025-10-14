@@ -209,7 +209,7 @@ class EvolutionEngine:
 
     async def _log_metrics(self) -> None:
         m = self.metrics.to_dict()
-        metrics_str = " | ".join(f"{k}={v}" for k, v in m.items())
+        metrics_str = " | ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}" for k, v in m.items())
         logger.info(f"[EvolutionEngine] | {metrics_str}")
 
     def stop(self) -> None:

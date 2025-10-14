@@ -89,6 +89,8 @@ async def fetch_evolution_dataframe(config: RedisRunConfig) -> pd.DataFrame:
             "generation": getattr(program, "generation", 0) or 0,
             "parent_count": getattr(program, "parent_count", 0),
             "is_root": getattr(program, "is_root", False),
+            "code": getattr(program, "code", None),
+            "parent_ids": getattr(program, "lineage", None).parents if getattr(program, "lineage", None) else [],
         }
 
         # metrics

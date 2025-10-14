@@ -1,0 +1,114 @@
+EVOLUTIONARY MUTATION: Adaptive Code Evolution
+
+Transform the program using program insights and historical lineage intelligence, balancing exploration and exploitation.
+
+## INTELLIGENCE INPUTS
+
+**PROGRAM INSIGHTS**: category [tag] (severity): concrete evidence  
+- Categories: structural, algorithmic, optimization, numerical, semantic, error_handling  
+- Tags: beneficial, harmful, neutral, fragile, rigid  
+- Severity: high (direct impact), medium (geometric reasoning), low (implementation detail)
+
+**TAG MEANINGS (evolutionary guidance):**  
+- **beneficial**: Good pattern → PRESERVE / EXTEND  
+- **harmful**: Bad pattern → REMOVE / AVOID  
+- **fragile**: Risky pattern → IMPROVE / ROBUSTIFY  
+- **rigid**: Inflexible pattern → MAKE MORE ADAPTABLE  
+- **neutral**: No clear impact → IGNORE  
+
+**LINEAGE INSIGHTS**: Historical mutation outcomes and effects  
+- strategy: imitation / generalization / avoidance / exploration  
+- description: causal explanation (≤30 words)  
+- delta: measured fitness change  
+- diff: exact code modifications  
+
+## EVOLUTIONARY ARCHETYPE SELECTION
+
+Choose an approach based on evidence strength and risk tolerance:
+
+### Exploitation (evidence-driven refinement)  
+1. **Precision Optimization** → Fine-tune proven patterns, minimal-risk changes  
+2. **Proven Pattern Extension** → Replicate or generalize successful strategies  
+3. **Harmful Pattern Removal** → Eliminate documented failure modes  
+
+### Exploration (innovation-driven change)  
+4. **Geometric Innovation** → Novel arrangements, spatial reorganization  
+5. **Algorithmic Discovery** → New placement or optimization strategies  
+6. **Structural Synthesis** → Combine approaches, hybrid architectures  
+
+### Hybrid (balanced approach)  
+7. **Guided Innovation** → Preserve proven elements + targeted innovations  
+8. **Conservative Exploration** → Explore safely, maintain structural integrity  
+
+**Selection framework:**  
+- Strong positive lineage + beneficial insights → Exploitation  
+- Negative/weak lineage + harmful/rigid insights → Exploration  
+- Mixed evidence + moderate confidence → Hybrid  
+
+## EXECUTION PRINCIPLES
+
+- Base changes on 1–3 insights (distinct categories)  
+- Match scope to chosen archetype  
+- Ensure traceability to insights/lineage  
+- Prioritize severity, then beneficial/fragile tags  
+- Harmful → remove patterns; Beneficial/fragile → preserve/improve  
+- Archetype constraints:  
+  - Exploitation: ≤2 localized changes  
+  - Exploration: meaningful structural novelty  
+  - Hybrid: balanced mix  
+
+## OUTPUT
+
+**Archetype Selection**: [Chosen archetype] – [≤1 sentence justification]
+
+**Justification** (2–3 sentences):  
+- Insights referenced  
+- Strategy chosen and why  
+- Expected mechanism of improvement  
+
+**Code** (THIS structre of the program you should return:
+```python
+import jax
+import jax.numpy as jnp
+import optax 
+from jax.nn import sigmoid
+from jax import lax
+from dataclasses import dataclass
+from typing import Tuple, List, Any, Dict
+
+@dataclass
+class Data:
+    name: str
+    tensor: jnp.ndarray
+    sota_rank: int
+
+def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
+    f = f.astype(jnp.uint8)
+    return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
+
+
+def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
+    spec = "ar,br,cr->abcr"
+    and_per_r = jnp.einsum(spec, b,b,b).astype(jnp.uint8)
+    return (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
+
+def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
+    if T2 is None:
+        return int(jnp.sum(T1))
+    return jnp.sum(T1 ^ T2)
+
+# EVOLVE-BLOCK-END
+"""CODE YOU CAN CHANGE"""
+# EVOLVE-BLOCK-END
+
+def entrypoint(context: List[Data]) -> List[jnp.ndarray]:
+    """
+    Return list of an integer array of shapes (N, R) correspoding to waring decomposition.
+    Primary objective: find .
+    """
+    return factors_list
+```
+
+**Critical**: Use exact format above. No text outside code fences.
+
+{parent_blocks}

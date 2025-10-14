@@ -164,7 +164,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 stage_name="ExecuteCode",
                 function_name="entrypoint",
                 python_path=[problem_ctx.problem_dir.resolve()],
-                timeout=600.0,
+                timeout=1200.0,
             ),
         )
 
@@ -193,7 +193,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     metrics_formatter=metrics_formatter,
                     metadata_key="insights",
                 ),
-                timeout=600.0,
+                timeout=1200.0,
             ),
         )
 
@@ -213,7 +213,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     ),
                 ),
                 storage=storage,
-                timeout=600,
+                timeout=1200.0,
             ),
         )
 
