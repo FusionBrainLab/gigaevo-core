@@ -50,6 +50,7 @@ def get_any_kernel_vector(matrix: np.ndarray, augmented_matrix: Optional[np.ndar
     return None
 
 def L_matrix_generation(nb_qubits: int, PM: ParityMatrix):
+    displ = 0
     matrix = np.zeros((nb_qubits * (nb_qubits + 1) // 2, PM.num_factors()))
     matrix[0:nb_qubits, :] = PM.P 
     for i in range(1, nb_qubits):
@@ -81,7 +82,6 @@ def tohpe(PME: ParityMatrix):
     
     nb_qubits = PM.get_target_qubits()
     while True:
-        displ = 0
         matrix = L_matrix_generation(nb_qubits, PM)
         y = get_any_kernel_vector(matrix)
         
