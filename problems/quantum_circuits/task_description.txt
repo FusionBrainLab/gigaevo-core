@@ -1,13 +1,13 @@
 OBJECTIVE
-Write a Python code that finds an exact Waring decomposition with the smallest possible rank of a Boolean symmetric tensor. You will evolve the code for finding the best algorithm.
+Write a Python code that modify the known of a Boolean symmetric tensor by reducint its rank. You will evolve the code for finding the best solution for specific task.
 
 TASK
-T is a bool tensor of rank 3, i.e. T.shape == (n,n,n). The code should find waring decomposition of this tensor:
+T is a bool tensor of rank 3, i.e. T.shape == (n,n,n). The code should upgrade the waring decomposition of this tensor:
 $$
 T = \sum_{r=1}^{R} f_{r} \otimes f_{r} \otimes f_{r}
 $$
 where f_{4} are factors and f_{r}.shape == (n,).
-The decomposition should be perfomed in def entrypoint(list[Data]) -> list[jnp.array].
+The decomposition should be perfomed in def entrypoint(Data) -> ParityMatrix.
 
 CODING RULES
 1. All the rules below must be stricltly followed. Do not hallucinate with it.
@@ -16,7 +16,7 @@ CODING RULES
 4. You are allowed to do and edit coments only with """, i.e. example: {{""" some comments """}}.
 5. You are only allowed to change code starting after {{# EVOLVE-BLOCK-START}} and before {{# EVOLVE-BLOCK-END}}, outside of code you can add only reasanable comments. All the other code is just for you context.
 6. You are forbidded to move and change the code outside the EVOLVE-BLOCK
-
+7. Use ParityMatrix interface
 
 VALIDATION & RIGOR
 - Check all jitted function can be compiled

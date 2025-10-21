@@ -1,94 +1,89 @@
 from __future__ import annotations
 import jax
 import jax.numpy as jnp
+import numpy as np
 from typing import List, Tuple
 from dataclasses import dataclass
 
-def reconcstruct_from_tensoralpha(tensoralpha_res):
-    dim = 3
-    factors = [tensoralpha_res[0,:,:].T for r in range(dim)]
-    letters = ''.join(chr(97 + i) for i in range(dim))
-    spec = ','.join(f"{chr(97 + i)}r" for i in range(dim)) + f"->{letters}r"
-    and_per_r = jnp.einsum(spec, *factors, optimize=True).astype(jnp.uint8)
-    T = (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
-    return T
-
-def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
-    f = f.astype(jnp.uint8)
-    return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
 
 @dataclass
 class Data:
     name: str
-    tensor: jnp.ndarray
+    sota_decomposition: ParityMatrix
+    early_decomposition: ParityMatrix
     sota_rank: int
 
-def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
-    spec = "ar,br,cr->abcr"
-    and_per_r = jnp.einsum(spec, b,b,b).astype(jnp.uint8)
-    return (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
+class ParityMatrix:
+    P: np.ndarray 
+    T: np.ndarray
+    def __init__(self, P: np.ndarray):
+        if len(P.shape) == 2:
+            self.P = P.astype(np.bool)
+            self.T = self.to_symmetric_tensor()
 
-def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
-    if T2 is None:
-        return int(jnp.sum(T1))
-    return jnp.sum(T1 ^ T2)
 
-# это для теста нужно было
-def matmul_tensor_4x4():
-    n = 4
-    dim = n*n
-    T = jnp.zeros((dim, dim, dim), dtype=jnp.int8)
-    idx = []
-    for i in range(n):
-        for j in range(n):
-            for k in range(n):
-                a = i * n + j
-                b = j * n + k
-                c = i * n + k
-                idx.append((a,b,c))
-    a,b,c = zip(*idx)
-    T = T.at[(jnp.array(a), jnp.array(b), jnp.array(c))].set(1)
-    return T
+    def num_factors(self) -> int:
+        return self.P.shape[1]
+    
+    def get_all_qubits(self) -> int:
+        return self.P.shape[0]
 
-def generate_bool_tensor(
-    shape: Tuple[int, ...],
-    rank: int,
-    *,
-    key: jax.Array = jax.random.PRNGKey(0),
-    p: float = 0.5,
-    return_factors: bool = True,
-):
-    N = len(shape)
-    keys = jax.random.split(key, N)
+    def get_target_qubits(self) -> int:
+        return self.P.shape[0]
+        
+    def get_factor(self, i: int) -> int:
+        """return column"""
+        return self.P[:, i]
 
-    factors = tuple(
-        jax.random.bernoulli(keys[n], p=p, shape=(shape[n], rank)).astype(jnp.uint8)
-        for n in range(N)
-    )
+    def get_row(self, i: int):
+        return self.P[i,:]
+    
+    def get_target_tensor(self):
+        return self.T
+    
+    def to_symmetric_tensor(self):
+        spec = "ar,br,cr->abcr"
+        and_per_r = np.einsum(spec, self.P, self.P, self.P).astype(np.uint8)
+        return (np.sum(and_per_r, axis=-1) & np.uint8(1)).astype(np.uint8)
+    
+    def add_to_factors(self, zs: Tuple[np.ndarray], indexes: Tuple[np.ndarray]):
+        if not np.all(self.T == self.to_symmetric_tensor()):
+            raise RuntimeError("adding non valid factors in init")
+        for z, index in zip(zs, indexes):
+            self.P[:,index[0]] ^= z
+        
+        if not np.all(self.T == self.to_symmetric_tensor()):
+            print(indexes)
+            raise RuntimeError("adding non valid factors")
+        
+    def add_factors(self, ys: np.ndarray):
+        oshape = self.P.shape
+        if oshape[0] != oshape[1]:
+            raise ValueError("asdf")
+        new_P = np.zeros((oshape[0], oshape[1] + ys[1])).astype(np.uint8)
+        new_P[:,:oshape[1]] = self.P
+        new_P[:,oshape[1]:] = ys
+        print("hello")
 
-    letters = ''.join(chr(97 + i) for i in range(N))
-    spec = ','.join(f"{chr(97 + i)}r" for i in range(N)) + f"->{letters}r"
-    and_per_r = jnp.einsum(spec, *factors, optimize=True).astype(jnp.uint8)
-    T = (jnp.sum(and_per_r, axis=-1) % 2).astype(jnp.uint8)
-    return (T, factors) if return_factors else T
-
-def generate_symmetric_bool_tensor(
-    N: int,
-    dim: int,
-    rank: int,
-    *,
-    key: jax.Array = jax.random.PRNGKey(0),
-    p: float = 0.5,
-    return_factors: bool = True,
-):
-    keys = jax.random.split(key, dim)
-
-    factor = jax.random.bernoulli(keys[0], p=p, shape=(N, rank)).astype(jnp.uint8)
-    factors = tuple(factor for _ in range(dim))
-    letters = ''.join(chr(97 + i) for i in range(dim))
-    spec = ','.join(f"{chr(97 + i)}r" for i in range(dim)) + f"->{letters}r"
-    and_per_r = jnp.einsum(spec, *factors, optimize=True).astype(jnp.uint8)
-
-    T = (jnp.sum(and_per_r, axis=-1) % 2).astype(jnp.uint8)
-
-    return (T, factors) if return_factors else T
+    def destroy_duplicate_columns(self):
+        indexes = set()
+        for i in range(self.P.shape[1]):
+            if np.all(self.P[:,i] == 0):
+                indexes.add(i)
+            if i in indexes:
+                continue
+            for j in range(i + 1, self.P.shape[1]):
+               if np.all(self.P[:,i] == self.P[:,j]):
+                    indexes.add(i)
+                    indexes.add(j)
+                    break
+        oshape = self.P.shape
+        new_P = np.zeros((oshape[0], oshape[1]  - len(indexes))).astype(np.uint8)
+        j = 0
+        for i in range(self.P.shape[1]):
+            if i not in indexes:
+                new_P[:,j] = self.P[:,i]
+                j += 1
+        self.P = new_P
+        if not np.all(self.T == self.to_symmetric_tensor()):
+            raise RuntimeError("wrong destruction")

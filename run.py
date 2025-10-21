@@ -333,7 +333,11 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
                 # "nvidia/llama-3.3-nemotron-super-49b-v1.5"
                 # "deepseek/deepseek-chat-v3.1:free",
                 # "google/gemini-2.5-flash"
-                "google/gemini-2.0-flash-001"
+                # "google/gemini-2.0-flash-001"
+                "GigaChat/GigaChat-2-Max",
+                "Qwen/Qwen3-Next-80B-A3B-Instruct",
+                "Qwen/Qwen3-235B-A22B-Instruct-2507",
+                "openai/gpt-oss-120b"
                 # "google/gemini-2.0-flash-exp:free",
                 # "deepseek/deepseek-v3.2-exp"
                 # "tngtech/deepseek-r1t2-chimera:free",
@@ -342,10 +346,14 @@ async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
                 # "qwen/qwen3-235b-a22b:free"
                 # "qwen/qwen3-coder:free"
             ],
-            probabilities=[1],
+            probabilities=[1,1,1,1],
             api_key=LLM_API_KEY,
             configs=[
-                LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
+                LLMConfig(**params, api_endpoint="https://foundation-models.api.cloud.ru/v1"),
+                LLMConfig(**params, api_endpoint="https://foundation-models.api.cloud.ru/v1"),
+                LLMConfig(**params, api_endpoint="https://foundation-models.api.cloud.ru/v1"),
+                LLMConfig(**params, api_endpoint="https://foundation-models.api.cloud.ru/v1"),
+
                 # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
                 # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
                 # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),

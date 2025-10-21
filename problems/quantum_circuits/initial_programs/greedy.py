@@ -1,68 +1,55 @@
 import jax
 import jax.numpy as jnp
 from typing import List, Dict, Any
-from dataclasses import dataclass
-
-@dataclass
-class Data:
-    name: str
-    tensor: jnp.ndarray
-    sota_rank: int
-
-def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
-    f = f.astype(jnp.uint8)
-    return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
-
-
-def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
-    spec = "ar,br,cr->abcr"
-    and_per_r = jnp.einsum(spec, b,b,b).astype(jnp.uint8)
-    return (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
-
-def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
-    if T2 is None:
-        return int(jnp.sum(T1))
-    return jnp.sum(T1 ^ T2)
+from helper import Data, ParityMatrix
 
 # EVOLVE-BLOCK-START
-def _sample_rank1(key, d: int):
-    """List of D binary vectors, one per mode; ensure each is nonzero."""
-    ks = jax.random.split(key, 1)
-    v = jax.random.bernoulli(ks[0], 0.5, (d,)).astype(jnp.float32)
-    idx = jax.random.randint(ks[0], (), 0, d)
-    v = jnp.where(v.sum() == 0, v.at[idx].set(1.), v)
-    return ks[0], v
-
-def _choose_best(key, residual, samples: int):
-    """Sample several candidates; keep the one minimizing residual metric."""
-    best_score, best = jnp.inf, None
-    for _ in range(samples):
-        key, cand = _sample_rank1(key, residual.shape[0])
-        sc = get_residual_num(residual, reconstruct_from_single_binary_factor(cand))
-        if float(sc) < float(best_score):
-            best_score, best = sc, cand
-    return key, best, float(best_score)
-
-def search_min_rank(T: jnp.ndarray, samples=128, max_rank=64, tol=1e-6, seed=0) -> jnp.array:
+def random_reduce_with_add(pm: ParityMatrix, samples: int, max_rank: int, seed: int) -> jnp.ndarray:
     key = jax.random.PRNGKey(seed)
-    R = jnp.array(T)
-    decomposed: List[List[jnp.ndarray]] = []
-    cur = 1
-    for _ in range(max_rank):
-        key, best, sc = _choose_best(key, R, samples)
-        if best is None or cur < tol: break
-        R = R - reconstruct_from_single_binary_factor(best)
-        decomposed.append(best); cur = sc
-        if cur < tol: break
-    return jnp.array(decomposed, dtype=jnp.uint8).T
+    bestP = pm.P.copy()
+    bestR = bestP.shape[1]
+    n, r = bestP.shape
+    for s in range(samples):
+        if bestR <= max_rank:
+            break
+        k1 = int(jax.random.randint(jax.random.fold_in(key, 2*s), (), 0, r))
+        k2 = int(jax.random.randint(jax.random.fold_in(key, 2*s+1), (), 0, r))
+        m = int(jax.random.randint(jax.random.fold_in(key, 3*s+2), (), 1, min(4, r)+1))
+        idxs = set([k1])
+        while len(idxs) < m:
+            idxs.add(int(jax.random.randint(jax.random.fold_in(key, 5*s+len(idxs)), (), 0, r)))
+        idxs = sorted(list(idxs))
+        zs = []
+        for t, idx in enumerate(idxs):
+            if t == 0:
+                zs.append(bestP[:, k2].copy())
+            else:
+                zkey = jax.random.fold_in(key, 7*s+idx)
+                z = jax.random.bernoulli(zkey, 0.5, (n,)).astype(jnp.uint8)
+                zs.append(z)
+        try:
+            trial = ParityMatrix(bestP.copy())
+            trial.add_to_factors(tuple(zs), tuple(idxs))
+            trial.destroy_duplicate_columns()
+            rnew = trial.P.shape[1]
+            if rnew < bestR:
+                bestP = trial.P.copy()
+                bestR = rnew
+        except Exception:
+            continue
+    return ParityMatrix(bestP)
+
+def search_min_rank(
+                    PME: ParityMatrix,
+                    samples: int, max_rank: int, seed: int) -> jnp.ndarray:
+    return random_reduce_with_add(PME, samples=samples, max_rank=max_rank, seed=seed)
 
 def get_parametes_based_on_context_data(data: Data, seed: int):
-    return {"samples": 20, "max_rank": data.sota_rank, "tol": 1e-6, "seed":seed+1}
-
-
-def entrypoint(context: List[Data]) -> List[jnp.array]:
-    res = []
-    for i, data in enumerate(context):
-        res.append(search_min_rank(T=data.tensor, **get_parametes_based_on_context_data(data, seed=i+1)))
-    return res
+    return {"samples": 200, "max_rank": data.sota_rank, "tol": 1e-6, "seed": seed+1}
 # EVOLVE-BLOCK-END
+
+def entrypoint(context: Data) -> jnp.array:
+    data = context
+    params = get_parametes_based_on_context_data(data, seed=1)
+    res = search_min_rank(data.early_decomposition, samples=params["samples"], max_rank=params["max_rank"], seed=params["seed"])
+    return res

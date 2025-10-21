@@ -1,3 +1,14 @@
+INSIGHTS:
+ - there exist algorithm which modify the initial Parity Matrix '''P''' adding 1 rank matrix '''zy^T''' where:
+ Ly \otimes B(z)y' \otimes b v(z) = 0 where y' and b is 0
+ In simplified version y'=0 and b=0, i.e. this condition will look like:
+ **Ly = 0 where L = np.einsum("ar,br->abr", P, P)**
+ If this conditions satisfied than addition of zy^T doesnt change the signature tensor. 
+ '''z''' can be choosen to nullify some factors in decompostion/ 
+ - Conditions for adding matrix of not rank 1 is unknown
+ - use such pertubations to parity matrix to explore possiblity for rank reduction  
+
+Advices. 
 - When optimization is used each component is a float vector **a** which translates to binary via sigmoid;
 - The rank of the decomposition can be much greater than rank of the tensor, during search tend to use sota_rank for upper limit of rank.
 - Use **multiple initializations** to improve exploration.
@@ -7,5 +18,4 @@
 - You can incrementally increase steps (computation time) if it can allow to obtain better decomposition
 
 Fitness Metric
-- minimize number of residual terms:
-- You are additionaly awarded for exact decompositions, decomposition at sota rank and under sota rank.
+- You reward is the rank of the decomposition
