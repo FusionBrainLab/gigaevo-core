@@ -49,14 +49,6 @@ def get_any_kernel_vector(matrix: np.ndarray, augmented_matrix: Optional[np.ndar
             return augmented_matrix[i].copy()
     return None
 
-def L_matrix_generation(nb_qubits: int, PM: ParityMatrix):
-    matrix = np.zeros((nb_qubits * (nb_qubits + 1) // 2, PM.num_factors()))
-    matrix[0:nb_qubits, :] = PM.P 
-    for i in range(1, nb_qubits):
-        displ += nb_qubits - i + 1
-        matrix[displ:displ + nb_qubits - i,:] = np.einsum("ar,r->ar", PM.P[i:,:], PM.P[i - 1,:])
-    return matrix.T.astype(np.bool)
-
 def tohpe(PME: ParityMatrix):
     """
     Algorithm for achieving upper bound of decomposition (n^2 + n) //2 + 1
@@ -82,7 +74,12 @@ def tohpe(PME: ParityMatrix):
     nb_qubits = PM.get_target_qubits()
     while True:
         displ = 0
-        matrix = L_matrix_generation(nb_qubits, PM)
+        matrix = np.zeros((nb_qubits * (nb_qubits + 1) // 2, PM.num_factors()))
+        matrix[0:nb_qubits, :] = PM.P 
+        for i in range(1, nb_qubits):
+            displ += nb_qubits - i + 1
+            matrix[displ:displ + nb_qubits - i,:] = np.einsum("ar,r->ar", PM.P[i:,:], PM.P[i - 1,:])
+        matrix = matrix.T.astype(np.bool)
         y = get_any_kernel_vector(matrix)
         
         z, places = choose_best_z(y)

@@ -12,7 +12,7 @@ class Data:
     sota_decomposition: ParityMatrix
     early_decomposition: ParityMatrix
     sota_rank: int
-
+    
 class ParityMatrix:
     P: np.ndarray 
     T: np.ndarray
@@ -20,7 +20,6 @@ class ParityMatrix:
         if len(P.shape) == 2:
             self.P = P.astype(np.bool)
             self.T = self.to_symmetric_tensor()
-
 
     def num_factors(self) -> int:
         return self.P.shape[1]

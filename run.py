@@ -551,7 +551,7 @@ async def run_evolution_experiment(
             poll_interval=5.0,
             max_concurrent_dags=cli_args.max_concurrent_dags,
             log_interval=15,
-            dag_timeout=7200,
+            dag_timeout=1800,
         )
 
         runner = RunnerManager(

@@ -76,13 +76,6 @@ import numpy as np
 from typing import List, Tuple
 from dataclasses import dataclass
 
-
-@dataclass
-class Data:
-    name: str
-    early_decomposition: ParityMatrix
-    sota_rank: int
-
 class ParityMatrix:
     P: np.ndarray 
     T: np.ndarray
@@ -160,13 +153,7 @@ class ParityMatrix:
 
 **Code** (THIS structre of the program you should return):
 ```python
-import jax
-import jax.numpy as jnp
-import optax
-from jax.nn import sigmoid
-from jax import lax
-from typing import Tuple, List, Any, Dict
-from helper import Data, ParityMatrix
+import 
 
 # EVOLVE-BLOCK-START
 """CODE YOU CAN CHANGE"""

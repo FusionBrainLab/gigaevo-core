@@ -4,8 +4,15 @@ import optax
 from jax.nn import sigmoid
 from jax import lax
 from typing import Tuple, List, Any, Dict
-from helper import Data, ParityMatrix
+from dataclasses import dataclass
+from helper import ParityMatrix
 
+@dataclass
+class Data:
+    name: str
+    early_decomposition: ParityMatrix
+    sota_rank: int
+    
 # EVOLVE-BLOCK-START
 def smooth_reconstruction(f: jnp.ndarray) -> jnp.ndarray:
     p = sigmoid(f)
@@ -48,7 +55,7 @@ def make_trainer(target_T: jnp.ndarray, lr: float):
         return f_final, steps
     return run_steps
 
-def pertubate(init: jnp.ndarray, base_key, seed, sigma=5.0):
+def perturbate(init: jnp.ndarray, base_key, seed, sigma=5.0):
     init = logits_from_binary(init)
     shape = init.shape[0], init.shape[1] - 1
     key = jax.random.fold_in(base_key, (int(shape[-1]) << 1) + int(seed))
@@ -65,7 +72,7 @@ def search_min_rank(
     base_key = jax.random.PRNGKey(seed)
     run_steps = make_trainer(T.astype(jnp.float32), lr)
     for i in range(restarts):
-        F0 = pertubate(PME_B, base_key=base_key, seed=seed)
+        F0 = perturbate(PME_B, base_key=base_key, seed=seed)
         F, _ = run_steps(F0, per_rank_steps)
         B = to_binary_factors(F)
         new_P = ParityMatrix(B)
@@ -74,7 +81,7 @@ def search_min_rank(
     return ParityMatrix(PME_B)
 
 def get_parameters_based_on_context_data(d: Data, seed: int) -> Dict[str, Any]:
-    return {"per_rank_steps": 100, "lr": 6e-2, "restarts": 5, "seed": seed}
+    return {"per_rank_steps": 500, "lr": 6e-2, "restarts": 10, "seed": seed}
 # EVOLVE-BLOCK-END
 
 def entrypoint(context: Data) -> ParityMatrix:
