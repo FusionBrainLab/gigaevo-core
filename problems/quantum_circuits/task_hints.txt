@@ -13,16 +13,16 @@ INSIGHTS:
             matrix[displ:displ + nb_qubits - i,:] = np.einsum("ar,r->ar", PM.P[i:,:], PM.P[i - 1,:])
         return matrix.T.astype(np.bool)
  ```
- If this conditions satisfied than addition of zy^T doesnt change the signature tensor. 
+ If this conditions are satisfied than addition of zy^T doesnt change the signature tensor. 
  '''z''' can be choosen to nullify some factors in decompostion
  - Conditions for adding matrix of not rank 1 is unknown
  - use such pertubations to parity matrix to explore possiblity for rank reduction  
-
+ 
 Advices. 
 - When optimization is used each component is a float vector **a** which translates to binary via sigmoid;
 - The rank of the decomposition can be much greater than rank of the tensor, during search tend to use sota_rank for upper limit of rank.
 - Use **multiple initializations** to improve exploration.
-- Develop **heuristics** for stronger initial guesses.
+- Develop **heuristics** for stronger initial guesses of perturbations for further optimization or sampling.
 - Propose new methods for new factor guesses.
 - You can propose some greedy heuristics for finding decomposition. 
 - You can incrementally increase steps (computation time) if it can allow to obtain better decomposition
