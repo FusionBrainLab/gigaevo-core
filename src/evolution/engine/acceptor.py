@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from src.programs.program import Program
 
 from src.programs.program_state import ProgramState
+from src.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
 
 __all__ = [
     "ProgramEvolutionAcceptor",
@@ -122,3 +123,17 @@ class RequiredBehaviorKeysAcceptor(ProgramEvolutionAcceptor):
             f"(total metrics: {len(program.metrics)})"
         )
         return True
+
+class MutationContextAndBehaviorKeysAcceptor(RequiredBehaviorKeysAcceptor):
+    """Acceptor that validates programs have a mutation context and all required behavior keys."""
+    
+    def is_accepted(self, program: Program) -> bool:
+        """Check if program has a mutation context and all required behavior keys.
+        
+        Args:
+            program: The program to validate
+            
+        Returns:
+            True if the program has a mutation context and all required behavior keys
+        """
+        return super().is_accepted(program) and program.get_metadata(MUTATION_CONTEXT_METADATA_KEY) is not None

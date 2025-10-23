@@ -14,15 +14,11 @@ from src.programs.stages.execution import (
     RunConstantPythonCode,
 )
 from src.programs.stages.ancestry_selector import AncestrySelector
-from src.programs.stages.insights import (
-    GenerateLLMInsightsStage,
-    InsightsConfig,
-)
-from src.programs.stages.insights_lineage import (
-    GenerateLineageInsightsStage,
-    LineageInsightsConfig,
-)
+from src.programs.stages.collector import DescendantCollector
+from src.programs.stages.insights import create_insights_stage
+from src.programs.stages.insights_lineage import create_lineage_stage
 from src.programs.stages.metrics import EnsureMetricsStage
+from src.programs.stages.mutation_context import MutationContextStage
 from src.programs.stages.validation import ValidateCodeStage
 from src.problems.context import ProblemContext
 from src.problems.layout import ProblemLayout
@@ -183,37 +179,52 @@ class DefaultPipelineBuilder(PipelineBuilder):
         # Insights stages
         self.add_stage(
             "GenerateLLMInsightsStage",
-            lambda: GenerateLLMInsightsStage(
-                config=InsightsConfig(
-                    llm_wrapper=llm_wrapper["insights"],
-                    evolutionary_task_description=task_description,
-                    max_insights=8,
-                    output_format="text",
-                    metrics_context=metrics_context,
-                    metrics_formatter=metrics_formatter,
-                    metadata_key="insights",
-                ),
+            lambda: create_insights_stage(
+                llm=llm_wrapper["insights"],
+                task_description=task_description,
+                metrics_context=metrics_context,
+                max_insights=8,
                 timeout=1200.0,
+                stage_name="GenerateLLMInsights",
             ),
         )
 
         self.add_stage(
             "GenerateLineageInsightsStage",
-            lambda: GenerateLineageInsightsStage(
-                config=LineageInsightsConfig(
-                    llm_wrapper=llm_wrapper["lineage"],
-                    metrics_context=metrics_context,
-                    metrics_formatter=metrics_formatter,
-                    task_description=task_description,
-                    ancestry_selector=AncestrySelector(
-                        storage=storage,
-                        metrics_context=metrics_context,
-                        strategy="best_fitness",
-                        max_parents=1,
-                    ),
-                ),
+            lambda: create_lineage_stage(
+                llm=llm_wrapper["lineage"],
+                task_description=task_description,
+                metrics_context=metrics_context,
                 storage=storage,
+                ancestry_selector=AncestrySelector(
+                    storage=storage,
+                    metrics_context=metrics_context,
+                    strategy="best_fitness",
+                    max_parents=2,
+                ),
                 timeout=1200.0,
+                stage_name="GenerateLineageInsights",
+            ),
+        )
+
+        # Collector stage: aggregate lineage analyses from descendant programs
+        self.add_stage(
+            "CollectDescendantLineagesStage",
+            lambda: DescendantCollector(
+                storage=storage,
+                source_stage_name="GenerateLineageInsightsStage",
+                stage_name="CollectDescendantLineages",
+                timeout=60.0,
+            ),
+        )
+
+        self.add_stage(
+            "PrepareMutationContextStage",
+            lambda: MutationContextStage(
+                storage=storage,
+                metrics_context=metrics_context,
+                stage_name="PrepareMutationContext",
+                timeout=30.0,
             ),
         )
 
@@ -228,9 +239,12 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
     def _contribute_default_edges(self) -> None:
-        # Add semantic data flow edges for better data flow clarity
         self.add_data_flow_edge("RunProgramCodeWithOptionalProducedData", "ValidatorCodeExecutor", "program_output")
         self.add_data_flow_edge("ValidatorCodeExecutor", "EnsureMetricsStage", "validation_result")
+        self.add_data_flow_edge("EnsureMetricsStage", "PrepareMutationContextStage", "metrics")
+        self.add_data_flow_edge("GenerateLLMInsightsStage", "PrepareMutationContextStage", "insights")
+        self.add_data_flow_edge("GenerateLineageInsightsStage", "PrepareMutationContextStage", "lineage_insights")
+        self.add_data_flow_edge("CollectDescendantLineagesStage", "PrepareMutationContextStage", "descendant_lineages")
 
     def _contribute_default_deps(self) -> None:
         self._deps = {
@@ -242,6 +256,9 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ],
             "GenerateLineageInsightsStage": [
                 ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+            ],
+            "CollectDescendantLineagesStage": [
+                ExecutionOrderDependency.always_after("GenerateLineageInsightsStage"),
             ],
         }
 

@@ -12,7 +12,6 @@ from src.programs.stages.guard import stage_guard
 if TYPE_CHECKING:
     from src.programs.program import Program
 
-
 class Stage:
     """Base class for DAG stages with uniform timeout/error handling.
 
@@ -34,9 +33,24 @@ class Stage:
 
         logger.debug("[{stage}] init timeout={t:.2f}s", stage=self.stage_name, t=self.timeout)
 
+    @property
+    def cacheable(self) -> bool:
+        """Whether this stage's outputs can be cached and reused.
+        
+        Cacheable stages (True): Expensive operations like LLM insights
+        Non-cacheable stages (False): Context that depends on evolving data (lineage descendants)
+        
+        Returns:
+            True if outputs can be cached, False to recompute on every reprocessing
+        """
+        return True
+
     async def run(self, program: "Program") -> ProgramStageResult:
-        """Execute stage via the shared stage_guard wrapper."""
-        self._ensure_mandatory_inputs_present()
+        """Execute stage with caching support."""
+        self._ensure_mandatory_inputs_present()        
+        logger.info(
+            f"[{self.stage_name}] Executing for {program.id[:8]} "
+        )
         return await stage_guard(self, program)
 
     async def _execute_stage(
@@ -80,5 +94,3 @@ class Stage:
                 f"Available: {list(self._named_inputs.keys())}. "
                 f"Optional: {self.__class__.optional_inputs()}"
             )
-
-

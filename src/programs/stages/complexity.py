@@ -30,21 +30,11 @@ class GetCodeLengthStage(WorkerPoolStage):
         logger.debug(
             f"[{self.stage_name}] Program {program.id}: Computing complexity metrics"
         )
-        try:
-            return build_stage_result(
-                status=StageState.COMPLETED,
-                started_at=started_at,
-                output={"code_length": len(program.code)},
-            )
-
-        except Exception as e:
-            raise StageError(
-                f"Code length computation failed: {e}",
-                stage_name=self.stage_name,
-                stage_type="analysis",
-                cause=e,
-            )
-
+        return build_stage_result(
+            status=StageState.COMPLETED,
+            started_at=started_at,
+            output={"code_length": len(program.code)},
+        )
 
 class NumericalComplexityVisitor(ast.NodeVisitor):
     """Enhanced AST visitor for comprehensive complexity analysis."""
@@ -228,24 +218,15 @@ class ComputeComplexityStage(WorkerPoolStage):
             f"[{self.stage_name}] Program {program.id}: Computing complexity metrics"
         )
 
-        try:
-            features = compute_numerical_complexity(program.code)
-            score = compute_complexity_score(features)
+        features = compute_numerical_complexity(program.code)
+        score = compute_complexity_score(features)
 
-            return build_stage_result(
-                status=StageState.COMPLETED,
-                started_at=started_at,
-                output={
-                    **features,
-                    "complexity_score": score,
-                    "negative_complexity_score": -score,
-                },
-            )
-
-        except Exception as e:  # pragma: no cover – unexpected
-            raise StageError(
-                f"Complexity computation failed: {e}",
-                stage_name=self.stage_name,
-                stage_type="analysis",
-                cause=e,
-            ) from e
+        return build_stage_result(
+            status=StageState.COMPLETED,
+            started_at=started_at,
+            output={
+                **features,
+                "complexity_score": score,
+                "negative_complexity_score": -score,
+            },
+        )

@@ -10,15 +10,17 @@ from datetime import datetime
 import json
 import os
 import re
-import random
 from typing import Callable, Optional
 
 import diffpatch
 from loguru import logger
 
 from src.evolution.mutation.base import MutationOperator, MutationSpec
+from src.evolution.mutation.context import MutationContext
 from src.exceptions import MutationError
-from src.llm.wrapper import LLMInterface
+from src.llm.agents.mutation import MutationAgent
+from src.llm.models import MultiModelRouter
+from src.llm.wrapper import LLMInterface  # Keep for type compatibility
 from src.programs.program import Program
 from src.programs.metrics.context import MetricsContext
 from src.programs.metrics.formatter import MetricsFormatter
@@ -132,43 +134,54 @@ def dump_prompt_and_response_txt(
 
 
 class LLMMutationOperator(MutationOperator):
+    """Mutation operator using LangGraph-based MutationAgent.
+    
+    This class maintains backward compatibility while using the new agent architecture.
+    All existing interfaces and logging are preserved.
+    """
+    
     def __init__(
         self,
         *,
-        llm_wrapper: LLMInterface,
+        llm_wrapper: LLMInterface | MultiModelRouter,
         metrics_context: MetricsContext,
         mutation_mode: str = "rewrite",
         fallback_to_rewrite: bool = True,
-        fetch_insights_fn: Callable[[Program], str] = lambda x: x.metadata.get(
-            "insights", "No insights available."
-        ),
-        fetch_lineage_insights_fn: Callable[
-            [Program], str
-        ] = lambda x: x.metadata.get(
-            "lineage_insights", "No lineage insights available."
-        ),
-        user_prompt_templates: list[str],
-        user_prompt_template_weights_factory: Callable[[list[Program]], list[float]],
+        context_key: str = "mutation_context",
+        user_prompt_template: str,
         system_prompt_template: str,
         task_definition: str = "The goal is to numerically approximate solutions to complex mathematical problems.",
         task_hints: str = "Prioritize numerical stability, convergence speed, and algorithmic originality.",
-        metrics_formatter: Optional[MetricsFormatter] = None,
     ):
+        # Store configuration for compatibility and logging
         self.llm_wrapper = llm_wrapper
         self.mutation_mode = mutation_mode
         self.fallback_to_rewrite = fallback_to_rewrite
-        self.fetch_insights_fn = fetch_insights_fn
-        self.fetch_lineage_insights_fn = fetch_lineage_insights_fn
+        self.context_key = context_key
         self.metrics_context = metrics_context
-        self.metrics_formatter = metrics_formatter or MetricsFormatter(metrics_context)
-        metrics_description = self.metrics_formatter.format_metrics_description()
+        
+        # Format system prompt
+        metrics_formatter = MetricsFormatter(metrics_context)
+        metrics_description = metrics_formatter.format_metrics_description()
         self.system_prompt = system_prompt_template.format(
             task_definition=task_definition,
             task_hints=task_hints,
             metrics_description=metrics_description,
         )
-        self.user_prompt_templates = user_prompt_templates
-        self.user_prompt_template_weights_factory = user_prompt_template_weights_factory
+        self.user_prompt_template = user_prompt_template
+        
+        # Create internal MutationAgent
+        self.agent = MutationAgent(
+            llm=llm_wrapper,
+            mutation_mode=mutation_mode,
+            system_prompt=self.system_prompt,
+            user_prompt_template=user_prompt_template,
+        )
+        
+        logger.info(
+            f"[LLMMutationOperator] Initialized with mode: {mutation_mode} "
+            "(using LangGraph agent)"
+        )
 
     async def mutate_single(
         self, selected_parents: list[Program]
@@ -193,52 +206,56 @@ class LLMMutationOperator(MutationOperator):
                     "Diff-based mutation requires exactly 1 parent program"
                 )
 
-            prompt = self._build_prompt(selected_parents)
             logger.debug(
-                f"[LLMMutationOperator] Sending prompt (length: {len(prompt)} chars)"
+                f"[LLMMutationOperator] Running mutation agent for {len(selected_parents)} parents"
             )
-
-            llm_response = await self.llm_wrapper.generate_async(
-                prompt, system_prompt=self.system_prompt
+            
+            # Run agent graph
+            result = await self.agent.arun(
+                input=selected_parents,
+                metadata={"mutation_mode": self.mutation_mode}
             )
-
-            if self.mutation_mode == "diff":
-                parent_code = selected_parents[0].code
-                try:
-                    patched_code = self._apply_diff_and_extract(
-                        parent_code, llm_response
-                    )
-                    final_code = patched_code
-                except Exception as diff_error:
-                    logger.warning(
-                        f"[LLMMutationOperator] Failed to apply diff: {diff_error}"
-                    )
-                    raise MutationError(
-                        f"Diff application failed: {diff_error}"
-                    ) from diff_error
-            else:
-                final_code = self._extract_code_block(llm_response)
-
-            model_tag = self.llm_wrapper.model.replace("/", "_")
+            
+            # Extract results from agent output
+            if "code" not in result:
+                raise ValueError(f"Missing 'code' key in agent result. Available keys: {list(result.keys())}")
+            if "response" not in result:
+                raise ValueError(f"Missing 'response' key in agent result. Available keys: {list(result.keys())}")
+            
+            final_code: str = result["code"]
+            llm_response_text: str = result["response"]
+            
+            # Check if code extraction failed
+            if not final_code or not final_code.strip():
+                error_msg = result.get("error", "Unknown parsing error")
+                raise ValueError(f"Failed to extract code from LLM response: {error_msg}")
+            
+            # Get model name and create label
+            model_tag = getattr(self.llm_wrapper, "model", "unknown").replace("/", "_")
             parent_ids = "_".join([p.id[:8] for p in selected_parents])
             label = f"llm_{self.mutation_mode}_{model_tag}_{parent_ids}"
 
-            # DUMP LLM INTERACTION FOR DEBUGGING
+            # DUMP LLM INTERACTION FOR DEBUGGING (preserve existing logging)
+            # We need to get the prompts from the agent's last state
+            # For now, reconstruct the prompt for logging (backward compatibility)
+            prompt = self._build_prompt(selected_parents)
+            
             dump_llm_interaction(
-                prompt, self.system_prompt, llm_response, final_code, label
+                prompt, self.system_prompt, llm_response_text, final_code, label
             )
             dump_prompt_and_response_txt(
-                prompt, self.system_prompt, llm_response, final_code, label
+                prompt, self.system_prompt, llm_response_text, final_code, label
             )
             log_mutation_summary(
-                label, len(prompt), len(llm_response), len(final_code), True
+                label, len(prompt), len(llm_response_text), len(final_code), True
             )
 
             mutation_spec = MutationSpec(
                 code=final_code.strip(), parents=selected_parents, name=label
             )
             logger.debug(
-                f"[LLMMutationOperator] Generated mutation from {len(selected_parents)} parents"
+                f"[LLMMutationOperator] Generated mutation from {len(selected_parents)} parents "
+                "(via LangGraph agent)"
             )
 
             return mutation_spec
@@ -246,32 +263,36 @@ class LLMMutationOperator(MutationOperator):
         except Exception as e:
             logger.error(f"[LLMMutationOperator] Mutation failed: {e}")
             # Log failed mutation attempt
-            failure_label = f"failed_mutation_{parent_ids if 'parent_ids' in locals() else 'unknown'}"
+            parent_ids = "_".join([p.id[:8] for p in selected_parents]) if selected_parents else "unknown"
+            failure_label = f"failed_mutation_{parent_ids}"
             log_mutation_summary(failure_label, 0, 0, 0, False)
             raise MutationError(f"LLM-based mutation failed: {e}") from e
 
     def _build_prompt(self, parents: list[Program]) -> str:
+        """Build prompt for logging (uses MutationContext if available)."""
         parent_blocks = []
         for i, p in enumerate(parents):
-            block = f"""=== Parent {i+1} ===
+            context: str = p.get_metadata(self.context_key)
+            logger.debug("[LLMMutationOperator] _build_prompt() Context: {}", context)
+            if context:
+                block = f"""=== Parent {i+1} ===
 ```python
 {p.code}
 ```
 
-=== Metrics ===
-{self.metrics_formatter.format_metrics_block(p.metrics)}
-
-=== Insights ===
-{self.fetch_insights_fn(p)}
-
-=== Lineage Insights ===
-{self.fetch_lineage_insights_fn(p)}
+{context}
 """
+            else:
+                block = f"""=== Parent {i+1} ===
+```python
+{p.code}
+```
+"""
+
             parent_blocks.append(block)
-        weights = self.user_prompt_template_weights_factory(parents)
-        assert len(weights) == len(self.user_prompt_templates), "Number of weights must match number of templates"
-        template = random.choices(self.user_prompt_templates, weights=weights, k=1)[0]
-        return template.format(
+        
+        # Use the single user prompt template
+        return self.user_prompt_template.format(
             count=len(parents), parent_blocks="\n\n".join(parent_blocks)
         )
 

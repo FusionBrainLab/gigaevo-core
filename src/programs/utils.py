@@ -43,7 +43,10 @@ def format_error_for_llm(
         return error
 
     if isinstance(error, Exception):
-        error_message = str(error)
+        try:
+            error_message = str(error)
+        except Exception as str_error:
+            error_message = f"Exception occurred (could not convert to string: {str_error})"
         error_type = type(error).__name__
 
         # Get traceback if available

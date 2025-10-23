@@ -150,7 +150,9 @@ class DagScheduler:
         if capacity <= 0:
             return
 
-        for program in fresh:
+        # Process fresh programs (includes both new and refreshing programs)
+        programs_to_process = fresh
+        for program in programs_to_process:
             if capacity <= 0:
                 break
             if program.id in self._active:
@@ -159,7 +161,9 @@ class DagScheduler:
             try:
                 dag: DAG = self._dag_blueprint.build(self._state_manager)
             except Exception as e:
+                import traceback
                 logger.error("[DagScheduler] DAG build failed for {}: {}", program.id, e)
+                logger.error("[DagScheduler] Traceback:\n{}", traceback.format_exc())
                 try:
                     await self._state_manager.set_program_state(program, ProgramState.DISCARDED)
                     await self._metrics.increment_dag_errors()
@@ -187,6 +191,7 @@ class DagScheduler:
 
     async def _execute_dag(self, dag: DAG, program: Program) -> None:
         ok = True
+        
         try:
             await dag.run(program)
         except Exception as exc:

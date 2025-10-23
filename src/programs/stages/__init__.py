@@ -6,6 +6,7 @@ Importing this module ensures all stages are registered with the StageRegistry.
 
 # Import all stage modules to ensure decorators are executed
 from src.programs.stages import base
+from src.programs.stages import collector
 from src.programs.stages import complexity
 from src.programs.stages import execution
 from src.programs.stages import insights
@@ -24,9 +25,10 @@ from src.programs.stages.execution import (
 )
 from src.programs.stages.metrics import EnsureMetricsStage, NormalizeMetricsStage
 from src.programs.stages.validation import ValidateCodeStage
-from src.programs.stages.insights import GenerateLLMInsightsStage
-from src.programs.stages.insights_lineage import GenerateLineageInsightsStage
-from src.programs.stages.llm_score import GenerateLLMScoreStage
+from src.programs.stages.insights import create_insights_stage
+from src.programs.stages.insights_lineage import create_lineage_stage
+from src.programs.stages.llm_score import ScoringStage
+from src.programs.stages.collector import AncestorCollector, DescendantCollector
 # WorkerPoolStage is a base class, not exported for direct use
 from src.programs.stages.complexity import GetCodeLengthStage, ComputeComplexityStage
 from src.programs.stages.json_processing import MergeDictStage, ParseJSONStage, StringifyJSONStage
@@ -35,6 +37,7 @@ __all__ = [
     # Base classes
     "base",
     # Stage modules
+    "collector",
     "complexity",
     "execution", 
     "insights",
@@ -51,9 +54,11 @@ __all__ = [
     "EnsureMetricsStage",
     "NormalizeMetricsStage",
     "ValidateCodeStage",
-    "GenerateLLMInsightsStage",
-    "GenerateLineageInsightsStage",
-    "GenerateLLMScoreStage",
+    "create_insights_stage",
+    "create_lineage_stage",
+    "ScoringStage",
+    "AncestorCollector",
+    "DescendantCollector",
     "GetCodeLengthStage",
     "ComputeComplexityStage",
     "MergeDictStage",

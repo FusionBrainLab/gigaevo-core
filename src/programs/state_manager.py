@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
-
+from loguru import logger
 from src.database.program_storage import ProgramStorage
 from src.programs.program import Program
 from src.programs.program_state import ProgramState
@@ -49,13 +49,25 @@ class ProgramStateManager:
 
     async def set_program_state(self, program: Program, new_state: ProgramState) -> None:
         async with self._lock_for(program.id):
+            logger.debug(
+                f"[ProgramStateManager] Setting program {program.id[:8]} state from {program.state} to {new_state}"
+            )
+            
             if program.state == new_state:
+                logger.debug(f"[ProgramStateManager] Program {program.id[:8]} already in state {new_state}, skipping")
                 return
 
             old_state = program.state  # keep a copy
             program.state = new_state
+            logger.debug(f"[ProgramStateManager] Updated program {program.id[:8]} state to {new_state}")
+            
             await self.storage.update(program)
+            logger.debug(f"[ProgramStateManager] Updated program {program.id[:8]} in storage")
+            
             old = old_state.value if old_state else None
             await self.storage.transition_status(program.id, old, new_state.value)
+            logger.debug(f"[ProgramStateManager] Transitioned {program.id[:8]} state {old_state} -> {new_state}")
+            
             await self.storage.publish_status_event(new_state.value, program.id)
+            logger.debug(f"[ProgramStateManager] Published status event for program {program.id[:8]}")
 

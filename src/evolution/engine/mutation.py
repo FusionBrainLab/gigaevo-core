@@ -69,10 +69,23 @@ async def generate_mutations(
                     logger.debug(f"[mutation] Task {task_id}: Failed to generate mutation")
                     return False
 
-                # Immediately persist the mutation
+                # Create program from mutation spec
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
+                
+
                 await storage.add(program)
+                for parent in parents:
+                    # Get fresh parent data from storage to avoid race conditions
+                    fresh_parent = await storage.get(parent.id)
+                    if fresh_parent:
+                        # Add child to fresh parent lineage
+                        fresh_parent.lineage.add_child(program.id)
+                        await storage.update(fresh_parent)
+                        logger.debug(f"[mutation] Task {task_id}: Updated parent {parent.id[:8]} lineage with child {program.id[:8]}")
+                    else:
+                        logger.warning(f"[mutation] Task {task_id}: Parent {parent.id[:8]} not found in storage")
+
 
                 logger.debug(f"[mutation] Task {task_id}: Persisted mutation: {mutation_spec.name}")
                 return True

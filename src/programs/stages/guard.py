@@ -19,7 +19,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 async def stage_guard(stage: "Stage", program: "Program") -> ProgramStageResult:
-    """Run *stage* with timeout and consistent error mapping."""
     started_at = datetime.now(timezone.utc)
     t0 = time.monotonic()
 

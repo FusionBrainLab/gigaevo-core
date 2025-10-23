@@ -33,7 +33,7 @@ class AncestrySelector:
         self.max_parents = max(1, int(max_parents))
 
     async def select(self, program) -> List[str]:
-        if not program.lineage or not program.lineage.parents:
+        if not program.lineage.parents:
             return []
 
         parents = list(program.lineage.parents)
@@ -56,8 +56,7 @@ class AncestrySelector:
             scored: list[tuple[float, str]] = []
             for pid in parents:
                 p = await self.storage.get(pid)
-                raw = p.metrics.get(fitness_key) if p and p.metrics else None
-                val = float(raw) if raw is not None else worst
+                val = p.metrics[fitness_key]
                 scored.append((val, pid))
 
             scored.sort(key=lambda t: t[0], reverse=higher_better)

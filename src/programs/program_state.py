@@ -20,6 +20,12 @@ class ProgramState(str, Enum):
     # Program explicitly discarded – excluded from any further processing
     DISCARDED = "discarded"
 
+FINAL_STATES = {
+    ProgramState.DAG_PROCESSING_COMPLETED,
+    ProgramState.EVOLVING,
+    ProgramState.DISCARDED,
+}
+
 
 # State hierarchy for merging logic (higher values = more advanced states)
 # This defines the natural progression order of program states
@@ -28,7 +34,7 @@ STATE_HIERARCHY: Dict[ProgramState, int] = {
     ProgramState.DAG_PROCESSING_STARTED: 1,
     ProgramState.DAG_PROCESSING_COMPLETED: 2,
     ProgramState.EVOLVING: 3,
-    ProgramState.DISCARDED: 4,  # Terminal state - highest priority
+    ProgramState.DISCARDED: 99,  # Terminal state - highest priority
 }
 
 
@@ -73,14 +79,24 @@ def merge_states(
     current_state: ProgramState, incoming_state: ProgramState
 ) -> ProgramState:
     """Merge two program states, taking the more advanced one.
+    
+    Special case: Allow bidirectional transitions between EVOLVING and FRESH
+    for refresh purposes (EVOLVING -> FRESH for refresh, FRESH -> EVOLVING after refresh).
 
     Args:
         current_state: The current program state
         incoming_state: The incoming program state
 
     Returns:
-        The more advanced state according to the hierarchy
+        The more advanced state according to the hierarchy, or incoming state
+        for EVOLVING <-> FRESH transitions
     """
+    # Special case: Allow bidirectional EVOLVING <-> FRESH transitions for refresh
+    if (current_state == ProgramState.EVOLVING and incoming_state == ProgramState.FRESH) or \
+       (current_state == ProgramState.FRESH and incoming_state == ProgramState.EVOLVING):
+        return incoming_state
+    
+    # Normal hierarchy-based merging for all other cases
     if get_state_priority(incoming_state) > get_state_priority(current_state):
         return incoming_state
     else:

@@ -18,7 +18,7 @@ from itertools import islice
 from loguru import logger
 from pydantic import AnyUrl, BaseModel, Field
 from redis import asyncio as aioredis
-
+from redis.exceptions import WatchError
 from src.database.merge_strategies import resolve_merge_strategy
 from src.database.program_storage import ProgramStorage
 from src.exceptions import StorageError
@@ -75,6 +75,9 @@ class RedisProgramStorage(ProgramStorage):
 
     def _k_status(self, status: str) -> str:
         return self.config.status_set_tpl.format(prefix=self.config.key_prefix, status=status)
+
+    def _k_ts(self) -> str:
+        return f"{self.config.key_prefix}:ts"
 
     async def _conn(self) -> aioredis.Redis:
         if self._redis is not None:
@@ -139,7 +142,9 @@ class RedisProgramStorage(ProgramStorage):
             key = self._k_program(program.id)
             status = program.state.value
             pipe = r.pipeline(transaction=False)
-            pipe.set(key, _dumps(program.to_dict()))
+            counter = await r.incr(self._k_ts())
+            new_program = program.model_copy(update={"atomic_counter": counter}, deep=True)
+            pipe.set(key, _dumps(new_program.to_dict()))
             pipe.sadd(self._k_status(status), program.id)
             pipe.xadd(self._k_stream(), {"id": program.id, "status": status, "event": "created"},
                     maxlen=10_000, approximate=True)
@@ -149,10 +154,22 @@ class RedisProgramStorage(ProgramStorage):
     async def update(self, program: Program):
         async def _update(r: aioredis.Redis):
             key = self._k_program(program.id)
-            existing_raw = await r.get(key)
-            existing = self._safe_deserialize(existing_raw, "update/get") if existing_raw else None
-            merged = self._merge(existing, program)
-            await r.set(key, _dumps(merged.to_dict()))
+            while True:
+                try:
+                    async with r.pipeline(transaction=True) as pipe:
+                        await pipe.watch(key)
+                        existing_raw = await pipe.get(key)
+                        existing = self._safe_deserialize(existing_raw, "update/get") if existing_raw else None
+                        counter = await r.incr(self._k_ts())
+                        new_program = program.model_copy(update={"atomic_counter": int(counter)}, deep=True)
+                        merged = self._merge(existing, new_program)
+                        merged = merged.model_copy(update={"atomic_counter": int(counter)}, deep=True)
+                        pipe.multi()  # enter transaction
+                        pipe.set(key, _dumps(merged.to_dict()))
+                        await pipe.execute()
+                        break
+                except WatchError:
+                    continue
         await self._with_redis("update", _update)
 
     async def get(self, program_id: str) -> Program | None:
@@ -208,7 +225,7 @@ class RedisProgramStorage(ProgramStorage):
             keys = [self._k_program(pid) for pid in ids]
             programs = await self._mget_by_keys(r, keys, f"get_all_by_status:{status}")
             # If the set drifted, keep only exact matches.
-            return [p for p in programs if p.state == status]
+            return [p for p in programs if p.state.value == status]
 
         return await self._with_redis("get_all_by_status", _by_status)
 
@@ -261,7 +278,3 @@ class RedisProgramStorage(ProgramStorage):
         if self._redis is not None:
             await self._redis.close()
             self._redis = None
-
-    
-
-

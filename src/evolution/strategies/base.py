@@ -149,6 +149,21 @@ class EvolutionStrategy(ABC):
         """
         ...
 
+    async def remove_program_by_id(self, program_id: str) -> bool:
+        """
+        Remove a program from the strategy by ID.
+        
+        Default implementation raises NotImplementedError.
+        Override this method if strategy supports program removal.
+
+        Args:
+            program_id: ID of the program to remove
+            
+        Returns:
+            True if program was removed, False if not found
+        """
+        raise NotImplementedError("Strategy does not support program removal")
+
     # Optional capabilities - strategies can override these for enhanced functionality
 
     async def get_metrics(self) -> Optional[StrategyMetrics]:

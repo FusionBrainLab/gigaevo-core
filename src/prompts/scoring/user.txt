@@ -1,0 +1,20 @@
+Evaluate the following Python program based on this trait:
+
+🧠 Trait: {trait_description}
+
+Assign a score between 0.0 and {max_score} that quantifies the program's quality in this trait.
+
+Program:
+```python
+{code}
+```
+
+Return only JSON format:
+```json
+{{"score": <float>}}
+```
+
+No explanation or additional text - just the JSON score.
+
+
+

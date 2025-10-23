@@ -47,4 +47,18 @@ class EngineMetrics(BaseModel):
             "avg_novel_programs": self.avg_novel_programs,
         }
 
+    def to_hashable_dict(self) -> dict[str, int | float]:
+        """Create a hashable representation excluding timestamp for comparison purposes."""
+        return {
+            "total_generations": self.total_generations,
+            "programs_processed": self.programs_processed,
+            "mutations_created": self.mutations_created,
+            "errors_encountered": self.errors_encountered,
+            "avg_novel_programs": self.avg_novel_programs,
+        }
+
+    def __hash__(self) -> int:
+        """Hash based on meaningful metrics only (excludes timestamp)."""
+        return hash(tuple(sorted(self.to_hashable_dict().items())))
+
     model_config = {"arbitrary_types_allowed": True, "extra": "allow"}

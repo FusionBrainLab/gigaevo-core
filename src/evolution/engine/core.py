@@ -42,6 +42,9 @@ class EvolutionEngine:
         self._running = False
         self._paused = False
         self._consecutive_errors = 0
+        self._last_pending_dags_state = None
+        self._last_pending_dags_counts = None  # Track pending DAG counts to avoid spam logging
+        self._last_logged_metrics_hash = None  # Track last logged metrics hash to avoid spam logging
 
         self.metrics = EngineMetrics()
         self.state = ProgramStateManager(self.storage)
@@ -100,31 +103,65 @@ class EvolutionEngine:
             raise EvolutionError(f"Evolution step failed: {exc}") from exc
 
     async def _step(self) -> None:
-        if await self._has_pending_dags():
-            logger.debug("[EvolutionEngine] Skip: pending DAGs")
+        # Stage 1: Wait for all programs to be processed
+        has_pending = await self._has_pending_dags()
+        if has_pending:
+            if not self._last_pending_dags_state:
+                logger.debug("[EvolutionEngine] Skip: pending DAGs")
+            self._last_pending_dags_state = True
+            return
+        else:
+            self._last_pending_dags_state = False
+        
+        logger.debug("[EvolutionEngine] Stage 1: No pending DAGs")
+
+        # Stage 2: Ingest completed programs
+        completed = await self.storage.get_all_by_status(ProgramState.DAG_PROCESSING_COMPLETED.value)
+        newly_ingested = False
+        if completed:
+            logger.debug(f"[EvolutionEngine] Stage 2: Ingesting {len(completed)} completed programs")
+            newly_ingested = await self._ingest_completed(completed)
+            # No DAG_PROCESSING_COMPLETED programs after this step
+        else:
+            logger.debug("[EvolutionEngine] Stage 2: No completed programs to ingest")
+
+        # Stage 3: Refresh all evolving programs (if any new programs were ingested)
+        if newly_ingested:
+            logger.debug("[EvolutionEngine] Stage 3: Refreshing all evolving programs")
+            await self._reprocess()
+            # After refresh, return to wait for DAGs to complete
             return
 
-        completed = await self.storage.get_all_by_status(ProgramState.DAG_PROCESSING_COMPLETED.value)
-        if completed:
-            await self._ingest_completed(completed)
-
+        # Stage 4: Mutate (only when no pending DAGs and no refresh needed)
+        logger.debug("[EvolutionEngine] Stage 4: Selecting elites and mutating")
         elites = await self._select_elites()
         if elites:
             await self._mutate(elites)
 
         self.metrics.total_generations += 1
 
-    async def _ingest_completed(self, programs: list[Program]) -> None:
-        """Validate and hand over completed programs to the strategy (state via StateManager only)."""
+    async def _ingest_completed(self, programs: list[Program]) -> bool:
+        """Validate and hand over completed programs to the strategy (state via StateManager only).
+        
+        For programs that were refreshing (previously EVOLVING, check if they're in the strategy),
+        restore them to EVOLVING. For new programs, try to add them to evolution.
+        
+        Returns:
+            True if any programs were added to EVOLVING state, False otherwise.
+        """
         logger.info("[EvolutionEngine] Ingest {} program(s)", len(programs))
 
         added = 0
+        restored = 0
         rej_valid = 0
         rej_strategy = 0
 
         # We fan out state changes as tasks; the lock lives inside ProgramStateManager.
         state_tasks: list[asyncio.Task] = []
 
+        # Get all program IDs currently in evolution to check for refreshing programs
+        evolving_program_ids = {p.id for p in await self.strategy.get_program_ids()}
+        
         for prog in programs:
             try:
                 accepted = await asyncio.to_thread(self.config.program_acceptor.is_accepted, prog)
@@ -133,7 +170,12 @@ class EvolutionEngine:
                     state_tasks.append(asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED)))
                     continue
 
-                if await self.strategy.add(prog):
+                is_already_evolving = prog.id in evolving_program_ids
+                
+                if is_already_evolving:
+                    restored += 1
+                    state_tasks.append(asyncio.create_task(self._set_state(prog, ProgramState.EVOLVING)))
+                elif await self.strategy.add(prog):
                     added += 1
                     state_tasks.append(asyncio.create_task(self._set_state(prog, ProgramState.EVOLVING)))
                 else:
@@ -151,9 +193,11 @@ class EvolutionEngine:
         self.metrics.programs_processed += added
         self.metrics.novel_programs_per_generation.append(added)
         logger.info(
-            "[EvolutionEngine] Ingest done | added={}, rejected_validation={}, rejected_strategy={}",
-            added, rej_valid, rej_strategy
+            "[EvolutionEngine] Ingest done | added={}, restored={}, rejected_validation={}, rejected_strategy={}",
+            added, restored, rej_valid, rej_strategy
         )
+        
+        return added > 0
 
     async def _select_elites(self) -> list[Program]:
         try:
@@ -163,6 +207,33 @@ class EvolutionEngine:
         except Exception as exc:
             logger.error("[EvolutionEngine] Elite selection error: {}", exc)
             return []
+
+    async def _reprocess(self) -> None:
+        """Reprocess ALL evolving programs to refresh non-cacheable stages.
+        
+        After new programs finish processing, get all programs in EVOLVING state
+        and submit them for reprocessing to refresh dynamic context like lineage.
+        Marks them as FRESH so they go through DAG again.
+        """
+
+        programs_to_refresh = await self.strategy.get_program_ids()
+        
+        logger.debug(f"[EvolutionEngine] Found {len(programs_to_refresh)} programs in EVOLVING state to refresh")
+        
+        reprocessed_count = 0
+        state_tasks: list[asyncio.Task] = []
+        
+        for program in programs_to_refresh:
+            state_tasks.append(asyncio.create_task(self._set_state(program, ProgramState.FRESH)))
+            reprocessed_count += 1
+        
+        if state_tasks:
+            await asyncio.gather(*state_tasks, return_exceptions=True)
+            
+        logger.info(
+            "[EvolutionEngine] Submitted {} programs for refresh",
+            reprocessed_count,
+        )
 
     async def _mutate(self, elites: list[Program]) -> None:
         logger.debug("[EvolutionEngine] Mutate from {} elite(s)", len(elites))
@@ -185,10 +256,18 @@ class EvolutionEngine:
         proc_programs = await self.storage.get_all_by_status(ProgramState.DAG_PROCESSING_STARTED.value)
         fresh = len(fresh_programs)
         proc = len(proc_programs)
+        
         if fresh or proc:
-            logger.debug("[EvolutionEngine] Pending DAGs: fresh={}, processing={}", fresh, proc)
+            current_counts = (fresh, proc)
+            # Only log when the counts change to avoid spam
+            if self._last_pending_dags_counts != current_counts:
+                logger.debug("[EvolutionEngine] Pending DAGs: fresh={}, processing={}", fresh, proc)
+                self._last_pending_dags_counts = current_counts
             return True
-        return False
+        else:
+            # Reset counts tracking when no pending DAGs
+            self._last_pending_dags_counts = None
+            return False
 
     async def _set_state(self, program: Program, state: ProgramState) -> None:
         """Single write path for program state updates."""
@@ -208,9 +287,14 @@ class EvolutionEngine:
         logger.error("[EvolutionEngine] Error #{}: {}", self._consecutive_errors, msg)
 
     async def _log_metrics(self) -> None:
-        m = self.metrics.to_dict()
-        metrics_str = " | ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}" for k, v in m.items())
-        logger.info(f"[EvolutionEngine] | {metrics_str}")
+        current_metrics_hash = hash(self.metrics)
+        
+        # Only log when metrics actually change to avoid spam
+        if self._last_logged_metrics_hash != current_metrics_hash:
+            m = self.metrics.to_dict()
+            metrics_str = " | ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}" for k, v in m.items())
+            logger.info(f"[EvolutionEngine] | {metrics_str}")
+            self._last_logged_metrics_hash = current_metrics_hash
 
     def stop(self) -> None:
         """Request the main loop to exit."""

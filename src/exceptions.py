@@ -91,21 +91,3 @@ class ResourceError(MetaEvolveError):
 class MutationError(MetaEvolveError):
     """Mutation failures."""
 
-
-# Quick validation helpers
-def ensure_not_none(value: T, name: str) -> T:
-    if value is None:
-        raise ValidationError(f"{name} cannot be None")
-    return value
-
-
-def ensure_positive(value: float, name: str) -> float:
-    if value <= 0:
-        raise ValidationError(f"{name} must be positive, got {value}")
-    return value
-
-
-def ensure_non_negative(value: float, name: str) -> float:
-    if value < 0:
-        raise ValidationError(f"{name} must be non-negative, got {value}")
-    return value

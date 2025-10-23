@@ -280,54 +280,33 @@ async def create_evolution_strategy(
     return strategy
 
 
-async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
-    """Setup the LLM wrapper for code generation and insights (post-refactor)."""
+async def setup_llm_wrapper():
+    """Setup LangChain chat models (replaces old LLM wrapper setup)."""
 
     if not LLM_API_KEY:
         raise ValueError("OPENROUTER_API_KEY environment variable must be set")
 
-    # Updated for longer programs and better model alignment
-    settings_per_stage = {
-        "insights": {
+    from src.llm.models import create_multi_model_router
+
+    # Model configuration - same settings as before
+    model_configs = [
+        {
+            "model": "Qwen3-235B-A22B-Thinking-2507",
             "temperature": 0.6,
             "max_tokens": 81920,
             "top_p": 0.95,
             "top_k": 20,
-        },
-        "lineage": {
-            "temperature": 0.6,
-            "max_tokens": 81920,
-            "top_p": 0.95,
-            "top_k": 20,
-        },
-        "mutation": {
-            "temperature": 0.6,
-            "max_tokens": 81920,
-            "top_p": 0.95,
-            "top_k": 20,
-        },
+            "base_url": "http://localhost:8777/v1",
+            "request_timeout": 600.0,  # 10 minutes for thinking model
+        }
+    ]
+
+    # Create routers for each stage (same interface as before)
+    return {
+        "insights": create_multi_model_router(model_configs, [1.0], LLM_API_KEY),
+        "lineage": create_multi_model_router(model_configs, [1.0], LLM_API_KEY),
+        "mutation": create_multi_model_router(model_configs, [1.0], LLM_API_KEY),
     }
-
-    def build_wrapper_with_params(
-        params: dict[str, float],
-    ) -> MultiModelLLMWrapper:
-
-        return MultiModelLLMWrapper(
-            models=[
-                "Qwen3-235B-A22B-Thinking-2507",
-            ],
-            probabilities=[1.0],
-            api_key=LLM_API_KEY,
-            configs=[
-                LLMConfig(**params, api_endpoint="http://localhost:8777/v1"),
-            ],
-        )
-
-    res = {
-        stage: build_wrapper_with_params(params)
-        for stage, params in settings_per_stage.items()
-    }
-    return res
 
 
 def _resolve_redis_url(
@@ -433,9 +412,7 @@ async def run_evolution_experiment(
         llm_wrapper = await setup_llm_wrapper()
 
         logger.info("Creating DAG pipeline...")
-        metrics_formatter = MetricsFormatter(
-            metrics_context, use_range_normalization=False
-        )
+        metrics_formatter = MetricsFormatter(metrics_context)
 
         pctx = PipelineContext(
             problem_ctx=problem_ctx,
@@ -466,21 +443,11 @@ async def run_evolution_experiment(
         mutation_operator = LLMMutationOperator(
             llm_wrapper=llm_wrapper["mutation"],
             mutation_mode="rewrite",  # Start with rewrite for maximum change
-            fetch_insights_fn=lambda x: x.metadata.get(
-                "insights", "No insights available."
-            ),
-            fetch_lineage_insights_fn=lambda x: x.metadata.get(
-                "lineage_insights", "No lineage insights available."
-            ),
             task_definition=task_description,
             task_hints=task_hints,
             system_prompt_template=problem_ctx.mutation_system_prompt,
-            user_prompt_templates=[
-                problem_ctx.mutation_user_prompt
-            ],  # optionally use a list of templates with weights to be randomly selected
-            user_prompt_template_weights_factory=lambda x: [1.0],
+            user_prompt_template=problem_ctx.mutation_user_prompt,
             metrics_context=metrics_context,
-            metrics_formatter=metrics_formatter,
         )
         required_behavior_keys = set()
         for island in evolution_strategy.islands.values():

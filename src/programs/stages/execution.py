@@ -6,13 +6,12 @@ from pathlib import Path
 import pickle
 import resource
 import tempfile
-from typing import Any, List, Optional
+from typing import Any
 
 from loguru import logger
 
 from src.exceptions import (
     ProgramExecutionError,
-    StageError,
     ValidationError,
 )
 from src.programs.program import Program, ProgramStageResult, StageState
@@ -32,11 +31,11 @@ class PythonCodeExecutor(Stage):
     def __init__(
         self,
         function_name: str = "run_code",
-        python_path: Optional[List[Path]] = None,
-        code: Optional[str] = None,
+        python_path: list[Path] | None = None,
+        code: str | None = None,
         enable_sandboxing: bool = False,
         max_output_size: int = 1024 * 1024 * 64,
-        **kwargs,
+        **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self.function_name = function_name
@@ -51,7 +50,7 @@ class PythonCodeExecutor(Stage):
         program: Program,
         started_at: datetime,
         code_str: str,
-        argument: Optional[Any],
+        argument: Any | None,
     ) -> ProgramStageResult:
         logger.debug(
             f"[{self.stage_name}] Program {program.id}: Executing Python code"
@@ -224,7 +223,6 @@ class RunProgramCodeWithOptionalProducedData(PythonCodeExecutor):
             argument=arg,
         )
 
-    # Inherit sandboxing and resource limits from base
 
 
 class RunProgramCodeWithConstantData(PythonCodeExecutor):

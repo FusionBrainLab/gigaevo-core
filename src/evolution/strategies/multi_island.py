@@ -317,6 +317,27 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
         return total_size
 
+    async def remove_program_by_id(self, program_id: str) -> bool:
+        """Remove a program from the strategy by ID.
+        
+        Args:
+            program_id: ID of the program to remove
+            
+        Returns:
+            True if program was removed, False if not found
+        """
+        removed = False
+        for island in self.islands.values():
+            try:
+                if await island.archive_storage.remove_elite_by_id(program_id):
+                    removed = True
+                    logger.debug(f"Removed program {program_id} from island {island.config.island_id}")
+                    break  # Program should only be in one island
+            except Exception as e:
+                logger.warning(f"Error removing program {program_id} from island {island.config.island_id}: {e}")
+        
+        return removed
+
     async def get_program_ids(self) -> List[Program]:
         """Get all programs across all islands."""
         all_programs = []
