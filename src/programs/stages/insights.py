@@ -1,59 +1,52 @@
-"""Insights stage - clean wrapper using LangGraphStage.
-
-Usage:
-    >>> from src.programs.stages.insights import create_insights_stage
-    >>> stage = create_insights_stage(llm, task_description, metrics_context)
-"""
+# src/programs/stages/insights.py
+from __future__ import annotations
 
 from typing import Any
 
 from langchain_openai import ChatOpenAI
 
 from src.llm.agents.factories import create_insights_agent
+from src.llm.agents.insights import ProgramInsights
 from src.llm.models import MultiModelRouter
+from src.programs.core_types import StageIO, VoidInput
 from src.programs.metrics.context import MetricsContext
 from src.programs.stages.langgraph_stage import LangGraphStage
+from src.programs.stages.stage_registry import StageRegistry
 
 
-def create_insights_stage(
-    llm: ChatOpenAI | MultiModelRouter,
-    task_description: str,
-    metrics_context: MetricsContext,
-    max_insights: int = 7,
-    **kwargs: Any
-) -> LangGraphStage:
-    """Create a ready-to-use insights stage.
-    
-    Args:
-        llm: LangChain chat model or router
-        task_description: Description of the evolutionary task
-        metrics_context: Metrics context for formatting
-        max_insights: Maximum number of insights to generate
-        **kwargs: Additional arguments passed to LangGraphStage (e.g., timeout, stage_name)
-        
-    Returns:
-        Configured LangGraphStage wrapping InsightsAgent
-        
-    Example:
-        >>> stage = create_insights_stage(
-        ...     llm=my_llm,
-        ...     task_description="Maximize triangle areas",
-        ...     metrics_context=ctx,
-        ...     timeout=1200.0,
-        ...     stage_name="GenerateInsights"
-        ... )
+class InsightsOutput(StageIO):
+    """Single-field wrapper so downstream stages get a strict schema."""
+
+    insights: ProgramInsights
+
+
+@StageRegistry.register(description="LLM insights for a single program")
+class InsightsStage(LangGraphStage):
     """
-    # Create agent via factory
-    agent = create_insights_agent(
-        llm=llm,
-        task_description=task_description,
-        metrics_context=metrics_context,
-        max_insights=max_insights,
-    )
-    
-    # Wrap in generic stage
-    return LangGraphStage(
-        agent=agent,
-        prepare_inputs=lambda program: {"program": program},
-        **kwargs
-    )
+    Runs the Insights agent on the current Program.
+
+    - InputsModel: none (DAG provides no inputs here)
+    - OutputModel: InsightsOutput (wraps ProgramInsights)
+    - Injects the live Program into the agent call as `program`
+    """
+
+    InputsModel = VoidInput
+    OutputModel = InsightsOutput
+    cacheable: bool = True
+
+    def __init__(
+        self,
+        *,
+        llm: ChatOpenAI | MultiModelRouter,
+        task_description: str,
+        metrics_context: MetricsContext,
+        max_insights: int = 7,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            agent=create_insights_agent(
+                llm, task_description, metrics_context, max_insights
+            ),
+            program_kwarg="program",
+            **kwargs,
+        )

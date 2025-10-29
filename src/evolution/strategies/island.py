@@ -1,30 +1,17 @@
 import random
-from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    computed_field,
-    field_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from src.database.redis_program_storage import RedisProgramStorage
 from src.evolution.storage.archive_storage import RedisArchiveStorage
+from src.evolution.strategies.elite_selectors import EliteSelector
 from src.evolution.strategies.metadata_manager import MetadataManager
+from src.evolution.strategies.migrant_selectors import MigrantSelector
+from src.evolution.strategies.models import BehaviorSpace
+from src.evolution.strategies.removers import ArchiveRemover
+from src.evolution.strategies.selectors import ArchiveSelector
 from src.programs.program import Program
-
-from .elite_selectors import EliteSelector
-from .migrant_selectors import MigrantSelector
-from .models import (
-    DEFAULT_MIGRATION_RATE,
-    BehaviorSpace,
-    QualityDiversityMetrics,
-)
-from .qd_metrics import compute_qd_metrics_for_island
-from .removers import ArchiveRemover
-from .selectors import ArchiveSelector
 
 
 class IslandConfig(BaseModel):
@@ -36,18 +23,16 @@ class IslandConfig(BaseModel):
         pattern=r"^[a-zA-Z0-9_-]+$",
         description="Unique identifier for the island",
     )
-    max_size: Optional[int] = Field(
+    max_size: int | None = Field(
         default=None,
         ge=1,
         description="Maximum number of programs in the archive. If the archive is full, excess entries will be removed.",
     )
-    behavior_space: BehaviorSpace = Field(
-        description="Behavior space configuration"
-    )
+    behavior_space: BehaviorSpace = Field(description="Behavior space configuration")
     archive_selector: ArchiveSelector = Field(
         description="Selector for choosing elite programs"
     )
-    archive_remover: Optional[ArchiveRemover] = Field(
+    archive_remover: ArchiveRemover | None = Field(
         description="Remover for removing programs from the archive"
     )
     elite_selector: EliteSelector = Field(
@@ -57,7 +42,7 @@ class IslandConfig(BaseModel):
         description="Selector for choosing migrants"
     )
     migration_rate: float = Field(
-        default=DEFAULT_MIGRATION_RATE,
+        default=0,
         ge=0.0,
         le=1.0,
         description="Rate of inter-island migration (0-1)",
@@ -72,42 +57,30 @@ class IslandConfig(BaseModel):
     @field_validator("archive_remover")
     def validate_archive_remover(cls, v, info):
         if info.data.get("max_size") is not None and v is None:
-            raise ValueError(
-                "`max_size` is set, but `archive_remover` is not set"
-            )
+            raise ValueError("`max_size` is set, but `archive_remover` is not set")
         return v
 
 
 class MapElitesIsland:
     """Single MAP-Elites island implementation."""
 
-    def __init__(
-        self, config: IslandConfig, program_storage: RedisProgramStorage
-    ):
+    def __init__(self, config: IslandConfig, program_storage: RedisProgramStorage):
         self.config = config
         self.program_storage = program_storage
         self.archive_storage = RedisArchiveStorage(
             program_storage=program_storage, key_prefix=config.redis_prefix
         )
         self.metadata_manager = MetadataManager(program_storage)
-        self.last_qd_metrics: Optional[QualityDiversityMetrics] = None
         logger.info(
             f"Initialized MAP-Elites island {config.island_id} with max_size={config.max_size}"
         )
 
     async def add(self, program: Program) -> bool:
-        if not isinstance(program.metrics, dict):
-            raise ValueError(
-                f"Program metrics must be a dictionary, got {type(program.metrics)}"
-            )
         missing_keys = (
-            set(self.config.behavior_space.behavior_keys)
-            - program.metrics.keys()
+            set(self.config.behavior_space.behavior_keys) - program.metrics.keys()
         )
         if missing_keys:
-            raise KeyError(
-                f"Program missing required behavior keys: {missing_keys}"
-            )
+            raise KeyError(f"Program missing required behavior keys: {missing_keys}")
 
         cell = self.config.behavior_space.get_cell(program.metrics)
         success = await self.archive_storage.add_elite(
@@ -116,14 +89,10 @@ class MapElitesIsland:
         if not success:
             return False
 
-        await self.metadata_manager.set_current_island(
-            program, self.config.island_id
-        )
+        await self.metadata_manager.set_current_island(program, self.config.island_id)
         await self.enforce_size_limit()
 
-        logger.debug(
-            f"Island {self.config.island_id}: Added program {program.id}"
-        )
+        logger.debug(f"Island {self.config.island_id}: Added program {program.id}")
         return True
 
     async def enforce_size_limit(self) -> None:
@@ -152,19 +121,12 @@ class MapElitesIsland:
         final_elites = await self.archive_storage.get_all_elites()
         final_count = len(final_elites)
 
-        if final_count > self.config.max_size:
-            logger.error(
-                f"CRITICAL: Island {self.config.island_id} size limit enforcement FAILED! "
-                f"Still has {final_count} elites after trying to remove {removal_count} programs. "
-                f"Target was {self.config.max_size}. This indicates a bug in the archive remover."
-            )
-        else:
-            logger.info(
-                f"Island {self.config.island_id}: Successfully removed {removal_count} elites. "
-                f"Population: {current_count} → {final_count} (target: {self.config.max_size})"
-            )
+        logger.info(
+            f"Island {self.config.island_id}: Successfully removed {removal_count} elites. "
+            f"Population: {current_count} → {final_count} (target: {self.config.max_size})"
+        )
 
-    async def select_elites(self, total: int) -> List[Program]:
+    async def select_elites(self, total: int) -> list[Program]:
         all_elites = await self.archive_storage.get_all_elites()
         if not all_elites:
             return []
@@ -186,14 +148,14 @@ class MapElitesIsland:
             )
             return random.sample(all_elites, min(total, len(all_elites)))
 
-    async def get_all_elites(self) -> List[Program]:
+    async def get_all_elites(self) -> list[Program]:
         return await self.archive_storage.get_all_elites()
 
     async def get_elite_count(self) -> int:
         elites = await self.get_all_elites()
         return len(elites)
 
-    async def get_archive_as_dict(self) -> Dict[Tuple[int, ...], Program]:
+    async def get_archive_as_dict(self) -> dict[tuple[int, ...], Program]:
         archive = {}
         elites = await self.get_all_elites()
         for elite in elites:
@@ -204,20 +166,8 @@ class MapElitesIsland:
                 logger.warning(f"Could not map elite {elite.id} to cell: {e}")
         return archive
 
-    async def select_migrants(self, count: int) -> List[Program]:
+    async def select_migrants(self, count: int) -> list[Program]:
         elites = await self.get_all_elites()
         if not elites:
             return []
-        try:
-            return self.config.migrant_selector(elites, count)
-        except Exception as e:
-            logger.warning(
-                f"Migrant selection failed for island {self.config.island_id}: {e}"
-            )
-            return random.sample(elites, min(count, len(elites)))
-
-    async def compute_qd_metrics(self) -> QualityDiversityMetrics:
-        elites = await self.get_all_elites()
-        metrics = compute_qd_metrics_for_island(elites, self.config)
-        self.last_qd_metrics = metrics
-        return metrics
+        return self.config.migrant_selector(elites, count)

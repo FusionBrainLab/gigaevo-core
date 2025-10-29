@@ -1,0 +1,14 @@
+# @package _global_
+
+runner_config:
+  _target_: src.runner.runner.RunnerConfig
+  poll_interval: ${constants.runner_poll_interval}
+  max_concurrent_dags: ${constants.max_concurrent_dags}
+  log_interval: ${constants.runner_log_interval}
+  dag_timeout: ${constants.dag_timeout}
+
+# Note: runner is instantiated in run_hydra.py with explicit parameters
+# because it requires dag_blueprint that's built at runtime
+runner:
+  _target_: src.runner.runner.RunnerManager
+

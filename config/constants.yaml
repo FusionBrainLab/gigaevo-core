@@ -1,0 +1,83 @@
+constants:
+  # Pipeline stage constants
+  stage_timeout: 1800
+  dag_timeout: 3600
+  dag_concurrency: 16
+  max_code_length: 30000
+  max_insights: 8
+  
+  # Redis constants
+  redis_max_connections: 150
+  redis_connection_pool_timeout: 45.0
+  redis_health_check_interval: 120
+  redis_max_retries: 5
+  redis_retry_delay: 0.5
+  
+  # Evolution constants
+  loop_interval: 1.0
+  max_elites_per_generation: 5
+  max_mutations_per_generation: 8
+  num_parents: 2
+  mutation_mode: rewrite
+  
+  # MAP-Elites constants
+  migration_interval: 25
+  max_migrants_per_island: 5
+  enable_migration: true
+  island_id: fitness_island
+  
+  # Island constants
+  island_max_size: 75
+  migration_rate: 0.10
+  primary_resolution: 150
+  validity_resolution: 2
+  binning_type: linear
+  
+  # Runner constants
+  runner_poll_interval: 5.0
+  runner_log_interval: 15
+  max_concurrent_dags: 10
+  
+  # LLM constants
+  default_temperature: 0.6
+  default_max_tokens: 81920
+  default_top_p: 0.95
+  default_top_k: 20
+  default_request_timeout: 1800
+  
+  # Redis key patterns
+  redis_key_prefix_tpl: "{problem_name}_evolution"
+  redis_program_key_tpl: "{prefix}:program:{pid}"
+  redis_status_stream_tpl: "{prefix}:status_events"
+  redis_status_set_tpl: "{prefix}:status:{status}"
+  
+  # Logging constants
+  log_rotation: "50 MB"
+  log_retention: "30 days"
+  log_dir: logs
+  default_log_level: INFO
+  
+  # Problem layout constants (from ProblemLayout)
+  task_description_file: task_description.txt
+  task_hints_file: task_hints.txt
+  mutation_system_prompt_file: mutation_system_prompt.txt
+  mutation_user_prompt_file: mutation_user_prompt.txt
+  context_file: context.py
+  metrics_file: metrics.yaml
+  initial_programs_dir: initial_programs
+  validate_file: validate.py
+  
+  # Metric keys
+  validity_key: is_valid
+  primary_metric_key: fitness  # overridden per problem
+  
+  # Function names for executors
+  entrypoint_function: entrypoint
+  validate_function: validate
+  build_context_function: build_context
+  
+  # API endpoints
+  default_llm_base_url: http://localhost:8777/v1
+  
+  # LLM model constants
+  default_model_name: Qwen3-235B-A22B-Thinking-2507

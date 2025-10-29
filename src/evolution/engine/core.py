@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from src.database.program_storage import ProgramStorage
+from src.database.state_manager import ProgramStateManager
 from src.evolution.engine.config import EngineConfig
 from src.evolution.engine.metrics import EngineMetrics
 from src.evolution.engine.mutation import generate_mutations
@@ -15,18 +16,9 @@ from src.evolution.strategies.base import EvolutionStrategy
 from src.exceptions import EvolutionError
 from src.programs.program import Program
 from src.programs.program_state import ProgramState
-from src.programs.state_manager import ProgramStateManager
-
-__all__ = ["EvolutionEngine"]
 
 
 class EvolutionEngine:
-    """
-    Lean evolution loop:
-    - All *program state updates* go through ProgramStateManager.
-    - Storage is used for reads (and mutations persist), never for state writes.
-    """
-
     def __init__(
         self,
         storage: ProgramStorage,
@@ -43,8 +35,12 @@ class EvolutionEngine:
         self._paused = False
         self._consecutive_errors = 0
         self._last_pending_dags_state = None
-        self._last_pending_dags_counts = None  # Track pending DAG counts to avoid spam logging
-        self._last_logged_metrics_hash = None  # Track last logged metrics hash to avoid spam logging
+        self._last_pending_dags_counts = (
+            None  # Track pending DAG counts to avoid spam logging
+        )
+        self._last_logged_metrics_hash = (
+            None  # Track last logged metrics hash to avoid spam logging
+        )
 
         self.metrics = EngineMetrics()
         self.state = ProgramStateManager(self.storage)
@@ -66,17 +62,26 @@ class EvolutionEngine:
                     continue
 
                 if self._reached_generation_cap():
-                    logger.info("[EvolutionEngine] Stop: max_generations={}", self.config.max_generations)
+                    logger.info(
+                        "[EvolutionEngine] Stop: max_generations={}",
+                        self.config.max_generations,
+                    )
                     break
 
                 try:
-                    await asyncio.wait_for(self.evolve_step(), timeout=self.config.generation_timeout)
+                    await asyncio.wait_for(
+                        self.evolve_step(), timeout=self.config.generation_timeout
+                    )
                     self._consecutive_errors = 0
                     self.metrics.last_generation_time = datetime.now(timezone.utc)
 
-                    if self._every(self.metrics.total_generations, self.config.log_interval):
+                    if self._every(
+                        self.metrics.total_generations, self.config.log_interval
+                    ):
                         await self._log_metrics()
-                    if self._every(self.metrics.total_generations, self.config.cleanup_interval):
+                    if self._every(
+                        self.metrics.total_generations, self.config.cleanup_interval
+                    ):
                         gc.collect()
 
                 except asyncio.TimeoutError:
@@ -85,7 +90,10 @@ class EvolutionEngine:
                 except Exception as exc:  # pylint: disable=broad-except
                     self._on_error(str(exc))
                     if self._consecutive_errors >= self.config.max_consecutive_errors:
-                        logger.critical("[EvolutionEngine] Stop: {} consecutive errors", self._consecutive_errors)
+                        logger.critical(
+                            "[EvolutionEngine] Stop: {} consecutive errors",
+                            self._consecutive_errors,
+                        )
                         break
 
                 await asyncio.sleep(self.config.loop_interval)
@@ -112,14 +120,18 @@ class EvolutionEngine:
             return
         else:
             self._last_pending_dags_state = False
-        
+
         logger.debug("[EvolutionEngine] Stage 1: No pending DAGs")
 
         # Stage 2: Ingest completed programs
-        completed = await self.storage.get_all_by_status(ProgramState.DAG_PROCESSING_COMPLETED.value)
+        completed = await self.storage.get_all_by_status(
+            ProgramState.DAG_PROCESSING_COMPLETED.value
+        )
         newly_ingested = False
         if completed:
-            logger.debug(f"[EvolutionEngine] Stage 2: Ingesting {len(completed)} completed programs")
+            logger.debug(
+                f"[EvolutionEngine] Stage 2: Ingesting {len(completed)} completed programs"
+            )
             newly_ingested = await self._ingest_completed(completed)
             # No DAG_PROCESSING_COMPLETED programs after this step
         else:
@@ -142,10 +154,10 @@ class EvolutionEngine:
 
     async def _ingest_completed(self, programs: list[Program]) -> bool:
         """Validate and hand over completed programs to the strategy (state via StateManager only).
-        
+
         For programs that were refreshing (previously EVOLVING, check if they're in the strategy),
         restore them to EVOLVING. For new programs, try to add them to evolution.
-        
+
         Returns:
             True if any programs were added to EVOLVING state, False otherwise.
         """
@@ -161,31 +173,50 @@ class EvolutionEngine:
 
         # Get all program IDs currently in evolution to check for refreshing programs
         evolving_program_ids = {p.id for p in await self.strategy.get_program_ids()}
-        
+
         for prog in programs:
             try:
-                accepted = await asyncio.to_thread(self.config.program_acceptor.is_accepted, prog)
+                accepted = await asyncio.to_thread(
+                    self.config.program_acceptor.is_accepted, prog
+                )
                 if not accepted:
                     rej_valid += 1
-                    state_tasks.append(asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED)))
+                    state_tasks.append(
+                        asyncio.create_task(
+                            self._set_state(prog, ProgramState.DISCARDED)
+                        )
+                    )
                     continue
 
                 is_already_evolving = prog.id in evolving_program_ids
-                
+
                 if is_already_evolving:
                     restored += 1
-                    state_tasks.append(asyncio.create_task(self._set_state(prog, ProgramState.EVOLVING)))
+                    state_tasks.append(
+                        asyncio.create_task(
+                            self._set_state(prog, ProgramState.EVOLVING)
+                        )
+                    )
                 elif await self.strategy.add(prog):
                     added += 1
-                    state_tasks.append(asyncio.create_task(self._set_state(prog, ProgramState.EVOLVING)))
+                    state_tasks.append(
+                        asyncio.create_task(
+                            self._set_state(prog, ProgramState.EVOLVING)
+                        )
+                    )
                 else:
                     rej_strategy += 1
-                    state_tasks.append(asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED)))
+                    state_tasks.append(
+                        asyncio.create_task(
+                            self._set_state(prog, ProgramState.DISCARDED)
+                        )
+                    )
 
             except Exception as exc:
-                # Best-effort discard on per-item failure; still go through StateManager.
                 logger.debug("[EvolutionEngine] Ingest fail for {}: {}", prog.id, exc)
-                state_tasks.append(asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED)))
+                state_tasks.append(
+                    asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
+                )
 
         if state_tasks:
             await asyncio.gather(*state_tasks, return_exceptions=True)
@@ -194,14 +225,19 @@ class EvolutionEngine:
         self.metrics.novel_programs_per_generation.append(added)
         logger.info(
             "[EvolutionEngine] Ingest done | added={}, restored={}, rejected_validation={}, rejected_strategy={}",
-            added, restored, rej_valid, rej_strategy
+            added,
+            restored,
+            rej_valid,
+            rej_strategy,
         )
-        
+
         return added > 0
 
     async def _select_elites(self) -> list[Program]:
         try:
-            elites = await self.strategy.select_elites(total=self.config.max_elites_per_generation)
+            elites = await self.strategy.select_elites(
+                total=self.config.max_elites_per_generation
+            )
             logger.debug("[EvolutionEngine] Elites selected: {}", len(elites))
             return elites
         except Exception as exc:
@@ -210,26 +246,30 @@ class EvolutionEngine:
 
     async def _reprocess(self) -> None:
         """Reprocess ALL evolving programs to refresh non-cacheable stages.
-        
+
         After new programs finish processing, get all programs in EVOLVING state
         and submit them for reprocessing to refresh dynamic context like lineage.
         Marks them as FRESH so they go through DAG again.
         """
 
         programs_to_refresh = await self.strategy.get_program_ids()
-        
-        logger.debug(f"[EvolutionEngine] Found {len(programs_to_refresh)} programs in EVOLVING state to refresh")
-        
+
+        logger.debug(
+            f"[EvolutionEngine] Found {len(programs_to_refresh)} programs in EVOLVING state to refresh"
+        )
+
         reprocessed_count = 0
         state_tasks: list[asyncio.Task] = []
-        
+
         for program in programs_to_refresh:
-            state_tasks.append(asyncio.create_task(self._set_state(program, ProgramState.FRESH)))
+            state_tasks.append(
+                asyncio.create_task(self._set_state(program, ProgramState.FRESH))
+            )
             reprocessed_count += 1
-        
+
         if state_tasks:
             await asyncio.gather(*state_tasks, return_exceptions=True)
-            
+
         logger.info(
             "[EvolutionEngine] Submitted {} programs for refresh",
             reprocessed_count,
@@ -253,15 +293,21 @@ class EvolutionEngine:
     async def _has_pending_dags(self) -> bool:
         """Backpressure: defer if fresh/processing programs exist (read-only)."""
         fresh_programs = await self.storage.get_all_by_status(ProgramState.FRESH.value)
-        proc_programs = await self.storage.get_all_by_status(ProgramState.DAG_PROCESSING_STARTED.value)
+        proc_programs = await self.storage.get_all_by_status(
+            ProgramState.DAG_PROCESSING_STARTED.value
+        )
         fresh = len(fresh_programs)
         proc = len(proc_programs)
-        
+
         if fresh or proc:
             current_counts = (fresh, proc)
             # Only log when the counts change to avoid spam
             if self._last_pending_dags_counts != current_counts:
-                logger.debug("[EvolutionEngine] Pending DAGs: fresh={}, processing={}", fresh, proc)
+                logger.debug(
+                    "[EvolutionEngine] Pending DAGs: fresh={}, processing={}",
+                    fresh,
+                    proc,
+                )
                 self._last_pending_dags_counts = current_counts
             return True
         else:
@@ -288,11 +334,14 @@ class EvolutionEngine:
 
     async def _log_metrics(self) -> None:
         current_metrics_hash = hash(self.metrics)
-        
+
         # Only log when metrics actually change to avoid spam
         if self._last_logged_metrics_hash != current_metrics_hash:
             m = self.metrics.to_dict()
-            metrics_str = " | ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}" for k, v in m.items())
+            metrics_str = " | ".join(
+                f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}"
+                for k, v in m.items()
+            )
             logger.info(f"[EvolutionEngine] | {metrics_str}")
             self._last_logged_metrics_hash = current_metrics_hash
 
@@ -319,5 +368,3 @@ class EvolutionEngine:
             "consecutive_errors": self._consecutive_errors,
             **self.metrics.to_dict(),
         }
-
-

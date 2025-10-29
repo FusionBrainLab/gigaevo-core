@@ -1,5 +1,6 @@
 from __future__ import annotations
-from src.programs.metrics.context import MetricsContext, VALIDITY_KEY
+
+from src.programs.metrics.context import VALIDITY_KEY, MetricsContext
 
 
 class MetricsFormatter:
@@ -20,7 +21,7 @@ class MetricsFormatter:
 
     def format_metrics_block(self, metrics: dict[str, float]) -> str:
         lines: list[str] = []
-        
+
         for key in self.context.prompt_keys():
             spec = self.context.specs[key]
             decimals = spec.decimals
@@ -29,11 +30,13 @@ class MetricsFormatter:
             orient = "↑" if self.context.is_higher_better(key) else "↓"
             value = metrics[key]
             unit_str = f" {unit}" if unit else ""
-            # Use the new is_sentinel method to detect sentinel values
             is_sentinel_value = spec.is_sentinel(value)
-            sentinel = " [sentinel]" if is_sentinel_value and key != VALIDITY_KEY else ""
-            
-            lines.append(f"- {key} : {value:.{decimals}f}{unit_str} ({desc}; {orient} better){sentinel}")
+            sentinel = (
+                " [sentinel]" if is_sentinel_value and key != VALIDITY_KEY else ""
+            )
+            lines.append(
+                f"- {key} : {value:.{decimals}f}{unit_str} ({desc}; {orient} better){sentinel}"
+            )
         return "\n".join(lines)
 
     def format_delta_block(
@@ -66,41 +69,56 @@ class MetricsFormatter:
             pct = (100.0 * d / abs(p)) if abs(p) > 1e-12 else None
             orient = "↑" if higher_better else "↓"
             impact = (
-                "improved" if (d > 0) == higher_better else
-                ("no change" if d == 0 else "worsened")
+                "improved"
+                if (d > 0) == higher_better
+                else ("no change" if d == 0 else "worsened")
             )
             sig = "★" if signif and abs(d) >= signif else ""
 
             parent_s = f"{p:.{decimals}f}{u(unit)}"
-            child_s  = f"{c:.{decimals}f}{u(unit)}"
-            delta_s  = f"{d:+.{decimals}f}{u(unit)}"
-            pct_s    = f"{pct:+.1f}%" if pct is not None else "—"
+            child_s = f"{c:.{decimals}f}{u(unit)}"
+            delta_s = f"{d:+.{decimals}f}{u(unit)}"
+            extra_pct_sign = ""
+            if pct is not None and pct > 100:
+                extra_pct_sign = ">"
+            elif pct is not None and pct < -100:
+                extra_pct_sign = "<"
+            if pct is not None:
+                pct = min(max(pct, -100.0), 100.0)
+            pct_s = f"{extra_pct_sign}{pct:+.1f}%" if pct is not None else "—"
 
-            rows.append((
-                key, desc, f"{orient} better",
-                parent_s, child_s, delta_s, pct_s, f"{impact} {sig}".strip()
-            ))
+            rows.append(
+                (
+                    key,
+                    desc,
+                    f"{orient} better",
+                    parent_s,
+                    child_s,
+                    delta_s,
+                    pct_s,
+                    f"{impact} {sig}".strip(),
+                )
+            )
 
         if not rows:
             return "N/A"
 
         if style == "bullets":
             return "\n".join(
-                f"- {k} ({dsc}; {dirn}) | {p} → {c} | Δ {dl}"
+                f"- {k} ({dirn}) | {p} → {c} | Δ {dl}"
                 f"{f' ({pc})' if pc != '—' else ''} | {imp}"
-                for k, dsc, dirn, p, c, dl, pc, imp in rows
+                for k, _, dirn, p, c, dl, pc, imp in rows
             )
 
         header = (
-            "| metric | description | direction | parent | child | Δ | %Δ | impact |\n"
-            "|---|---|:--:|---:|---:|---:|---:|:--:|"
+            "| metric | direction | parent | child | Δ | %Δ | impact |\n"
+            "|---|:--:|---:|---:|---:|---:|:--:|"
         )
         body = "\n".join(
-            f"| {k} | {dsc} | {dirn} | {p} | {c} | {dl} | {pc} | {imp} |"
-            for k, dsc, dirn, p, c, dl, pc, imp in rows
+            f"| {k} | {dirn} | {p} | {c} | {dl} | {pc} | {imp} |"
+            for k, _, dirn, p, c, dl, pc, imp in rows
         )
         return f"{header}\n{body}"
-
 
     def format_metrics_description(self) -> str:
         """Build a concise overview of available metrics from context.
@@ -121,8 +139,6 @@ class MetricsFormatter:
             if bounds is not None and bounds[0] is not None and bounds[1] is not None:
                 parts.append(f"[{bounds[0]}, {bounds[1]}] range")
             if spec.unit:
-                parts.append(f"unit=\"{spec.unit}\"")
+                parts.append(f'unit="{spec.unit}"')
             lines.append(f"- {key}: {spec.description} (" + "; ".join(parts) + ")")
         return "\n".join(lines)
-
-

@@ -1,8 +1,10 @@
+import random
 from abc import ABC, abstractmethod
 from itertools import combinations
-import random
 from typing import Iterator
+
 from loguru import logger
+
 from src.programs.program import Program
 
 
@@ -35,14 +37,16 @@ class RandomParentSelector(ParentSelector):
         self, available_parents: list[Program]
     ) -> Iterator[list[Program]]:
         """Create iterator for random parent selection.
-        
+
         Yields infinite random selections of parents (consumer controls limit via break).
         If fewer parents are available than requested, returns all available.
         """
         if not available_parents:
             return
         while True:
-            yield random.sample(available_parents, min(self.num_parents, len(available_parents)))
+            yield random.sample(
+                available_parents, min(self.num_parents, len(available_parents))
+            )
 
 
 class AllCombinationsParentSelector(ParentSelector):
@@ -57,21 +61,23 @@ class AllCombinationsParentSelector(ParentSelector):
         self, available_parents: list[Program]
     ) -> Iterator[list[Program]]:
         """Create iterator for all combinations of parents.
-        
+
         Yields all possible combinations of the requested number of parents.
         Combinations are shuffled for randomness.
         If fewer parents are available than requested, yields all available parents once.
         """
         if not available_parents:
             return
-        
+
         parents_copy = available_parents.copy()
         random.shuffle(parents_copy)
-        
+
         if len(parents_copy) < self.num_parents:
-            logger.info(f"[AllCombinationsParentSelector] Only {len(parents_copy)} parents available, yielding all")
+            logger.info(
+                f"[AllCombinationsParentSelector] Only {len(parents_copy)} parents available, yielding all"
+            )
             yield parents_copy
             return
-        
+
         for combo in combinations(parents_copy, self.num_parents):
             yield list(combo)

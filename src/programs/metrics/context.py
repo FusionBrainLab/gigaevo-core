@@ -30,7 +30,9 @@ class MetricSpec(BaseModel):
     def _set_default_sentinel_value(self) -> MetricSpec:
         """Set default sentinel value based on optimization direction."""
         if self.sentinel_value is None:
-            self.sentinel_value = MIN_VALUE_DEFAULT if self.higher_is_better else MAX_VALUE_DEFAULT
+            self.sentinel_value = (
+                MIN_VALUE_DEFAULT if self.higher_is_better else MAX_VALUE_DEFAULT
+            )
         return self
 
     @model_validator(mode="after")
@@ -50,7 +52,10 @@ class MetricSpec(BaseModel):
 
     def is_sentinel(self, value: float) -> bool:
         """Check if a value is the sentinel value for this metric."""
-        return self.sentinel_value is not None and abs(value - self.sentinel_value) < EPSILON
+        return (
+            self.sentinel_value is not None
+            and abs(value - self.sentinel_value) < EPSILON
+        )
 
 
 class MetricsContext(BaseModel):
@@ -81,57 +86,44 @@ class MetricsContext(BaseModel):
 
     def get_primary_spec(self) -> MetricSpec:
         """Get the MetricSpec for the primary metric.
-        
+
         Returns:
             The MetricSpec marked as primary
-            
-        Raises:
-            RuntimeError: If no primary spec found (should never happen due to validation)
         """
         for spec in self.specs.values():
             if spec.is_primary:
                 return spec
-        raise RuntimeError("No primary spec found (validation should prevent this)")
-    
+
     def get_primary_key(self) -> str:
         """Get the key of the primary metric.
-        
+
         Returns:
             The metric key marked as primary
-            
-        Raises:
-            RuntimeError: If no primary key found (should never happen due to validation)
         """
         for key, spec in self.specs.items():
             if spec.is_primary:
                 return key
-        raise RuntimeError("No primary key found (validation should prevent this)")
 
     def get_description(self, key: str) -> str:
         """Get the description for a metric.
-        
+
         Args:
             key: The metric key
-            
+
         Returns:
             The metric description
-            
-        Raises:
-            KeyError: If metric key not found
         """
         return self.specs[key].description
 
     def get_decimals(self, key: str) -> int:
         """Get the decimal precision for a metric.
-        
+
         Args:
             key: The metric key
-            
+
         Returns:
             Number of decimal places to display
-            
-        Raises:
-            KeyError: If metric key not found
+
         """
         return self.specs[key].decimals
 
@@ -158,11 +150,13 @@ class MetricsContext(BaseModel):
     def additional_metrics(self) -> dict[str, str]:
         """Return mapping of non-primary metrics that have descriptions."""
         primary_key = self.get_primary_key()
-        return {k: spec.description for k, spec in self.specs.items() if k != primary_key}
+        return {
+            k: spec.description for k, spec in self.specs.items() if k != primary_key
+        }
 
     def get_sentinels(self) -> dict[str, float]:
         """Get worst-case sentinel values for all metrics.
-        
+
         Returns:
             Dictionary mapping metric keys to their sentinel values
         """
@@ -170,13 +164,13 @@ class MetricsContext(BaseModel):
 
     def get_bounds(self, key: str) -> tuple[float, float] | None:
         """Get the bounds for a metric if defined.
-        
+
         Args:
             key: The metric key
-            
+
         Returns:
             Tuple of (lower_bound, upper_bound) or None if not fully defined
-            
+
         Raises:
             KeyError: If metric key not found
         """
@@ -187,13 +181,13 @@ class MetricsContext(BaseModel):
 
     def is_higher_better(self, key: str) -> bool:
         """Check if higher values are better for a metric.
-        
+
         Args:
             key: The metric key
-            
+
         Returns:
             True if higher is better, False otherwise
-            
+
         Raises:
             KeyError: If metric key not found
         """
@@ -213,9 +207,9 @@ class MetricsContext(BaseModel):
         display_order: list[str] | None = None,
     ) -> MetricsContext:
         """Convenience constructor from simple description mappings.
-        
+
         By default, all additional metrics are higher_is_better=True.
-        
+
         Args:
             primary_key: Key for the primary optimization metric
             primary_description: Description of the primary metric
@@ -225,7 +219,7 @@ class MetricsContext(BaseModel):
             decimals: Default decimal precision for all metrics
             per_metric_decimals: Optional per-metric decimal precision overrides
             display_order: Optional explicit display order for metrics
-            
+
         Returns:
             New MetricsContext instance
         """
@@ -240,7 +234,9 @@ class MetricsContext(BaseModel):
             specs[k] = MetricSpec(
                 description=desc,
                 decimals=(per_metric_decimals or {}).get(k, decimals),
-                higher_is_better=(additional_metrics_higher_is_better or {}).get(k, True),
+                higher_is_better=(additional_metrics_higher_is_better or {}).get(
+                    k, True
+                ),
             )
         return cls(
             specs=specs,
@@ -255,11 +251,11 @@ class MetricsContext(BaseModel):
         display_order: list[str] | None = None,
     ) -> MetricsContext:
         """Create MetricsContext from a dictionary of metric key -> spec fields.
-        
+
         Args:
             specs: Dictionary mapping metric keys to spec field dictionaries
             display_order: Optional explicit display order for metrics
-            
+
         Returns:
             New MetricsContext instance
         """
@@ -268,5 +264,3 @@ class MetricsContext(BaseModel):
             data = dict(data)
             built[key] = MetricSpec(**data)
         return cls(specs=built, display_order=display_order or [])
-
-

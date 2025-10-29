@@ -48,63 +48,6 @@ class StrategyMetrics(BaseModel):
         return result
 
 
-class StrategyStatus(BaseModel):
-    """Generic status information that any evolution strategy can provide."""
-
-    strategy_type: str = Field(
-        description="Type/name of the evolution strategy"
-    )
-
-    is_healthy: bool = Field(
-        default=True, description="Whether the strategy is operating normally"
-    )
-
-    error_message: Optional[str] = Field(
-        default=None,
-        max_length=1000,
-        description="Error message if strategy is unhealthy",
-    )
-
-    metrics: Optional[StrategyMetrics] = Field(
-        default=None, description="Current strategy metrics"
-    )
-
-    @computed_field
-    @property
-    def status_summary(self) -> str:
-        """Generate a human-readable status summary."""
-        if self.is_healthy:
-            programs_info = ""
-            if self.metrics and self.metrics.has_programs:
-                programs_info = f" ({self.metrics.total_programs} programs)"
-            return f"{self.strategy_type}: Healthy{programs_info}"
-        else:
-            return f"{self.strategy_type}: Error - {self.error_message or 'Unknown error'}"
-
-    @field_validator("error_message")
-    @classmethod
-    def validate_error_message_with_health(cls, v, info):
-        """Ensure error message is provided when unhealthy."""
-        if "is_healthy" in info.data and not info.data["is_healthy"] and not v:
-            raise ValueError(
-                "error_message must be provided when is_healthy is False"
-            )
-        return v
-
-    status_details: Optional[Dict[str, Any]] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        result = {
-            "strategy_type": self.strategy_type,
-            "is_healthy": self.is_healthy,
-            "error_message": self.error_message,
-            "metrics": self.metrics.to_dict() if self.metrics else None,
-        }
-        if self.status_details:
-            result.update(self.status_details)
-        return result
-
-
 class EvolutionStrategy(ABC):
     """
     Abstract base class for evolution strategies.
@@ -127,7 +70,7 @@ class EvolutionStrategy(ABC):
         ...
 
     @abstractmethod
-    async def select_elites(self, total: int) -> List[Program]:
+    async def select_elites(self, total: int) -> list[Program]:
         """
         Select elite programs from the strategy.
 
@@ -140,7 +83,7 @@ class EvolutionStrategy(ABC):
         ...
 
     @abstractmethod
-    async def get_program_ids(self) -> List[Program]:
+    async def get_program_ids(self) -> list[Program]:
         """
         Get all programs managed by this strategy.
 
@@ -152,13 +95,10 @@ class EvolutionStrategy(ABC):
     async def remove_program_by_id(self, program_id: str) -> bool:
         """
         Remove a program from the strategy by ID.
-        
-        Default implementation raises NotImplementedError.
-        Override this method if strategy supports program removal.
 
         Args:
             program_id: ID of the program to remove
-            
+
         Returns:
             True if program was removed, False if not found
         """
@@ -166,7 +106,7 @@ class EvolutionStrategy(ABC):
 
     # Optional capabilities - strategies can override these for enhanced functionality
 
-    async def get_metrics(self) -> Optional[StrategyMetrics]:
+    async def get_metrics(self) -> StrategyMetrics | None:
         """
         Get strategy-specific metrics.
 
@@ -174,53 +114,6 @@ class EvolutionStrategy(ABC):
             StrategyMetrics object or None if not supported
         """
         return None
-
-    async def get_status(self) -> StrategyStatus:
-        """
-        Get comprehensive strategy status.
-
-        Returns:
-            StrategyStatus object with current state
-        """
-        try:
-            metrics = await self.get_metrics()
-            return StrategyStatus(
-                strategy_type=self.__class__.__name__,
-                is_healthy=True,
-                metrics=metrics,
-            )
-        except Exception as e:
-            return StrategyStatus(
-                strategy_type=self.__class__.__name__,
-                is_healthy=False,
-                error_message=str(e),
-            )
-
-    def supports_capability(self, capability: str) -> bool:
-        """
-        Check if strategy supports a specific capability.
-
-        Args:
-            capability: Capability name to check
-
-        Returns:
-            True if capability is supported
-        """
-        capability_methods = {
-            "metrics": "get_metrics",
-            "status": "get_status",
-            "pause_resume": "pause",
-            "cleanup": "cleanup",
-        }
-
-        if capability in capability_methods:
-            method_name = capability_methods[capability]
-            # Check if method is overridden from base class
-            base_method = getattr(EvolutionStrategy, method_name, None)
-            strategy_method = getattr(self, method_name, None)
-            return strategy_method != base_method
-
-        return False
 
     async def cleanup(self) -> None:
         """

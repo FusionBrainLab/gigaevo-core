@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import yaml
 
-from src.programs.metrics.context import MetricsContext, VALIDITY_KEY
 from src.problems.layout import ProblemLayout as PL
+from src.programs.metrics.context import VALIDITY_KEY, MetricsContext
 
 
 class ProblemContext:
@@ -23,11 +24,10 @@ class ProblemContext:
     pc.mutation_user_prompt   # -> str
     """
 
-    def __init__(self, problem_dir: Path):
-        self.problem_dir = problem_dir
+    def __init__(self, problem_dir: str | Path):
+        self.problem_dir = Path(problem_dir)
         self._metrics_context: MetricsContext | None = None
 
-    # ---------- Text helpers ----------
     def load_text(self, relative_path: str) -> str:
         path = self.problem_dir / relative_path
         if not path.exists():
@@ -58,7 +58,6 @@ class ProblemContext:
         """
         return (self.problem_dir / PL.CONTEXT_FILE).exists()
 
-    # ---------- Metrics ----------
     @property
     def metrics_context(self) -> MetricsContext:
         if self._metrics_context is None:
@@ -79,9 +78,7 @@ class ProblemContext:
                 k: v for k, v in data.items() if k != "display_order"
             }
             display_order = data.get("display_order")
-            ctx = MetricsContext.from_dict(
-                specs=specs, display_order=display_order
-            )
+            ctx = MetricsContext.from_dict(specs=specs, display_order=display_order)
 
             # Strict validation: primary bounds and is_valid [0,1]
             primary_key = ctx.get_primary_key()
@@ -104,7 +101,6 @@ class ProblemContext:
         except Exception as e:
             raise ValueError(f"Failed to parse metrics.yaml: {e}") from e
 
-    # ---------- Validation ----------
     def validate(self, add_context: bool = False) -> None:
         """Validate that required files/dirs exist and are minimally correct.
 
@@ -125,11 +121,8 @@ class ProblemContext:
                 f"Missing required files/directories in {self.problem_dir}: {', '.join(items)}"
             )
 
-        # Ensure at least one initial program exists
         initial_dir = self.problem_dir / PL.INITIAL_PROGRAMS_DIR
         if not list(initial_dir.glob("*.py")):
             raise FileNotFoundError(
                 f"No Python files found in {initial_dir}. At least one initial program is required."
             )
-
-

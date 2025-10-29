@@ -1,6 +1,5 @@
-from abc import ABC, abstractmethod
 import random
-from typing import List
+from abc import ABC, abstractmethod
 
 from src.evolution.strategies.utils import dominates, extract_fitness_values
 from src.programs.program import Program
@@ -10,15 +9,13 @@ class MigrantSelector(ABC):
     """Abstract base class for selecting programs to migrate."""
 
     @abstractmethod
-    def __call__(
-        self, programs: List[Program], count: int
-    ) -> List[Program]: ...
+    def __call__(self, programs: list[Program], count: int) -> list[Program]: ...
 
 
 class RandomMigrantSelector(MigrantSelector):
     """Selects random programs."""
 
-    def __call__(self, programs: List[Program], count: int) -> List[Program]:
+    def __call__(self, programs: list[Program], count: int) -> list[Program]:
         if len(programs) <= count:
             return programs
         else:
@@ -28,13 +25,11 @@ class RandomMigrantSelector(MigrantSelector):
 class TopFitnessMigrantSelector(MigrantSelector):
     """Selects top programs by scalar fitness."""
 
-    def __init__(
-        self, fitness_key: str, fitness_key_higher_is_better: bool = True
-    ):
+    def __init__(self, fitness_key: str, fitness_key_higher_is_better: bool = True):
         self.fitness_key = fitness_key
         self.fitness_key_higher_is_better = fitness_key_higher_is_better
 
-    def __call__(self, programs: List[Program], count: int) -> List[Program]:
+    def __call__(self, programs: list[Program], count: int) -> list[Program]:
         if not programs:
             return []
 
@@ -55,9 +50,7 @@ class TopFitnessMigrantSelector(MigrantSelector):
         if not scored_programs:
             return random.sample(programs, min(count, len(programs)))
 
-        sorted_programs = sorted(
-            scored_programs, key=lambda x: x[1], reverse=True
-        )
+        sorted_programs = sorted(scored_programs, key=lambda x: x[1], reverse=True)
         return [p for p, _ in sorted_programs[:count]]
 
 
@@ -66,7 +59,7 @@ class ParetoFrontMigrantSelector(MigrantSelector):
 
     def __init__(
         self,
-        fitness_keys: List[str],
+        fitness_keys: list[str],
         fitness_key_higher_is_better: dict[str, bool] | None = None,
     ):
         self.fitness_keys = fitness_keys
@@ -74,7 +67,7 @@ class ParetoFrontMigrantSelector(MigrantSelector):
             key: True for key in fitness_keys
         }
 
-    def __call__(self, programs: List[Program], count: int) -> List[Program]:
+    def __call__(self, programs: list[Program], count: int) -> list[Program]:
         if not programs:
             return []
 
@@ -93,10 +86,10 @@ class ParetoFrontMigrantSelector(MigrantSelector):
 
     def _compute_pareto_front(
         self,
-        programs: List[Program],
-        fitness_keys: List[str],
+        programs: list[Program],
+        fitness_keys: list[str],
         fitness_key_higher_is_better: dict[str, bool],
-    ) -> List[Program]:
+    ) -> list[Program]:
         pareto_front = []
 
         for p in programs:

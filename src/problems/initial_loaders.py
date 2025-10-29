@@ -12,8 +12,8 @@ class InitialProgramLoader(Protocol):
 
 
 class DirectoryProgramLoader:
-    def __init__(self, problem_dir: Path):
-        self.problem_dir = problem_dir
+    def __init__(self, problem_dir: str | Path):
+        self.problem_dir = Path(problem_dir)
 
     async def load(self, storage: RedisProgramStorage) -> list[Program]:
         initial_dir = self.problem_dir / "initial_programs"
@@ -108,5 +108,3 @@ class RedisTopProgramsLoader:
                 await source.close()
             except Exception:
                 pass
-
-

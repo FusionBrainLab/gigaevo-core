@@ -49,6 +49,3 @@ EXAMPLE ELEMENT (format only, content illustrative):
   "severity": "high",
   "insight": "Grid placement at `y=0.33` induces collinearity; replace with jittered barycentric init. Evidence: `min_area=0.001` < target."
 }}
-
-
-

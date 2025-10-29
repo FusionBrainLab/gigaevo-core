@@ -1,190 +1,143 @@
-"""Code validation stage for MetaEvolve."""
+from __future__ import annotations
 
 import ast
-from datetime import datetime
 import re
-from typing import List, Optional
 
 from loguru import logger
 
-from src.exceptions import (
-    SecurityViolationError,
-    ensure_positive,
-)
+from src.exceptions import SecurityViolationError
 from src.programs.constants import DANGEROUS_PATTERNS
-from src.programs.program import Program, ProgramStageResult, StageState
-from src.programs.utils import build_stage_result
-from src.runner.stage_registry import StageRegistry
+from src.programs.core_types import StageIO, VoidInput
+from src.programs.program import Program
+from src.programs.stages.base import Stage
+from src.programs.stages.stage_registry import StageRegistry
 
-from .base import Stage
+
+class CodeValidationOutput(StageIO):
+    message: str
+    code_length: int
+    security_checks_passed: bool
+    syntax_valid: bool
 
 
-@StageRegistry.register(
-    description="Validate program code for syntax and security"
-)
+@StageRegistry.register(description="Validate program code for syntax and security")
 class ValidateCodeStage(Stage):
+    """
+    Validates Program.code:
+      - Non-empty & length bound
+      - Python syntax (compile)
+      - Optional "safe mode" checks (regex + simple AST heuristics)
+    """
+
+    InputsModel = VoidInput
+    OutputModel = CodeValidationOutput
+    cacheable: bool = True
 
     def __init__(
         self,
+        *,
         safe_mode: bool = False,
-        custom_patterns: Optional[List[str]] = None,
-        max_code_length: int = 10000,
+        custom_patterns: list[str] | None = None,
+        max_code_length: int = 10_000,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        if max_code_length <= 0:
+            raise ValueError("max_code_length must be positive")
         self.safe_mode = safe_mode
         self.custom_patterns = custom_patterns or []
-        self.max_code_length = ensure_positive(
-            max_code_length, "max_code_length"
-        )
-        self._requires_code = True
+        self.max_code_length = max_code_length
 
-        # Compile patterns for better performance
-        self._compiled_patterns = []
-        for pattern in DANGEROUS_PATTERNS + self.custom_patterns:
+        self._compiled_patterns: list[re.Pattern[str]] = []
+        for pattern in [*DANGEROUS_PATTERNS, *self.custom_patterns]:
             try:
-                self._compiled_patterns.append(
-                    re.compile(pattern, re.IGNORECASE)
-                )
+                self._compiled_patterns.append(re.compile(pattern, re.IGNORECASE))
             except re.error as e:
                 logger.warning(
-                    f"[{self.stage_name}] Invalid regex pattern '{pattern}': {e}"
+                    "[{}] Invalid regex pattern '{}': {}",
+                    type(self).__name__,
+                    pattern,
+                    e,
                 )
 
-    async def _execute_stage(
-        self, program: Program, started_at: datetime
-    ) -> ProgramStageResult:
-        code = program.code
+    async def compute(self, program: Program) -> StageIO:
+        code = program.code or ""
+        clsname = type(self).__name__
 
-        logger.debug(
-            f"[{self.stage_name}] Program {program.id}: Starting comprehensive code validation"
-        )
+        if not code.strip():
+            raise ValueError("Code cannot be empty")
 
-        # Basic validation
-        if not code or not code.strip():
-            return build_stage_result(
-                status=StageState.FAILED,
-                started_at=started_at,
-                error="Code cannot be empty",
-                stage_name=self.stage_name,
-                context="Code validation failed - empty code",
-            )
-
-        # Length validation
         if len(code) > self.max_code_length:
-            return build_stage_result(
-                status=StageState.FAILED,
-                started_at=started_at,
-                error=f"Code too long: {len(code)} > {self.max_code_length}",
-                stage_name=self.stage_name,
-                context=f"Code length validation failed: {len(code)} characters",
-            )
+            raise ValueError(f"Code too long: {len(code)} > {self.max_code_length}")
 
         try:
             compile(code, "<string>", "exec")
         except SyntaxError as e:
-            error_msg = (
-                f"SyntaxError on line {e.lineno}, offset {e.offset}: {e.msg}"
-            )
-            code_line = e.text.strip() if e.text else "<source unavailable>"
+            code_line = (e.text or "").strip() or "<source unavailable>"
+            raise SyntaxError(
+                f"SyntaxError at line {e.lineno}, offset {e.offset}: {e.msg}. Line: `{code_line}`"
+            ) from e
 
-            return build_stage_result(
-                status=StageState.FAILED,
-                started_at=started_at,
-                error=error_msg,
-                stage_name=self.stage_name,
-                context=f"Python syntax validation failed on line {e.lineno}: `{code_line}`",
-            )
+        if self.safe_mode:
+            self._validate_security_text(code)
+            self._validate_security_ast_file_ops(code)
+            self._validate_ast_imports(code)
 
-        # Security validation
-        try:
-            await self._validate_security(code, program.id)
-        except SecurityViolationError as e:
-            return build_stage_result(
-                status=StageState.FAILED,
-                started_at=started_at,
-                error=e,
-                stage_name=self.stage_name,
-                context="Security validation failed",
-            )
-
-        # AST validation for additional safety
-        try:
-            await self._validate_ast(code, program.id)
-        except SecurityViolationError as e:
-            return build_stage_result(
-                status=StageState.FAILED,
-                started_at=started_at,
-                error=e,
-                stage_name=self.stage_name,
-                context="AST validation failed",
-            )
-
-        return build_stage_result(
-            status=StageState.COMPLETED,
-            started_at=started_at,
-            output={
-                "message": "Code validation passed",
-                "code_length": len(code),
-                "security_checks_passed": True,
-                "syntax_valid": True,
-            },
-            stage_name=self.stage_name,
+        logger.debug("[{}] Code validation passed (len={})", clsname, len(code))
+        return CodeValidationOutput(
+            message="Code validation passed",
+            code_length=len(code),
+            security_checks_passed=bool(self.safe_mode),
+            syntax_valid=True,
         )
 
-    async def _validate_security(self, code: str, program_id: str) -> None:
-        if self.safe_mode:
-            for pattern in self._compiled_patterns:
-                match = pattern.search(code)
-                if match:
-                    raise SecurityViolationError(
-                        "Potentially dangerous operation detected",
-                        violation_type="dangerous_pattern",
-                        detected_pattern=match.group(0),
-                    )
-            if self._contains_file_operations_ast(code):
+    def _validate_security_text(self, code: str) -> None:
+        """Regex-based screening for dangerous textual patterns."""
+        for pattern in self._compiled_patterns:
+            m = pattern.search(code)
+            if m:
                 raise SecurityViolationError(
-                    "File operation detected",
-                    violation_type="file_operation",
-                    detected_pattern="AST-based file op",
+                    f"Potentially dangerous pattern detected: {m.group(0)!r}"
                 )
 
-    def _contains_file_operations_ast(self, code: str) -> bool:
+    def _validate_security_ast_file_ops(self, code: str) -> None:
+        """AST scan for obvious file I/O calls (open/file/read/write/remove/unlink)."""
         try:
             tree = ast.parse(code)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Name) and node.func.id in {
-                        "open",
-                        "file",
-                    }:
-                        return True
-                    if isinstance(
-                        node.func, ast.Attribute
-                    ) and node.func.attr in {
-                        "read",
-                        "write",
-                        "remove",
-                        "unlink",
-                    }:
-                        return True
-            return False
-        except Exception:
-            return False
-
-    async def _validate_ast(self, code: str, program_id: str) -> None:
-        try:
-            tree = ast.parse(code)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name in ["os", "sys", "subprocess"]:
-                            raise SecurityViolationError(
-                                f"Import of {alias.name} not allowed",
-                                violation_type="unsafe_import",
-                                detected_pattern=alias.name,
-                            )
         except SyntaxError:
-            pass
-        except Exception as e:
-            logger.warning(f"[{self.stage_name}] AST validation error: {e}")
+            return
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in {"open", "file"}:
+                    raise SecurityViolationError(
+                        "File operation detected via AST (open/file)"
+                    )
+                if isinstance(node.func, ast.Attribute) and node.func.attr in {
+                    "read",
+                    "write",
+                    "remove",
+                    "unlink",
+                }:
+                    raise SecurityViolationError(
+                        f"File operation detected via AST ({node.func.attr})"
+                    )
+
+    def _validate_ast_imports(self, code: str) -> None:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in {"os", "sys", "subprocess"}:
+                        raise SecurityViolationError(
+                            f"Import of '{alias.name}' not allowed in safe_mode"
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                if node.module in {"os", "sys", "subprocess"}:
+                    raise SecurityViolationError(
+                        f"Import from '{node.module}' not allowed in safe_mode"
+                    )

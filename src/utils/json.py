@@ -1,11 +1,3 @@
-"""Unified JSON helper.
-
-Provides *dumps*, *loads* helpers that use **orjson** when available and
-fall back to the standard :pymod:`json` module otherwise.  The selected backend
-module is also exposed via the attribute :data:`json` so that legacy code can
-still access the underlying implementation directly.
-"""
-
 from __future__ import annotations
 
 from typing import Any, Union

@@ -1,9 +1,6 @@
-"""Helpers for mutation generation and persistence."""
-
 from __future__ import annotations
 
 import asyncio
-from typing import List
 
 from loguru import logger
 
@@ -12,11 +9,9 @@ from src.evolution.mutation.base import MutationOperator
 from src.evolution.mutation.parent_selector import ParentSelector
 from src.programs.program import Program
 
-__all__ = ["generate_mutations"]
-
 
 async def generate_mutations(
-    elites: List[Program],
+    elites: list[Program],
     *,
     mutator: MutationOperator,
     storage: ProgramStorage,
@@ -43,10 +38,8 @@ async def generate_mutations(
         return 0
 
     try:
-        # Create parent iterator - no need for reset/state management
         parent_iterator = parent_selector.create_parent_iterator(elites)
 
-        # Collect parent selections up to the limit
         parent_selections = []
         for parents in parent_iterator:
             if len(parent_selections) >= limit:
@@ -57,56 +50,47 @@ async def generate_mutations(
             logger.info("[mutation] No valid parent selections available")
             return 0
 
-        logger.info(f"[mutation] Generated {len(parent_selections)} parent selections for parallel mutation")
+        logger.info(
+            f"[mutation] Generated {len(parent_selections)} parent selections for parallel mutation"
+        )
 
-        # Create mutation tasks for parallel execution
-        async def generate_and_persist_mutation(parents: List[Program], task_id: int) -> bool:
+        async def generate_and_persist_mutation(
+            parents: list[Program], task_id: int
+        ) -> bool:
             """Generate a single mutation and persist it. Returns True if successful."""
             try:
                 mutation_spec = await mutator.mutate_single(parents)
 
                 if mutation_spec is None:
-                    logger.debug(f"[mutation] Task {task_id}: Failed to generate mutation")
                     return False
 
-                # Create program from mutation spec
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
-                
 
                 await storage.add(program)
                 for parent in parents:
-                    # Get fresh parent data from storage to avoid race conditions
                     fresh_parent = await storage.get(parent.id)
-                    if fresh_parent:
-                        # Add child to fresh parent lineage
-                        fresh_parent.lineage.add_child(program.id)
-                        await storage.update(fresh_parent)
-                        logger.debug(f"[mutation] Task {task_id}: Updated parent {parent.id[:8]} lineage with child {program.id[:8]}")
-                    else:
-                        logger.warning(f"[mutation] Task {task_id}: Parent {parent.id[:8]} not found in storage")
-
-
-                logger.debug(f"[mutation] Task {task_id}: Persisted mutation: {mutation_spec.name}")
+                    fresh_parent.lineage.add_child(program.id)
+                    await storage.update(fresh_parent)
                 return True
 
             except Exception as exc:
-                logger.error(f"[mutation] Task {task_id}: Failed to generate/persist mutation: {exc}")
+                logger.error(
+                    f"[mutation] Task {task_id}: Failed to generate/persist mutation: {exc}"
+                )
                 return False
 
-        # Execute mutations in parallel
         tasks = [
-            generate_and_persist_mutation(parents, i) 
+            generate_and_persist_mutation(parents, i)
             for i, parents in enumerate(parent_selections)
         ]
 
-        # Use gather with return_exceptions=True to handle individual failures gracefully
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        persisted = sum(1 for result in results if result)
 
-        # Count successful mutations
-        persisted = sum(1 for result in results if result is True)
-
-        logger.info(f"[mutation] Created {persisted} mutations in parallel (immediately persisted)")
+        logger.info(
+            f"[mutation] Created {persisted} mutations in parallel (immediately persisted)"
+        )
         return persisted
 
     except Exception as exc:  # pragma: no cover

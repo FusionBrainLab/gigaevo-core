@@ -1,10 +1,5 @@
-"""
-Island selector for handling intelligent island selection for programs.
-"""
-
-from abc import ABC, abstractmethod
 import random
-from typing import List, Optional
+from abc import ABC, abstractmethod
 
 from loguru import logger
 
@@ -16,14 +11,10 @@ class IslandCompatibilityMixin:
     """Mixin providing common island compatibility checking functionality."""
 
     @staticmethod
-    async def _can_accept_program(
-        island: MapElitesIsland, program: Program
-    ) -> bool:
-        """Check if island can accept program with comprehensive logging."""
+    async def _can_accept_program(island: MapElitesIsland, program: Program) -> bool:
         island_id = island.config.island_id
 
         try:
-            # Check required keys
             required_keys = set(island.config.behavior_space.behavior_keys)
             if not required_keys.issubset(program.metrics.keys()):
                 missing_keys = required_keys - program.metrics.keys()
@@ -33,30 +24,14 @@ class IslandCompatibilityMixin:
 
                 return False
 
-            # Get the cell and check if there's an existing program
             cell = island.config.behavior_space.get_cell(program.metrics)
             existing = await island.archive_storage.get_elite(cell)
 
-            # Check if program can be accepted
             can_accept = existing is None or island.config.archive_selector(
                 program, existing
             )
-
-            if can_accept:
-                logger.debug(
-                    f"🏝️ {island_id} ACCEPTED {program.id} (existing: {existing is not None}, cell: {cell})"
-                )
-            else:
-                logger.debug(
-                    f"🏝️ {island_id} REJECTED {program.id}: not better than existing (cell: {cell})"
-                )
-
             return can_accept
-
         except Exception as e:
-            logger.warning(
-                f"🏝️ {island_id} REJECTED {program.id}: evaluation error - {e}"
-            )
             return False
 
 
@@ -65,8 +40,8 @@ class IslandSelector(ABC):
 
     @abstractmethod
     async def select_island(
-        self, program: Program, islands: List[MapElitesIsland]
-    ) -> Optional[MapElitesIsland]:
+        self, program: Program, islands: list[MapElitesIsland]
+    ) -> MapElitesIsland | None:
         """
         Select the best island for a program.
 
@@ -86,13 +61,12 @@ class WeightedIslandSelector(IslandSelector, IslandCompatibilityMixin):
         self._selection_count = 0
 
     async def select_island(
-        self, program: Program, islands: List[MapElitesIsland]
-    ) -> Optional[MapElitesIsland]:
+        self, program: Program, islands: list[MapElitesIsland]
+    ) -> MapElitesIsland | None:
         """Select island using weighted random selection based on size."""
         if not islands:
             return None
 
-        # Find islands that can accept the program
         accepting_islands = []
         for island in islands:
             try:
@@ -104,24 +78,20 @@ class WeightedIslandSelector(IslandSelector, IslandCompatibilityMixin):
                 )
 
         if not accepting_islands:
-            logger.debug(
-                f"🚫 No accepting islands found for program {program.id}"
-            )
+            logger.debug(f"🚫 No accepting islands found for program {program.id}")
             return None
 
-        # Weighted selection based on size
         selected = await self._weighted_select(accepting_islands)
         return selected
 
     @staticmethod
     async def _weighted_select(
-        islands: List[MapElitesIsland],
+        islands: list[MapElitesIsland],
     ) -> MapElitesIsland:
         """Select island using weighted random selection based on size."""
         if not islands:
             return None
 
-        # Get sizes for all islands
         island_info = []
         for island in islands:
             try:
@@ -136,14 +106,11 @@ class WeightedIslandSelector(IslandSelector, IslandCompatibilityMixin):
         if not island_info:
             return None
 
-        # Calculate weights (inverse of size to favor less populated islands)
         total_size = sum(size for _, size in island_info)
         if total_size == 0:
             # If all islands are empty, select randomly
             selected = random.choice(islands)
-            logger.debug(
-                f"🏝️ Selected {selected.config.island_id} (random - all empty)"
-            )
+            logger.debug(f"🏝️ Selected {selected.config.island_id} (random - all empty)")
             return selected
 
         weights = []
@@ -170,13 +137,12 @@ class RoundRobinIslandSelector(IslandSelector, IslandCompatibilityMixin):
         self._last_index = -1
 
     async def select_island(
-        self, program: Program, islands: List[MapElitesIsland]
-    ) -> Optional[MapElitesIsland]:
+        self, program: Program, islands: list[MapElitesIsland]
+    ) -> MapElitesIsland | None:
         """Select island using round-robin selection."""
         if not islands:
             return None
 
-        # Find islands that can accept the program
         accepting_islands = []
         for island in islands:
             try:
@@ -190,7 +156,6 @@ class RoundRobinIslandSelector(IslandSelector, IslandCompatibilityMixin):
         if not accepting_islands:
             return None
 
-        # Round-robin selection
         self._last_index = (self._last_index + 1) % len(accepting_islands)
         selected = accepting_islands[self._last_index]
         logger.debug(f"🏝️ Selected {selected.config.island_id} (round-robin)")
@@ -201,13 +166,12 @@ class RandomIslandSelector(IslandSelector, IslandCompatibilityMixin):
     """Random selection among compatible islands."""
 
     async def select_island(
-        self, program: Program, islands: List[MapElitesIsland]
-    ) -> Optional[MapElitesIsland]:
+        self, program: Program, islands: list[MapElitesIsland]
+    ) -> MapElitesIsland | None:
         """Select island using random selection."""
         if not islands:
             return None
 
-        # Find islands that can accept the program
         accepting_islands = []
         for island in islands:
             try:
@@ -221,7 +185,6 @@ class RandomIslandSelector(IslandSelector, IslandCompatibilityMixin):
         if not accepting_islands:
             return None
 
-        # Random selection
         selected = random.choice(accepting_islands)
         logger.debug(f"🏝️ Selected {selected.config.island_id} (random)")
         return selected
