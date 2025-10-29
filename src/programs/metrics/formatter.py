@@ -1,5 +1,6 @@
 from __future__ import annotations
-from src.programs.metrics.context import MetricsContext, VALIDITY_KEY
+
+from src.programs.metrics.context import VALIDITY_KEY, MetricsContext
 
 
 class MetricsFormatter:
@@ -15,13 +16,12 @@ class MetricsFormatter:
       - is_valid (Validity flag; ↑ better) +0.00000
     """
 
-    def __init__(self, context: MetricsContext, use_range_normalization: bool = False):
+    def __init__(self, context: MetricsContext):
         self.context = context
-        self.use_range_normalization = use_range_normalization
 
     def format_metrics_block(self, metrics: dict[str, float]) -> str:
         lines: list[str] = []
-        
+
         for key in self.context.prompt_keys():
             spec = self.context.specs[key]
             decimals = spec.decimals
@@ -30,11 +30,13 @@ class MetricsFormatter:
             orient = "↑" if self.context.is_higher_better(key) else "↓"
             value = metrics[key]
             unit_str = f" {unit}" if unit else ""
-            # Use the new is_sentinel method to detect sentinel values
             is_sentinel_value = spec.is_sentinel(value)
-            sentinel = " [sentinel]" if is_sentinel_value and key != VALIDITY_KEY else ""
-            
-            lines.append(f"- {key} : {value:.{decimals}f}{unit_str} ({desc}; {orient} better){sentinel}")
+            sentinel = (
+                " [sentinel]" if is_sentinel_value and key != VALIDITY_KEY else ""
+            )
+            lines.append(
+                f"- {key} : {value:.{decimals}f}{unit_str} ({desc}; {orient} better){sentinel}"
+            )
         return "\n".join(lines)
 
     def format_delta_block(
@@ -43,42 +45,80 @@ class MetricsFormatter:
         parent: dict[str, float],
         child: dict[str, float],
         include_primary: bool = False,
-        use_range_normalization: bool | None = None,
+        style: str = "table",
     ) -> str:
-        use_range_normalization = (
-            self.use_range_normalization if use_range_normalization is None else use_range_normalization
-        )
-        lines: list[str] = []
-        primary_key = self.context.get_primary_key()
-        for key in self.context.prompt_keys():
-            if not include_primary and key == primary_key:
-                continue
-            spec = self.context.specs[key]
+        ctx = self.context
+        primary = ctx.get_primary_key()
+        keys = [k for k in ctx.prompt_keys() if include_primary or k != primary]
+
+        def u(unit: str) -> str:
+            return f" {unit}" if unit else ""
+
+        rows = []
+        for key in keys:
+            spec = ctx.specs[key]
             decimals = spec.decimals
-            desc = spec.description or ""
             unit = spec.unit or ""
-            signif = spec.significant_change or 0.0
-            orient = "↑" if self.context.is_higher_better(key) else "↓"
-            p = parent[key]
-            c = child[key]
-            delta = c - p
-            unit_str = f" {unit}" if unit else ""
-            percent = (100.0 * delta / abs(p)) if abs(p) > 1e-12 else None
-            if use_range_normalization:
-                bounds = self.context.get_bounds(key)
-                if bounds is not None:
-                    lo, hi = bounds
-                    if lo is not None and hi is not None and hi > lo:
-                        rng = hi - lo
-                        delta = delta / rng
-                        unit_str = ""  # range-normalized is unitless
-                        percent = None
-            mark = " *" if signif and abs(delta) >= signif else ""
-            if percent is None:
-                lines.append(f"- {key} ({desc}; {orient} better) {delta:+.{decimals}f}{unit_str}{mark}")
-            else:
-                lines.append(f"- {key} ({desc}; {orient} better) {delta:+.{decimals}f}{unit_str} ({percent:+.1f}%)" + mark)
-        return "\n".join(lines) if lines else "N/A"
+            desc = spec.description or ""
+            signif = float(spec.significant_change or 0.0)
+            higher_better = ctx.is_higher_better(key)
+
+            p = float(parent[key])
+            c = float(child[key])
+            d = c - p
+            pct = (100.0 * d / abs(p)) if abs(p) > 1e-12 else None
+            orient = "↑" if higher_better else "↓"
+            impact = (
+                "improved"
+                if (d > 0) == higher_better
+                else ("no change" if d == 0 else "worsened")
+            )
+            sig = "★" if signif and abs(d) >= signif else ""
+
+            parent_s = f"{p:.{decimals}f}{u(unit)}"
+            child_s = f"{c:.{decimals}f}{u(unit)}"
+            delta_s = f"{d:+.{decimals}f}{u(unit)}"
+            extra_pct_sign = ""
+            if pct is not None and pct > 100:
+                extra_pct_sign = ">"
+            elif pct is not None and pct < -100:
+                extra_pct_sign = "<"
+            if pct is not None:
+                pct = min(max(pct, -100.0), 100.0)
+            pct_s = f"{extra_pct_sign}{pct:+.1f}%" if pct is not None else "—"
+
+            rows.append(
+                (
+                    key,
+                    desc,
+                    f"{orient} better",
+                    parent_s,
+                    child_s,
+                    delta_s,
+                    pct_s,
+                    f"{impact} {sig}".strip(),
+                )
+            )
+
+        if not rows:
+            return "N/A"
+
+        if style == "bullets":
+            return "\n".join(
+                f"- {k} ({dirn}) | {p} → {c} | Δ {dl}"
+                f"{f' ({pc})' if pc != '—' else ''} | {imp}"
+                for k, _, dirn, p, c, dl, pc, imp in rows
+            )
+
+        header = (
+            "| metric | direction | parent | child | Δ | %Δ | impact |\n"
+            "|---|:--:|---:|---:|---:|---:|:--:|"
+        )
+        body = "\n".join(
+            f"| {k} | {dirn} | {p} | {c} | {dl} | {pc} | {imp} |"
+            for k, _, dirn, p, c, dl, pc, imp in rows
+        )
+        return f"{header}\n{body}"
 
     def format_metrics_description(self) -> str:
         """Build a concise overview of available metrics from context.
@@ -99,8 +139,6 @@ class MetricsFormatter:
             if bounds is not None and bounds[0] is not None and bounds[1] is not None:
                 parts.append(f"[{bounds[0]}, {bounds[1]}] range")
             if spec.unit:
-                parts.append(f"unit=\"{spec.unit}\"")
+                parts.append(f'unit="{spec.unit}"')
             lines.append(f"- {key}: {spec.description} (" + "; ".join(parts) + ")")
         return "\n".join(lines)
-
-

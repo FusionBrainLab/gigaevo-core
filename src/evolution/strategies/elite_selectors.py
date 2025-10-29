@@ -1,5 +1,5 @@
-from abc import ABC, abstractmethod
 import random
+from abc import ABC, abstractmethod
 from typing import Callable, List, Optional, Protocol
 
 from loguru import logger
@@ -9,18 +9,18 @@ from src.programs.program import Program
 
 
 class EliteSelectorProtocol(Protocol):
-    def __call__(self, programs: List[Program], total: int) -> List[Program]:
+    def __call__(self, programs: list[Program], total: int) -> list[Program]:
         pass
 
 
 class EliteSelector(ABC):
     @abstractmethod
-    def __call__(self, programs: List[Program], total: int) -> List[Program]:
+    def __call__(self, programs: list[Program], total: int) -> list[Program]:
         pass
 
 
 class RandomEliteSelector(EliteSelector):
-    def __call__(self, programs: List[Program], total: int) -> List[Program]:
+    def __call__(self, programs: list[Program], total: int) -> list[Program]:
         if len(programs) <= total:
             logger.warning(
                 f"Only {len(programs)} elites available, requested {total}. Returning all available elites without duplicates."
@@ -30,13 +30,11 @@ class RandomEliteSelector(EliteSelector):
 
 
 class FitnessProportionalEliteSelector(EliteSelector):
-    def __init__(
-        self, fitness_key: str, fitness_key_higher_is_better: bool = True
-    ):
+    def __init__(self, fitness_key: str, fitness_key_higher_is_better: bool = True):
         self.fitness_key = fitness_key
         self.higher_is_better = fitness_key_higher_is_better
 
-    def __call__(self, programs: List[Program], total: int) -> List[Program]:
+    def __call__(self, programs: list[Program], total: int) -> list[Program]:
         if len(programs) <= total:
             logger.warning(
                 f"Only {len(programs)} elites available, requested {total}. Returning all available elites without duplicates."
@@ -100,7 +98,7 @@ class ScalarTournamentEliteSelector(EliteSelector):
         )
         return values[0]
 
-    def __call__(self, programs: List[Program], total: int) -> List[Program]:
+    def __call__(self, programs: list[Program], total: int) -> list[Program]:
         if len(programs) <= total:
             logger.warning(
                 f"Only {len(programs)} programs available, requested {total}. Returning all."
@@ -136,9 +134,7 @@ class ParetoTournamentEliteSelector(EliteSelector):
         tournament_size: int = 3,
     ):
         if not fitness_keys or len(fitness_keys) < 2:
-            raise ValueError(
-                "ParetoTournament requires at least two fitness keys."
-            )
+            raise ValueError("ParetoTournament requires at least two fitness keys.")
 
         self.fitness_keys = fitness_keys
         self.higher_is_better = fitness_key_higher_is_better or {
@@ -148,17 +144,13 @@ class ParetoTournamentEliteSelector(EliteSelector):
         self.tournament_size = tournament_size
 
     def _pareto_rank(self, target: Program, population: List[Program]) -> int:
-        vec = extract_fitness_values(
-            target, self.fitness_keys, self.higher_is_better
-        )
+        vec = extract_fitness_values(target, self.fitness_keys, self.higher_is_better)
         return sum(
             1
             for other in population
             if other is not target
             and dominates(
-                extract_fitness_values(
-                    other, self.fitness_keys, self.higher_is_better
-                ),
+                extract_fitness_values(other, self.fitness_keys, self.higher_is_better),
                 vec,
             )
         )

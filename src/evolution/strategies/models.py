@@ -1,49 +1,9 @@
-from enum import Enum
 import math
+from enum import Enum
 from typing import Dict, List, Tuple
 
 from loguru import logger
-from pydantic import (
-    BaseModel,
-    Field,
-    computed_field,
-    field_validator,
-    model_validator,
-)
-
-# Constants
-DEFAULT_REDIS_PREFIX = "mapelites"
-MIN_COORDINATE = 0
-DEFAULT_MIGRATION_RATE = 0.05
-
-
-class QualityDiversityMetrics(BaseModel):
-    """Simple Quality-Diversity metrics."""
-
-    qd_score: float = Field(description="Sum of all fitness values")
-    coverage: float = Field(
-        ge=0.0, le=1.0, description="Fraction of cells filled (0-1)"
-    )
-    maximum_fitness: float = Field(description="Best fitness value")
-    average_fitness: float = Field(description="Average fitness")
-    filled_cells: int = Field(ge=0, description="Number of filled cells")
-    total_cells: int = Field(gt=0, description="Total number of cells")
-
-    @computed_field
-    @property
-    def coverage_percentage(self) -> float:
-        return self.coverage * 100.0
-
-    def to_dict(self) -> Dict[str, float]:
-        return {
-            "qd_score": self.qd_score,
-            "coverage": self.coverage,
-            "coverage_percentage": round(self.coverage_percentage, 2),
-            "maximum_fitness": self.maximum_fitness,
-            "average_fitness": self.average_fitness,
-            "filled_cells": float(self.filled_cells),
-            "total_cells": float(self.total_cells),
-        }
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 
 class SelectionMode(Enum):
@@ -59,9 +19,7 @@ class BinningType(Enum):
 
     LINEAR = "linear"  # Standard linear binning
     LOGARITHMIC = "logarithmic"  # Log-scaled bins for exponential distributions
-    SQUARE_ROOT = (
-        "square_root"  # Square root scaling for moderate non-linearity
-    )
+    SQUARE_ROOT = "square_root"  # Square root scaling for moderate non-linearity
     QUANTILE = "quantile"  # Quantile-based binning (requires pre-computed data)
 
 
@@ -104,9 +62,7 @@ class BehaviorSpace(BaseModel):
     def validate_resolution(cls, v):
         for key, res in v.items():
             if res <= 0:
-                raise ValueError(
-                    f"Resolution for {key} must be positive, got {res}"
-                )
+                raise ValueError(f"Resolution for {key} must be positive, got {res}")
         return v
 
     @field_validator("binning_types")
@@ -114,22 +70,16 @@ class BehaviorSpace(BaseModel):
     def validate_binning_types(cls, v):
         for key, binning_type in v.items():
             if not isinstance(binning_type, BinningType):
-                raise ValueError(
-                    f"Invalid binning type for {key}: {binning_type}"
-                )
+                raise ValueError(f"Invalid binning type for {key}: {binning_type}")
         return v
 
     @model_validator(mode="after")
     def validate_consistency(self):
-        missing_bounds = set(self.behavior_keys) - set(
-            self.feature_bounds.keys()
-        )
+        missing_bounds = set(self.behavior_keys) - set(self.feature_bounds.keys())
         if missing_bounds:
             raise ValueError(f"Missing feature bounds for: {missing_bounds}")
 
-        missing_resolution = set(self.behavior_keys) - set(
-            self.resolution.keys()
-        )
+        missing_resolution = set(self.behavior_keys) - set(self.resolution.keys())
         if missing_resolution:
             raise ValueError(f"Missing resolution for: {missing_resolution}")
 
@@ -184,13 +134,9 @@ class BehaviorSpace(BaseModel):
         if binning_type == BinningType.LINEAR:
             coordinate = self._linear_binning(value, min_val, max_val, num_bins)
         elif binning_type == BinningType.LOGARITHMIC:
-            coordinate = self._logarithmic_binning(
-                value, min_val, max_val, num_bins
-            )
+            coordinate = self._logarithmic_binning(value, min_val, max_val, num_bins)
         elif binning_type == BinningType.SQUARE_ROOT:
-            coordinate = self._square_root_binning(
-                value, min_val, max_val, num_bins
-            )
+            coordinate = self._square_root_binning(value, min_val, max_val, num_bins)
         else:
             # Fallback to linear
             logger.warning(
@@ -198,8 +144,7 @@ class BehaviorSpace(BaseModel):
             )
             coordinate = self._linear_binning(value, min_val, max_val, num_bins)
 
-        # Clamp to valid range
-        return max(MIN_COORDINATE, min(coordinate, num_bins - 1))
+        return max(0, min(coordinate, num_bins - 1))
 
     def _linear_binning(
         self, value: float, min_val: float, max_val: float, num_bins: int
@@ -217,7 +162,6 @@ class BehaviorSpace(BaseModel):
         if max_val == min_val:
             return 0
 
-        # Clamp value at least to min_val (>0) to avoid math domain errors
         safe_value = max(value, min_val)
 
         log_min = math.log(min_val)
@@ -249,7 +193,6 @@ class BehaviorSpace(BaseModel):
 
         centers = []
         for i in range(num_bins):
-            # Calculate normalized position in bin
             normalized_pos = (i + 0.5) / num_bins
 
             if binning_type == BinningType.LINEAR:
@@ -265,7 +208,6 @@ class BehaviorSpace(BaseModel):
                 sqrt_center = sqrt_min + normalized_pos * (sqrt_max - sqrt_min)
                 center = sqrt_center**2
             else:
-                # Fallback to linear
                 center = min_val + normalized_pos * (max_val - min_val)
 
             centers.append(center)
@@ -297,7 +239,6 @@ class BehaviorSpace(BaseModel):
 
         widths = []
         for i in range(num_bins):
-            # Calculate bin boundaries
             lower_norm = i / num_bins
             upper_norm = (i + 1) / num_bins
 

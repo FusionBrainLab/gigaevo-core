@@ -1,0 +1,8 @@
+# @package _global_
+
+logging:
+  level: DEBUG
+  log_dir: ${constants.log_dir}
+  rotation: ${constants.log_rotation}
+  retention: ${constants.log_retention}
+

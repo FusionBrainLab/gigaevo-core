@@ -1,16 +1,5 @@
 # MetaEvolve: LLM-based Evolutionary Optimization System
 
-MetaEvolve is a flexible, professional-grade evolutionary optimization system that uses Large Language Models (LLMs) for code generation and mutation. It's designed to solve complex optimization problems through multi-island evolution with diverse behavior spaces.
-
-## Features
-
-- **Flexible Problem Configuration**: Support for any optimization problem through configurable problem directories
-- **Multi-Island Evolution**: MAP-Elites algorithm with multiple specialized islands
-- **LLM-Based Mutation**: Intelligent code generation using state-of-the-art language models
-- **Performance Monitoring**: Built-in system performance tracking and auto-optimization
-- **Modular Architecture**: Clean separation of concerns with extensible DAG-based execution
-- **Professional CLI**: Comprehensive command-line interface with extensive configuration options
-
 ## Installation
 
 Recommended Python version: 3.12+
@@ -19,19 +8,12 @@ Recommended Python version: 3.12+
 # Clone the repository
 git clone <repository-url>
 cd metaevolve
-
-# Install the package in development mode
 pip install -e .
 
-# Or install with development dependencies
-pip install -e ".[dev]"
-
-# For examples and visualization
-pip install -e ".[examples]"
-
 # Set up environment variables
-export OPENROUTER_API_KEY=your_openrouter_api_key_here
+export OPENAI_API_KEY=<your_llm_api_key_here> (required)
 ```
+or using `.env` file 
 
 ## Quick Start
 
@@ -43,6 +25,10 @@ First we need to launch redis-server as a separate process.
 redis-server
 ```
 
+### Legacy approach
+
+`run.py` is pure python example of launching the evolution which can be easily tweaked
+
 ```bash
 # Run evolution on the hexagon packing problem
 python run.py --problem-dir problems/hexagon_pack
@@ -51,19 +37,15 @@ python run.py --problem-dir problems/hexagon_pack
 python run.py --problem-dir problems/hexagon_pack --redis-db 1
 ```
 
-### Advanced Configuration
+### Hydra-based configs (Recommended)
 
+`run_hydra.py` utilizes composable hydra configs for experiments. See `config` folder to undertstand how the config is composed
+example runs
 ```bash
-# Full configuration example
-python run.py \
-    --problem-dir problems/hexagon_pack \
-    --redis-host localhost \
-    --redis-port 6379 \
-    --redis-db 2 \
-    --max-concurrent-dags 8 \
-    --log-level DEBUG \
-    --log-dir logs/experiment_1
+python run_hydra.py problem.name=heilbron_simplified
+python run_hydra.py problem.name=heilbron_simplified redis.db=1 constants.num_parents=1  constants.default_llm_base_url=<my_api_endpoint>
 ```
+
 
 ## Problem Directory Structure
 
@@ -95,7 +77,7 @@ problems/your_problem/
 
 ### Optional Files
 
-- **`helper.py`**: Utility functions that solutions can import
+- **`helper.py / <any additional py files>`**: Auxiliary functions that solutions can import
 - **`context.py`**: Context builder function for problems requiring external data
 
 ## Example Problems
@@ -115,13 +97,8 @@ The system includes three example problems demonstrating different types of opti
 
 **Usage**:
 ```bash
-# Basic hexagon packing optimization
 python run.py --problem-dir problems/hexagon_pack
-
-# With high performance settings
-python run.py --problem-dir problems/hexagon_pack \
-    --max-concurrent-dags 12 \
-    --log-level INFO
+python run_hydra.py problem.name=hexagon_pack
 ```
 
 ### 2. Regression Optimization (`problems/optimization/`)
@@ -141,118 +118,7 @@ python run.py --problem-dir problems/hexagon_pack \
 python run.py --problem-dir problems/optimization \
     --add-context
 
-# With extended evolution
-python run.py --problem-dir problems/optimization \
-    --add-context \
-    --max-generations 100 \
-    --log-level DEBUG
-```
-
-### 3. Circle Packing (`problems/toy_example/`)
-
-**Problem**: Arrange 9 non-overlapping circles with variable radii in a unit square to maximize total radius sum.
-
-**Type**: Geometric optimization with variable sizing
-
-**Key Features**:
-- Variable circle sizes (adaptive radius optimization)
-- Unit square constraint
-- Multiple initial strategies (simple, jittered, optimized)
-
-**Usage**:
-```bash
-# Circle packing optimization
-python run.py --problem-dir problems/toy_example
-
-# With performance monitoring disabled for speed
-python run.py --problem-dir problems/toy_example \
-    --max-concurrent-dags 16
-```
-
-## Configuration Options
-
-### Command Line Arguments
-
-#### Required
-- `--problem-dir`: Directory containing problem files
-
-#### Context Configuration
-- `--add-context`: Enable context mode (required for problems with `context.py`)
-
-#### Redis Configuration
-- `--redis-url`: Redis URL, e.g. `redis://host:port/db` (overrides host/port/db)
-- `--redis-host`: Redis hostname (default: localhost)
-- `--redis-port`: Redis port (default: 6379)
-- `--redis-db`: Redis database number (default: 0)
-
-#### Evolution Configuration
-- `--max-generations`: Maximum number of generations (default: unlimited)
-- `--population-size`: Initial population size (default: auto-determined)
-
-#### Redis Selection Mode
-- `--use-redis-selection`: Use existing Redis programs instead of initial_programs/
-- `--source-redis-url`: Source Redis URL for program selection (overrides source host/port/db)
-- `--source-redis-db`: Source Redis database for program selection (default: 0)
-- `--top-n`: Number of top programs to select by fitness (default: 50)
-
-#### Performance Configuration
-- `--max-concurrent-dags`: Maximum concurrent DAG executions (default: 6)
-
-#### Logging Configuration
-- `--log-level`: Logging level (DEBUG, INFO, WARNING, ERROR)
-- `--log-dir`: Directory for log files (default: logs)
-
-### Environment Variables
-
-- `OPENROUTER_API_KEY`: Required for LLM access
-- `REDIS_HOST`: Override default Redis host
-- `REDIS_PORT`: Override default Redis port
-- `REDIS_DB`: Override default Redis database
-
-## Advanced Usage Examples
-
-### Continuing Evolution from Previous Run
-
-```bash
-# Run initial evolution
-python run.py --problem-dir problems/hexagon_pack \
-    --redis-db 1
-
-# Continue evolution using best programs from previous run
-python run.py --problem-dir problems/hexagon_pack \
-    --redis-db 2 \
-    --use-redis-selection \
-    --source-redis-db 1 \
-    --top-n 30
-```
-
-### High-Performance Configuration
-
-```bash
-# Maximum performance setup
-python run.py --problem-dir problems/hexagon_pack \
-    --max-concurrent-dags 16 \
-    --log-level WARNING \
-    --redis-db 3
-```
-
-### Debugging and Development
-
-```bash
-# Full debugging information
-python run.py --problem-dir problems/toy_example \
-    --log-level DEBUG \
-    --log-dir debug_logs \
-    --max-concurrent-dags 2
-```
-
-### Remote Redis Configuration
-
-```bash
-# Using remote Redis server
-python run.py --problem-dir problems/optimization \
-    --add-context \
-    --redis-url redis://redis-server.example.com:6380/5
+python run_hydra.py problem.name=optimization
 ```
 
 ## Architecture
@@ -305,11 +171,9 @@ Persistent, high-performance program and state management:
 
 ### Behavior Spaces
 
-The system uses three specialized islands:
+The system in default configuration uses one island:
 
-1. **Fitness Island**: Focuses on pure fitness optimization using fitness and validity dimensions
-2. **Simplicity Island**: Balances performance and code elegance using Pareto optimization across fitness, complexity_score, and validity dimensions
-3. **Entropy Island**: Rewards fitness combined with structural diversity using fitness, AST entropy, and validity dimensions
+**Fitness Island**: focuses on fitness purely
 
 ### Execution Pipeline
 
@@ -340,33 +204,6 @@ MetaEvolve operates through a continuous cycle of evolution, evaluation, and opt
 │ 5. Migrate Between Islands (periodically)                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
-
-### 3. Program Evaluation Pipeline
-Each generated program goes through a multi-stage DAG pipeline:
-
-1. **Validation Stage**: Check syntax and compilation
-2. **Execution Stage**: Run the program with safety limits
-3. **Complexity Analysis**: Compute structural metrics (AST entropy, node count, etc.)
-4. **Domain Validation**: Run problem-specific validation function
-5. **Insights Generation**: LLM-based analysis and feedback
-6. **Metrics Collection**: Aggregate performance data
-
-### 4. Multi-Island Strategy
-The system maintains three specialized islands:
-
-- **🏆 Fitness Island**: Pure optimization for best solutions using fitness proportional selection
-- **⚖️ Simplicity Island**: Balance between performance and code elegance using Pareto front optimization (fitness vs. complexity)  
-- **🌀 Entropy Island**: Reward fitness combined with structural diversity using Pareto front optimization (fitness vs. AST entropy)
-
-### 5. Migration & Selection
-- Programs migrate between islands based on performance
-- Each island uses specialized selection criteria (Pareto fronts, fitness proportional, etc.)
-- Archive management prevents overcrowding while preserving diversity
-
-### 6. LLM-Driven Mutation
-- Context-aware code generation using problem-specific prompts
-- Incorporates insights from previous successful programs
-- Supports both incremental improvements and radical rewrites
 
 ## Creating New Problems
 
@@ -424,7 +261,7 @@ def validate(payload):
 
 ### Step 4: Create Initial Programs
 
-Add at least one Python file to the `initial_programs/` directory. The expected function name is `entrypoint`.
+Add at least one Python file to the `initial_programs/` directory. The expected function name is `entrypoint` (configurable in pipeline builder).
 
 #### For Problems Without Context:
 ```python
@@ -491,126 +328,17 @@ python run.py --problem-dir problems/my_problem
 python run.py --problem-dir problems/my_problem --add-context
 ```
 
-## Performance Monitoring
-
-MetaEvolve includes comprehensive performance monitoring:
-
-- **Real-time Metrics**: CPU, memory, and Redis usage
-- **Auto-optimization**: Automatic resource adjustment
-- **Alert System**: Performance degradation warnings
-- **Dashboard Logging**: Periodic performance summaries
-
-## 📊 Performance
-
-MetaEvolve is designed for high performance and scalability. Benchmarks on standard hardware (8-core CPU, 16GB RAM):
-
-| Metric | Value |
-|--------|-------|
-| Programs/second | 100-500+ |
-| Concurrent DAGs | 6-16 (configurable) |
-| Evolution cycles/second | 5-20 |
-| Memory usage | <1GB for 10k programs |
-| Redis operations/second | 1000+ |
-
-### Performance Tuning
+with hydra DAG is set automatically to include context generation by default
 
 ```bash
-# High-performance configuration
-python run.py \
-    --problem-dir problems/hexagon_pack \
-    --max-concurrent-dags 12 \
-    --redis-db 1
-
-# Memory-efficient configuration  
-python run.py \
-    --problem-dir problems/hexagon_pack \
-    --max-concurrent-dags 4 \
-    --log-level WARNING
+python run_hydra.py problem.name=my_problem
 ```
+works for both cases
 
-## ⚙️ Advanced Configuration
+### Evolution analysis
 
-### Evolution Engine Settings
+There are several helper scripts included in `tools`
+1) `redis2pd.py` converts evolution history stored in redis to .csv file which can be studied with pandas
+2) `comparison.py` allows for comparing multiple / single evolution runs
 
-The system can be fine-tuned by modifying the configuration in the source code:
-
-```python
-# In run.py - create_evolution_strategy()
-engine_config = EngineConfig(
-    loop_interval=1.0,                    # Evolution frequency (seconds)
-    max_elites_per_generation=6,          # Selection pressure
-    max_mutations_per_generation=8,       # Exploration rate
-    required_behavior_keys=behavior_keys, # Required metrics
-    log_validation_failures=True          # Debug failed programs
-)
-```
-
-### Runner Configuration
-
-```python
-# In run.py - run_evolution_experiment()
-runner_config = RunnerConfig(
-    poll_interval=5.0,                    # DAG polling frequency
-    max_concurrent_dags=6,                # Parallelism level
-    log_interval=15                       # Status reporting interval
-)
-```
-
-### Behavior Space Customization
-
-```python
-# In run.py - create_behavior_spaces()
-fitness_validity_space = BehaviorSpace(
-    feature_bounds={
-        'fitness': (-7.0, -3.93),         # Expected fitness range
-        'is_valid': (-0.01, 1.01)         # Binary validity flag
-    },
-    resolution={
-        'fitness': 30,                     # Discretization granularity
-        'is_valid': 2
-    },
-    binning_types={
-        'fitness': BinningType.LINEAR,     # Linear or logarithmic binning
-        'is_valid': BinningType.LINEAR
-    }
-)
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Missing API Key**: Ensure `OPENROUTER_API_KEY` is set
-2. **Redis Connection**: Check Redis server is running
-3. **Problem Directory**: Verify all required files are present
-4. **Permissions**: Ensure write access to log directory
-5. **Context Problems**: Use `--add-context` flag for problems with `context.py`
-
-### Debug Mode
-
-Enable detailed debugging by setting:
-
-```bash
---log-level DEBUG
-```
-
-### Log Files
-
-Logs are automatically rotated and stored in:
-- Default: `logs/` directory
-- Custom: Use `--log-dir` option
-
-## Advanced Usage
-
-### Custom Behavior Spaces
-
-Modify `create_behavior_spaces()` to define custom optimization criteria.
-
-### Custom Mutation Operators
-
-Extend `LLMMutationOperator` for problem-specific mutations.
-
-### Custom Execution Stages
-
-Add new stages to the DAG pipeline in `create_dag_stages()`.
-
+#TODO add DAG tool decription

@@ -8,10 +8,7 @@ from src.evolution.engine.acceptor import (
     DefaultProgramEvolutionAcceptor,
     ProgramEvolutionAcceptor,
 )
-from src.evolution.mutation.parent_selector import (
-    ParentSelector,
-    RandomParentSelector,
-)
+from src.evolution.mutation.parent_selector import ParentSelector, RandomParentSelector
 
 
 class EngineConfig(BaseModel):
@@ -34,6 +31,6 @@ class EngineConfig(BaseModel):
     )
     program_acceptor: ProgramEvolutionAcceptor = Field(
         default_factory=lambda: DefaultProgramEvolutionAcceptor(),
-        description="Acceptor for determining if programs should be accepted for evolution"
+        description="Acceptor for determining if programs should be accepted for evolution",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)

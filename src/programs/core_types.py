@@ -1,32 +1,58 @@
-"""Core data types for MetaEvolve programs.
-
-This module contains fundamental data structures that are used across the system
-but don't depend on other modules to avoid circular imports.
-"""
+from __future__ import annotations
 
 import base64
 import pickle
+import traceback
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-from pydantic import (
-    BaseModel,
-    Field,
-    field_serializer,
-)
+from pydantic import BaseModel, Field, field_serializer
+
+from src.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
 
 
-def _pickle_b64_serialize(value: Any) -> str:
-    """Serialize a value to base64-encoded pickle string."""
-    return base64.b64encode(
-        pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
-    ).decode("utf-8")
+class StageIO(BaseModel):
+    """Strict base for stage inputs/outputs (used by stage classes & DAG typing)."""
+
+    model_config = {"extra": "forbid", "arbitrary_types_allowed": True}
 
 
-def _pickle_b64_deserialize(value: str) -> Any:
-    """Deserialize a base64-encoded pickle string to a value."""
-    return pickle.loads(base64.b64decode(value.encode("utf-8")))
+class VoidInput(StageIO):
+    pass
+
+
+class VoidOutput(StageIO):
+    pass
+
+
+class StageError(BaseModel):
+    type: str = Field(..., description="Exception class or category")
+    message: str = Field(..., description="Human-readable message")
+    stage: Optional[str] = Field(None, description="Stage class name, if known")
+    traceback: Optional[str] = Field(None, description="Formatted traceback")
+
+    @classmethod
+    def from_exception(
+        cls,
+        exc: BaseException,
+        *,
+        stage: Optional[str] = None,
+        include_traceback: bool = True,
+    ) -> "StageError":
+        tb_str = None
+        if include_traceback:
+            tb_str = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )
+        msg = str(exc) or repr(exc)
+        return cls(type=type(exc).__name__, message=msg, stage=stage, traceback=tb_str)
+
+    def pretty(self, include_traceback: bool = False) -> str:
+        head = f"[{self.stage or 'unknown'}] {self.type}: {self.message}"
+        if include_traceback and self.traceback:
+            return f"{head}\n\nTraceback:\n{self.traceback}"
+        return head
 
 
 class StageState(str, Enum):
@@ -40,95 +66,69 @@ class StageState(str, Enum):
     SKIPPED = "skipped"
 
 
-class ProgramStageResult(BaseModel):
-    """Result of a program processing stage."""
+FINAL_STATES = {
+    StageState.COMPLETED,
+    StageState.FAILED,
+    StageState.CANCELLED,
+    StageState.SKIPPED,
+}
 
-    status: StageState = Field(
-        StageState.PENDING, description="Current status of the stage"
-    )
-    output: Optional[Any] = Field(
-        None, description="Output data from the stage"
-    )
-    error: Optional[Any] = Field(
-        None, description="Error information if stage failed"
-    )
-    metadata: Optional[Dict[str, Any]] = Field(
-        None, description="Additional stage metadata"
-    )
-    started_at: Optional[datetime] = Field(
-        None, description="When the stage started"
-    )
-    finished_at: Optional[datetime] = Field(
-        None, description="When the stage finished"
-    )
+
+class ProgramStageResult(BaseModel):
+    status: StageState = Field(StageState.PENDING)
+    output: Optional[Any] = None
+    error: Optional[StageError] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
 
     def duration_seconds(self) -> Optional[float]:
-        """Calculate the duration of the stage in seconds."""
         if self.started_at and self.finished_at:
             return (self.finished_at - self.started_at).total_seconds()
         return None
 
-    def is_running(self) -> bool:
-        """Check if the stage is currently running."""
-        return self.status == StageState.RUNNING
-
-    def is_completed(self) -> bool:
-        """Check if the stage completed successfully."""
-        return self.status == StageState.COMPLETED
-
-    def is_failed(self) -> bool:
-        """Check if the stage failed."""
-        return self.status == StageState.FAILED
-
-    def is_skipped(self) -> bool:
-        """Check if the stage was skipped."""
-        return self.status == StageState.SKIPPED
-
     def mark_started(self) -> None:
-        """Mark the stage as started."""
         self.started_at = datetime.now(timezone.utc)
         self.status = StageState.RUNNING
 
-    def mark_completed(
-        self, output: Any = None, metadata: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """Mark the stage as completed."""
+    def mark_completed(self, output: Optional[Any] = None) -> None:
         self.finished_at = datetime.now(timezone.utc)
         self.status = StageState.COMPLETED
         if output is not None:
             self.output = output
-        if metadata is not None:
-            self.metadata = metadata or {}
 
-    def mark_failed(
-        self, error: Any = None, metadata: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """Mark the stage as failed."""
+    def mark_failed(self, error: StageError) -> None:
         self.finished_at = datetime.now(timezone.utc)
         self.status = StageState.FAILED
-        if error is not None:
-            self.error = error
-        if metadata is not None:
-            self.metadata = metadata or {}
-
-    @field_serializer("output", when_used="json")
-    def serialize_output(self, value: Any) -> Optional[str]:
-        return _pickle_b64_serialize(value) if value is not None else None
-
-    @field_serializer("error", when_used="json")
-    def serialize_error(self, value: Any) -> Optional[str]:
-        return _pickle_b64_serialize(value) if value is not None else None
-
-    @field_serializer("metadata", when_used="json")
-    def serialize_metadata(self, value: Any) -> Optional[str]:
-        return _pickle_b64_serialize(value) if value is not None else None
+        self.error = error
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ProgramStageResult":
-        """Create a ProgramStageResult from a dictionary."""
-        data = dict(data)
-        for key in ("output", "error", "metadata"):
-            if isinstance(data.get(key), str):
-                data[key] = _pickle_b64_deserialize(data[key])
-        return cls.model_validate(data)
+    def success(
+        cls, *, output: Optional[Any] = None, started_at: Optional[datetime] = None
+    ) -> "ProgramStageResult":
+        res = cls(started_at=started_at or datetime.now(timezone.utc))
+        res.mark_completed(output=output)
+        return res
 
+    @classmethod
+    def failure(
+        cls, *, error: StageError, started_at: Optional[datetime] = None
+    ) -> "ProgramStageResult":
+        res = cls(started_at=started_at or datetime.now(timezone.utc))
+        res.mark_failed(error=error)
+        return res
+
+    @field_serializer("output", when_used="json")
+    def _ser_output(self, value: Any | None) -> str | None:
+        return pickle_b64_serialize(value) if value is not None else None
+
+    @field_serializer("error", when_used="json")
+    def _ser_error(self, value: StageError | None) -> str | None:
+        return pickle_b64_serialize(value) if value is not None else None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ProgramStageResult":
+        d = dict(data)
+        for key in ("output", "error"):
+            if isinstance(d.get(key), str):
+                d[key] = pickle_b64_deserialize(d[key])
+        return cls.model_validate(d)

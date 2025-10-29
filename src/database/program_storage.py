@@ -20,6 +20,9 @@ class ProgramStorage(ABC):
     async def get(self, program_id: str) -> Program | None: ...
 
     @abstractmethod
+    async def mget(self, program_ids: list[str]) -> list[Program]: ...
+
+    @abstractmethod
     async def exists(self, program_id: str) -> bool: ...
 
     @abstractmethod
@@ -37,7 +40,9 @@ class ProgramStorage(ABC):
     async def get_all_by_status(self, status: str) -> list[Program]: ...
 
     @abstractmethod
-    async def transition_status(self, program_id: str, old: str | None, new: str) -> None: ...
+    async def transition_status(
+        self, program_id: str, old: str | None, new: str
+    ) -> None: ...
 
     async def wait_for_activity(self, timeout: float) -> None:
         """

@@ -4,11 +4,7 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from src.database.redis_program_storage import RedisProgramStorage
-from src.evolution.strategies.base import (
-    EvolutionStrategy,
-    StrategyMetrics,
-    StrategyStatus,
-)
+from src.evolution.strategies.base import EvolutionStrategy, StrategyMetrics
 from src.programs.program import Program
 
 from .island import IslandConfig, MapElitesIsland
@@ -23,7 +19,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
     def __init__(
         self,
-        island_configs: List[IslandConfig],
+        island_configs: list[IslandConfig],
         program_storage: RedisProgramStorage,
         migration_interval: int = 50,
         enable_migration: bool = True,
@@ -34,7 +30,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
         if not island_configs:
             raise ValueError("At least one island configuration is required")
 
-        self.islands: Dict[str, MapElitesIsland] = {
+        self.islands: dict[str, MapElitesIsland] = {
             cfg.island_id: MapElitesIsland(cfg, program_storage)
             for cfg in island_configs
         }
@@ -46,11 +42,9 @@ class MapElitesMultiIsland(EvolutionStrategy):
         self.generation = 0
         self.last_migration = 0
 
-        # Initialize selectors and routers
         self.island_selector = island_selector or WeightedIslandSelector()
         self.mutant_router = mutant_router or RandomMutantRouter()
 
-        # Calculate global max_size
         total_max_size = 0
         has_size_limits = False
         for cfg in island_configs:
@@ -64,11 +58,8 @@ class MapElitesMultiIsland(EvolutionStrategy):
             f"Initialized MAP-Elites with {len(self.islands)} islands, global max_size={self.max_size}"
         )
 
-    async def add(
-        self, program: Program, island_id: Optional[str] = None
-    ) -> bool:
+    async def add(self, program: Program, island_id: Optional[str] = None) -> bool:
         """Add a program to the best-matching island (or specific one)."""
-        # Manual island assignment
         if island_id is not None and island_id not in self.islands:
             logger.debug(
                 f"Program {program.id} rejected — invalid island_id: {island_id}"
@@ -82,9 +73,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
             )
         )
         if island is None:
-            logger.debug(
-                f"Program {program.id} rejected — no compatible island found"
-            )
+            logger.debug(f"Program {program.id} rejected — no compatible island found")
             return False
 
         try:
@@ -104,7 +93,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
             )
             return False
 
-    async def select_elites(self, total: int = 10) -> List[Program]:
+    async def select_elites(self, total: int = 10) -> list[Program]:
         """Sample elites from all islands (with optional migration)."""
         if (
             self.enable_migration
@@ -116,30 +105,23 @@ class MapElitesMultiIsland(EvolutionStrategy):
         if self.generation % 10 == 0:
             await self._enforce_all_island_size_limits()
 
-        # FIXED: Collect all candidates with their island info, then fairly select
         island_candidates = []
         quotas = self._calculate_island_quotas(total)
 
         for island_id, quota in quotas.items():
             try:
                 if quota > 0:
-                    selected = await self.islands[island_id].select_elites(
-                        quota
-                    )
+                    selected = await self.islands[island_id].select_elites(quota)
                     island_candidates.append((island_id, selected))
             except Exception as e:
-                logger.warning(
-                    f"Failed to select elites from island {island_id}: {e}"
-                )
+                logger.warning(f"Failed to select elites from island {island_id}: {e}")
 
-        # FIXED: Randomize order to prevent bias toward specific islands
         random.shuffle(island_candidates)
 
-        all_elites: List[Program] = []
+        all_elites: list[Program] = []
         for island_id, selected in island_candidates:
             all_elites.extend(selected)
 
-        # FIXED: If we have more than requested, fairly sample rather than truncate
         if len(all_elites) > total:
             all_elites = random.sample(all_elites, total)
 
@@ -148,7 +130,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
         return all_elites
 
-    def _calculate_island_quotas(self, total: int) -> Dict[str, int]:
+    def _calculate_island_quotas(self, total: int) -> dict[str, int]:
         """Evenly distribute elite selection across islands."""
         if not self.islands:
             return {}
@@ -184,13 +166,11 @@ class MapElitesMultiIsland(EvolutionStrategy):
         logger.info(f"Migrating {len(all_migrants)} programs")
 
         successful, failed = 0, 0
-        # FIXED: Shuffle migrants to prevent processing order bias
         random.shuffle(all_migrants)
 
         for migrant in all_migrants:
             source_island = migrant.metadata.get("current_island")
 
-            # FIXED: Handle missing current_island metadata
             if not source_island:
                 logger.warning(
                     f"Migrant {migrant.id} has no current_island metadata, skipping migration"
@@ -198,7 +178,6 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 failed += 1
                 continue
 
-            # Get all islands except the source island
             available_islands = [
                 island
                 for island in self.islands.values()
@@ -212,7 +191,6 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 failed += 1
                 continue
 
-            # Route to a different island
             destination = await self.mutant_router.route_mutant(
                 migrant, available_islands
             )
@@ -228,8 +206,10 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 accepted = await destination.add(migrant)
                 if accepted:
                     source_island_obj = self.islands[source_island]
-                    removal_success = await source_island_obj.archive_storage.remove_elite_by_id(
-                        migrant.id
+                    removal_success = (
+                        await source_island_obj.archive_storage.remove_elite_by_id(
+                            migrant.id
+                        )
                     )
 
                     if removal_success:
@@ -259,14 +239,10 @@ class MapElitesMultiIsland(EvolutionStrategy):
                         f"Destination island {destination.config.island_id} rejected migrant {migrant.id}"
                     )
             except Exception as e:
-                logger.warning(
-                    f"Migration failed for program {migrant.id}: {e}"
-                )
+                logger.warning(f"Migration failed for program {migrant.id}: {e}")
                 failed += 1
 
-        logger.info(
-            f"Migration complete: {successful} succeeded, {failed} failed"
-        )
+        logger.info(f"Migration complete: {successful} succeeded, {failed} failed")
 
     async def _enforce_all_island_size_limits(self) -> None:
         """Enforce size limits on all islands after migration."""
@@ -284,7 +260,6 @@ class MapElitesMultiIsland(EvolutionStrategy):
                     )
                     await island.enforce_size_limit()
 
-                    # Verify enforcement worked
                     post_enforcement_count = await island.get_elite_count()
                     if post_enforcement_count > island.config.max_size:
                         logger.error(
@@ -296,9 +271,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
                         f"Island {island_id} size OK: {current_count}/{island.config.max_size}"
                     )
             except Exception as e:
-                logger.error(
-                    f"Failed to enforce size limit on island {island_id}: {e}"
-                )
+                logger.error(f"Failed to enforce size limit on island {island_id}: {e}")
 
         if not violations_found:
             logger.debug("All island size limits are within bounds")
@@ -317,7 +290,32 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
         return total_size
 
-    async def get_program_ids(self) -> List[Program]:
+    async def remove_program_by_id(self, program_id: str) -> bool:
+        """Remove a program from the strategy by ID.
+
+        Args:
+            program_id: ID of the program to remove
+
+        Returns:
+            True if program was removed, False if not found
+        """
+        removed = False
+        for island in self.islands.values():
+            try:
+                if await island.archive_storage.remove_elite_by_id(program_id):
+                    removed = True
+                    logger.debug(
+                        f"Removed program {program_id} from island {island.config.island_id}"
+                    )
+                    break  # Program should only be in one island
+            except Exception as e:
+                logger.warning(
+                    f"Error removing program {program_id} from island {island.config.island_id}: {e}"
+                )
+
+        return removed
+
+    async def get_program_ids(self) -> list[Program]:
         """Get all programs across all islands."""
         all_programs = []
         for island in self.islands.values():
@@ -333,64 +331,18 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
     async def get_metrics(self) -> Optional[StrategyMetrics]:
         """Get multi-island strategy metrics."""
-        try:
-            total_programs = await self.get_global_archive_size()
-            active_populations = len(self.islands)
 
-            return StrategyMetrics(
-                total_programs=total_programs,
-                active_populations=active_populations,
-                strategy_specific_metrics={
-                    "generation": self.generation,
-                    "migration_enabled": self.enable_migration,
-                    "migration_interval": self.migration_interval,
-                    "max_migrants_per_island": self.max_migrants_per_island,
-                    "global_max_size": self.max_size,
-                },
-            )
-        except Exception as e:
-            logger.error(f"Failed to get metrics: {e}")
-            return None
+        total_programs = await self.get_global_archive_size()
+        active_populations = len(self.islands)
 
-    async def get_status(self) -> StrategyStatus:
-        """Get MAP-Elites strategy status."""
-        try:
-            metrics = await self.get_metrics()
-
-            is_healthy = True
-            health_issues = []
-
-            if metrics and metrics.active_populations == 0:
-                is_healthy = False
-                health_issues.append("No active islands")
-
-            if metrics and metrics.total_programs == 0:
-                health_issues.append("No programs in archive")
-
-            status_details = {
-                "health_issues": health_issues,
-                "capabilities": {
-                    "migration": self.enable_migration,
-                },
-            }
-
-            return StrategyStatus(
-                strategy_type="MapElitesMultiIsland",
-                is_healthy=is_healthy,
-                error_message=(
-                    "; ".join(health_issues) if health_issues else None
-                ),
-                metrics=metrics,
-                status_details=status_details,
-            )
-
-        except Exception as e:
-            return StrategyStatus(
-                strategy_type="MapElitesMultiIsland",
-                is_healthy=False,
-                error_message=f"Status check failed: {e}",
-            )
-
-    async def cleanup(self) -> None:
-        """Perform cleanup operations."""
-        logger.info("[MapElitesMultiIsland] Cleanup completed")
+        return StrategyMetrics(
+            total_programs=total_programs,
+            active_populations=active_populations,
+            strategy_specific_metrics={
+                "generation": self.generation,
+                "migration_enabled": self.enable_migration,
+                "migration_interval": self.migration_interval,
+                "max_migrants_per_island": self.max_migrants_per_island,
+                "global_max_size": self.max_size,
+            },
+        )

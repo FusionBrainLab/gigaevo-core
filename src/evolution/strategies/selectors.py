@@ -1,16 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional, Protocol
 
 from src.evolution.strategies.utils import dominates, extract_fitness_values
 from src.programs.program import Program
-
-
-class ArchiveSelectorProtocol(Protocol):
-    """Protocol for archive selector implementations."""
-
-    def __call__(self, new: Program, current: Program) -> bool:
-        """Determine if new program should replace current elite."""
-        ...
 
 
 class ArchiveSelector(ABC):
@@ -18,15 +9,17 @@ class ArchiveSelector(ABC):
 
     def __init__(
         self,
-        fitness_keys: List[str],
-        fitness_key_higher_is_better: dict[str, bool] | None = None,
+        fitness_keys: list[str],
+        fitness_key_higher_is_better: list[bool] | None = None,
     ):
         if not fitness_keys:
             raise ValueError("fitness_keys cannot be empty")
         self.fitness_keys = fitness_keys
-        self.fitness_key_higher_is_better = fitness_key_higher_is_better or {
-            key: True for key in fitness_keys
-        }
+        if fitness_key_higher_is_better is None:
+            fitness_key_higher_is_better = [True] * len(fitness_keys)
+        self.fitness_key_higher_is_better = dict(
+            zip(fitness_keys, fitness_key_higher_is_better)
+        )
 
     @abstractmethod
     def __call__(self, new: Program, current: Program) -> bool:
@@ -34,7 +27,7 @@ class ArchiveSelector(ABC):
 
 
 class SumArchiveSelector(ArchiveSelector):
-    def __init__(self, *args, weights: Optional[List[float]] = None, **kwargs):
+    def __init__(self, *args, weights: list[float] | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.weights = weights or [1.0] * len(self.fitness_keys)
 

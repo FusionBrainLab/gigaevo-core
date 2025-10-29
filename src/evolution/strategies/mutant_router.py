@@ -1,6 +1,6 @@
-from abc import ABC, abstractmethod
 import random
-from typing import Any, Dict, List, Optional
+from abc import ABC, abstractmethod
+from typing import Any
 
 from loguru import logger
 
@@ -16,9 +16,9 @@ class MutantRouter(ABC):
     async def route_mutant(
         self,
         mutant: Program,
-        islands: List[MapElitesIsland],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[MapElitesIsland]:
+        islands: list[MapElitesIsland],
+        context: dict[str, Any] | None = None,
+    ) -> MapElitesIsland | None:
         """
         Route a mutant (new program) to an appropriate island.
 
@@ -40,23 +40,18 @@ class RandomMutantRouter(MutantRouter, IslandCompatibilityMixin):
     async def route_mutant(
         self,
         mutant: Program,
-        islands: List[MapElitesIsland],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[MapElitesIsland]:
-        """Route mutant to a random accepting island with logging."""
+        islands: list[MapElitesIsland],
+        context: dict[str, Any] | None = None,
+    ) -> MapElitesIsland | None:
         if not islands:
             return None
 
-        # Get compatible islands with logging
         compatible_islands = await self._get_compatible_islands(mutant, islands)
 
         if not compatible_islands:
-            logger.debug(
-                f"🚫 No compatible islands found for mutant {mutant.id}"
-            )
+            logger.debug(f"🚫 No compatible islands found for mutant {mutant.id}")
             return None
 
-        # Select random island
         selected = random.choice(compatible_islands)
 
         logger.debug(
@@ -66,9 +61,8 @@ class RandomMutantRouter(MutantRouter, IslandCompatibilityMixin):
         return selected
 
     async def _get_compatible_islands(
-        self, mutant: Program, islands: List[MapElitesIsland]
-    ) -> List[MapElitesIsland]:
-        """Get list of islands that can accept the mutant with logging."""
+        self, mutant: Program, islands: list[MapElitesIsland]
+    ) -> list[MapElitesIsland]:
         compatible_islands = []
         for island in islands:
             if await self._can_accept_program(island, mutant):

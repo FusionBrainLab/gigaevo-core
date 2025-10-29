@@ -4,9 +4,9 @@ Enhanced Colored Logging Setup for MetaEvolve System
 Comprehensive loguru configuration with colored console output and file logging.
 """
 
-from datetime import datetime, timezone
 import os
 import sys
+from datetime import datetime, timezone
 
 from loguru import logger
 

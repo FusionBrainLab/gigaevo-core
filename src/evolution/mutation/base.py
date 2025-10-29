@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Iterable, List, Optional
+from typing import Iterable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.programs.program import Program
 
@@ -9,11 +9,9 @@ from src.programs.program import Program
 class MutationSpec(BaseModel):
     """Container for a single mutation result returned by a `MutationOperator`."""
 
-    code: str  # the code of the mutated program
-    parents: List[
-        Program
-    ]  # list of programs that were mutated to produce this one
-    name: str  # description of the mutation
+    code: str = Field(description="The code of the mutated program")
+    parents: list[Program] = Field(description="List of parent programs")
+    name: str = Field(description="Description of the mutation")
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __iter__(self) -> Iterable:
@@ -26,8 +24,8 @@ class MutationOperator(ABC):
 
     @abstractmethod
     async def mutate_single(
-        self, selected_parents: List[Program]
-    ) -> Optional[MutationSpec]:
+        self, selected_parents: list[Program]
+    ) -> MutationSpec | None:
         """Generate a single mutation from the selected parents.
 
         Args:
