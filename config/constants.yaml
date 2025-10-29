@@ -72,12 +72,11 @@ constants:
   primary_metric_key: fitness  # overridden per problem
   
   # Function names for executors
-  entrypoint_function: entrypoint
-  validate_function: validate
-  build_context_function: build_context
+  # Currently are unused, hardcoded in pipeline builder
+  # entrypoint_function: entrypoint
+  # validate_function: validate
+  # build_context_function: build_context
   
   # API endpoints
   default_llm_base_url: http://localhost:8777/v1
-  
-  # LLM model constants
   default_model_name: Qwen3-235B-A22B-Thinking-2507
