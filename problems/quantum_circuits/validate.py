@@ -1,12 +1,10 @@
 import numpy as np
-import jax.numpy as jnp
-from helper import Data, ParityMatrix
-
+from helper import Data, Matrix, Tensor3D
 
 def validate(
-    payload: tuple[Data, ParityMatrix],
+    payload: tuple[Data, np.ndarray],
 ) -> dict[str, float]:
     context, result = payload
-    if np.any(context.sota_decomposition.T != result.to_symmetric_tensor()):
-        return {"fitness": -result.P.shape[1] + context.sota_rank, "is_valid": 0}
-    return {"fitness": -result.P.shape[1] + np.random.uniform(0, 0.8) + context.sota_rank, "is_valid": 1}
+    if np.any(Tensor3D(Matrix.from_numpy(context.sota_decomposition)) != Tensor3D(Matrix.from_numpy(result))):
+        return {"fitness": -result.shape[0] + context.sota_rank, "is_valid": 0}
+    return {"fitness": -result.shape[0] + context.sota_rank, "is_valid": 1}

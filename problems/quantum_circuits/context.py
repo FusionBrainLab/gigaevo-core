@@ -1,9 +1,8 @@
 import numpy as np
 from typing import List
-from helper import Data, ParityMatrix
+from helper import Data, Tensor3D, Matrix, eliminate_duplications_inplace 
 
 
- 
 def build_context() -> Data:
     l: List[Data] = []
     name = "binary_addition.npz"
@@ -20,12 +19,11 @@ def build_context() -> Data:
             if file == name:
                 print(f[file])
                 l.append(Data(file, 
-                              ParityMatrix(f[file][0,:,:].reshape(rank, n).T), 
-                              ParityMatrix(np.load(f"data/{name}.matrix.npy")),
+                              f[file][0,:,:].reshape(rank, n), 
+                              np.load(f"data/{name}.matrix.npy").T,
                             rank))
-    print(np.argwhere(l[0].sota_decomposition.T != l[0].early_decomposition.T).shape)
-    # print(l[0].early_decomposition.P.shape)
-    # print(l[0].sota_decomposition.P.shape)
+                # eliminate_duplications_inplace(l[-1].early_decomposition)
+    # print(np.argwhere(l[0].sota_decomposition.T != l[0].early_decomposition.T).shape)
     return l[0]
 
 build_context()
