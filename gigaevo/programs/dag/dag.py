@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from asyncio import CancelledError
 from datetime import datetime, timezone
 import time
 from typing import Dict, Set, cast
@@ -240,41 +241,10 @@ class DAG:
 
             async def _run_stage(stage_name=name):
                 async with self._stage_sema:
-                    try:
-                        logger.debug(
-                            "[DAG][{}] Preparing inputs for '{}'...", pid, stage_name
-                        )
-                        named_inputs = self.automata.build_named_inputs(
-                            program, stage_name
-                        )
-                        # Attach the inputs to the stage
-                        stage: Stage = self.automata.topology.nodes[stage_name]
-                        stage.attach_inputs(named_inputs)
-                        result = await stage.execute(program)
-                        await self._persist_stage_result(program, stage_name, result)
-                        logger.debug(
-                            "[DAG][{}] Stage '{}' finished with status {}",
-                            pid,
-                            stage_name,
-                            result.status.name,
-                        )
-                        return result
-
-                    except Exception as exc:
-                        now = datetime.now(timezone.utc)
-                        logger.exception(
-                            "[DAG][{}] Unhandled exception in stage '{}' wrapper",
-                            pid,
-                            stage_name,
-                        )
-                        return ProgramStageResult(
-                            status=StageState.FAILED,
-                            error=StageError.from_exception(
-                                exc, stage=self._canonical_stage_name(stage_name)
-                            ),
-                            started_at=now,
-                            finished_at=now,
-                        )
+                    named_inputs = self.automata.build_named_inputs(program, stage_name)
+                    stage: Stage = self.automata.topology.nodes[stage_name]
+                    stage.attach_inputs(named_inputs)
+                    return await stage.execute(program)
 
             tasks[name] = asyncio.create_task(_run_stage(), name=f"stage-{name[:16]}")
 
@@ -304,24 +274,39 @@ class DAG:
         for stage_name, outcome in zip(tasks.keys(), results):
             running.discard(stage_name)
             now = datetime.now(timezone.utc)
-
+            started_at = program.stage_results[stage_name].started_at or now
             if isinstance(outcome, Exception):
-                result = ProgramStageResult(
-                    status=StageState.FAILED,
-                    error=StageError.from_exception(
-                        outcome, stage=self._canonical_stage_name(stage_name)
-                    ),
-                    started_at=now,
-                    finished_at=now,
-                )
-                logger.error(
-                    "[DAG][{}] Stage '{}' FAILED with raised exception: {}",
-                    pid,
-                    stage_name,
-                    outcome,
-                )
+                if isinstance(outcome, CancelledError):
+                    result = ProgramStageResult(
+                        status=StageState.CANCELLED,
+                        error=StageError(
+                            type="Cancelled",
+                            message="Stage task was cancelled.",
+                            stage=self._canonical_stage_name(stage_name),
+                        ),
+                        started_at=started_at,
+                        finished_at=now,
+                    )
+                    logger.warning("[DAG][{}] Stage '{}' CANCELLED.", pid, stage_name)
+                else:
+                    result = ProgramStageResult(
+                        status=StageState.FAILED,
+                        error=StageError.from_exception(
+                            outcome, stage=self._canonical_stage_name(stage_name)
+                        ),
+                        started_at=started_at,
+                        finished_at=now,
+                    )
             else:
                 result = cast(ProgramStageResult, outcome)
+
+            if result.status == StageState.FAILED and result.error is not None:
+                logger.exception(
+                    "[DAG][{}] Stage '{}' FAILED with exception.\n### ERROR SUMMARY ###:\n{}",
+                    pid,
+                    stage_name,
+                    result.error.pretty(include_traceback=True),
+                )
 
             await self._persist_stage_result(program, stage_name, result)
             await self._persist_program_snapshot(program)

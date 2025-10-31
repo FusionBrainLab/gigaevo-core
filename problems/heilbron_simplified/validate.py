@@ -5,6 +5,7 @@ from helper import get_unit_triangle
 import numpy as np
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import pdist
+from keklib import mykek
 
 
 def compute_layout_metrics(points: np.ndarray) -> dict:
