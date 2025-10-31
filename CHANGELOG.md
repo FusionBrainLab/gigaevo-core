@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.0 (2025-10-31)
+
+### Features
+
+- Changed pickle serialization to cloudpickle for classes and lambdas over network
+  ([`6524340`](https://github.com/KhrulkovV/metaevolve/commit/652434069eaf07dda49b29d2a64338539c448760))
+
+
 ## v1.0.3 (2025-10-31)
 
 
