@@ -1,7 +1,7 @@
 # @package _global_
 
 llm:
-  _target_: src.llm.models.create_multi_model_router
+  _target_: gigaevo.llm.models.create_multi_model_router
   model_configs:
     - model: ${constants.default_model_name}
       temperature: ${constants.default_temperature}
@@ -12,4 +12,3 @@ llm:
       request_timeout: ${constants.default_request_timeout}
   probabilities: [1.0]
   api_key: ${oc.env:OPENAI_API_KEY}
-

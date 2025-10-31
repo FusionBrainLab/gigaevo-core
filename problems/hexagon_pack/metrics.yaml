@@ -18,4 +18,3 @@ specs:
     upper_bound: 1.0
     include_in_prompts: true
     significant_change: 1.0
-

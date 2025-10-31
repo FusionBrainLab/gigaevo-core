@@ -1,7 +1,7 @@
 # @package _global_
-# 
+#
 # Template for custom pipeline builders.
-# 
+#
 # To create a custom pipeline:
 # 1. Implement your PipelineBuilder subclass in your problem or a shared module
 # 2. Copy this file and update _target_ to point to your custom builder class
@@ -15,7 +15,7 @@
 #         my_experiment.yaml  # Copy of this template with updated _target_
 
 evolution_context:
-  _target_: src.entrypoint.evolution_context.EvolutionContext
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${llm}
   storage: ${redis_storage}
@@ -28,6 +28,5 @@ pipeline_builder:
   # custom_param: value
 
 dag_blueprint:
-  _target_: src.config.helpers.build_dag_from_builder
+  _target_: gigaevo.config.helpers.build_dag_from_builder
   builder: ${pipeline_builder}
-

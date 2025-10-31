@@ -1,5 +1,5 @@
 # @package _global_
 
 program_loader:
-  _target_: src.problems.initial_loaders.DirectoryProgramLoader
+  _target_: gigaevo.problems.initial_loaders.DirectoryProgramLoader
   problem_dir: ${problem.dir}

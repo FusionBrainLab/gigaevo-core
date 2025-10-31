@@ -504,7 +504,3 @@ if (styleEl && !styleEl.dataset.stageNodeCss) {
 }
 
 export default React.memo(StageNodeBase);
-
-
-
-

@@ -18,12 +18,7 @@ def validate_packing(centers, radii):
     for i in range(n):
         x, y = centers[i]
         r = radii[i]
-        if (
-            x - r < -1e-6
-            or x + r > 1 + 1e-6
-            or y - r < -1e-6
-            or y + r > 1 + 1e-6
-        ):
+        if x - r < -1e-6 or x + r > 1 + 1e-6 or y - r < -1e-6 or y + r > 1 + 1e-6:
             raise ValueError(
                 f"Circle {i} at ({x}, {y}) with radius {r} is outside the unit square"
             )
@@ -32,11 +27,9 @@ def validate_packing(centers, radii):
     for i in range(n):
         for j in range(i + 1, n):
             dist = np.sqrt(np.sum((centers[i] - centers[j]) ** 2))
-            if (
-                dist < radii[i] + radii[j] - 1e-6
-            ):  # Allow for tiny numerical errors
+            if dist < radii[i] + radii[j] - 1e-6:  # Allow for tiny numerical errors
                 raise ValueError(
-                    f"Circles {i} and {j} overlap: dist={dist}, r1+r2={radii[i]+radii[j]}"
+                    f"Circles {i} and {j} overlap: dist={dist}, r1+r2={radii[i] + radii[j]}"
                 )
 
     return True
@@ -63,9 +56,7 @@ def validate(data):
         raise ValueError(
             f"Shape is invalid: centers.shape={centers.shape}, radii.shape={radii.shape}"
         )
-    is_not_nan_and_finite = np.all(np.isfinite(radii)) and np.all(
-        np.isfinite(centers)
-    )
+    is_not_nan_and_finite = np.all(np.isfinite(radii)) and np.all(np.isfinite(centers))
     if not is_not_nan_and_finite:
         raise ValueError(
             f"Radii or centers have NaN or infinite values: radii={radii}, centers={centers}"

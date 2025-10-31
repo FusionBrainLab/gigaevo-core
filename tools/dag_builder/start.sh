@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# MetaEvolve DAG Builder - Quick Startup Script
+# GigaEvo DAG Builder - Quick Startup Script
 # Simple version without health checks
 
 set -e
 
-echo "🚀 Starting MetaEvolve DAG Builder (Quick Mode)"
+echo "🚀 Starting GigaEvo DAG Builder (Quick Mode)"
 echo ""
 
 # Cleanup
@@ -19,7 +19,7 @@ sleep 2
 
 # Start backend
 echo "🔧 Starting backend on port 8081..."
-cd /workspace-SR008.fs2/mathemage/metaevolve/tools/dag_builder
+cd /workspace-SR008.fs2/mathemage/gigaevo/tools/dag_builder
 python run.py &
 BACKEND_PID=$!
 

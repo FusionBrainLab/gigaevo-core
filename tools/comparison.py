@@ -24,10 +24,10 @@ import asyncio
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from loguru import logger
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-from loguru import logger
 
 from tools.utils import (
     RedisRunConfig,

@@ -1,6 +1,6 @@
 import random
 
-from helper import get_unit_triangle, get_smallest_triangle_area, is_inside_triangle
+from helper import get_unit_triangle
 import numpy as np
 
 np.random.seed(42)

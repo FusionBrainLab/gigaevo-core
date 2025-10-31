@@ -30,4 +30,3 @@ CONSTRAINTS
 VALIDATION & RIGOR
 - Check all norms equal
 - Compute d^2_min; accept iff d^2_min ≥ r^2
-

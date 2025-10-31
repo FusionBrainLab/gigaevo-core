@@ -1,10 +1,10 @@
 import itertools
+from itertools import combinations
 
 from helper import get_unit_triangle
 import numpy as np
-from scipy.spatial.distance import pdist
 from scipy.spatial import ConvexHull
-from itertools import combinations
+from scipy.spatial.distance import pdist
 
 
 def compute_layout_metrics(points: np.ndarray) -> dict:
@@ -15,7 +15,9 @@ def compute_layout_metrics(points: np.ndarray) -> dict:
     assert points.shape == (11, 2), "Expected exactly 11 points in 2D."
 
     def triangle_area(p1, p2, p3):
-        return 0.5 * abs((p2[0] - p1[0])*(p3[1] - p1[1]) - (p3[0] - p1[0])*(p2[1] - p1[1]))
+        return 0.5 * abs(
+            (p2[0] - p1[0]) * (p3[1] - p1[1]) - (p3[0] - p1[0]) * (p2[1] - p1[1])
+        )
 
     def min_triangle_angle_deg(p1, p2, p3):
         a = np.linalg.norm(p2 - p3)
@@ -23,11 +25,17 @@ def compute_layout_metrics(points: np.ndarray) -> dict:
         c = np.linalg.norm(p1 - p2)
         if a == 0 or b == 0 or c == 0:
             return 0.0
-        angles = np.arccos(np.clip([
-            (b**2 + c**2 - a**2) / (2 * b * c),
-            (a**2 + c**2 - b**2) / (2 * a * c),
-            (a**2 + b**2 - c**2) / (2 * a * b)
-        ], -1, 1))
+        angles = np.arccos(
+            np.clip(
+                [
+                    (b**2 + c**2 - a**2) / (2 * b * c),
+                    (a**2 + c**2 - b**2) / (2 * a * c),
+                    (a**2 + b**2 - c**2) / (2 * a * b),
+                ],
+                -1,
+                1,
+            )
+        )
         return np.degrees(np.min(angles))
 
     areas = []

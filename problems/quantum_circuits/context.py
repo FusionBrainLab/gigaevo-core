@@ -1,5 +1,5 @@
+from helper import Data, reconcstruct_from_tensoralpha
 import numpy as np
-from helper import reconcstruct_from_tensoralpha, Data
 
 
 def build_context() -> list[Data]:
@@ -15,5 +15,6 @@ def build_context() -> list[Data]:
     for obj in l:
         print(obj.name, obj.sota_rank, obj.tensor.shape)
     return l[:]
+
 
 # build_context()

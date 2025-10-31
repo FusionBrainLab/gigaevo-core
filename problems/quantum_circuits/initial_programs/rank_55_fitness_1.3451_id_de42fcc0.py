@@ -8,13 +8,15 @@ Generation: N/A
 State: ProgramState.DISCARDED
 """
 
-import jax
-import jax.numpy as jnp
-import optax 
-from jax.nn import sigmoid
-from jax import lax
 from dataclasses import dataclass
-from typing import Tuple, List, Any, Dict
+from typing import List, Tuple
+
+import jax
+from jax import lax
+from jax.nn import sigmoid
+import jax.numpy as jnp
+import optax
+
 
 @dataclass
 class Data:
@@ -22,50 +24,59 @@ class Data:
     tensor: jnp.ndarray
     sota_rank: int
 
+
 def reconstruct_from_single_binary_factor(f: jnp.ndarray) -> jnp.ndarray:
     f = f.astype(jnp.uint8)
-    return jnp.einsum("a,b,c->abc", *(f,f,f)).astype(jnp.uint8)
+    return jnp.einsum("a,b,c->abc", *(f, f, f)).astype(jnp.uint8)
 
 
 def reconstruct_from_multi_binary_factors(b: jnp.ndarray) -> jnp.ndarray:
     spec = "ar,br,cr->abcr"
-    and_per_r = jnp.einsum(spec, b,b,b).astype(jnp.uint8)
+    and_per_r = jnp.einsum(spec, b, b, b).astype(jnp.uint8)
     return (jnp.sum(and_per_r, axis=-1) & jnp.uint8(1)).astype(jnp.uint8)
 
-def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray=None):
+
+def get_residual_num(T1: jnp.ndarray, T2: jnp.ndarray = None):
     if T2 is None:
         return int(jnp.sum(T1))
     return jnp.sum(T1 ^ T2)
 
+
 # EVOLVE-BLOCK-START
 def smooth_reconstruction(factors: jnp.ndarray) -> jnp.ndarray:
     p = sigmoid(factors)
-    and_per_r = jnp.einsum("ar,br,cr->abcr", p,p,p)
+    and_per_r = jnp.einsum("ar,br,cr->abcr", p, p, p)
     return 0.5 * (1.0 - jnp.prod(1.0 - 2.0 * and_per_r, axis=-1))
 
-def enhanced_bce_loss(target: jnp.ndarray, factors: jnp.ndarray, temperature: float = 1.0) -> jnp.ndarray:
+
+def enhanced_bce_loss(
+    target: jnp.ndarray, factors: jnp.ndarray, temperature: float = 1.0
+) -> jnp.ndarray:
     """Enhanced BCE loss with improved temperature annealing and residual-aware weighting"""
     # Improved temperature annealing: slower cooling for better exploration
     sharp_factors = factors / jnp.maximum(temperature, 0.01)
     p = sigmoid(sharp_factors)
-    
+
     # Smooth reconstruction with temperature control
     and_per_r = jnp.einsum("ar,br,cr->abcr", p, p, p)
     P_recon = 0.5 * (1.0 - jnp.prod(1.0 - 2.0 * and_per_r, axis=-1))
-    
+
     # Improved residual-aware weighting - continuous scaling based on error magnitude
     error_magnitude = jnp.abs(target - P_recon)
     weight = 1.0 + 9.0 * error_magnitude  # Continuous scaling from 1.0 to 10.0
-    
+
     # Stable BCE computation
     eps = 1e-8
     P_clipped = jnp.clip(P_recon, eps, 1.0 - eps)
-    bce_loss = -jnp.sum(weight * (target * jnp.log(P_clipped) + (1.0 - target) * jnp.log1p(-P_clipped)))
-    
+    bce_loss = -jnp.sum(
+        weight * (target * jnp.log(P_clipped) + (1.0 - target) * jnp.log1p(-P_clipped))
+    )
+
     # Balanced binary encouragement
     binary_encouragement = jnp.mean((p * (1.0 - p)) ** 2) * 0.5
-    
+
     return bce_loss + binary_encouragement
+
 
 def generate_finit(shape, base_key, seed: int, sparsity: float):
     """Simplified initialization with fixed scaling"""
@@ -73,19 +84,23 @@ def generate_finit(shape, base_key, seed: int, sparsity: float):
     key = jax.random.fold_in(base_key, (r << 2) + seed)
     return jax.random.normal(key, shape) * (1.0 / jnp.sqrt(n))
 
+
 def get_optimizer(lr):
     return optax.adam(lr)
 
+
 def make_trainer(target: jnp.ndarray, lr: float, sparsity: float):
     opt = get_optimizer(lr)
-    
+
     def loss_fn(f: jnp.ndarray, step: int) -> jnp.ndarray:
         # Improved temperature annealing: logarithmic cooling for better convergence
         current_temp = 1.0 / jnp.log(step + 10.0)
         return enhanced_bce_loss(target, f, current_temp)
 
     @jax.jit
-    def step(f: jnp.ndarray, state: optax.OptState, step_count: int) -> Tuple[jnp.ndarray, optax.OptState]:
+    def step(
+        f: jnp.ndarray, state: optax.OptState, step_count: int
+    ) -> Tuple[jnp.ndarray, optax.OptState]:
         grads = jax.grad(loss_fn)(f, step_count)
         updates, state = opt.update(grads, state, f)
         f = optax.apply_updates(f, updates)
@@ -94,16 +109,21 @@ def make_trainer(target: jnp.ndarray, lr: float, sparsity: float):
     @jax.jit
     def run_steps(f_init: jnp.ndarray, steps: int) -> Tuple[jnp.ndarray, int]:
         state = opt.init(f_init)
+
         def body(i, carry):
             f, s = carry
             f, s = step(f, s, i)
             return (f, s)
+
         f_final, _ = lax.fori_loop(0, steps, body, (f_init, state))
         return f_final, steps
+
     return run_steps
+
 
 def to_binary_factors(factors: jnp.ndarray) -> jnp.ndarray:
     return (sigmoid(factors) >= 0.5).astype(jnp.uint8)
+
 
 def adaptive_min_rank_search(
     T: jnp.ndarray,
@@ -116,71 +136,86 @@ def adaptive_min_rank_search(
 ) -> jnp.array:
     n = T.shape[0]
     base_key = jax.random.PRNGKey(seed)
-    
+
     # Compute tensor sparsity for adaptive parameters
-    tensor_sparsity = jnp.sum(T) / (n ** 3)
-    
+    tensor_sparsity = jnp.sum(T) / (n**3)
+
     # Adaptive learning rate based on problem size
     adaptive_lr = lr * jnp.minimum(1.0, 10.0 / n)
-    
+
     # Conservative rank expansion with dynamic bounds
     start_rank = max(1, sota_rank - 2)
     end_rank = sota_rank + max_expansion
     best = {"rank": None, "residual": T.size, "factors": None}
-    
+
     run_steps = make_trainer(T.astype(jnp.float32), adaptive_lr, float(tensor_sparsity))
-    
+
     # Warm-start factors across ranks
     warm_start_factors = None
-    
+
     for r in range(start_rank, end_rank + 1):
         # Adaptive step scaling based on rank and problem complexity
         steps = base_steps + (r - start_rank) * 100 + (n // 5) * 50
-        
+
         for s in range(restarts):
             if warm_start_factors is not None and s == 0:
                 # Warm start: pad previous best factors with new random columns
-                F0 = jnp.concatenate([
-                    warm_start_factors,
-                    generate_finit((n, r - warm_start_factors.shape[1]), base_key, seed=s, sparsity=float(tensor_sparsity))
-                ], axis=1)
+                F0 = jnp.concatenate(
+                    [
+                        warm_start_factors,
+                        generate_finit(
+                            (n, r - warm_start_factors.shape[1]),
+                            base_key,
+                            seed=s,
+                            sparsity=float(tensor_sparsity),
+                        ),
+                    ],
+                    axis=1,
+                )
             else:
-                F0 = generate_finit((n, r), base_key, seed=s, sparsity=float(tensor_sparsity))
-                
+                F0 = generate_finit(
+                    (n, r), base_key, seed=s, sparsity=float(tensor_sparsity)
+                )
+
             F, _ = run_steps(F0, steps)
             binF = to_binary_factors(F)
             T_hat = reconstruct_from_multi_binary_factors(binF)
             residual = get_residual_num(T, T_hat)
-            
-            if residual < best["residual"] or (residual == best["residual"] and (best["rank"] is None or r < best["rank"])):
+
+            if residual < best["residual"] or (
+                residual == best["residual"]
+                and (best["rank"] is None or r < best["rank"])
+            ):
                 best = {"rank": r, "residual": residual, "factors": binF}
                 warm_start_factors = binF  # Update warm start for next rank
-            
+
             # Only early exit for exact decomposition
             if residual == 0:
                 return best["factors"]
-    
+
     return best["factors"]
+
 
 def get_parametes_based_on_context_data(data: Data, seed: int):
     n = data.tensor.shape[0]
-    tensor_sparsity = jnp.sum(data.tensor) / (n ** 3)
-    
+    tensor_sparsity = jnp.sum(data.tensor) / (n**3)
+
     # Adaptive parameters based on tensor characteristics
     restarts = min(12, max(4, n // 2))
     base_steps = min(800, max(400, n * 30))
-    
+
     # Fixed expansion bounds for simplicity
     max_expansion = 5
-    
+
     return {
         "sota_rank": data.sota_rank,
         "base_steps": int(base_steps),
         "lr": 1e-2,
         "restarts": int(restarts),
         "seed": seed,
-        "max_expansion": int(max_expansion)
+        "max_expansion": int(max_expansion),
     }
+
 
 def efficient_greedy_backup(T: jnp.ndarray, max_rank: int, seed: int) -> jnp.array:
     """Efficient greedy decomposition with residual-adaptive trials"""
@@ -188,45 +223,50 @@ def efficient_greedy_backup(T: jnp.ndarray, max_rank: int, seed: int) -> jnp.arr
     R = T.copy()
     factors = []
     n = T.shape[0]
-    
+
     # Adaptive trial count based on current residual
     for _ in range(max_rank):
         residual_sum = get_residual_num(R)
         if residual_sum == 0:
             break
-            
+
         # Adaptive trials based on residual magnitude
         base_trials = min(64, max(16, n * 3))
         trials = base_trials + min(32, residual_sum // 10)
-        
+
         best_score = jnp.inf
         best_factor = None
-        
+
         for trial in range(trials):
             key, subkey = jax.random.split(key)
             candidate = jax.random.bernoulli(subkey, 0.5, (n,)).astype(jnp.uint8)
-            
+
             # Ensure non-zero candidate
             if jnp.sum(candidate) == 0:
                 idx = jax.random.randint(subkey, (), 0, n)
                 candidate = candidate.at[idx].set(1)
-            
+
             # Quick residual evaluation
             T_cand = reconstruct_from_single_binary_factor(candidate)
             score = get_residual_num(R, T_cand)
-            
+
             if score < best_score:
                 best_score, best_factor = score, candidate
-                
+
             if best_score == 0:
                 break
-        
+
         if best_factor is not None:
             factors.append(best_factor)
             T_cand = reconstruct_from_single_binary_factor(best_factor)
             R = (R ^ T_cand).astype(jnp.uint8)
-    
-    return jnp.array(factors, dtype=jnp.uint8).T if factors else jnp.zeros((n, 0), dtype=jnp.uint8)
+
+    return (
+        jnp.array(factors, dtype=jnp.uint8).T
+        if factors
+        else jnp.zeros((n, 0), dtype=jnp.uint8)
+    )
+
 
 def entrypoint(context: List[Data]) -> List[jnp.array]:
     results = []
@@ -237,7 +277,7 @@ def entrypoint(context: List[Data]) -> List[jnp.array]:
                 T=data.tensor,
                 **get_parametes_based_on_context_data(data, idx),
             )
-            
+
             # Validate and use backup if needed (with higher threshold)
             T_hat = reconstruct_from_multi_binary_factors(res)
             residual = get_residual_num(data.tensor, T_hat)
@@ -248,4 +288,6 @@ def entrypoint(context: List[Data]) -> List[jnp.array]:
             res = efficient_greedy_backup(data.tensor, data.sota_rank + 3, idx)
         results.append(res)
     return results
+
+
 # EVOLVE-BLOCK-END

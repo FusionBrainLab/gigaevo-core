@@ -8,41 +8,24 @@ Provides endpoints for:
 - Validating DAG structures
 """
 
-import os
-import sys
 from pathlib import Path
+import sys
 
 # Add the project root to Python path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-import json
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from src.programs.automata import DataFlowEdge, ExecutionOrderDependency
-from src.programs.stages.complexity import ComputeComplexityStage, GetCodeLengthStage
-
 # Import all stages to register them
-from src.programs.stages.execution import (
-    RunConstantPythonCode,
-    RunProgramCodeWithOptionalProducedData,
-    ValidatorCodeExecutor,
-)
-from src.programs.stages.insights import GenerateLLMInsightsStage
-from src.programs.stages.insights_lineage import GenerateLineageInsightsStage
-from src.programs.stages.llm_score import GenerateLLMScoreStage
-from src.programs.stages.metrics import EnsureMetricsStage, NormalizeMetricsStage
-from src.programs.stages.validation import ValidateCodeStage
-from src.programs.stages.worker_pool import WorkerPoolStage
-from src.runner.pipeline_factory import PipelineBuilder, PipelineContext
-from src.runner.stage_registry import StageInfo, StageRegistry
+from gigaevo.runner.stage_registry import StageRegistry
 
-app = FastAPI(title="MetaEvolve DAG Builder API", version="1.0.0")
+app = FastAPI(title="GigaEvo DAG Builder API", version="1.0.0")
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -104,7 +87,7 @@ async def root():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>MetaEvolve DAG Builder</title>
+        <title>GigaEvo DAG Builder</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
             .container { max-width: 1200px; margin: 0 auto; }
@@ -112,36 +95,36 @@ async def root():
             .header h1 { color: #333; margin-bottom: 10px; }
             .header p { color: #666; }
             .main-content { display: flex; gap: 20px; }
-            .stage-library { 
-                background: white; 
-                padding: 20px; 
-                border-radius: 8px; 
+            .stage-library {
+                background: white;
+                padding: 20px;
+                border-radius: 8px;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
                 width: 300px;
                 height: fit-content;
             }
             .stage-library h3 { margin-top: 0; color: #333; }
-            .stage-item { 
-                background: #f8f9fa; 
-                padding: 12px; 
-                margin: 8px 0; 
-                border-radius: 6px; 
+            .stage-item {
+                background: #f8f9fa;
+                padding: 12px;
+                margin: 8px 0;
+                border-radius: 6px;
                 cursor: pointer;
                 border: 1px solid #e9ecef;
                 transition: all 0.2s;
             }
-            .stage-item:hover { 
-                background: #e9ecef; 
+            .stage-item:hover {
+                background: #e9ecef;
                 transform: translateY(-1px);
                 box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             }
             .stage-name { font-weight: bold; color: #495057; margin-bottom: 4px; }
             .stage-description { font-size: 0.9em; color: #6c757d; margin-bottom: 6px; }
             .stage-inputs { font-size: 0.8em; color: #868e96; }
-            .dag-canvas { 
+            .dag-canvas {
                 flex: 1;
-                background: white; 
-                border: 2px dashed #dee2e6; 
+                background: white;
+                border: 2px dashed #dee2e6;
                 border-radius: 8px;
                 min-height: 500px;
                 display: flex;
@@ -149,8 +132,8 @@ async def root():
                 justify-content: center;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }
-            .canvas-placeholder { 
-                text-align: center; 
+            .canvas-placeholder {
+                text-align: center;
                 color: #6c757d;
             }
             .canvas-placeholder h3 { margin-bottom: 10px; }
@@ -160,10 +143,10 @@ async def root():
     <body>
         <div class="container">
             <div class="header">
-                <h1>🏗️ MetaEvolve DAG Builder</h1>
+                <h1>🏗️ GigaEvo DAG Builder</h1>
                 <p>Drag stages from the library to build your execution pipeline</p>
             </div>
-            
+
             <div class="main-content">
                 <div class="stage-library">
                     <h3>📚 Stage Library</h3>
@@ -171,7 +154,7 @@ async def root():
                         <p>Loading stages...</p>
                     </div>
                 </div>
-                
+
                 <div class="dag-canvas" id="dag-canvas">
                     <div class="canvas-placeholder">
                         <h3>🎯 DAG Canvas</h3>
@@ -180,7 +163,7 @@ async def root():
                 </div>
             </div>
         </div>
-        
+
         <script>
             // Simple JavaScript for now - will be replaced with React
             fetch('/api/stages')
@@ -188,7 +171,7 @@ async def root():
                 .then(stages => {
                     const container = document.getElementById('stages-container');
                     container.innerHTML = '';
-                    
+
                     stages.forEach(stage => {
                         const div = document.createElement('div');
                         div.className = 'stage-item';
@@ -201,12 +184,12 @@ async def root():
                                 Optional: ${stage.optional_inputs.join(', ') || 'none'}
                             </div>
                         `;
-                        
+
                         // Add drag event
                         div.addEventListener('dragstart', (e) => {
                             e.dataTransfer.setData('text/plain', stage.name);
                         });
-                        
+
                         container.appendChild(div);
                     });
                 })
@@ -214,22 +197,22 @@ async def root():
                     console.error('Error loading stages:', error);
                     document.getElementById('stages-container').innerHTML = '<p>Error loading stages</p>';
                 });
-            
+
             // Canvas drop functionality
             const canvas = document.getElementById('dag-canvas');
             canvas.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 canvas.style.backgroundColor = '#f8f9fa';
             });
-            
+
             canvas.addEventListener('dragleave', (e) => {
                 canvas.style.backgroundColor = 'white';
             });
-            
+
             canvas.addEventListener('drop', (e) => {
                 e.preventDefault();
                 canvas.style.backgroundColor = 'white';
-                
+
                 const stageName = e.dataTransfer.getData('text/plain');
                 if (stageName) {
                     // For now, just show a simple message
@@ -370,14 +353,14 @@ def generate_pipeline_builder_code(dag_request: DAGRequest) -> str:
     code_lines = [
         "#!/usr/bin/env python3",
         '"""',
-        "Generated Pipeline from MetaEvolve DAG Builder",
+        "Generated Pipeline from GigaEvo DAG Builder",
         "This file contains a complete pipeline configuration.",
         '"""',
         "",
         "# Core imports",
-        "from src.runner.pipeline_factory import PipelineBuilder, PipelineContext",
-        "from src.programs.automata import DataFlowEdge, ExecutionOrderDependency",
-        "from src.runner.dag_blueprint import DAGBlueprint",
+        "from gigaevo.runner.pipeline_factory import PipelineBuilder, PipelineContext",
+        "from gigaevo.programs.automata import DataFlowEdge, ExecutionOrderDependency",
+        "from gigaevo.runner.dag_blueprint import DAGBlueprint",
         "",
         "# Stage imports - dynamically generated from registry",
     ]
@@ -430,26 +413,26 @@ def generate_pipeline_builder_code(dag_request: DAGRequest) -> str:
             if stage.notes:
                 code_lines.append(f"    # Notes: {stage.notes}")
 
-            code_lines.append(f"    builder.add_stage(")
+            code_lines.append("    builder.add_stage(")
             code_lines.append(f'        "{stage.name}",')
             code_lines.append(f"        lambda: {class_name}(")
             code_lines.append(f'            stage_name="{display_name}",')
             code_lines.append(
-                f"            # Add any additional required arguments here"
+                "            # Add any additional required arguments here"
             )
-            code_lines.append(f"        )")
-            code_lines.append(f"    )")
+            code_lines.append("        )")
+            code_lines.append("    )")
             code_lines.append("")
 
     # Add data flow edges
     if dag_request.data_flow_edges:
         code_lines.append("    # Add data flow edges")
         for edge in dag_request.data_flow_edges:
-            code_lines.append(f"    builder.add_data_flow_edge(")
+            code_lines.append("    builder.add_data_flow_edge(")
             code_lines.append(f'        "{edge.source_stage}",')
             code_lines.append(f'        "{edge.destination_stage}",')
             code_lines.append(f'        "{edge.input_name}"')
-            code_lines.append(f"    )")
+            code_lines.append("    )")
         code_lines.append("")
 
     # Add execution dependencies
@@ -457,26 +440,26 @@ def generate_pipeline_builder_code(dag_request: DAGRequest) -> str:
         code_lines.append("    # Add execution dependencies")
         for dep in dag_request.execution_dependencies:
             if dep.dependency_type == "on_success":
-                code_lines.append(f"    builder.add_exec_dep(")
+                code_lines.append("    builder.add_exec_dep(")
                 code_lines.append(f'        "{dep.stage}",')
                 code_lines.append(
                     f'        ExecutionOrderDependency.on_success("{dep.target_stage}")'
                 )
-                code_lines.append(f"    )")
+                code_lines.append("    )")
             elif dep.dependency_type == "on_failure":
-                code_lines.append(f"    builder.add_exec_dep(")
+                code_lines.append("    builder.add_exec_dep(")
                 code_lines.append(f'        "{dep.stage}",')
                 code_lines.append(
                     f'        ExecutionOrderDependency.on_failure("{dep.target_stage}")'
                 )
-                code_lines.append(f"    )")
+                code_lines.append("    )")
             elif dep.dependency_type == "always_after":
-                code_lines.append(f"    builder.add_exec_dep(")
+                code_lines.append("    builder.add_exec_dep(")
                 code_lines.append(f'        "{dep.stage}",')
                 code_lines.append(
                     f'        ExecutionOrderDependency.always_after("{dep.target_stage}")'
                 )
-                code_lines.append(f"    )")
+                code_lines.append("    )")
         code_lines.append("")
 
     code_lines.extend(
@@ -525,6 +508,6 @@ def generate_pipeline_builder_code(dag_request: DAGRequest) -> str:
 if __name__ == "__main__":
     import uvicorn
 
-    print("🚀 Starting MetaEvolve DAG Builder API...")
+    print("🚀 Starting GigaEvo DAG Builder API...")
     print("📱 Open http://localhost:8081 in your browser")
     uvicorn.run(app, host="0.0.0.0", port=8081, reload=True)

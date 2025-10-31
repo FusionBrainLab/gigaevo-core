@@ -2,7 +2,8 @@ import numpy as np
 
 
 def validate(
-    context, y_pred,
+    context,
+    y_pred,
 ) -> dict[str, float]:
     y_true = context["y_test"]
     if y_true.shape != y_pred.shape:

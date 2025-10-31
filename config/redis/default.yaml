@@ -8,9 +8,9 @@ redis:
 
 # Redis storage configuration
 redis_storage:
-  _target_: src.database.redis_program_storage.RedisProgramStorage
+  _target_: gigaevo.database.redis_program_storage.RedisProgramStorage
   config:
-    _target_: src.database.redis_program_storage.RedisProgramStorageConfig
+    _target_: gigaevo.database.redis_program_storage.RedisProgramStorageConfig
     redis_url: redis://${redis.host}:${redis.port}/${redis.db}
     key_prefix: ${problem.name}_evolution
     max_connections: ${constants.redis_max_connections}

@@ -1,36 +1,39 @@
 from __future__ import annotations
-import jax
-import jax.numpy as jnp
-from jax.nn import initializers, sigmoid
-import optax
+
 from dataclasses import dataclass
-from typing import Tuple, List, Any
-from helper import generate_symmetric_bool_tensor
+from typing import Any, List, Tuple
+
+import jax
+from jax.nn import initializers, sigmoid
+import jax.numpy as jnp
+import optax
 
 
 def entrypoint(context: List[jnp.ndarray]):
     def reconstruct_tensor_from_factors(factors: jnp.ndarray, dim: int) -> jnp.ndarray:
-        letters = ''.join(chr(97 + i) for i in range(dim))
-        spec = ','.join(f"{chr(97+i)}r" for i in range(dim)) + "->" + letters + "r"
+        letters = "".join(chr(97 + i) for i in range(dim))
+        spec = ",".join(f"{chr(97 + i)}r" for i in range(dim)) + "->" + letters + "r"
         probs = tuple(sigmoid(factors) for _ in range(dim))
-        and_per_r = jnp.einsum(spec, *probs)          # (..., R)
+        and_per_r = jnp.einsum(spec, *probs)  # (..., R)
         return 0.5 - 0.5 * jnp.prod(1.0 - 2 * and_per_r, axis=-1)
 
     @jax.jit
     def bce_loss(target: jnp.ndarray, P: jnp.ndarray) -> jnp.ndarray:
         eps = 1e-6
-        return -jnp.sum(target * jnp.log(P + eps)  + (1.0 - target) * jnp.log(1 - P + eps))
+        return -jnp.sum(
+            target * jnp.log(P + eps) + (1.0 - target) * jnp.log(1 - P + eps)
+        )
 
     @dataclass
     class CPHyperParams:
         learning_rate: float = 3e-2
-        init_scale: float = 1e+0
+        init_scale: float = 1e0
 
     class WarDecFinder:
         def __init__(
             self,
             target: jnp.ndarray,
-            rank: int=None,
+            rank: int = None,
             key: jax.random.PRNGKey = jax.random.PRNGKey(0),
             dtype: Any = jnp.float32,
             hypers: CPHyperParams | None = None,
@@ -38,8 +41,8 @@ def entrypoint(context: List[jnp.ndarray]):
         ):
             self.target = target.astype(jnp.float32)
             self.N = self.target.shape[0]
-            if rank is None: 
-                #TODO
+            if rank is None:
+                # TODO
                 pass
             else:
                 self.rank = rank
@@ -62,6 +65,7 @@ def entrypoint(context: List[jnp.ndarray]):
             optimizer = self.optimizer
             target = self.target
             dim = self.dim
+
             def loss_fn(factors: Tuple[jnp.ndarray, ...]) -> jnp.ndarray:
                 P = reconstruct_tensor_from_factors(factors, dim)
                 return bce_loss(target, P)
@@ -79,7 +83,7 @@ def entrypoint(context: List[jnp.ndarray]):
             P = reconstruct_tensor_from_factors(self.factors, self.dim)
             return bce_loss(self.target, P, self.hypers.alpha_pos, self.hypers.beta_neg)
 
-        def fit(self, steps: int=50000) -> None:
+        def fit(self, steps: int = 50000) -> None:
             for s in range(1, steps + 1):
                 self.step()
 
@@ -89,10 +93,17 @@ def entrypoint(context: List[jnp.ndarray]):
         def reconstruct_bool(self) -> jnp.ndarray:
             B = reconstruct_tensor_from_factors(self.factors, self.dim)
             return (B > 0.5).astype(jnp.int32)
+
     solutions = []
     for tensor in context:
         wdf = WarDecFinder(tensor)
         wdf.fit()
-        solutions.append(jnp.sum(tensor - reconstruct_tensor_from_factors(wdf.factors, dim=len(tensor.shape)) > 0.1))
+        solutions.append(
+            jnp.sum(
+                tensor
+                - reconstruct_tensor_from_factors(wdf.factors, dim=len(tensor.shape))
+                > 0.1
+            )
+        )
 
     return solutions

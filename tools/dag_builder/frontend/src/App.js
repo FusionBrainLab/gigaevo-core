@@ -562,7 +562,7 @@ function App() {
         }}
       >
         <h1 style={{ margin: 0, fontSize: 22, color: '#111827', letterSpacing: 0.2 }}>
-          🏗️ MetaEvolve DAG Builder
+          🏗️ GigaEvo DAG Builder
         </h1>
         <Toolbar
           onExport={exportPipeline}

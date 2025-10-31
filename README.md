@@ -1,4 +1,4 @@
-# MetaEvolve: LLM-based Evolutionary Optimization System
+# GigaEvo: LLM-based Evolutionary Optimization System
 
 ## Installation
 
@@ -7,13 +7,13 @@ Recommended Python version: 3.12+
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd metaevolve
+cd gigaevo
 pip install -e .
 
 # Set up environment variables
 export OPENAI_API_KEY=<your_llm_api_key_here> (required)
 ```
-or using `.env` file 
+or using `.env` file
 
 ## Quick Start
 
@@ -123,7 +123,7 @@ python run_hydra.py problem.name=optimization
 
 ## Architecture
 
-MetaEvolve uses a modular, high-performance architecture designed for scalability and flexibility:
+GigaEvo uses a modular, high-performance architecture designed for scalability and flexibility:
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -185,7 +185,7 @@ The system in default configuration uses one island:
 
 ## 🔄 How It Works
 
-MetaEvolve operates through a continuous cycle of evolution, evaluation, and optimization:
+GigaEvo operates through a continuous cycle of evolution, evaluation, and optimization:
 
 ### 1. Initialization Phase
 - Load initial programs from `initial_programs/` directory
@@ -244,11 +244,11 @@ touch problems/my_problem/context.py
 def validate(payload):
     """
     Validate and score the solution.
-    
+
     Args:
         payload: For context problems: (context, solution_output)
                 For non-context problems: solution_output
-        
+
     Returns:
         dict: Metrics including 'fitness' and 'is_valid'
     """
@@ -300,7 +300,7 @@ from sklearn.model_selection import train_test_split
 def build_context() -> dict[str, np.ndarray]:
     """
     Build context data for the problem.
-    
+
     Returns:
         dict: Context data that will be passed to entrypoint()
     """
@@ -309,9 +309,9 @@ def build_context() -> dict[str, np.ndarray]:
         housing[0], housing[1], test_size=0.2, random_state=42
     )
     return {
-        "X_train": X_train, 
-        "X_test": X_test, 
-        "y_train": y_train, 
+        "X_train": X_train,
+        "X_test": X_test,
+        "y_train": y_train,
         "y_test": y_test
     }
 ```
