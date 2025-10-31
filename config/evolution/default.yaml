@@ -2,22 +2,22 @@
 
 # Compute required behavior keys from islands
 required_behavior_keys:
-  _target_: src.config.helpers.extract_behavior_keys_from_islands
+  _target_: gigaevo.config.helpers.extract_behavior_keys_from_islands
   island_configs: ${islands}
 
 # Parent selector
 parent_selector:
-  _target_: src.evolution.mutation.parent_selector.AllCombinationsParentSelector
+  _target_: gigaevo.evolution.mutation.parent_selector.AllCombinationsParentSelector
   num_parents: ${constants.num_parents}
 
 # Program acceptor
 program_acceptor:
-  _target_: src.evolution.engine.MutationContextAndBehaviorKeysAcceptor
+  _target_: gigaevo.evolution.engine.MutationContextAndBehaviorKeysAcceptor
   required_behavior_keys: ${required_behavior_keys}
 
 # Engine config
 engine_config:
-  _target_: src.evolution.engine.EngineConfig
+  _target_: gigaevo.evolution.engine.EngineConfig
   loop_interval: ${constants.loop_interval}
   max_elites_per_generation: ${constants.max_elites_per_generation}
   max_mutations_per_generation: ${constants.max_mutations_per_generation}
@@ -30,7 +30,7 @@ max_generations: null
 
 # Evolution engine
 evolution_engine:
-  _target_: src.evolution.engine.EvolutionEngine
+  _target_: gigaevo.evolution.engine.EvolutionEngine
   storage: ${redis_storage}
   strategy: ${evolution_strategy}
   mutation_operator: ${mutation_operator}

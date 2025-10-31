@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.problems.layout import ProblemLayout as PL
+from gigaevo.problems.layout import ProblemLayout as PL
 
 
 def main() -> None:

@@ -5,4 +5,3 @@ logging:
   log_dir: ${constants.log_dir}
   rotation: ${constants.log_rotation}
   retention: ${constants.log_retention}
-

@@ -22,7 +22,7 @@ const DataEdge = ({
   });
 
   const edgeColor = '#b1b1b7';
-  
+
   // Calculate edge center for label positioning
   const centerX = (sourceX + targetX) / 2;
   const centerY = (sourceY + targetY) / 2;
@@ -47,7 +47,7 @@ const DataEdge = ({
           />
         </marker>
       </defs>
-      
+
       <BaseEdge
         id={id}
         path={edgePath}
@@ -58,7 +58,7 @@ const DataEdge = ({
           ...style,
         }}
       />
-      
+
       {/* Optional: Show input name label */}
       {data?.inputName && (
         <EdgeLabelRenderer>

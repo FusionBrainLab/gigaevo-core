@@ -31,9 +31,7 @@ def _segments_intersect(p1, p2, q1, q2) -> bool:
     """Check if two line segments (p1-p2 and q1-q2) intersect — excludes touching endpoints."""
 
     def _orient(a, b, c):
-        return np.sign(
-            (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-        )
+        return np.sign((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
 
     def _on_segment(a, b, c):
         return (
@@ -120,9 +118,7 @@ def check_hexagon_overlap_two(
 def check_hexagon_overlap_many(centers: np.ndarray, angles: np.ndarray) -> bool:
     """Check if any pair of hexagons overlaps."""
     n = len(centers)
-    hex_vertices = [
-        get_hexagon_vertices(centers[i], angles[i]) for i in range(n)
-    ]
+    hex_vertices = [get_hexagon_vertices(centers[i], angles[i]) for i in range(n)]
 
     for i in range(n):
         vi = hex_vertices[i]

@@ -1,25 +1,25 @@
 import asyncio
-import time
 from datetime import datetime, timezone
+import time
 
-import hydra
 from dotenv import load_dotenv
+import hydra
 from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import DictConfig
 
-from src.database.redis_program_storage import RedisProgramStorage
-from src.evolution.engine import EvolutionEngine
-from src.problems.initial_loaders import InitialProgramLoader
-from src.runner.dag_blueprint import DAGBlueprint
-from src.runner.runner import RunnerConfig, RunnerManager
-from src.utils.logger_setup import setup_logger
+from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.evolution.engine import EvolutionEngine
+from gigaevo.problems.initial_loaders import InitialProgramLoader
+from gigaevo.runner.dag_blueprint import DAGBlueprint
+from gigaevo.runner.runner import RunnerConfig, RunnerManager
+from gigaevo.utils.logger_setup import setup_logger
 
 
 async def run_experiment(cfg: DictConfig):
     start_time = time.time()
 
-    logger.info("🔄 Starting MetaEvolve Evolution Experiment")
+    logger.info("🔄 Starting GigaEvo Evolution Experiment")
     logger.info(f"📁 Problem: {cfg.problem.name}")
     logger.info(f"🕐 Start time: {datetime.now(timezone.utc).isoformat()}")
 
@@ -64,7 +64,7 @@ async def run_experiment(cfg: DictConfig):
         await redis_storage.close()
         duration = time.time() - start_time
         logger.info(
-            f"Total experiment duration: {duration:.2f} seconds ({duration/3600:.2f} hours)"
+            f"Total experiment duration: {duration:.2f} seconds ({duration / 3600:.2f} hours)"
         )
         logger.info(f"End time: {datetime.now(timezone.utc).isoformat()}")
 

@@ -1,33 +1,33 @@
 🔬 MUTATION MANDATE:
 You are given one or more **input programs for crossover**, along with:
-- Their metrics  
-- Structured insights  
-- Lineage history  
+- Their metrics
+- Structured insights
+- Lineage history
 
 Your task is to write a new **mutant program** that:
-- Integrates at least **three insights** from different domains  
-- Uses at least one **lineage-based insight** (imitation, generalization, or avoidance)  
-- Applies a **clearly traceable architectural change** — not a parameter tweak  
+- Integrates at least **three insights** from different domains
+- Uses at least one **lineage-based insight** (imitation, generalization, or avoidance)
+- Applies a **clearly traceable architectural change** — not a parameter tweak
 
 📚 INSIGHT SOURCES:
 
 ### 💡 PROGRAM INSIGHTS (categorized):
 Examples include:
-- **optimization** — loss shaping, constraint relaxation, gradient flow, convergence stability  
-- **algorithmic** — initialization schemes, search strategies, update schedules  
-- **evolutionary** — stagnation, phase shifts, adaptive behavior  
-- **mathematical** — regularization schemes, objective structure, curvature heuristics  
-- **implementation** — modularity, vectorization, fallback logic  
+- **optimization** — loss shaping, constraint relaxation, gradient flow, convergence stability
+- **algorithmic** — initialization schemes, search strategies, update schedules
+- **evolutionary** — stagnation, phase shifts, adaptive behavior
+- **mathematical** — regularization schemes, objective structure, curvature heuristics
+- **implementation** — modularity, vectorization, fallback logic
 - **error** — numerical instability, NaNs, premature convergence
 
 ### 🧬 LINEAGE HISTORY (performance deltas):
 Each entry includes:
-- A fitness delta (e.g., "–0.132", "+0.280")  
+- A fitness delta (e.g., "–0.132", "+0.280")
 - A structural explanation (e.g., "using gradient boosting helped")
 
 You must:
-- Reflect on at least one **improvement** and one **degradation**  
-- Decide whether to **imitate**, **avoid**, or **generalize** a prior strategy  
+- Reflect on at least one **improvement** and one **degradation**
+- Decide whether to **imitate**, **avoid**, or **generalize** a prior strategy
 - Summarize the lineage insight in a single `Lineage (type): ...` comment line
 
 ✍️ OUTPUT FORMAT — STRICT:
@@ -52,10 +52,10 @@ Output **only a single fenced Python code block** (```python ... ```), with:
 
 🧬 CROSSOVER INPUT:
 
-You are given {count} structurally distinct programs selected for recombination.  
+You are given {count} structurally distinct programs selected for recombination.
 These are **not guaranteed to be direct parents** in the mutation lineage.
 
-Use their **combined insights** — not necessarily their code — to guide your mutant design.  
+Use their **combined insights** — not necessarily their code — to guide your mutant design.
 You may **discard, reimagine, or fuse architectural patterns** freely in pursuit of better packing.
 
 At least one **true lineage-based insight** (from history) must also be integrated and reflected in the output comment.

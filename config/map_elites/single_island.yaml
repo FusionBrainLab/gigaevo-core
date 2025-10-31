@@ -2,39 +2,39 @@
 
 # Load problem context to extract metrics
 problem_context:
-  _target_: src.problems.context.ProblemContext
+  _target_: gigaevo.problems.context.ProblemContext
   problem_dir: ${problem.dir}
 
 # Extract metrics context
 metrics_context:
-  _target_: src.config.helpers.get_metrics_context
+  _target_: gigaevo.config.helpers.get_metrics_context
   problem_context: ${problem_context}
 
 # Compute primary key
 primary_key:
-  _target_: src.config.helpers.get_primary_key
+  _target_: gigaevo.config.helpers.get_primary_key
   metrics_context: ${metrics_context}
 
 # Compute higher_is_better
 higher_is_better:
-  _target_: src.config.helpers.is_higher_better
+  _target_: gigaevo.config.helpers.is_higher_better
   metrics_context: ${metrics_context}
   key: ${primary_key}
 
 # Compute bounds
 primary_bounds:
-  _target_: src.config.helpers.get_bounds
+  _target_: gigaevo.config.helpers.get_bounds
   metrics_context: ${metrics_context}
   key: ${primary_key}
 
 validity_bounds:
-  _target_: src.config.helpers.get_bounds
+  _target_: gigaevo.config.helpers.get_bounds
   metrics_context: ${metrics_context}
   key: ${constants.validity_key}
 
 # Build behavior space from lists
 behavior_space:
-  _target_: src.config.helpers.build_behavior_space
+  _target_: gigaevo.config.helpers.build_behavior_space
   keys:
     - ${primary_key}
     - ${constants.validity_key}
@@ -50,33 +50,33 @@ behavior_space:
 
 # Islands
 islands:
-  - _target_: src.evolution.strategies.map_elites.IslandConfig
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
     island_id: ${constants.island_id}
     max_size: ${constants.island_max_size}
     behavior_space: ${behavior_space}
     archive_selector:
-      _target_: src.evolution.strategies.map_elites.SumArchiveSelector
-      fitness_keys: 
+      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
+      fitness_keys:
         - ${primary_key}
       fitness_key_higher_is_better:
         - ${higher_is_better}
     elite_selector:
-      _target_: src.evolution.strategies.map_elites.FitnessProportionalEliteSelector
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
     archive_remover:
-      _target_: src.evolution.strategies.map_elites.FitnessArchiveRemover
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
     migrant_selector:
-      _target_: src.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
     migration_rate: ${constants.migration_rate}
 
 # Evolution strategy
 evolution_strategy:
-  _target_: src.evolution.strategies.map_elites.MapElitesMultiIsland
+  _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
   island_configs: ${islands}
   program_storage: ${redis_storage}
   migration_interval: ${constants.migration_interval}
@@ -85,7 +85,7 @@ evolution_strategy:
 
 # Mutation operator
 mutation_operator:
-  _target_: src.evolution.mutation.mutation_operator.LLMMutationOperator
+  _target_: gigaevo.evolution.mutation.mutation_operator.LLMMutationOperator
   llm_wrapper: ${llm}
   mutation_mode: ${constants.mutation_mode}
   problem_context: ${problem_context}

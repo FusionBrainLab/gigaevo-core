@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def entrypoint() -> np.ndarray:
     np.random.seed(42)
     points = []

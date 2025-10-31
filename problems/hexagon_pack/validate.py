@@ -44,9 +44,7 @@ def validate(data):
     n = centers.shape[0]
     for i in range(n):
         for j in range(i + 1, n):
-            if check_hexagon_overlap_two(
-                centers[i], angles[i], centers[j], angles[j]
-            ):
+            if check_hexagon_overlap_two(centers[i], angles[i], centers[j], angles[j]):
                 raise ValueError(
                     f"Hexagon {i} and {j} overlap.\n"
                     f"  Centers: ({centers[i][0]:.3f}, {centers[i][1]:.3f}) vs ({centers[j][0]:.3f}, {centers[j][1]:.3f})\n"

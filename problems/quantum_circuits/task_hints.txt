@@ -3,7 +3,7 @@
 - Use **multiple initializations** to improve exploration.
 - Develop **heuristics** for stronger initial guesses.
 - Propose new methods for new factor guesses.
-- You can propose some greedy heuristics for finding decomposition. 
+- You can propose some greedy heuristics for finding decomposition.
 - You can incrementally increase steps (computation time) if it can allow to obtain better decomposition
 
 Fitness Metric

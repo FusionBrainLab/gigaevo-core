@@ -20,4 +20,3 @@ specs:
     include_in_prompts: true
     significant_change: 1.0
     sentinel_value: 0
-

@@ -30,7 +30,7 @@ const ExecutionEdge = ({
 
   const executionType = data?.executionType || 'always';
   const edgeColor = executionColors[executionType] || '#6c757d';
-  
+
   // Calculate edge center for label positioning
   const centerX = (sourceX + targetX) / 2;
   const centerY = (sourceY + targetY) / 2;
@@ -55,7 +55,7 @@ const ExecutionEdge = ({
           />
         </marker>
       </defs>
-      
+
       <BaseEdge
         id={id}
         path={edgePath}

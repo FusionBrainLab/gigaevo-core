@@ -78,14 +78,14 @@ const StageCard = ({ stage, onAddStage }) => {
         height: '3px',
         background: getStageColor(stage.name)
       }} />
-      
+
       {/* Add button */}
       <button
         ref={buttonRef}
         onClick={(e) => {
           e.stopPropagation();
           e.preventDefault();
-          
+
           // Debounce rapid clicks (prevent multiple stage creation)
           const now = Date.now();
           if (now - lastClickTime.current < 500) {
@@ -93,7 +93,7 @@ const StageCard = ({ stage, onAddStage }) => {
             return;
           }
           lastClickTime.current = now;
-          
+
           console.log('Add button clicked for:', stage.name);
           if (onAddStage) {
             onAddStage(stage);
@@ -200,13 +200,13 @@ const StageCard = ({ stage, onAddStage }) => {
             Mandatory Inputs
           </div>
           <div style={{ color: '#6c757d' }}>
-            {stage.mandatory_inputs.length > 0 
+            {stage.mandatory_inputs.length > 0
               ? stage.mandatory_inputs.join(', ')
               : 'None'
             }
           </div>
         </div>
-        
+
         <div style={{
           flex: 1,
           background: '#f8f9fa',
@@ -222,7 +222,7 @@ const StageCard = ({ stage, onAddStage }) => {
             Optional Inputs
           </div>
           <div style={{ color: '#6c757d' }}>
-            {stage.optional_inputs.length > 0 
+            {stage.optional_inputs.length > 0
               ? stage.optional_inputs.join(', ')
               : 'None'
             }
@@ -299,7 +299,7 @@ const StageLibrary = ({ stages, onAddStage }) => {
         padding: '8px'
       }}>
         {stages.map((stage) => (
-          <StageCard 
+          <StageCard
             key={stage.name}
             stage={stage}
             onAddStage={onAddStage}

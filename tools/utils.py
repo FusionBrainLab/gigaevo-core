@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Tuple
+from typing import Any
 
-import pandas as pd
 from loguru import logger
+import pandas as pd
 
-from src.database.redis_program_storage import (
+from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
@@ -63,7 +63,6 @@ async def fetch_evolution_dataframe(
             "is_complete": program.is_complete,
             "generation": program.generation,
             "is_root": program.is_root,
-            "code": program.code,
             "parent_ids": (program.lineage.parents),
             "children_ids": (program.lineage.children),
         }

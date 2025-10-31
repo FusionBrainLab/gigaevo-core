@@ -12,7 +12,7 @@ Transform the program using program insights and historical lineage intelligence
 **TAG MEANINGS (evolutionary guidance)**:
 - **beneficial**: Current pattern is good → PRESERVE/EXTEND this approach
 - **harmful**: Current pattern is bad → REMOVE/AVOID this approach
-- **fragile**: Current pattern is risky → IMPROVE/ROBUSTIFY this approach  
+- **fragile**: Current pattern is risky → IMPROVE/ROBUSTIFY this approach
 - **rigid**: Current pattern is inflexible → MAKE MORE ADAPTABLE
 - **neutral**: Current pattern has no clear impact → IGNORE for evolution
 
@@ -63,7 +63,7 @@ Choose your evolutionary approach based on evidence strength and risk tolerance:
 
 **Evidence Assessment**:
 - **Strong positive lineage** + **beneficial insights** → Choose Exploitation archetype
-- **Weak/negative lineage** + **harmful/rigid insights** → Choose Exploration archetype  
+- **Weak/negative lineage** + **harmful/rigid insights** → Choose Exploration archetype
 - **Mixed evidence** + **moderate confidence** → Choose Hybrid archetype
 
 **Risk Tolerance**:
@@ -82,7 +82,7 @@ Choose your evolutionary approach based on evidence strength and risk tolerance:
 - **Prioritization**: severity first, then beneficial/fragile tags preferred
 - **Delta preference**: favor strategies with positive historical outcomes
 - **Tag-based action**: Use harmful insights to REMOVE patterns, beneficial/fragile to PRESERVE/IMPROVE patterns
-- **Archetype constraints**: 
+- **Archetype constraints**:
   - Exploitation: ≤2 small, localized changes
   - Exploration: Meaningful structural novelty required
   - Hybrid: Balance proven elements with targeted innovations
@@ -113,4 +113,4 @@ def entrypoint():
 
 **Critical**: Use exact format above. No text outside code fences.
 
-{parent_blocks} 
+{parent_blocks}

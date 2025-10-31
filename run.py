@@ -4,31 +4,31 @@ load_dotenv()
 
 import argparse
 import asyncio
-import os
-import time
 from datetime import datetime, timezone
+import os
 from pathlib import Path
+import time
 from urllib.parse import urlsplit
 
 from loguru import logger
 
-from src.database.redis_program_storage import (
+from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
-from src.entrypoint.default_pipelines import (
+from gigaevo.entrypoint.default_pipelines import (
     ContextPipelineBuilder,
     DefaultPipelineBuilder,
 )
-from src.entrypoint.evolution_context import EvolutionContext
-from src.evolution.engine import (
+from gigaevo.entrypoint.evolution_context import EvolutionContext
+from gigaevo.evolution.engine import (
     EngineConfig,
     EvolutionEngine,
     MutationContextAndBehaviorKeysAcceptor,
 )
-from src.evolution.mutation.mutation_operator import LLMMutationOperator
-from src.evolution.mutation.parent_selector import AllCombinationsParentSelector
-from src.evolution.strategies.map_elites import (
+from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
+from gigaevo.evolution.mutation.parent_selector import AllCombinationsParentSelector
+from gigaevo.evolution.strategies.map_elites import (
     BehaviorSpace,
     BinningType,
     FitnessArchiveRemover,
@@ -38,12 +38,15 @@ from src.evolution.strategies.map_elites import (
     SumArchiveSelector,
     TopFitnessMigrantSelector,
 )
-from src.llm.models import MultiModelRouter, create_multi_model_router
-from src.problems.context import ProblemContext
-from src.problems.initial_loaders import DirectoryProgramLoader, RedisTopProgramsLoader
-from src.programs.metrics.context import VALIDITY_KEY, MetricsContext
-from src.runner.runner import RunnerConfig, RunnerManager
-from src.utils.logger_setup import setup_logger
+from gigaevo.llm.models import MultiModelRouter, create_multi_model_router
+from gigaevo.problems.context import ProblemContext
+from gigaevo.problems.initial_loaders import (
+    DirectoryProgramLoader,
+    RedisTopProgramsLoader,
+)
+from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
+from gigaevo.runner.runner import RunnerConfig, RunnerManager
+from gigaevo.utils.logger_setup import setup_logger
 
 DEFAULT_REDIS_HOST = "localhost"
 DEFAULT_REDIS_PORT = 6379
@@ -53,14 +56,14 @@ DEFAULT_REDIS_DB = 0
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="MetaEvolve: LLM-based Evolutionary Optimization System",
+        description="GigaEvo: LLM-based Evolutionary Optimization System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Use initial programs from directory
   %(prog)s --problem-dir problems/hexagon_pack
   %(prog)s --problem-dir problems/hexagon_pack --redis-db 1
-  
+
   # Use top programs from existing Redis database (by main metric)
   %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --source-redis-db 0 --top-n 30
   %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --redis-host remote-host --redis-port 6379 --source-redis-db 2 --top-n 50
@@ -224,7 +227,6 @@ async def create_evolution_strategy(
     redis_storage: RedisProgramStorage,
     metrics_context: MetricsContext,
 ) -> MapElitesMultiIsland:
-
     behavior_spaces = create_behavior_spaces(metrics_context)
     island_configs = create_island_configs(behavior_spaces, metrics_context)
 
@@ -285,7 +287,7 @@ async def run_evolution_experiment(cli_args: argparse.Namespace, log_file_path: 
     start_time = time.time()
     problem_dir = Path(cli_args.problem_dir)
 
-    logger.info("🔄 Starting MetaEvolve Evolution Experiment")
+    logger.info("🔄 Starting GigaEvo Evolution Experiment")
     logger.info(f"📁 Problem directory: {problem_dir}")
     logger.info(f"📁 Log file: {log_file_path}")
     logger.info(f"🕐 Start time: {datetime.now(timezone.utc).isoformat()}")
@@ -344,9 +346,6 @@ async def run_evolution_experiment(cli_args: argparse.Namespace, log_file_path: 
         else:
             logger.info("🌱 Initializing database with initial programs...")
             programs = await DirectoryProgramLoader(problem_dir).load(redis_storage)
-
-        task_description = problem_ctx.task_description
-        task_hints = problem_ctx.task_hints
 
         logger.info("Setting up LLM wrapper...")
         llm_wrapper = setup_llm_wrapper()
@@ -450,7 +449,7 @@ async def run_evolution_experiment(cli_args: argparse.Namespace, log_file_path: 
         # Log experiment completion
         duration = time.time() - start_time
         logger.info(
-            f"⏱️ Total experiment duration: {duration:.2f} seconds ({duration/3600:.2f} hours)"
+            f"⏱️ Total experiment duration: {duration:.2f} seconds ({duration / 3600:.2f} hours)"
         )
         logger.info(f"🕐 End time: {datetime.now(timezone.utc).isoformat()}")
 

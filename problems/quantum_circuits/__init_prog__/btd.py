@@ -1,30 +1,37 @@
 from __future__ import annotations
-import jax
-import jax.numpy as jnp
-from jax.nn import initializers, sigmoid
-import optax
+
 from dataclasses import dataclass
-from typing import Tuple, List, Any
+from typing import Any, Tuple
+
 from helper import generate_bool_tensor
+import jax
+from jax.nn import initializers, sigmoid
+import jax.numpy as jnp
+import optax
 
 
 def reconstruct_prob_from_factors(factors: Tuple[jnp.ndarray, ...]) -> jnp.ndarray:
     N = len(factors)
-    letters = ''.join(chr(97 + i) for i in range(N))
-    spec = ','.join(f"{chr(97+i)}r" for i in range(N)) + "->" + letters + "r"
+    letters = "".join(chr(97 + i) for i in range(N))
+    spec = ",".join(f"{chr(97 + i)}r" for i in range(N)) + "->" + letters + "r"
     probs = tuple(sigmoid(F) for F in factors)
-    and_per_r = jnp.einsum(spec, *probs)          # (..., R)
+    and_per_r = jnp.einsum(spec, *probs)  # (..., R)
     return 0.5 - 0.5 * jnp.prod(1.0 - 2 * and_per_r, axis=-1)
 
-def bce_loss(target: jnp.ndarray, P: jnp.ndarray, alpha: float, beta: float) -> jnp.ndarray:
+
+def bce_loss(
+    target: jnp.ndarray, P: jnp.ndarray, alpha: float, beta: float
+) -> jnp.ndarray:
     eps = 1e-6
-    return -jnp.sum(alpha * target * jnp.log(P + eps)  + beta * (1.0 - target) * jnp.log(1 - P + eps))
+    return -jnp.sum(
+        alpha * target * jnp.log(P + eps) + beta * (1.0 - target) * jnp.log(1 - P + eps)
+    )
 
 
 @dataclass
 class CPHyperParams:
     learning_rate: float = 1e-1
-    init_scale: float = 1e+1
+    init_scale: float = 1e1
     alpha_pos: float = 1.0
     beta_neg: float = 1.0
     threshold: float = 0.5
@@ -53,7 +60,10 @@ class TDFinder:
         N = len(shape)
         if factors is None:
             keys = jax.random.split(self.key, N)
-            self.factors = tuple(self.init(keys[i], (shape[i], self.rank), dtype=self.dtype) for i in range(N))
+            self.factors = tuple(
+                self.init(keys[i], (shape[i], self.rank), dtype=self.dtype)
+                for i in range(N)
+            )
         else:
             self.factors = factors
 
@@ -97,10 +107,10 @@ class TDFinder:
                 current_loss = self.loss()
                 print(f"[step {s}] loss={float(current_loss):.6f}")
 
-
     def reconstruct_bool(self) -> jnp.ndarray:
         B = reconstruct_prob_from_factors(self.factors)
         return (B > 0.5).astype(jnp.int32)
+
 
 if __name__ == "__main__":
     r = 5
