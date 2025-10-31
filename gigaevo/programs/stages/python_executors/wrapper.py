@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-import pickle
 import sys
 from typing import Any, Sequence
+
+import cloudpickle
 
 
 class ExecRunnerError(Exception):
@@ -49,7 +50,7 @@ async def run_exec_runner(
         "args": list(args or []),
         "kwargs": dict(kwargs or {}),
     }
-    data = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+    data = cloudpickle.dumps(payload)
 
     try:
         stdout, stderr = await asyncio.wait_for(
@@ -71,10 +72,12 @@ async def run_exec_runner(
 
     if proc.returncode == 0:
         try:
-            value = pickle.loads(stdout)
+            value = cloudpickle.loads(stdout)
         except Exception as e:
             raise ExecRunnerError(
-                returncode=0, stderr=f"Invalid pickle payload: {e}", stdout_bytes=stdout
+                returncode=0,
+                stderr=f"Invalid cloudpickle payload: {e}",
+                stdout_bytes=stdout,
             )
         return value, stdout, stderr_text
 

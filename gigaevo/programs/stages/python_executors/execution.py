@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pickle
 from typing import Any, Optional, Sequence
 
 from loguru import logger
@@ -78,18 +77,16 @@ class PythonCodeExecutor(Stage):
                 timeout=int(self.timeout),
             )
 
-            if value is not None:
-                size = len(pickle.dumps(value))
-                if size > self.max_output_size:
-                    return ProgramStageResult.failure(
-                        error=StageError(
-                            type="OutputTooLarge",
-                            message=f"Output {size} > limit {self.max_output_size}",
-                            stage=stage_name,
-                        )
+            size = len(_stdout_bytes)
+            if size > self.max_output_size:
+                return ProgramStageResult.failure(
+                    error=StageError(
+                        type="OutputTooLarge",
+                        message=f"Output {size} > limit {self.max_output_size}",
+                        stage=stage_name,
                     )
-            OutputModel = self.__class__.OutputModel
-            return OutputModel(data=value)
+                )
+            return self.__class__.OutputModel(data=value)
 
         except ExecRunnerError as e:
             return ProgramStageResult.failure(

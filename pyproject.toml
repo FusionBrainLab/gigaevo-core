@@ -28,6 +28,7 @@ dependencies = [
     "networkx",
     "scipy",
     "pandas",
+    "cloudpickle",
     "matplotlib",
     "seaborn",
     "python-dotenv",

@@ -1,11 +1,11 @@
-# gigaevo/programs/exec_runner.py
 from __future__ import annotations
 
-import pickle
 import sys
 import traceback
 import types
 from typing import Any, Dict, List
+
+import cloudpickle
 
 
 def _load_module_from_code(code: str, name: str = "user_code") -> types.ModuleType:
@@ -25,7 +25,7 @@ def _prepend_sys_path(paths: list[str] | None) -> None:
 
 def main() -> None:
     try:
-        payload: Dict[str, Any] = pickle.loads(sys.stdin.buffer.read())
+        payload: Dict[str, Any] = cloudpickle.loads(sys.stdin.buffer.read())
         code: str = payload["code"]
         fn_name: str = payload["function_name"]
         py_path: List[str] = payload.get("python_path", [])
@@ -43,7 +43,7 @@ def main() -> None:
 
         result = fn(*args, **kwargs)
 
-        sys.stdout.buffer.write(pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL))
+        sys.stdout.buffer.write(cloudpickle.dumps(result))
         sys.stdout.buffer.flush()
     except Exception:
         traceback.print_exc(file=sys.stderr)
