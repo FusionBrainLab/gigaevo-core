@@ -28,10 +28,10 @@ Strict rules:
 - Focus on geometric reasoning — triangle areas, point distributions, constraint satisfaction
 - Avoid duplicates; each insight should cite distinct evidence (metric value, code symbol/literal, or error substring)
 
-✅ Only recommend structural or numerical improvements that clearly support maximizing minimum triangle area
+✅ Only recommend structural or numerical improvements that clearly support main objective
 
 TAGS: beneficial, harmful, neutral, fragile, rigid
-SEVERITY: high (direct fitness impact), medium (geometric reasoning), low (implementation details)
+SEVERITY: high, medium, low
 
 OUTPUT (JSON ONLY):
 Return a JSON array with at most {max_insights} items. Each element must have these fields:

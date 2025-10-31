@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
@@ -13,17 +14,19 @@ from gigaevo.programs.stages.base import Stage
 class DAGBlueprint(BaseModel):
     """Blueprint used to build fresh `DAG` instances."""
 
-    nodes: dict[str, Callable[[], Stage]] = Field(
+    nodes: Mapping[str, Callable[[], Stage]] = Field(
         ..., description="Stage factories by name"
     )
-    data_flow_edges: list[DataFlowEdge] = Field(
+    data_flow_edges: Sequence[DataFlowEdge] = Field(
         ..., description="Data flow edges with semantic input names"
     )
-    exec_order_deps: dict[str, list[ExecutionOrderDependency]] | None = Field(
+    exec_order_deps: Mapping[str, Sequence[ExecutionOrderDependency]] | None = Field(
         None, description="Execution order dependencies by stage name"
     )
     max_parallel_stages: int = Field(8, description="Maximum parallel stages allowed")
     dag_timeout: float = Field(2400.0, description="Timeout for DAG execution")
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def build(self, state_manager: ProgramStateManager) -> DAG:
         return DAG(

@@ -1,18 +1,6 @@
 # @package _global_
-#
-# Template for custom pipeline builders.
-#
-# To create a custom pipeline:
-# 1. Implement your PipelineBuilder subclass in your problem or a shared module
-# 2. Copy this file and update _target_ to point to your custom builder class
-# 3. Reference your new config: python run_hydra.py problem.name=hexagon_pack pipeline=my_custom
-#
-# Example:
-#   problems/
-#     hexagon_pack/
-#       custom_pipeline.py  # Your MyCustomPipelineBuilder class
-#       pipeline/
-#         my_experiment.yaml  # Copy of this template with updated _target_
+
+# Manual definition of the pipeline via stages and edges
 
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
@@ -20,13 +8,17 @@ evolution_context:
   llm_wrapper: ${llm}
   storage: ${redis_storage}
 
-# Replace with your custom pipeline builder
-pipeline_builder:
-  _target_: ??? # e.g., problems.hexagon_pack.custom_pipeline.MyCustomPipelineBuilder
-  ctx: ${evolution_context}
-  # Add any custom parameters your builder needs
-  # custom_param: value
-
 dag_blueprint:
-  _target_: gigaevo.config.helpers.build_dag_from_builder
-  builder: ${pipeline_builder}
+  _target_: src.runner.dag_blueprint.DAGBlueprint
+  nodes:
+    ValidateCodeStage:
+      _target_: src.programs.stages.validation.ValidateCodeStage
+      _partial_: true
+      max_code_length: ${constants.max_code_length}
+      timeout: ${constants.stage_timeout}
+      safe_mode: true
+
+  data_flow_edges: []
+
+  max_parallel_stages: ${constants.dag_concurrency}
+  dag_timeout: ${constants.dag_timeout}

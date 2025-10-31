@@ -25,7 +25,7 @@ class ProblemContext:
     """
 
     def __init__(self, problem_dir: str | Path):
-        self.problem_dir = Path(problem_dir)
+        self.problem_dir = Path(problem_dir).resolve()
         self._metrics_context: MetricsContext | None = None
 
     def load_text(self, relative_path: str) -> str:

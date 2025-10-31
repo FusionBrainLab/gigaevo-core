@@ -234,8 +234,8 @@ async def main():
     parser.add_argument(
         "--extreme-threshold",
         type=float,
-        default=-10000.0,
-        help="Threshold for extreme outliers (default: -10000.0)",
+        default=100.0,
+        help="Threshold for extreme outliers (default: 100.0)",
     )
     parser.add_argument(
         "--outlier-multiplier",

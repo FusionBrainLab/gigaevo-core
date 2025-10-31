@@ -105,7 +105,7 @@ def _outlier_mask(
     Uses extreme_threshold and IQR method, consistent with the analyzer logic.
     """
     values = values.copy()
-    extreme_outliers = abs(values) < extreme_threshold
+    extreme_outliers = abs(values) > extreme_threshold
     non_extreme = values[~extreme_outliers]
     if len(non_extreme) > 0:
         Q1 = non_extreme.quantile(0.25)
