@@ -5,7 +5,7 @@ from helper import Data, Matrix, ToddGenerator, NullSpace
 class Data:
     """Dont change this data class"""
     name: str
-    early_decomposition: Matrix
+    early_decomposition: np.ndarray
     sota_rank: int
 
 def fast_todd(mat: Matrix) -> Matrix:
@@ -34,6 +34,6 @@ def fast_todd(mat: Matrix) -> Matrix:
         rank = mat.rows
     return mat
 
-def entrypoint(context: Data) -> Matrix:
-    res = fast_todd(context.early_decomposition)
-    return res
+def entrypoint(context: Data) -> np.ndarray:
+    res = fast_todd(Matrix.from_numpy(context.early_decomposition))
+    return res.to_numpy()

@@ -72,14 +72,14 @@ from helper import ToddGenerator, NullSpace, Matrix, Data
 class Data:
     """Dont change this data class"""
     name: str
-    early_decomposition: Matrix
+    early_decomposition: np.ndarray
     sota_rank: int
 
 # implementation code
 
-def entrypoint(context: Data) -> Matrix:
-    res = optimization(context.early_decomposition)
-    return res
+def entrypoint(context: Data) -> np.ndarray:
+    res = optimization(Matrix.from_numpy(context.early_decomposition))
+    return res.to_numpy()
 ```
 
 **Critical**: Use exact format above. No text outside code fences.

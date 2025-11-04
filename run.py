@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 from helper import *
 
 load_dotenv()
+
+
 # Main imports
 from loguru import logger
 
@@ -250,12 +252,12 @@ def setup_llm_wrapper() -> MultiModelRouter:
 
     model_configs = [
         {
-            "model": "Qwen3-235B-A22B-Thinking-2507",
+            "model": "tngtech/deepseek-r1t2-chimera:free",
             "temperature": 0.6,
             "max_tokens": 81920,
             "top_p": 0.95,
             "top_k": 20,
-            "base_url": "http://localhost:8777/v1",
+            "base_url": "https://openrouter.ai/api/v1",
             "request_timeout": 1800,
         }
     ]

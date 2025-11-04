@@ -60,6 +60,9 @@ class BitVec:
     def to_numpy(self) -> numpy.typing.NDArray[numpy.bool]:
         ...
 class Matrix:
+    @staticmethod
+    def from_numpy(array: typing.Annotated[numpy.typing.ArrayLike, numpy.bool]) -> Matrix:
+        ...
     @property
     def cols(self) -> int:
         ...
