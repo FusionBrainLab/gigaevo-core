@@ -1,5 +1,5 @@
 OBJECTIVE
-Write a Python code that modify the known of a Boolean symmetric tensor by reducing its rank. You will evolve the code for finding the best solution for specific signature tensor decompostion.
+Write a Python code that modify the known decomposition of a Boolean symmetric tensor where modification is reducing the rank of decomposition. You will evolve the code for finding the best solution for specific signature tensor decompostion.
 
  
 TASK
@@ -23,13 +23,43 @@ YOUR ROLE
 You can change choice function/ordering of the operation, you can try transformation wich increase the rank and not only decrease it for better exploration and etc.
 
 
-TOOLS (interface of the lib you must use)
-class Matrix:
-    """keeps factors of the decomposition"""
+TOOLS (interface of the lib from Helper module you MUST use)
+```python
+class BitVec:
     @staticmethod
-    def from_numpy(mat: np.ndarray) -> Matrix
+    def from_numpy(array: typing.Annotated[numpy.typing.ArrayLike, numpy.bool]) -> BitVec:
         ...
-        
+    def __and__(self, arg0: BitVec) -> BitVec:
+        ...
+    def __getitem__(self, arg0: typing.SupportsInt) -> bool:
+        ...
+    def __invert__(self) -> BitVec:
+        ...
+    def __ixor__(self, arg0: BitVec) -> BitVec:
+        ...
+    def __len__(self) -> int:
+        ...
+    def __lshift__(self, arg0: typing.SupportsInt) -> BitVec:
+        ...
+    def __or__(self, arg0: BitVec) -> BitVec:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __rshift__(self, arg0: typing.SupportsInt) -> BitVec:
+        ...
+    def __setitem__(self, arg0: typing.SupportsInt, arg1: bool) -> None:
+        ...
+    def __xor__(self, arg0: BitVec) -> BitVec:
+        ...
+    def count(self) -> int:
+        ...
+    def size(self) -> int:
+        ...
+    def to_list(self) -> list[bool]:
+        ...
+    def to_numpy(self) -> numpy.typing.NDArray[numpy.bool]:
+        ...
+class Matrix:
     @property
     def cols(self) -> int:
         ...
@@ -38,7 +68,6 @@ class Matrix:
         ...
     def __getitem__(self, arg0: typing.SupportsInt) -> BitVec:
         ...
-
 class NullSpace:
     def P_ref(self) -> Matrix:
         ...
@@ -69,7 +98,7 @@ class ToddGenerator:
         ...
     @property
     def P(self) -> Matrix:
-
+```
 
 RULES
 - All the tensors shape are correct
