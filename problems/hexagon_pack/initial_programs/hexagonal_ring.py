@@ -17,9 +17,7 @@ def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     outer_centers = []
     for i in range(8):
         angle = i * 2 * np.pi / 8
-        outer_centers.append(
-            [ring_radius * np.cos(angle), ring_radius * np.sin(angle)]
-        )
+        outer_centers.append([ring_radius * np.cos(angle), ring_radius * np.sin(angle)])
 
     centers = np.vstack([inner_centers, np.array(outer_centers)])
 

@@ -21,14 +21,9 @@ def entrypoint() -> tuple[np.ndarray, np.ndarray]:
         candidate_center = np.array([r * np.cos(theta), r * np.sin(theta)])
 
         for existing_center in centers:
-            if (
-                np.linalg.norm(candidate_center - existing_center)
-                < min_distance
-            ):
+            if np.linalg.norm(candidate_center - existing_center) < min_distance:
                 r *= 1.3
-                candidate_center = np.array(
-                    [r * np.cos(theta), r * np.sin(theta)]
-                )
+                candidate_center = np.array([r * np.cos(theta), r * np.sin(theta)])
                 break
 
         centers.append(candidate_center)

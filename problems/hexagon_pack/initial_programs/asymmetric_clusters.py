@@ -25,8 +25,7 @@ def entrypoint() -> tuple[np.ndarray, np.ndarray]:
             if dist < min_distance:
                 direction = centers[j] - centers[i]
                 centers[j] = (
-                    centers[i]
-                    + direction / np.linalg.norm(direction) * min_distance
+                    centers[i] + direction / np.linalg.norm(direction) * min_distance
                 )
 
     angles = np.array(

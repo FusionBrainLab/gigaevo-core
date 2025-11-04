@@ -1,4 +1,4 @@
-# MetaEvolve .gitignore
+# GigaEvo .gitignore
 # Comprehensive ignore patterns for evolutionary computation project
 
 # =============================================================================
@@ -281,7 +281,7 @@ dist/
 storybook-static/
 
 # =============================================================================
-# MetaEvolve Specific
+# GigaEvo Specific
 # =============================================================================
 
 # Log files
@@ -409,19 +409,9 @@ docs/build/
 *.ipynb
 
 # =============================================================================
-# Docker (if used)
-# =============================================================================
-
-.dockerignore
-Dockerfile
-docker-compose*.yml
-.docker/
-
-# =============================================================================
 # CI/CD
 # =============================================================================
 
-.github/
 .gitlab-ci.yml
 .travis.yml
 .circleci/
@@ -564,9 +554,7 @@ Icon?
 
 # Keep important configuration files
 !pyproject.toml
-!pytest.ini
 !README.md
-!README_MetaEvolve.md
 
 # Keep example problems (but ignore their outputs)
 !problems/*/
@@ -579,11 +567,11 @@ problems/*/*.csv
 problems/*/*.json
 
 # Keep source code
-!src/**/*.py
-!src/**/*.md
-!src/**/*.txt
+!gigaevo/**/*.py
+!gigaevo/**/*.md
+!gigaevo/**/*.txt
 
 # Keep documentation
 !docs/**/*.md
 !docs/**/*.rst
-!docs/**/*.txt 
+!docs/**/*.txt

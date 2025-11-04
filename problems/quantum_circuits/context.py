@@ -19,11 +19,11 @@ def build_context() -> Data:
             if file == name:
                 print(f[file])
                 l.append(Data(file, 
-                              f[file][0,:,:].reshape(rank, n), 
-                              np.load(f"data/{name}.matrix.npy").T,
+                              Matrix.from_numpy(f[file][0,:,:].reshape(rank, n)), 
+                              Matrix.from_numpy(np.load(f"data/{name}.matrix.npy").T),
                             rank))
                 # eliminate_duplications_inplace(l[-1].early_decomposition)
     # print(np.argwhere(l[0].sota_decomposition.T != l[0].early_decomposition.T).shape)
     return l[0]
 
-build_context()
+# build_context()

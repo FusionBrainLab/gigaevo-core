@@ -53,6 +53,6 @@ def random_todd(mat: Matrix) -> Matrix:
     return mat
 
 
-def entrypoint(context: Data) -> np.ndarray:
-    res = random_todd(Matrix.from_numpy(context.early_decomposition))
-    return res.to_numpy()
+def entrypoint(context: Data) -> Matrix:
+    res = random_todd(context.early_decomposition)
+    return res

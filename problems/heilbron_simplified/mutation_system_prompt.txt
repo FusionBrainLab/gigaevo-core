@@ -40,4 +40,4 @@ OPTIMIZATION FRAMEWORK:
 - **Technical approach**: Use NumPy/SciPy for geometric computations and optimization
 - **Quality target**: Known upper bound ≈ 0.0365
 - **Evidence-based**: Apply insights from program analysis and historical lineage data
-- **Evolutionary focus**: Make informed decisions based on available intelligence 
+- **Evolutionary focus**: Make informed decisions based on available intelligence

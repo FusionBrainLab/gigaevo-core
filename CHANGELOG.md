@@ -1,58 +1,56 @@
-## 0.9.0 (2025-01-XX)
+# CHANGELOG
 
-### DAG Builder GUI Enhancements
-- **Unique Name Management**: Implemented automatic counter appending for duplicate stage names (e.g., `TestStage`, `TestStage_1`, `TestStage_2`) to prevent export errors
-- **Real-time Validation**: Added client-side validation in Stage Editor to prevent duplicate custom names with visual feedback
-- **Connection Validation**: Fixed port type compatibility - execution edges only snap to execution ports, data edges only to data input ports
-- **Color Consistency**: Fixed color calculation across all components (StageNode, MiniMap, NodeDetails) to use original stage type instead of unique names
-- **Event Handling**: Added click debouncing and removed double-click handlers to prevent accidental duplicate stage creation
-- **Backend Validation**: Enhanced DAG export validation to check for unique stage names and prevent faulty graph exports
+<!-- version list -->
 
-### Development Infrastructure
-- **Node.js Support**: Added comprehensive `.gitignore` patterns for Node.js dependencies, build outputs, and cache files
-- **Installation Guide**: Updated README with detailed setup instructions for both Python backend and React frontend
-- **Requirements Management**: Added `requirements.txt` for Python dependencies and improved startup scripts
+## v1.1.0 (2025-10-31)
 
-### Technical Improvements
-- **State Management**: Improved React state handling to prevent race conditions and duplicate node creation
-- **Port System**: Enhanced connection validation with proper source/target handle checking
-- **Export System**: Fixed edge mapping to use unique names for proper DAG structure validation
+### Features
 
-Notes:
-- All duplicate stage instances now maintain consistent colors based on original stage type
-- Connection system enforces proper port type compatibility with visual feedback
-- Backend validation prevents export of DAGs with duplicate stage identifiers
+- Changed pickle serialization to cloudpickle for classes and lambdas over network
+  ([`6524340`](https://github.com/KhrulkovV/metaevolve/commit/652434069eaf07dda49b29d2a64338539c448760))
 
-## 0.7.0 (2025-09-20)
 
-- Problem scaffolding and layout standardization:
-  - Added `ProblemLayout` with centralized filenames/dirs and `scaffold()` utility
-  - Introduced `ProblemContext` (moved to `src/problems/context.py`) and integrated into `run.py`
-  - Added `tools/wizard.py` CLI to scaffold new problems with optional custom texts
-  - Prompts scaffolding now includes all placeholders: `{task_definition}`, `{task_hints}`, `{metrics_description}`, `{count}`, `{parent_blocks}`
-- Initial population loaders (OOP):
-  - `DirectoryProgramLoader` and `RedisTopProgramsLoader` for clean, configurable population sourcing
-  - Redis loader params (connections, timeouts) are user-configurable
-- Cleanups:
-  - Removed hardcoded paths/strings in favor of `ProblemLayout`
-  - Deprecated inlined helpers in `run.py` to prevent drift
+## v1.0.3 (2025-10-31)
 
-## 0.6.0 (2025-09-20)
-- Centralized metrics into OOP classes:
-  - Added `MetricSpec` and `MetricsContext` with strict validation (exactly one primary; bounds; orientation).
-  - Introduced `MetricsFormatter` to render metrics, deltas, and a metrics description block for prompts.
-  - Added range-normalized delta option and significance markers; included orientation (↑/↓ better).
-- Pipeline and stages refactor:
-  - Replaced `FactoryMetricsStage` with `EnsureMetricsStage` (strict selection, coercion, clamping).
-  - Added `NormalizeMetricsStage` (not enabled by default) for 0–1 normalization and aggregate scoring.
-  - Updated `GenerateLLMInsightsStage` and `GenerateLineageInsightsStage` to use `MetricsContext` and `MetricsFormatter`.
-- Configuration & UX:
-  - Externalized metrics to `problems/*/metrics.yaml`; removed CLI bounds; templates created per problem.
-  - Injected an AVAILABLE METRICS section into mutation system prompts via `{metrics_description}`.
-  - `LLMMutationOperator` now accepts a shared `MetricsFormatter`; removed ad-hoc helpers; using modern typing.
-- Code quality & style:
-  - Modern typing (list/dict), clearer helpers, compact logic, documented methods, and better logging.
 
-Notes:
-- Invalid programs’ fitness is clamped to primary lower_bound, keeping them in the lowest bucket by design.
-- Normalization stage exists but is not wired into the default DAG.
+## v1.0.2 (2025-10-31)
+
+
+## v1.0.1 (2025-10-31)
+
+### Bug Fixes
+
+- Minor fixes to simplify hydra and fix prompt for insights
+  ([`60aa776`](https://github.com/KhrulkovV/metaevolve/commit/60aa7764d920233d95ca689ffcd8d363dfb3f5f6))
+
+### Chores
+
+- **deps**: Move hydra dependencies to main requirements
+  ([`6e574d9`](https://github.com/KhrulkovV/metaevolve/commit/6e574d90ed220192a4df0087a71ed59e61f49679))
+
+### Refactoring
+
+- Migrate MetaEvolve to GigaEvo
+  ([`fc8c2ca`](https://github.com/KhrulkovV/metaevolve/commit/fc8c2ca64e0a1323a0101ea16ac3b3647df60892))
+
+
+## v1.0.0 (2025-10-31)
+
+
+## v0.9.0 (2025-09-26)
+
+
+## v0.8.0 (2025-09-22)
+
+
+## v0.7.0 (2025-09-21)
+
+### Chores
+
+- **release**: V0.7.0
+  ([`5f102b4`](https://github.com/KhrulkovV/metaevolve/commit/5f102b4918de8343bbc50b80d27c93a64efc1f71))
+
+
+## v0.6.0 (2025-09-20)
+
+- Initial Release

@@ -1,14 +1,14 @@
 🔬 MUTATION MANDATE:
 You are given one or more **input programs for crossover**, along with:
-- Their performance metrics  
-- Structured insights 
-- Structured lineage insights (including from ancestors and descendants)  
+- Their performance metrics
+- Structured insights
+- Structured lineage insights (including from ancestors and descendants)
 
 Your task is to write a new **mutant program** that:
-- Integrates **1–3 distinct insights** from different domains  
-- Applies exactly **one lineage strategy**: imitation, generalization, or avoidance  
-- Introduces a **clearly identifiable algorithmic or architectural modification**  
-- Performs **parameter changes only when explicitly justified by an insight**  
+- Integrates **1–3 distinct insights** from different domains
+- Applies exactly **one lineage strategy**: imitation, generalization, or avoidance
+- Introduces a **clearly identifiable algorithmic or architectural modification**
+- Performs **parameter changes only when explicitly justified by an insight**
 - Ensures that **each selected insight leads to a concrete, traceable code change**
 
 ---
@@ -16,10 +16,10 @@ Your task is to write a new **mutant program** that:
 
 ### 💡 PROGRAM INSIGHTS (categorized):
 Examples include:
-- **geometric** (e.g., layout conflicts, nesting logic)  
-- **algorithmic** (e.g., perturbation flaws, annealing design)  
-- **evolutionary** (e.g., stagnation, trend shifts)  
-- **mathematical** (e.g., spacing bounds, angle symmetries)  
+- **geometric** (e.g., layout conflicts, nesting logic)
+- **algorithmic** (e.g., perturbation flaws, annealing design)
+- **evolutionary** (e.g., stagnation, trend shifts)
+- **mathematical** (e.g., spacing bounds, angle symmetries)
 - **implementation** (e.g., init heuristics, overlap handling)
 - **error** (e.g., degenerate configuration)
 
@@ -27,10 +27,10 @@ Examples include:
 
 🧠 INSIGHT FORMAT:
 Each insight includes:
-- `strategy`: how to treat the code change (`imitation`, `avoidance`, or `generalization`)  
-- `description`: brief explanation of the likely effect  
-- `impact`: the metric delta caused by the change (e.g., `+0.019`)  
-- `diff`: a minimal unified diff representing the original change (for reference)  
+- `strategy`: how to treat the code change (`imitation`, `avoidance`, or `generalization`)
+- `description`: brief explanation of the likely effect
+- `impact`: the metric delta caused by the change (e.g., `+0.019`)
+- `diff`: a minimal unified diff representing the original change (for reference)
 - `parent_reference` / `child_reference`: code location and snippet (if available)
 
 Use these insights to:
@@ -49,9 +49,9 @@ Produce **only a single fenced Python code block**:
 # May define additional helpers
 ```
 
-- Do **not** include explanations, comments, docstrings, or markdown  
-- Do **not** include anything outside the code block  
-- If randomness is used, **set a fixed seed** for reproducibility  
+- Do **not** include explanations, comments, docstrings, or markdown
+- Do **not** include anything outside the code block
+- If randomness is used, **set a fixed seed** for reproducibility
 - You may optionally annotate changes with `# MUTATED`
 
 ---
@@ -59,8 +59,8 @@ Produce **only a single fenced Python code block**:
 🎯 STRATEGIC MINDSET:
 
 Your edits should emulate a **surgical diff**:
-- Modify only the regions motivated by selected insights  
-- Do not reformat, shuffle, or rewrite unrelated logic  
+- Modify only the regions motivated by selected insights
+- Do not reformat, shuffle, or rewrite unrelated logic
 - Preserve structure and flow unless a complete overhaul is explicitly justified
 
 ---
@@ -70,13 +70,13 @@ Your edits should emulate a **surgical diff**:
 You are provided with `{count}` structurally diverse crossover candidates.
 
 ✅ You may:
-- Reuse helper functions  
-- Tune constants with justification  
-- Insert new logic when guided by insights  
+- Reuse helper functions
+- Tune constants with justification
+- Insert new logic when guided by insights
 
 🚫 Do NOT:
-- Introduce cosmetic edits  
-- Reindent or shuffle unrelated code  
+- Introduce cosmetic edits
+- Reindent or shuffle unrelated code
 - Rewrite the whole program without clear rationale
 
 📥 Programs provided below:

@@ -12,12 +12,12 @@ export function getStageColor(stageName) {
     hash = ((hash << 5) - hash) + char;
     hash = hash & hash; // Convert to 32-bit integer
   }
-  
+
   // Convert hash to HSL color space for better color distribution
   const hue = Math.abs(hash) % 360;
   const saturation = 60 + (Math.abs(hash >> 8) % 25); // 60-85%
   const lightness = 45 + (Math.abs(hash >> 16) % 20); // 45-65%
-  
+
   return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
 
@@ -50,7 +50,7 @@ export function validateConnection(sourceStage, targetStage, inputName) {
   // Check if the target stage accepts the specified input
   const mandatoryInputs = targetStage.mandatory_inputs || [];
   const optionalInputs = targetStage.optional_inputs || [];
-  
+
   return mandatoryInputs.includes(inputName) || optionalInputs.includes(inputName);
 }
 
@@ -61,7 +61,7 @@ export function getConnectionSuggestions(stage, availableStages) {
   const suggestions = [];
   const mandatoryInputs = stage.mandatory_inputs || [];
   const optionalInputs = stage.optional_inputs || [];
-  
+
   // For each input, suggest compatible stages
   [...mandatoryInputs, ...optionalInputs].forEach(inputName => {
     availableStages.forEach(otherStage => {
@@ -74,7 +74,7 @@ export function getConnectionSuggestions(stage, availableStages) {
       }
     });
   });
-  
+
   return suggestions;
 }
 
@@ -128,7 +128,7 @@ export function generateUniqueStageName(baseName, existingNodes) {
   // Find the highest counter for this base name
   let counter = 1;
   let uniqueName = `${baseName}_${counter}`;
-  
+
   while (existingNames.includes(uniqueName)) {
     counter++;
     uniqueName = `${baseName}_${counter}`;

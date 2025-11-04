@@ -17,17 +17,13 @@ def entrypoint() -> tuple[np.ndarray, np.ndarray]:
     layer1 = []
     for i in range(6):
         angle = i * np.pi / 3
-        layer1.append(
-            [layer1_radius * np.cos(angle), layer1_radius * np.sin(angle)]
-        )
+        layer1.append([layer1_radius * np.cos(angle), layer1_radius * np.sin(angle)])
 
     layer2_radius = 5.0
     layer2 = []
     for i in range(4):
         angle = i * np.pi / 2 + np.pi / 4
-        layer2.append(
-            [layer2_radius * np.cos(angle), layer2_radius * np.sin(angle)]
-        )
+        layer2.append([layer2_radius * np.cos(angle), layer2_radius * np.sin(angle)])
 
     centers = np.vstack([core, np.array(layer1), np.array(layer2)])
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-MetaEvolve Setup Verification Script
+GigaEvo Setup Verification Script
 ==================================
 
 This script verifies that all dependencies are installed and optionally runs
@@ -126,9 +126,7 @@ def check_api_key() -> bool:
         check_symbol(True, "OPENROUTER_API_KEY environment variable is set")
         return True
     else:
-        check_symbol(
-            False, "OPENROUTER_API_KEY environment variable is not set"
-        )
+        check_symbol(False, "OPENROUTER_API_KEY environment variable is not set")
         print("  Get your API key from: https://openrouter.ai/keys")
         print("  Set it with: export OPENROUTER_API_KEY=your_api_key_here")
         return False
@@ -180,17 +178,15 @@ def check_problem_directory() -> bool:
 
 def main():
     """Main verification routine."""
-    print("🚀 MetaEvolve Setup Verification")
+    print("🚀 GigaEvo Setup Verification")
     print("================================")
 
     # Check virtual environment
     if os.getenv("VIRTUAL_ENV"):
-        check_symbol(
-            True, f"Virtual environment active: {os.getenv('VIRTUAL_ENV')}"
-        )
+        check_symbol(True, f"Virtual environment active: {os.getenv('VIRTUAL_ENV')}")
     else:
         check_symbol(False, "No virtual environment detected")
-        print("  Activate with: source metaevolve/bin/activate")
+        print("  Activate with: source gigaevo/bin/activate")
 
     # Run all checks
     checks = [
@@ -205,14 +201,14 @@ def main():
     print(f"\n📊 Summary: {sum(checks)}/{len(checks)} checks passed")
 
     if all_checks_passed:
-        print("\n🎉 All checks passed! MetaEvolve is ready to run.")
+        print("\n🎉 All checks passed! GigaEvo is ready to run.")
         print("\nTo start evolution:")
         print(
             "  python restart_llm_evolution_improved.py --problem-dir problems/hexagon_pack --min-fitness -7 --max-fitness -3.9"
         )
     else:
         print(
-            "\n⚠️  Some checks failed. Please fix the issues above before running MetaEvolve."
+            "\n⚠️  Some checks failed. Please fix the issues above before running GigaEvo."
         )
         sys.exit(1)
 

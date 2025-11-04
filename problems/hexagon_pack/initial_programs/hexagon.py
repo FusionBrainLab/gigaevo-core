@@ -4,7 +4,6 @@ import numpy as np
 
 
 def entrypoint() -> tuple[np.ndarray, np.ndarray]:
-
     centers = []
     angles = []
 

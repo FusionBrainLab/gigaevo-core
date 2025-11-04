@@ -30,7 +30,7 @@ const StageEditor = ({ node, nodes, onSave, onClose }) => {
 
     const trimmedName = name.trim();
     const isUnique = isStageNameUnique(trimmedName, nodes, node.id);
-    
+
     if (!isUnique) {
       setNameError('This name is already used by another stage');
       return false;

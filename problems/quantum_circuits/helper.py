@@ -6,6 +6,6 @@ from gf2lib.gf2lib import Matrix, ToddGenerator, TohpeGenerator, Tensor3D, elimi
 @dataclass
 class Data:
     name: str
-    sota_decomposition: np.ndarray
-    early_decomposition: np.ndarray
+    sota_decomposition: Matrix
+    early_decomposition: Matrix
     sota_rank: int

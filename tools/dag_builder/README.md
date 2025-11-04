@@ -1,6 +1,6 @@
-# 🏗️ MetaEvolve DAG Builder
+# 🏗️ GigaEvo DAG Builder
 
-A modern visual interface for building execution pipelines in MetaEvolve using React and React Flow.
+A modern visual interface for building execution pipelines in GigaEvo using React and React Flow.
 
 ## ✨ Features
 
@@ -18,7 +18,7 @@ A modern visual interface for building execution pipelines in MetaEvolve using R
 
 - **Python 3.8+** with pip
 - **Node.js 16+** with npm
-- **MetaEvolve project** (this tool is part of the MetaEvolve codebase)
+- **GigaEvo project** (this tool is part of the GigaEvo codebase)
 
 ### 1. Backend Setup (Python/FastAPI)
 
@@ -87,7 +87,7 @@ cd tools/dag_builder
 1. Click the **Export** button in the toolbar
 2. The system validates your DAG structure
 3. Download the generated Python pipeline code
-4. Use the code in your MetaEvolve project
+4. Use the code in your GigaEvo project
 
 ### Keyboard Shortcuts
 
@@ -99,7 +99,7 @@ cd tools/dag_builder
 ## 🏗️ Architecture
 
 ### Backend (FastAPI)
-- **Stage Registry**: Automatically imports all stages from MetaEvolve using `@StageRegistry.register` decorators
+- **Stage Registry**: Automatically imports all stages from GigaEvo using `@StageRegistry.register` decorators
 - **DAG Validation**: Validates DAG structure and ensures unique stage names
 - **Code Generation**: Exports visual DAGs as PipelineBuilder Python code
 - **CORS Support**: Configured for frontend communication
@@ -133,7 +133,7 @@ tools/dag_builder/
 
 ### Adding New Stages
 
-The tool automatically discovers stages from the MetaEvolve codebase. To add a new stage:
+The tool automatically discovers stages from the GigaEvo codebase. To add a new stage:
 
 1. Create your stage class in the appropriate module
 2. Use the `@StageRegistry.register` decorator
@@ -170,8 +170,8 @@ npm install
 
 **Python Import Errors**
 ```bash
-# Ensure you're in the MetaEvolve project root
-cd /path/to/metaevolve
+# Ensure you're in the GigaEvo project root
+cd /path/to/gigaevo
 export PYTHONPATH=$PWD:$PYTHONPATH
 ```
 
@@ -214,4 +214,4 @@ npm start
 
 ## 📄 License
 
-Part of the MetaEvolve project. See the main project license for details.
+Part of the GigaEvo project. See the main project license for details.

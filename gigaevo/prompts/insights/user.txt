@@ -1,0 +1,11 @@
+Analyze this program and extract 3-{max_insights} actionable insights for evolutionary refinement.
+
+PROGRAM:
+```python
+{code}
+```
+
+METRICS: {metrics}
+ERRORS: {error_section}
+
+Extract insights with concrete evidence from code/metrics/errors only. No speculation.

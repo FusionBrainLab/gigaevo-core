@@ -1,17 +1,6 @@
-#!/usr/bin/env python3
-"""
-MetaEvolve: LLM-based Evolutionary System for Optimization Problems
+from dotenv import load_dotenv
 
-This script runs the MetaEvolve pipeline for optimization problems by:
-1. Loading initial programs from a configurable problem directory
-2. Creating diverse initial populations using problem-specific strategies
-3. Running multi-island evolution with LLM-based mutation
-4. Optimizing arrangements using geometric and structural diversity
-
-Usage:
-    python restart_llm_evolution_improved.py --problem-dir problems/hexagon_pack [OPTIONS]
-
-"""
+load_dotenv()
 
 import argparse
 import asyncio
@@ -27,16 +16,23 @@ load_dotenv()
 # Main imports
 from loguru import logger
 
-from src.database.redis_program_storage import (
+from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
-from src.evolution.engine import EngineConfig, EvolutionEngine
-from src.evolution.mutation.llm import LLMMutationOperator
-from src.evolution.mutation.parent_selector import (
-    AllCombinationsParentSelector,
+from gigaevo.entrypoint.default_pipelines import (
+    ContextPipelineBuilder,
+    DefaultPipelineBuilder,
 )
-from src.evolution.strategies.map_elites import (
+from gigaevo.entrypoint.evolution_context import EvolutionContext
+from gigaevo.evolution.engine import (
+    EngineConfig,
+    EvolutionEngine,
+    MutationContextAndBehaviorKeysAcceptor,
+)
+from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
+from gigaevo.evolution.mutation.parent_selector import AllCombinationsParentSelector
+from gigaevo.evolution.strategies.map_elites import (
     BehaviorSpace,
     BinningType,
     FitnessArchiveRemover,
@@ -46,26 +42,16 @@ from src.evolution.strategies.map_elites import (
     SumArchiveSelector,
     TopFitnessMigrantSelector,
 )
-from src.llm.wrapper import LLMConfig, MultiModelLLMWrapper
-from src.programs.metrics.context import MetricsContext, VALIDITY_KEY
-from src.programs.metrics.formatter import MetricsFormatter
-from src.problems.context import ProblemContext
-from src.problems.initial_loaders import (
+from gigaevo.llm.models import MultiModelRouter, create_multi_model_router
+from gigaevo.problems.context import ProblemContext
+from gigaevo.problems.initial_loaders import (
     DirectoryProgramLoader,
     RedisTopProgramsLoader,
 )
-from src.runner.manager import RunnerConfig, RunnerManager
-from src.runner.pipeline_factory import (
-    PipelineContext,
-    DefaultPipelineBuilder,
-    ContextPipelineBuilder,
-)
+from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
+from gigaevo.runner.runner import RunnerConfig, RunnerManager
+from gigaevo.utils.logger_setup import setup_logger
 
-# Setup logging first
-from src.utils.logger_setup import setup_logger
-
-# Global configuration
-DEFAULT_PROBLEM_DIR = "problems/hexagon_pack"
 DEFAULT_REDIS_HOST = "localhost"
 DEFAULT_REDIS_PORT = 6379
 DEFAULT_REDIS_DB = 0
@@ -74,26 +60,25 @@ DEFAULT_REDIS_DB = 0
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="MetaEvolve: LLM-based Evolutionary Optimization System",
+        description="GigaEvo: LLM-based Evolutionary Optimization System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Use initial programs from directory
   %(prog)s --problem-dir problems/hexagon_pack
   %(prog)s --problem-dir problems/hexagon_pack --redis-db 1
-  
-  # Use top programs from existing Redis database (by fitness)
+
+  # Use top programs from existing Redis database (by main metric)
   %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --source-redis-db 0 --top-n 30
   %(prog)s --problem-dir problems/hexagon_pack --use-redis-selection --redis-host remote-host --redis-port 6379 --source-redis-db 2 --top-n 50
         """,
     )
 
-    # Required arguments
     parser.add_argument(
         "--problem-dir",
         type=str,
-        default=DEFAULT_PROBLEM_DIR,
-        help=f"Directory containing problem files (default: {DEFAULT_PROBLEM_DIR})",
+        required=True,
+        help="Directory containing problem files",
     )
     parser.add_argument(
         "--add-context",
@@ -101,7 +86,6 @@ Examples:
         help="Add context to the problem (i.e., context.py will be run to produce an input to the main program)",
     )
 
-    # Redis configuration
     redis_group = parser.add_argument_group("Redis Configuration")
     redis_group.add_argument(
         "--redis-url",
@@ -128,7 +112,6 @@ Examples:
         help=f"Redis database number (default: {DEFAULT_REDIS_DB})",
     )
 
-    # Evolution configuration
     evolution_group = parser.add_argument_group("Evolution Configuration")
     evolution_group.add_argument(
         "--max-generations",
@@ -136,17 +119,7 @@ Examples:
         default=None,
         help="Maximum number of generations (default: unlimited)",
     )
-    evolution_group.add_argument(
-        "--population-size",
-        type=int,
-        default=None,
-        help="Initial population size (default: auto-determined)",
-    )
-
-    # Redis selection configuration
-    redis_selection_group = parser.add_argument_group(
-        "Redis Selection Configuration"
-    )
+    redis_selection_group = parser.add_argument_group("Redis Selection Configuration")
     redis_selection_group.add_argument(
         "--use-redis-selection",
         action="store_true",
@@ -171,7 +144,6 @@ Examples:
         help="Number of top programs to select by fitness (default: 50)",
     )
 
-    # Logging configuration
     logging_group = parser.add_argument_group("Logging Configuration")
     logging_group.add_argument(
         "--log-level",
@@ -186,7 +158,6 @@ Examples:
         help="Directory for log files (default: logs)",
     )
 
-    # Performance configuration
     performance_group = parser.add_argument_group("Performance Configuration")
     performance_group.add_argument(
         "--max-concurrent-dags",
@@ -196,14 +167,6 @@ Examples:
     )
 
     return parser.parse_args()
-
-
-# Configuration constants
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = os.getenv("REDIS_DB", "0")
-
-LLM_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 
 def create_behavior_spaces(
@@ -225,10 +188,7 @@ def create_behavior_spaces(
         )
 
     fitness_validity_space = BehaviorSpace(
-        feature_bounds={
-            primary_key: primary_bounds,
-            VALIDITY_KEY: valid_bounds,
-        },
+        feature_bounds={primary_key: primary_bounds, VALIDITY_KEY: valid_bounds},
         resolution={primary_key: 150, VALIDITY_KEY: 2},
         binning_types={
             primary_key: BinningType.LINEAR,
@@ -247,33 +207,23 @@ def create_island_configs(
     """Create 1 island configurations with improved resolution balance and migration strategies."""
 
     primary_key = metrics_context.get_primary_key()
-    configs = IslandConfig(
+    hi_better = metrics_context.is_higher_better(primary_key)
+    island_exploit = IslandConfig(
         island_id="fitness_island",
         max_size=75,
         behavior_space=behavior_spaces[0],
         archive_selector=SumArchiveSelector(
             [primary_key],
-            fitness_key_higher_is_better={
-                primary_key: metrics_context.is_higher_better(primary_key)
-            },
+            fitness_key_higher_is_better={primary_key: hi_better},
         ),
-        elite_selector=FitnessProportionalEliteSelector(
-            primary_key,
-            metrics_context.is_higher_better(primary_key),
-        ),
-        archive_remover=FitnessArchiveRemover(
-            primary_key,
-            metrics_context.is_higher_better(primary_key),
-        ),
-        migrant_selector=TopFitnessMigrantSelector(
-            primary_key,
-            metrics_context.is_higher_better(primary_key),
-        ),
-        migration_rate=0.0,
+        elite_selector=FitnessProportionalEliteSelector(primary_key, hi_better),
+        archive_remover=FitnessArchiveRemover(primary_key, hi_better),
+        migrant_selector=TopFitnessMigrantSelector(primary_key, hi_better),
+        migration_rate=0.10,
     )
 
     return [
-        configs,
+        island_exploit,
     ]
 
 
@@ -281,7 +231,6 @@ async def create_evolution_strategy(
     redis_storage: RedisProgramStorage,
     metrics_context: MetricsContext,
 ) -> MapElitesMultiIsland:
-
     behavior_spaces = create_behavior_spaces(metrics_context)
     island_configs = create_island_configs(behavior_spaces, metrics_context)
 
@@ -296,81 +245,27 @@ async def create_evolution_strategy(
     return strategy
 
 
-async def setup_llm_wrapper() -> dict[str, MultiModelLLMWrapper]:
-    """Setup the LLM wrapper for code generation and insights (post-refactor)."""
+def setup_llm_wrapper() -> MultiModelRouter:
+    """Setup LangChain chat models."""
 
-    if not LLM_API_KEY:
-        raise ValueError("OPENROUTER_API_KEY environment variable must be set")
-
-    # Updated for longer programs and better model alignment
-    settings_per_stage = {
-        "insights": {
-            "temperature": 0.8,
-            "max_tokens": 32768//2,
-            "top_p": 0.9,
-            "top_k": 20,
-        },
-        "lineage": {
-            "temperature": 0.4,
-            "max_tokens": 32768//2,
+    model_configs = [
+        {
+            "model": "Qwen3-235B-A22B-Thinking-2507",
+            "temperature": 0.6,
+            "max_tokens": 81920,
             "top_p": 0.95,
             "top_k": 20,
-        },
-        "mutation": {
-            "temperature": 0.7,
-            "max_tokens": 32768,
-            "top_p": 0.95,
-            "top_k": 20,
-        },
-    }
-
-    def build_wrapper_with_params(
-        params: dict[str, float],
-    ) -> MultiModelLLMWrapper:
-
-        return MultiModelLLMWrapper(
-            models=[
-                # "baidu/ernie-4.5-21b-a3b-thinking",
-                # "nvidia/llama-3.3-nemotron-super-49b-v1.5"
-                # "deepseek/deepseek-chat-v3.1:free",
-                # "google/gemini-2.5-flash"
-                # "google/gemini-2.0-flash-001"
-                # "GigaChat/GigaChat-2-Max",
-                "Qwen/Qwen3-Next-80B-A3B-Instruct",
-                "Qwen/Qwen3-235B-A22B-Instruct-2507",
-                "openai/gpt-oss-120b"
-                # "google/gemini-2.0-flash-exp:free",
-                # "deepseek/deepseek-v3.2-exp"
-                # "tngtech/deepseek-r1t2-chimera:free",
-                # "deepseek/deepseek-r1-0528:free"
-                # "z-ai/glm-4.5-air:free"
-                # "qwen/qwen3-235b-a22b:free"
-                # "qwen/qwen3-coder:free"
-            ],
-            probabilities=[1,1,1],
-            api_key=LLM_API_KEY,
-            configs=[
-                # LLMConfig(**params, api_endpoint="https://foundation-models.api.cloud.ru/v1"),
-                LLMConfig(**params, api_endpoint="https://foundation-models.api.cloud.ru/v1"),
-                LLMConfig(**params, api_endpoint="https://foundation-models.api.cloud.ru/v1"),
-                LLMConfig(**params, api_endpoint="https://foundation-models.api.cloud.ru/v1"),
-
-                # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
-                # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
-                # LLMConfig(**params, api_endpoint="https://openrouter.ai/api/v1/"),
-            ],
-        )
-
-    res = {
-        stage: build_wrapper_with_params(params)
-        for stage, params in settings_per_stage.items()
-    }
-    return res
+            "base_url": "http://localhost:8777/v1",
+            "request_timeout": 1800,
+        }
+    ]
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if openai_api_key is None:
+        raise ValueError("OPENAI_API_KEY environment variable must be set")
+    return create_multi_model_router(model_configs, [1.0], openai_api_key)
 
 
-def _resolve_redis_url(
-    host: str, port: int, db: int, url_override: str | None
-) -> str:
+def _resolve_redis_url(host: str, port: int, db: int, url_override: str | None) -> str:
     """Build a Redis URL from host/port/db unless an override is provided."""
     if url_override:
         return url_override
@@ -390,15 +285,13 @@ def _parse_redis_url(url: str) -> tuple[str, int, int]:
     return host, port, db
 
 
-async def run_evolution_experiment(
-    cli_args: argparse.Namespace, log_file_path: str
-):
+async def run_evolution_experiment(cli_args: argparse.Namespace, log_file_path: str):
     """Run the complete evolution experiment with provided configuration."""
 
     start_time = time.time()
     problem_dir = Path(cli_args.problem_dir)
 
-    logger.info("🔄 Starting MetaEvolve Evolution Experiment")
+    logger.info("🔄 Starting GigaEvo Evolution Experiment")
     logger.info(f"📁 Problem directory: {problem_dir}")
     logger.info(f"📁 Log file: {log_file_path}")
     logger.info(f"🕐 Start time: {datetime.now(timezone.utc).isoformat()}")
@@ -424,9 +317,7 @@ async def run_evolution_experiment(
 
     try:
         # Clear the target database to start fresh
-        logger.info(
-            f"🧹 Clearing Redis database {cli_args.redis_db} for restart..."
-        )
+        logger.info(f"🧹 Clearing Redis database {cli_args.redis_db} for restart...")
         await redis_storage.flushdb()
         logger.info(f"✓ Redis database {cli_args.redis_db} cleared")
 
@@ -437,9 +328,7 @@ async def run_evolution_experiment(
 
         # Initialize new DB with initial programs
         if cli_args.use_redis_selection:
-            logger.info(
-                "🔍 Initializing database with selected programs from Redis..."
-            )
+            logger.info("🔍 Initializing database with selected programs from Redis...")
             primary_key = metrics_context.get_primary_key()
             source_host = cli_args.redis_host
             source_port = cli_args.redis_port
@@ -460,82 +349,55 @@ async def run_evolution_experiment(
             programs = await loader.load(redis_storage)
         else:
             logger.info("🌱 Initializing database with initial programs...")
-            programs = await DirectoryProgramLoader(problem_dir).load(
-                redis_storage
-            )
-
-        task_description = problem_ctx.task_description
-        task_hints = problem_ctx.task_hints
+            programs = await DirectoryProgramLoader(problem_dir).load(redis_storage)
 
         logger.info("Setting up LLM wrapper...")
-        llm_wrapper = await setup_llm_wrapper()
+        llm_wrapper = setup_llm_wrapper()
 
         logger.info("Creating DAG pipeline...")
-        metrics_formatter = MetricsFormatter(
-            metrics_context, use_range_normalization=False
-        )
-
-        pctx = PipelineContext(
+        pctx = EvolutionContext(
             problem_ctx=problem_ctx,
-            metrics_context=metrics_context,
-            metrics_formatter=metrics_formatter,
             llm_wrapper=llm_wrapper,
             storage=redis_storage,
-            task_description=task_description,
-            add_context=cli_args.add_context,
         )
-        if cli_args.add_context:
+        if problem_ctx.is_contextual:
+            logger.info(
+                "Contextual problem detected. Using contextual pipeline builder..."
+            )
             builder = ContextPipelineBuilder(pctx)
         else:
+            logger.info(
+                "Non-contextual problem detected. Using default pipeline builder..."
+            )
             builder = DefaultPipelineBuilder(pctx)
-        dag_spec = builder.set_limits(
-            dag_timeout=2000, max_parallel=8
-        ).build_spec()
+        dag_blueprint = builder.build_blueprint()
 
-        # Create evolution strategy
         logger.info("Creating evolution strategy...")
         evolution_strategy = await create_evolution_strategy(
             redis_storage, metrics_context
         )
 
-        # Create LLM mutation operator
         logger.info("Creating LLM mutation operator...")
 
         mutation_operator = LLMMutationOperator(
-            llm_wrapper=llm_wrapper["mutation"],
-            mutation_mode="rewrite",  # Start with rewrite for maximum change
-            fetch_insights_fn=lambda x: x.metadata.get(
-                "insights", "No insights available."
-            ),
-            fetch_lineage_insights_fn=lambda x: x.metadata.get(
-                "lineage_insights", "No lineage insights available."
-            ),
-            task_definition=task_description,
-            task_hints=task_hints,
-            system_prompt_template=problem_ctx.mutation_system_prompt,
-            user_prompt_templates=[
-                problem_ctx.mutation_user_prompt
-            ],  # optionally use a list of templates with weights to be randomly selected
-            user_prompt_template_weights_factory=lambda x: [1.0],
-            metrics_context=metrics_context,
-            metrics_formatter=metrics_formatter,
+            llm_wrapper=llm_wrapper,
+            mutation_mode="rewrite",
+            problem_context=problem_ctx,
         )
         required_behavior_keys = set()
         for island in evolution_strategy.islands.values():
-            required_behavior_keys |= set(
-                island.config.behavior_space.behavior_keys
-            )
+            required_behavior_keys |= set(island.config.behavior_space.behavior_keys)
 
-        # Note: Consider an abstraction for a function filter to drop unsuitable programs
-        # (e.g., when metrics are missing).
         logger.info("Creating evolution engine...")
 
         engine_config = EngineConfig(
             loop_interval=1.0,
-            max_elites_per_generation=3,  # INCREASED: More elites for better diversity preservation
-            max_mutations_per_generation=4,  # INCREASED: More mutations per generation for faster exploration
-            max_generations=cli_args.max_generations,  # Pass max_generations from command line
-            required_behavior_keys=required_behavior_keys,
+            max_elites_per_generation=5,
+            max_mutations_per_generation=8,
+            max_generations=cli_args.max_generations,
+            program_acceptor=MutationContextAndBehaviorKeysAcceptor(
+                required_behavior_keys=required_behavior_keys
+            ),
             parent_selector=AllCombinationsParentSelector(num_parents=2),
         )
 
@@ -546,7 +408,6 @@ async def run_evolution_experiment(
             config=engine_config,
         )
 
-        # Create runner with optimized concurrency
         logger.info("Creating runner...")
         runner_config = RunnerConfig(
             poll_interval=5.0,
@@ -557,7 +418,7 @@ async def run_evolution_experiment(
 
         runner = RunnerManager(
             engine=evolution_engine,
-            dag_spec=dag_spec,
+            dag_blueprint=dag_blueprint,
             storage=redis_storage,
             config=runner_config,
         )
@@ -570,7 +431,7 @@ async def run_evolution_experiment(
         logger.info(
             f"  - Max generations: {cli_args.max_generations if cli_args.max_generations else 'unlimited'}"
         )
-        logger.info(f"  - DAG stages: {list(dag_spec.nodes)}")
+        logger.info(f"  - DAG stages: {list(dag_blueprint.nodes.keys())}")
 
         await runner.run()
 
@@ -592,17 +453,14 @@ async def run_evolution_experiment(
         # Log experiment completion
         duration = time.time() - start_time
         logger.info(
-            f"⏱️ Total experiment duration: {duration:.2f} seconds ({duration/3600:.2f} hours)"
+            f"⏱️ Total experiment duration: {duration:.2f} seconds ({duration / 3600:.2f} hours)"
         )
         logger.info(f"🕐 End time: {datetime.now(timezone.utc).isoformat()}")
 
 
 def main() -> int:
-    """CLI entrypoint for running MetaEvolve experiment."""
-    # Parse command-line arguments
     cli_args = parse_arguments()
 
-    # Reconfigure logging with user preferences
     log_file_path = setup_logger(
         log_dir=cli_args.log_dir,
         level=cli_args.log_level,
@@ -610,17 +468,11 @@ def main() -> int:
         retention="30 days",
     )
 
-    # Check prerequisites
-    if not os.getenv("OPENROUTER_API_KEY"):
-        logger.error("❌ OPENROUTER_API_KEY environment variable must be set")
-        raise SystemExit(1)
-
     cli_problem_dir = Path(cli_args.problem_dir)
     if not cli_problem_dir.exists():
         logger.error(f"❌ Problem directory not found: {cli_problem_dir}")
         raise SystemExit(1)
 
-    # Run the evolution experiment
     asyncio.run(run_evolution_experiment(cli_args, log_file_path))
     return 0
 

@@ -38,10 +38,7 @@ def entrypoint() -> tuple[np.ndarray, np.ndarray]:
                     if np.linalg.norm(direction) > 1e-8:
                         centers[j] = (
                             centers[i]
-                            + direction
-                            / np.linalg.norm(direction)
-                            * min_distance
-                            * 1.1
+                            + direction / np.linalg.norm(direction) * min_distance * 1.1
                         )
                         needs_adjustment = True
 
