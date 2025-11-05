@@ -10,10 +10,7 @@ You are provided with:
 - Task-specific constraints and fitness evaluation criteria
 
 OBJECTIVE:
-{task_definition}
-
-STRATEGIC GUIDANCE:
-{task_hints}
+{task_description}
 
 AVAILABLE METRICS:
 {metrics_description}

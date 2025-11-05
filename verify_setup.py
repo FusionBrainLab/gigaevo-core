@@ -143,10 +143,7 @@ def check_problem_directory() -> bool:
         # Check required files
         required_files = [
             "task_description.txt",
-            "task_hints.txt",
             "validate.py",
-            "mutation_system_prompt.txt",
-            "mutation_user_prompt.txt",
         ]
 
         all_files_present = True

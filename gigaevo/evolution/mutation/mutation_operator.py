@@ -5,10 +5,9 @@ from loguru import logger
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.exceptions import MutationError
-from gigaevo.llm.agents.mutation import MutationAgent
+from gigaevo.llm.agents.factories import create_mutation_agent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
-from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import Program
 
 MutationMode = Literal["rewrite", "diff"]
@@ -37,20 +36,11 @@ class LLMMutationOperator(MutationOperator):
         self.context_key = context_key
         self.metrics_context = problem_context.metrics_context
 
-        metrics_formatter = MetricsFormatter(self.metrics_context)
-        metrics_description = metrics_formatter.format_metrics_description()
-        self.system_prompt = problem_context.mutation_system_prompt.format(
-            task_definition=problem_context.task_description,
-            task_hints=problem_context.task_hints,
-            metrics_description=metrics_description,
-        )
-        self.user_prompt_template = problem_context.mutation_user_prompt
-
-        self.agent = MutationAgent(
+        self.agent = create_mutation_agent(
             llm=llm_wrapper,
+            task_description=problem_context.task_description,
+            metrics_context=self.metrics_context,
             mutation_mode=mutation_mode,
-            system_prompt=self.system_prompt,
-            user_prompt_template=self.user_prompt_template,
         )
 
         logger.info(
