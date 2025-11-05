@@ -13,7 +13,12 @@ from gigaevo.programs.program_state import ProgramState
 CellDescriptor = tuple[int, ...]
 
 
+# ------------------------------- Interface -------------------------------
+
+
 class ArchiveStorage(ABC):
+    """Elite archive keyed by behavior-space cells."""
+
     @abstractmethod
     async def get_elite(self, cell: CellDescriptor) -> Program | None: ...
 
@@ -29,7 +34,9 @@ class ArchiveStorage(ABC):
     async def remove_elite(self, cell: CellDescriptor) -> bool: ...
 
     @abstractmethod
-    async def get_all_elites(self) -> list[Program]: ...
+    async def get_all_elites(self) -> list[str]: ...
+
+    # Returns unique program IDs that are currently elites in any cell.
 
     @abstractmethod
     async def remove_elite_by_id(self, program_id: str) -> bool: ...
@@ -37,27 +44,84 @@ class ArchiveStorage(ABC):
     @abstractmethod
     async def clear_all_elites(self) -> int: ...
 
+    # Returns number of cells cleared.
+
+    @abstractmethod
+    async def size(self) -> int: ...
+
+    # Returns number of occupied cells.
+
 
 class RedisArchiveStorage(ArchiveStorage):
+    """
+    Redis-backed archive: a single hash at `prefix:archive`
+      field = cell serialized as "c0,c1,c2,..."
+      value = program_id (string)
+    """
+
     def __init__(
         self, program_storage: RedisProgramStorage, key_prefix: str | None = None
     ) -> None:
         self._storage = program_storage
         self._state_manager = ProgramStateManager(program_storage)
         prefix = key_prefix or program_storage.config.key_prefix
-        self._key = f"{prefix}:archive"
+        self._hash_key = f"{prefix}:archive"
+
+    # -------- small helpers --------
 
     @staticmethod
     def _field(cell: CellDescriptor) -> str:
         return ",".join(map(str, cell))
 
+    async def _hget(self, field: str) -> str | None:
+        async def _op(r):
+            return await r.hget(self._hash_key, field)
+
+        return await self._storage._with_redis("archive:hget", _op)
+
+    async def _hset(self, field: str, program_id: str) -> None:
+        async def _op(r):
+            await r.hset(self._hash_key, field, program_id)
+
+        await self._storage._with_redis("archive:hset", _op)
+
+    async def _hdel(self, *fields: str) -> int:
+        async def _op(r):
+            return await r.hdel(self._hash_key, *fields)
+
+        return await self._storage._with_redis("archive:hdel", _op)
+
+    async def _hvals(self) -> list[str]:
+        async def _op(r):
+            return await r.hvals(self._hash_key)
+
+        return await self._storage._with_redis("archive:hvals", _op) or []
+
+    async def _hlen(self) -> int:
+        async def _op(r):
+            return await r.hlen(self._hash_key)
+
+        return await self._storage._with_redis("archive:hlen", _op)
+
+    async def _hgetall(self) -> dict[str, str]:
+        async def _op(r):
+            return await r.hgetall(self._hash_key)
+
+        return await self._storage._with_redis("archive:hgetall", _op) or {}
+
+    async def _delete_hash(self) -> None:
+        async def _op(r):
+            await r.delete(self._hash_key)
+
+        await self._storage._with_redis("archive:delete", _op)
+
+    async def _discard_if_exists(self, program_id: str) -> None:
+        prog = await self._storage.get(program_id)
+        if prog is not None:
+            await self._state_manager.set_program_state(prog, ProgramState.DISCARDED)
+
     async def get_elite(self, cell: CellDescriptor) -> Program | None:
-        field = self._field(cell)
-
-        async def _get(r):
-            return await r.hget(self._key, field)
-
-        pid = await self._storage._with_redis("archive_get_elite", _get)
+        pid = await self._hget(self._field(cell))
         return await self._storage.get(pid) if pid else None
 
     async def add_elite(
@@ -67,135 +131,77 @@ class RedisArchiveStorage(ArchiveStorage):
         is_better: Callable[[Program, Program | None], bool],
     ) -> bool:
         if not await self._storage.exists(program.id):
-            logger.debug("archive add ignored: program {} not in storage", program.id)
+            logger.debug("[Archive] add ignored: program {} not in storage", program.id)
             return False
 
         field = self._field(cell)
 
-        async def _put(r):
-            current_id = await r.hget(self._key, field)
+        async def _op(r):
+            current_id = await r.hget(self._hash_key, field)
             if current_id:
-                current = await self._storage.get(current_id)
-                if current and not is_better(program, current):
+                current_prog = await self._storage.get(current_id)
+                if current_prog and not is_better(program, current_prog):
                     return False
-            await r.hset(self._key, field, program.id)
+            await r.hset(self._hash_key, field, program.id)
             return True
 
-        ok = await self._storage._with_redis("archive_add_elite", _put)
+        ok = await self._storage._with_redis("archive:add_elite", _op)
         if ok:
-            logger.debug("archive cell {} -> {}", field, program.id)
-        return ok
+            logger.debug("[Archive] cell {} -> {}", field, program.id)
+        return bool(ok)
 
     async def remove_elite(self, cell: CellDescriptor) -> bool:
         field = self._field(cell)
-
-        # Get the program ID before removal so we can update its state
-        program_id = None
-
-        async def _get_before_del(r):
-            nonlocal program_id
-            program_id = await r.hget(self._key, field)
-            return program_id
-
-        await self._storage._with_redis("archive_get_before_remove", _get_before_del)
-
-        async def _del(r):
-            return (await r.hdel(self._key, field)) > 0
-
-        removed = await self._storage._with_redis("archive_remove_elite", _del)
-
-        # If elite was removed, get the program and set its state to DISCARDED
-        if removed and program_id:
-            program = await self._storage.get(program_id)
-            if program:
-                await self._state_manager.set_program_state(
-                    program, ProgramState.DISCARDED
-                )
-                logger.debug(
-                    "archive removed elite from cell {} (program {}), set state to DISCARDED",
-                    field,
-                    program_id,
-                )
-
+        pid = await self._hget(field)
+        removed = await self._hdel(field) > 0
+        if removed and pid:
+            await self._discard_if_exists(pid)
+            logger.debug(
+                "[Archive] removed cell {} (program {}) -> DISCARDED", field, pid
+            )
         return removed
 
-    async def get_all_elites(self) -> list[Program]:
-        async def _vals(r):
-            return await r.hvals(self._key)
+    async def get_all_elites(self) -> list[str]:
+        """
+        Return unique program IDs that are elites across all cells.
+        """
+        ids = await self._hvals()
+        # Deduplicate and preserve a stable order (optional: sorted).
+        return sorted(set(ids))
 
-        ids = await self._storage._with_redis("archive_hvals", _vals)
-        if not ids:
-            return []
-        # dedupe while preserving order
-        seen = set[str]()
-        unique_ids = [i for i in ids if not (i in seen or seen.add(i))]
-        return await self._storage.mget(unique_ids)
+    async def size(self) -> int:
+        return await self._hlen()
 
     async def remove_elite_by_id(self, program_id: str) -> bool:
-        # Get the fields before removal for logging
-        fields_to_remove = []
-
-        async def _find_fields(r):
-            nonlocal fields_to_remove
-            mapping = await r.hgetall(self._key)
-            fields_to_remove = [k for k, v in mapping.items() if v == program_id]
-            return len(fields_to_remove) > 0
-
-        found = await self._storage._with_redis("archive_find_by_id", _find_fields)
-        if not found:
+        mapping = await self._hgetall()
+        fields = [k for k, v in mapping.items() if v == program_id]
+        if not fields:
             return False
 
-        async def _del(r):
-            await r.hdel(self._key, *fields_to_remove)
-            return True
-
-        removed = await self._storage._with_redis("archive_remove_by_id", _del)
-
-        # If elite was removed, set its state to DISCARDED
-        if removed:
-            program = await self._storage.get(program_id)
-            if program:
-                await self._state_manager.set_program_state(
-                    program, ProgramState.DISCARDED
-                )
-                logger.debug(
-                    "archive removed elite by ID {} from {} cells, set state to DISCARDED",
-                    program_id,
-                    len(fields_to_remove),
-                )
-
-        return removed
+        await self._hdel(*fields)
+        await self._discard_if_exists(program_id)
+        logger.debug(
+            "[Archive] removed id {} from {} cell(s) -> DISCARDED",
+            program_id,
+            len(fields),
+        )
+        return True
 
     async def clear_all_elites(self) -> int:
-        # Get all program IDs before clearing
-        program_ids = []
+        mapping = await self._hgetall()
+        count = len(mapping)
+        if count == 0:
+            return 0
 
-        async def _get_all_ids(r):
-            nonlocal program_ids
-            program_ids = await r.hvals(self._key)
-            n = await r.hlen(self._key)
-            await r.delete(self._key)
-            return n
+        await self._delete_hash()
 
-        count = await self._storage._with_redis("archive_clear_all", _get_all_ids)
+        # Discard all unique program IDs that were elites
+        for pid in set(mapping.values()):
+            await self._discard_if_exists(pid)
 
-        # Set all removed programs to DISCARDED state
-        if count > 0 and program_ids:
-            # Deduplicate program IDs
-            unique_ids = list(set(program_ids))
-            programs = await self._storage.mget(unique_ids)
-
-            # Set state for each program
-            for program in programs:
-                if program:
-                    await self._state_manager.set_program_state(
-                        program, ProgramState.DISCARDED
-                    )
-
-            logger.debug(
-                "archive cleared {} elites ({} unique programs), set all to DISCARDED",
-                count,
-                len(unique_ids),
-            )
-
+        logger.debug(
+            "[Archive] cleared {} elites ({} unique ids) -> DISCARDED",
+            count,
+            len(set(mapping.values())),
+        )
         return count

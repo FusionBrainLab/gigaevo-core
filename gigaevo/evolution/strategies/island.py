@@ -1,4 +1,4 @@
-import random
+from __future__ import annotations
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
@@ -15,7 +15,7 @@ from gigaevo.programs.program import Program
 
 
 class IslandConfig(BaseModel):
-    """Configuration for individual evolution islands."""
+    """Configuration for an individual MAP-Elites island."""
 
     island_id: str = Field(
         min_length=1,
@@ -26,26 +26,20 @@ class IslandConfig(BaseModel):
     max_size: int | None = Field(
         default=None,
         ge=1,
-        description="Maximum number of programs in the archive. If the archive is full, excess entries will be removed.",
+        description="Max programs in the archive; excess entries are removed.",
     )
-    behavior_space: BehaviorSpace = Field(description="Behavior space configuration")
+    behavior_space: BehaviorSpace
     archive_selector: ArchiveSelector = Field(
-        description="Selector for choosing elite programs"
+        description="Comparator used by archive to decide if newcomer is better"
     )
     archive_remover: ArchiveRemover | None = Field(
-        description="Remover for removing programs from the archive"
+        description="Policy to remove programs when archive exceeds max_size"
     )
     elite_selector: EliteSelector = Field(
-        description="Selector for choosing elite programs"
+        description="Selector for choosing elites to mutate"
     )
     migrant_selector: MigrantSelector = Field(
         description="Selector for choosing migrants"
-    )
-    migration_rate: float = Field(
-        default=0,
-        ge=0.0,
-        le=1.0,
-        description="Rate of inter-island migration (0-1)",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -55,14 +49,15 @@ class IslandConfig(BaseModel):
         return f"island_{self.island_id}"
 
     @field_validator("archive_remover")
-    def validate_archive_remover(cls, v, info):
+    @classmethod
+    def _validate_archive_remover(cls, v, info):
         if info.data.get("max_size") is not None and v is None:
-            raise ValueError("`max_size` is set, but `archive_remover` is not set")
+            raise ValueError("`max_size` is set but `archive_remover` is None")
         return v
 
 
 class MapElitesIsland:
-    """Single MAP-Elites island implementation."""
+    """Single MAP-Elites island."""
 
     def __init__(self, config: IslandConfig, program_storage: RedisProgramStorage):
         self.config = config
@@ -71,103 +66,102 @@ class MapElitesIsland:
             program_storage=program_storage, key_prefix=config.redis_prefix
         )
         self.metadata_manager = MetadataManager(program_storage)
-        logger.info(
-            f"Initialized MAP-Elites island {config.island_id} with max_size={config.max_size}"
-        )
+        logger.info("Island {} init (max_size={})", config.island_id, config.max_size)
+
+    # -------------------------- Public API --------------------------
 
     async def add(self, program: Program) -> bool:
-        missing_keys = (
-            set(self.config.behavior_space.behavior_keys) - program.metrics.keys()
-        )
-        if missing_keys:
-            raise KeyError(f"Program missing required behavior keys: {missing_keys}")
+        """Insert `program` into its behavior cell if it improves the elite."""
+        missing = set(self.config.behavior_space.behavior_keys) - program.metrics.keys()
+        if missing:
+            raise KeyError(f"Program missing required behavior keys: {missing}")
 
         cell = self.config.behavior_space.get_cell(program.metrics)
-        success = await self.archive_storage.add_elite(
+        improved = await self.archive_storage.add_elite(
             cell, program, self.config.archive_selector
         )
-        if not success:
+        if not improved:
             return False
 
         await self.metadata_manager.set_current_island(program, self.config.island_id)
-        await self.enforce_size_limit()
-
-        logger.debug(f"Island {self.config.island_id}: Added program {program.id}")
+        await self._enforce_size_limit()
+        logger.debug("Island {}: added {}", self.config.island_id, program.id)
         return True
 
-    async def enforce_size_limit(self) -> None:
-        """Enforce the maximum archive size by removing excess programs."""
+    async def select_elites(self, total: int) -> list[Program]:
+        """Return up to `total` elite programs for mutation."""
+        elites = await self.get_elites()
+        if not elites or total <= 0:
+            return []
+        if len(elites) <= total:
+            logger.debug(
+                "Island {}: {} elites ≤ requested {}",
+                self.config.island_id,
+                len(elites),
+                total,
+            )
+            return elites
+        selected = self.config.elite_selector(elites, total)
+        logger.debug(
+            "Island {}: selected {} / {}",
+            self.config.island_id,
+            len(selected),
+            len(elites),
+        )
+        return selected
+
+    async def select_migrants(self, count: int) -> list[Program]:
+        """Select programs to emigrate to other islands."""
+        elites = await self.get_elites()
+        return [] if not elites else self.config.migrant_selector(elites, count)
+
+    async def get_elite_ids(self) -> list[str]:
+        """IDs of all elites in this island (source of truth is the archive)."""
+        return await self.archive_storage.get_all_elites()  # list[str]
+
+    async def get_elites(self) -> list[Program]:
+        """Materialized elite programs (filters out missing)."""
+        ids = await self.get_elite_ids()
+        if not ids:
+            return []
+        programs = await self.program_storage.mget(ids)
+        return [p for p in programs if p is not None]
+
+    async def __len__(self) -> int:
+        """Number of elites in this island."""
+        return len(await self.get_elite_ids())
+
+    async def _enforce_size_limit(self) -> None:
+        """If `max_size` is set, remove excess programs using the configured remover."""
         if self.config.max_size is None or self.config.archive_remover is None:
             return
 
-        elites = await self.archive_storage.get_all_elites()
-        current_count = len(elites)
-        if current_count <= self.config.max_size:
+        current = await self.__len__()
+        if current <= self.config.max_size:
             return
 
         logger.warning(
-            f"Island {self.config.island_id}: Enforcing size limit - {current_count} elites, target {self.config.max_size}"
+            "Island {}: enforcing size limit {} → {}",
+            self.config.island_id,
+            current,
+            self.config.max_size,
         )
 
-        to_remove = self.config.archive_remover(elites, self.config.max_size)
-        removal_count = 0
+        to_remove: list[Program] = self.config.archive_remover(
+            await self.get_elites(), self.config.max_size
+        )
+        removed = 0
+        for prog in to_remove:
+            await self.archive_storage.remove_elite_by_id(prog.id)
+            await self.metadata_manager.clear_current_island(prog)
+            removed += 1
 
-        for elite in to_remove:
-            success = await self.archive_storage.remove_elite_by_id(elite.id)
-            if success:
-                await self.metadata_manager.clear_current_island(elite)
-                removal_count += 1
-
-        final_elites = await self.archive_storage.get_all_elites()
-        final_count = len(final_elites)
-
+        final_count = await self.__len__()
         logger.info(
-            f"Island {self.config.island_id}: Successfully removed {removal_count} elites. "
-            f"Population: {current_count} → {final_count} (target: {self.config.max_size})"
+            "Island {}: removed {} elites. Population: {} → {} (target {})",
+            self.config.island_id,
+            removed,
+            current,
+            final_count,
+            self.config.max_size,
         )
-
-    async def select_elites(self, total: int) -> list[Program]:
-        all_elites = await self.archive_storage.get_all_elites()
-        if not all_elites:
-            return []
-        if len(all_elites) <= total:
-            logger.debug(
-                f"Island {self.config.island_id}: Only {len(all_elites)} elites available, requested {total}"
-            )
-            return all_elites
-
-        try:
-            selected = self.config.elite_selector(all_elites, total)
-            logger.debug(
-                f"Island {self.config.island_id}: Selected {len(selected)} elites from {len(all_elites)}"
-            )
-            return selected
-        except Exception as e:
-            logger.warning(
-                f"Elite selection failed for island {self.config.island_id}: {e}"
-            )
-            return random.sample(all_elites, min(total, len(all_elites)))
-
-    async def get_all_elites(self) -> list[Program]:
-        return await self.archive_storage.get_all_elites()
-
-    async def get_elite_count(self) -> int:
-        elites = await self.get_all_elites()
-        return len(elites)
-
-    async def get_archive_as_dict(self) -> dict[tuple[int, ...], Program]:
-        archive = {}
-        elites = await self.get_all_elites()
-        for elite in elites:
-            try:
-                cell = self.config.behavior_space.get_cell(elite.metrics)
-                archive[cell] = elite
-            except Exception as e:
-                logger.warning(f"Could not map elite {elite.id} to cell: {e}")
-        return archive
-
-    async def select_migrants(self, count: int) -> list[Program]:
-        elites = await self.get_all_elites()
-        if not elites:
-            return []
-        return self.config.migrant_selector(elites, count)

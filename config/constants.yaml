@@ -19,6 +19,7 @@ constants:
   max_mutations_per_generation: 8
   num_parents: 2
   mutation_mode: rewrite
+  max_generations: null
 
   # MAP-Elites constants
   migration_interval: 25

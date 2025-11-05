@@ -2,6 +2,14 @@
 
 logging:
   level: DEBUG
-  log_dir: ${constants.log_dir}
+  log_dir: ${hydra:runtime.output_dir}
   rotation: ${constants.log_rotation}
   retention: ${constants.log_retention}
+
+tb_config:
+  _target_: gigaevo.utils.tb_logger.TBConfig
+  logdir: ${hydra:runtime.output_dir}/tb_logs
+
+writer:
+  _target_: gigaevo.utils.tb_logger.init_tb
+  cfg: ${tb_config}

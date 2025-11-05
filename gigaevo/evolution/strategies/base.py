@@ -83,7 +83,7 @@ class EvolutionStrategy(ABC):
         ...
 
     @abstractmethod
-    async def get_program_ids(self) -> list[Program]:
+    async def get_program_ids(self) -> list[str]:
         """
         Get all programs managed by this strategy.
 

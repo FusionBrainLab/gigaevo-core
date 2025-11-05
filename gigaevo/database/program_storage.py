@@ -40,6 +40,9 @@ class ProgramStorage(ABC):
     async def get_all_by_status(self, status: str) -> list[Program]: ...
 
     @abstractmethod
+    async def get_all_program_ids(self) -> list[str]: ...
+
+    @abstractmethod
     async def transition_status(
         self, program_id: str, old: str | None, new: str
     ) -> None: ...
@@ -51,3 +54,6 @@ class ProgramStorage(ABC):
         Storages with push/notify capability should override.
         """
         await asyncio.sleep(timeout)
+
+    @abstractmethod
+    async def close(self) -> None: ...

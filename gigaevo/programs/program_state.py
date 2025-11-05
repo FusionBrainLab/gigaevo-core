@@ -20,6 +20,11 @@ class ProgramState(str, Enum):
     DISCARDED = "discarded"
 
 
+NEW_STATES_PROGRAM_LIFECYCLE = {
+    ProgramState.FRESH,
+    ProgramState.DAG_PROCESSING_STARTED,
+}
+
 FINAL_STATES_PROGRAM_LIFECYCLE = {
     ProgramState.DAG_PROCESSING_COMPLETED,
     ProgramState.EVOLVING,
