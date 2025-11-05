@@ -1,6 +1,6 @@
 
 import numpy as np
-from helper import Data, Matrix, ToddGenerator, NullSpace
+from helper import Matrix, ToddGenerator, NullSpace, BitVec
 
 class Data:
     """Dont change this data class"""

@@ -1,6 +1,7 @@
 import random
 import numpy as np
-from helper import Data, Matrix, ToddGenerator, NullSpace
+np.random.seed(44)
+from helper import Matrix, ToddGenerator, NullSpace, BitVec
 
 class Data:
     """Dont change this data class"""
@@ -35,7 +36,7 @@ def random_todd(mat: Matrix) -> Matrix:
         if candidates:
             total_weight = sum(weights)
             if total_weight > 0:
-                r = random.uniform(0, total_weight)
+                r = np.random.uniform(0, total_weight)
                 current = 0
                 for i, weight in enumerate(weights):
                     current += weight

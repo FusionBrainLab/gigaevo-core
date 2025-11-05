@@ -67,7 +67,7 @@ echo "  Redis prefix: $REDIS_PREFIX"
 echo "  Conda environment: $CONDA_ENV"
 echo ""
 
-source /home/danilkafish/.venvs/metaevolve/bin/activate
+source /home/danilkafish/.venvs/metaevolve312/bin/activate
 # source /home/user/conda/etc/profile.d/conda.sh
 # conda activate "$CONDA_ENV"
 

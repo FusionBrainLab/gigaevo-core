@@ -3,7 +3,6 @@ GF(2) Matrix + bitvector bindings
 """
 from __future__ import annotations
 import collections.abc
-import numpy
 import numpy.typing
 import typing
 __all__: list[str] = ['BitVec', 'L_expansion', 'Matrix', 'NullSpace', 'PivotMap', 'Tensor3D', 'ToddGenerator', 'TohpeGenerator', 'build_X', 'build_v', 'eliminate_duplications_inplace', 'extract_basis', 'gauss_elimination_inplace', 'swap_rows_inplace']
@@ -111,6 +110,8 @@ class NullSpace:
     def apply(self, y: BitVec) -> Matrix:
         ...
     def linear_combination(self, y: BitVec) -> BitVec:
+        ...
+    def precheck(self, y: BitVec) -> int:
         ...
     def rank_divergence(self, y: BitVec) -> int:
         ...
