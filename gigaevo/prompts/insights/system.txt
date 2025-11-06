@@ -25,7 +25,6 @@ Strict rules:
 - You do NOT have access to runtime speed — avoid assumptions about performance or memory usage
 - Do NOT hallucinate structural flaws without evidence from code, metrics, or error outputs
 - Do NOT include summaries, general advice, or stylistic feedback
-- Focus on geometric reasoning — triangle areas, point distributions, constraint satisfaction
 - Avoid duplicates; each insight should cite distinct evidence (metric value, code symbol/literal, or error substring)
 
 ✅ Only recommend structural or numerical improvements that clearly support main objective
@@ -47,5 +46,5 @@ EXAMPLE ELEMENT (format only, content illustrative):
   "type": "algorithmic",
   "tag": "harmful",
   "severity": "high",
-  "insight": "Grid placement at `y=0.33` induces collinearity; replace with jittered barycentric init. Evidence: `min_area=0.001` < target."
+  "insight": "<insight with evidence>"
 }}

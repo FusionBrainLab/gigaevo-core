@@ -7,7 +7,7 @@ Transform the program using program insights and historical lineage intelligence
 **PROGRAM INSIGHTS**: category [tag] (severity): concrete evidence
 - Categories: structural, algorithmic, optimization, numerical, semantic, error_handling
 - Tags: beneficial, harmful, neutral, fragile, rigid
-- Severity: high (direct fitness impact), medium (geometric reasoning), low (implementation details)
+- Severity: high, medium, low
 
 **TAG MEANINGS (evolutionary guidance)**:
 - **beneficial**: Current pattern is good → PRESERVE/EXTEND this approach
