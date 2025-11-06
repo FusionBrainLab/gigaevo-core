@@ -13,11 +13,70 @@ from langchain_openai import ChatOpenAI
 
 from gigaevo.llm.agents.insights import InsightsAgent
 from gigaevo.llm.agents.lineage import LineageAgent
+from gigaevo.llm.agents.mutation import MutationAgent
 from gigaevo.llm.agents.scoring import ScoringAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
-from gigaevo.prompts import InsightsPrompts, LineagePrompts, ScoringPrompts
+from gigaevo.prompts import (
+    InsightsPrompts,
+    LineagePrompts,
+    MutationPrompts,
+    ScoringPrompts,
+)
+
+
+def create_mutation_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+    task_description: str,
+    metrics_context: MetricsContext,
+    mutation_mode: str = "rewrite",
+) -> MutationAgent:
+    """Create a fully configured mutation agent.
+
+    This factory does ALL the setup:
+    - Loads prompts from files
+    - Formats system prompt with task description and metrics
+    - Returns ready-to-use agent
+
+    Args:
+        llm: LangChain chat model or multi-model router
+        task_description: Description of the optimization task
+        metrics_context: Metrics context for formatting
+        mutation_mode: "rewrite" or "diff"
+
+    Returns:
+        Ready-to-use MutationAgent
+
+    Example:
+        >>> agent = create_mutation_agent(
+        ...     llm=llm,
+        ...     task_description="Maximize triangle areas",
+        ...     metrics_context=metrics_context,
+        ...     mutation_mode="rewrite"
+        ... )
+        >>> result = await agent.arun(parents, mutation_mode)
+    """
+    # Load prompts from files
+    system_template = MutationPrompts.system()
+    user_template = MutationPrompts.user()
+
+    # Create metrics formatter
+    metrics_formatter = MetricsFormatter(metrics_context)
+
+    # Format system prompt with task description and metrics
+    system_prompt = system_template.format(
+        task_description=task_description,
+        metrics_description=metrics_formatter.format_metrics_description(),
+    )
+
+    # Return configured agent
+    return MutationAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
+        mutation_mode=mutation_mode,
+    )
 
 
 def create_insights_agent(

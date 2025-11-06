@@ -35,6 +35,20 @@ def load_prompt(agent_name: str, prompt_type: str) -> str:
 
 
 # Simple accessors for common prompts
+class MutationPrompts:
+    """Mutation agent prompt templates."""
+
+    @staticmethod
+    def system() -> str:
+        """System prompt for mutation."""
+        return load_prompt("mutation", "system")
+
+    @staticmethod
+    def user() -> str:
+        """User prompt template for mutation."""
+        return load_prompt("mutation", "user")
+
+
 class InsightsPrompts:
     """Insights agent prompt templates."""
 

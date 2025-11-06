@@ -29,3 +29,29 @@ EVOLUTIONARY APPROACH:
 - Use program insights to identify patterns affecting performance
 - Leverage lineage outcomes to guide decisions
 - Apply evidence-driven mutations based on performance data
+
+STRATEGIC GUIDANCE:
+OPTIMIZATION OBJECTIVE
+
+Fitness Metric:
+Maximize the area of the smallest triangle among all C(11, 3) = 165 triangles formed by point triplets.
+
+Failure Modes:
+- Clustering: Points too close together → small triangle areas
+- Alignment: Three or more points nearly collinear → flat or degenerate triangles
+- Overlap: Duplicate or nearly identical coordinates
+- Boundary violations: Points placed outside the triangle
+
+Evaluation Details:
+- Fitness = minimum triangle area across all 165 combinations
+- Higher minimum area → better performance
+- Theoretical upper bound ≈ 0.0365
+
+OUTPUT:
+```python
+# Imports as needed
+def entrypoint():
+    # Archetype-appropriate implementation
+    # Fix all random seeds if using randomness
+    return output # format as described above
+```

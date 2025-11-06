@@ -54,10 +54,7 @@ Each problem must be organized in a specific directory structure:
 ```
 problems/your_problem/
 ├── task_description.txt          # Problem description
-├── task_hints.txt               # Optimization hints
 ├── validate.py                  # Validation function
-├── mutation_system_prompt.txt   # LLM system prompt
-├── mutation_user_prompt.txt     # LLM user prompt
 ├── helper.py                    # Helper functions (optional)
 ├── context.py                   # Context builder (optional)
 └── initial_programs/            # Initial population strategies (required)
@@ -69,11 +66,8 @@ problems/your_problem/
 ### Required Files and Directories
 
 1. **`task_description.txt`**: Clear description of the optimization problem
-2. **`task_hints.txt`**: Guidance and hints for the optimization process
-3. **`validate.py`**: Must contain a `validate()` function that evaluates solutions
-4. **`mutation_system_prompt.txt`**: System prompt for LLM-based mutations
-5. **`mutation_user_prompt.txt`**: User prompt template for LLM mutations
-6. **`initial_programs/`**: Directory with at least one Python file containing initial population strategies
+2. **`validate.py`**: Must contain a `validate()` function that evaluates solutions
+3. **`initial_programs/`**: Directory with at least one Python file containing initial population strategies
 
 ### Optional Files
 
@@ -219,8 +213,7 @@ PYTHONPATH=. python tools/wizard.py problems/my_problem --add-context --overwrit
 # With custom texts
 PYTHONPATH=. python tools/wizard.py problems/my_problem \
   --task-description "Optimize X under Y" \
-  --task-hints "Use A; consider B; avoid C" \
-  --system-prompt "... {task_definition} ... {task_hints} ... {metrics_description} ..." \
+  --system-prompt "... {task_definition} ... {metrics_description} ..." \
   --user-prompt "=== Parents ({count}) ===\n{parent_blocks}\n"
 ```
 
@@ -229,10 +222,7 @@ PYTHONPATH=. python tools/wizard.py problems/my_problem \
 ```bash
 mkdir -p problems/my_problem/initial_programs
 touch problems/my_problem/task_description.txt
-touch problems/my_problem/task_hints.txt
 touch problems/my_problem/validate.py
-touch problems/my_problem/mutation_system_prompt.txt
-touch problems/my_problem/mutation_user_prompt.txt
 # Optional:
 touch problems/my_problem/context.py
 ```
