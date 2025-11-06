@@ -1,0 +1,36 @@
+"""
+Validation function for: {{ problem.description }}
+
+{{ task_description.objective }}
+"""
+
+import numpy as np
+{% if add_helper %}from helper import *{% endif %}
+
+
+def validate({{ validation.params | join(', ') }}):
+    """
+    Validate the solution and compute fitness metrics.
+
+    Args:
+        {{ validation.inputs | default("TODO: Describe input parameters") }}
+
+    Returns:
+        dict with metrics:
+        {% for metric_name, metric_spec in metrics.items() %}
+        - {{ metric_name }}: {{ metric_spec.description }}
+        {% endfor %}
+    """
+    # TODO: Unpack/process input data
+
+    # TODO: Validate constraints from task_description.txt
+
+    # TODO: Compute metrics
+    fitness = 0.0  # {{ metrics[primary_key].description }}
+    is_valid = 1   # Set to 0 if any constraint violated
+
+    return {
+        {% for metric_name in metrics.keys() %}
+        "{{ metric_name }}": {{ "fitness" if metric_name == primary_key else ("is_valid" if metric_name == "is_valid" else "0.0") }},{{ "  # TODO: Compute " + metrics[metric_name].description if metric_name not in [primary_key, "is_valid"] else "" }}
+        {% endfor %}
+    }
