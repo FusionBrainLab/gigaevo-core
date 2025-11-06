@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 import sys
 from typing import Any, Sequence
@@ -18,6 +19,13 @@ class ExecRunnerError(Exception):
         self.stdout_bytes = stdout_bytes
 
 
+def _find_runner_in_repo() -> Path:
+    """Build path for tools/exec_runner.py."""
+    cur = Path(__file__).resolve()
+    parent = cur.parent.parent.parent.parent.parent
+    return parent / "tools" / "exec_runner.py"
+
+
 async def run_exec_runner(
     *,
     code: str,
@@ -27,20 +35,29 @@ async def run_exec_runner(
     python_path: Sequence[Path] | None = None,
     timeout: int,
     cwd: Path | None = None,
+    runner_path: Path | None = None,
 ) -> tuple[Any, bytes, str]:
     """
-    Run gigaevo.programs.exec_runner as a subprocess.
+    Run the lightweight exec runner as a subprocess.
+
     Returns: (result_object, raw_stdout_bytes, stderr_text)
     Raises: ExecRunnerError on non-zero exit, asyncio.TimeoutError on timeout.
     """
+    script = str(runner_path or _find_runner_in_repo())
+
+    env = os.environ.copy()
+    env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
-        "-m",
-        "gigaevo.programs.stages.python_executors.exec_runner",
+        "-u",
+        script,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(cwd) if cwd else None,
+        env=env,
     )
 
     payload = {
@@ -50,7 +67,7 @@ async def run_exec_runner(
         "args": list(args or []),
         "kwargs": dict(kwargs or {}),
     }
-    data = cloudpickle.dumps(payload)
+    data = cloudpickle.dumps(payload, protocol=cloudpickle.DEFAULT_PROTOCOL)
 
     try:
         stdout, stderr = await asyncio.wait_for(
@@ -76,7 +93,7 @@ async def run_exec_runner(
         except Exception as e:
             raise ExecRunnerError(
                 returncode=0,
-                stderr=f"Invalid cloudpickle payload: {e}",
+                stderr=f"Invalid cloudpickle payload: {e}\n[stderr]\n{stderr_text}",
                 stdout_bytes=stdout,
             )
         return value, stdout, stderr_text

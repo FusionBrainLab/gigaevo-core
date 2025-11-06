@@ -308,6 +308,7 @@ island_statistics*.txt
 top_programs_analysis*.txt
 stage_results_statistics*.txt
 time_since_update_statistics*.txt
+outputs
 
 # Generated plots and visualizations
 *.png

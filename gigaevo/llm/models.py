@@ -196,7 +196,7 @@ def create_chat_model(
     Example:
         >>> model = create_chat_model(
         ...     model="Qwen3-235B-A22B-Thinking-2507",
-        ...     api_key=os.getenv("OPENROUTER_API_KEY"),
+        ...     api_key=os.getenv("OPENAI_API_KEY"),
         ...     temperature=0.6,
         ...     max_tokens=81920,
         ...     base_url="http://localhost:8777/v1"

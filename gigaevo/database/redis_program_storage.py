@@ -1,12 +1,8 @@
-"""Redis-backed :class:`ProgramStorage` implementation.
-
-Separated from *program_storage.py* to keep concerns isolated and allow the
-abstract interface to stay lightweight.
-"""
-
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import gc
 from itertools import islice
 from typing import Any, Awaitable, Callable, Iterable, TypeVar
 
@@ -21,18 +17,14 @@ from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
 from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
+from gigaevo.utils.logger import LogWriter
+from gigaevo.utils.metrics_collector import start_metrics_collector
 
-__all__ = [
-    "RedisProgramStorageConfig",
-    "RedisProgramStorage",
-]
-
+__all__ = ["RedisProgramStorageConfig", "RedisProgramStorage"]
 T = TypeVar("T")
 
 
 class RedisProgramStorageConfig(BaseModel):
-    """Minimal, predictable Redis settings (unchanged key schema)."""
-
     redis_url: AnyUrl = Field(default="redis://localhost:6379/0")
     key_prefix: str = Field(default="gigaevo")
 
@@ -51,20 +43,34 @@ class RedisProgramStorageConfig(BaseModel):
         default="additive"
     )
 
+    metrics_interval: float = Field(
+        default=1.0, ge=0.1, description="Interval (s) for Redis metrics collection"
+    )
+
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
-
-
-# --------------------------- Storage ---------------------------
 
 
 class RedisProgramStorage(ProgramStorage):
     _MGET_CHUNK: int = 1024
 
-    def __init__(self, config: RedisProgramStorageConfig):
+    def __init__(
+        self, config: RedisProgramStorageConfig, writer: LogWriter | None = None
+    ):
         self.config = config
         self._merge = resolve_merge_strategy(self.config.merge_strategy)
         self._redis: aioredis.Redis | None = None
         self._lock = asyncio.Lock()
+        self._writer = (
+            writer.bind(path=["redis_storage"]) if writer is not None else None
+        )
+
+        self._metrics_task: asyncio.Task | None = None
+        self._metrics_stop_flag: bool = False
+
+        # prevents new connections & waits while closing
+        self._closing = False
+
+    # --------------------- Keys ---------------------
 
     def _k_program(self, pid: str) -> str:
         return self.config.program_key_tpl.format(
@@ -83,10 +89,18 @@ class RedisProgramStorage(ProgramStorage):
         return f"{self.config.key_prefix}:ts"
 
     async def _conn(self) -> aioredis.Redis:
+        if self._closing:
+            raise StorageError(
+                "RedisProgramStorage is closing; cannot open connection."
+            )
         if self._redis is not None:
             return self._redis
         async with self._lock:
             if self._redis is None:
+                if self._closing:
+                    raise StorageError(
+                        "RedisProgramStorage is closing; cannot open connection."
+                    )
                 r = aioredis.from_url(
                     str(self.config.redis_url),
                     decode_responses=True,
@@ -101,18 +115,24 @@ class RedisProgramStorage(ProgramStorage):
                     "[RedisProgramStorage] connected {}", self.config.redis_url
                 )
                 self._redis = r
+
+                if self._writer is not None and (
+                    self._metrics_task is None or self._metrics_task.done()
+                ):
+                    self._start_metrics_collector()
         return self._redis
 
     async def _with_redis(
         self, name: str, fn: Callable[[aioredis.Redis], Awaitable[T]]
     ) -> T:
+        if self._closing:
+            raise StorageError(f"Redis op {name} refused: storage is closing.")
         delay = self.config.retry_delay
         for attempt in range(1, self.config.max_retries + 1):
             try:
                 return await fn(await self._conn())
             except Exception as e:
-                if attempt == self.config.max_retries:
-                    # Keep the log calm; raise a clear error.
+                if attempt == self.config.max_retries or self._closing:
                     logger.debug("[RedisProgramStorage] {} failed: {}", name, e)
                     raise StorageError(f"Redis op {name} failed: {e}") from e
                 await asyncio.sleep(min(delay, 1.0))
@@ -129,7 +149,6 @@ class RedisProgramStorage(ProgramStorage):
         try:
             return Program.from_dict(_loads(raw))
         except Exception as e:
-            # Soft log; skip the broken record.
             logger.debug("[RedisProgramStorage] bad JSON in {}: {}", ctx, e)
             return None
 
@@ -167,6 +186,12 @@ class RedisProgramStorage(ProgramStorage):
 
         await self._with_redis("add", _add)
 
+    async def size(self) -> int:
+        async def _size(r: aioredis.Redis):
+            return len(await r.keys(pattern=self._k_program("*")))
+
+        return await self._with_redis("size", _size)
+
     async def update(self, program: Program):
         async def _update(r: aioredis.Redis):
             key = self._k_program(program.id)
@@ -184,11 +209,10 @@ class RedisProgramStorage(ProgramStorage):
                         new_program = program.model_copy(
                             update={"atomic_counter": int(counter)}, deep=True
                         )
-                        merged = self._merge(existing, new_program)
-                        merged = merged.model_copy(
+                        merged = self._merge(existing, new_program).model_copy(
                             update={"atomic_counter": int(counter)}, deep=True
                         )
-                        pipe.multi()  # enter transaction
+                        pipe.multi()
                         pipe.set(key, _dumps(merged.to_dict()))
                         await pipe.execute()
                         break
@@ -229,10 +253,7 @@ class RedisProgramStorage(ProgramStorage):
         await self._with_redis("transition_status", _tx)
 
     async def publish_status_event(
-        self,
-        status: str,
-        program_id: str,
-        extra: dict[str, Any] | None = None,
+        self, status: str, program_id: str, extra: dict[str, Any] | None = None
     ) -> None:
         async def _event(r: aioredis.Redis):
             data = {"id": program_id, "status": status, **(extra or {})}
@@ -257,7 +278,6 @@ class RedisProgramStorage(ProgramStorage):
         async def _by_status(r: aioredis.Redis):
             keys = [self._k_program(pid) for pid in ids]
             programs = await self._mget_by_keys(r, keys, f"get_all_by_status:{status}")
-            # If the set drifted, keep only exact matches.
             return [p for p in programs if p.state.value == status]
 
         return await self._with_redis("get_all_by_status", _by_status)
@@ -291,14 +311,26 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._with_redis("get_all", _scan_then_mget)
 
+    async def get_all_program_ids(self) -> list[str]:
+        """Return program IDs (not full Redis keys)."""
+
+        async def _get_all_ids(r: aioredis.Redis):
+            keys = await r.keys(pattern=self._k_program("*"))
+            return [key.split(":")[-1] for key in keys]
+
+        return await self._with_redis("get_all_program_ids", _get_all_ids)
+
     async def wait_for_activity(self, timeout: float):
-        """Wait using Redis stream; fall back to sleep on errors/timeouts."""
+        """Block on stream read; exits quickly during shutdown."""
+        if self._closing:
+            return
         poll_ms = max(1, int(timeout * 1000))
         try:
-            redis = await self._conn()
+            r = await self._conn()
             stream = self._k_stream()
-            _ = await redis.xread({stream: "$"}, block=poll_ms, count=1)
-            return
+            await r.xread({stream: "$"}, block=poll_ms, count=1)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.debug("[RedisProgramStorage] wait_for_activity fallback: {}", e)
             await asyncio.sleep(timeout)
@@ -307,9 +339,93 @@ class RedisProgramStorage(ProgramStorage):
         async def _flush(r: aioredis.Redis):
             await r.flushdb()
 
-        await self._with_redis("flushdb", _flush)
+        return await self._with_redis("flushdb", _flush)
+
+    def _start_metrics_collector(self) -> None:
+        if self._metrics_task is not None and not self._metrics_task.done():
+            return
+
+        self._metrics_stop_flag = False
+
+        async def _collect() -> dict[str, Any]:
+            # During close, refuse to collect to avoid late connects
+            if self._closing:
+                return {}
+            try:
+                r = await self._conn()
+            except StorageError:
+                return {}
+
+            metrics: dict[str, Any] = {}
+
+            count = 0
+
+            async for _ in r.scan_iter(match=self._k_program("*"), count=1000):
+                count += 1
+            metrics["size"] = float(count)
+
+            for section in (
+                "stats",
+                "memory",
+                "clients",
+                "server",
+                "cpu",
+                "keyspace",
+                "replication",
+            ):
+                try:
+                    info = await r.info(section=section)
+                    for k, v in _flatten_numbers(info, prefix=f"{section}/").items():
+                        metrics[k] = v
+                except Exception:
+                    continue
+
+            return metrics
+
+        def _stop_flag() -> bool:
+            return self._metrics_stop_flag
+
+        self._metrics_task = start_metrics_collector(
+            writer=self._writer,  # type: ignore[arg-type]
+            collect_fn=_collect,
+            interval=self.config.metrics_interval,
+            stop_flag=_stop_flag,
+            task_name="redis-metrics-collector",
+        )
 
     async def close(self):
-        if self._redis is not None:
-            await self._redis.close()
-            self._redis = None
+        self._metrics_stop_flag = True
+        task, self._metrics_task = self._metrics_task, None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        self._closing = True
+
+        r, self._redis = self._redis, None
+        if r is not None:
+            with contextlib.suppress(Exception):
+                await r.aclose()
+            with contextlib.suppress(Exception):
+                await r.connection_pool.disconnect(inuse_connections=True)
+
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+
+
+def _flatten_numbers(d: Any, prefix: str = "") -> dict[str, float]:
+    out: dict[str, float] = {}
+
+    def _walk(x: Any, p: str):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                key = f"{p}{k}" if not p.endswith("/") else f"{p}{k}"
+                if isinstance(v, (int, float)):
+                    out[key] = float(v)
+                elif isinstance(v, dict):
+                    _walk(v, key + "/")
+
+    _walk(d, prefix)
+    return out

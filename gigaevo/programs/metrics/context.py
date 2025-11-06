@@ -84,6 +84,18 @@ class MetricsContext(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_display_order(self) -> MetricsContext:
+        """Validate display order is a subset of specs."""
+        if self.display_order:
+            display_order_set = set(self.display_order)
+            specs_set = set(self.specs.keys())
+            if display_order_set != specs_set:
+                raise ValueError(
+                    f"If display_order is set, it must contain all keys in specs. Missing keys: {specs_set - display_order_set}. Extra keys: {display_order_set - specs_set}"
+                )
+        return self
+
     def get_primary_spec(self) -> MetricSpec:
         """Get the MetricSpec for the primary metric.
 

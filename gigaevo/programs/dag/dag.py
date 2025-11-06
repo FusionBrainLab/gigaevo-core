@@ -10,7 +10,6 @@ from loguru import logger
 
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.programs.core_types import (
-    FINAL_STATES,
     ProgramStageResult,
     StageError,
     StageState,
@@ -22,6 +21,7 @@ from gigaevo.programs.dag.automata import (
 )
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
+from gigaevo.utils.logger import LogWriter
 
 
 class DAG:
@@ -37,7 +37,7 @@ class DAG:
 
     def __init__(
         self,
-        nodes: Dict[str, Stage],
+        nodes: dict[str, Stage],
         data_flow_edges: list[DataFlowEdge],
         execution_order_deps: dict[str, list[ExecutionOrderDependency]] | None,
         state_manager: ProgramStateManager,
@@ -45,6 +45,7 @@ class DAG:
         max_parallel_stages: int = 8,
         dag_timeout: float | None = 2400.0,
         stall_grace_seconds: float = 30.0,
+        writer: LogWriter,
     ) -> None:
         self.automata = DAGAutomata.build(nodes, data_flow_edges, execution_order_deps)
         self.state_manager = state_manager
@@ -52,6 +53,7 @@ class DAG:
         self.dag_timeout = dag_timeout
         self.stall_grace_seconds = stall_grace_seconds
         self._previous_launched_hash = None
+        self._writer: LogWriter = writer.bind(path=["dag", "internals"])
 
     async def run(self, program: Program) -> None:
         pid = self._pid(program)
@@ -64,8 +66,11 @@ class DAG:
                 )
             else:
                 await self._run_internal(program)
+
+            self._writer.scalar("dag_timeout", 0)
         except asyncio.TimeoutError:
             logger.error("[DAG][{}] DAG run timed out after {}s", pid, self.dag_timeout)
+            self._writer.scalar("dag_timeout", 1)
             raise
 
     def _pid(self, program: Program) -> str:
@@ -311,19 +316,42 @@ class DAG:
             await self._persist_stage_result(program, stage_name, result)
             await self._persist_program_snapshot(program)
 
-            if result.status in FINAL_STATES:
-                finished_this_run.add(stage_name)
-                logger.info(
-                    "[DAG][{}] Stage '{}' FINALIZED as {}.",
-                    pid,
-                    stage_name,
-                    result.status.name,
-                )
+            finished_this_run.add(stage_name)
+            logger.info(
+                "[DAG][{}] Stage '{}' FINALIZED as {}.",
+                pid,
+                stage_name,
+                result.status.name,
+            )
 
     async def _persist_stage_result(
         self, program: Program, stage_name: str, result: ProgramStageResult
     ) -> None:
+        await self._write_stage_status(stage_name, result)
         await self.state_manager.update_stage_result(program, stage_name, result)
 
     async def _persist_program_snapshot(self, program: Program) -> None:
         await self.state_manager.storage.update(program)
+
+    async def _write_stage_status(
+        self, stage_name: str, result: ProgramStageResult
+    ) -> None:
+        self._writer.scalar(
+            "stage_success",
+            int(result.status == StageState.COMPLETED),
+            path=[stage_name],
+        )
+        self._writer.scalar(
+            "stage_failure", int(result.status == StageState.FAILED), path=[stage_name]
+        )
+        self._writer.scalar(
+            "stage_skipped", int(result.status == StageState.SKIPPED), path=[stage_name]
+        )
+        self._writer.scalar(
+            "stage_cancelled",
+            int(result.status == StageState.CANCELLED),
+            path=[stage_name],
+        )
+        self._writer.scalar(
+            "stage_duration", float(result.duration_seconds() or 0.0), path=[stage_name]
+        )

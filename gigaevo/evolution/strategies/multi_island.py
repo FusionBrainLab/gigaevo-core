@@ -1,21 +1,20 @@
+from __future__ import annotations
+
+import asyncio
 import random
-from typing import Optional
 
 from loguru import logger
 
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.strategies.base import EvolutionStrategy, StrategyMetrics
+from gigaevo.evolution.strategies.island import IslandConfig, MapElitesIsland
+from gigaevo.evolution.strategies.island_selector import WeightedIslandSelector
+from gigaevo.evolution.strategies.mutant_router import RandomMutantRouter
 from gigaevo.programs.program import Program
-
-from .island import IslandConfig, MapElitesIsland
-from .island_selector import WeightedIslandSelector
-from .mutant_router import RandomMutantRouter
 
 
 class MapElitesMultiIsland(EvolutionStrategy):
-    """
-    Multi-island MAP-Elites implementation.
-    """
+    """Multi-island MAP-Elites strategy (updated to new island API)."""
 
     def __init__(
         self,
@@ -24,8 +23,8 @@ class MapElitesMultiIsland(EvolutionStrategy):
         migration_interval: int = 50,
         enable_migration: bool = True,
         max_migrants_per_island: int = 5,
-        island_selector: Optional[WeightedIslandSelector] = None,
-        mutant_router: Optional[RandomMutantRouter] = None,
+        island_selector: WeightedIslandSelector | None = None,
+        mutant_router: RandomMutantRouter | None = None,
     ):
         if not island_configs:
             raise ValueError("At least one island configuration is required")
@@ -36,35 +35,33 @@ class MapElitesMultiIsland(EvolutionStrategy):
         }
 
         self.program_storage = program_storage
-        self.migration_interval = migration_interval
-        self.enable_migration = enable_migration
-        self.max_migrants_per_island = max_migrants_per_island
+        self.migration_interval = int(migration_interval)
+        self.enable_migration = bool(enable_migration)
+        self.max_migrants_per_island = int(max_migrants_per_island)
+
         self.generation = 0
         self.last_migration = 0
 
+        # Pluggables (kept for API completeness)
         self.island_selector = island_selector or WeightedIslandSelector()
         self.mutant_router = mutant_router or RandomMutantRouter()
 
-        total_max_size = 0
-        has_size_limits = False
-        for cfg in island_configs:
-            if cfg.max_size is not None:
-                total_max_size += cfg.max_size
-                has_size_limits = True
-
-        self.max_size = total_max_size if has_size_limits else None
+        capped = [cfg.max_size for cfg in island_configs if cfg.max_size is not None]
+        self.max_size = sum(capped) if capped else None
 
         logger.info(
-            f"Initialized MAP-Elites with {len(self.islands)} islands, global max_size={self.max_size}"
+            "Initialized MAP-Elites with {} island(s), global max_size={}",
+            len(self.islands),
+            self.max_size,
         )
 
-    async def add(self, program: Program, island_id: Optional[str] = None) -> bool:
-        """Add a program to the best-matching island (or specific one)."""
+    # --------------------------- Public API ---------------------------
+
+    async def add(self, program: Program, island_id: str | None = None) -> bool:
+        """Add a program to a specific island or route it automatically."""
         if island_id is not None and island_id not in self.islands:
-            logger.debug(
-                f"Program {program.id} rejected — invalid island_id: {island_id}"
-            )
             return False
+
         island = (
             self.islands[island_id]
             if island_id is not None
@@ -73,70 +70,106 @@ class MapElitesMultiIsland(EvolutionStrategy):
             )
         )
         if island is None:
-            logger.debug(f"Program {program.id} rejected — no compatible island found")
             return False
 
-        try:
-            accepted = await island.add(program)
-            if accepted:
-                logger.debug(
-                    f"Program {program.id} accepted by island {island.config.island_id}"
-                )
-            else:
-                logger.debug(
-                    f"Program {program.id} rejected by island {island.config.island_id}"
-                )
-            return accepted
-        except Exception as e:
-            logger.warning(
-                f"Failed to add program {program.id} to island {island.config.island_id}: {e}"
-            )
-            return False
+        return await island.add(program)
 
     async def select_elites(self, total: int = 10) -> list[Program]:
-        """Sample elites from all islands (with optional migration)."""
+        """
+        Sample elites from all islands (migration & enforcement on schedule).
+        Returns up to `total` elite programs.
+        """
         if (
             self.enable_migration
-            and self.generation - self.last_migration >= self.migration_interval
+            and (self.generation - self.last_migration) >= self.migration_interval
         ):
             await self._perform_migration()
+            await self._enforce_all_island_size_limits()
             self.last_migration = self.generation
-            await self._enforce_all_island_size_limits()
-        if self.generation % 10 == 0:
-            await self._enforce_all_island_size_limits()
 
-        island_candidates = []
         quotas = self._calculate_island_quotas(total)
+        tasks = [
+            asyncio.create_task(self.islands[island_id].select_elites(quota))
+            for island_id, quota in quotas.items()
+            if quota > 0
+        ]
+        if not tasks:
+            return []
 
-        for island_id, quota in quotas.items():
-            try:
-                if quota > 0:
-                    selected = await self.islands[island_id].select_elites(quota)
-                    island_candidates.append((island_id, selected))
-            except Exception as e:
-                logger.warning(f"Failed to select elites from island {island_id}: {e}")
+        selections = await asyncio.gather(*tasks)
+        results = [p for group in selections for p in group]
 
-        random.shuffle(island_candidates)
+        random.shuffle(results)
+        if len(results) > total:
+            results = random.sample(results, total)
 
-        all_elites: list[Program] = []
-        for island_id, selected in island_candidates:
-            all_elites.extend(selected)
-
-        if len(all_elites) > total:
-            all_elites = random.sample(all_elites, total)
-
-        if all_elites:
+        if results:
             self.generation += 1
 
-        return all_elites
+        return results
+
+    async def select_migrants(self, count: int) -> list[Program]:
+        """Select migrants across all islands (utility)."""
+        tasks = [
+            asyncio.create_task(island.select_migrants(count))
+            for island in self.islands.values()
+        ]
+        groups = await asyncio.gather(*tasks)
+        return [p for g in groups for p in g]
+
+    async def get_program_ids(self) -> list[str]:
+        tasks = [
+            asyncio.create_task(island.get_elite_ids())
+            for island in self.islands.values()
+        ]
+        groups = await asyncio.gather(*tasks)  # list[list[str]]
+        ids: list[str] = [pid for group in groups for pid in group]
+        return list(set(ids))
+
+    async def get_global_archive_size(self) -> int:
+        """Total elites across all islands (fast path via island counts)."""
+        tasks = [
+            asyncio.create_task(island.__len__) for island in self.islands.values()
+        ]
+        sizes = await asyncio.gather(*tasks)
+        return sum(int(s) for s in sizes)
+
+    async def remove_program_by_id(self, program_id: str) -> bool:
+        """Remove a program (by id) from whichever island holds it."""
+        for island in self.islands.values():
+            if await island.archive_storage.remove_elite_by_id(program_id):
+                prog = await self.program_storage.get(program_id)
+                if prog is not None:
+                    await island.metadata_manager.clear_current_island(prog)
+                return True
+        return False
+
+    async def get_metrics(self) -> StrategyMetrics:
+        # per-island counts concurrently
+        island_ids = list(self.islands.keys())
+        counts = [await self.islands[i].__len__() for i in island_ids]
+        population_sizes = {f"size/{i}": int(c) for i, c in zip(island_ids, counts)}
+        total_programs = sum(population_sizes.values())
+
+        return StrategyMetrics(
+            total_programs=total_programs,
+            active_populations=len(self.islands),
+            strategy_specific_metrics={
+                "generation": self.generation,
+                "migration_enabled": self.enable_migration,
+                "migration_interval": self.migration_interval,
+                "max_migrants_per_island": self.max_migrants_per_island,
+                "global_max_size": self.max_size,
+                **population_sizes,
+            },
+        )
 
     def _calculate_island_quotas(self, total: int) -> dict[str, int]:
-        """Evenly distribute elite selection across islands."""
-        if not self.islands:
-            return {}
+        """Evenly distribute selection quotas across islands."""
         island_ids = list(self.islands.keys())
-        base = total // len(island_ids)
-        rem = total % len(island_ids)
+        if not island_ids or total <= 0:
+            return {}
+        base, rem = divmod(total, len(island_ids))
         random.shuffle(island_ids)
         return {
             island_id: base + (1 if i < rem else 0)
@@ -144,205 +177,48 @@ class MapElitesMultiIsland(EvolutionStrategy):
         }
 
     async def _perform_migration(self) -> None:
-        """Migrate best elites across islands to improve diversity."""
-        logger.info("Starting migration round")
-        island_ids = list(self.islands.keys())
-        random.shuffle(island_ids)
-
-        all_migrants = []
-        for island_id in island_ids:
-            try:
-                migrants = await self.islands[island_id].select_migrants(
-                    self.max_migrants_per_island
-                )
-                all_migrants.extend(migrants)
-            except Exception as e:
-                logger.error(f"Error collecting migrants from {island_id}: {e}")
-
-        if not all_migrants:
-            logger.info("No migrants available for migration")
+        """Migrate elites between islands to improve diversity."""
+        tasks = [
+            asyncio.create_task(island.select_migrants(self.max_migrants_per_island))
+            for island in self.islands.values()
+        ]
+        groups = await asyncio.gather(*tasks)
+        migrants = [p for g in groups for p in g]
+        if not migrants:
             return
 
-        logger.info(f"Migrating {len(all_migrants)} programs")
+        random.shuffle(migrants)
+        for migrant in migrants:
+            source_island_id = migrant.get_metadata("current_island")
 
-        successful, failed = 0, 0
-        random.shuffle(all_migrants)
-
-        for migrant in all_migrants:
-            source_island = migrant.metadata.get("current_island")
-
-            if not source_island:
-                logger.warning(
-                    f"Migrant {migrant.id} has no current_island metadata, skipping migration"
-                )
-                failed += 1
-                continue
-
-            available_islands = [
-                island
-                for island in self.islands.values()
-                if island.config.island_id != source_island
+            candidates = [
+                i
+                for i in self.islands.values()
+                if i.config.island_id != source_island_id
             ]
-
-            if not available_islands:
-                logger.debug(
-                    f"No available destination islands for migrant {migrant.id} from {source_island}"
-                )
-                failed += 1
+            if not candidates:
                 continue
 
-            destination = await self.mutant_router.route_mutant(
-                migrant, available_islands
-            )
-
-            if not destination:
-                logger.debug(
-                    f"No compatible destination island found for migrant {migrant.id}"
-                )
-                failed += 1
+            destination = await self.mutant_router.route_mutant(migrant, candidates)
+            if destination is None:
                 continue
 
-            try:
-                accepted = await destination.add(migrant)
-                if accepted:
-                    source_island_obj = self.islands[source_island]
-                    removal_success = (
-                        await source_island_obj.archive_storage.remove_elite_by_id(
-                            migrant.id
-                        )
-                    )
-
-                    if removal_success:
-                        successful += 1
-                        logger.debug(
-                            f"Successfully migrated program {migrant.id} from {source_island} to {destination.config.island_id}"
-                        )
-                    else:
-                        logger.error(
-                            f"CRITICAL: Program {migrant.id} added to {destination.config.island_id} but failed to remove from {source_island} - potential duplicate!"
-                        )
-                        failed += 1
-                        try:
-                            await destination.archive_storage.remove_elite_by_id(
-                                migrant.id
-                            )
-                            logger.info(
-                                f"Cleaned up duplicate program {migrant.id} from destination island {destination.config.island_id}"
-                            )
-                        except Exception as cleanup_exc:
-                            logger.error(
-                                f"Failed to cleanup duplicate program {migrant.id}: {cleanup_exc}"
-                            )
-                else:
-                    failed += 1
-                    logger.debug(
-                        f"Destination island {destination.config.island_id} rejected migrant {migrant.id}"
-                    )
-            except Exception as e:
-                logger.warning(f"Migration failed for program {migrant.id}: {e}")
-                failed += 1
-
-        logger.info(f"Migration complete: {successful} succeeded, {failed} failed")
+            if await destination.add(migrant):
+                removed = await self.islands[
+                    source_island_id
+                ].archive_storage.remove_elite_by_id(migrant.id)
+                if not removed:
+                    # rollback to avoid duplicates
+                    await destination.archive_storage.remove_elite_by_id(migrant.id)
 
     async def _enforce_all_island_size_limits(self) -> None:
-        """Enforce size limits on all islands after migration."""
-        violations_found = False
+        """Enforce size limits on all capped islands."""
+        tasks = [
+            asyncio.create_task(self._enforce_one_island(island))
+            for island in self.islands.values()
+        ]
+        if tasks:
+            await asyncio.gather(*tasks)
 
-        for island_id, island in self.islands.items():
-            if island.config.max_size is None:
-                continue
-            try:
-                current_count = await island.get_elite_count()
-                if current_count > island.config.max_size:
-                    violations_found = True
-                    logger.warning(
-                        f"Enforcing size limit on island {island_id}: {current_count} > {island.config.max_size}"
-                    )
-                    await island.enforce_size_limit()
-
-                    post_enforcement_count = await island.get_elite_count()
-                    if post_enforcement_count > island.config.max_size:
-                        logger.error(
-                            f"CRITICAL: Size enforcement failed for island {island_id}! "
-                            f"Still has {post_enforcement_count} > {island.config.max_size} after enforcement"
-                        )
-                else:
-                    logger.debug(
-                        f"Island {island_id} size OK: {current_count}/{island.config.max_size}"
-                    )
-            except Exception as e:
-                logger.error(f"Failed to enforce size limit on island {island_id}: {e}")
-
-        if not violations_found:
-            logger.debug("All island size limits are within bounds")
-
-    async def get_global_archive_size(self) -> int:
-        """Get total number of elites across all islands."""
-        total_size = 0
-        for island in self.islands.values():
-            try:
-                programs = await island.get_all_elites()
-                total_size += len(programs)
-            except Exception as e:
-                logger.warning(
-                    f"Error getting elite count from island {island.config.island_id}: {e}"
-                )
-
-        return total_size
-
-    async def remove_program_by_id(self, program_id: str) -> bool:
-        """Remove a program from the strategy by ID.
-
-        Args:
-            program_id: ID of the program to remove
-
-        Returns:
-            True if program was removed, False if not found
-        """
-        removed = False
-        for island in self.islands.values():
-            try:
-                if await island.archive_storage.remove_elite_by_id(program_id):
-                    removed = True
-                    logger.debug(
-                        f"Removed program {program_id} from island {island.config.island_id}"
-                    )
-                    break  # Program should only be in one island
-            except Exception as e:
-                logger.warning(
-                    f"Error removing program {program_id} from island {island.config.island_id}: {e}"
-                )
-
-        return removed
-
-    async def get_program_ids(self) -> list[Program]:
-        """Get all programs across all islands."""
-        all_programs = []
-        for island in self.islands.values():
-            try:
-                programs = await island.get_all_elites()
-                all_programs.extend(programs)
-            except Exception as e:
-                logger.warning(
-                    f"Error getting programs from island {island.config.island_id}: {e}"
-                )
-
-        return all_programs
-
-    async def get_metrics(self) -> Optional[StrategyMetrics]:
-        """Get multi-island strategy metrics."""
-
-        total_programs = await self.get_global_archive_size()
-        active_populations = len(self.islands)
-
-        return StrategyMetrics(
-            total_programs=total_programs,
-            active_populations=active_populations,
-            strategy_specific_metrics={
-                "generation": self.generation,
-                "migration_enabled": self.enable_migration,
-                "migration_interval": self.migration_interval,
-                "max_migrants_per_island": self.max_migrants_per_island,
-                "global_max_size": self.max_size,
-            },
-        )
+    async def _enforce_one_island(self, island: MapElitesIsland) -> None:
+        await island._enforce_size_limit()

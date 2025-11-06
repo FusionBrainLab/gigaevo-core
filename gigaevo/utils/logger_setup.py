@@ -1,9 +1,3 @@
-"""
-Enhanced Colored Logging Setup for GigaEvo System
-
-Comprehensive loguru configuration with colored console output and file logging.
-"""
-
 from datetime import datetime, timezone
 import os
 import sys
@@ -19,7 +13,7 @@ def setup_logger(
     enable_colors: bool = True,
 ) -> str:
     """
-    Set up enhanced colored logging with file and console output.
+    Set up logging with file and console output.
 
     Args:
         log_dir: Directory for log files
@@ -58,7 +52,7 @@ def setup_logger(
             "{message}"
         )
 
-    # Add console handler with enhanced coloring
+    # Add console handler
     logger.add(
         lambda msg: print(msg, end=""),
         level=level,
@@ -68,7 +62,7 @@ def setup_logger(
         diagnose=True,
     )
 
-    # Add file handler (no colors in file)
+    # Add file handler
     logger.add(
         log_file,
         level=level,
@@ -81,10 +75,5 @@ def setup_logger(
         diagnose=True,
     )
 
-    logger.info(
-        f"🎨 Enhanced colored logger initialized. Logging to console and {log_file}"
-    )
-    logger.debug(
-        f"📊 Log level: {level}, Colors: {enable_colors and sys.stdout.isatty()}"
-    )
+    logger.info(f"Logging to console and file: {log_file}")
     return log_file

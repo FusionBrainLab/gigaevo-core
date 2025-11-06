@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from collections import deque
-from datetime import datetime
-
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field
 
 
 class EngineMetrics(BaseModel):
@@ -21,44 +18,56 @@ class EngineMetrics(BaseModel):
     errors_encountered: int = Field(
         default=0, description="Total number of errors encountered"
     )
-    last_generation_time: datetime | None = Field(
-        default=None, description="Timestamp of last generation"
+    added: int = Field(default=0, description="Total programs added to evolution")
+    restored: int = Field(default=0, description="Total programs restored to evolution")
+    rejected_validation: int = Field(
+        default=0, description="Total programs rejected by validation"
     )
-    novel_programs_per_generation: deque = Field(
-        default_factory=lambda: deque(maxlen=5),
-        description="Rolling window of novel programs per generation",
+    rejected_strategy: int = Field(
+        default=0, description="Total programs rejected by strategy"
+    )
+    elites_selected: int = Field(
+        default=0, description="Total elites selected across all generations"
+    )
+    elites_selection_errors: int = Field(
+        default=0, description="Total elite selection errors"
+    )
+    submitted_for_refresh: int = Field(
+        default=0, description="Total programs submitted for refresh"
+    )
+    mutations_creation_errors: int = Field(
+        default=0, description="Total mutation creation errors"
     )
 
-    @computed_field
-    @property
-    def avg_novel_programs(self) -> float:
-        """Average number of novel programs over the rolling window."""
-        return sum(self.novel_programs_per_generation) / max(
-            1, len(self.novel_programs_per_generation)
-        )
+    def record_ingestion_metrics(
+        self,
+        added: int,
+        restored: int,
+        rejected_validation: int,
+        rejected_strategy: int,
+    ) -> None:
+        """Record metrics from program ingestion."""
+        self.added += added
+        self.restored += restored
+        self.rejected_validation += rejected_validation
+        self.rejected_strategy += rejected_strategy
 
-    def to_dict(self) -> dict[str, int | float | str]:
-        return {
-            "total_generations": self.total_generations,
-            "programs_processed": self.programs_processed,
-            "mutations_created": self.mutations_created,
-            "errors_encountered": self.errors_encountered,
-            "last_generation_time": self.last_generation_time,
-            "avg_novel_programs": self.avg_novel_programs,
-        }
+    def record_elite_selection_metrics(
+        self, elites_selected: int, elites_selection_errors: int
+    ) -> None:
+        """Record metrics from elite selection."""
+        self.elites_selected += elites_selected
+        self.elites_selection_errors += elites_selection_errors
 
-    def to_hashable_dict(self) -> dict[str, int | float]:
-        """Create a hashable representation excluding timestamp for comparison purposes."""
-        return {
-            "total_generations": self.total_generations,
-            "programs_processed": self.programs_processed,
-            "mutations_created": self.mutations_created,
-            "errors_encountered": self.errors_encountered,
-            "avg_novel_programs": self.avg_novel_programs,
-        }
+    def record_reprocess_metrics(self, submitted_for_refresh: int) -> None:
+        """Record metrics from reprocessing."""
+        self.submitted_for_refresh += submitted_for_refresh
 
-    def __hash__(self) -> int:
-        """Hash based on meaningful metrics only (excludes timestamp)."""
-        return hash(tuple(sorted(self.to_hashable_dict().items())))
+    def record_mutation_metrics(
+        self, mutations_created: int, mutations_creation_errors: int
+    ) -> None:
+        """Record metrics from mutation."""
+        self.mutations_created += mutations_created
+        self.mutations_creation_errors += mutations_creation_errors
 
     model_config = {"arbitrary_types_allowed": True, "extra": "allow"}

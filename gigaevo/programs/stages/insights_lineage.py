@@ -66,8 +66,8 @@ class LineageStage(LangGraphStage):
     async def preprocess(
         self, program: Program, params: VoidInput
     ) -> dict[str, Program] | ProgramStageResult:
-        ids: list[str] = program.lineage.parents
-        return {"parents": [await self.storage.get(pid) for pid in ids]}
+        ids: list[str] = list(program.lineage.parents)
+        return {"parents": await self.storage.mget(ids)}
 
 
 class LineagesToDescendantsInputs(StageIO):

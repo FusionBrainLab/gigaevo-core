@@ -31,6 +31,7 @@ dependencies = [
     "cloudpickle",
     "matplotlib",
     "seaborn",
+    "tensorboardX",
     "python-dotenv",
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",

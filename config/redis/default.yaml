@@ -18,3 +18,4 @@ redis_storage:
     health_check_interval: ${constants.redis_health_check_interval}
     max_retries: ${constants.redis_max_retries}
     retry_delay: ${constants.redis_retry_delay}
+  writer: ${writer}

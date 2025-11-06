@@ -19,6 +19,7 @@ constants:
   max_mutations_per_generation: 8
   num_parents: 2
   mutation_mode: rewrite
+  max_generations: null
 
   # MAP-Elites constants
   migration_interval: 25
@@ -54,18 +55,12 @@ constants:
   # Logging constants
   log_rotation: "50 MB"
   log_retention: "30 days"
-  log_dir: logs
+  log_dir: ${hydra:runtime.output_dir}
   default_log_level: INFO
 
   # Metric keys
   validity_key: is_valid
   primary_metric_key: fitness  # overridden per problem
-
-  # Function names for executors
-  # Currently are unused, hardcoded in pipeline builder
-  # entrypoint_function: entrypoint
-  # validate_function: validate
-  # build_context_function: build_context
 
   # API endpoints
   default_llm_base_url: http://localhost:8777/v1

@@ -20,10 +20,10 @@ class EngineConfig(BaseModel):
     loop_interval: float = Field(default=1.0, gt=0)
     max_elites_per_generation: int = Field(default=20, gt=0)
     max_mutations_per_generation: int = Field(default=50, gt=0)
-    max_consecutive_errors: int = Field(default=5, gt=0)
     generation_timeout: float = Field(default=1200.0, gt=0)
-    log_interval: int = Field(default=1, gt=0)
-    cleanup_interval: int = Field(default=100, gt=0)
+    metrics_collection_interval: float = Field(
+        default=1.0, gt=0, description="Interval in seconds for metrics collection"
+    )
     max_generations: Optional[int] = Field(
         default=None,
         gt=0,
