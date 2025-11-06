@@ -5,7 +5,7 @@ from __future__ import annotations
 import collections.abc
 import numpy.typing
 import typing
-__all__: list[str] = ['BitVec', 'L_expansion', 'Matrix', 'NullSpace', 'PivotMap', 'Tensor3D', 'ToddGenerator', 'TohpeGenerator', 'build_X', 'build_v', 'eliminate_duplications_inplace', 'extract_basis', 'gauss_elimination_inplace', 'swap_rows_inplace']
+__all__: list[str] = ['BitVec', 'L_expansion', 'Matrix', 'NullSpace', 'PivotMap', 'RNG', 'Tensor3D', 'ToddGenerator', 'TohpeGenerator', 'build_X', 'build_v', 'eliminate_duplications_inplace', 'extract_basis', 'gauss_elimination_inplace', 'swap_rows_inplace']
 class BitVec:
     @staticmethod
     def from_numpy(array: typing.Annotated[numpy.typing.ArrayLike, numpy.bool]) -> BitVec:
@@ -92,6 +92,8 @@ class Matrix:
         ...
     def reserve_rows(self, n: typing.SupportsInt) -> None:
         ...
+    def seed(self, base_seed: typing.SupportsInt = 0, step: typing.SupportsInt = 0) -> int:
+        ...
     def set_row(self, arg0: typing.SupportsInt, arg1: BitVec) -> None:
         ...
     def shrink_to_fit(self) -> None:
@@ -127,6 +129,37 @@ class NullSpace:
 class PivotMap:
     def __repr__(self: collections.abc.Mapping[typing.SupportsInt, typing.SupportsInt]) -> str:
         ...
+class RNG:
+    @typing.overload
+    def __init__(self) -> None:
+        ...
+    @typing.overload
+    def __init__(self, seed: typing.SupportsInt) -> None:
+        ...
+    def fisher_yates(self, max_unique: typing.SupportsInt, n: typing.SupportsInt) -> list[int]:
+        """
+        Fisher-Yates shuffle using internal RNG state
+        """
+    def rand_double(self, low: typing.SupportsFloat = 0.0, high: typing.SupportsFloat = 1.0) -> float:
+        """
+        Generate random double in [low, high]
+        """
+    def rand_int(self, low: typing.SupportsInt, high: typing.SupportsInt) -> int:
+        """
+        Generate random integer in [low, high]
+        """
+    def random(self) -> int:
+        """
+        Generate raw random number
+        """
+    def sample_unique_bitvecs(self, dim: typing.SupportsInt, num_samples: typing.SupportsInt) -> list[BitVec]:
+        """
+        Sample
+        """
+    def seed(self, seed_val: typing.SupportsInt) -> None:
+        """
+        Reseed the RNG
+        """
 class Tensor3D:
     __hash__: typing.ClassVar[None] = None
     @staticmethod
