@@ -12,8 +12,3 @@ dag_runner:
   dag_blueprint: ${dag_blueprint}
   config: ${runner_config}
   writer: ${writer}
-
-evolution_runner:
-  _target_: gigaevo.runner.runner.EvolutionRunner
-  dag_runner: ${dag_runner}
-  evolution_engine: ${evolution_engine}
