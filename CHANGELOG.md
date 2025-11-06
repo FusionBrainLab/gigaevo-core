@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.2.0 (2025-11-06)
+
+### Chores
+
+- **prompts**: Removed unused prompt constants, moved task hints to description
+  ([`b6db207`](https://github.com/KhrulkovV/metaevolve/commit/b6db207386179e62e9b665d9fcbda140e824c3d3))
+
+### Features
+
+- **prompts**: Centralize mutation prompts and remove task hints
+  ([`6bd971f`](https://github.com/KhrulkovV/metaevolve/commit/6bd971fd1bf7dac06d6cf796e9bcdc002412f759))
+
+### Refactoring
+
+- **prompts**: Add task-independent mutation prompts
+  ([`e56dd49`](https://github.com/KhrulkovV/metaevolve/commit/e56dd49fe79dedf08a78683f36935e32db886e9e))
+
+
 ## v1.1.0 (2025-10-31)
 
 ### Features
