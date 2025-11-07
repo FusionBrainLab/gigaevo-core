@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.4.0 (2025-11-07)
+
+### Features
+
+- Wandb support; improve pythonpath passthrough
+  ([`e408cec`](https://github.com/KhrulkovV/metaevolve/commit/e408ceca5b45a447d74c24c085bdf3c814c836e8))
+
+
 ## v1.3.0 (2025-11-06)
 
 ### Bug Fixes
