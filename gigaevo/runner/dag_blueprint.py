@@ -9,7 +9,7 @@ from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.dag.dag import DAG
 from gigaevo.programs.stages.base import Stage
-from gigaevo.utils.logger import LogWriter
+from gigaevo.utils.trackers.base import LogWriter
 
 
 class DAGBlueprint(BaseModel):

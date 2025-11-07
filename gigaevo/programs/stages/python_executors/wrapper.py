@@ -26,6 +26,15 @@ def _find_runner_in_repo() -> Path:
     return parent / "tools" / "exec_runner.py"
 
 
+def _prepend_sys_path(paths: Sequence[Path | str] | None) -> None:
+    if not paths:
+        return
+    for path in paths:
+        candidate = str(path)
+        if candidate and candidate not in sys.path:
+            sys.path.insert(0, candidate)
+
+
 async def run_exec_runner(
     *,
     code: str,
@@ -48,6 +57,12 @@ async def run_exec_runner(
     env = os.environ.copy()
     env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     env.setdefault("PYTHONUNBUFFERED", "1")
+    if python_path:
+        python_path_entries = [str(p) for p in python_path]
+        existing_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = os.pathsep.join(
+            python_path_entries + ([existing_pythonpath] if existing_pythonpath else [])
+        )
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -89,6 +104,7 @@ async def run_exec_runner(
 
     if proc.returncode == 0:
         try:
+            _prepend_sys_path(python_path)
             value = cloudpickle.loads(stdout)
         except Exception as e:
             raise ExecRunnerError(

@@ -15,9 +15,9 @@ from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
-from gigaevo.utils.logger import LogWriter
 from gigaevo.utils.metrics_collector import start_metrics_collector
 from gigaevo.utils.metrics_tracker import MetricsTracker
+from gigaevo.utils.trackers.base import LogWriter
 
 if TYPE_CHECKING:
     from typing import Any

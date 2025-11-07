@@ -7,7 +7,7 @@ from typing import Any
 
 from loguru import logger
 
-from gigaevo.utils.logger import LogWriter
+from gigaevo.utils.trackers.base import LogWriter
 
 
 async def _maybe_await(x: Any) -> Any:

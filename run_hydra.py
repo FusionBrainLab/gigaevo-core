@@ -13,9 +13,9 @@ from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.problems.initial_loaders import InitialProgramLoader
 from gigaevo.runner.dag_runner import DagRunner
-from gigaevo.utils.logger import LogWriter
 from gigaevo.utils.logger_setup import setup_logger
 from gigaevo.utils.serve import serve_until_signal
+from gigaevo.utils.trackers.base import LogWriter
 
 
 async def run_experiment(cfg: DictConfig):
@@ -24,7 +24,8 @@ async def run_experiment(cfg: DictConfig):
     logger.info("🔄 Starting GigaEvo Evolution Experiment")
     logger.info(f"📁 Problem: {cfg.problem.name}")
     logger.info(f"🕐 Start time: {datetime.now(timezone.utc).isoformat()}")
-
+    redis_storage: RedisProgramStorage | None = None
+    writer: LogWriter | None = None
     try:
         config_with_instances = instantiate(cfg, recursive=True)
         redis_storage: RedisProgramStorage = config_with_instances.redis_storage
@@ -62,8 +63,10 @@ async def run_experiment(cfg: DictConfig):
         raise
     finally:
         logger.info("🧹 Starting cleanup...")
-        await redis_storage.close()
-        writer.close()
+        if redis_storage is not None:
+            await redis_storage.close()
+        if writer is not None:
+            writer.close()
         duration = time.time() - start_time
         logger.info(
             f"Total experiment duration: {duration:.2f} seconds ({duration / 3600:.2f} hours)"

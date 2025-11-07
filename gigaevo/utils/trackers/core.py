@@ -1,21 +1,14 @@
+# gigaevo_logger/core.py
 from __future__ import annotations
 
-from pathlib import Path
 from queue import Empty, Queue
 import threading
 import time
 from typing import Any
 
 from pydantic import BaseModel, Field
-from tensorboardX import SummaryWriter
 
-from gigaevo.utils.logger import LogWriter
-
-
-class TBConfig(BaseModel):
-    logdir: str | Path
-    flush_secs: float = 3.0
-    queue_size: int = 8192
+from gigaevo.utils.trackers.base import LogWriter
 
 
 def _sanitize(s: str) -> str:
@@ -38,25 +31,62 @@ class _SeriesState(BaseModel):
     last_ts: float = Field(default=0.0)
 
 
-class TBLogger(LogWriter):
-    def __init__(self, cfg: TBConfig):
-        self.cfg = cfg
+# Backend adapter interface
+class LoggerBackend:
+    """
+    Minimal adapter every backend must implement.
+    write_* may buffer; flush() must push buffered data to remote if applicable.
+    """
+
+    def open(self) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
+
+    def write_scalar(self, tag: str, value: float, step: int, wall_time: float) -> None:
+        raise NotImplementedError
+
+    def write_hist(self, tag: str, values: Any, step: int, wall_time: float) -> None:
+        raise NotImplementedError
+
+    def write_text(self, tag: str, text: str, step: int, wall_time: float) -> None:
+        raise NotImplementedError
+
+    def flush(self) -> None:
+        """
+        Ensure buffered events are sent to the backend.
+        Called periodically by GenericLogger (every `flush_secs`).
+        """
+        raise NotImplementedError
+
+
+class GenericLogger(LogWriter):
+    def __init__(
+        self, backend: LoggerBackend, *, queue_size: int = 8192, flush_secs: float = 3.0
+    ):
+        self.backend = backend
         self._series: dict[str, _SeriesState] = {}
-        self._q: Queue[dict[str, Any]] = Queue(maxsize=cfg.queue_size)
+        self._q: Queue[dict[str, Any]] = Queue(maxsize=queue_size)
         self._stop = threading.Event()
         self._closed = False
+        self._flush_secs = float(flush_secs)
 
-        logdir = Path(cfg.logdir).resolve()
-        logdir.mkdir(parents=True, exist_ok=True)
-        self._writer = SummaryWriter(str(logdir), flush_secs=cfg.flush_secs)
+        # open backend
+        self.backend.open()
 
-        self._t = threading.Thread(target=self._loop, name="tb-writer", daemon=True)
+        # background thread
+        self._t = threading.Thread(
+            target=self._loop, name="generic-writer", daemon=True
+        )
         self._t.start()
+
+        self._last_flush = time.time()
 
     def bind(
         self, *, path: list[str] | None = None, labels: dict[str, str] | None = None
-    ) -> "BoundTB":
-        return BoundTB(self, path or [], labels or {})
+    ) -> "BoundGeneric":
+        return BoundGeneric(self, path or [], labels or {})
 
     def scalar(self, metric: str, value: float, **kw) -> None:
         if self._closed:
@@ -105,13 +135,12 @@ class TBLogger(LogWriter):
         )
 
     def close(self, drain_timeout_s: float = 1.5) -> None:
-        """Stop thread, drain queue briefly, flush & close writer."""
         if self._closed:
             return
         self._closed = True
         self._stop.set()
 
-        # Drain remaining events for a short grace period
+        # drain queue
         deadline = time.time() + max(0.0, drain_timeout_s)
         while time.time() < deadline:
             try:
@@ -121,23 +150,26 @@ class TBLogger(LogWriter):
             else:
                 self._handle(event)
 
-        # Join the thread
+        # join thread
         if self._t.is_alive():
             self._t.join(timeout=2.0)
 
-        # Final flush/close
+        # final flush & backend close
         try:
-            self._writer.flush()
+            try:
+                self.backend.flush()
+            except Exception:
+                pass
+            self.backend.close()
         finally:
-            self._writer.close()
+            self._closed = True
 
-    # -------- internal --------
-
+    # internals
     def _offer(self, event: dict[str, Any]) -> None:
         try:
             self._q.put_nowait(event)
         except Exception:
-            # drop on full/any error
+            # drop event on full queue or any error
             pass
 
     def _loop(self) -> None:
@@ -145,8 +177,25 @@ class TBLogger(LogWriter):
             try:
                 event = self._q.get(timeout=0.1)
             except Empty:
+                # periodic flush
+                now = time.time()
+                if (now - self._last_flush) >= self._flush_secs:
+                    try:
+                        self.backend.flush()
+                    except Exception:
+                        pass
+                    self._last_flush = now
                 continue
             self._handle(event)
+
+            # optionally flush if time passed
+            now = time.time()
+            if (now - self._last_flush) >= self._flush_secs:
+                try:
+                    self.backend.flush()
+                except Exception:
+                    pass
+                self._last_flush = now
 
     def _handle(self, e: dict[str, Any]) -> None:
         tag = _render_tag(e["path"], e["metric"], e["labels"])
@@ -157,15 +206,20 @@ class TBLogger(LogWriter):
         if kind == "scalar":
             if self._throttle(tag, e["value"], wall_time, e.get("thr") or {}):
                 return
-            self._writer.add_scalar(
-                tag, e["value"], global_step=step, walltime=wall_time
-            )
+            try:
+                self.backend.write_scalar(tag, e["value"], step, wall_time)
+            except Exception:
+                pass
         elif kind == "hist":
-            self._writer.add_histogram(
-                tag, e["values"], global_step=step, walltime=wall_time
-            )
+            try:
+                self.backend.write_hist(tag, e["values"], step, wall_time)
+            except Exception:
+                pass
         elif kind == "text":
-            self._writer.add_text(tag, e["text"], global_step=step, walltime=wall_time)
+            try:
+                self.backend.write_text(tag, e.get("text", ""), step, wall_time)
+            except Exception:
+                pass
 
     def _state(self, key: str) -> _SeriesState:
         st = self._series.get(key)
@@ -201,16 +255,16 @@ class TBLogger(LogWriter):
         return False
 
 
-class BoundTB(LogWriter):
-    def __init__(self, base: TBLogger, path: list[str], labels: dict[str, str]):
+class BoundGeneric(LogWriter):
+    def __init__(self, base: GenericLogger, path: list[str], labels: dict[str, str]):
         self._base = base
         self._path = list(path)
         self._labels = dict(labels)
 
     def bind(
         self, *, path: list[str] | None = None, labels: dict[str, str] | None = None
-    ) -> "BoundTB":
-        return BoundTB(
+    ) -> "BoundGeneric":
+        return BoundGeneric(
             self._base, [*self._path, *(path or [])], {**self._labels, **(labels or {})}
         )
 
@@ -231,20 +285,3 @@ class BoundTB(LogWriter):
 
     def close(self) -> None:
         self._base.close()
-
-
-_default: TBLogger | None = None
-
-
-def init_tb(cfg: TBConfig) -> TBLogger:
-    global _default
-    if _default is not None:
-        return _default
-    _default = TBLogger(cfg)
-    return _default
-
-
-def get_tb() -> TBLogger:
-    if _default is None:
-        raise ValueError("TBLogger not initialized. Call init_tb() first.")
-    return _default

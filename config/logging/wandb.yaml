@@ -1,0 +1,16 @@
+# @package _global_
+
+logging:
+  level: DEBUG
+  log_dir: ${constants.log_dir}
+  rotation: ${constants.log_rotation}
+  retention: ${constants.log_retention}
+
+wandb_config:
+  _target_: gigaevo.utils.trackers.configs.WBConfig
+  project: evo
+  name: ${constants.tag}
+
+writer:
+  _target_: gigaevo.utils.trackers.init_wandb
+  cfg: ${wandb_config}

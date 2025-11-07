@@ -16,8 +16,8 @@ from gigaevo.programs.dag.dag import DAG
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.runner.dag_blueprint import DAGBlueprint
-from gigaevo.utils.logger import LogWriter
 from gigaevo.utils.metrics_collector import start_metrics_collector
+from gigaevo.utils.trackers.base import LogWriter
 
 
 class TaskInfo(NamedTuple):

@@ -4,10 +4,11 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import linecache
+from pathlib import Path
 import sys
 import traceback
 import types
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import cloudpickle
 
@@ -24,19 +25,18 @@ def _load_module_from_code(
 ) -> types.ModuleType:
     _register_source(_CODE_FILENAME, code)
     mod = types.ModuleType(mod_name)
+    sys.modules[mod_name] = mod
     code_obj = compile(code, _CODE_FILENAME, "exec")
     exec(code_obj, mod.__dict__)
     return mod
 
 
-def _prepend_sys_path(paths: List[str] | None) -> None:
+def _prepend_sys_path(paths: list[str] | None) -> None:
     if not paths:
         return
-    sp = sys.path
-    insert = sp.insert
     for p in paths:
-        if p and p not in sp:
-            insert(0, p)
+        if p and p not in sys.path:
+            sys.path.insert(0, str(Path(p).resolve()))
 
 
 def _write_code_context(tb: BaseException, *, out: io.TextIOBase) -> None:
@@ -81,9 +81,9 @@ def main() -> None:
 
         code: str = payload["code"]
         fn_name: str = payload["function_name"]
-        py_path: List[str] = payload.get("python_path", [])
-        args: List[Any] = payload.get("args", [])
-        kwargs: Dict[str, Any] = payload.get("kwargs", {})
+        py_path: list[str] = payload.get("python_path", [])
+        args: list[Any] = payload.get("args", [])
+        kwargs: dict[str, Any] = payload.get("kwargs", {})
 
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             raise TypeError("Payload must contain 'args': list and 'kwargs': dict")

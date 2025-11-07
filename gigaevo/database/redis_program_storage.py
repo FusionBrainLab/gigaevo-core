@@ -17,8 +17,8 @@ from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
 from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
-from gigaevo.utils.logger import LogWriter
 from gigaevo.utils.metrics_collector import start_metrics_collector
+from gigaevo.utils.trackers.base import LogWriter
 
 __all__ = ["RedisProgramStorageConfig", "RedisProgramStorage"]
 T = TypeVar("T")
