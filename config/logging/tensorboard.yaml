@@ -7,9 +7,9 @@ logging:
   retention: ${constants.log_retention}
 
 tb_config:
-  _target_: gigaevo.utils.tb_logger.TBConfig
+  _target_: gigaevo.utils.trackers.configs.TBConfig
   logdir: ${constants.log_dir}/tb_logs
 
 writer:
-  _target_: gigaevo.utils.tb_logger.init_tb
+  _target_: gigaevo.utils.trackers.init_tb
   cfg: ${tb_config}

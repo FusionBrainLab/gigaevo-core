@@ -57,6 +57,7 @@ constants:
   log_retention: "30 days"
   log_dir: ${hydra:runtime.output_dir}
   default_log_level: INFO
+  tag: experiment # to be overwrittern typically
 
   # Metric keys
   validity_key: is_valid

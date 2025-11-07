@@ -21,7 +21,7 @@ from gigaevo.programs.dag.automata import (
 )
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
-from gigaevo.utils.logger import LogWriter
+from gigaevo.utils.trackers.base import LogWriter
 
 
 class DAG:

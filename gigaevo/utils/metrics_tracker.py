@@ -11,7 +11,7 @@ from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import NEW_STATES_PROGRAM_LIFECYCLE
-from gigaevo.utils.logger import LogWriter
+from gigaevo.utils.trackers.base import LogWriter
 
 
 class _RunningStats(BaseModel):

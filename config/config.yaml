@@ -7,7 +7,7 @@ defaults:
   - pipeline: auto
   - runner: default
   - loader: directory
-  - logging: default
+  - logging: tensorboard
   - _self_
 
 # Problem metadata (set via command line or problem-specific config)
