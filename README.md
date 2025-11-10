@@ -7,11 +7,15 @@ Recommended Python version: 3.12+
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd gigaevo
 pip install -e .
 
 # Set up environment variables
 export OPENAI_API_KEY=<your_llm_api_key_here> (required)
+
+# Optional: Langfuse tracing (for observability)
+export LANGFUSE_PUBLIC_KEY=<your_langfuse_public_key>
+export LANGFUSE_SECRET_KEY=<your_langfuse_secret_key>
+export LANGFUSE_HOST=https://cloud.langfuse.com  # or your self-hosted URL
 ```
 or using `.env` file
 
