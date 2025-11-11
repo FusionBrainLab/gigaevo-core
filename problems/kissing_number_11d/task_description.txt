@@ -1,0 +1,65 @@
+TASK DEFINITION – KISSING NUMBER PROBLEM IN DIMENSION 11 (INTEGRAL CONSTRUCTION)
+
+Problem Type: Evolutionary Geometric Optimization
+Challenge: Construct a large set of unit spheres in 11D, all mutually tangent and tangent to a central unit sphere, via integer coordinates. Known lower bound: 840.
+
+PROBLEM COMPLEXITY
+High-dimensional sphere packing with rigid separation constraints. The single-shell (equal-norm) structure is essential; even small integer edits can break feasibility.
+
+OBJECTIVE
+Return distinct non-zero integer 11D vectors {x_i} ⊂ Z^11 such that:
+1) (Single shell) ||x_i||^2 = r^2 for all i and some r^2 > 0.
+2) (Separation) min_{i≠j} ||x_i - x_j||^2 ≥ r^2.
+This scale-invariant certificate yields a valid kissing configuration after scaling by t = 2/√(r^2).
+
+Output: (N, 11) NumPy int array
+Fitness: N (set size)
+Goal: Achieve N ≥ 840
+
+GEOMETRIC SETUP
+- Central unit sphere at origin
+- Candidate centers: integer vectors in Z^11, non-zero, equal norm
+- Realization: scale by t = 2/√(r^2) → all centers at radius 2; pairwise distances ≥ 2
+
+CONSTRAINTS
+- Integer coordinates only
+- Distinct, non-zero rows
+- Exact integer arithmetic
+- Single-shell constraint (||x_i||^2 constant)
+
+VALIDATION & RIGOR
+- Check all norms are equal
+- Compute d²_min; accept iff d²_min ≥ r²
+
+STRATEGIC GUIDANCE
+
+Fitness Metric
+Maximize N = number of distinct non-zero integer vectors x_i ∈ Z¹² satisfying:
+    ||x_i||² = r² (constant) and min_{i≠j} ||x_i - x_j||² ≥ r²
+(After rescaling by t = 2/√(r²), all centers lie on radius 2 with pairwise distances ≥ 2.)
+
+Failure Modes
+- Norm inconsistency (not single-shell)
+- Certificate violation: d²_min < r²
+- Duplicate vectors or inclusion of zero vector
+- Symmetry duplicates (sign/permutation copies)
+- Non-integer coordinates
+- Float-based checks instead of exact integer arithmetic
+- Timeouts due to direct combinatorial enumeration (e.g., generating all permutations or sign patterns) is computationally infeasible due to exponential complexity; use constructive or algebraic methods instead
+
+Evaluation Details
+- r² = ||x_i||² (common squared norm)
+- d²_min = min_{i≠j} ||x_i - x_j||²
+- Valid iff d²_min ≥ r²
+- Fitness = N; secondary metric: margin δ = d²_min - r²
+- Target: N ≥ 840
+
+OUTPUT FORMAT:
+```python
+# Import necessary libraries
+def entrypoint():
+    # Your implementation here
+    # Fix all random seeds if using randomness
+    return output  # (N, 11) NumPy int array as specified above
+```
+!!! DO NOT add commentaries !!! Code only.

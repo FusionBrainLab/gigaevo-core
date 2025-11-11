@@ -1,4 +1,3 @@
-display_order: [fitness, is_valid]
 specs:
   fitness:
     description: Main objective, higher is better
@@ -6,7 +5,7 @@ specs:
     is_primary: true
     higher_is_better: true
     lower_bound: 0.0
-    upper_bound: 100.0
+    upper_bound: 1.525
     include_in_prompts: true
     significant_change: 1.0e-6
   is_valid:

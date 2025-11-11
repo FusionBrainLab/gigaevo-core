@@ -1,0 +1,5 @@
+# @package _global_
+# API endpoint defaults
+
+llm_base_url: http://localhost:8777/v1
+model_name: Qwen3-235B-A22B-Thinking-2507

@@ -1,8 +1,10 @@
-# GigaEvo: LLM-based Evolutionary Optimization System
+# GigaEvo
 
-## Installation
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-Recommended Python version: 3.12+
+Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
 
 ```bash
 # Clone the repository
@@ -18,321 +20,231 @@ export LANGFUSE_SECRET_KEY=<your_langfuse_secret_key>
 export LANGFUSE_HOST=https://cloud.langfuse.com  # or your self-hosted URL
 ```
 or using `.env` file
+## 🚀 Getting Started
+
+- **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes ⭐
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - Understand the system design
+
+## 📚 Documentation
+
+- **[DAG System](docs/DAG_SYSTEM.md)** - Comprehensive guide to GigaEvo's execution engine
+- **[Evolution Strategies](docs/EVOLUTION_STRATEGIES.md)** - MAP-Elites and multi-island evolution system
+- **[Tools](tools/README.md)** - Helper utilities for analysis and debugging
+- **[Usage Guide](docs/USAGE.md)** - Detailed usage instructions
+- **[Changelog](docs/CHANGELOG.md)** - Version history and changes
+- **[Contributing](docs/CONTRIBUTING.md)** - Guidelines for contributors
 
 ## Quick Start
 
-### Basic Usage
+### 1. Install Dependencies
 
-First we need to launch redis-server as a separate process.
+**Requirements:** Python 3.12+
+
+```bash
+pip install -e .
+```
+
+### 2. Set up Environment
+
+Create a `.env` file with your OpenRouter API key:
+
+```bash
+OPENAI_API_KEY=sk-or-v1-your-api-key-here
+```
+
+### 3. Start Redis
 
 ```bash
 redis-server
 ```
 
-### Legacy approach
-
-`run.py` is pure python example of launching the evolution which can be easily tweaked
+### 4. Run Evolution
 
 ```bash
-# Run evolution on the hexagon packing problem
-python run.py --problem-dir problems/hexagon_pack
+python run.py problem.name=heilbron
+```
+
+That's it! Evolution will start and logs will be saved to `outputs/`.
+To study results, check `tools` or start `tensorboard` / `wandb`
+
+## What Happens
+
+1. **Loads initial programs** from `problems/heilbron/`
+2. **Mutates programs** using LLMs (GPT, Claude, Gemini, etc.)
+3. **Evaluates fitness** by running the programs
+4. **Selects best solutions** using MAP-Elites algorithm
+5. **Repeats** for multiple generations
+
+## Customization
+
+### Use a Different Experiment
+
+```bash
+# Multi-island evolution (explores diverse solutions)
+python run.py experiment=multi_island_complexity problem.name=heilbron
+
+# Multi-LLM exploration (uses multiple models)
+python run.py experiment=multi_llm_exploration problem.name=heilbron
+```
+
+### Change Settings
+
+```bash
+# Limit generations
+python run.py problem.name=heilbron max_generations=10
 
 # Use different Redis database
-python run.py --problem-dir problems/hexagon_pack --redis-db 1
+python run.py problem.name=heilbron redis.db=5
+
+# Change LLM model
+python run.py problem.name=heilbron model_name=anthropic/claude-3.5-sonnet
 ```
 
-### Hydra-based configs (Recommended)
+## Configuration
 
-`run_hydra.py` utilizes composable hydra configs for experiments. See `config` folder to undertstand how the config is composed
-example runs
+All configuration is in `config/`:
+
+- **`experiment/`** - Complete experiment setups (start here!)
+  - `base.yaml` - Simple single-island evolution (default)
+  - `full_featured.yaml` - Multi-island + multi-LLM
+  - `multi_island_complexity.yaml` - Two islands: performance + simplicity
+
+- **`constants/`** - Tunable parameters split by domain
+  - `evolution.yaml` - Generation limits, mutation rates
+  - `llm.yaml` - Temperature, max tokens, etc.
+  - `islands.yaml` - Island sizes, migration settings
+
+- **`algorithm/`** - MAP-Elites configurations
+- **`llm/`** - LLM provider setups
+
+See `config/` for detailed documentation on each component.
+
+## Output
+
+Results are saved to `outputs/YYYY-MM-DD/HH-MM-SS/`:
+
+- **Logs**: `evolution_YYYYMMDD_HHMMSS.log`
+- **Programs**: Stored in Redis for fast access
+- **Metrics**: TensorBoard logs (if enabled)
+
+## Troubleshooting
+
+### Redis Database Not Empty
+
+If you see:
+```
+ERROR: Redis database is not empty!
+```
+
+Flush the database manually:
 ```bash
-python run_hydra.py problem.name=heilbron_simplified
-python run_hydra.py problem.name=heilbron_simplified redis.db=1 constants.num_parents=1  constants.default_llm_base_url=<my_api_endpoint>
+redis-cli -n 0 FLUSHDB
 ```
 
-
-## Problem Directory Structure
-
-Each problem must be organized in a specific directory structure:
-
-```
-problems/your_problem/
-├── task_description.txt          # Problem description
-├── validate.py                  # Validation function
-├── helper.py                    # Helper functions (optional)
-├── context.py                   # Context builder (optional)
-└── initial_programs/            # Initial population strategies (required)
-    ├── strategy1.py
-    ├── strategy2.py
-    └── ...
-```
-
-### Required Files and Directories
-
-1. **`task_description.txt`**: Clear description of the optimization problem
-2. **`validate.py`**: Must contain a `validate()` function that evaluates solutions
-3. **`initial_programs/`**: Directory with at least one Python file containing initial population strategies
-
-### Optional Files
-
-- **`helper.py / <any additional py files>`**: Auxiliary functions that solutions can import
-- **`context.py`**: Context builder function for problems requiring external data
-
-## Example Problems
-
-The system includes three example problems demonstrating different types of optimization challenges:
-
-### 1. Hexagon Packing (`problems/hexagon_pack/`)
-
-**Problem**: Arrange 11 unit regular hexagons inside a larger enclosing hexagon to minimize the enclosing hexagon's side length.
-
-**Type**: Geometric optimization without context
-
-**Key Features**:
-- Complex constraint satisfaction (non-overlapping)
-- Geometric reasoning and spatial optimization
-- Multiple initial strategies (hexagonal rings, spirals, clusters)
-
-**Usage**:
+Or use a different database number:
 ```bash
-python run.py --problem-dir problems/hexagon_pack
-python run_hydra.py problem.name=hexagon_pack
+python run.py redis.db=1
 ```
 
-### 2. Regression Optimization (`problems/optimization/`)
+### LLM Connection Issues
 
-**Problem**: Learn a regression model from California housing dataset to predict house prices.
-
-**Type**: Machine learning optimization with context
-
-**Key Features**:
-- Uses external data context (California housing dataset)
-- Requires `--add-context` flag
-- Demonstrates ML model evolution
-
-**Usage**:
+Check your API key in `.env`:
 ```bash
-# Regression model optimization (note: requires --add-context)
-python run.py --problem-dir problems/optimization \
-    --add-context
+echo $OPENAI_API_KEY
+```
 
-python run_hydra.py problem.name=optimization
+Verify OpenRouter is accessible:
+```bash
+curl -H "Authorization: Bearer $OPENAI_API_KEY" https://openrouter.ai/api/v1/models
 ```
 
 ## Architecture
 
-GigaEvo uses a modular, high-performance architecture designed for scalability and flexibility:
-
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Runner        │────│  Evolution       │────│  DAG Pipeline   │
-│   Orchestrator  │    │  Engine          │    │  Executor       │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                        │                        │
-         └────────────────────────┼────────────────────────┘
-                                  │
-                    ┌─────────────────────────┐
-                    │     Redis Storage       │
-                    │   (Programs & State)    │
-                    └─────────────────────────┘
-```
-
-### Core Components
-
-#### 1. Evolution Engine
-High-performance evolutionary loop with configurable strategies:
-- **MapElitesMultiIsland**: Multi-island quality-diversity optimization with migration and specialization
-- **LLM Integration**: Intelligent code generation using state-of-the-art language models
-- **Adaptive Strategies**: Dynamic behavior space adjustment and fitness landscape exploration
-
-#### 2. DAG Pipeline System
-Flexible program execution pipeline with parallel processing:
-- Execution-order deps: sequencing only (on_success/always_after)
-- Dataflow via edges: edges carry data only, never gate readiness
-- Mandatory/optional inputs: each stage declares (mandatory, optional_max)
-- Code Validation: Syntax checking and compilation verification
-- Sandboxed Execution: Safe program execution with resource limits
-- Multi-Stage Evaluation: Custom fitness, behavior, and complexity evaluation
-- Metrics Collection: Comprehensive performance and structural analysis
-
-#### 3. Runner Orchestration
-Coordinates evolution and execution with high concurrency:
-- **Concurrent Processing**: Multiple DAG pipelines running in parallel
-- **Resource Management**: Configurable concurrency limits and memory allocation
-- **Monitoring**: Real-time metrics, performance tracking, and auto-optimization
-
-#### 4. Redis Storage System
-Persistent, high-performance program and state management:
-- **Async Operations**: Non-blocking Redis operations for maximum throughput
-- **Program Versioning**: Full program history and metadata tracking
-- **State Persistence**: Evolution state survives restarts and failures
-
-### Behavior Spaces
-
-The system in default configuration uses one island:
-
-**Fitness Island**: focuses on fitness purely
-
-### Execution Pipeline
-
-1. Validation: Check code compilation and syntax
-2. Execution: Run the program to generate solutions
-3. Domain Validation: Evaluate solution quality (fixed validator code)
-4. Insights Generation: Generate LLM-based insights
-5. Metrics Collection: Aggregate performance data
-
-## 🔄 How It Works
-
-GigaEvo operates through a continuous cycle of evolution, evaluation, and optimization:
-
-### 1. Initialization Phase
-- Load initial programs from `initial_programs/` directory
-- Populate Redis database with initial population
-- Initialize multi-island MAP-Elites strategy with specialized behavior spaces
-
-### 2. Evolution Loop
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Main Evolution Loop                     │
-├─────────────────────────────────────────────────────────────────┤
-│ 1. Select Elite Programs  → 2. Generate Mutations              │
-│    ↓                          ↓                                │
-│ 4. Update Archives       ← 3. Evaluate via DAG Pipeline        │
-│    ↓                                                           │
-│ 5. Migrate Between Islands (periodically)                      │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────┐
+│   Problem   │  Define task, initial programs, metrics
+└──────┬──────┘
+       │
+       v
+┌─────────────┐
+│  Evolution  │  MAP-Elites algorithm
+│   Engine    │  Selects parents, generates mutations
+└──────┬──────┘
+       │
+       v
+┌─────────────┐
+│     LLM     │  Generates code mutations
+│   Wrapper   │  (GPT, Claude, Gemini, etc.)
+└──────┬──────┘
+       │
+       v
+┌─────────────┐
+│  Evaluator  │  Runs programs, computes fitness
+│ (DAG Runner)│  Validates solutions
+└──────┬──────┘
+       │
+       v
+┌─────────────┐
+│   Storage   │  Redis for fast program access
+│   (Redis)   │  Maintains archive of solutions
+└─────────────┘
 ```
 
-## Creating New Problems
+## Key Concepts
 
-### Step 1: Scaffold with Wizard (recommended)
+- **MAP-Elites**: Algorithm that maintains diverse solutions across behavior dimensions
+- **Islands**: Independent populations that can exchange solutions (migration)
+- **DAG Pipeline**: Stages for validation, execution, complexity analysis, etc.
+- **Behavior Space**: Multi-dimensional grid dividing solutions by characteristics
+
+## Advanced Usage
+
+### Create Your Own Problem
+
+1. Create directory in `problems/`:
+   ```
+   problems/my_problem/
+     - __init__.py
+     - entrypoint.py    # Your function to evolve
+     - validate.py      # Fitness evaluation
+     - metrics.yaml     # Define metrics
+     - initial_programs # Directory containing a number of initial programs
+   ```
+
+2. Run:
+   ```bash
+   python run.py problem.name=my_problem
+   ```
+
+### Custom Experiment
+
+Copy an existing experiment and modify:
 
 ```bash
-# Minimal scaffold
-PYTHONPATH=. python tools/wizard.py problems/my_problem
-
-# Include context.py and overwrite existing files
-PYTHONPATH=. python tools/wizard.py problems/my_problem --add-context --overwrite
-
-# With custom texts
-PYTHONPATH=. python tools/wizard.py problems/my_problem \
-  --task-description "Optimize X under Y" \
-  --system-prompt "... {task_definition} ... {metrics_description} ..." \
-  --user-prompt "=== Parents ({count}) ===\n{parent_blocks}\n"
+cp config/experiment/base.yaml config/experiment/my_experiment.yaml
+# Edit my_experiment.yaml...
+python run.py experiment=my_experiment
 ```
 
-### Manual Setup (alternative)
+## Tools
 
-```bash
-mkdir -p problems/my_problem/initial_programs
-touch problems/my_problem/task_description.txt
-touch problems/my_problem/validate.py
-# Optional:
-touch problems/my_problem/context.py
+GigaEvo includes utilities for analysis and visualization:
+
+- **`tools/redis2pd.py`** - Export evolution data to CSV
+- **`tools/comparison.py`** - Compare multiple runs with plots
+- **`tools/dag_builder/`** - Visual DAG pipeline designer
+- **`tools/wizard.py`** - Interactive problem setup
+
+See `tools/README.md` for detailed documentation.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## Citation
+
+If you use GigaEvo in your research, please cite:
+
+```bibtex
+[Citation coming soon]
 ```
-
-### Step 3: Implement Validation Function
-
-```python
-# problems/my_problem/validate.py
-def validate(payload):
-    """
-    Validate and score the solution.
-
-    Args:
-        payload: For context problems: (context, solution_output)
-                For non-context problems: solution_output
-
-    Returns:
-        dict: Metrics including 'fitness' and 'is_valid'
-    """
-    # Implement your validation logic here
-    return {
-        'fitness': your_fitness_score,
-        'is_valid': 1 if valid else 0
-    }
-```
-
-### Step 4: Create Initial Programs
-
-Add at least one Python file to the `initial_programs/` directory. The expected function name is `entrypoint` (configurable in pipeline builder).
-
-#### For Problems Without Context:
-```python
-# problems/my_problem/initial_programs/basic_solution.py
-"""
-Basic solution strategy for my_problem.
-"""
-
-def entrypoint():
-    # Implement your basic solution here
-    return solution_data
-```
-
-#### For Problems With Context:
-```python
-# problems/my_problem/initial_programs/basic_solution.py
-"""
-Basic solution strategy for my_problem.
-"""
-
-def entrypoint(context):
-    # Implement your basic solution here
-    return solution_data
-```
-
-### Step 5: Optional Context Implementation
-
-For problems requiring external data, create a context builder:
-
-```python
-# problems/my_problem/context.py
-import numpy as np
-from sklearn.datasets import fetch_california_housing
-from sklearn.model_selection import train_test_split
-
-def build_context() -> dict[str, np.ndarray]:
-    """
-    Build context data for the problem.
-
-    Returns:
-        dict: Context data that will be passed to entrypoint()
-    """
-    housing = fetch_california_housing(return_X_y=True)
-    X_train, X_test, y_train, y_test = train_test_split(
-        housing[0], housing[1], test_size=0.2, random_state=42
-    )
-    return {
-        "X_train": X_train,
-        "X_test": X_test,
-        "y_train": y_train,
-        "y_test": y_test
-    }
-```
-
-### Step 6: Run Evolution
-
-#### For Non-Context Problems:
-```bash
-python run.py --problem-dir problems/my_problem
-```
-
-#### For Context Problems:
-```bash
-python run.py --problem-dir problems/my_problem --add-context
-```
-
-with hydra DAG is set automatically to include context generation by default
-
-```bash
-python run_hydra.py problem.name=my_problem
-```
-works for both cases
-
-### Evolution analysis
-
-There are several helper scripts included in `tools`
-1) `redis2pd.py` converts evolution history stored in redis to .csv file which can be studied with pandas
-2) `comparison.py` allows for comparing multiple / single evolution runs
-
-#TODO add DAG tool decription

@@ -1,6 +1,6 @@
 from enum import Enum
 import math
-from typing import Dict, List, Tuple
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
@@ -26,13 +26,13 @@ class BinningType(Enum):
 class BehaviorSpace(BaseModel):
     """Enhanced discretized behavior space for MAP-Elites with multiple binning strategies."""
 
-    feature_bounds: Dict[str, Tuple[float, float]] = Field(
+    feature_bounds: dict[str, tuple[float, float]] = Field(
         description="Bounds for each behavior feature (min, max)"
     )
-    resolution: Dict[str, int] = Field(
+    resolution: dict[str, int] = Field(
         description="Discretization resolution for each behavior feature"
     )
-    binning_types: Dict[str, "BinningType"] = Field(
+    binning_types: dict[str, "BinningType"] = Field(
         default_factory=dict,
         description="Binning strategy for each behavior feature (defaults to LINEAR)",
     )
@@ -101,16 +101,18 @@ class BehaviorSpace(BaseModel):
 
     @computed_field
     @property
-    def behavior_keys(self) -> List[str]:
+    def behavior_keys(self) -> list[str]:
         return list(self.resolution.keys())
 
     def get_binning_type(self, behavior_key: str) -> "BinningType":
         """Get the binning type for a behavior key, defaulting to LINEAR."""
         return self.binning_types.get(behavior_key, BinningType.LINEAR)
 
-    def get_cell(self, metrics: Dict[str, float]) -> Tuple[int, ...]:
+    def get_cell(self, metrics: dict[str, float]) -> tuple[int, ...]:
         """Map program metrics to discrete cell coordinates using appropriate binning."""
         coordinates = []
+        details = []
+
         for behavior_key in self.behavior_keys:
             if behavior_key not in metrics:
                 raise KeyError(
@@ -119,7 +121,22 @@ class BehaviorSpace(BaseModel):
             value = metrics[behavior_key]
             coordinate = self._map_value_to_coordinate(behavior_key, value)
             coordinates.append(coordinate)
-        return tuple(coordinates)
+
+            # Track mapping details for debug logging
+            min_val, max_val = self.feature_bounds[behavior_key]
+            binning_type = self.get_binning_type(behavior_key)
+            details.append(
+                f"{behavior_key}={value:.3f}->{coordinate} (bounds=[{min_val:.1f},{max_val:.1f}], {binning_type.value})"
+            )
+
+        cell = tuple(coordinates)
+        logger.debug(
+            "BehaviorSpace: mapped to cell {} | {}",
+            cell,
+            " | ".join(details),
+        )
+
+        return cell
 
     def _map_value_to_coordinate(self, behavior_key: str, value: float) -> int:
         """Map a single value to its coordinate using the appropriate binning strategy."""
@@ -185,7 +202,7 @@ class BehaviorSpace(BaseModel):
         normalized = (sqrt_value - sqrt_min) / (sqrt_max - sqrt_min)
         return int(normalized * num_bins)
 
-    def get_bin_centers(self, behavior_key: str) -> List[float]:
+    def get_bin_centers(self, behavior_key: str) -> list[float]:
         """Get the center values of each bin for a behavior key."""
         min_val, max_val = self.feature_bounds[behavior_key]
         num_bins = self.resolution[behavior_key]
@@ -214,7 +231,7 @@ class BehaviorSpace(BaseModel):
 
         return centers
 
-    def describe_binning(self) -> Dict[str, Dict[str, any]]:
+    def describe_binning(self) -> dict[str, dict[str, Any]]:
         """Get a description of the binning configuration for each behavior key."""
         description = {}
         for key in self.behavior_keys:
@@ -231,7 +248,7 @@ class BehaviorSpace(BaseModel):
             }
         return description
 
-    def _calculate_bin_widths(self, behavior_key: str) -> List[float]:
+    def _calculate_bin_widths(self, behavior_key: str) -> list[float]:
         """Calculate the width of each bin for a behavior key."""
         min_val, max_val = self.feature_bounds[behavior_key]
         num_bins = self.resolution[behavior_key]

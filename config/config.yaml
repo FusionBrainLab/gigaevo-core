@@ -1,13 +1,5 @@
 defaults:
-  - constants
-  - redis: default
-  - llm: qwen_235b
-  - evolution: default
-  - map_elites: single_island
-  - pipeline: auto
-  - runner: default
-  - loader: directory
-  - logging: tensorboard
+  - experiment: base       # Base experiment setup (override with experiment=full_featured)
   - _self_
 
 # Problem metadata (set via command line or problem-specific config)

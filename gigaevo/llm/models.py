@@ -6,6 +6,7 @@ This module provides:
 - create_multi_model_router: Convenience factory for router creation
 """
 
+from collections.abc import AsyncIterator, Iterator
 import random
 from typing import Any, AsyncIterator, Iterator, Optional
 
@@ -112,6 +113,7 @@ class MultiModelRouter(Runnable):
                 self.langfuse_handler = None
                 self.langfuse_client = None
         
+        self.selected_model: ChatOpenAI | None = None
         logger.info(f"[MultiModelRouter] Initialized with {len(models)} models")
 
     def _select_model(self) -> ChatOpenAI:
@@ -148,7 +150,7 @@ class MultiModelRouter(Runnable):
     def invoke(
         self,
         input: LanguageModelInput,
-        config: Optional[RunnableConfig] = None,
+        config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> BaseMessage:
         """Synchronously select and invoke a model.
@@ -170,7 +172,7 @@ class MultiModelRouter(Runnable):
     async def ainvoke(
         self,
         input: LanguageModelInput,
-        config: Optional[RunnableConfig] = None,
+        config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> BaseMessage:
         """Asynchronously select and invoke a model.
@@ -192,7 +194,7 @@ class MultiModelRouter(Runnable):
     def stream(
         self,
         input: LanguageModelInput,
-        config: Optional[RunnableConfig] = None,
+        config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> Iterator[BaseMessage]:
         """Stream response from selected model.
@@ -214,7 +216,7 @@ class MultiModelRouter(Runnable):
     async def astream(
         self,
         input: LanguageModelInput,
-        config: Optional[RunnableConfig] = None,
+        config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         """Async stream response from selected model.

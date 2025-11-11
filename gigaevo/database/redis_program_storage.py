@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable, Iterable
 import contextlib
 import gc
 from itertools import islice
-from typing import Any, Awaitable, Callable, Iterable, TypeVar
+import os
+import socket
+import time
+from typing import Any, TypeVar
+import uuid
 
 from loguru import logger
 from pydantic import AnyUrl, BaseModel, Field
@@ -70,6 +75,13 @@ class RedisProgramStorage(ProgramStorage):
         # prevents new connections & waits while closing
         self._closing = False
 
+        # Instance lock management (prevents multiple instances on same Redis prefix)
+        self._instance_lock_token: str | None = None
+        self._instance_lock_renewal_task: asyncio.Task | None = None
+        self._instance_id = (
+            f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        )
+
     # --------------------- Keys ---------------------
 
     def _k_program(self, pid: str) -> str:
@@ -87,6 +99,10 @@ class RedisProgramStorage(ProgramStorage):
 
     def _k_ts(self) -> str:
         return f"{self.config.key_prefix}:ts"
+
+    def _k_instance_lock(self) -> str:
+        """Key for exclusive instance lock (prevents multiple instances)."""
+        return f"{self.config.key_prefix}:__instance_lock__"
 
     async def _conn(self) -> aioredis.Redis:
         if self._closing:
@@ -257,10 +273,7 @@ class RedisProgramStorage(ProgramStorage):
     ) -> None:
         async def _event(r: aioredis.Redis):
             data = {"id": program_id, "status": status, **(extra or {})}
-            pipe = r.pipeline(transaction=False)
-            pipe.xadd(self._k_stream(), data, maxlen=10_000, approximate=True)
-            pipe.sadd(self._k_status(status), program_id)
-            await pipe.execute()
+            await r.xadd(self._k_stream(), data, maxlen=10_000, approximate=True)
 
         await self._with_redis("publish_status_event", _event)
 
@@ -335,6 +348,17 @@ class RedisProgramStorage(ProgramStorage):
             logger.debug("[RedisProgramStorage] wait_for_activity fallback: {}", e)
             await asyncio.sleep(timeout)
 
+    async def has_data(self) -> bool:
+        """Check if database has any programs."""
+
+        async def _check(r: aioredis.Redis) -> bool:
+            # Check if there are any program keys
+            async for _ in r.scan_iter(match=self._k_program("*"), count=1):
+                return True
+            return False
+
+        return await self._with_redis("has_data", _check)
+
     async def flushdb(self):
         async def _flush(r: aioredis.Redis):
             await r.flushdb()
@@ -393,7 +417,190 @@ class RedisProgramStorage(ProgramStorage):
             task_name="redis-metrics-collector",
         )
 
+    # --------------------- Instance Locking ---------------------
+
+    async def acquire_instance_lock(self) -> bool:
+        """Acquire exclusive lock to prevent multiple instances on same prefix."""
+
+        async def _acquire(r: aioredis.Redis) -> bool:
+            lock_key = self._k_instance_lock()
+            lock_value = f"{self._instance_id}:{time.time()}"
+
+            # Try to acquire lock with SET NX (only if not exists)
+            # EX 300 = expires in 5 minutes as safety mechanism
+            acquired = await r.set(lock_key, lock_value, nx=True, ex=300)
+
+            if not acquired:
+                # Lock is held by another instance
+                existing = await r.get(lock_key)
+                raise StorageError(
+                    f"Cannot start: another instance is using Redis prefix '{self.config.key_prefix}'. "
+                    f"Lock held by: {existing}. "
+                    f"If this is a stale lock from a crashed instance, manually delete Redis key: {lock_key}"
+                )
+
+            logger.info(
+                f"[RedisProgramStorage] Acquired exclusive instance lock for prefix '{self.config.key_prefix}'"
+            )
+            self._instance_lock_token = lock_value
+
+            # Start renewal task to keep lock alive
+            self._instance_lock_renewal_task = asyncio.create_task(
+                self._renew_lock_periodically()
+            )
+            return True
+
+        return await self._with_redis("acquire_instance_lock", _acquire)
+
+    async def release_instance_lock(self) -> None:
+        """Release the instance lock."""
+        # Stop renewal task
+        if self._instance_lock_renewal_task:
+            self._instance_lock_renewal_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._instance_lock_renewal_task
+            self._instance_lock_renewal_task = None
+
+        if not self._instance_lock_token:
+            return
+
+        async def _release(r: aioredis.Redis):
+            lock_key = self._k_instance_lock()
+            # Only delete if we still own the lock (check token matches)
+            current = await r.get(lock_key)
+            if current and current.startswith(self._instance_id):
+                await r.delete(lock_key)
+                logger.info(
+                    f"[RedisProgramStorage] Released instance lock for prefix '{self.config.key_prefix}'"
+                )
+            self._instance_lock_token = None
+
+        try:
+            await self._with_redis("release_instance_lock", _release)
+        except Exception as e:
+            logger.warning(
+                f"[RedisProgramStorage] Failed to release instance lock: {e}"
+            )
+
+    async def renew_instance_lock(self) -> bool:
+        """Renew the instance lock to prevent expiry."""
+        if not self._instance_lock_token:
+            return False
+
+        async def _renew(r: aioredis.Redis) -> bool:
+            lock_key = self._k_instance_lock()
+            # Check we still own the lock
+            current = await r.get(lock_key)
+            if not current or not current.startswith(self._instance_id):
+                logger.error(
+                    "[RedisProgramStorage] Lost instance lock! Another instance may have taken over."
+                )
+                return False
+
+            # Renew expiry
+            lock_value = f"{self._instance_id}:{time.time()}"
+            await r.set(lock_key, lock_value, ex=300)
+            self._instance_lock_token = lock_value
+            return True
+
+        try:
+            return await self._with_redis("renew_instance_lock", _renew)
+        except Exception as e:
+            logger.error(f"[RedisProgramStorage] Failed to renew instance lock: {e}")
+            return False
+
+    async def _renew_lock_periodically(self):
+        """Background task to renew instance lock every 2 minutes."""
+        while not self._closing:
+            try:
+                await asyncio.sleep(
+                    120
+                )  # Renew every 2 minutes (lock expires in 5 minutes)
+                if not await self.renew_instance_lock():
+                    logger.critical(
+                        "[RedisProgramStorage] Failed to renew instance lock! "
+                        "Another instance may be using the same prefix. STOPPING."
+                    )
+                    break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[RedisProgramStorage] Lock renewal error: {e}")
+
+    async def atomic_state_transition(
+        self, program: Program, old_state: str | None, new_state: str
+    ) -> None:
+        async def _atomic(r: aioredis.Redis):
+            key = self._k_program(program.id)
+
+            # Use WATCH-MULTI-EXEC for optimistic locking
+            while True:
+                try:
+                    async with r.pipeline(transaction=True) as pipe:
+                        # Watch the program key for concurrent modifications
+                        await pipe.watch(key)
+
+                        # Get existing program and merge
+                        existing_raw = await pipe.get(key)
+                        existing = (
+                            self._safe_deserialize(existing_raw, "atomic_transition")
+                            if existing_raw
+                            else None
+                        )
+
+                        # Increment counter for this update
+                        counter = await r.incr(self._k_ts())
+                        updated = program.model_copy(
+                            update={"atomic_counter": int(counter)}, deep=True
+                        )
+
+                        if existing:
+                            updated = self._merge(existing, updated).model_copy(
+                                update={"atomic_counter": int(counter)}, deep=True
+                            )
+
+                        # Begin transaction
+                        pipe.multi()
+
+                        # 1. Update program in hash
+                        pipe.set(key, _dumps(updated.to_dict()))
+
+                        # 2. Update status set membership
+                        if old_state:
+                            pipe.srem(self._k_status(old_state), program.id)
+                        pipe.sadd(self._k_status(new_state), program.id)
+
+                        # 3. Publish event
+                        pipe.xadd(
+                            self._k_stream(),
+                            {
+                                "id": program.id,
+                                "status": new_state,
+                                "event": "transition",
+                            },
+                            maxlen=10_000,
+                            approximate=True,
+                        )
+
+                        # Execute all operations atomically
+                        await pipe.execute()
+                        break  # Success!
+
+                except WatchError:
+                    # Another client modified the key, retry
+                    logger.debug(
+                        f"[RedisProgramStorage] Concurrent modification detected for {program.id}, retrying..."
+                    )
+                    continue
+
+        await self._with_redis("atomic_state_transition", _atomic)
+
+    # --------------------- Shutdown ---------------------
+
     async def close(self):
+        # Release instance lock first
+        await self.release_instance_lock()
+
         self._metrics_stop_flag = True
         task, self._metrics_task = self._metrics_task, None
         if task is not None:

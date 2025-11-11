@@ -1,0 +1,17 @@
+# @package _global_
+
+# Full Featured Experiment
+# Multi-island evolution with multiple LLMs and complexity tracking
+# Explores both high-performance and simple solutions
+
+defaults:
+  - /constants: base
+  - /redis: default
+  - /llm: multi_model
+  - /evolution: default
+  - /metrics: code_complexity  # Required by multi_island
+  - /algorithm: multi_island
+  - /pipeline: auto
+  - /runner: default
+  - /loader: directory
+  - /logging: tensorboard

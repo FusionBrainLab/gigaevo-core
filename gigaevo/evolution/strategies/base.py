@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -17,7 +17,7 @@ class StrategyMetrics(BaseModel):
         default=0, ge=0, description="Number of active populations/islands"
     )
 
-    strategy_specific_metrics: Optional[Dict[str, Any]] = Field(
+    strategy_specific_metrics: dict[str, Any] | None = Field(
         default=None, description="Strategy-specific metrics and statistics"
     )
 
@@ -35,7 +35,7 @@ class StrategyMetrics(BaseModel):
         """Check if strategy contains any programs."""
         return self.total_programs > 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary with computed fields."""
         result = {
             "total_programs": self.total_programs,

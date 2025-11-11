@@ -216,6 +216,7 @@ class EvolutionEngine:
             elites,
             mutator=self.mutation_operator,
             storage=self.storage,
+            state_manager=self.state,
             parent_selector=self.config.parent_selector,
             limit=self.config.max_mutations_per_generation,
             iteration=self.metrics.total_generations,
@@ -236,6 +237,10 @@ class EvolutionEngine:
             return
 
         logger.info("[EvolutionEngine] Ingest {} program(s)", len(completed))
+        logger.debug(
+            "[EvolutionEngine] Program IDs: {}",
+            [p.id for p in completed[:8]] + (["..."] if len(completed) > 10 else []),
+        )
 
         added = 0
         restored = 0
@@ -255,18 +260,30 @@ class EvolutionEngine:
             elif not self.config.program_acceptor.is_accepted(prog):
                 # rejected by basic checks
                 rej_valid += 1
+                logger.debug(
+                    "[EvolutionEngine] Program {} rejected by acceptor",
+                    prog.id,
+                )
                 state_tasks.append(
                     asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
                 )
             elif await self.strategy.add(prog):
                 # accepted by strategy (i.e, routed to an island)
                 added += 1
+                logger.debug(
+                    "[EvolutionEngine] Program {} added to strategy",
+                    prog.id,
+                )
                 state_tasks.append(
                     asyncio.create_task(self._set_state(prog, ProgramState.EVOLVING))
                 )
             else:
                 # rejected by strategy / validation
                 rej_strategy += 1
+                logger.debug(
+                    "[EvolutionEngine] Program {} rejected by strategy",
+                    prog.id,
+                )
                 state_tasks.append(
                     asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
                 )

@@ -1,0 +1,9 @@
+# @package _global_
+# Evolution engine constants
+
+loop_interval: 1.0
+max_elites_per_generation: 5
+max_mutations_per_generation: 8
+num_parents: 2
+mutation_mode: rewrite
+max_generations: null

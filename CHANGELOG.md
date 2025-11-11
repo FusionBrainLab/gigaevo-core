@@ -2,6 +2,38 @@
 
 <!-- version list -->
 
+## v1.6.0 (2025-11-11)
+
+
+## v1.5.2 (2025-11-11)
+
+### Bug Fixes
+
+- Small fix problem name
+  ([`6663ea4`](https://github.com/KhrulkovV/metaevolve/commit/6663ea4f50f8256589ae865a6e9022d7cc6a2a3f))
+
+### Features
+
+- More docs and stability for redis
+  ([`dbcb856`](https://github.com/KhrulkovV/metaevolve/commit/dbcb85609002197d07c7b1e3ef58f274d788bba9))
+
+
+## v1.5.1 (2025-11-11)
+
+### Bug Fixes
+
+- Small fix problem name
+  ([`44ea85f`](https://github.com/KhrulkovV/metaevolve/commit/44ea85ff182cc835cd30f780d0ecf0d3a3a6555b))
+
+
+## v1.5.0 (2025-11-11)
+
+### Features
+
+- Better config structure, examples, and polish
+  ([`643331e`](https://github.com/KhrulkovV/metaevolve/commit/643331e2ef09c997da25cb55cfeacbcddab58653))
+
+
 ## v1.4.0 (2025-11-07)
 
 ### Features
@@ -61,10 +93,18 @@
 
 ## v1.0.2 (2025-10-31)
 
+### Bug Fixes
+
+- Better error handling and logging in dag
+  ([`5973d7b`](https://github.com/KhrulkovV/metaevolve/commit/5973d7bfa6b76e1f96ccefc1da13606024b03d4f))
+
 
 ## v1.0.1 (2025-10-31)
 
 ### Bug Fixes
+
+- Add missing dep
+  ([`acecda2`](https://github.com/KhrulkovV/metaevolve/commit/acecda25cf697398f2f13c377641f5e4e168df2a))
 
 - Minor fixes to simplify hydra and fix prompt for insights
   ([`60aa776`](https://github.com/KhrulkovV/metaevolve/commit/60aa7764d920233d95ca689ffcd8d363dfb3f5f6))

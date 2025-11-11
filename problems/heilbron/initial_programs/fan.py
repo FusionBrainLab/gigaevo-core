@@ -12,7 +12,7 @@ def entrypoint() -> np.ndarray:
     A, B, C = tri
     center = (A + B + C) / 3
     points = [center]
-    for i in range(11):
+    for i in range(10):
         t = i / 10
         edge = A * (1 - t) + B * t if i % 2 == 0 else B * (1 - t) + C * t
         mid = (center + edge) / 2

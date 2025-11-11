@@ -21,12 +21,26 @@ class EliteSelector(ABC):
 
 class RandomEliteSelector(EliteSelector):
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
+        logger.debug(
+            "RandomEliteSelector: selecting {} from {} programs",
+            total,
+            len(programs),
+        )
+
         if len(programs) <= total:
-            logger.warning(
-                f"Only {len(programs)} elites available, requested {total}. Returning all available elites without duplicates."
+            logger.debug(
+                "RandomEliteSelector: returning all {} programs (≤ requested {})",
+                len(programs),
+                total,
             )
             return programs
-        return random.sample(programs, total)
+
+        selected = random.sample(programs, total)
+        logger.debug(
+            "RandomEliteSelector: selected {} programs randomly",
+            len(selected),
+        )
+        return selected
 
 
 class FitnessProportionalEliteSelector(EliteSelector):
@@ -35,9 +49,19 @@ class FitnessProportionalEliteSelector(EliteSelector):
         self.higher_is_better = fitness_key_higher_is_better
 
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
+        logger.debug(
+            "FitnessProportionalEliteSelector: selecting {} from {} programs (key='{}', higher_is_better={})",
+            total,
+            len(programs),
+            self.fitness_key,
+            self.higher_is_better,
+        )
+
         if len(programs) <= total:
-            logger.warning(
-                f"Only {len(programs)} elites available, requested {total}. Returning all available elites without duplicates."
+            logger.debug(
+                "FitnessProportionalEliteSelector: returning all {} programs (≤ requested {})",
+                len(programs),
+                total,
             )
             return programs
 
@@ -51,10 +75,20 @@ class FitnessProportionalEliteSelector(EliteSelector):
             fitnesses.append(val if self.higher_is_better else -val)
 
         min_fitness = min(fitnesses)
+        max_fitness = max(fitnesses)
+        logger.debug(
+            "FitnessProportionalEliteSelector: fitness range [{:.3f}, {:.3f}]",
+            min_fitness,
+            max_fitness,
+        )
+
         if min_fitness < 0:
             fitnesses = [
                 f - min_fitness + 1e-6 for f in fitnesses
             ]  # shift to positive space
+            logger.debug(
+                "FitnessProportionalEliteSelector: shifted fitnesses to positive space"
+            )
 
         # FIXED: Proper sampling without replacement using numpy-style approach
         selected = []
@@ -76,6 +110,10 @@ class FitnessProportionalEliteSelector(EliteSelector):
             remaining_programs.pop(idx)
             remaining_fitnesses.pop(idx)
 
+        logger.debug(
+            "FitnessProportionalEliteSelector: selected {} programs",
+            len(selected),
+        )
         return selected
 
 

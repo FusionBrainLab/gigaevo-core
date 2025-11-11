@@ -12,10 +12,10 @@ redis_storage:
   config:
     _target_: gigaevo.database.redis_program_storage.RedisProgramStorageConfig
     redis_url: redis://${redis.host}:${redis.port}/${redis.db}
-    key_prefix: ${problem.name}_evolution
-    max_connections: ${constants.redis_max_connections}
-    connection_pool_timeout: ${constants.redis_connection_pool_timeout}
-    health_check_interval: ${constants.redis_health_check_interval}
-    max_retries: ${constants.redis_max_retries}
-    retry_delay: ${constants.redis_retry_delay}
+    key_prefix: ${problem.name}
+    max_connections: ${redis_max_connections}
+    connection_pool_timeout: ${redis_connection_pool_timeout}
+    health_check_interval: ${redis_health_check_interval}
+    max_retries: ${redis_max_retries}
+    retry_delay: ${redis_retry_delay}
   writer: ${writer}

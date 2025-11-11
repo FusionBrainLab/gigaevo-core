@@ -15,12 +15,14 @@ from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.collector import AncestorProgramIds, DescendantProgramIds
+from gigaevo.programs.stages.complexity import ComputeComplexityStage
 from gigaevo.programs.stages.insights import InsightsStage
 from gigaevo.programs.stages.insights_lineage import (
     LineagesFromAncestors,
     LineageStage,
     LineagesToDescendants,
 )
+from gigaevo.programs.stages.json_processing import MergeDictStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
 from gigaevo.programs.stages.python_executors.execution import (
@@ -270,6 +272,20 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
         self.add_stage(
+            "ComputeComplexityStage",
+            lambda: ComputeComplexityStage(
+                timeout=DEFAULT_STAGE_TIMEOUT,
+            ),
+        )
+
+        self.add_stage(
+            "MergeMetricsStage",
+            lambda: MergeDictStage[str, float](
+                timeout=DEFAULT_STAGE_TIMEOUT,
+            ),
+        )
+
+        self.add_stage(
             "EnsureMetricsStage",
             lambda: EnsureMetricsStage(
                 metrics_factory=metrics_context.get_sentinels,
@@ -282,9 +298,9 @@ class DefaultPipelineBuilder(PipelineBuilder):
         self.add_data_flow_edge(
             "CallProgramFunction", "CallValidatorFunction", "payload"
         )
-        self.add_data_flow_edge(
-            "CallValidatorFunction", "EnsureMetricsStage", "candidate"
-        )
+        self.add_data_flow_edge("CallValidatorFunction", "MergeMetricsStage", "first")
+        self.add_data_flow_edge("ComputeComplexityStage", "MergeMetricsStage", "second")
+        self.add_data_flow_edge("MergeMetricsStage", "EnsureMetricsStage", "candidate")
         self.add_data_flow_edge("EnsureMetricsStage", "MutationContextStage", "metrics")
         self.add_data_flow_edge("InsightsStage", "MutationContextStage", "insights")
         self.add_data_flow_edge(

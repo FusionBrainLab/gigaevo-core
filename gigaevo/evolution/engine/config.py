@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.evolution.engine.acceptor import (
@@ -24,7 +22,7 @@ class EngineConfig(BaseModel):
     metrics_collection_interval: float = Field(
         default=1.0, gt=0, description="Interval in seconds for metrics collection"
     )
-    max_generations: Optional[int] = Field(
+    max_generations: int | None = Field(
         default=None,
         gt=0,
         description="Maximum number of generations to run (None = unlimited)",

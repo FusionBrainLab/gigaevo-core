@@ -12,7 +12,7 @@ from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.evolution.strategies.map_elites import BehaviorSpace, IslandConfig
 from gigaevo.evolution.strategies.models import BinningType
 from gigaevo.problems.context import ProblemContext
-from gigaevo.programs.metrics.context import MetricsContext
+from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
 
 def get_metrics_context(problem_context: ProblemContext) -> MetricsContext:
@@ -154,3 +154,20 @@ def select_pipeline_builder(
     if problem_context.is_contextual:
         return ContextPipelineBuilder(evolution_context)
     return DefaultPipelineBuilder(evolution_context)
+
+
+def add_auxiliary_metrics(
+    metrics_context: MetricsContext, auxiliary_metrics: dict[str, MetricSpec]
+) -> MetricsContext:
+    """Add auxiliary metrics to existing context in-place.
+
+    Args:
+        metrics_context: The MetricsContext to mutate
+        auxiliary_metrics: Dict mapping metric keys to MetricSpec instances
+
+    Returns:
+        The mutated metrics_context (for chaining in Hydra)
+    """
+    for key, spec in auxiliary_metrics.items():
+        metrics_context.add_metric(key, spec)
+    return metrics_context
