@@ -1,5 +1,6 @@
+from collections.abc import AsyncIterator, Iterator
 import random
-from typing import Any, AsyncIterator, Iterator, Optional
+from typing import Any
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
@@ -62,7 +63,7 @@ class MultiModelRouter(Runnable):
         total = sum(probabilities)
         self.probabilities = [p / total for p in probabilities]
         self._default_model = models[0]
-        self.selected_model: Optional[ChatOpenAI] = None
+        self.selected_model: ChatOpenAI | None = None
         logger.info(f"[MultiModelRouter] Initialized with {len(models)} models")
 
     def _select_model(self) -> ChatOpenAI:
@@ -73,7 +74,7 @@ class MultiModelRouter(Runnable):
     def invoke(
         self,
         input: LanguageModelInput,
-        config: Optional[RunnableConfig] = None,
+        config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> BaseMessage:
         """Synchronously select and invoke a model.
@@ -92,7 +93,7 @@ class MultiModelRouter(Runnable):
     async def ainvoke(
         self,
         input: LanguageModelInput,
-        config: Optional[RunnableConfig] = None,
+        config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> BaseMessage:
         """Asynchronously select and invoke a model.
@@ -111,7 +112,7 @@ class MultiModelRouter(Runnable):
     def stream(
         self,
         input: LanguageModelInput,
-        config: Optional[RunnableConfig] = None,
+        config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> Iterator[BaseMessage]:
         """Stream response from selected model.
@@ -130,7 +131,7 @@ class MultiModelRouter(Runnable):
     async def astream(
         self,
         input: LanguageModelInput,
-        config: Optional[RunnableConfig] = None,
+        config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         """Async stream response from selected model.

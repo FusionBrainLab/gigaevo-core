@@ -87,32 +87,17 @@ class FamilyTreeMutationContext(MutationContext):
                 lines.append("")
 
         if self.descendants:
-            logger.debug(
-                f"[FamilyTreeMutationContext] Adding descendants section with {len(self.descendants)} descendants"
-            )
             lines.append("### Descendants")
             lines.append("")
             for i, analysis in enumerate(self.descendants):
-                logger.debug(
-                    f"[FamilyTreeMutationContext] Adding descendant {i + 1}: {analysis.from_id[:8]} → {analysis.to_id[:8]}"
-                )
                 lines.append(
                     f"#### Descendant {i + 1}: {analysis.from_id[:8]} → {analysis.to_id[:8]}"
                 )
                 lines.append("")
                 lines.append(self._format_lineage_block(analysis))
                 lines.append("")
-        else:
-            logger.debug("[FamilyTreeMutationContext] No descendants to add")
 
         result = "\n".join(lines) if len(lines) > 2 else ""
-        logger.debug(
-            f"[FamilyTreeMutationContext] Formatted result length: {len(result)}"
-        )
-        logger.debug(
-            f"[FamilyTreeMutationContext] Formatted result contains '### Descendants': {'### Descendants' in result}"
-        )
-
         return result
 
     def _format_lineage_block(self, analysis: TransitionAnalysis) -> str:

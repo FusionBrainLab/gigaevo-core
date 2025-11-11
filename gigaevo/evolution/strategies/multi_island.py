@@ -59,7 +59,18 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
     async def add(self, program: Program, island_id: str | None = None) -> bool:
         """Add a program to a specific island or route it automatically."""
+        logger.debug(
+            "MultiIsland: adding program {} (island_id={})",
+            program.id,
+            island_id or "auto-route",
+        )
+
         if island_id is not None and island_id not in self.islands:
+            logger.debug(
+                "MultiIsland: program {} rejected (unknown island '{}')",
+                program.id,
+                island_id,
+            )
             return False
 
         island = (
@@ -69,42 +80,110 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 program, list(self.islands.values())
             )
         )
+
         if island is None:
+            logger.debug(
+                "MultiIsland: program {} rejected (router returned None)",
+                program.id,
+            )
             return False
 
-        return await island.add(program)
+        logger.debug(
+            "MultiIsland: routing program {} to island '{}'",
+            program.id,
+            island.config.island_id,
+        )
+        result = await island.add(program)
+
+        if result:
+            logger.debug(
+                "MultiIsland: program {} successfully added to island '{}'",
+                program.id,
+                island.config.island_id,
+            )
+        else:
+            logger.debug(
+                "MultiIsland: program {} rejected by island '{}'",
+                program.id,
+                island.config.island_id,
+            )
+
+        return result
 
     async def select_elites(self, total: int = 10) -> list[Program]:
         """
         Sample elites from all islands (migration & enforcement on schedule).
         Returns up to `total` elite programs.
         """
-        if (
-            self.enable_migration
-            and (self.generation - self.last_migration) >= self.migration_interval
-        ):
-            await self._perform_migration()
-            await self._enforce_all_island_size_limits()
-            self.last_migration = self.generation
+        logger.debug(
+            "MultiIsland: selecting elites (gen={}, total={}, islands={})",
+            self.generation,
+            total,
+            len(self.islands),
+        )
 
+        # Check if migration is due
+        if self.enable_migration:
+            gens_since_migration = self.generation - self.last_migration
+            logger.debug(
+                "MultiIsland: migration check (gens_since_last={}, interval={})",
+                gens_since_migration,
+                self.migration_interval,
+            )
+
+            if gens_since_migration >= self.migration_interval:
+                logger.info(
+                    "MultiIsland: triggering migration (generation {}, last migration at {})",
+                    self.generation,
+                    self.last_migration,
+                )
+                await self._perform_migration()
+                await self._enforce_all_island_size_limits()
+                self.last_migration = self.generation
+
+        # Calculate per-island quotas
         quotas = self._calculate_island_quotas(total)
+        logger.debug(
+            "MultiIsland: island quotas: {}",
+            {k: v for k, v in quotas.items() if v > 0},
+        )
+
         tasks = [
             asyncio.create_task(self.islands[island_id].select_elites(quota))
             for island_id, quota in quotas.items()
             if quota > 0
         ]
         if not tasks:
+            logger.debug("MultiIsland: no elites to select (all islands empty)")
             return []
 
         selections = await asyncio.gather(*tasks)
         results = [p for group in selections for p in group]
 
+        logger.debug(
+            "MultiIsland: collected {} elites from {} islands",
+            len(results),
+            len(tasks),
+        )
+
+        # Shuffle and sample if needed
         random.shuffle(results)
         if len(results) > total:
+            logger.debug(
+                "MultiIsland: sampling {} from {} collected elites",
+                total,
+                len(results),
+            )
             results = random.sample(results, total)
 
         if results:
             self.generation += 1
+            logger.debug(
+                "MultiIsland: selected {} elites (generation {} -> {})",
+                len(results),
+                self.generation - 1,
+                self.generation,
+            )
 
         return results
 
@@ -178,18 +257,42 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
     async def _perform_migration(self) -> None:
         """Migrate elites between islands to improve diversity."""
+        logger.info(
+            "MultiIsland: starting migration (max_migrants_per_island={})",
+            self.max_migrants_per_island,
+        )
+
+        # Collect migrants from all islands
         tasks = [
             asyncio.create_task(island.select_migrants(self.max_migrants_per_island))
             for island in self.islands.values()
         ]
         groups = await asyncio.gather(*tasks)
         migrants = [p for g in groups for p in g]
+
         if not migrants:
+            logger.info("MultiIsland: no migrants selected")
             return
+
+        logger.info(
+            "MultiIsland: collected {} migrants from {} islands",
+            len(migrants),
+            len(self.islands),
+        )
+
+        # Track migration statistics
+        successful_migrations = 0
+        failed_migrations = 0
+        rollbacks = 0
 
         random.shuffle(migrants)
         for migrant in migrants:
             source_island_id = migrant.get_metadata("current_island")
+            logger.debug(
+                "MultiIsland: migrating program {} from island '{}'",
+                migrant.id,
+                source_island_id,
+            )
 
             candidates = [
                 i
@@ -197,19 +300,65 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 if i.config.island_id != source_island_id
             ]
             if not candidates:
+                logger.debug(
+                    "MultiIsland: no candidate islands for migrant {} (only 1 island?)",
+                    migrant.id,
+                )
+                failed_migrations += 1
                 continue
 
             destination = await self.mutant_router.route_mutant(migrant, candidates)
             if destination is None:
+                logger.debug(
+                    "MultiIsland: router returned None for migrant {}",
+                    migrant.id,
+                )
+                failed_migrations += 1
                 continue
 
+            logger.debug(
+                "MultiIsland: migrant {} routed to island '{}'",
+                migrant.id,
+                destination.config.island_id,
+            )
+
             if await destination.add(migrant):
+                # Successfully added to destination, remove from source
                 removed = await self.islands[
                     source_island_id
                 ].archive_storage.remove_elite_by_id(migrant.id)
+
                 if not removed:
-                    # rollback to avoid duplicates
+                    # Rollback: remove from destination to avoid duplicates
+                    logger.warning(
+                        "MultiIsland: migration rollback for {} (failed to remove from source '{}')",
+                        migrant.id,
+                        source_island_id,
+                    )
                     await destination.archive_storage.remove_elite_by_id(migrant.id)
+                    rollbacks += 1
+                else:
+                    logger.debug(
+                        "MultiIsland: migrant {} successfully moved: '{}' -> '{}'",
+                        migrant.id,
+                        source_island_id,
+                        destination.config.island_id,
+                    )
+                    successful_migrations += 1
+            else:
+                logger.debug(
+                    "MultiIsland: migrant {} rejected by destination island '{}'",
+                    migrant.id,
+                    destination.config.island_id,
+                )
+                failed_migrations += 1
+
+        logger.info(
+            "MultiIsland: migration complete (success={}, failed={}, rollbacks={})",
+            successful_migrations,
+            failed_migrations,
+            rollbacks,
+        )
 
     async def _enforce_all_island_size_limits(self) -> None:
         """Enforce size limits on all capped islands."""

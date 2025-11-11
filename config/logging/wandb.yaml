@@ -2,14 +2,14 @@
 
 logging:
   level: DEBUG
-  log_dir: ${constants.log_dir}
-  rotation: ${constants.log_rotation}
-  retention: ${constants.log_retention}
+  log_dir: ${log_dir}
+  rotation: ${log_rotation}
+  retention: ${log_retention}
 
 wandb_config:
   _target_: gigaevo.utils.trackers.configs.WBConfig
   project: evo
-  name: ${constants.tag}
+  name: ${tag}
 
 writer:
   _target_: gigaevo.utils.trackers.init_wandb

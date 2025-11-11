@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable, Iterable
 import contextlib
 import gc
 from itertools import islice
-from typing import Any, Awaitable, Callable, Iterable, TypeVar
+from typing import Any, TypeVar
 
 from loguru import logger
 from pydantic import AnyUrl, BaseModel, Field
@@ -334,6 +335,17 @@ class RedisProgramStorage(ProgramStorage):
         except Exception as e:
             logger.debug("[RedisProgramStorage] wait_for_activity fallback: {}", e)
             await asyncio.sleep(timeout)
+
+    async def has_data(self) -> bool:
+        """Check if database has any programs."""
+
+        async def _check(r: aioredis.Redis) -> bool:
+            # Check if there are any program keys
+            async for _ in r.scan_iter(match=self._k_program("*"), count=1):
+                return True
+            return False
+
+        return await self._with_redis("has_data", _check)
 
     async def flushdb(self):
         async def _flush(r: aioredis.Redis):

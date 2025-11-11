@@ -1,0 +1,30 @@
+# @package _global_
+
+# Heterogeneous: AlphaEvolve models (Gemini 2.5 Pro and Flash
+
+llm:
+  _target_: gigaevo.llm.models.create_multi_model_router
+  model_configs:
+    # Model 1: Primary workhorse
+    - model: google/gemini-2.5-pro
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      top_p: ${top_p}
+      top_k: ${top_k}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+    # Model 2: Alternative model (e.g., for different strengths)
+    # Change to your preferred alternative model
+    - model: google/gemini-2.5-flash # Example alternative
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      top_p: ${top_p}
+      top_k: ${top_k}
+      base_url: https://openrouter.ai/api/v1  # Different endpoint
+      request_timeout: ${request_timeout}
+
+  # Equal probability for both models
+  probabilities: [0.1, 0.9]
+
+  api_key: ${oc.env:OPENAI_API_KEY}

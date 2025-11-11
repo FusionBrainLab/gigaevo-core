@@ -1,0 +1,16 @@
+# @package _global_
+
+# Base Experiment - Simple Single Island Setup
+# Perfect for getting started and local development
+
+defaults:
+  - /constants: base
+  - /redis: default
+  - /llm: single
+  - /evolution: default
+  - /algorithm: single_island
+  - /pipeline: auto
+  - /runner: default
+  - /loader: directory
+  - /logging: tensorboard
+  - /metrics: default

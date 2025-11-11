@@ -1,0 +1,17 @@
+# @package _global_
+
+# Multi-Island with Complexity Tracking
+# Two islands: Fitness Island (performance) + Simplicity Island (clean code)
+# Single LLM for focused evolution
+
+defaults:
+  - /constants: base
+  - /redis: default
+  - /llm: single
+  - /evolution: default
+  - /metrics: code_complexity  # Required by multi_island
+  - /algorithm: multi_island
+  - /pipeline: auto
+  - /runner: default
+  - /loader: directory
+  - /logging: tensorboard

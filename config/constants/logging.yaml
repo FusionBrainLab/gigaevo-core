@@ -1,0 +1,7 @@
+# @package _global_
+# Logging configuration
+
+log_rotation: "50 MB"
+log_retention: "30 days"
+log_dir: ${hydra:runtime.output_dir}
+tag: experiment

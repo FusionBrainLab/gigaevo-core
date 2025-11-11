@@ -1,7 +1,6 @@
-display_order: [fitness, is_valid]
 specs:
   fitness:
-    description: Main objective, higher is better
+    description: Main objective [area of the smallest triangle]
     decimals: 5
     is_primary: true
     higher_is_better: true
@@ -9,6 +8,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: true
     significant_change: 1.0e-6
+    sentinel_value: -1000
   is_valid:
     description: Whether the program is valid (1 valid, 0 invalid)
     decimals: 0
@@ -18,3 +18,4 @@ specs:
     upper_bound: 1.0
     include_in_prompts: true
     significant_change: 1.0
+    sentinel_value: 0

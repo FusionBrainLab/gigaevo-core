@@ -1,6 +1,0 @@
-🚫 COMMON FAILURE MODES
-
-- Clustering points near triangle vertices → small triangle areas
-- Aligning points along edges → collinear or near-degenerate triangles
-- Symmetric or regular patterns → hidden degeneracies
-- Maximizing pairwise distance without considering triangle areas

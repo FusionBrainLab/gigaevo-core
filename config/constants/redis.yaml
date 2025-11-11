@@ -1,0 +1,8 @@
+# @package _global_
+# Redis connection constants
+
+redis_max_connections: 150
+redis_connection_pool_timeout: 45.0
+redis_health_check_interval: 120
+redis_max_retries: 5
+redis_retry_delay: 0.5

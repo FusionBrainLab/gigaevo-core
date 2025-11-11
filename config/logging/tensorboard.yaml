@@ -2,13 +2,13 @@
 
 logging:
   level: DEBUG
-  log_dir: ${constants.log_dir}
-  rotation: ${constants.log_rotation}
-  retention: ${constants.log_retention}
+  log_dir: ${log_dir}
+  rotation: ${log_rotation}
+  retention: ${log_retention}
 
 tb_config:
   _target_: gigaevo.utils.trackers.configs.TBConfig
-  logdir: ${constants.log_dir}/tb_logs
+  logdir: ${log_dir}/tb_logs
 
 writer:
   _target_: gigaevo.utils.trackers.init_tb

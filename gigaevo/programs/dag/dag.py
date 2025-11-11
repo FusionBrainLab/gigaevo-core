@@ -4,7 +4,7 @@ import asyncio
 from asyncio import CancelledError
 from datetime import datetime, timezone
 import time
-from typing import Dict, Set, cast
+from typing import cast
 
 from loguru import logger
 
@@ -229,10 +229,10 @@ class DAG:
         await self._persist_program_snapshot(program)
 
     async def _launch_ready(
-        self, program: Program, ready: Set[str]
-    ) -> Dict[str, asyncio.Task]:
+        self, program: Program, ready: set[str]
+    ) -> dict[str, asyncio.Task]:
         pid = self._pid(program)
-        tasks: Dict[str, asyncio.Task] = {}
+        tasks: dict[str, asyncio.Task] = {}
         if not ready:
             logger.debug("[DAG][{}] No ready stages to launch.", pid)
             return tasks

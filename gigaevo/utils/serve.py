@@ -1,7 +1,7 @@
 import asyncio
+from collections.abc import Awaitable, Iterable
 import contextlib
 import signal
-from typing import Awaitable, Iterable
 
 
 async def serve_until_signal(
@@ -10,7 +10,7 @@ async def serve_until_signal(
     on_stop: Iterable[asyncio.Future] = (),
 ) -> None:
     """
-    Wait until SIGINT/SIGTERM, then:
+    Wait until SIGINT/SIGTERM or any task in on_stop completes naturally, then:
       1) await all stop coroutines (e.g., engine.stop(), dag.stop())
       2) cancel & await any provided task handles
     """
@@ -25,8 +25,22 @@ async def serve_until_signal(
     loop.add_signal_handler(signal.SIGTERM, _set)
 
     try:
-        # Block here until a signal arrives
-        await stop_event.wait()
+        # Block here until a signal arrives OR any monitored task completes
+        tasks_to_monitor = [t for t in on_stop if t and not t.done()]
+        if tasks_to_monitor:
+            wait_tasks = [asyncio.create_task(stop_event.wait())] + tasks_to_monitor
+            done, pending = await asyncio.wait(
+                wait_tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            # If stop_event wasn't the one that completed, set it now to proceed with cleanup
+            if not stop_event.is_set():
+                stop_event.set()
+            # Cancel the stop_event.wait() task if it's still pending
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+        else:
+            await stop_event.wait()
 
         # 1) run component stop coroutines (in parallel)
         if stop_coros:

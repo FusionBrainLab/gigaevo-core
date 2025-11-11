@@ -1,8 +1,98 @@
 import itertools
+from itertools import combinations
 
 from helper import get_unit_triangle
 import numpy as np
+from scipy.spatial import ConvexHull
 from scipy.spatial.distance import pdist
+
+def compute_layout_metrics(points: np.ndarray) -> dict:
+    """
+    Compute geometric and distribution metrics for a set of 11 2D points.
+    Includes triangle quality, spacing, spread, and convex hull area.
+    """
+    assert points.shape == (11, 2), "Expected exactly 11 points in 2D."
+
+    def triangle_area(p1, p2, p3):
+        return 0.5 * abs(
+            (p2[0] - p1[0]) * (p3[1] - p1[1]) - (p3[0] - p1[0]) * (p2[1] - p1[1])
+        )
+
+    def min_triangle_angle_deg(p1, p2, p3):
+        a = np.linalg.norm(p2 - p3)
+        b = np.linalg.norm(p1 - p3)
+        c = np.linalg.norm(p1 - p2)
+        if a == 0 or b == 0 or c == 0:
+            return 0.0
+        angles = np.arccos(
+            np.clip(
+                [
+                    (b**2 + c**2 - a**2) / (2 * b * c),
+                    (a**2 + c**2 - b**2) / (2 * a * c),
+                    (a**2 + b**2 - c**2) / (2 * a * b),
+                ],
+                -1,
+                1,
+            )
+        )
+        return np.degrees(np.min(angles))
+
+    areas = []
+    min_angles = []
+    degenerate_count = 0
+    degenerate_threshold = 1e-4
+
+    for i, j, k in combinations(range(11), 3):
+        p1, p2, p3 = points[i], points[j], points[k]
+        area = triangle_area(p1, p2, p3)
+        min_angle = min_triangle_angle_deg(p1, p2, p3)
+        areas.append(area)
+        min_angles.append(min_angle)
+        if area < degenerate_threshold:
+            degenerate_count += 1
+
+    areas = np.array(areas)
+    min_angles = np.array(min_angles)
+
+    # Pairwise distances
+    dists = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=-1)
+    upper_dists = dists[np.triu_indices(11, k=1)]
+
+    # Centroid and spread
+    centroid = np.mean(points, axis=0)
+    point_var = np.var(points, axis=0)
+
+    # Convex hull area (in 2D, volume is area)
+    hull = ConvexHull(points)
+    convex_hull_area = hull.volume
+
+    min_area, max_area = np.min(areas), np.max(areas)
+    log_bins = np.geomspace(max(min_area, 1e-8), max_area, num=16)  # 8 bins
+    hist, bin_edges = np.histogram(areas, bins=log_bins)
+
+    low_bin_frac = np.sum(hist[:3]) / np.sum(hist)
+    probs = hist / np.sum(hist)
+    entropy = -np.sum(probs[probs > 0] * np.log(probs[probs > 0]))
+    mean_bin = np.average(np.arange(len(hist)), weights=hist)
+
+    return {
+        "mean_triangle_area": float(np.mean(areas)),
+        "std_triangle_area": float(np.std(areas)),
+        "min_triangle_angle_deg": float(np.min(min_angles)),
+        "mean_min_triangle_angle_deg": float(np.mean(min_angles)),
+        "degenerate_triangle_count": int(degenerate_count),
+        "pairwise_distance_min": float(np.min(upper_dists)),
+        "pairwise_distance_max": float(np.max(upper_dists)),
+        "pairwise_distance_std": float(np.std(upper_dists)),
+        "centroid_x": float(centroid[0]),
+        "centroid_y": float(centroid[1]),
+        "spread_x_var": float(point_var[0]),
+        "spread_y_var": float(point_var[1]),
+        "convex_hull_area": float(convex_hull_area),
+        "triangle_area_low_bin_frac": float(low_bin_frac),
+        "triangle_area_hist_entropy": float(entropy),
+        "triangle_area_mean_bin": float(mean_bin),
+    }
 
 
 def validate(coordinates):
@@ -69,8 +159,9 @@ def validate(coordinates):
     )
 
     min_area = np.min(areas)
-
+    metrics = compute_layout_metrics(coordinates)
     return {
         "fitness": float(min_area),
         "is_valid": 1,
+        **metrics,
     }

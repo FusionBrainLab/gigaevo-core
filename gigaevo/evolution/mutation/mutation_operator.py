@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal
 
 from loguru import logger
 
@@ -50,7 +50,7 @@ class LLMMutationOperator(MutationOperator):
 
     async def mutate_single(
         self, selected_parents: list[Program]
-    ) -> Optional[MutationSpec]:
+    ) -> MutationSpec | None:
         """Generate a single mutation from the selected parents.
 
         Args:

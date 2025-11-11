@@ -69,9 +69,6 @@ class MetricsContext(BaseModel):
     # All metric specs keyed by metric name. Must include exactly one primary metric.
     specs: dict[str, MetricSpec] = Field(default_factory=dict)
 
-    # Optional explicit display order. If empty, order is: primary first, then others sorted by key.
-    display_order: list[str] = Field(default_factory=list)
-
     model_config = {"arbitrary_types_allowed": True}
 
     @model_validator(mode="after")
@@ -82,18 +79,6 @@ class MetricsContext(BaseModel):
             raise ValueError(
                 f"Exactly one MetricSpec must have is_primary=True, found {len(primary_specs)}"
             )
-        return self
-
-    @model_validator(mode="after")
-    def _validate_display_order(self) -> MetricsContext:
-        """Validate display order is a subset of specs."""
-        if self.display_order:
-            display_order_set = set(self.display_order)
-            specs_set = set(self.specs.keys())
-            if display_order_set != specs_set:
-                raise ValueError(
-                    f"If display_order is set, it must contain all keys in specs. Missing keys: {specs_set - display_order_set}. Extra keys: {display_order_set - specs_set}"
-                )
         return self
 
     def get_primary_spec(self) -> MetricSpec:
@@ -147,16 +132,12 @@ class MetricsContext(BaseModel):
         """Return ordered metric keys intended for prompts.
 
         Order rules:
-        - If display_order is set, use it (filtered to known specs)
-        - Else: primary first, then others sorted
+        - Primary first, then others sorted alphabetically
         - Always filter by include_in_prompts flag
         """
-        if self.display_order:
-            ordered = [k for k in self.display_order if k in self.specs]
-        else:
-            primary_key = self.get_primary_key()
-            remaining = [k for k in sorted(self.specs.keys()) if k != primary_key]
-            ordered = [primary_key] + remaining
+        primary_key = self.get_primary_key()
+        remaining = [k for k in sorted(self.specs.keys()) if k != primary_key]
+        ordered = [primary_key] + remaining
         return [k for k in ordered if self.specs[k].include_in_prompts]
 
     def additional_metrics(self) -> dict[str, str]:
@@ -205,6 +186,18 @@ class MetricsContext(BaseModel):
         """
         return self.specs[key].higher_is_better
 
+    def add_metric(self, key: str, spec: MetricSpec) -> MetricsContext:
+        if key in self.specs:
+            raise ValueError(f"Metric key '{key}' already exists in context")
+
+        if spec.is_primary:
+            raise ValueError(
+                f"Cannot add primary metric '{key}': context already has a primary metric"
+            )
+
+        self.specs[key] = spec
+        return self
+
     @classmethod
     def from_descriptions(
         cls,
@@ -216,7 +209,6 @@ class MetricsContext(BaseModel):
         additional_metrics_higher_is_better: dict[str, bool] | None = None,
         decimals: int = DEFAULT_DECIMALS,
         per_metric_decimals: dict[str, int] | None = None,
-        display_order: list[str] | None = None,
     ) -> MetricsContext:
         """Convenience constructor from simple description mappings.
 
@@ -230,7 +222,6 @@ class MetricsContext(BaseModel):
             additional_metrics_higher_is_better: Optional per-metric optimization direction
             decimals: Default decimal precision for all metrics
             per_metric_decimals: Optional per-metric decimal precision overrides
-            display_order: Optional explicit display order for metrics
 
         Returns:
             New MetricsContext instance
@@ -250,23 +241,18 @@ class MetricsContext(BaseModel):
                     k, True
                 ),
             )
-        return cls(
-            specs=specs,
-            display_order=display_order or [],
-        )
+        return cls(specs=specs)
 
     @classmethod
     def from_dict(
         cls,
         *,
         specs: dict[str, dict[str, Any]],
-        display_order: list[str] | None = None,
     ) -> MetricsContext:
         """Create MetricsContext from a dictionary of metric key -> spec fields.
 
         Args:
             specs: Dictionary mapping metric keys to spec field dictionaries
-            display_order: Optional explicit display order for metrics
 
         Returns:
             New MetricsContext instance
@@ -275,4 +261,4 @@ class MetricsContext(BaseModel):
         for key, data in specs.items():
             data = dict(data)
             built[key] = MetricSpec(**data)
-        return cls(specs=built, display_order=display_order or [])
+        return cls(specs=built)

@@ -36,17 +36,19 @@ class MergeDictStage(Stage, Generic[K, V]):
         second = self.params.second.data
 
         merged = {**first, **second}
+        overlapping_keys = len(first) + len(second) - len(merged)
         logger.debug(
-            "[{}] merged {} + {} -> {} keys",
+            "[{}] merged {} + {} -> {} keys ({} overlapping)",
             type(self).__name__,
             len(first),
             len(second),
             len(merged),
+            overlapping_keys,
         )
         return self.__class__.OutputModel(data=merged)
 
     @classmethod
-    def __class_getitem__(cls, params):  # supports MergeDictStage[float] & [K, V]
+    def __class_getitem__(cls, params):
         """
         Returns a dynamic subclass with InputsModel/OutputModel specialized
         to the provided K,V types.
@@ -58,12 +60,6 @@ class MergeDictStage(Stage, Generic[K, V]):
     def _make_specialized_class(
         cls, K_t: Any, V_t: Any
     ) -> type["MergeDictStage[K, V]"]:
-        """
-        Build a dynamic subclass whose I/O models are typed as:
-        InputsModel = MergeDictInputs[K_t, V_t]
-        OutputModel = DictContainer[K_t, V_t]
-        """
-
         def _exec_body(ns):
             ns["__doc__"] = {cls.__doc__}
             ns["InputsModel"] = MergeDictInputs[K_t, V_t]
@@ -72,6 +68,25 @@ class MergeDictStage(Stage, Generic[K, V]):
             ns["compute"] = cls.compute  # reuse implementation
 
         return types.new_class(cls.__name__, (cls,), exec_body=_exec_body)
+
+    @classmethod
+    def create_typed(cls, key_type: type, value_type: type):
+        """Factory for Hydra configs: returns MergeDictStage[K, V] class.
+
+        Args:
+            key_type: Type for dictionary keys
+            value_type: Type for dictionary values
+
+        Returns:
+            Specialized MergeDictStage class
+
+        Usage in Hydra:
+            _target_: gigaevo.programs.stages.json_processing.MergeDictStage.create_typed_factory
+            _partial_: true
+            key_type: ${get_object:builtins.str}
+            value_type: ${get_object:builtins.float}
+        """
+        return cls[key_type, value_type]
 
 
 @StageRegistry.register(description="Parse JSON string into Python value")

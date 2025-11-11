@@ -59,11 +59,8 @@ class ProblemContext:
             if not isinstance(data, dict):
                 raise ValueError("metrics.yaml must be a mapping")
 
-            specs = data.get("specs") or {
-                k: v for k, v in data.items() if k != "display_order"
-            }
-            display_order = data.get("display_order")
-            ctx = MetricsContext.from_dict(specs=specs, display_order=display_order)
+            specs = data.get("specs") or data
+            ctx = MetricsContext.from_dict(specs=specs)
 
             # Strict validation: primary bounds and is_valid [0,1]
             primary_key = ctx.get_primary_key()

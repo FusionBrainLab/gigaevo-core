@@ -8,7 +8,7 @@ required_behavior_keys:
 # Parent selector
 parent_selector:
   _target_: gigaevo.evolution.mutation.parent_selector.AllCombinationsParentSelector
-  num_parents: ${constants.num_parents}
+  num_parents: ${num_parents}
 
 # Program acceptor
 program_acceptor:
@@ -18,10 +18,10 @@ program_acceptor:
 # Engine config
 engine_config:
   _target_: gigaevo.evolution.engine.EngineConfig
-  loop_interval: ${constants.loop_interval}
-  max_elites_per_generation: ${constants.max_elites_per_generation}
-  max_mutations_per_generation: ${constants.max_mutations_per_generation}
-  max_generations: ${constants.max_generations}
+  loop_interval: ${loop_interval}
+  max_elites_per_generation: ${max_elites_per_generation}
+  max_mutations_per_generation: ${max_mutations_per_generation}
+  max_generations: ${max_generations}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
 

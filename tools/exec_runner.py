@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import traceback
 import types
-from typing import Any, Dict
+from typing import Any
 
 import cloudpickle
 
@@ -77,7 +77,7 @@ def main() -> None:
     captured = io.StringIO()
     try:
         payload_bytes = sys.stdin.buffer.read()
-        payload: Dict[str, Any] = cloudpickle.loads(payload_bytes)
+        payload: dict[str, Any] = cloudpickle.loads(payload_bytes)
 
         code: str = payload["code"]
         fn_name: str = payload["function_name"]

@@ -11,7 +11,7 @@ authors = [
 ]
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 
 dependencies = [
     "redis>=4.5.0",
@@ -56,7 +56,7 @@ include = ["gigaevo*"]
 
 [tool.ruff]
 line-length = 88  # same as in black
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes
@@ -75,7 +75,7 @@ known-first-party = ["gigaevo"]
 force-sort-within-sections = true
 
 # [tool.mypy]
-# python_version = "3.10"
+# python_version = "3.12"
 # warn_unused_configs = true
 # check_untyped_defs = true
 # warn_redundant_casts = true
