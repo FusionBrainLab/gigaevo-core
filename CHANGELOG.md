@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.5.0 (2025-11-11)
+
+### Features
+
+- Better config structure, examples, and polish
+  ([`643331e`](https://github.com/KhrulkovV/metaevolve/commit/643331e2ef09c997da25cb55cfeacbcddab58653))
+
+
 ## v1.4.0 (2025-11-07)
 
 ### Features
