@@ -14,7 +14,7 @@ python tools/redis2pd.py \
   --redis-host localhost \
   --redis-port 6379 \
   --redis-db 11 \
-  --redis-prefix "heilbron_simplified" \
+  --redis-prefix "heilbron" \
   --output-file results.csv
 ```
 
@@ -49,8 +49,8 @@ Compares multiple evolution runs by plotting rolling fitness statistics over ite
 python tools/comparison.py \
   --redis-host localhost \
   --redis-port 6379 \
-  --run "heilbron_simplified@11:Run_A" \
-  --run "heilbron_simplified@12:Run_B" \
+  --run "heilbron@11:Run_A" \
+  --run "heilbron@12:Run_B" \
   --iteration-rolling-window 5 \
   --output-folder results/comparison
 ```
@@ -66,7 +66,7 @@ python tools/comparison.py \
 **Run Format:**
 - `prefix@db:label` - Full specification with custom label
 - `prefix@db` - Label defaults to "Run_<db>"
-- `prefix` is just the problem name (e.g., `heilbron_simplified`)
+- `prefix` is just the problem name (e.g., `heilbron`)
 
 **Output:**
 - PNG plots showing fitness evolution over iterations
@@ -174,11 +174,11 @@ GigaEvo stores data with the problem name as prefix:
 <problem_name>:program:<program_id>:*
 ```
 
-For example, if you run `python run.py problem.name=heilbron_simplified`, the keys will be:
+For example, if you run `python run.py problem.name=heilbron`, the keys will be:
 ```
-heilbron_simplified:program:<uuid>:code
-heilbron_simplified:program:<uuid>:metrics
-heilbron_simplified:archive
+heilbron:program:<uuid>:code
+heilbron:program:<uuid>:metrics
+heilbron:archive
 ...
 ```
 
@@ -188,7 +188,7 @@ Find your prefix:
 redis-cli -n <db> KEYS "*:program:*" | head -1
 ```
 
-**Important:** The `--redis-prefix` argument for tools should be just the problem name (e.g., `heilbron_simplified`), NOT the full key pattern.
+**Important:** The `--redis-prefix` argument for tools should be just the problem name (e.g., `heilbron`), NOT the full key pattern.
 
 ### Clearing Old Data
 ```bash
