@@ -5,21 +5,6 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
-
-```bash
-# Clone the repository
-git clone <repository-url>
-pip install -e .
-
-# Set up environment variables
-export OPENAI_API_KEY=<your_llm_api_key_here> (required)
-
-# Optional: Langfuse tracing (for observability)
-export LANGFUSE_PUBLIC_KEY=<your_langfuse_public_key>
-export LANGFUSE_SECRET_KEY=<your_langfuse_secret_key>
-export LANGFUSE_HOST=https://cloud.langfuse.com  # or your self-hosted URL
-```
-or using `.env` file
 ## 🚀 Getting Started
 
 - **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes ⭐
@@ -50,6 +35,11 @@ Create a `.env` file with your OpenRouter API key:
 
 ```bash
 OPENAI_API_KEY=sk-or-v1-your-api-key-here
+
+# Optional: Langfuse tracing (for observability)
+LANGFUSE_PUBLIC_KEY=<your_langfuse_public_key>
+LANGFUSE_SECRET_KEY=<your_langfuse_secret_key>
+LANGFUSE_HOST=https://cloud.langfuse.com  # or your self-hosted URL
 ```
 
 ### 3. Start Redis
