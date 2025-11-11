@@ -6,12 +6,16 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validat
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.storage.archive_storage import RedisArchiveStorage
 from gigaevo.evolution.strategies.elite_selectors import EliteSelector
-from gigaevo.evolution.strategies.metadata_manager import MetadataManager
 from gigaevo.evolution.strategies.migrant_selectors import MigrantSelector
 from gigaevo.evolution.strategies.models import BehaviorSpace
 from gigaevo.evolution.strategies.removers import ArchiveRemover
 from gigaevo.evolution.strategies.selectors import ArchiveSelector
 from gigaevo.programs.program import Program
+from gigaevo.programs.program_state import ProgramState
+
+# Metadata keys for island tracking
+METADATA_KEY_HOME_ISLAND = "home_island"
+METADATA_KEY_CURRENT_ISLAND = "current_island"
 
 
 class IslandConfig(BaseModel):
@@ -65,7 +69,9 @@ class MapElitesIsland:
         self.archive_storage = RedisArchiveStorage(
             program_storage=program_storage, key_prefix=config.redis_prefix
         )
-        self.metadata_manager = MetadataManager(program_storage)
+        from gigaevo.database.state_manager import ProgramStateManager
+
+        self.state_manager = ProgramStateManager(program_storage)
         logger.info("Island {} init (max_size={})", config.island_id, config.max_size)
 
     # -------------------------- Public API --------------------------
@@ -134,7 +140,9 @@ class MapElitesIsland:
                 cell,
             )
 
-        await self.metadata_manager.set_current_island(program, self.config.island_id)
+        program.metadata.setdefault(METADATA_KEY_HOME_ISLAND, self.config.island_id)
+        program.metadata[METADATA_KEY_CURRENT_ISLAND] = self.config.island_id
+        await self.state_manager.update_program(program)
         await self._enforce_size_limit()
         return True
 
@@ -243,7 +251,10 @@ class MapElitesIsland:
         removed = 0
         for prog in to_remove:
             await self.archive_storage.remove_elite_by_id(prog.id)
-            await self.metadata_manager.clear_current_island(prog)
+            if prog.metadata.get(METADATA_KEY_CURRENT_ISLAND):
+                prog.metadata[METADATA_KEY_CURRENT_ISLAND] = None
+                await self.state_manager.update_program(prog)
+            await self.state_manager.set_program_state(prog, ProgramState.DISCARDED)
             removed += 1
 
         final_count = await self.__len__()

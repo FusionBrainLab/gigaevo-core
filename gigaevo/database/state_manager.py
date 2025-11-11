@@ -6,7 +6,7 @@ from loguru import logger
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.program import Program
-from gigaevo.programs.program_state import ProgramState
+from gigaevo.programs.program_state import ProgramState, validate_transition
 
 
 class ProgramStateManager:
@@ -44,14 +44,24 @@ class ProgramStateManager:
         stage_name: str,
         result: ProgramStageResult,
     ) -> None:
-        """Set a stage result and persist."""
+        """Set a stage result and persist the entire program.
+
+        Note: This persists the ENTIRE program object (metrics, metadata, lineage, etc.),
+        not just the stage_result. This is why additional snapshots are not needed.
+        """
         async with self._lock_for(program.id):
             program.stage_results[stage_name] = result
+            await self.storage.update(program)
+
+    async def update_program(self, program: Program) -> None:
+        """Update program (for metadata, lineage, etc.) with proper locking."""
+        async with self._lock_for(program.id):
             await self.storage.update(program)
 
     async def set_program_state(
         self, program: Program, new_state: ProgramState
     ) -> None:
+        """Set program state with validation and atomic persistence."""
         async with self._lock_for(program.id):
             logger.debug(
                 f"[ProgramStateManager] Setting program {program.id[:8]} state from {program.state} to {new_state}"
@@ -63,24 +73,24 @@ class ProgramStateManager:
                 )
                 return
 
-            old_state = program.state  # keep a copy
+            old_state = program.state
+            try:
+                validate_transition(old_state, new_state)
+            except ValueError as e:
+                logger.error(
+                    f"[ProgramStateManager] Invalid state transition for {program.id[:8]}: {e}"
+                )
+                raise
+
+            # Update program object
             program.state = new_state
             logger.debug(
                 f"[ProgramStateManager] Updated program {program.id[:8]} state to {new_state}"
             )
 
-            await self.storage.update(program)
-            logger.debug(
-                f"[ProgramStateManager] Updated program {program.id[:8]} in storage"
-            )
-
             old = old_state.value if old_state else None
-            await self.storage.transition_status(program.id, old, new_state.value)
-            logger.debug(
-                f"[ProgramStateManager] Transitioned {program.id[:8]} state {old_state} -> {new_state}"
-            )
+            await self.storage.atomic_state_transition(program, old, new_state.value)
 
-            await self.storage.publish_status_event(new_state.value, program.id)
             logger.debug(
-                f"[ProgramStateManager] Published status event for program {program.id[:8]}"
+                f"[ProgramStateManager] Atomically transitioned {program.id[:8]} state {old_state} -> {new_state}"
             )

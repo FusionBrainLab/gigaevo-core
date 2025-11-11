@@ -7,7 +7,11 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from gigaevo.programs.core_types import ProgramStageResult, StageState
-from gigaevo.programs.program_state import FINAL_STATES_PROGRAM_LIFECYCLE, ProgramState
+from gigaevo.programs.program_state import (
+    COMPLETE_STATES,
+    TERMINAL_STATES,
+    ProgramState,
+)
 from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
 
 if TYPE_CHECKING:
@@ -213,4 +217,4 @@ class Program(BaseModel):
 
     @property
     def is_complete(self) -> bool:
-        return self.state in FINAL_STATES_PROGRAM_LIFECYCLE
+        return self.state in (COMPLETE_STATES | TERMINAL_STATES)

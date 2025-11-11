@@ -7,10 +7,15 @@ from loguru import logger
 
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.strategies.base import EvolutionStrategy, StrategyMetrics
-from gigaevo.evolution.strategies.island import IslandConfig, MapElitesIsland
+from gigaevo.evolution.strategies.island import (
+    METADATA_KEY_CURRENT_ISLAND,
+    IslandConfig,
+    MapElitesIsland,
+)
 from gigaevo.evolution.strategies.island_selector import WeightedIslandSelector
 from gigaevo.evolution.strategies.mutant_router import RandomMutantRouter
 from gigaevo.programs.program import Program
+from gigaevo.programs.program_state import ProgramState
 
 
 class MapElitesMultiIsland(EvolutionStrategy):
@@ -214,12 +219,17 @@ class MapElitesMultiIsland(EvolutionStrategy):
         return sum(int(s) for s in sizes)
 
     async def remove_program_by_id(self, program_id: str) -> bool:
-        """Remove a program (by id) from whichever island holds it."""
+        """Remove a program (by id) from whichever island holds it and transition to DISCARDED."""
         for island in self.islands.values():
             if await island.archive_storage.remove_elite_by_id(program_id):
                 prog = await self.program_storage.get(program_id)
                 if prog is not None:
-                    await island.metadata_manager.clear_current_island(prog)
+                    if prog.metadata.get(METADATA_KEY_CURRENT_ISLAND):
+                        prog.metadata[METADATA_KEY_CURRENT_ISLAND] = None
+                        await island.state_manager.update_program(prog)
+                    await island.state_manager.set_program_state(
+                        prog, ProgramState.DISCARDED
+                    )
                 return True
         return False
 

@@ -6,12 +6,19 @@
 
 Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
 
-## Documentation
+## 🚀 Getting Started
 
-- **[DAG System](gigaevo/programs/dag/README.md)** - Comprehensive guide to GigaEvo's execution engine
-- **[Evolution Strategies](gigaevo/evolution/strategies/README.md)** - MAP-Elites and multi-island evolution system
+- **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes ⭐
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - Understand the system design
+
+## 📚 Documentation
+
+- **[DAG System](docs/DAG_SYSTEM.md)** - Comprehensive guide to GigaEvo's execution engine
+- **[Evolution Strategies](docs/EVOLUTION_STRATEGIES.md)** - MAP-Elites and multi-island evolution system
 - **[Tools](tools/README.md)** - Helper utilities for analysis and debugging
-- **[Contributing](CONTRIBUTING.md)** - Guidelines for contributors
+- **[Usage Guide](docs/USAGE.md)** - Detailed usage instructions
+- **[Changelog](docs/CHANGELOG.md)** - Version history and changes
+- **[Contributing](docs/CONTRIBUTING.md)** - Guidelines for contributors
 
 ## Quick Start
 

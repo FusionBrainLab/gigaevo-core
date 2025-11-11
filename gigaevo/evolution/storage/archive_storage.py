@@ -6,9 +6,7 @@ from typing import Callable
 from loguru import logger
 
 from gigaevo.database.redis_program_storage import RedisProgramStorage
-from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.programs.program import Program
-from gigaevo.programs.program_state import ProgramState
 
 CellDescriptor = tuple[int, ...]
 
@@ -63,7 +61,6 @@ class RedisArchiveStorage(ArchiveStorage):
         self, program_storage: RedisProgramStorage, key_prefix: str | None = None
     ) -> None:
         self._storage = program_storage
-        self._state_manager = ProgramStateManager(program_storage)
         prefix = key_prefix or program_storage.config.key_prefix
         self._hash_key = f"{prefix}:archive"
 
@@ -115,11 +112,6 @@ class RedisArchiveStorage(ArchiveStorage):
 
         await self._storage._with_redis("archive:delete", _op)
 
-    async def _discard_if_exists(self, program_id: str) -> None:
-        prog = await self._storage.get(program_id)
-        if prog is not None:
-            await self._state_manager.set_program_state(prog, ProgramState.DISCARDED)
-
     async def get_elite(self, cell: CellDescriptor) -> Program | None:
         pid = await self._hget(self._field(cell))
         return await self._storage.get(pid) if pid else None
@@ -152,13 +144,9 @@ class RedisArchiveStorage(ArchiveStorage):
 
     async def remove_elite(self, cell: CellDescriptor) -> bool:
         field = self._field(cell)
-        pid = await self._hget(field)
         removed = await self._hdel(field) > 0
-        if removed and pid:
-            await self._discard_if_exists(pid)
-            logger.debug(
-                "[Archive] removed cell {} (program {}) -> DISCARDED", field, pid
-            )
+        if removed:
+            logger.debug("[Archive] removed cell {}", field)
         return removed
 
     async def get_all_elites(self) -> list[str]:
@@ -179,9 +167,8 @@ class RedisArchiveStorage(ArchiveStorage):
             return False
 
         await self._hdel(*fields)
-        await self._discard_if_exists(program_id)
         logger.debug(
-            "[Archive] removed id {} from {} cell(s) -> DISCARDED",
+            "[Archive] removed id {} from {} cell(s)",
             program_id,
             len(fields),
         )
@@ -195,12 +182,8 @@ class RedisArchiveStorage(ArchiveStorage):
 
         await self._delete_hash()
 
-        # Discard all unique program IDs that were elites
-        for pid in set(mapping.values()):
-            await self._discard_if_exists(pid)
-
         logger.debug(
-            "[Archive] cleared {} elites ({} unique ids) -> DISCARDED",
+            "[Archive] cleared {} elites ({} unique ids)",
             count,
             len(set(mapping.values())),
         )

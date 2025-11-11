@@ -45,7 +45,7 @@ Failure Modes
 - Symmetry duplicates (sign/permutation copies)
 - Non-integer coordinates
 - Float-based checks instead of exact integer arithmetic
-- Direct combinatorial enumeration (e.g., generating all permutations or sign patterns) is computationally infeasible due to exponential complexity; use constructive or algebraic methods instead
+- Timeouts due to direct combinatorial enumeration (e.g., generating all permutations or sign patterns) is computationally infeasible due to exponential complexity; use constructive or algebraic methods instead
 
 Evaluation Details
 - r² = ||x_i||² (common squared norm)

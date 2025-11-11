@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
 from gigaevo.programs.program import Program
-from gigaevo.programs.program_state import NEW_STATES_PROGRAM_LIFECYCLE
+from gigaevo.programs.program_state import INCOMPLETE_STATES
 from gigaevo.utils.trackers.base import LogWriter
 
 
@@ -133,7 +133,7 @@ class MetricsTracker:
 
     async def _process_program(self, program: Program) -> bool:
         """Process one program; returns True if metrics were written/updated."""
-        if program.state in NEW_STATES_PROGRAM_LIFECYCLE:
+        if program.state in INCOMPLETE_STATES:
             return False
 
         metrics = program.metrics or {}

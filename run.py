@@ -41,7 +41,17 @@ async def run_experiment(cfg: DictConfig):
         logger.info("Step 1/5: Complete")
         logger.info("")
 
-        logger.info("Step 2/5: Checking Redis database...")
+        logger.info("Step 2/5: Checking Redis database and acquiring instance lock...")
+
+        try:
+            await redis_storage.acquire_instance_lock()
+        except Exception as e:
+            logger.error(f"Failed to acquire instance lock: {e}")
+            raise RuntimeError(
+                "Another instance is already running on this Redis prefix, "
+                "or failed to acquire lock. See error above for details."
+            ) from e
+
         # Safety check: prevent accidental data loss
         if await redis_storage.has_data():
             db_num = cfg.redis.db
@@ -64,7 +74,7 @@ Or use a different database number:
             raise RuntimeError(
                 f"Redis database {db_num} is not empty. Flush manually to proceed."
             )
-        logger.info("Step 2/5: Database is empty, ready to proceed")
+        logger.info("Step 2/5: Database is empty and instance lock acquired")
         logger.info("")
 
         logger.info("Step 3/5: Loading initial programs...")

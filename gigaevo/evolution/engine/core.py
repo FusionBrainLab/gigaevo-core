@@ -216,6 +216,7 @@ class EvolutionEngine:
             elites,
             mutator=self.mutation_operator,
             storage=self.storage,
+            state_manager=self.state,
             parent_selector=self.config.parent_selector,
             limit=self.config.max_mutations_per_generation,
             iteration=self.metrics.total_generations,

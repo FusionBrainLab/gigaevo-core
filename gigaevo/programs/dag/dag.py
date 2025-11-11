@@ -88,8 +88,11 @@ class DAG:
                 name, ProgramStageResult(status=StageState.PENDING)
             )
 
-        # Persist the initial snapshot
-        await self._persist_program_snapshot(program)
+        # Persist initial state (PENDING stages) for monitoring/crash recovery
+        # Note: Further snapshots are NOT needed because update_stage_result()
+        # persists the ENTIRE program object after each stage completes,
+        # including any changes to metrics, metadata, etc.
+        await self.state_manager.update_program(program)
 
         running: set[str] = set()
         launched_this_run: set[str] = set()
@@ -226,8 +229,6 @@ class DAG:
             if not tasks and not skip_progress and running:
                 await asyncio.sleep(0.005)
 
-        await self._persist_program_snapshot(program)
-
     async def _launch_ready(
         self, program: Program, ready: set[str]
     ) -> dict[str, asyncio.Task]:
@@ -314,7 +315,6 @@ class DAG:
                 )
 
             await self._persist_stage_result(program, stage_name, result)
-            await self._persist_program_snapshot(program)
 
             finished_this_run.add(stage_name)
             logger.info(
@@ -329,9 +329,6 @@ class DAG:
     ) -> None:
         await self._write_stage_status(stage_name, result)
         await self.state_manager.update_stage_result(program, stage_name, result)
-
-    async def _persist_program_snapshot(self, program: Program) -> None:
-        await self.state_manager.storage.update(program)
 
     async def _write_stage_status(
         self, stage_name: str, result: ProgramStageResult
