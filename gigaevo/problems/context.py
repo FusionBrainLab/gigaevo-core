@@ -16,7 +16,7 @@ class ProblemContext:
     - Provide convenient accessors for task description
 
     Example:
-    pc = ProblemContext(Path("problems/heilbron_simplified"))
+    pc = ProblemContext(Path("problems/heilbron"))
     pc.metrics_context  # -> MetricsContext
     pc.task_description # -> str
     """

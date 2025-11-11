@@ -40,7 +40,7 @@ redis-server
 ### 4. Run Evolution
 
 ```bash
-python run.py problem.name=heilbron_simplified
+python run.py problem.name=heilbron
 ```
 
 That's it! Evolution will start and logs will be saved to `outputs/`.
@@ -48,7 +48,7 @@ To study results, check `tools` or start `tensorboard` / `wandb`
 
 ## What Happens
 
-1. **Loads initial programs** from `problems/heilbron_simplified/`
+1. **Loads initial programs** from `problems/heilbron/`
 2. **Mutates programs** using LLMs (GPT, Claude, Gemini, etc.)
 3. **Evaluates fitness** by running the programs
 4. **Selects best solutions** using MAP-Elites algorithm
@@ -60,23 +60,23 @@ To study results, check `tools` or start `tensorboard` / `wandb`
 
 ```bash
 # Multi-island evolution (explores diverse solutions)
-python run.py experiment=multi_island_complexity problem.name=heilbron_simplified
+python run.py experiment=multi_island_complexity problem.name=heilbron
 
 # Multi-LLM exploration (uses multiple models)
-python run.py experiment=multi_llm_exploration problem.name=heilbron_simplified
+python run.py experiment=multi_llm_exploration problem.name=heilbron
 ```
 
 ### Change Settings
 
 ```bash
 # Limit generations
-python run.py problem.name=heilbron_simplified max_generations=10
+python run.py problem.name=heilbron max_generations=10
 
 # Use different Redis database
-python run.py problem.name=heilbron_simplified redis.db=5
+python run.py problem.name=heilbron redis.db=5
 
 # Change LLM model
-python run.py problem.name=heilbron_simplified model_name=anthropic/claude-3.5-sonnet
+python run.py problem.name=heilbron model_name=anthropic/claude-3.5-sonnet
 ```
 
 ## Configuration
