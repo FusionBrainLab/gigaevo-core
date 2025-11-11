@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.5.1 (2025-11-11)
+
+### Bug Fixes
+
+- Small fix problem name
+  ([`44ea85f`](https://github.com/KhrulkovV/metaevolve/commit/44ea85ff182cc835cd30f780d0ecf0d3a3a6555b))
+
+
 ## v1.5.0 (2025-11-11)
 
 ### Features
