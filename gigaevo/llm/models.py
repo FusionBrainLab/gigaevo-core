@@ -1,11 +1,3 @@
-"""LLM model management with probabilistic routing and Langfuse tracing.
-
-This module provides:
-- MultiModelRouter: Probabilistic model selection with built-in Langfuse tracing
-- create_chat_model: Factory for creating ChatOpenAI models
-- create_multi_model_router: Convenience factory for router creation
-"""
-
 from collections.abc import AsyncIterator, Iterator
 import random
 from typing import Any, AsyncIterator, Iterator, Optional
