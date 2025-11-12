@@ -1,12 +1,12 @@
 # @package _global_
 
-# Heterogeneous: AlphaEvolve models (Gemini 2.5 Pro and Flash
+# Heterogeneous: AlphaEvolve models (Gemini 2.5 Pro and gpt-5-mini)
 
 llm:
   _target_: gigaevo.llm.models.create_multi_model_router
   model_configs:
     # Model 1: Primary workhorse
-    - model: google/gemini-2.5-pro
+    - model: openai/gpt-5
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1

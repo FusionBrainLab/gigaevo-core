@@ -7,7 +7,7 @@
 defaults:
   - /constants: base
   - /redis: default
-  - /llm: multi_model
+  - /llm: heterogeneous
   - /evolution: default
   - /algorithm: single_island
   - /pipeline: auto

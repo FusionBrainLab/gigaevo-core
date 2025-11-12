@@ -88,22 +88,76 @@ python run.py problem.name=heilbron model_name=anthropic/claude-3.5-sonnet
 
 ## Configuration
 
-All configuration is in `config/`:
+GigaEvo uses a modular configuration system based on [Hydra](https://hydra.cc/). All configuration is in `config/`:
 
-- **`experiment/`** - Complete experiment setups (start here!)
+### Top-Level Configuration
+
+- **`experiment/`** - Complete experiment templates (start here!)
   - `base.yaml` - Simple single-island evolution (default)
-  - `full_featured.yaml` - Multi-island + multi-LLM
+  - `full_featured.yaml` - Multi-island + multi-LLM exploration
   - `multi_island_complexity.yaml` - Two islands: performance + simplicity
+  - `multi_llm_exploration.yaml` - Multiple LLMs for diverse mutations
 
-- **`constants/`** - Tunable parameters split by domain
-  - `evolution.yaml` - Generation limits, mutation rates
-  - `llm.yaml` - Temperature, max tokens, etc.
-  - `islands.yaml` - Island sizes, migration settings
+### Component Configurations
 
-- **`algorithm/`** - MAP-Elites configurations
-- **`llm/`** - LLM provider setups
+- **`algorithm/`** - Evolution algorithms
+  - `single_island.yaml` - Standard MAP-Elites
+  - `multi_island.yaml` - Multiple independent populations with migration
 
-See `config/` for detailed documentation on each component.
+- **`llm/`** - Language model setups
+  - `single.yaml` - One LLM for all mutations
+  - `heterogeneous.yaml` - Multiple LLMs (GPT, Claude, Gemini, etc.) for diverse mutations
+
+- **`pipeline/`** - DAG execution pipelines
+  - `auto.yaml` - Automatically selects pipeline (standard or contextual) based on problem
+  - `standard.yaml` - Basic validation → execution → metrics
+  - `with_context.yaml` - Includes contextual information extraction
+  - `custom.yaml` - Template for custom pipelines
+
+- **`constants/`** - Tunable parameters grouped by domain
+  - `evolution.yaml` - Generation limits, mutation rates, selection pressure
+  - `llm.yaml` - Temperature, max tokens, retry logic
+  - `islands.yaml` - Island sizes, migration frequency, diversity settings
+  - `pipeline.yaml` - Stage timeouts, parallelization settings
+  - `redis.yaml` - Connection settings, key patterns
+  - `logging.yaml` - Log levels, output formats
+  - `runner.yaml` - DAG execution settings
+  - `endpoints.yaml` - API endpoint defaults
+
+### Supporting Configurations
+
+- **`loader/`** - Program loading strategies
+  - `directory.yaml` - Load initial programs from filesystem
+  - `redis_selection.yaml` - Load from existing Redis archive
+
+- **`logging/`** - Logging backends
+  - `tensorboard.yaml` - TensorBoard integration
+  - `wandb.yaml` - Weights & Biases tracking
+
+- **`metrics/`** - Metric computation
+  - `default.yaml` - Basic fitness metrics
+  - `code_complexity.yaml` - Includes cyclomatic complexity, LOC, etc.
+
+- **`redis/`** - Redis storage backend
+- **`runner/`** - DAG runner configuration
+- **`evolution/`** - Core evolution engine settings
+
+### Configuration Overrides
+
+Override any setting via command line:
+
+```bash
+# Override experiment
+python run.py experiment=full_featured
+
+# Override specific settings
+python run.py problem.name=heilbron max_generations=50 temperature=0.8
+
+# Override nested settings
+python run.py constants.evolution.mutation_rate=0.3
+```
+
+See individual YAML files for detailed documentation on each component.
 
 ## Output
 
