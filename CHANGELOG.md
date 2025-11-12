@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.7.1 (2025-11-12)
+
+### Bug Fixes
+
+- Small polish
+  ([`e9abd09`](https://github.com/KhrulkovV/metaevolve/commit/e9abd0965a4e9385354f8d9a3aa5de52892bfbca))
+
+
 ## v1.7.0 (2025-11-12)
 
 ### Features
