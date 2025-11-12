@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v1.7.0 (2025-11-12)
+
+### Features
+
+- Handling of langfuse errors
+  ([`50adbc3`](https://github.com/KhrulkovV/metaevolve/commit/50adbc3abaf3c03712d7c89dc0a215e7b92eb242))
+
+- Langfuse_tracing_less_comments
+  ([`5910f96`](https://github.com/KhrulkovV/metaevolve/commit/5910f9665d8fcab50bd53ec9c22930040788a720))
+
+- Simplifying_langfuse_tracing
+  ([`c746de7`](https://github.com/KhrulkovV/metaevolve/commit/c746de7845b0610454a27561e230247ab0d9eeb2))
+
+- Update README.md to work with langfuse
+  ([`765e0e7`](https://github.com/KhrulkovV/metaevolve/commit/765e0e729afff42bcca5ba66d4ebba0e97996867))
+
+
 ## v1.6.1 (2025-11-12)
 
 ### Bug Fixes
