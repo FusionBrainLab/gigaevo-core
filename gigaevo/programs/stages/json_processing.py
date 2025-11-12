@@ -89,6 +89,58 @@ class MergeDictStage(Stage, Generic[K, V]):
         return cls[key_type, value_type]
 
 
+class StrFloatDictInputs(StageIO):
+    """Inputs for merging two str->float dictionaries."""
+
+    first: Box[dict[str, float]]
+    second: Box[dict[str, float]]
+
+
+@StageRegistry.register(
+    description="Merge two str→float dicts (e.g., metrics); second overwrites first"
+)
+class MergeStrFloatDict(Stage):
+    """
+    Specialized stage for merging two dictionaries with string keys and float values.
+    Common use case: merging metrics from different stages.
+
+    The second dictionary overwrites any overlapping keys from the first.
+
+    Example:
+        first = {"accuracy": 0.9, "loss": 0.1}
+        second = {"f1_score": 0.85, "loss": 0.08}
+        result = {"accuracy": 0.9, "loss": 0.08, "f1_score": 0.85}
+    """
+
+    InputsModel = StrFloatDictInputs
+    OutputModel = Box[dict[str, float]]
+    cacheable: bool = True
+
+    async def compute(self, program: Program) -> StageIO:
+        first = self.params.first.data
+        second = self.params.second.data
+
+        merged = {**first, **second}
+        overlapping_keys = len(first) + len(second) - len(merged)
+
+        logger.debug(
+            "[MergeStrFloatDict] merged {} + {} -> {} keys ({} overlapping)",
+            len(first),
+            len(second),
+            len(merged),
+            overlapping_keys,
+        )
+
+        if overlapping_keys > 0:
+            overlap_names = set(first.keys()) & set(second.keys())
+            logger.info(
+                "[MergeStrFloatDict] overlapping keys (using second): {}",
+                sorted(overlap_names),
+            )
+
+        return Box[dict[str, float]](data=merged)
+
+
 @StageRegistry.register(description="Parse JSON string into Python value")
 class ParseJSONStage(Stage):
     InputsModel = StringContainer

@@ -1,7 +1,7 @@
 // src/components/StageNode.js
 import React, { useMemo, useCallback, useEffect } from 'react';
 import { Handle, Position, useReactFlow, useUpdateNodeInternals } from 'reactflow';
-import { getStageColor, getStageIcon, formatStageName } from '../utils/stageUtils';
+import { getStageColor, formatStageName, getTypeColor } from '../utils/stageUtils';
 
 const EXEC_COLORS = { always: '#6c757d', success: '#28a745', failure: '#dc3545' };
 const INPUT_COLORS = { mandatory: '#dc3545', optional: '#6c757d' };
@@ -57,12 +57,18 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
   // Visuals
   const baseStageColor = useMemo(() => getStageColor(colorKey), [colorKey]);
   const palette = useMemo(() => shadesFromStageColor(baseStageColor), [baseStageColor]);
-  const stageIcon  = useMemo(() => getStageIcon(colorKey), [colorKey]);
 
   // Inputs
   const mandatoryInputs = Array.isArray(data.mandatory_inputs) ? data.mandatory_inputs : [];
   const optionalInputs  = Array.isArray(data.optional_inputs)  ? data.optional_inputs  : [];
   const totalInputs = mandatoryInputs.length + optionalInputs.length;
+  const inputTypes = data.input_types || {};
+
+  // Outputs
+  const outputFields = Array.isArray(data.output_fields) ? data.output_fields : [];
+  const outputModelName = data.output_model_name || 'VoidOutput';
+  const hasOutputs = outputFields.length > 0 && outputModelName !== 'VoidOutput';
+  const outputColor = useMemo(() => getTypeColor(outputModelName), [outputModelName]);
 
   // Recompute handle layout when counts change
   useEffect(() => { updateNodeInternals(id); }, [id, totalInputs, updateNodeInternals]);
@@ -104,51 +110,61 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
       style={{
         position: 'relative',
         background: 'white',
-        border: `2px solid ${selected ? '#3B82F6' : palette.accentBorder}`,
-        borderRadius: 14,
+        border: `1.5px solid ${selected ? '#3B82F6' : '#E5E7EB'}`,
+        borderRadius: 8,
         minWidth: 260,
         maxWidth: 360,
         minHeight: 120,
         overflow: 'visible',
         boxShadow: selected
-          ? '0 16px 36px rgba(59,130,246,0.25), 0 2px 0 rgba(59,130,246,0.05) inset'
-          : '0 10px 28px rgba(0,0,0,0.12), 0 1px 0 rgba(0,0,0,0.04) inset',
-        transition: 'box-shadow 140ms ease, border-color 140ms ease, transform 120ms ease',
-        willChange: 'transform, box-shadow',
+          ? '0 4px 12px rgba(59,130,246,0.15), 0 0 0 3px rgba(59,130,246,0.08)'
+          : '0 0 0 0 transparent',
+        transition: 'box-shadow 140ms ease, border-color 140ms ease',
+      }}
+      onMouseEnter={(e) => {
+        if (!selected) {
+          e.currentTarget.style.boxShadow = '0 0 0 2px rgba(59, 130, 246, 0.1)';
+          e.currentTarget.style.borderColor = '#CBD5E1';
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!selected) {
+          e.currentTarget.style.boxShadow = '0 0 0 0 transparent';
+          e.currentTarget.style.borderColor = '#E5E7EB';
+        }
       }}
     >
-      {/* Accent rail */}
+      {/* Minimal accent indicator - only 2px */}
       <div
         aria-hidden
         style={{
           position: 'absolute',
-          left: -2,
-          top: -2,
-          bottom: -2,
-          width: 6,
-          borderTopLeftRadius: 12,
-          borderBottomLeftRadius: 12,
-          background: `linear-gradient(180deg, ${palette.accent} 0%, ${palette.accentStrong} 100%)`,
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 2,
+          borderTopLeftRadius: 7,
+          borderBottomLeftRadius: 7,
+          background: selected ? '#3B82F6' : '#94A3B8',
         }}
       />
 
       {/* Header */}
       <div
         style={{
-          background: palette.accentSoft,
+          background: '#F9FAFB',
           color: '#111827',
           padding: '10px 12px',
           display: 'flex',
           alignItems: 'center',
           gap: 10,
-          borderTopLeftRadius: 12,
-          borderTopRightRadius: 12,
+          borderTopLeftRadius: 7,
+          borderTopRightRadius: 7,
           borderBottom: '1px solid #E5E7EB',
           userSelect: 'none',
         }}
         title={displayName}
       >
-        <span aria-hidden style={{ fontSize: 18, lineHeight: 1 }}>{stageIcon}</span>
         <div
           style={{
             flex: 1,
@@ -158,9 +174,25 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
             letterSpacing: 0.2,
             fontWeight: 800,
             color: '#111827',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
           }}
         >
           {displayName}
+          {data.cacheable !== undefined && (
+            <span
+              style={{
+                fontSize: 11,
+                color: '#6b7280',
+                flexShrink: 0,
+              }}
+              title={data.cacheable ? "Cacheable - results can be cached" : "Non-cacheable - always recomputes"}
+              aria-label={data.cacheable ? "Cacheable stage" : "Non-cacheable stage"}
+            >
+              {data.cacheable ? '💾' : '🔄'}
+            </span>
+          )}
         </div>
 
         {/* Quick actions */}
@@ -190,6 +222,7 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
           </div>
         )}
 
+        {/* Input badges */}
         <div
           style={{
             display: 'flex',
@@ -198,6 +231,7 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
             fontSize: 11,
             color: '#6B7280',
             flexWrap: 'wrap',
+            marginBottom: hasOutputs ? 8 : 0,
           }}
         >
           {totalInputs > 0 && (
@@ -213,6 +247,30 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
           ))}
           {mandatoryInputs.length > 3 && <Badge muted>+{mandatoryInputs.length - 3} more</Badge>}
         </div>
+
+        {/* Output badges */}
+        {hasOutputs && (
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              fontSize: 11,
+              color: '#6B7280',
+              flexWrap: 'wrap',
+            }}
+          >
+            <Badge accent title={`Output model: ${outputModelName}`}>
+              Output: {outputModelName}
+            </Badge>
+            {outputFields.slice(0, 3).map((n) => (
+              <Badge key={`out-${n}`} muted title={n}>
+                {trimName(n)}
+              </Badge>
+            ))}
+            {outputFields.length > 3 && <Badge muted>+{outputFields.length - 3} more</Badge>}
+          </div>
+        )}
       </div>
 
       {/* ===== Ports ===== */}
@@ -238,7 +296,7 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
               id={name}
               label={name}
               type="target"
-              color={INPUT_COLORS.mandatory}
+              color={getTypeColor(inputTypes[name])}
               position={Position.Left}
               topOffset={i * portSpacing}
               isConnectable={isConnectable}
@@ -252,7 +310,7 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
               id={name}
               label={name}
               type="target"
-              color={INPUT_COLORS.optional}
+              color={getTypeColor(inputTypes[name])}
               position={Position.Left}
               topOffset={(mandatoryInputs.length + j) * portSpacing}
               isConnectable={isConnectable}
@@ -274,15 +332,17 @@ function StageNodeBase({ data = {}, isConnectable, id, selected }) {
           right: -6,
           top: '50%',
           transform: 'translateY(-50%)',
-          background: palette.accentStrong,
+          background: outputColor,
           border: '2px solid white',
           width: 12,
           height: 12,
         }}
         isConnectable={isConnectable}
-        title="Data output"
+        title={hasOutputs ? `Output: ${outputModelName} (${outputFields.join(', ')})` : "Data output"}
         data-handle-type="data"
         data-direction="out"
+        data-output-model={outputModelName}
+        data-output-fields={outputFields.join(',')}
       />
 
       {/* Execution targets */}
@@ -366,7 +426,11 @@ const IconBtn = React.memo(function IconBtn({ onClick, title, ariaLabel, childre
   );
 });
 
-function Badge({ children, muted, title }) {
+function Badge({ children, muted, accent, title }) {
+  const bgColor = muted ? '#F3F4F6' : (accent ? '#FEF3C7' : '#EEF2FF');
+  const textColor = muted ? '#4B5563' : (accent ? '#92400E' : '#4338CA');
+  const borderColor = muted ? '#E5E7EB' : (accent ? '#FDE68A' : '#E0E7FF');
+
   return (
     <span
       title={title}
@@ -376,9 +440,9 @@ function Badge({ children, muted, title }) {
         gap: 6,
         padding: '2px 8px',
         borderRadius: 999,
-        background: muted ? '#F3F4F6' : '#EEF2FF',
-        color: muted ? '#4B5563' : '#4338CA',
-        border: `1px solid ${muted ? '#E5E7EB' : '#E0E7FF'}`,
+        background: bgColor,
+        color: textColor,
+        border: `1px solid ${borderColor}`,
         fontWeight: 700,
         maxWidth: 180,
         overflow: 'hidden',
@@ -428,11 +492,12 @@ function PortWithLabel({ id, label, type, color, position, topOffset, isConnecta
           width: 12,
           height: 12,
           zIndex: 10,
-          boxShadow: '0 0 0 2px rgba(0,0,0,0.05)',
+          boxShadow: 'none',
           pointerEvents: 'auto',
+          opacity: muted ? 0.6 : 1,
         }}
         isConnectable={isConnectable}
-        title={label}
+        title={`${label}${dataPortKind === 'mandatory' ? ' (required)' : ''}`}
         aria-label={`${label} input`}
         data-handle-type={dataType}          // <- for connection validation
         data-port-kind={dataPortKind}        // <- mandatory/optional
@@ -487,13 +552,8 @@ const styleEl = typeof document !== 'undefined' ? document.createElement('style'
 if (styleEl && !styleEl.dataset.stageNodeCss) {
   styleEl.dataset.stageNodeCss = 'true';
   styleEl.textContent = `
-    .stage-node { transform: translateZ(0); }
-    .stage-node:hover { transform: translateY(-1px); }
-    .stage-node:active { transform: translateY(0); }
     .stage-node:hover .node-actions { opacity: 1; }
     .stage-node:hover .port-label { opacity: 1; transform: translateX(0); }
-    .node-action-btn:hover { transform: translateY(-1px); }
-    .node-action-btn:active { transform: translateY(0); box-shadow: 0 0 0 rgba(0,0,0,0.06); }
 
     /* Respect reduced motion */
     @media (prefers-reduced-motion: reduce) {

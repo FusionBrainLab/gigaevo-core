@@ -22,8 +22,12 @@ import StageEditor from './components/StageEditor';
 import Toolbar from './components/Toolbar';
 import ExecutionEdge from './components/ExecutionEdge';
 import DataEdge from './components/DataEdge';
-import { getStages, exportDAG } from './services/api';
+import QuickAdd from './components/QuickAdd';
+import Toast from './components/Toast';
+import { getStages, exportYAML, validateDAG, listYAMLConfigs, loadYAMLConfig } from './services/api';
 import { generateNodeId, generateEdgeId, getStageColor, generateUniqueStageName } from './utils/stageUtils';
+import { toPng } from 'html-to-image';
+import { jsPDF } from 'jspdf';
 
 const nodeTypes = { stageNode: StageNode };
 const edgeTypes = { execution: ExecutionEdge, dataFlow: DataEdge };
@@ -258,6 +262,24 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [rfReady, setRfReady] = useState(false);
+  const [validationStatus, setValidationStatus] = useState(null);
+  const [showConfigLoader, setShowConfigLoader] = useState(false);
+  const [availableConfigs, setAvailableConfigs] = useState([]);
+  const [loadingConfig, setLoadingConfig] = useState(false);
+  const [validationErrors, setValidationErrors] = useState([]);
+
+  // History for undo/redo
+  const [history, setHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [copiedNode, setCopiedNode] = useState(null);
+
+  // Quick Add modal
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [quickAddPosition, setQuickAddPosition] = useState(null);
+  const { project } = useReactFlow();
+
+  // Toast notifications
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
     selectedNodeRef.current = selectedNode;
@@ -278,6 +300,48 @@ function App() {
       }
     })();
   }, []);
+
+  // Track if we're in the middle of undo/redo to avoid capturing those states
+  const isUndoRedoRef = useRef(false);
+
+  // History management - automatically capture state changes
+  useEffect(() => {
+    // Don't capture history during undo/redo or if no nodes
+    if (isUndoRedoRef.current || isLoading) return;
+
+    // Debounce history capture to avoid intermediate states
+    const timeoutId = setTimeout(() => {
+      const snapshot = {
+        nodes: JSON.parse(JSON.stringify(nodes)),
+        edges: JSON.parse(JSON.stringify(edges)),
+      };
+
+      // Don't push if this is the same as the current history entry
+      if (historyIndex >= 0 && history[historyIndex]) {
+        const current = history[historyIndex];
+        const isSame =
+          JSON.stringify(current.nodes) === JSON.stringify(snapshot.nodes) &&
+          JSON.stringify(current.edges) === JSON.stringify(snapshot.edges);
+        if (isSame) return;
+      }
+
+      // Remove any future history if we're not at the end
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push(snapshot);
+
+      // Limit history to 50 entries
+      if (newHistory.length > 50) {
+        newHistory.shift();
+        setHistory(newHistory);
+        setHistoryIndex(newHistory.length - 1);
+      } else {
+        setHistory(newHistory);
+        setHistoryIndex(newHistory.length - 1);
+      }
+    }, 300); // 300ms debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [nodes, edges, history, historyIndex, isLoading]);
 
   // Validate connection compatibility to prevent snapping to wrong port types
   const isValidConnection = useCallback(
@@ -394,6 +458,13 @@ function App() {
     setEditingNode(null);
   }, []);
 
+  const onNodesDelete = useCallback((deletedNodes) => {
+    // If the deleted node was selected, close the sidebar
+    if (selectedNode && deletedNodes.some(node => node.id === selectedNode.id)) {
+      setSelectedNode(null);
+    }
+  }, [selectedNode]);
+
   const handleEditNode = useCallback(
     (nodeId, editedData) => {
       setNodes((nds) =>
@@ -458,56 +529,591 @@ function App() {
         }
         return [...nds, newNode];
       });
+
+      // Select the newly added node
+      setSelectedNode(newNode);
     },
     [setNodes, nodes]
   );
 
-  const exportPipeline = useCallback(async () => {
-    try {
-      const dagData = {
-        stages: nodes.map((node) => ({
-          name: node.data.originalName || node.data.name, // Use original stage type for backend
-          custom_name: node.data.customName || null,
-          display_name: node.data.customName || node.data.name, // Use unique name for display
-          description: node.data.description || '',
-          notes: node.data.notes || '',
-        })),
-        data_flow_edges: edges
-          .filter((edge) => edge.type === 'dataFlow')
-          .map((edge) => ({
-            source_stage: nodes.find((n) => n.id === edge.source)?.data?.name, // Use unique name
-            destination_stage: nodes.find((n) => n.id === edge.target)?.data?.name, // Use unique name
-            input_name: edge.data?.inputName || edge.targetHandle || 'default',
-          })),
-        execution_dependencies: edges
-          .filter((edge) => edge.type === 'execution')
-          .map((edge) => ({
-            stage: nodes.find((n) => n.id === edge.source)?.data?.name, // Use unique name
-            dependency_type: edge.data?.executionType || 'always',
-            target_stage: nodes.find((n) => n.id === edge.target)?.data?.name, // Use unique name
-          })),
-      };
+  // Helper function to build DAG data structure
+  const buildDAGData = useCallback(() => {
+    // Helper to get the effective name (customName takes precedence)
+    const getEffectiveName = (node) => node?.data?.customName || node?.data?.name;
 
-      const result = await exportDAG(dagData);
-      const blob = new Blob([result.code], { type: 'text/python' });
+    return {
+      stages: nodes.map((node) => ({
+        name: node.data.originalName || node.data.name, // Use original stage type for backend
+        custom_name: node.data.customName || null,
+        display_name: getEffectiveName(node), // Use custom name if set, otherwise use unique name
+        description: node.data.description || '',
+        notes: node.data.notes || '',
+      })),
+      data_flow_edges: edges
+        .filter((edge) => edge.type === 'dataFlow')
+        .map((edge) => ({
+          source_stage: getEffectiveName(nodes.find((n) => n.id === edge.source)), // Use effective name
+          destination_stage: getEffectiveName(nodes.find((n) => n.id === edge.target)), // Use effective name
+          input_name: edge.data?.inputName || edge.targetHandle || 'default',
+        })),
+      execution_dependencies: edges
+        .filter((edge) => edge.type === 'execution')
+        .map((edge) => {
+          // IMPORTANT: Execution edge direction is reversed!
+          // Visual edge: source → target means "source must run before target"
+          // So target depends on source, thus: stage=target, target_stage=source
+
+          // Map frontend executionType to backend dependency_type format
+          const typeMap = {
+            'success': 'on_success',
+            'failure': 'on_failure',
+            'always': 'always_after'
+          };
+          const execType = edge.data?.executionType || 'always';
+
+          return {
+            stage: getEffectiveName(nodes.find((n) => n.id === edge.target)), // Stage that has dependency
+            dependency_type: typeMap[execType] || 'always_after',
+            target_stage: getEffectiveName(nodes.find((n) => n.id === edge.source)), // Stage it depends on
+          };
+        }),
+    };
+  }, [nodes, edges]);
+
+  // Automatic validation when nodes or edges change
+  useEffect(() => {
+    // Debounce validation to avoid calling too frequently
+    const timeoutId = setTimeout(async () => {
+      if (nodes.length === 0) {
+        setValidationStatus(null);
+        setValidationErrors([]);
+        return;
+      }
+
+      try {
+        const dagData = buildDAGData();
+        const result = await validateDAG(dagData);
+        setValidationStatus(result);
+
+        if (!result.is_valid) {
+          setValidationErrors(result.errors || []);
+        } else {
+          setValidationErrors([]);
+        }
+      } catch (err) {
+        console.error('Validation error:', err);
+        setValidationErrors([err?.message || String(err)]);
+      }
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [nodes, edges, buildDAGData]);
+
+  const handleValidate = useCallback(async () => {
+    try {
+      const dagData = buildDAGData();
+      const result = await validateDAG(dagData);
+      setValidationStatus(result);
+
+      if (!result.is_valid) {
+        setValidationErrors(result.errors || []);
+      } else {
+        setValidationErrors([]);
+      }
+    } catch (err) {
+      setValidationErrors([err?.message || String(err)]);
+      setValidationStatus(null);
+    }
+  }, [buildDAGData]);
+
+  const exportYAMLConfig = useCallback(async () => {
+    try {
+      const dagData = buildDAGData();
+      const result = await exportYAML(dagData);
+      const blob = new Blob([result.yaml], { type: 'text/yaml' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'generated_pipeline.py';
+      a.download = 'generated_pipeline.yaml';
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      setToast({ message: 'YAML config exported successfully!', type: 'success' });
     } catch (err) {
-      setError('Failed to export DAG: ' + (err?.message || String(err)));
+      setError('Failed to export YAML: ' + (err?.message || String(err)));
+      setToast({ message: 'Failed to export YAML', type: 'error' });
     }
-  }, [nodes, edges]);
+  }, [buildDAGData]);
+
+  const exportPDF = useCallback(() => {
+    const reactFlowElement = document.querySelector('.react-flow__viewport');
+    if (!reactFlowElement) {
+      setToast({ message: 'Canvas not found', type: 'error' });
+      return;
+    }
+
+    // Get the viewport element for better quality capture
+    const viewportElement = reactFlowElement;
+
+    // Hide controls and minimap temporarily for cleaner export
+    const flowWrapper = document.querySelector('.react-flow');
+    const controls = flowWrapper?.querySelector('.react-flow__controls');
+    const minimap = flowWrapper?.querySelector('.react-flow__minimap');
+    const background = flowWrapper?.querySelector('.react-flow__background');
+    const panel = flowWrapper?.querySelector('.react-flow__panel');
+
+    const originalControlsDisplay = controls?.style.display;
+    const originalMinimapDisplay = minimap?.style.display;
+    const originalPanelDisplay = panel?.style.display;
+    const originalBackgroundOpacity = background?.style.opacity;
+
+    if (controls) controls.style.display = 'none';
+    if (minimap) minimap.style.display = 'none';
+    if (panel) panel.style.display = 'none';
+    if (background) background.style.opacity = '0.3';
+
+    // Use higher pixel ratio and cacheBust for better quality
+    toPng(flowWrapper, {
+      backgroundColor: '#ffffff',
+      quality: 1.0,
+      pixelRatio: 3, // Even higher resolution for crisp output
+      cacheBust: true,
+      style: {
+        transform: 'none', // Remove any transforms
+      },
+    })
+      .then((dataUrl) => {
+        // Restore hidden elements
+        if (controls) controls.style.display = originalControlsDisplay;
+        if (minimap) minimap.style.display = originalMinimapDisplay;
+        if (panel) panel.style.display = originalPanelDisplay;
+        if (background) background.style.opacity = originalBackgroundOpacity;
+
+        const img = new Image();
+        img.onload = () => {
+          // Create PDF in landscape if width > height, portrait otherwise
+          const imgWidth = img.width;
+          const imgHeight = img.height;
+          const isLandscape = imgWidth > imgHeight;
+
+          // A4 dimensions in mm
+          const pdf = new jsPDF({
+            orientation: isLandscape ? 'landscape' : 'portrait',
+            unit: 'mm',
+            format: 'a4',
+            compress: false, // Don't compress for better quality
+          });
+
+          const pageWidth = pdf.internal.pageSize.getWidth();
+          const pageHeight = pdf.internal.pageSize.getHeight();
+
+          // Calculate dimensions to fit page while maintaining aspect ratio
+          const imgRatio = imgWidth / imgHeight;
+          const pageRatio = pageWidth / pageHeight;
+
+          let finalWidth, finalHeight;
+          if (imgRatio > pageRatio) {
+            // Image is wider than page ratio
+            finalWidth = pageWidth - 20; // 10mm margin on each side
+            finalHeight = finalWidth / imgRatio;
+          } else {
+            // Image is taller than page ratio
+            finalHeight = pageHeight - 20; // 10mm margin on each side
+            finalWidth = finalHeight * imgRatio;
+          }
+
+          const x = (pageWidth - finalWidth) / 2;
+          const y = (pageHeight - finalHeight) / 2;
+
+          // Use PNG format with no compression for best quality
+          pdf.addImage(dataUrl, 'PNG', x, y, finalWidth, finalHeight, undefined, 'FAST');
+          pdf.save('dag-pipeline.pdf');
+
+          setToast({ message: 'PDF exported successfully!', type: 'success' });
+        };
+        img.src = dataUrl;
+      })
+      .catch((err) => {
+        // Restore hidden elements on error
+        if (controls) controls.style.display = originalControlsDisplay;
+        if (minimap) minimap.style.display = originalMinimapDisplay;
+        if (panel) panel.style.display = originalPanelDisplay;
+        if (background) background.style.opacity = originalBackgroundOpacity;
+
+        console.error('Failed to export PDF:', err);
+        setToast({ message: 'Failed to export PDF', type: 'error' });
+      });
+  }, []);
 
   const clearCanvas = useCallback(() => {
     setNodes([]);
     setEdges([]);
     setSelectedNode(null);
   }, [setNodes, setEdges]);
+
+  // Helper function to apply layout algorithm to nodes (pure function)
+  const applyLayoutToNodes = useCallback((nodesToLayout, edgesToLayout) => {
+    if (!nodesToLayout || nodesToLayout.length === 0) return nodesToLayout;
+
+    // Build adjacency list for topological sort
+    const graph = new Map();
+    const inDegree = new Map();
+
+    nodesToLayout.forEach(node => {
+      graph.set(node.id, []);
+      inDegree.set(node.id, 0);
+    });
+
+    edgesToLayout.forEach(edge => {
+      if (edge.type === 'dataFlow' || edge.type === 'execution') {
+        if (!graph.has(edge.source)) graph.set(edge.source, []);
+        graph.get(edge.source).push(edge.target);
+        inDegree.set(edge.target, (inDegree.get(edge.target) || 0) + 1);
+      }
+    });
+
+    // Topological sort to get layers
+    const layers = [];
+    const queue = nodesToLayout.filter(n => inDegree.get(n.id) === 0).map(n => n.id);
+    const layerMap = new Map();
+
+    queue.forEach(id => layerMap.set(id, 0));
+
+    while (queue.length > 0) {
+      const nodeId = queue.shift();
+      const layer = layerMap.get(nodeId);
+
+      if (!layers[layer]) layers[layer] = [];
+      layers[layer].push(nodeId);
+
+      const neighbors = graph.get(nodeId) || [];
+      neighbors.forEach(targetId => {
+        const newInDegree = inDegree.get(targetId) - 1;
+        inDegree.set(targetId, newInDegree);
+
+        if (newInDegree === 0) {
+          layerMap.set(targetId, layer + 1);
+          queue.push(targetId);
+        }
+      });
+    }
+
+    // Handle nodes with no edges
+    nodesToLayout.forEach(node => {
+      if (!layerMap.has(node.id)) {
+        const lastLayer = layers.length;
+        if (!layers[lastLayer]) layers[lastLayer] = [];
+        layers[lastLayer].push(node.id);
+        layerMap.set(node.id, lastLayer);
+      }
+    });
+
+    // Position nodes in layers
+    const layerSpacing = 450;
+    const nodeSpacing = 180;
+
+    return nodesToLayout.map(node => {
+      const nodeLayer = layerMap.get(node.id) || 0;
+      const nodesInLayer = layers[nodeLayer] || [];
+      const indexInLayer = nodesInLayer.indexOf(node.id);
+      const layerHeight = nodesInLayer.length * nodeSpacing;
+
+      return {
+        ...node,
+        position: {
+          x: 100 + nodeLayer * layerSpacing,
+          y: 100 + indexInLayer * nodeSpacing - layerHeight / 2 + window.innerHeight / 3,
+        },
+      };
+    });
+  }, []);
+
+  const autoLayout = useCallback((nodesToLayout = null, edgesToLayout = null) => {
+    // Use provided nodes/edges or fall back to state
+    const currentNodes = nodesToLayout || nodes;
+    const currentEdges = edgesToLayout || edges;
+
+    if (currentNodes.length === 0) return;
+
+    // Apply layout and update state
+    const layoutedNodes = applyLayoutToNodes(currentNodes, currentEdges);
+    setNodes(layoutedNodes);
+  }, [nodes, edges, setNodes, applyLayoutToNodes]);
+
+  const undo = useCallback(() => {
+    if (historyIndex <= 0) return;
+
+    isUndoRedoRef.current = true;
+    const newIndex = historyIndex - 1;
+    const snapshot = history[newIndex];
+
+    setNodes(snapshot.nodes);
+    setEdges(snapshot.edges);
+    setHistoryIndex(newIndex);
+    setSelectedNode(null);
+
+    // Reset flag after a short delay to allow state to settle
+    setTimeout(() => {
+      isUndoRedoRef.current = false;
+    }, 100);
+  }, [history, historyIndex, setNodes, setEdges]);
+
+  const redo = useCallback(() => {
+    if (historyIndex >= history.length - 1) return;
+
+    isUndoRedoRef.current = true;
+    const newIndex = historyIndex + 1;
+    const snapshot = history[newIndex];
+
+    setNodes(snapshot.nodes);
+    setEdges(snapshot.edges);
+    setHistoryIndex(newIndex);
+    setSelectedNode(null);
+
+    // Reset flag after a short delay to allow state to settle
+    setTimeout(() => {
+      isUndoRedoRef.current = false;
+    }, 100);
+  }, [history, historyIndex, setNodes, setEdges]);
+
+  // Copy/Paste functionality
+  const copySelectedNode = useCallback(() => {
+    if (!selectedNode) return;
+    setCopiedNode(selectedNode);
+  }, [selectedNode]);
+
+  const pasteNode = useCallback(() => {
+    if (!copiedNode) return;
+
+    // Create a duplicate with offset position
+    const newNode = {
+      ...copiedNode,
+      id: generateNodeId(),
+      position: {
+        x: copiedNode.position.x + 50,
+        y: copiedNode.position.y + 50,
+      },
+      data: {
+        ...copiedNode.data,
+        customName: copiedNode.data.customName
+          ? generateUniqueStageName(copiedNode.data.customName, nodes)
+          : null,
+      },
+      selected: false,
+    };
+
+    setNodes((nds) => [...nds, newNode]);
+    setSelectedNode(newNode);
+  }, [copiedNode, nodes, setNodes]);
+
+  // Global keyboard shortcuts for copy/paste/undo/redo/quick-add
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+      // Ignore if typing in an input/textarea (except for "/" which opens quick add)
+      const isTyping = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+      if (isTyping && e.key !== '/') {
+        return;
+      }
+
+      // "/" - Quick Add (open at center)
+      if (e.key === '/' && !cmdOrCtrl) {
+        e.preventDefault();
+        setQuickAddPosition({ x: 250, y: 250 }); // Will be centered
+        setShowQuickAdd(true);
+        return;
+      }
+
+      // Cmd/Ctrl+K - Quick Add (open at center)
+      if (cmdOrCtrl && e.key === 'k') {
+        e.preventDefault();
+        setQuickAddPosition({ x: 250, y: 250 }); // Will be centered
+        setShowQuickAdd(true);
+        return;
+      }
+
+      // Cmd/Ctrl+C - Copy
+      if (cmdOrCtrl && e.key === 'c' && !e.shiftKey) {
+        e.preventDefault();
+        copySelectedNode();
+      }
+
+      // Cmd/Ctrl+V - Paste
+      if (cmdOrCtrl && e.key === 'v' && !e.shiftKey) {
+        e.preventDefault();
+        pasteNode();
+      }
+
+      // Cmd/Ctrl+D - Duplicate (same as copy+paste)
+      if (cmdOrCtrl && e.key === 'd' && !e.shiftKey) {
+        e.preventDefault();
+        // Only duplicate if a node is actually selected
+        if (selectedNode) {
+          copySelectedNode();
+          // Paste immediately after copying
+          setTimeout(() => pasteNode(), 10);
+        }
+      }
+
+      // Cmd/Ctrl+Z - Undo
+      if (cmdOrCtrl && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+
+      // Cmd/Ctrl+Shift+Z - Redo
+      if (cmdOrCtrl && e.key === 'z' && e.shiftKey) {
+        e.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [copySelectedNode, pasteNode, undo, redo]);
+
+  const handleLoadConfig = useCallback(async () => {
+    try {
+      setLoadingConfig(true);
+      const configs = await listYAMLConfigs();
+      setAvailableConfigs(configs);
+      setShowConfigLoader(true);
+    } catch (err) {
+      setError('Failed to load config list: ' + (err?.message || String(err)));
+    } finally {
+      setLoadingConfig(false);
+    }
+  }, []);
+
+  const handleSelectConfig = useCallback(async (configPath) => {
+    try {
+      setLoadingConfig(true);
+      setShowConfigLoader(false);
+
+      const result = await loadYAMLConfig(configPath);
+
+      if (result.errors && result.errors.length > 0) {
+        setError('Config load errors: ' + result.errors.join(', '));
+        return;
+      }
+
+      // Clear current canvas
+      setNodes([]);
+      setEdges([]);
+      setSelectedNode(null);
+
+      // Add stages to canvas
+      const newNodes = [];
+      const stageMap = new Map();
+
+      result.stages.forEach((stageReq, idx) => {
+        const nodeId = generateNodeId();
+        const displayName = stageReq.display_name || stageReq.custom_name || stageReq.name;
+
+        // Find stage info from registry
+        const stageInfo = stages.find(s => s.name === stageReq.name);
+
+        newNodes.push({
+          id: nodeId,
+          type: 'stageNode',
+          position: { x: 100 + (idx % 4) * 300, y: 100 + Math.floor(idx / 4) * 200 },
+          data: {
+            name: displayName,
+            customName: stageReq.custom_name || null,
+            originalName: stageReq.name,
+            color: getStageColor(stageReq.name),
+            mandatory_inputs: stageInfo?.mandatory_inputs || [],
+            optional_inputs: stageInfo?.optional_inputs || [],
+            input_types: stageInfo?.input_types || {},
+            output_fields: stageInfo?.output_fields || [],
+            output_model_name: stageInfo?.output_model_name || 'VoidOutput',
+            description: stageReq.description || stageInfo?.description || '',
+            notes: stageReq.notes || '',
+            cacheable: stageInfo?.cacheable !== undefined ? stageInfo.cacheable : true,
+          },
+        });
+
+        stageMap.set(displayName, nodeId);
+      });
+
+      // Build edges FIRST (before rendering anything)
+      const newEdges = [];
+
+      // Data flow edges
+      result.data_flow_edges.forEach((edge) => {
+        const sourceNodeId = stageMap.get(edge.source_stage);
+        const targetNodeId = stageMap.get(edge.destination_stage);
+
+        if (sourceNodeId && targetNodeId) {
+          newEdges.push({
+            id: generateEdgeId(),
+            source: sourceNodeId,
+            target: targetNodeId,
+            sourceHandle: 'output',
+            targetHandle: edge.input_name,
+            type: 'dataFlow',
+            data: { inputName: edge.input_name },
+            markerEnd: { type: MarkerType.ArrowClosed },
+          });
+        }
+      });
+
+      // Execution dependencies
+      result.execution_dependencies.forEach((dep) => {
+        const sourceNodeId = stageMap.get(dep.target_stage);
+        const targetNodeId = stageMap.get(dep.stage);
+
+        // Map dependency type to handle ID
+        const handleMap = {
+          'on_success': 'exec-success',
+          'on_failure': 'exec-failure',
+          'always_after': 'exec-always'
+        };
+        const targetHandle = handleMap[dep.dependency_type] || 'exec-always';
+
+        // Map dependency type to execution type for edge display
+        const executionTypeMap = {
+          'on_success': 'success',
+          'on_failure': 'failure',
+          'always_after': 'always'
+        };
+        const executionType = executionTypeMap[dep.dependency_type] || 'always';
+
+        if (sourceNodeId && targetNodeId) {
+          newEdges.push({
+            id: generateEdgeId(),
+            source: sourceNodeId,
+            target: targetNodeId,
+            sourceHandle: 'exec-source',
+            targetHandle: targetHandle,
+            type: 'execution',
+            data: { executionType: executionType },
+            markerEnd: { type: MarkerType.ArrowClosed },
+          });
+        }
+      });
+
+      // Apply layout to nodes BEFORE setting them (no blink!)
+      const layoutedNodes = applyLayoutToNodes(newNodes, newEdges);
+
+      // Set both nodes and edges at once
+      setNodes(layoutedNodes);
+      setEdges(newEdges);
+
+      setError(null);
+
+      if (result.warnings && result.warnings.length > 0) {
+        setError('Warnings: ' + result.warnings.join(', '));
+      }
+    } catch (err) {
+      setError('Failed to load config: ' + (err?.message || String(err)));
+    } finally {
+      setLoadingConfig(false);
+    }
+  }, [stages, setNodes, setEdges, applyLayoutToNodes]);
 
   const handleEdgesChange = useCallback(
     (changes) => {
@@ -565,8 +1171,14 @@ function App() {
           🏗️ GigaEvo DAG Builder
         </h1>
         <Toolbar
-          onExport={exportPipeline}
+          onExportYAML={exportYAMLConfig}
+          onExportPDF={exportPDF}
           onClear={clearCanvas}
+          onLoadConfig={handleLoadConfig}
+          onUndo={undo}
+          onRedo={redo}
+          canUndo={historyIndex > 0}
+          canRedo={historyIndex < history.length - 1}
           nodeCount={nodes.length}
           edgeCount={edges.length}
         />
@@ -587,6 +1199,60 @@ function App() {
         </div>
       )}
 
+      {/* Validation Errors Box */}
+      {validationErrors.length > 0 && (
+        <div
+          style={{
+            background: '#fef2f2',
+            borderBottom: '1px solid #fecaca',
+            padding: '12px 20px',
+          }}
+        >
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginBottom: '8px',
+            color: '#991b1b',
+            fontWeight: 600,
+            fontSize: '14px'
+          }}>
+            <span style={{ fontSize: '18px' }}>⚠️</span>
+            <span>Validation Errors:</span>
+          </div>
+          <ul style={{
+            margin: 0,
+            paddingLeft: '32px',
+            color: '#7f1d1d',
+            fontSize: '13px'
+          }}>
+            {validationErrors.map((err, idx) => (
+              <li key={idx} style={{ marginBottom: '4px' }}>{err}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Validation Success */}
+      {validationStatus?.is_valid && nodes.length > 0 && (
+        <div
+          style={{
+            background: '#f0fdf4',
+            borderBottom: '1px solid #bbf7d0',
+            padding: '8px 20px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            color: '#166534',
+            fontWeight: 600,
+            fontSize: '14px'
+          }}
+        >
+          <span style={{ fontSize: '18px' }}>✅</span>
+          <span>DAG is valid!</span>
+        </div>
+      )}
+
       {/* Main content */}
       <div style={{ flex: '1 1 auto', display: 'flex', minHeight: 0 }}>
         {/* Stage Library (scrolls independently) */}
@@ -595,7 +1261,7 @@ function App() {
             flex: '0 0 auto',
             overflowY: 'auto',
             borderRight: '1px solid #e5e7eb',
-            maxWidth: 360,
+            maxWidth: 280,
           }}
         >
           <StageLibrary stages={stages} onAddStage={addStageToCanvas} />
@@ -625,29 +1291,6 @@ function App() {
             </div>
           )}
 
-          {/* Count badge */}
-          {nodes.length > 0 && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 16,
-                left: 16,
-                background: 'rgba(255, 255, 255, 0.9)',
-                padding: '8px 12px',
-                borderRadius: 10,
-                border: '1px solid #e5e7eb',
-                fontSize: 12,
-                fontWeight: 600,
-                color: '#374151',
-                zIndex: 2,
-                boxShadow: '0 4px 14px rgba(0,0,0,0.08)',
-                backdropFilter: 'blur(4px)',
-              }}
-            >
-              📊 {nodes.length} stages • {edges.length} connections
-            </div>
-          )}
-
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -656,6 +1299,7 @@ function App() {
             onConnect={onConnect}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
+            onNodesDelete={onNodesDelete}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             isValidConnection={isValidConnection}
@@ -712,6 +1356,56 @@ function App() {
 
             {/* Auto-fit once when nodes first appear */}
             <AutoFitOnFirstGraph rfReady={rfReady} />
+
+            {/* Auto Layout Button Panel */}
+            <Panel position="top-left" style={{
+              margin: '8px',
+              background: 'white',
+              borderRadius: '6px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              border: '1px solid #e5e7eb'
+            }}>
+              <button
+                onClick={() => autoLayout()}
+                disabled={nodes.length === 0}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 10px',
+                  background: nodes.length === 0 ? '#f8f9fa' : 'linear-gradient(135deg, #20c997 0%, #17a2b8 100%)',
+                  color: nodes.length === 0 ? '#6c757d' : 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  cursor: nodes.length === 0 ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s ease',
+                  boxShadow: nodes.length === 0 ? 'none' : '0 1px 4px rgba(32, 201, 151, 0.3)',
+                }}
+                onMouseEnter={(e) => {
+                  if (nodes.length > 0) {
+                    e.target.style.transform = 'translateY(-1px)';
+                    e.target.style.boxShadow = '0 2px 8px rgba(32, 201, 151, 0.4)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (nodes.length > 0) {
+                    e.target.style.transform = 'translateY(0)';
+                    e.target.style.boxShadow = '0 1px 4px rgba(32, 201, 151, 0.3)';
+                  }
+                }}
+                title="Arrange nodes using topological sort (left to right flow)"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/>
+                  <path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="15"/>
+                  <circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/>
+                  <path d="M18 9v7a2 2 0 0 1-2 2h-3"/>
+                </svg>
+                <span>Auto Layout</span>
+              </button>
+            </Panel>
           </ReactFlow>
         </div>
 
@@ -719,8 +1413,8 @@ function App() {
         {selectedNode && (
           <div
             style={{
-              flex: '0 0 360px',
-              maxWidth: 360,
+              flex: '0 0 280px',
+              maxWidth: 280,
               borderLeft: '1px solid #e5e7eb',
               overflowY: 'auto',
             }}
@@ -752,6 +1446,132 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Config Loader Modal */}
+      {showConfigLoader && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 1000,
+          }}
+          onClick={() => setShowConfigLoader(false)}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: '12px',
+              padding: '24px',
+              maxWidth: '600px',
+              width: '90%',
+              maxHeight: '70vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ margin: '0 0 16px 0', fontSize: '20px', fontWeight: '600' }}>
+              Load Pipeline Config
+            </h2>
+            <p style={{ margin: '0 0 20px 0', color: '#666', fontSize: '14px' }}>
+              Select a Hydra YAML pipeline configuration to load into the builder
+            </p>
+
+            {loadingConfig ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+                Loading...
+              </div>
+            ) : availableConfigs.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+                No configuration files found in config/pipeline/
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {availableConfigs.map((config) => (
+                  <button
+                    key={config.path}
+                    onClick={() => handleSelectConfig(config.path)}
+                    style={{
+                      padding: '16px',
+                      background: '#f9fafb',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'all 0.2s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.background = '#f3f4f6';
+                      e.target.style.borderColor = '#d1d5db';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.background = '#f9fafb';
+                      e.target.style.borderColor = '#e5e7eb';
+                    }}
+                  >
+                    <div style={{ fontWeight: '600', marginBottom: '4px' }}>
+                      {config.display_name}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                      {config.path}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowConfigLoader(false)}
+                style={{
+                  padding: '8px 16px',
+                  background: '#6b7280',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.background = '#4b5563';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.background = '#6b7280';
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Add Modal */}
+      {showQuickAdd && (
+        <QuickAdd
+          stages={stages}
+          onAddStage={addStageToCanvas}
+          onClose={() => setShowQuickAdd(false)}
+          position={quickAddPosition}
+        />
+      )}
+
+      {/* Toast Notifications */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
     </div>
   );
 }

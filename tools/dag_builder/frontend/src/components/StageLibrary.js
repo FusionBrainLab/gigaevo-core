@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import { Package } from 'lucide-react';
 import { getStageColor, getStageIcon, formatStageName } from '../utils/stageUtils';
 
@@ -10,16 +10,16 @@ const StageCard = ({ stage, onAddStage }) => {
 
   const handleCardMouseEnter = () => {
     if (cardRef.current) {
-      cardRef.current.style.transform = 'translateY(-2px)';
-      cardRef.current.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
-      cardRef.current.style.borderColor = getStageColor(stage.name);
+      // Only glow - no layout shift
+      cardRef.current.style.boxShadow = '0 0 0 2px rgba(59, 130, 246, 0.15)';
+      cardRef.current.style.borderColor = '#93C5FD';
     }
   };
 
   const handleCardMouseLeave = () => {
     if (cardRef.current) {
-      cardRef.current.style.transform = 'translateY(0)';
-      cardRef.current.style.boxShadow = 'none';
+      // Return to invisible shadow (prevents layout shift)
+      cardRef.current.style.boxShadow = '0 0 0 0 transparent';
       cardRef.current.style.borderColor = '#e1e5e9';
     }
   };
@@ -27,18 +27,17 @@ const StageCard = ({ stage, onAddStage }) => {
   const handleButtonMouseEnter = (e) => {
     e.stopPropagation();
     if (buttonRef.current) {
-      buttonRef.current.style.transform = 'scale(1.15)';
-      buttonRef.current.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
-      buttonRef.current.style.background = getStageColor(stage.name);
+      // Subtle hover without scale (no shaking)
+      buttonRef.current.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+      buttonRef.current.style.opacity = '0.9';
     }
   };
 
   const handleButtonMouseLeave = (e) => {
     e.stopPropagation();
     if (buttonRef.current) {
-      buttonRef.current.style.transform = 'scale(1)';
-      buttonRef.current.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
-      buttonRef.current.style.background = getStageColor(stage.name);
+      buttonRef.current.style.boxShadow = '0 1px 4px rgba(0,0,0,0.2)';
+      buttonRef.current.style.opacity = '1';
     }
   };
 
@@ -48,13 +47,15 @@ const StageCard = ({ stage, onAddStage }) => {
       style={{
         background: 'white',
         border: '1px solid #e1e5e9',
-        borderRadius: '8px',
-        padding: '12px',
-        margin: '6px 0',
+        borderRadius: '6px',
+        padding: '8px',
+        paddingRight: '36px', // Make room for the add button
+        margin: '4px 0',
         cursor: 'grab',
-        transition: 'all 0.2s ease',
+        transition: 'box-shadow 0.15s ease, border-color 0.15s ease',
         position: 'relative',
         overflow: 'hidden',
+        boxShadow: '0 0 0 0 transparent', // Initial transparent shadow prevents layout shift
         userSelect: 'none',
         WebkitUserSelect: 'none',
         MozUserSelect: 'none',
@@ -69,15 +70,6 @@ const StageCard = ({ stage, onAddStage }) => {
         }
       }}
     >
-      {/* Color indicator */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        height: '3px',
-        background: getStageColor(stage.name)
-      }} />
 
       {/* Add button */}
       <button
@@ -106,23 +98,23 @@ const StageCard = ({ stage, onAddStage }) => {
         onMouseLeave={handleButtonMouseLeave}
         style={{
           position: 'absolute',
-          top: '8px',
-          right: '8px',
-          background: getStageColor(stage.name),
+          top: '6px',
+          right: '6px',
+          background: '#64748B',
           color: 'white',
           border: 'none',
-          borderRadius: '50%',
-          width: '28px',
-          height: '28px',
+          borderRadius: '4px',
+          width: '24px',
+          height: '24px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           cursor: 'pointer',
-          fontSize: '18px',
-          fontWeight: 'bold',
+          fontSize: '16px',
+          fontWeight: '600',
           lineHeight: '1',
-          transition: 'all 0.2s ease',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+          transition: 'opacity 0.15s ease, box-shadow 0.15s ease',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
           zIndex: 10,
           pointerEvents: 'auto',
           padding: '0',
@@ -130,22 +122,7 @@ const StageCard = ({ stage, onAddStage }) => {
         }}
         title="Click to add to canvas"
       >
-        <span style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: '100%',
-          height: '100%',
-          fontSize: '16px',
-          fontWeight: 'bold',
-          lineHeight: '1',
-          margin: '0',
-          padding: '0',
-          textAlign: 'center',
-          verticalAlign: 'middle'
-        }}>
-          +
-        </span>
+        +
       </button>
 
       {/* Stage info */}
@@ -153,131 +130,193 @@ const StageCard = ({ stage, onAddStage }) => {
         display: 'flex',
         alignItems: 'center',
         gap: '8px',
-        marginBottom: '8px'
+        marginBottom: '6px'
       }}>
-        <span style={{ fontSize: '16px' }}>
+        <span style={{ fontSize: '14px' }}>
           {getStageIcon()}
         </span>
-        <div>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          flex: 1
+        }}>
           <div style={{
             fontWeight: '600',
-            fontSize: '14px',
+            fontSize: '13px',
             color: '#333',
             lineHeight: '1.2'
           }}>
             {formatStageName(stage.name)}
           </div>
+          {stage.cacheable !== undefined && (
+            <span
+              style={{
+                fontSize: 10,
+                color: '#6b7280',
+              }}
+              title={stage.cacheable ? "Cacheable - results can be cached" : "Non-cacheable - always recomputes"}
+            >
+              {stage.cacheable ? '💾' : '🔄'}
+            </span>
+          )}
         </div>
       </div>
 
       <div style={{
-        fontSize: '12px',
+        fontSize: '11px',
         color: '#666',
-        lineHeight: '1.4',
-        marginBottom: '8px'
+        lineHeight: '1.3',
+        marginBottom: '6px'
       }}>
         {stage.description}
       </div>
 
       {/* Inputs/Outputs */}
-      <div style={{
-        display: 'flex',
-        gap: '12px',
-        fontSize: '11px'
-      }}>
+      <div style={{ fontSize: '10px' }}>
+        {/* Inputs */}
         <div style={{
-          flex: 1,
-          background: '#f8f9fa',
-          padding: '4px 6px',
-          borderRadius: '4px',
-          border: '1px solid #e9ecef'
+          display: 'flex',
+          gap: '12px',
+          marginBottom: '8px'
         }}>
           <div style={{
-            fontWeight: '600',
-            color: '#495057',
-            marginBottom: '2px'
+            flex: 1,
+            background: '#f8f9fa',
+            padding: '4px 6px',
+            borderRadius: '4px',
+            border: '1px solid #e9ecef'
           }}>
-            Mandatory Inputs
+            <div style={{
+              fontWeight: '600',
+              color: '#495057',
+              marginBottom: '2px'
+            }}>
+              Mandatory Inputs
+            </div>
+            <div style={{ color: '#6c757d' }}>
+              {stage.mandatory_inputs.length > 0
+                ? stage.mandatory_inputs.join(', ')
+                : 'None'
+              }
+            </div>
           </div>
-          <div style={{ color: '#6c757d' }}>
-            {stage.mandatory_inputs.length > 0
-              ? stage.mandatory_inputs.join(', ')
-              : 'None'
-            }
+
+          <div style={{
+            flex: 1,
+            background: '#f8f9fa',
+            padding: '4px 6px',
+            borderRadius: '4px',
+            border: '1px solid #e9ecef'
+          }}>
+            <div style={{
+              fontWeight: '600',
+              color: '#495057',
+              marginBottom: '2px'
+            }}>
+              Optional Inputs
+            </div>
+            <div style={{ color: '#6c757d' }}>
+              {stage.optional_inputs.length > 0
+                ? stage.optional_inputs.join(', ')
+                : 'None'
+              }
+            </div>
           </div>
         </div>
 
-        <div style={{
-          flex: 1,
-          background: '#f8f9fa',
-          padding: '4px 6px',
-          borderRadius: '4px',
-          border: '1px solid #e9ecef'
-        }}>
+        {/* Output */}
+        {stage.output_fields && stage.output_fields.length > 0 && stage.output_model_name !== 'VoidOutput' && (
           <div style={{
-            fontWeight: '600',
-            color: '#495057',
-            marginBottom: '2px'
+            background: '#fffbeb',
+            padding: '4px 6px',
+            borderRadius: '4px',
+            border: '1px solid #fde68a'
           }}>
-            Optional Inputs
+            <div style={{
+              fontWeight: '600',
+              color: '#92400e',
+              marginBottom: '2px'
+            }}>
+              Output: {stage.output_model_name}
+            </div>
+            <div style={{ color: '#b45309' }}>
+              {stage.output_fields.join(', ')}
+            </div>
           </div>
-          <div style={{ color: '#6c757d' }}>
-            {stage.optional_inputs.length > 0
-              ? stage.optional_inputs.join(', ')
-              : 'None'
-            }
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
 };
 
 const StageLibrary = ({ stages, onAddStage }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  // Filter stages based on search term
+  const filteredStages = useMemo(() => {
+    if (!searchTerm.trim()) {
+      return stages;
+    }
+
+    const lowerSearch = searchTerm.toLowerCase();
+    return stages.filter((stage) => {
+      // Search in name, description, inputs, and outputs
+      const nameMatch = stage.name.toLowerCase().includes(lowerSearch);
+      const descMatch = stage.description?.toLowerCase().includes(lowerSearch) || false;
+      const inputMatch = [
+        ...stage.mandatory_inputs,
+        ...stage.optional_inputs
+      ].some(input => input.toLowerCase().includes(lowerSearch));
+      const outputMatch = stage.output_model_name?.toLowerCase().includes(lowerSearch) || false;
+
+      return nameMatch || descMatch || inputMatch || outputMatch;
+    });
+  }, [stages, searchTerm]);
 
   return (
     <div style={{
-      width: '320px',
+      width: '100%',
       background: 'white',
-      borderRight: '1px solid #e1e5e9',
       display: 'flex',
       flexDirection: 'column',
-      boxShadow: '2px 0 4px rgba(0,0,0,0.1)'
+      height: '100%'
     }}>
       {/* Header */}
       <div style={{
-        padding: '16px 20px',
+        padding: '12px 16px',
         borderBottom: '1px solid #e1e5e9',
         background: '#f8f9fa'
       }}>
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
-          fontSize: '16px',
+          gap: '6px',
+          fontSize: '14px',
           fontWeight: '600',
           color: '#333'
         }}>
-          <Package size={20} />
+          <Package size={18} />
           Stage Library
         </div>
         <div style={{
-          fontSize: '12px',
+          fontSize: '11px',
           color: '#666',
-          marginTop: '4px'
+          marginTop: '2px'
         }}>
-          {stages.length} stages available
+          {filteredStages.length} of {stages.length} stages
         </div>
       </div>
 
       {/* Search */}
       <div style={{
-        padding: '12px 16px',
+        padding: '10px 12px',
         borderBottom: '1px solid #e1e5e9'
       }}>
         <input
           type="text"
           placeholder="Search stages..."
+          value={searchTerm}
           style={{
             width: '100%',
             padding: '8px 12px',
@@ -286,9 +325,7 @@ const StageLibrary = ({ stages, onAddStage }) => {
             fontSize: '14px',
             outline: 'none'
           }}
-          onChange={(e) => {
-            // TODO: Implement search functionality
-          }}
+          onChange={(e) => setSearchTerm(e.target.value)}
         />
       </div>
 
@@ -298,13 +335,24 @@ const StageLibrary = ({ stages, onAddStage }) => {
         overflowY: 'auto',
         padding: '8px'
       }}>
-        {stages.map((stage) => (
-          <StageCard
-            key={stage.name}
-            stage={stage}
-            onAddStage={onAddStage}
-          />
-        ))}
+        {filteredStages.length > 0 ? (
+          filteredStages.map((stage) => (
+            <StageCard
+              key={stage.name}
+              stage={stage}
+              onAddStage={onAddStage}
+            />
+          ))
+        ) : (
+          <div style={{
+            padding: '20px',
+            textAlign: 'center',
+            color: '#666',
+            fontSize: '13px'
+          }}>
+            No stages found matching "{searchTerm}"
+          </div>
+        )}
       </div>
     </div>
   );

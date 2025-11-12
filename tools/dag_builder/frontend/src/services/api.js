@@ -81,4 +81,40 @@ export async function validateDAG(dagData) {
   }
 }
 
+/**
+ * Export a DAG as YAML configuration
+ */
+export async function exportYAML(dagData) {
+  try {
+    const response = await api.post('/export-yaml', dagData);
+    return response.data;
+  } catch (error) {
+    throw new Error(`Failed to export YAML: ${error.response?.data?.detail || error.message}`);
+  }
+}
+
+/**
+ * List available Hydra YAML pipeline configs
+ */
+export async function listYAMLConfigs() {
+  try {
+    const response = await api.get('/yaml-configs');
+    return response.data;
+  } catch (error) {
+    throw new Error(`Failed to list YAML configs: ${error.response?.data?.detail || error.message}`);
+  }
+}
+
+/**
+ * Load and parse a Hydra YAML config
+ */
+export async function loadYAMLConfig(yamlPath) {
+  try {
+    const response = await api.post('/load-yaml', { yaml_path: yamlPath });
+    return response.data;
+  } catch (error) {
+    throw new Error(`Failed to load YAML config: ${error.response?.data?.detail || error.message}`);
+  }
+}
+
 export default api;

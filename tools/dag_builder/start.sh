@@ -19,7 +19,7 @@ sleep 2
 
 # Start backend
 echo "🔧 Starting backend on port 8081..."
-cd /workspace-SR008.fs2/mathemage/gigaevo/tools/dag_builder
+cd tools/dag_builder
 python run.py &
 BACKEND_PID=$!
 

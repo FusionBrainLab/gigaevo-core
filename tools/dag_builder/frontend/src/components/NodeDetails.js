@@ -1,6 +1,6 @@
 import React from 'react';
 import { X, Settings, Activity, Code, Zap, Edit3 } from 'lucide-react';
-import { getStageColor, formatStageName } from '../utils/stageUtils';
+import { getStageColor, formatStageName, getTypeColor } from '../utils/stageUtils';
 
 const NodeDetails = ({ node, onClose, onEdit }) => {
   const stageColor = getStageColor(node.data.originalName || node.data.name);
@@ -8,16 +8,14 @@ const NodeDetails = ({ node, onClose, onEdit }) => {
 
   return (
     <div style={{
-      width: '320px',
+      width: '100%',
       background: 'white',
-      borderLeft: '1px solid #e1e5e9',
       display: 'flex',
       flexDirection: 'column',
-      boxShadow: '-2px 0 4px rgba(0,0,0,0.1)'
     }}>
       {/* Header */}
       <div style={{
-        padding: '16px 20px',
+        padding: '12px 16px',
         borderBottom: '1px solid #e1e5e9',
         background: '#f8f9fa',
         display: 'flex',
@@ -27,12 +25,12 @@ const NodeDetails = ({ node, onClose, onEdit }) => {
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
-          fontSize: '16px',
+          gap: '6px',
+          fontSize: '14px',
           fontWeight: '600',
           color: '#333'
         }}>
-          <Settings size={20} />
+          <Settings size={18} />
           Node Details
         </div>
         <div style={{
@@ -91,7 +89,10 @@ const NodeDetails = ({ node, onClose, onEdit }) => {
       <div style={{
         flex: 1,
         overflowY: 'auto',
-        padding: '20px'
+        overflowX: 'hidden',
+        padding: '20px',
+        wordWrap: 'break-word',
+        overflowWrap: 'break-word'
       }}>
         {/* Stage Info */}
         <div style={{
@@ -142,27 +143,47 @@ const NodeDetails = ({ node, onClose, onEdit }) => {
               }}>
                 Required Inputs:
               </div>
-              {node.data.mandatory_inputs.map((input, index) => (
-                <div key={input} style={{
-                  background: '#fff5f5',
-                  border: '1px solid #fed7d7',
-                  borderRadius: '6px',
-                  padding: '8px 12px',
-                  marginBottom: '4px',
-                  fontSize: '12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px'
-                }}>
-                  <div style={{
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    background: '#dc3545'
-                  }} />
-                  {input}
-                </div>
-              ))}
+              {node.data.mandatory_inputs.map((input, index) => {
+                const inputType = node.data.input_types && node.data.input_types[input];
+                const typeColor = getTypeColor(inputType);
+                return (
+                  <div key={input} style={{
+                    background: '#fff5f5',
+                    border: '1px solid #fed7d7',
+                    borderRadius: '6px',
+                    padding: '8px 12px',
+                    marginBottom: '4px',
+                    fontSize: '12px'
+                  }}>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      marginBottom: inputType ? '4px' : '0'
+                    }}>
+                      <div style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        background: typeColor,
+                        flexShrink: 0
+                      }} />
+                      <span style={{ fontWeight: '600' }}>{input}</span>
+                    </div>
+                    {inputType && (
+                      <div style={{
+                        fontSize: '11px',
+                        color: typeColor,
+                        marginLeft: '16px',
+                        fontFamily: 'monospace',
+                        fontWeight: '500'
+                      }}>
+                        {inputType}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -177,27 +198,48 @@ const NodeDetails = ({ node, onClose, onEdit }) => {
               }}>
                 Optional Inputs:
               </div>
-              {node.data.optional_inputs.map((input, index) => (
-                <div key={input} style={{
-                  background: '#f8f9fa',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '6px',
-                  padding: '8px 12px',
-                  marginBottom: '4px',
-                  fontSize: '12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px'
-                }}>
-                  <div style={{
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    background: '#6c757d'
-                  }} />
-                  {input}
-                </div>
-              ))}
+              {node.data.optional_inputs.map((input, index) => {
+                const inputType = node.data.input_types && node.data.input_types[input];
+                const typeColor = getTypeColor(inputType);
+                return (
+                  <div key={input} style={{
+                    background: '#f8f9fa',
+                    border: '1px solid #e9ecef',
+                    borderRadius: '4px',
+                    padding: '8px 12px',
+                    marginBottom: '4px',
+                    fontSize: '12px',
+                    opacity: 0.7
+                  }}>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      marginBottom: inputType ? '4px' : '0'
+                    }}>
+                      <div style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        background: typeColor,
+                        flexShrink: 0
+                      }} />
+                      <span style={{ fontWeight: '600' }}>{input}</span>
+                    </div>
+                    {inputType && (
+                      <div style={{
+                        fontSize: '11px',
+                        color: typeColor,
+                        marginLeft: '16px',
+                        fontFamily: 'monospace',
+                        fontWeight: '500'
+                      }}>
+                        {inputType}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -235,26 +277,40 @@ const NodeDetails = ({ node, onClose, onEdit }) => {
             border: '1px solid #b3d9ff',
             borderRadius: '6px',
             padding: '12px',
-            fontSize: '12px',
-            color: '#0066cc'
+            fontSize: '12px'
           }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              marginBottom: '4px'
-            }}>
-              <div style={{
-                width: '8px',
-                height: '8px',
-                borderRadius: '50%',
-                background: stageColor
-              }} />
-              Program Output
-            </div>
-            <div style={{ color: '#666', fontSize: '11px' }}>
-              Results from stage execution
-            </div>
+            {(() => {
+              const outputType = node.data.output_model_name || 'Output';
+              const typeColor = getTypeColor(outputType);
+              return (
+                <>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    marginBottom: '4px'
+                  }}>
+                    <div style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: typeColor,
+                      flexShrink: 0
+                    }} />
+                    <span style={{ fontWeight: '600' }}>output</span>
+                  </div>
+                  <div style={{
+                    fontSize: '11px',
+                    color: typeColor,
+                    marginLeft: '16px',
+                    fontFamily: 'monospace',
+                    fontWeight: '500'
+                  }}>
+                    {outputType}
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
 
@@ -301,10 +357,32 @@ const NodeDetails = ({ node, onClose, onEdit }) => {
             <div style={{
               display: 'flex',
               justifyContent: 'space-between',
-              fontSize: '12px'
+              fontSize: '12px',
+              marginBottom: '6px'
             }}>
               <span style={{ color: '#6c757d' }}>Type:</span>
               <span style={{ color: '#333', fontFamily: 'monospace' }}>{node.type}</span>
+            </div>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              fontSize: '12px',
+              alignItems: 'center'
+            }}>
+              <span style={{ color: '#6c757d' }}>Cacheable:</span>
+              <span style={{ color: '#333', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                {node.data.cacheable ? (
+                  <>
+                    <span>Yes</span>
+                    <span style={{ fontSize: 11 }} title="Results can be cached">💾</span>
+                  </>
+                ) : (
+                  <>
+                    <span>No</span>
+                    <span style={{ fontSize: 11 }} title="Always recomputes">🔄</span>
+                  </>
+                )}
+              </span>
             </div>
           </div>
         </div>

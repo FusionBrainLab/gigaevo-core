@@ -1,24 +1,13 @@
 // Utility functions for dynamic stage handling
 
 /**
- * Generate a consistent color for a stage based on its name hash
- * This ensures the same stage always gets the same color
+ * Generate a neutral gray color for minimal, professional design
+ * All stages use the same calm gray palette
  */
 export function getStageColor(stageName) {
-  // Simple hash function for consistent colors
-  let hash = 0;
-  for (let i = 0; i < stageName.length; i++) {
-    const char = stageName.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-
-  // Convert hash to HSL color space for better color distribution
-  const hue = Math.abs(hash) % 360;
-  const saturation = 60 + (Math.abs(hash >> 8) % 25); // 60-85%
-  const lightness = 45 + (Math.abs(hash >> 16) % 20); // 45-65%
-
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  // Minimal design: neutral gray for all stages
+  // Focus on structure, not decoration
+  return 'hsl(220, 9%, 46%)'; // Subtle blue-gray
 }
 
 /**
@@ -168,4 +157,69 @@ export function isStageNameUnique(name, existingNodes, excludeNodeId = null) {
  */
 export function getStageDisplayName(nodeData) {
   return nodeData?.customName || nodeData?.name || 'Untitled Stage';
+}
+
+/**
+ * Extract the inner type from Optional[Type] or Union[Type, None]
+ * @param {string} typeName - The type name (e.g., "Optional[ProgramIO]")
+ * @returns {string} - The inner type (e.g., "ProgramIO") or original if not optional
+ */
+export function extractInnerType(typeName) {
+  if (!typeName) return typeName;
+
+  // Handle Optional[Type]
+  const optionalMatch = typeName.match(/^Optional\[(.+)\]$/);
+  if (optionalMatch) {
+    return optionalMatch[1];
+  }
+
+  // Handle Union[Type, None] or Union[None, Type]
+  const unionMatch = typeName.match(/^Union\[(.+),\s*None\]$|^Union\[None,\s*(.+)\]$/);
+  if (unionMatch) {
+    return unionMatch[1] || unionMatch[2];
+  }
+
+  return typeName;
+}
+
+/**
+ * Generate a consistent color for a given type
+ * Same type always gets the same color for easy visual matching
+ * @param {string} typeName - The type name (e.g., "ProgramIO", "str", "Optional[Dict[str, Any]]")
+ * @returns {string} - HSL color string
+ */
+export function getTypeColor(typeName) {
+  if (!typeName) {
+    return '#6c757d'; // Default gray for undefined types
+  }
+
+  // Extract inner type for Optional/Union types to ensure consistent colors
+  const baseType = extractInnerType(typeName);
+
+  // Predefined palette of distinct, accessible colors
+  const colorPalette = [
+    'hsl(210, 79%, 46%)',  // Blue
+    'hsl(340, 82%, 52%)',  // Pink
+    'hsl(291, 64%, 42%)',  // Purple
+    'hsl(262, 52%, 47%)',  // Deep purple
+    'hsl(39, 100%, 50%)',  // Orange
+    'hsl(122, 39%, 49%)',  // Green
+    'hsl(187, 71%, 42%)',  // Teal
+    'hsl(14, 100%, 57%)',  // Red-orange
+    'hsl(45, 100%, 51%)',  // Yellow
+    'hsl(171, 100%, 37%)', // Cyan
+    'hsl(4, 90%, 58%)',    // Red
+    'hsl(24, 100%, 50%)',  // Deep orange
+  ];
+
+  // Simple hash function for consistent color assignment
+  let hash = 0;
+  for (let i = 0; i < baseType.length; i++) {
+    hash = ((hash << 5) - hash) + baseType.charCodeAt(i);
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+
+  // Map hash to palette index
+  const index = Math.abs(hash) % colorPalette.length;
+  return colorPalette[index];
 }
