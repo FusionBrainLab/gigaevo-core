@@ -16,17 +16,8 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
 from loguru import logger
 
-# Try to import Langfuse - if not available, tracing will be disabled
-try:
-    from langfuse import Langfuse
-    from langfuse.langchain import CallbackHandler
-    LANGFUSE_AVAILABLE = True
-except ImportError:
-    LANGFUSE_AVAILABLE = False
-    CallbackHandler = None
-    Langfuse = None
-    logger.warning("[MultiModelRouter] Langfuse not installed, tracing disabled")
-
+from langfuse import Langfuse
+from langfuse.langchain import CallbackHandler
 
 class MultiModelRouter(Runnable):
     """Probabilistic model selector - drop-in replacement for ChatOpenAI.
@@ -92,26 +83,23 @@ class MultiModelRouter(Runnable):
         self.langfuse_handler = None
         self.langfuse_client = None
 
-        # Auto-initialize Langfuse tracing if available
-        if LANGFUSE_AVAILABLE:
-            try:
-                # Create handler - reads from LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY env vars
-                self.langfuse_handler = CallbackHandler()
-                
-                # Create client for immediate flushing and manual control
-                self.langfuse_client = Langfuse(
-                    flush_at=1,          # Send every event immediately
-                    flush_interval=1,    # Check every 1 second
-                )
-                
-                logger.info("[MultiModelRouter] Langfuse tracing enabled (immediate mode)")
-            except Exception as e:
-                logger.warning(
-                    f"[MultiModelRouter] Failed to initialize Langfuse: {e}. "
-                    "Tracing disabled. Set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY."
-                )
-                self.langfuse_handler = None
-                self.langfuse_client = None
+        # Auto-initialize Langfuse tracing
+        try:
+            # Create handler - reads from LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY env vars
+            self.langfuse_handler = CallbackHandler()
+              
+            # Create client for immediate flushing and manual control
+            self.langfuse_client = Langfuse(
+                flush_at=1,          # Send every event immediately
+                flush_interval=1,    # Check every 1 second
+            )
+              
+            logger.info("[MultiModelRouter] Langfuse tracing enabled (immediate mode)")
+        except Exception as e:
+            logger.warning(
+                f"[MultiModelRouter] Failed to initialize Langfuse: {e}. "
+                "Tracing disabled. Set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY."
+            )
         
         self.selected_model: ChatOpenAI | None = None
         logger.info(f"[MultiModelRouter] Initialized with {len(models)} models")
@@ -127,25 +115,21 @@ class MultiModelRouter(Runnable):
             return config
 
         cfg = dict(config or {})
-        
+    
         # Add Langfuse handler to callbacks
-        callbacks = list(cfg.get("callbacks", []) or [])
+        callbacks = cfg.setdefault("callbacks", [])
         if self.langfuse_handler not in callbacks:
             callbacks.append(self.langfuse_handler)
-        cfg["callbacks"] = callbacks
 
         # Add model metadata and tags
         if self.selected_model:
-            metadata = dict(cfg.get("metadata", {}) or {})
-            model_name = getattr(self.selected_model, "model", str(self.selected_model))
-            metadata["selected_model"] = model_name
+            metadata = dict(cfg.get("metadata", {}))
+            model_data = str(self.selected_model)
+            metadata["selected_model"] = model_data
             cfg["metadata"] = metadata
 
-            tags = list(cfg.get("tags", []) or [])
-            tags.extend(["router", f"model:{model_name}"])
-            cfg["tags"] = tags
-
         return cfg
+
 
     def invoke(
         self,
