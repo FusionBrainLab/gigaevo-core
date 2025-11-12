@@ -46,10 +46,8 @@ dag_blueprint:
 
     # Merge validator and complexity metrics (dict[str, float])
     MergeMetricsStage:
-      _target_: gigaevo.programs.stages.json_processing.MergeDictStage.create_typed
+      _target_: gigaevo.programs.stages.json_processing.MergeStrFloatDict
       _partial_: true
-      key_type: ${get_object:builtins.str}
-      value_type: ${get_object:builtins.float}
       timeout: ${stage_timeout}
 
     # Ensure all required metrics exist

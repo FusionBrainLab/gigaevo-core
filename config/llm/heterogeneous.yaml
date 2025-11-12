@@ -9,18 +9,14 @@ llm:
     - model: google/gemini-2.5-pro
       temperature: ${temperature}
       max_tokens: ${max_tokens}
-      top_p: ${top_p}
-      top_k: ${top_k}
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
 
     # Model 2: Alternative model (e.g., for different strengths)
     # Change to your preferred alternative model
-    - model: google/gemini-2.5-flash # Example alternative
+    - model: openai/gpt-5-mini # Example alternative
       temperature: ${temperature}
       max_tokens: ${max_tokens}
-      top_p: ${top_p}
-      top_k: ${top_k}
       base_url: https://openrouter.ai/api/v1  # Different endpoint
       request_timeout: ${request_timeout}
 

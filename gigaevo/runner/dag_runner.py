@@ -264,7 +264,10 @@ class DagRunner:
             try:
                 info.task.result()
                 await self._metrics.increment_dag_runs_completed()
-                logger.debug("[DagScheduler] program {} completed", info.program_id)
+                logger.debug(
+                    "[DagScheduler] harvested completed task for program {}",
+                    info.program_id,
+                )
             except Exception as e:
                 await self._metrics.increment_dag_errors()
                 logger.error("[DagScheduler] program {} failed: {}", info.program_id, e)
@@ -361,6 +364,12 @@ class DagRunner:
                 ProgramState.DAG_PROCESSING_COMPLETED if ok else ProgramState.DISCARDED
             )
             await self._state_manager.set_program_state(program, new_state)
+
+            # Log completion immediately when state is updated
+            if ok:
+                logger.debug(
+                    "[DagScheduler] DAG completed for {} (state updated)", program.id
+                )
         except Exception as se:
             await self._metrics.record_state_update_failure()
             logger.error(

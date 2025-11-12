@@ -5,7 +5,7 @@ specs:
     is_primary: true
     higher_is_better: true
     lower_bound: 32
-    upper_bound: 594
+    upper_bound: 593
     include_in_prompts: true
     significant_change: 1
 

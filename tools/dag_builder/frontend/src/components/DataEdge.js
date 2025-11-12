@@ -66,18 +66,19 @@ const DataEdge = ({
             style={{
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${centerX}px,${centerY}px)`,
-              fontSize: 10,
-              fontWeight: '500',
-              color: '#666',
-              background: 'white',
-              padding: '2px 6px',
+              fontSize: 12,
+              fontWeight: '600',
+              color: '#111827',
+              background: 'rgba(255, 255, 255, 0.95)',
+              padding: '3px 8px',
               borderRadius: '4px',
-              border: `1px solid ${edgeColor}`,
+              border: '1px solid #E5E7EB',
               pointerEvents: 'none',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
               minWidth: '16px',
               textAlign: 'center',
-              opacity: 0.8
+              zIndex: 10,
+              willChange: 'transform', // Optimize rendering
             }}
             className="nodrag nopan"
           >

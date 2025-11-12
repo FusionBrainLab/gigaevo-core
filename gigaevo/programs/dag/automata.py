@@ -105,63 +105,68 @@ class DAGAutomata(BaseModel):
     topology: _Topology | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # ---------------------- Build / Validation ----------------------
-
     @classmethod
-    def build(
+    def validate_structure(
         cls,
-        nodes: dict[str, Stage],
+        stage_classes: dict[str, Type[Stage]],
         data_flow_edges: list[DataFlowEdge],
         execution_order_deps: dict[str, list[ExecutionOrderDependency]] | None = None,
-    ) -> "DAGAutomata":
-        rules: dict[str, StageTransitionRule] = {}
+    ) -> list[str]:
+        """
+        Validate DAG structure using stage classes (no instances required).
 
-        bad_nodes = [k for k, v in nodes.items() if not isinstance(v, Stage)]
+        Returns a list of validation error messages. Empty list means valid.
+        This is useful for design-time validation without needing to instantiate stages.
+        """
+        errors: list[str] = []
+
+        # Validate that all values are Stage classes
+        bad_nodes = [
+            k
+            for k, v in stage_classes.items()
+            if not (isinstance(v, type) and issubclass(v, Stage))
+        ]
         if bad_nodes:
-            raise ValueError(
-                f"Non-Stage objects registered as nodes: {', '.join(sorted(bad_nodes))}"
+            errors.append(
+                f"Non-Stage classes registered as nodes: {', '.join(sorted(bad_nodes))}"
             )
+            return errors
 
+        # Validate edge references
         incoming_by_dest: dict[str, list[DataFlowEdge]] = {}
         for e in data_flow_edges:
-            if e.source_stage not in nodes:
-                raise ValueError(
+            if e.source_stage not in stage_classes:
+                errors.append(
                     f"Data flow edge references unknown source '{e.source_stage}'"
                 )
-            if e.destination_stage not in nodes:
-                raise ValueError(
+            if e.destination_stage not in stage_classes:
+                errors.append(
                     f"Data flow edge references unknown destination '{e.destination_stage}'"
                 )
             incoming_by_dest.setdefault(e.destination_stage, []).append(e)
 
-        preds_by_dest: dict[str, list[str]] = {
-            dst: [e.source_stage for e in edges]
-            for dst, edges in incoming_by_dest.items()
-        }
-
+        # Validate execution order dependencies
         execution_order_deps = execution_order_deps or {}
         for stage_name, deps in execution_order_deps.items():
-            if stage_name not in nodes:
-                raise ValueError(
+            if stage_name not in stage_classes:
+                errors.append(
                     f"Execution-order deps contain unknown target stage '{stage_name}'"
                 )
             for dep in deps:
-                if dep.stage_name not in nodes:
-                    raise ValueError(
+                if dep.stage_name not in stage_classes:
+                    errors.append(
                         f"Execution-order dependency for '{stage_name}' references unknown stage '{dep.stage_name}'"
                     )
-            rules[stage_name] = StageTransitionRule(
-                stage_name=stage_name, execution_order_dependencies=list(deps)
-            )
 
-        # ---------- Input/topology & TYPE consistency (exact class match) ----------
-        errors: list[str] = []
+        # Return early if basic structure is invalid
+        if errors:
+            return errors
 
-        for stage_name, stage in nodes.items():
-            st_cls = stage.__class__
+        # Validate input/output type compatibility
+        for stage_name, stage_cls in stage_classes.items():
             incoming_edges = incoming_by_dest.get(stage_name, [])
             seen: set[str] = set()
-            dst_inputs_model: Type[StageIO] = st_cls.InputsModel
+            dst_inputs_model: Type[StageIO] = stage_cls.InputsModel
             declared = set(dst_inputs_model.model_fields.keys())
 
             for e in incoming_edges:
@@ -172,7 +177,7 @@ class DAGAutomata(BaseModel):
                 seen.add(e.input_name)
 
                 # TYPE CHECK
-                src_cls = nodes[e.source_stage].__class__
+                src_cls = stage_classes[e.source_stage]
                 src_out_model = src_cls.OutputModel
 
                 if e.input_name not in declared:
@@ -206,35 +211,48 @@ class DAGAutomata(BaseModel):
                             inner = ", ".join(_fmt(x) for x in a)
                             return f"{name}[{inner}]"
 
-                        exp = " | ".join(_fmt(a) for a in accepts)
                         errors.append(
-                            f"Type mismatch for edge {e.source_stage} -> {e.destination_stage}.{e.input_name}: "
-                            f"producer={_fmt(src_out_model)} not compatible with {exp}"
+                            f"Type mismatch: {e.source_stage} produces {_fmt(src_out_model)}, "
+                            f"but {e.destination_stage}.{e.input_name} expects {_fmt(ann)}"
                         )
-                        if errors:
-                            raise ValueError(
-                                "Input/topology/type validation failed: "
-                                + "; ".join(errors)
-                            )
 
-        # Build-time: every mandatory input must have a provider
-        for stage_name, stage in nodes.items():
-            st_cls = stage.__class__
-            required_names = set(st_cls._required_names)
-            incoming = {e.input_name for e in incoming_by_dest.get(stage_name, [])}
-            missing = sorted(required_names - incoming)
+            # Check for missing mandatory inputs
+            required = set(stage_cls._required_names)
+            provided = seen
+            missing = required - provided
             if missing:
-                raise ValueError(
-                    f"Topology error: stage '{stage_name}' is missing providers for mandatory inputs: {missing}"
+                errors.append(
+                    f"Stage '{stage_name}' missing required inputs: {sorted(missing)}"
                 )
+
+        # Validate cacheability safety
+        for e in data_flow_edges:
+            dst_cls = stage_classes[e.destination_stage]
+            src_cls = stage_classes[e.source_stage]
+            if dst_cls.cacheable and not src_cls.cacheable:
+                errors.append(
+                    f"Cacheability violation: cacheable '{e.destination_stage}' depends on "
+                    f"non-cacheable '{e.source_stage}' via data-flow"
+                )
+
+        execution_order_deps = execution_order_deps or {}
+        for stage_name, deps in execution_order_deps.items():
+            dst_cls = stage_classes[stage_name]
+            for dep in deps:
+                src_cls = stage_classes[dep.stage_name]
+                if dst_cls.cacheable and not src_cls.cacheable:
+                    errors.append(
+                        f"Cacheability violation: cacheable '{stage_name}' depends on "
+                        f"non-cacheable '{dep.stage_name}' via execution-order"
+                    )
 
         # ---------- DAG must be acyclic (data + exec deps) ----------
         G = nx.DiGraph()
-        G.add_nodes_from(nodes.keys())
+        G.add_nodes_from(stage_classes.keys())
         for e in data_flow_edges:
             G.add_edge(e.source_stage, e.destination_stage)
-        for stage_name, rule in rules.items():
-            for dep in rule.execution_order_dependencies:
+        for stage_name, deps in execution_order_deps.items():
+            for dep in deps:
                 G.add_edge(dep.stage_name, stage_name)
 
         if not nx.is_directed_acyclic_graph(G):
@@ -244,24 +262,58 @@ class DAGAutomata(BaseModel):
                 cycle_desc = " -> ".join(cycle_nodes)
             except Exception:
                 cycle_desc = "(could not extract cycle nodes)"
-            raise ValueError(
+            errors.append(
                 f"Cycle detected in DAG (including exec-order deps): {cycle_desc}"
             )
 
-        # ---------- Cacheability safety ----------
-        def _assert_cache_safe(dst: str, src: str, kind: str) -> None:
-            if nodes[dst].cacheable and not nodes[src].cacheable:
-                raise ValueError(
-                    f"Cacheability violation: cacheable '{dst}' depends on non-cacheable '{src}' via {kind}"
-                )
+        return errors
 
-        for dst, edges in incoming_by_dest.items():
-            for e in edges:
-                _assert_cache_safe(dst, e.source_stage, "data-flow")
-        for stage_name, rule in rules.items():
-            for dep in rule.execution_order_dependencies:
-                _assert_cache_safe(stage_name, dep.stage_name, "execution-order")
+    @classmethod
+    def build(
+        cls,
+        nodes: dict[str, Stage],
+        data_flow_edges: list[DataFlowEdge],
+        execution_order_deps: dict[str, list[ExecutionOrderDependency]] | None = None,
+    ) -> "DAGAutomata":
+        # Validate that all nodes are Stage instances
+        bad_nodes = [k for k, v in nodes.items() if not isinstance(v, Stage)]
+        if bad_nodes:
+            raise ValueError(
+                f"Non-Stage objects registered as nodes: {', '.join(sorted(bad_nodes))}"
+            )
 
+        # Extract stage classes from instances for validation
+        stage_classes = {name: stage.__class__ for name, stage in nodes.items()}
+
+        # Use validate_structure to check the DAG structure
+        validation_errors = cls.validate_structure(
+            stage_classes, data_flow_edges, execution_order_deps
+        )
+        if validation_errors:
+            raise ValueError(
+                "DAG structure validation failed:\n  - "
+                + "\n  - ".join(validation_errors)
+            )
+
+        # Build transition rules
+        rules: dict[str, StageTransitionRule] = {}
+        execution_order_deps = execution_order_deps or {}
+        for stage_name, deps in execution_order_deps.items():
+            rules[stage_name] = StageTransitionRule(
+                stage_name=stage_name, execution_order_dependencies=list(deps)
+            )
+
+        # Build topology data structures
+        incoming_by_dest: dict[str, list[DataFlowEdge]] = {}
+        for e in data_flow_edges:
+            incoming_by_dest.setdefault(e.destination_stage, []).append(e)
+
+        preds_by_dest: dict[str, list[str]] = {
+            dst: [e.source_stage for e in edges]
+            for dst, edges in incoming_by_dest.items()
+        }
+
+        # Build the automata with validated topology
         automata = cls(transition_rules=rules)
         automata.topology = _Topology(
             nodes=nodes,
@@ -271,8 +323,6 @@ class DAGAutomata(BaseModel):
             exec_rules=rules,
         )
         return automata
-
-    # --------------------------- Small helpers (DRY) ---------------------------
 
     def _pid(self, program: Program) -> str:
         return program.id[:8]
@@ -485,8 +535,6 @@ class DAGAutomata(BaseModel):
             return (self.GateState.WAIT, exec_reasons + df_reasons)
         return (self.GateState.READY, [])
 
-    # --------------------------- Done/Ready/Skip ---------------------------
-
     def _compute_done_sets(
         self, program: Program, finished_this_run: set[str]
     ) -> tuple[set[str], set[str]]:
@@ -585,8 +633,6 @@ class DAGAutomata(BaseModel):
         )
         return "\n".join(lines)
 
-    # --------------------------- Auto-skip ---------------------------
-
     def get_stages_to_skip(
         self,
         program: Program,
@@ -617,8 +663,6 @@ class DAGAutomata(BaseModel):
                 stage=stage_name,
             ),
         )
-
-    # --------------------------- Runtime input wiring ---------------------------
 
     def build_named_inputs(self, program: Program, stage_name: str) -> dict[str, Any]:
         """Build named inputs from COMPLETED producers only."""

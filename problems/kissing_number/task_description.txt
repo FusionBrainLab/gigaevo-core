@@ -1,58 +1,30 @@
 TASK DEFINITION – KISSING NUMBER PROBLEM IN DIMENSION 12 (INTEGRAL CONSTRUCTION)
 
-Problem Type: Evolutionary Geometric Optimization
-Challenge: Construct a large set of unit spheres in 12D, all mutually tangent and tangent to a central unit sphere, via integer coordinates. Known lower bound: 840.
-
-PROBLEM COMPLEXITY
-High-dimensional sphere packing with rigid separation constraints. The single-shell (equal-norm) structure is essential; even small integer edits can break feasibility.
+Challenge: High-dimensional sphere packing with rigid separation constraints. Construct a large set of unit spheres in 12D, all mutually tangent and tangent to a central unit sphere, via integer coordinates. Target: N ≥ 840.
 
 OBJECTIVE
 Return distinct non-zero integer 12D vectors {x_i} ⊂ Z^12 such that:
 1) (Single shell) ||x_i||^2 = r^2 for all i and some r^2 > 0.
 2) (Separation) min_{i≠j} ||x_i - x_j||^2 ≥ r^2.
-This scale-invariant certificate yields a valid kissing configuration after scaling by t = 2/√(r^2).
+Scaling by t = 2/√(r^2) yields a valid kissing configuration: all centers at radius 2, pairwise distances ≥ 2.
 
-Output: (N, 12) NumPy int array
-Fitness: N (set size)
-Goal: Achieve N ≥ 840
-
-GEOMETRIC SETUP
-- Central unit sphere at origin
-- Candidate centers: integer vectors in Z^12, non-zero, equal norm
-- Realization: scale by t = 2/√(r^2) → all centers at radius 2; pairwise distances ≥ 2
+Output: (N, 12) NumPy int array  |  Fitness: N  |  Goal: N ≥ 840
 
 CONSTRAINTS
-- Integer coordinates only
-- Distinct, non-zero rows
-- Exact integer arithmetic
-- Single-shell constraint (||x_i||^2 constant)
+- Integer coordinates only; distinct, non-zero rows
+- Single-shell: ||x_i||^2 constant for all i
+- Exact integer arithmetic; use np.int32/int64 dtypes
 
-VALIDATION & RIGOR
-- Check all norms are equal
-- Compute d²_min; accept iff d²_min ≥ r²
+VALIDATION & EFFICIENCY (CRITICAL)
+- Check all norms equal; compute d²_min via vectorized NumPy operations; accept iff d²_min ≥ r²
+- MUST use matrix operations (broadcasting, scipy.spatial.distance) NOT Python loops—for N=840, this is 100-1000× faster
+- Avoid iterating over vectors/coordinates with Python for/while loops
 
-STRATEGIC GUIDANCE
-
-Fitness Metric
-Maximize N = number of distinct non-zero integer vectors x_i ∈ Z¹² satisfying:
-    ||x_i||² = r² (constant) and min_{i≠j} ||x_i - x_j||² ≥ r²
-(After rescaling by t = 2/√(r²), all centers lie on radius 2 with pairwise distances ≥ 2.)
-
-Failure Modes
-- Norm inconsistency (not single-shell)
-- Certificate violation: d²_min < r²
-- Duplicate vectors or inclusion of zero vector
-- Symmetry duplicates (sign/permutation copies)
-- Non-integer coordinates
-- Float-based checks instead of exact integer arithmetic
-- Timeouts due to direct combinatorial enumeration (e.g., generating all permutations or sign patterns) is computationally infeasible due to exponential complexity; use constructive or algebraic methods instead
-
-Evaluation Details
-- r² = ||x_i||² (common squared norm)
-- d²_min = min_{i≠j} ||x_i - x_j||²
-- Valid iff d²_min ≥ r²
-- Fitness = N; secondary metric: margin δ = d²_min - r²
-- Target: N ≥ 840
+FAILURE MODES
+- Norm inconsistency; certificate violation (d²_min < r²); duplicates or zero vector
+- Symmetry duplicates; non-integer coordinates; float-based validation
+- Combinatorial enumeration (exponential complexity—use constructive/algebraic methods)
+- Nested Python loops instead of vectorized operations (causes timeouts for large N)
 
 OUTPUT FORMAT:
 ```python
