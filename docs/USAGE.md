@@ -152,6 +152,30 @@ python run_hydra.py --config-name=profiles/local_dev problem.name=toy_example --
 python run_hydra.py problem.name=toy_example --cfg job | head -50
 ```
 
+## Specific OpenAI API parameters
+
+Additional OpenAI API parameters can be specified by editing one of configuration files in `config/llm`. More info can be found in [OpenAI API documentation](https://platform.openai.com/docs/api-reference/introduction).
+
+### Example
+
+```yaml
+llm:
+  _target_: gigaevo.llm.models.create_multi_model_router
+  model_configs:
+    - model: google/gemini-2.5-pro
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+      # Specify additional parameters like "reasoning" and "provider"
+      reasoning: true
+      provider:
+        order: ["google-vertex/global", "google-ai-studio"]
+        allow_fallbacks: false
+        data_collection: deny
+        require_parameters: true
+```
+
 ## Tips
 
 1. **Start simple**: Begin with default or `base` profile
