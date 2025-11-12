@@ -7,7 +7,7 @@
 defaults:
   - /constants: base
   - /redis: default
-  - /llm: multi_model
+  - /llm: heterogeneous
   - /evolution: default
   - /metrics: code_complexity  # Required by multi_island
   - /algorithm: multi_island

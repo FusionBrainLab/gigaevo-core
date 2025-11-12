@@ -37,6 +37,7 @@ async def fetch_evolution_dataframe(
             max_connections=50,
             connection_pool_timeout=30.0,
             health_check_interval=60,
+            read_only=True,
         )
     )
 

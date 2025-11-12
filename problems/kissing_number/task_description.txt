@@ -27,11 +27,8 @@ FAILURE MODES
 - Nested Python loops instead of vectorized operations (causes timeouts for large N)
 
 OUTPUT FORMAT:
-```python
-# Import necessary libraries
-def entrypoint():
-    # Your implementation here
-    # Fix all random seeds if using randomness
-    return output  # (N, 12) NumPy int array as specified above
-```
-!!! DO NOT add commentaries !!! Code only.
+
+Implement `def entrypoint():` that returns an (N, 11) NumPy integer array.
+- Use numpy, scipy, sklearn, or standard library as needed
+- Fix random seeds if using randomness (e.g., np.random.seed(42))
+- Return type: np.ndarray with dtype int32 or int64, shape (N, 11)
