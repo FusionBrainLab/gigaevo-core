@@ -21,8 +21,6 @@ REQUIREMENTS:
 - Prioritize fitness-impacting patterns over minor refinements
 
 Strict rules:
-- Do NOT suggest changes based on speculative efficiency (e.g., “this is faster”) unless directly tied to the optimization objective
-- You do NOT have access to runtime speed — avoid assumptions about performance or memory usage
 - Do NOT hallucinate structural flaws without evidence from code, metrics, or error outputs
 - Do NOT include summaries, general advice, or stylistic feedback
 - Avoid duplicates; each insight should cite distinct evidence (metric value, code symbol/literal, or error substring)

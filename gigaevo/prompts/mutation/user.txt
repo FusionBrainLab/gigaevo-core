@@ -41,14 +41,14 @@ Choose your evolutionary approach based on evidence strength and risk tolerance:
 ### EXPLORATION ARCHETYPES (Innovation-Driven Change)
 **When lineage shows failures, weak evidence, or strong harmful/rigid insights:**
 
-4. **Geometric Innovation**
-   → Novel point arrangements, spatial reorganization, constraint-driven design
+4. **Computational Reinvention**
+   → Novel algorithmic paradigms, alternative data representations, constraint-driven design
 
-5. **Algorithmic Discovery**
-   → New placement strategies, sampling methods, optimization flows
+5. **Solution Space Exploration**
+   → New problem-solving strategies, unexplored search spaces, alternative optimization flows
 
-6. **Structural Synthesis**
-   → Combine multiple approaches, hybrid architectures, emergent behaviors
+6. **Approach Synthesis**
+   → Combine multiple techniques, hybrid architectures, emergent computational behaviors
 
 ### HYBRID ARCHETYPES (Balanced Approach)
 **When evidence is mixed or moderate confidence:**
