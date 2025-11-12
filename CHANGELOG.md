@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.6.1 (2025-11-12)
+
+### Bug Fixes
+
+- Follow-up on removing task-dependent text
+  ([`a72968b`](https://github.com/KhrulkovV/metaevolve/commit/a72968bd1f29007865692bdee586a980cef2b571))
+
+- Remove task-dependent text from evolution prompts
+  ([`1c6acf3`](https://github.com/KhrulkovV/metaevolve/commit/1c6acf320c17d08ca428386bad2c4a2bff45e924))
+
+
 ## v1.6.0 (2025-11-11)
 
 
