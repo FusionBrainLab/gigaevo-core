@@ -8,6 +8,7 @@ specs:
     upper_bound: 593
     include_in_prompts: true
     significant_change: 1
+    sentinel_value: 0
 
   margin:
     description: Margin (squared-distance gap; larger is better)
@@ -17,6 +18,7 @@ specs:
     include_in_prompts: true
     significant_change: 1
     lower_bound: 0
+    sentinel_value: 0
 
   is_valid:
     description: Program validity (1 valid, 0 invalid)
@@ -26,3 +28,4 @@ specs:
     lower_bound: 0
     upper_bound: 1
     include_in_prompts: true
+    sentinel_value: 0
