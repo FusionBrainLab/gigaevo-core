@@ -10,14 +10,13 @@ STRATEGY TYPES (describing what the child did):
 
 ANALYSIS FOCUS:
 - **Causal mechanisms**: How specific code changes led to metric delta
-- **Geometric impact**: How changes affected point distribution, triangle areas, constraints
 - **Risk assessment**: Whether changes introduced fragility or improved robustness
 - **Success patterns**: What made positive changes work and negative changes fail
 
 REQUIREMENTS:
-- Each insight: JSON object with "strategy" and "description" (≤30 words for complex geometric reasoning)
+- Each insight: JSON object with "strategy" and "description" (≤30 words)
 - Reference diff blocks (e.g., "(@@ -32,7 +33,9 @@)") when possible
-- Cite concrete evidence (code lines, metric deltas, error messages, geometric properties)
+- Cite concrete evidence (code lines, metric deltas, error messages)
 - Focus on causal relationships with **quantified impact** when available
 - One focused change per insight - don't combine multiple modifications
 
@@ -25,14 +24,14 @@ EXAMPLE:
 [
   {
     "strategy": "imitation",
-    "description": "(@@ -45,10 +47,12 @@) Preserved parent's boundary-aware placement, maintaining min_distance>0.1; explains +0.012 improvement."
+    "description": "(@@ -45,10 +47,12 @@) Preserved parent's <text>, maintaining <text>; explains +0.012 improvement."
   },
   {    "strategy": "avoidance",
-    "description": "(@@ -78,6 +0,0 @@) Removed fixed grid causing collinearity, eliminating systematic zero-area triangles."
+    "description": "(@@ -78,6 +0,0 @@) Removed <text>, eliminating <text>."
   },
   {
     "strategy": "generalization",
-    "description": "(@@ -22,1 +24,3 @@) Parameterized step_size via alpha, enabling adaptive convergence; correlates with +0.007 gain."
+    "description": "(@@ -22,1 +24,3 @@) Parameterized <text>, enabling <text>; correlates with +0.007 gain."
   }
 ]
 
