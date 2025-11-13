@@ -1,10 +1,3 @@
-"""
-Wizard configuration schema for problem scaffolding.
-
-This module defines the config structure for generating new problems.
-Configs are YAML files that specify all parameters for scaffolding.
-"""
-
 from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator
@@ -12,25 +5,16 @@ from pydantic import BaseModel, Field, model_validator
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricSpec
 
 __all__ = [
-    "WizardConfig",
-    "ProblemConfig",
     "FunctionSignature",
     "TaskDescription",
     "InitialProgram",
+    "ProblemConfig",
 ]
 
 
 class FunctionSignature(BaseModel):
     """Function signature specification.
-
-    NOTE: Only parameters are specified, NOT function name.
     Function names are fixed: 'validate' or 'entrypoint'.
-
-    Examples:
-        params: []                          # No parameters: def entrypoint():
-        params: [data]                      # Single param: def validate(data):
-        params: [context]                   # With context: def entrypoint(context):
-        params: [context, predictions]      # Multiple: def validate(context, predictions):
     """
 
     params: list[str] = Field(
@@ -127,9 +111,3 @@ class ProblemConfig(BaseModel):
                 )
 
         return self
-
-
-class WizardConfig(BaseModel):
-    """Top-level wizard configuration."""
-
-    problem: ProblemConfig

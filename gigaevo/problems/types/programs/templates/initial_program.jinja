@@ -1,21 +1,16 @@
-"""
-{{ program_description }}
-
-{{ task_description.objective }}
-"""
-
-import numpy as np
-{% if add_helper %}from helper import *{% endif %}
+{% if add_helper %}
+from helper import *
+{% endif %}
 
 
 def entrypoint({{ entrypoint.params | join(', ') }}):
     """
     {{ program_description }}
-{% if entrypoint.inputs %}
+    {% if entrypoint.inputs %}
 
     Args:
         {{ entrypoint.inputs }}
-{% endif %}
+    {% endif %}
 
     Returns:
         {{ entrypoint.returns | default("Solution matching problem specification") }}

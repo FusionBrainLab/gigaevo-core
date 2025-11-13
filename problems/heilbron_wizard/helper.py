@@ -1,11 +1,10 @@
 """
-Helper functions for: {{ problem.description }}
+Helper functions for: Heilbronn Triangle Problem - maximize minimum triangle area
 
 Utility functions shared between validate.py and user programs.
 These functions are importable via: from helper import function_name
 """
 
-import numpy as np
 # TODO: Add necessary imports
 
 

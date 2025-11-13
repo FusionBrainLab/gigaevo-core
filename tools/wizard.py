@@ -1,27 +1,43 @@
-#!/usr/bin/env python3
-"""
-Problem scaffolding wizard.
-
-Generates problem directory structure from YAML config files.
-Supports different problem types with type-specific templates and utilities.
-
-Usage:
-    python tools/wizard.py config/wizard/simple_problem.yaml
-    python tools/wizard.py my_config.yaml --overwrite
-    python tools/wizard.py my_config.yaml --output-dir custom/path
-    python tools/wizard.py my_config.yaml --problem-type prompt_evolution
-"""
-
 from __future__ import annotations
 
+import importlib
+import inspect
 from pathlib import Path
 import sys
 
 import click
 import yaml
 
+from gigaevo.problems.config import ProblemConfig
 from gigaevo.problems.layout import ProblemLayout as PL
-from gigaevo.problems.wizard_config import WizardConfig
+
+
+def load_problem_config_class(problem_type: str) -> type:
+    """
+    Dynamically load config class for problem type.
+
+    Looks for custom config in types/{problem_type}/config.py.
+    Falls back to base ProblemConfig if not found.
+
+    Args:
+        problem_type: Problem type name (e.g., 'programs', 'prompt_evolution')
+
+    Returns:
+        Config class (ProblemConfig or subclass)
+    """
+    try:
+        module = importlib.import_module(
+            f"gigaevo.problems.types.{problem_type}.config"
+        )
+
+        for name, obj in inspect.getmembers(module, inspect.isclass):
+            if issubclass(obj, ProblemConfig) and obj is not ProblemConfig:
+                return obj
+
+    except ImportError:
+        pass
+
+    return ProblemConfig
 
 
 @click.command()
@@ -36,9 +52,9 @@ from gigaevo.problems.wizard_config import WizardConfig
 )
 @click.option(
     "--problem-type",
-    default="base",
+    default="programs",
     type=str,
-    help="Problem type determining templates and utilities (default: base).",
+    help="Problem type determining templates and utilities (default: programs).",
 )
 @click.option(
     "--output-dir",
@@ -46,37 +62,24 @@ from gigaevo.problems.wizard_config import WizardConfig
     default=None,
     help="Override output directory (default: problems/<problem.name>).",
 )
+@click.option(
+    "--validate-only",
+    is_flag=True,
+    help="Validate config without generating files.",
+)
 def main(
     config: Path,
     overwrite: bool,
     problem_type: str,
     output_dir: Path | None,
+    validate_only: bool,
 ) -> None:
     """
     Generate problem scaffolding from CONFIG file.
 
     CONFIG should be a YAML file with problem specification including
     metrics, function signatures, task description, and optional features.
-
-    Examples:
-
-        \b
-        # Generate from config
-        python tools/wizard.py config/wizard/simple_problem.yaml
-
-        \b
-        # Overwrite existing problem
-        python tools/wizard.py my_config.yaml --overwrite
-
-        \b
-        # Custom output location
-        python tools/wizard.py my_config.yaml --output-dir custom/path
-
-        \b
-        # Use different problem type
-        python tools/wizard.py my_config.yaml --problem-type prompt_evolution
     """
-    # Load config
     try:
         with open(config) as f:
             config_data = yaml.safe_load(f)
@@ -84,33 +87,56 @@ def main(
         click.echo(click.style(f"❌ Failed to load config: {e}", fg="red"), err=True)
         sys.exit(1)
 
+    # Dynamically load config class for problem type
+    ConfigClass = load_problem_config_class(problem_type)
+
     # Validate config
     try:
-        wizard_config = WizardConfig(**config_data)
+        problem_config = ConfigClass(**config_data)
     except Exception as e:
         click.echo(click.style("❌ Invalid config:", fg="red"), err=True)
         click.echo(f"   {e}", err=True)
         sys.exit(1)
 
+    # Validate-only mode
+    if validate_only:
+        click.echo(click.style("✅ Configuration is valid!", fg="green", bold=True))
+        click.echo(f"   Problem: {problem_config.name}")
+        click.echo(f"   Description: {problem_config.description}")
+        click.echo(f"   Metrics: {len(problem_config.metrics)} defined")
+        click.echo(
+            f"   Initial programs: {len(problem_config.initial_programs)} specified"
+        )
+        features = [
+            f
+            for f, enabled in [
+                ("context", problem_config.add_context),
+                ("helper", problem_config.add_helper),
+            ]
+            if enabled
+        ]
+        click.echo(f"   Features: {', '.join(features) if features else 'none'}")
+        return
+
     # Determine output directory
     if output_dir:
         target_dir = output_dir
     else:
-        target_dir = Path("problems") / wizard_config.problem.name
+        target_dir = Path("problems") / problem_config.name
 
     # Print summary
     click.echo(click.style("🔧 Generating problem scaffolding", fg="cyan", bold=True))
-    click.echo(f"   Name: {wizard_config.problem.name}")
+    click.echo(f"   Name: {problem_config.name}")
     click.echo(f"   Target: {target_dir}")
-    click.echo(f"   Context: {wizard_config.problem.add_context}")
-    click.echo(f"   Helper: {wizard_config.problem.add_helper}")
+    click.echo(f"   Context: {problem_config.add_context}")
+    click.echo(f"   Helper: {problem_config.add_helper}")
     click.echo()
 
     # Generate
     try:
         result = PL.scaffold(
             target_dir=target_dir,
-            config=wizard_config,
+            config=problem_config,
             overwrite=overwrite,
             problem_type=problem_type,
         )
