@@ -6,6 +6,7 @@ PROGRAM:
 ```
 
 METRICS: {metrics}
+
 ERRORS: {error_section}
 
 Extract insights with concrete evidence from code/metrics/errors only. No speculation.

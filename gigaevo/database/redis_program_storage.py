@@ -52,6 +52,12 @@ class RedisProgramStorageConfig(BaseModel):
         default=1.0, ge=0.1, description="Interval (s) for Redis metrics collection"
     )
 
+    read_only: bool = Field(
+        default=False,
+        description="If True, skip instance locking and disable write operations. "
+        "Use for read-only inspection (e.g., from Jupyter notebooks).",
+    )
+
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
 
@@ -83,6 +89,14 @@ class RedisProgramStorage(ProgramStorage):
         )
 
     # --------------------- Keys ---------------------
+
+    def _check_write_allowed(self, operation: str) -> None:
+        """Raise error if write operation is attempted in read-only mode."""
+        if self.config.read_only:
+            raise StorageError(
+                f"Cannot perform '{operation}' in read-only mode. "
+                f"Create storage without read_only=True for write operations."
+            )
 
     def _k_program(self, pid: str) -> str:
         return self.config.program_key_tpl.format(
@@ -182,6 +196,8 @@ class RedisProgramStorage(ProgramStorage):
         return out
 
     async def add(self, program: Program) -> None:
+        self._check_write_allowed("add")
+
         async def _add(r: aioredis.Redis):
             key = self._k_program(program.id)
             status = program.state.value
@@ -209,6 +225,8 @@ class RedisProgramStorage(ProgramStorage):
         return await self._with_redis("size", _size)
 
     async def update(self, program: Program):
+        self._check_write_allowed("update")
+
         async def _update(r: aioredis.Redis):
             key = self._k_program(program.id)
             while True:
@@ -251,6 +269,8 @@ class RedisProgramStorage(ProgramStorage):
         return await self._with_redis("exists", _exists)
 
     async def remove(self, program_id: str):
+        self._check_write_allowed("remove")
+
         async def _del(r: aioredis.Redis):
             await r.delete(self._k_program(program_id))
 
@@ -259,6 +279,8 @@ class RedisProgramStorage(ProgramStorage):
     async def transition_status(
         self, program_id: str, old: str | None, new: str
     ) -> None:
+        self._check_write_allowed("transition_status")
+
         async def _tx(r: aioredis.Redis):
             pipe = r.pipeline(transaction=False)
             if old:
@@ -271,6 +293,8 @@ class RedisProgramStorage(ProgramStorage):
     async def publish_status_event(
         self, status: str, program_id: str, extra: dict[str, Any] | None = None
     ) -> None:
+        self._check_write_allowed("publish_status_event")
+
         async def _event(r: aioredis.Redis):
             data = {"id": program_id, "status": status, **(extra or {})}
             await r.xadd(self._k_stream(), data, maxlen=10_000, approximate=True)
@@ -360,6 +384,8 @@ class RedisProgramStorage(ProgramStorage):
         return await self._with_redis("has_data", _check)
 
     async def flushdb(self):
+        self._check_write_allowed("flushdb")
+
         async def _flush(r: aioredis.Redis):
             await r.flushdb()
 
@@ -420,7 +446,15 @@ class RedisProgramStorage(ProgramStorage):
     # --------------------- Instance Locking ---------------------
 
     async def acquire_instance_lock(self) -> bool:
-        """Acquire exclusive lock to prevent multiple instances on same prefix."""
+        """Acquire exclusive lock to prevent multiple instances on same prefix.
+
+        Skip locking in read-only mode to allow inspection from multiple sources.
+        """
+        if self.config.read_only:
+            logger.info(
+                f"[RedisProgramStorage] Skipping instance lock (read-only mode) for prefix '{self.config.key_prefix}'"
+            )
+            return True
 
         async def _acquire(r: aioredis.Redis) -> bool:
             lock_key = self._k_instance_lock()
@@ -454,6 +488,9 @@ class RedisProgramStorage(ProgramStorage):
 
     async def release_instance_lock(self) -> None:
         """Release the instance lock."""
+        if self.config.read_only:
+            return
+
         # Stop renewal task
         if self._instance_lock_renewal_task:
             self._instance_lock_renewal_task.cancel()
@@ -530,6 +567,8 @@ class RedisProgramStorage(ProgramStorage):
     async def atomic_state_transition(
         self, program: Program, old_state: str | None, new_state: str
     ) -> None:
+        self._check_write_allowed("atomic_state_transition")
+
         async def _atomic(r: aioredis.Redis):
             key = self._k_program(program.id)
 
