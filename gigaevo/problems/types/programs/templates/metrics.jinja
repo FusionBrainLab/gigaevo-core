@@ -1,0 +1,31 @@
+display_order: [
+{%- for name in (display_order if display_order else metrics.keys()) -%}
+{{ name }}{{ ", " if not loop.last }}
+{%- endfor -%}
+]
+
+specs:
+{% for metric_name, metric_spec in metrics.items() %}
+  {{ metric_name }}:
+    description: {{ metric_spec.description }}
+    decimals: {{ metric_spec.decimals }}
+    is_primary: {{ metric_spec.is_primary | lower }}
+    higher_is_better: {{ metric_spec.higher_is_better | lower }}
+{% if metric_spec.lower_bound is not none %}
+    lower_bound: {{ metric_spec.lower_bound }}
+{% endif %}
+{% if metric_spec.upper_bound is not none %}
+    upper_bound: {{ metric_spec.upper_bound }}
+{% endif %}
+{% if metric_spec.unit %}
+    unit: {{ metric_spec.unit }}
+{% endif %}
+    include_in_prompts: {{ metric_spec.include_in_prompts | lower }}
+{% if metric_spec.significant_change is not none %}
+{% if metric_spec.significant_change < 0.01 %}
+    significant_change: !!float {{ metric_spec.significant_change }}
+{% else %}
+    significant_change: {{ metric_spec.significant_change }}
+{% endif %}
+{% endif %}
+{% endfor %}

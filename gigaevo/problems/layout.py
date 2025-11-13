@@ -4,6 +4,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
+from gigaevo.problems.config import ProblemConfig
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricSpec
 
 
@@ -16,7 +17,7 @@ class ProblemLayout:
     METRICS_FILE = "metrics.yaml"
 
     INITIAL_PROGRAMS_DIR = "initial_programs"
-    TEMPLATES_DIR = Path(__file__).parent / "templates"
+    TEMPLATES_DIR = Path(__file__).parent / "types"
 
     @classmethod
     def required_files(cls, add_context: bool = False) -> list[str]:
@@ -35,7 +36,7 @@ class ProblemLayout:
     def scaffold(
         cls,
         target_dir: Path,
-        config: "WizardConfig",  # noqa: F821
+        config: ProblemConfig,
         overwrite: bool = False,
         problem_type: str = "base",
     ) -> dict:
@@ -43,7 +44,7 @@ class ProblemLayout:
 
         Args:
             target_dir: Where to create problem
-            config: WizardConfig with all parameters
+            config: ProblemConfig with all parameters
             overwrite: Replace existing files
             problem_type: Problem type determining templates and utilities (default: base)
 
@@ -86,7 +87,7 @@ class ProblemLayout:
             "target_dir": target_dir,
             "files_generated": len(file_map),
             "initial_programs": num_initial_programs,
-            "add_context": config.problem.add_context,
+            "add_context": config.add_context,
         }
 
     @classmethod
@@ -94,7 +95,7 @@ class ProblemLayout:
         """Get template directory for problem type.
 
         Args:
-            problem_type: Problem type name (e.g., 'base', 'prompt_evolution', 'rl')
+            problem_type: Problem type name
 
         Returns:
             Path to template directory
@@ -102,21 +103,25 @@ class ProblemLayout:
         Raises:
             ValueError: If template directory doesn't exist
         """
-        template_dir = cls.TEMPLATES_DIR / problem_type
+        template_dir = cls.TEMPLATES_DIR / problem_type / "templates"
         if not template_dir.exists():
             raise ValueError(
                 f"Unknown problem type: '{problem_type}'. "
-                f"Template directory not found: {template_dir}"
+                f"Template directory not found: {template_dir}\n"
+                f"Available types: {', '.join(d.name for d in cls.TEMPLATES_DIR.iterdir() if d.is_dir() and not d.name.startswith('_'))}"
             )
         return template_dir
 
-    @classmethod
-    def _build_template_context(cls, config: "WizardConfig") -> dict:  # noqa: F821
-        """Build Jinja template context with auto-generated is_valid metric."""
-        prob = config.problem
+    @staticmethod
+    def _to_dict(obj) -> dict:
+        """Convert Pydantic model to dict (v1/v2 compatible)."""
+        return obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
 
+    @classmethod
+    def _build_template_context(cls, config: ProblemConfig) -> dict:
+        """Build Jinja template context with auto-generated is_valid metric."""
         primary_key = next(
-            (key for key, spec in prob.metrics.items() if spec.is_primary), None
+            (key for key, spec in config.metrics.items() if spec.is_primary), None
         )
 
         is_valid_spec = MetricSpec(
@@ -130,41 +135,32 @@ class ProblemLayout:
             significant_change=1.0,
         )
 
-        all_metrics = {**prob.metrics, VALIDITY_KEY: is_valid_spec}
+        all_metrics = {**config.metrics, VALIDITY_KEY: is_valid_spec}
 
         display_order = (
-            prob.display_order.copy()
-            if prob.display_order
-            else list(prob.metrics.keys())
+            config.display_order.copy()
+            if config.display_order
+            else list(config.metrics.keys())
         )
         if VALIDITY_KEY not in display_order:
             display_order.append(VALIDITY_KEY)
 
-        metrics_dict = {
-            key: spec.model_dump() if hasattr(spec, "model_dump") else spec.dict()
-            for key, spec in all_metrics.items()
-        }
+        metrics_dict = {key: cls._to_dict(spec) for key, spec in all_metrics.items()}
 
         return {
-            "problem": {"name": prob.name, "description": prob.description},
-            "entrypoint": prob.entrypoint.model_dump()
-            if hasattr(prob.entrypoint, "model_dump")
-            else prob.entrypoint.dict(),
-            "validation": prob.validation.model_dump()
-            if hasattr(prob.validation, "model_dump")
-            else prob.validation.dict(),
+            "problem": {"name": config.name, "description": config.description},
+            "entrypoint": cls._to_dict(config.entrypoint),
+            "validation": cls._to_dict(config.validation),
             "metrics": metrics_dict,
             "display_order": display_order,
             "primary_key": primary_key,
-            "task_description": prob.task_description.model_dump()
-            if hasattr(prob.task_description, "model_dump")
-            else prob.task_description.dict(),
-            "add_context": prob.add_context,
-            "add_helper": prob.add_helper,
+            "task_description": cls._to_dict(config.task_description),
+            "add_context": config.add_context,
+            "add_helper": config.add_helper,
         }
 
     @classmethod
-    def _get_file_template_map(cls, config: "WizardConfig") -> dict[str, str]:  # noqa: F821
+    def _get_file_template_map(cls, config: ProblemConfig) -> dict[str, str]:
         """Map output filenames to template names."""
         file_map = {
             cls.TASK_DESCRIPTION: "task_description.jinja",
@@ -172,10 +168,10 @@ class ProblemLayout:
             cls.VALIDATOR: "validate.jinja",
         }
 
-        if config.problem.add_context:
+        if config.add_context:
             file_map[cls.CONTEXT_FILE] = "context.jinja"
 
-        if config.problem.add_helper:
+        if config.add_helper:
             file_map["helper.py"] = "helper.jinja"
 
         return file_map
@@ -184,7 +180,7 @@ class ProblemLayout:
     def _generate_initial_programs(
         cls,
         target_dir: Path,
-        config: "WizardConfig",  # noqa: F821
+        config: ProblemConfig,
         env: Environment,
         context: dict,
     ) -> int:
@@ -193,12 +189,12 @@ class ProblemLayout:
         Returns:
             Number of initial programs generated
         """
-        if not config.problem.initial_programs:
+        if not config.initial_programs:
             return 0
 
         template = env.get_template("initial_program.jinja")
 
-        for prog_spec in config.problem.initial_programs:
+        for prog_spec in config.initial_programs:
             content = template.render(
                 **context,
                 program_name=prog_spec.name,
@@ -208,4 +204,4 @@ class ProblemLayout:
             prog_path = target_dir / cls.INITIAL_PROGRAMS_DIR / f"{prog_spec.name}.py"
             prog_path.write_text(content)
 
-        return len(config.problem.initial_programs)
+        return len(config.initial_programs)

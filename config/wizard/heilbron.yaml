@@ -1,0 +1,82 @@
+# Heilbronn Triangle Problem Configuration
+# Example configuration for the wizard scaffolding system
+#
+# This is based on the existing problems/heilbron/ problem.
+# Use as a reference for creating new problem configs.
+
+name: "heilbron_wizard"
+description: "Heilbronn Triangle Problem - maximize minimum triangle area"
+
+# Function signatures
+entrypoint:
+  params: []
+  returns: "(11, 2) NumPy array of point coordinates"
+  inputs: null
+
+validation:
+  params: ["coordinates"]
+  returns: "dict with metrics: fitness, is_valid"
+  inputs: "coordinates: (11, 2) array from entrypoint()"
+
+# Metrics (is_valid is auto-generated, don't include it)
+metrics:
+  fitness:
+    description: "Main objective [area of the smallest triangle]"
+    decimals: 5
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 0.0365
+    include_in_prompts: true
+    significant_change: 0.000001
+    sentinel_value: -1000
+
+# Optional: specify metric display order
+# display_order: ["fitness", "is_valid"]
+
+# Task description
+task_description:
+  objective: |
+    TASK DEFINITION – HEILBRONN TRIANGLE PROBLEM
+
+    Problem Type: Evolutionary Geometric Optimization
+    Challenge: Design 11-point layouts that maximize the area of the smallest triangle formed by any three points.
+
+    PROBLEM COMPLEXITY
+
+    This is a high-dimensional, non-convex optimization problem with sharp local minima. Small changes to point coordinates can drastically reduce the smallest triangle area due to geometric degeneracies. The search space includes both discrete failure regions (e.g. exact alignments) and continuous low-fitness basins (e.g. clustered configurations). Effective solutions must balance global dispersion with local spacing constraints under strict boundary and uniqueness conditions.
+
+    OBJECTIVE:
+    Implement a Python function that returns 11 distinct 2D coordinates inside a unit-area equilateral triangle, such that the minimum area among all C(11, 3) = 165 triangles formed by point triplets is as large as possible.
+
+    - Output shape: (11, 2) NumPy array
+    - Fitness: Area of the smallest triangle formed by any 3 points
+    - Goal: Maximize this minimum triangle area
+
+    GEOMETRIC SETUP:
+    - Enclosing triangle: Equilateral, area = 1.0
+    - Orientation: Flat-bottomed, base along x-axis, vertex at (0, 0)
+    - Point configuration: All 11 points must lie strictly inside or on the boundary
+
+    CONSTRAINTS:
+    - All points must be distinct
+    - All points must lie within or on the boundary of the enclosing triangle
+    - No three points may be collinear
+    - Numerical precision matters for geometric computations
+
+  hints:
+    - "Clustering: Points too close together → small triangle areas"
+    - "Alignment: Three or more points nearly collinear → flat or degenerate triangles"
+    - "Overlap: Duplicate or nearly identical coordinates"
+    - "Boundary violations: Points placed outside the triangle"
+    - "Use program insights to identify patterns affecting performance"
+    - "Leverage lineage outcomes to guide decisions"
+
+# Optional features
+add_context: false
+add_helper: true
+
+# Initial programs
+initial_programs:
+  - name: "arc"
+    description: "Arc-based point arrangement strategy"
