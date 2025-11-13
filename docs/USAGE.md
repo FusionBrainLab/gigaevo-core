@@ -152,29 +152,99 @@ python run_hydra.py --config-name=profiles/local_dev problem.name=toy_example --
 python run_hydra.py problem.name=toy_example --cfg job | head -50
 ```
 
-## Specific OpenAI API parameters
+## Specific OpenAI API Parameters
 
-Additional OpenAI API parameters can be specified by editing one of configuration files in `config/llm`. More info can be found in [OpenAI API documentation](https://platform.openai.com/docs/api-reference/introduction).
+Additional OpenAI API parameters can be specified by editing the `models` config section in configuration files under `config/llm`.
+Parameters should be named exactly as in the OpenAI API specification and placed under either the `model_kwargs` or `extra_body` section.
+Content from both of these sections will be placed at the top level of the OpenAI API request body.
 
-### Example
+### `model_kwargs` vs `extra_body` Parameters
+
+Use the correct section for different types of API arguments:
+
+**Use `model_kwargs` for:**
+
+- Standard OpenAI API parameters not explicitly defined as class parameters
+- Parameters that should be flattened into the top-level request payload
+- Examples: `max_completion_tokens`, `stream_options`, `modalities`, `audio`
+
+**Use `extra_body` for:**
+
+- Custom parameters specific to OpenAI-compatible providers (vLLM, LM Studio, OpenRouter, etc.)
+- Parameters that need to be nested under `extra_body` in the request
+- Any non-standard OpenAI API parameters
+
+**Key Differences:**
+
+- `model_kwargs`: Parameters are **merged into top-level** request payload
+- `extra_body`: Parameters are **nested under `extra_body`** key in request
+
+>**Warning:**
+>   Always use `extra_body` for custom parameters, **not** `model_kwargs`.
+>   Using `model_kwargs` for non-OpenAI parameters will cause API errors.
+
+More information can be found in the [OpenAI API documentation](https://platform.openai.com/docs/api-reference/introduction) and
+[ChatOpenAI documentation](https://reference.langchain.com/python/integrations/langchain_openai/ChatOpenAI/?h=chatopenai#langchain_openai.chat_models.ChatOpenAI).
+
+### Examples
+
+#### Specifying `model_kwargs` section
+
+```yaml
+# Standard OpenAI parameters
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: "..."
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      top_p: ${top_p}
+      base_url: ${llm_base_url}
+      model_kwargs:
+        # These are standard OpenAI API parameters or accepted sub-objects:
+        stream_options:                 # Used by OpenAI API for streaming
+          include_usage: true
+        max_completion_tokens: 300      # Supported OpenAI parameter for completion length
+        modalities: [text, audio]       # Example OpenAI API-supported parameter (multi-modal models)
+        audio:                          # Audio config goes here, accepted by OpenAI's API for its voice models
+          voice: alloy
+          format: wav
+  probabilities: [0.5, 0.5]
+```
+
+#### Specifying `extra_body` section
 
 ```yaml
 llm:
-  _target_: gigaevo.llm.models.create_multi_model_router
-  model_configs:
-    - model: google/gemini-2.5-pro
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: ${model_name}
+      api_key: ${oc.env:OPENAI_API_KEY}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
-      base_url: https://openrouter.ai/api/v1
-      request_timeout: ${request_timeout}
-      # Specify additional parameters like "reasoning" and "provider"
-      reasoning: true
-      provider:
-        order: ["google-vertex/global", "google-ai-studio"]
-        allow_fallbacks: false
-        data_collection: deny
-        require_parameters: true
+      top_p: ${top_p}
+      base_url: ${llm_base_url}
+      extra_body:
+        # These are non-OpenAI parameters:
+        provider:                       # OpenRouter-specific (not OpenAI standard)
+          order: [google-vertex]
+          allow_fallbacks: false
+          data_collection: deny
+        top_k: ${top_k}                 # Provider-specific (e.g., Google Gemini, Anthropic Claude; not OpenAI standard)
+        use_beam_search: true           # vLLM-specific parameter
+        best_of: 4                      # vLLM-specific parameter
+        ttl: 300                        # LM Studio-specific parameter
+        reasoning:                      # OpenRouter-specific (not OpenAI standard)
+          effort: high
+          max_tokens: 5000
+  probabilities: [0.5, 0.5]
 ```
+
 
 ## Tips
 
