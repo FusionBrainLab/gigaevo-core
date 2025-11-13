@@ -7,7 +7,7 @@
 python run_hydra.py problem.name=toy_example
 
 # Override individual components
-python run_hydra.py problem.name=toy_example llm=multi_model
+python run_hydra.py problem.name=toy_example llm=heterogeneous
 python run_hydra.py problem.name=toy_example map_elites=multi_island auxiliary_metrics=code_complexity
 python run_hydra.py problem.name=toy_example constants=base
 ```
@@ -40,9 +40,7 @@ python run_hydra.py --config-name=profiles/multi_island_complexity problem.name=
 ```bash
 python run_hydra.py --config-name=profiles/multi_llm_exploration problem.name=toy_example
 ```
-- 70% creative mutations (temp 0.8)
-- 30% precise mutations (temp 0.4)
-- Maximizes solution diversity
+- Uses two different LLMs for exploration
 
 **`profiles/full_featured`** - Everything enabled
 ```bash
@@ -59,7 +57,7 @@ python run_hydra.py --config-name=profiles/full_featured problem.name=toy_exampl
 python run_hydra.py --config-name=profiles/local_dev problem.name=toy_example max_generations=20
 
 # Use local_dev profile but with multi-LLM
-python run_hydra.py --config-name=profiles/local_dev problem.name=toy_example llm=multi_model
+python run_hydra.py --config-name=profiles/local_dev problem.name=toy_example llm=heterogeneous
 
 # Full featured but with local_dev timeouts
 python run_hydra.py --config-name=profiles/full_featured problem.name=toy_example \
@@ -95,7 +93,7 @@ Override individual groups without using profiles:
 python run_hydra.py problem.name=toy_example constants=local_dev
 
 # Use different LLM config
-python run_hydra.py problem.name=toy_example llm=multi_model
+python run_hydra.py problem.name=toy_example llm=heterogeneous
 
 # Use different MAP-Elites strategy
 python run_hydra.py problem.name=toy_example map_elites=multi_island
@@ -136,7 +134,7 @@ python run_hydra.py --config-name=profiles/multi_llm_exploration \
 # Mix and match
 python run_hydra.py problem.name=heilbron \
     constants=base \
-    llm=multi_model \
+    llm=heterogeneous \
     map_elites=multi_island \
     auxiliary_metrics=code_complexity \
     max_generations=100
@@ -252,7 +250,7 @@ llm:
 2. **Profiles are starting points**: Override anything after selecting a profile
 3. **Check outputs**: Hydra saves full config to `outputs/YYYY-MM-DD/HH-MM-SS/.hydra/`
 4. **Use `--config-name` for profiles**: This is the correct way to select profile configs
-5. **Regular overrides don't need `--config-name`**: Just `llm=multi_model` is enough
+5. **Regular overrides don't need `--config-name`**: Just `llm=heterogeneous` is enough
 
 ## Troubleshooting
 
@@ -265,7 +263,7 @@ ls config/profiles/
 **Want default config with one change?**
 ```bash
 # Don't use --config-name, just override
-python run_hydra.py problem.name=toy_example llm=multi_model
+python run_hydra.py problem.name=toy_example llm=heterogeneous
 ```
 
 **Want to see what a profile does?**
