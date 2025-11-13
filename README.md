@@ -243,22 +243,37 @@ curl -H "Authorization: Bearer $OPENAI_API_KEY" https://openrouter.ai/api/v1/mod
 
 ## Advanced Usage
 
-### Create Your Own Problem
+### Generate Problem with Wizard
+
+Create problem scaffolding from YAML configuration:
+
+```bash
+python tools/wizard.py config/wizard/heilbron.yaml
+```
+
+See `tools/README.md` for detailed wizard documentation.
+
+### Create Your Own Problem Manually
 
 1. Create directory in `problems/`:
    ```
    problems/my_problem/
-     - __init__.py
-     - entrypoint.py    # Your function to evolve
-     - validate.py      # Fitness evaluation
-     - metrics.yaml     # Define metrics
-     - initial_programs # Directory containing a number of initial programs
+     - validate.py           # Fitness evaluation function
+     - metrics.yaml          # Metrics specification
+     - task_description.txt  # Problem description
+     - initial_programs/     # Directory with initial programs
+       - strategy1.py        # Each contains entrypoint() function
+       - strategy2.py
+     - helper.py             # Optional: utility functions
+     - context.py            # Optional: runtime context builder
    ```
 
 2. Run:
    ```bash
    python run.py problem.name=my_problem
    ```
+
+See `problems/heilbron/` for a complete example.
 
 ### Custom Experiment
 
