@@ -5,22 +5,26 @@
 
 llm:
   _target_: gigaevo.llm.models.create_multi_model_router
-  model_configs:
-
+  _convert_: all
+  models:
     # Primary model: Fast and creative
-    - model: google/gemini-2.0-flash-exp:free
+    - _target_: langchain_openai.ChatOpenAI
+      model: google/gemini-2.0-flash-exp:free
+      api_key: ${oc.env:OPENAI_API_KEY}
       temperature: 0.7
       max_tokens: ${max_tokens}
       top_p: 0.95
       base_url: ${llm_base_url}
+      request_timeout: ${request_timeout}
 
     # Secondary model: More conservative, different architecture
-    - model: qwen/qwen-2.5-coder-32b-instruct
+    - _target_: langchain_openai.ChatOpenAI
+      model: qwen/qwen-2.5-coder-32b-instruct
+      api_key: ${oc.env:OPENAI_API_KEY}
       temperature: 0.5
       max_tokens: ${max_tokens}
       top_p: 0.9
       base_url: ${llm_base_url}
+      request_timeout: ${request_timeout}
 
   probabilities: [0.7, 0.3]  # 70% primary, 30% secondary
-
-  api_key: ${oc.env:OPENAI_API_KEY}
