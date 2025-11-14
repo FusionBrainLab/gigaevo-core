@@ -22,10 +22,6 @@ specs:
 {% endif %}
     include_in_prompts: {{ metric_spec.include_in_prompts | lower }}
 {% if metric_spec.significant_change is not none %}
-{% if metric_spec.significant_change < 0.01 %}
-    significant_change: !!float {{ metric_spec.significant_change }}
-{% else %}
     significant_change: {{ metric_spec.significant_change }}
-{% endif %}
 {% endif %}
 {% endfor %}

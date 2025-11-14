@@ -42,8 +42,8 @@ def load_problem_config_class(problem_type: str) -> type:
 
 @click.command()
 @click.argument(
-    "config",
-    type=click.Path(exists=True, path_type=Path),
+    "config_name",
+    type=str,
 )
 @click.option(
     "--overwrite",
@@ -68,20 +68,37 @@ def load_problem_config_class(problem_type: str) -> type:
     help="Validate config without generating files.",
 )
 def main(
-    config: Path,
+    config_name: str,
     overwrite: bool,
     problem_type: str,
     output_dir: Path | None,
     validate_only: bool,
 ) -> None:
     """
-    Generate problem scaffolding from CONFIG file.
+    Generate problem scaffolding from CONFIG_NAME.
 
-    CONFIG should be a YAML file with problem specification including
-    metrics, function signatures, task description, and optional features.
+    CONFIG_NAME should be a YAML filename (e.g., 'heilbron.yaml') located in
+    tools/wizard/config/ directory. The config should include metrics, function
+    signatures, task description, and optional features.
     """
+    # Construct path to config file in fixed directory
+    wizard_dir = Path(__file__).parent
+    config_path = wizard_dir / "config" / config_name
+
+    # Check if config exists
+    if not config_path.exists():
+        click.echo(
+            click.style(f"❌ Config not found: {config_path}", fg="red"), err=True
+        )
+        click.echo("   Available configs in tools/wizard/config/:", err=True)
+        config_dir = wizard_dir / "config"
+        if config_dir.exists():
+            for cfg in sorted(config_dir.glob("*.yaml")):
+                click.echo(f"   - {cfg.name}", err=True)
+        sys.exit(1)
+
     try:
-        with open(config) as f:
+        with open(config_path) as f:
             config_data = yaml.safe_load(f)
     except Exception as e:
         click.echo(click.style(f"❌ Failed to load config: {e}", fg="red"), err=True)

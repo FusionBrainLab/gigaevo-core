@@ -80,3 +80,11 @@ add_helper: true
 initial_programs:
   - name: "arc"
     description: "Arc-based point arrangement strategy"
+  - name: "cluster"
+    description: "Clustered point distribution approach"
+  - name: "fan"
+    description: "Fan-shaped point layout"
+  - name: "grid"
+    description: "Grid-based systematic placement"
+  - name: "random_arr"
+    description: "Random point arrangement with constraints"
