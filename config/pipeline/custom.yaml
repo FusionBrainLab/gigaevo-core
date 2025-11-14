@@ -11,7 +11,7 @@ evolution_context:
 
 dag_blueprint:
   _target_: gigaevo.runner.dag_blueprint.DAGBlueprint
-
+  _convert_: all
   # Stage definitions
   nodes:
     # Validation stage
