@@ -1,9 +1,3 @@
-display_order: [
-{%- for name in (display_order if display_order else metrics.keys()) -%}
-{{ name }}{{ ", " if not loop.last }}
-{%- endfor -%}
-]
-
 specs:
 {% for metric_name, metric_spec in metrics.items() %}
   {{ metric_name }}:

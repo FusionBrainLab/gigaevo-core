@@ -169,7 +169,9 @@ def main(
 
         # Next steps
         next_steps = ["Implement validate.py", "Implement initial_programs/*.py"]
-        if result["add_context"]:
+        if problem_config.add_helper:
+            next_steps.append("Implement helper.py")
+        if problem_config.add_context:
             next_steps.append("Implement context.py")
         click.echo(f"   📝 Next: {', '.join(next_steps)}")
 

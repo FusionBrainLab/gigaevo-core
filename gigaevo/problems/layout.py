@@ -87,7 +87,6 @@ class ProblemLayout:
             "target_dir": target_dir,
             "files_generated": len(file_map),
             "initial_programs": num_initial_programs,
-            "add_context": config.add_context,
         }
 
     @classmethod
@@ -137,14 +136,6 @@ class ProblemLayout:
 
         all_metrics = {**config.metrics, VALIDITY_KEY: is_valid_spec}
 
-        display_order = (
-            config.display_order.copy()
-            if config.display_order
-            else list(config.metrics.keys())
-        )
-        if VALIDITY_KEY not in display_order:
-            display_order.append(VALIDITY_KEY)
-
         metrics_dict = {key: cls._to_dict(spec) for key, spec in all_metrics.items()}
 
         return {
@@ -152,7 +143,6 @@ class ProblemLayout:
             "entrypoint": cls._to_dict(config.entrypoint),
             "validation": cls._to_dict(config.validation),
             "metrics": metrics_dict,
-            "display_order": display_order,
             "primary_key": primary_key,
             "task_description": cls._to_dict(config.task_description),
             "add_context": config.add_context,

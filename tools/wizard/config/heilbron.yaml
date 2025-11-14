@@ -31,9 +31,6 @@ metrics:
     significant_change: 0.000001
     sentinel_value: -1000
 
-# Optional: specify metric display order
-# display_order: ["fitness", "is_valid"]
-
 # Task description
 task_description:
   objective: |
