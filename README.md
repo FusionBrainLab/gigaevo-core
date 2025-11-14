@@ -14,7 +14,7 @@ Evolutionary algorithm that uses Large Language Models (LLMs) to automatically i
 
 - **[DAG System](docs/DAG_SYSTEM.md)** - Comprehensive guide to GigaEvo's execution engine
 - **[Evolution Strategies](docs/EVOLUTION_STRATEGIES.md)** - MAP-Elites and multi-island evolution system
-- **[Tools](tools/README.md)** - Helper utilities for analysis and debugging
+- **[Tools](tools/README.md)** - Helper utilities for analysis, debugging, and problem scaffolding
 - **[Usage Guide](docs/USAGE.md)** - Detailed usage instructions
 - **[Changelog](docs/CHANGELOG.md)** - Version history and changes
 - **[Contributing](docs/CONTRIBUTING.md)** - Guidelines for contributors
@@ -248,7 +248,7 @@ curl -H "Authorization: Bearer $OPENAI_API_KEY" https://openrouter.ai/api/v1/mod
 Create problem scaffolding from YAML configuration:
 
 ```bash
-python tools/wizard.py config/wizard/heilbron.yaml
+python -m tools.wizard heilbron.yaml
 ```
 
 See `tools/README.md` for detailed wizard documentation.
@@ -292,7 +292,7 @@ GigaEvo includes utilities for analysis and visualization:
 - **`tools/redis2pd.py`** - Export evolution data to CSV
 - **`tools/comparison.py`** - Compare multiple runs with plots
 - **`tools/dag_builder/`** - Visual DAG pipeline designer
-- **`tools/wizard.py`** - Interactive problem setup
+- **`tools/wizard/`** - Interactive problem setup
 
 See `tools/README.md` for detailed documentation.
 

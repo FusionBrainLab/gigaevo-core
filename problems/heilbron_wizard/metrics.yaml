@@ -9,7 +9,7 @@ specs:
     lower_bound: 0.0
     upper_bound: 0.0365
     include_in_prompts: true
-    significant_change: !!float 1e-06
+    significant_change: 1e-06
   is_valid:
     description: Whether the program is valid (1 valid, 0 invalid)
     decimals: 0

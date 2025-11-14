@@ -40,27 +40,73 @@ python tools/redis2pd.py \
 
 ---
 
+### `comparison.py` - Compare Multiple Runs
+
+Compares multiple evolution runs by plotting rolling fitness statistics over iterations.
+
+**Usage:**
+```bash
+python tools/comparison.py \
+  --redis-host localhost \
+  --redis-port 6379 \
+  --run "heilbron@11:Run_A" \
+  --run "heilbron@12:Run_B" \
+  --iteration-rolling-window 5 \
+  --output-folder results/comparison
+```
+
+**Arguments:**
+- `--redis-host`: Redis server hostname (default: localhost)
+- `--redis-port`: Redis server port (default: 6379)
+- `--run`: Run specification in format `<prefix>@<db>:<label>` (can be repeated)
+  - `<prefix>` is the problem name (same as `problem.name`)
+- `--iteration-rolling-window`: Window size for rolling statistics (default: 5)
+- `--output-folder`: Directory to save comparison plots (required)
+
+**Run Format:**
+- `prefix@db:label` - Full specification with custom label
+- `prefix@db` - Label defaults to "Run_<db>"
+- `prefix` is just the problem name (e.g., `heilbron`)
+
+**Output:**
+- PNG plots showing fitness evolution over iterations
+- Rolling mean with ±1 standard deviation bands
+- Multiple runs overlaid for easy comparison
+
+**Example:**
+```bash
+# Compare three different experiments (all using problem.name=test)
+python tools/comparison.py \
+  --run "test@5:Baseline" \
+  --run "test@6:Multi_Island" \
+  --run "test@7:Multi_LLM" \
+  --iteration-rolling-window 10 \
+  --output-folder results/my_comparison
+```
+
+---
+
 ### `wizard.py` - Problem Scaffolding
 
 Generates problem directory structure from YAML configuration.
 
 **Usage:**
 ```bash
-python tools/wizard.py config/wizard/heilbron.yaml
-python tools/wizard.py config.yaml --validate-only
-python tools/wizard.py config.yaml --output-dir custom/path
-python tools/wizard.py config.yaml --problem-type programs
+python -m tools.wizard heilbron.yaml
+python -m tools.wizard my_config.yaml --overwrite
+python -m tools.wizard my_config.yaml --validate-only
+python -m tools.wizard my_config.yaml --output-dir custom/path
 ```
 
 **Arguments:**
-- `CONFIG`: Path to YAML configuration file (required)
+- `CONFIG_NAME`: YAML configuration filename (required), e.g., `heilbron.yaml`
+- `--overwrite`: Overwrite existing problem directory if it exists
 - `--validate-only`: Validate configuration without generating files
 - `--output-dir PATH`: Override output directory (default: `problems/<problem.name>`)
 - `--problem-type TYPE`: Problem type determining templates (default: `programs`)
-- `--overwrite`: Overwrite existing problem directory if it exists
 
 **File Structure:**
-- **Configuration files:** Store in `config/wizard/` directory
+- **Configuration files:** Store in `tools/wizard/config/` directory
 - **Templates:** Located in `gigaevo/problems/types/{problem_type}/templates/`
 - **Output:** Generated in `problems/<name>/` by default
 
@@ -205,63 +251,6 @@ def build_context() -> dict:
     # TODO: Load or generate data
 
     return {}
-```
-
----
-
-### `comparison.py` - Compare Multiple Runs
-
-Compares multiple evolution runs by plotting rolling fitness statistics over iterations.
-
-**Usage:**
-```bash
-python tools/comparison.py \
-  --redis-host localhost \
-  --redis-port 6379 \
-  --run "heilbron@11:Run_A" \
-  --run "heilbron@12:Run_B" \
-  --iteration-rolling-window 5 \
-  --output-folder results/comparison
-```
-
-**Arguments:**
-- `--redis-host`: Redis server hostname (default: localhost)
-- `--redis-port`: Redis server port (default: 6379)
-- `--run`: Run specification in format `<prefix>@<db>:<label>` (can be repeated)
-  - `<prefix>` is the problem name (same as `problem.name`)
-- `--iteration-rolling-window`: Window size for rolling statistics (default: 5)
-- `--output-folder`: Directory to save comparison plots (required)
-
-**Run Format:**
-- `prefix@db:label` - Full specification with custom label
-- `prefix@db` - Label defaults to "Run_<db>"
-- `prefix` is just the problem name (e.g., `heilbron`)
-
-**Output:**
-- PNG plots showing fitness evolution over iterations
-- Rolling mean with ±1 standard deviation bands
-- Multiple runs overlaid for easy comparison
-
-**Example:**
-```bash
-# Compare three different experiments (all using problem.name=test)
-python tools/comparison.py \
-  --run "test@5:Baseline" \
-  --run "test@6:Multi_Island" \
-  --run "test@7:Multi_LLM" \
-  --iteration-rolling-window 10 \
-  --output-folder results/my_comparison
-```
-
----
-
-### `wizard.py` - Interactive Setup
-
-Interactive wizard for setting up new problems and experiments.
-
-**Usage:**
-```bash
-python tools/wizard.py
 ```
 
 ---
