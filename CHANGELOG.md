@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.8.0 (2025-11-14)
+
+### Features
+
+- Remove memory leaks and small fixes
+  ([`2746ea6`](https://github.com/KhrulkovV/metaevolve/commit/2746ea6c002c0c94d0e46ab6e43d44649dac062c))
+
+
 ## v1.7.1 (2025-11-12)
 
 ### Bug Fixes
