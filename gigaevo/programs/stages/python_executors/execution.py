@@ -25,8 +25,21 @@ from gigaevo.programs.utils import dedent_code
 
 class PythonCodeExecutor(Stage):
     """
-    Execute a user function from dynamic code in a subprocess.
+    Execute a user function from dynamic code in an isolated subprocess.
+
+    The subprocess has resource limits applied for safety:
+    - Memory limits (via resource.RLIMIT_AS) prevent RAM exhaustion
+    - Timeout limits prevent infinite loops
+    - Output size limits prevent excessive data generation
+
     The output is a Box[T] containing the result of the function call.
+
+    Args:
+        function_name: Name of the function to call in the user code
+        python_path: Additional paths to add to sys.path
+        max_output_size: Maximum size of output in bytes (default: 64MB)
+        max_memory_mb: Maximum memory in MB (default: None = unlimited)
+        timeout: Maximum execution time in seconds (inherited from Stage)
 
     Subclasses must implement `_build_call(self, program) -> (args, kwargs)`.
     """
@@ -41,12 +54,14 @@ class PythonCodeExecutor(Stage):
         function_name: str = "run_code",
         python_path: list[Path] | None = None,
         max_output_size: int = 64 * 1024 * 1024,
+        max_memory_mb: int | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self.function_name = function_name
         self.python_path = python_path or []
         self.max_output_size = int(max_output_size)
+        self.max_memory_mb = int(max_memory_mb) if max_memory_mb is not None else None
 
     def _code_str(self, program: Program) -> str:
         return program.code
@@ -68,31 +83,51 @@ class PythonCodeExecutor(Stage):
         )
 
         try:
-            value, _stdout_bytes, _stderr_text = await run_exec_runner(
+            value, stdout_bytes, stderr_text = await run_exec_runner(
                 code=dedent_code(code_str),
                 function_name=self.function_name,
                 args=args,
                 kwargs=kwargs,
                 python_path=self.python_path,
                 timeout=int(self.timeout),
+                max_memory_mb=self.max_memory_mb,
             )
 
-            size = len(_stdout_bytes)
-            if size > self.max_output_size:
+            # Check output size
+            output_size = len(stdout_bytes)
+            if output_size > self.max_output_size:
                 return ProgramStageResult.failure(
                     error=StageError(
                         type="OutputTooLarge",
-                        message=f"Output {size} > limit {self.max_output_size}",
+                        message=f"Output {output_size} bytes exceeds limit of {self.max_output_size} bytes",
                         stage=stage_name,
                     )
                 )
+
+            del stdout_bytes
+            del stderr_text
+
             return self.__class__.OutputModel(data=value)
 
         except ExecRunnerError as e:
+            # Detect memory limit errors
+            error_type = "SubprocessError"
+            error_msg = str(e)
+
+            if e.stderr and (
+                "MemoryError" in e.stderr or "Cannot allocate memory" in e.stderr
+            ):
+                error_type = "MemoryLimitExceeded"
+                error_msg = (
+                    f"Process exceeded memory limit of {self.max_memory_mb} MB"
+                    if self.max_memory_mb
+                    else "Process ran out of memory"
+                )
+
             return ProgramStageResult.failure(
                 error=StageError(
-                    type="SubprocessError",
-                    message=str(e),
+                    type=error_type,
+                    message=error_msg,
                     stage=stage_name,
                     traceback=e.stderr,
                 )

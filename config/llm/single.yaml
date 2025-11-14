@@ -9,4 +9,5 @@ llm:
       api_key: ${oc.env:OPENAI_API_KEY}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
+      base_url: ${llm_base_url}
   probabilities: [1.0]

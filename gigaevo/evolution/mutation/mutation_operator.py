@@ -1,9 +1,11 @@
+import ast
 from typing import Literal
 
 from loguru import logger
 
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.utils import _DocstringRemover
 from gigaevo.exceptions import MutationError
 from gigaevo.llm.agents.factories import create_mutation_agent
 from gigaevo.llm.models import MultiModelRouter
@@ -28,6 +30,7 @@ class LLMMutationOperator(MutationOperator):
         fallback_to_rewrite: bool = True,
         context_key: str = MUTATION_CONTEXT_METADATA_KEY,
         problem_context: ProblemContext,
+        strip_comments_and_docstrings: bool = False,
     ):
         self.problem_context = problem_context
         self.llm_wrapper = llm_wrapper
@@ -35,6 +38,7 @@ class LLMMutationOperator(MutationOperator):
         self.fallback_to_rewrite = fallback_to_rewrite
         self.context_key = context_key
         self.metrics_context = problem_context.metrics_context
+        self.strip_comments_and_docstrings = strip_comments_and_docstrings
 
         self.agent = create_mutation_agent(
             llm=llm_wrapper,
@@ -44,9 +48,33 @@ class LLMMutationOperator(MutationOperator):
         )
 
         logger.info(
-            f"[LLMMutationOperator] Initialized with mode: {mutation_mode} "
+            f"[LLMMutationOperator] Initialized with mode: {mutation_mode}, "
+            f"strip_comments_and_docstrings: {strip_comments_and_docstrings} "
             "(using LangGraph agent)"
         )
+
+    @staticmethod
+    def _canonicalize_code(code: str) -> str:
+        """Remove comments and docstrings from Python code.
+
+        Args:
+            code: Python source code as string
+
+        Returns:
+            Canonicalized code with comments and docstrings removed
+        """
+        try:
+            tree = ast.parse(code)
+            remover = _DocstringRemover()
+            tree = remover.visit(tree)
+            canonicalized = ast.unparse(tree)
+            return canonicalized
+        except SyntaxError as e:
+            logger.warning(
+                f"[LLMMutationOperator] Failed to canonicalize code due to syntax error: {e}. "
+                "Returning original code."
+            )
+            return code
 
     async def mutate_single(
         self, selected_parents: list[Program]
@@ -82,6 +110,14 @@ class LLMMutationOperator(MutationOperator):
                 raise MutationError(
                     "Failed to extract code from LLM response. No code found."
                 )
+
+            # Canonicalize code if requested
+            if self.strip_comments_and_docstrings:
+                logger.debug(
+                    "[LLMMutationOperator] Canonicalizing code (removing comments and docstrings)"
+                )
+                final_code = self._canonicalize_code(final_code)
+
             mutation_spec = MutationSpec(
                 code=final_code,
                 parents=selected_parents,

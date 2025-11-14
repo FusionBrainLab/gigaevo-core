@@ -8,6 +8,7 @@ from gigaevo.entrypoint.constants import (
     DEFAULT_MAX_INSIGHTS,
     DEFAULT_STAGE_TIMEOUT,
     MAX_CODE_LENGTH,
+    MAX_MEMORY_MB,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.problems.layout import ProblemLayout
@@ -32,33 +33,6 @@ from gigaevo.programs.stages.python_executors.execution import (
 )
 from gigaevo.programs.stages.validation import ValidateCodeStage
 from gigaevo.runner.dag_blueprint import DAGBlueprint
-
-trait_description = """
-Assess how modular the submitted code is.
-
-Focus on whether the solution decomposes the task into small, cohesive, reusable functions with clear interfaces and minimal coupling. Reward:
-- Clear separation of concerns: the top-level function orchestrates; helpers do one thing well.
-- Small functions (preferably < 40 LOC) with descriptive names, docstrings, and type hints.
-- Low coupling / high cohesion: helpers don’t reach into each other’s internals; parameters carry needed data.
-- Reuse over repetition (little to no copy-paste).
-- Controlled side effects: I/O and state changes isolated behind thin adapters; core logic mostly pure.
-- Testability and composability: helpers can be unit-tested in isolation; minimal global state.
-
-Penalize:
-- Monolithic or god functions, deep nesting, and long parameter lists.
-- Mixed responsibilities in a single function.
-- Hidden dependencies, global/mutable shared state, and tight coupling.
-- Duplicate logic instead of extracting helpers.
-
-Scoring rubric (0–100):
-- 90–100: Highly modular; clear orchestration + focused helpers; minimal coupling; excellent docs/types.
-- 70–89: Generally modular; a few oversized or mixed-concern helpers; minor duplication/coupling.
-- 40–69: Partially modular; main function still heavy; noticeable duplication and side-effect tangling.
-- 0–39: Monolithic; few/no helpers; tightly coupled, hard to test.
-
-Ignore performance or algorithmic optimality; evaluate modularity only.
-"""
-
 
 StageFactory = Callable[[], Stage]
 
@@ -183,6 +157,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 function_name="entrypoint",
                 python_path=[problem_ctx.problem_dir.resolve()],
                 timeout=DEFAULT_STAGE_TIMEOUT,
+                max_memory_mb=MAX_MEMORY_MB,
             ),
         )
 
