@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import resource
 import sys
 import traceback
 import types
@@ -23,6 +24,20 @@ def _prepend_sys_path(paths: list[str] | None) -> None:
             sys.path.insert(0, p)
 
 
+def _set_memory_limit(max_memory_mb: int | None) -> None:
+    """
+    Set memory limit for the current process to prevent RAM exhaustion.
+    Args:
+        max_memory_mb: Maximum memory in megabytes, or None for no limit.
+    """
+    if max_memory_mb is None:
+        return
+
+    max_bytes = max_memory_mb * 1024 * 1024
+    resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
+    resource.setrlimit(resource.RLIMIT_DATA, (max_bytes, max_bytes))
+
+
 def main() -> None:
     try:
         payload: Dict[str, Any] = cloudpickle.loads(sys.stdin.buffer.read())
@@ -31,9 +46,13 @@ def main() -> None:
         py_path: List[str] = payload.get("python_path", [])
         args: List[Any] = payload.get("args", [])
         kwargs: Dict[str, Any] = payload.get("kwargs", {})
+        max_memory_mb: int | None = payload.get("max_memory_mb")
 
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             raise TypeError("Payload must contain 'args': list and 'kwargs': dict")
+
+        # Set memory limit BEFORE executing any user code
+        _set_memory_limit(max_memory_mb)
 
         _prepend_sys_path(py_path)
         mod = _load_module_from_code(code)

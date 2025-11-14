@@ -43,14 +43,30 @@ async def run_exec_runner(
     kwargs: dict[str, Any] | None = None,
     python_path: Sequence[Path] | None = None,
     timeout: int,
+    max_memory_mb: int | None = None,
     cwd: Path | None = None,
     runner_path: Path | None = None,
 ) -> tuple[Any, bytes, str]:
     """
-    Run the lightweight exec runner as a subprocess.
+    Run user code in an isolated subprocess with resource limits.
 
-    Returns: (result_object, raw_stdout_bytes, stderr_text)
-    Raises: ExecRunnerError on non-zero exit, asyncio.TimeoutError on timeout.
+    Args:
+        code: Python code to execute
+        function_name: Function to call in the code
+        args: Positional arguments for the function
+        kwargs: Keyword arguments for the function
+        python_path: Additional paths to add to sys.path
+        timeout: Maximum execution time in seconds
+        max_memory_mb: Maximum memory in MB (None = unlimited)
+        cwd: Working directory for subprocess
+        runner_path: Path to exec_runner.py script
+
+    Returns:
+        (result_object, raw_stdout_bytes, stderr_text)
+
+    Raises:
+        ExecRunnerError: On non-zero exit or execution failure
+        asyncio.TimeoutError: On timeout
     """
     script = str(runner_path or _find_runner_in_repo())
 
@@ -81,6 +97,7 @@ async def run_exec_runner(
         "python_path": [str(p) for p in (python_path or [])],
         "args": list(args or []),
         "kwargs": dict(kwargs or {}),
+        "max_memory_mb": max_memory_mb,
     }
     data = cloudpickle.dumps(payload, protocol=cloudpickle.DEFAULT_PROTOCOL)
 
@@ -88,21 +105,27 @@ async def run_exec_runner(
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(input=data), timeout=timeout
         )
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        # Kill subprocess immediately on timeout or cancellation
+        proc.kill()
         try:
-            proc.terminate()
-            await asyncio.wait_for(proc.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except Exception:
-                pass
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except Exception:
+            pass  # Best effort cleanup
+
+        # Close pipes to free resources
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            if pipe:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
         raise
 
+    returncode = proc.returncode
     stderr_text = stderr.decode("utf-8", errors="replace")
 
-    if proc.returncode == 0:
+    if returncode == 0:
         try:
             _prepend_sys_path(python_path)
             value = cloudpickle.loads(stdout)
@@ -115,5 +138,5 @@ async def run_exec_runner(
         return value, stdout, stderr_text
 
     raise ExecRunnerError(
-        returncode=proc.returncode, stderr=stderr_text, stdout_bytes=stdout
+        returncode=returncode, stderr=stderr_text, stdout_bytes=stdout
     )

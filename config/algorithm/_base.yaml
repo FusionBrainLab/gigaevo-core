@@ -42,3 +42,4 @@ mutation_operator:
   llm_wrapper: ${llm}
   mutation_mode: ${mutation_mode}
   problem_context: ${problem_context}
+  strip_comments_and_docstrings: ${strip_comments_and_docstrings}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import datetime, timezone
+import gc
 import os
 import time
 from typing import Any, NamedTuple
@@ -271,6 +272,16 @@ class DagRunner:
             except Exception as e:
                 await self._metrics.increment_dag_errors()
                 logger.error("[DagScheduler] program {} failed: {}", info.program_id, e)
+            finally:
+                del info
+
+        if finished or timed_out:
+            gc.collect()
+            logger.debug(
+                "[DagScheduler] Cleaned up {} finished + {} timed out tasks, forced GC",
+                len(finished),
+                len(timed_out),
+            )
 
     async def _launch(self) -> None:
         try:
@@ -358,6 +369,22 @@ class DagRunner:
         except Exception as exc:
             ok = False
             logger.error("[DagScheduler] DAG run failed for {}: {}", program.id, exc)
+        finally:
+            # CRITICAL: Explicitly cleanup DAG to free memory
+            # Clear all Stage instances and their resources
+            if (
+                hasattr(dag, "automata")
+                and dag.automata
+                and hasattr(dag.automata, "topology")
+            ):
+                if dag.automata.topology and hasattr(dag.automata.topology, "nodes"):
+                    # Clear Stage instances which may hold LLM clients
+                    dag.automata.topology.nodes.clear()
+                dag.automata.topology = None
+            dag.automata = None
+            dag.state_manager = None
+            dag._writer = None
+            dag._stage_sema = None
 
         try:
             new_state = (

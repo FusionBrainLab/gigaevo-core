@@ -1,6 +1,6 @@
 # @package _global_
 
-# Heterogeneous: AlphaEvolve models (Gemini 2.5 Pro and gpt-5-mini)
+# Heterogeneous: gpt-5 and gpt-5-mini
 
 llm:
   _target_: gigaevo.llm.models.MultiModelRouter
@@ -22,7 +22,7 @@ llm:
       api_key: ${oc.env:OPENAI_API_KEY}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
-      base_url: https://openrouter.ai/api/v1  # Different endpoint
+      base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
 
   # Equal probability for both models
