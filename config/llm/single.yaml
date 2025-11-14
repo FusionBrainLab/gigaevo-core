@@ -2,6 +2,7 @@
 
 llm:
   _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
   models:
     - _target_: langchain_openai.ChatOpenAI
       model: ${model_name}
