@@ -7,7 +7,8 @@ from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricSpec
 
 class FunctionSignature(BaseModel):
     """Function signature specification.
-    Function names are fixed: 'validate' or 'entrypoint'.
+    Function names are fixed for the base case: 'validate' or 'entrypoint'.
+    Change if other function is specified in python code executor stage.
     """
 
     params: list[str] = Field(
@@ -52,10 +53,6 @@ class ProblemConfig(BaseModel):
     metrics: dict[str, MetricSpec] = Field(
         description="Metric specifications (is_valid auto-generated, do NOT include)"
     )
-    display_order: list[str] = Field(
-        default_factory=list,
-        description="Metric display order (defaults to metric definition order if not specified)",
-    )
 
     task_description: TaskDescription
 
@@ -80,11 +77,6 @@ class ProblemConfig(BaseModel):
             raise ValueError(
                 f"Exactly one metric must be primary, found {primary_count}"
             )
-
-        if self.display_order:
-            unknown = set(self.display_order) - set(self.metrics.keys())
-            if unknown:
-                raise ValueError(f"display_order has unknown metrics: {unknown}")
 
         return self
 
