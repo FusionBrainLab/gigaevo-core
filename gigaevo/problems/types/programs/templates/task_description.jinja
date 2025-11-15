@@ -1,0 +1,8 @@
+{{ task_description.objective }}
+{% if task_description.hints %}
+
+**STRATEGY HINTS**:
+{% for hint in task_description.hints %}
+- {{ hint }}
+{% endfor %}
+{% endif %}

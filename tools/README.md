@@ -86,13 +86,171 @@ python tools/comparison.py \
 
 ---
 
-### `wizard.py` - Interactive Setup
+### `wizard.py` - Problem Scaffolding
 
-Interactive wizard for setting up new problems and experiments.
+Generates problem directory structure from YAML configuration.
 
 **Usage:**
 ```bash
-python tools/wizard.py
+python -m tools.wizard heilbron.yaml
+python -m tools.wizard my_config.yaml --overwrite
+python -m tools.wizard my_config.yaml --validate-only
+python -m tools.wizard my_config.yaml --output-dir custom/path
+```
+
+**Arguments:**
+- `CONFIG_NAME`: YAML configuration filename (required), e.g., `heilbron.yaml`
+- `--overwrite`: Overwrite existing problem directory if it exists
+- `--validate-only`: Validate configuration without generating files
+- `--output-dir PATH`: Override output directory (default: `problems/<problem.name>`)
+- `--problem-type TYPE`: Problem type determining templates (default: `programs`)
+
+**File Structure:**
+- **Configuration files:** Store in `tools/wizard/config/` directory
+- **Templates:** Located in `gigaevo/problems/types/{problem_type}/templates/`
+- **Output:** Generated in `problems/<name>/` by default
+
+**Configuration Example (`heilbron.yaml`):**
+```yaml
+name: "heilbron"
+description: "Heilbronn triangle problem"
+
+entrypoint:
+  params: []
+  returns: "(11, 2) array of coordinates"
+
+validation:
+  params: ["coordinates"]
+
+metrics:
+  fitness:
+    description: "Area of smallest triangle"
+    decimals: 5
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 0.0365
+    include_in_prompts: true
+    significant_change: !!float 1e-6
+
+task_description:
+  objective: |
+    Return 11 distinct 2D coordinates inside unit-area equilateral triangle.
+    Maximize the minimum area among all triangles formed by point triplets.
+
+add_helper: true
+
+initial_programs:
+  - name: arc
+    description: "Arc-based point distribution"
+```
+
+**Key Configuration Notes:**
+- Exactly one metric must have `is_primary: true`
+- `is_valid` metric is auto-generated (do NOT include in config)
+- Use `!!float` tag for small scientific notation values (e.g., `!!float 1e-6`)
+- `add_context: true` generates `context.py` (optional, requires `context` param in function signatures)
+- `add_helper: true` generates `helper.py` (optional)
+
+**Generated Structure:**
+```
+problems/heilbron/
+├── task_description.txt
+├── metrics.yaml
+├── validate.py          # User must implement
+├── helper.py            # Optional: User must implement utilities
+└── initial_programs/
+    └── arc.py           # User must implement strategy
+```
+
+**Required Implementation:**
+
+After scaffolding, you **must implement** the following:
+
+**1. `validate.py` - Validation and metrics computation:**
+```python
+"""
+Validation function for: Heilbronn triangle problem
+"""
+
+from helper import *
+
+
+def validate(coordinates):
+    """
+    Validate the solution and compute fitness metrics.
+
+    Returns:
+        dict with metrics:
+        - fitness: Area of smallest triangle
+        - is_valid: Whether the program is valid (1 valid, 0 invalid)
+    """
+    # TODO: Validate constraints from task_description.txt
+
+    # TODO: Compute metrics
+    fitness = 0.0  # Area of smallest triangle
+    is_valid = 1   # Set to 0 if any constraint violated
+
+    return {
+        "fitness": fitness,
+        "is_valid": is_valid,
+    }
+```
+
+**2. All `initial_programs/*.py` - Initial strategy implementations:**
+```python
+from helper import *
+
+
+def entrypoint():
+    """
+    Arc-based point distribution
+
+    Returns:
+        (11, 2) array of coordinates
+    """
+    # TODO: Implement strategy
+
+    pass
+```
+
+**Optional Implementation:**
+
+**If `add_helper: true`** - `helper.py` with utility functions:
+```python
+"""
+Helper functions for: Heilbronn triangle problem
+"""
+
+# TODO: Add helper functions here
+# Example:
+# def get_unit_triangle():
+#     """Return vertices of unit-area equilateral triangle."""
+#     unit_area_side = np.sqrt(4 / np.sqrt(3))
+#     height = np.sqrt(3) / 2 * unit_area_side
+#     A = np.array([0, 0])
+#     B = np.array([unit_area_side, 0])
+#     C = np.array([unit_area_side / 2, height])
+#     return A, B, C
+```
+
+**If `add_context: true`** - `context.py` with runtime context builder:
+```python
+"""
+Context builder for problem
+"""
+
+
+def build_context() -> dict:
+    """
+    Build runtime context data (called once at startup).
+
+    Returns:
+        dict: Context data passed to all programs
+    """
+    # TODO: Load or generate data
+
+    return {}
 ```
 
 ---
