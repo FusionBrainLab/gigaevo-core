@@ -2,6 +2,35 @@
 
 <!-- version list -->
 
+## v1.9.0 (2025-11-15)
+
+### Chores
+
+- Removed legacy fields, upd. FunctionSignature note
+  ([`f7c832e`](https://github.com/KhrulkovV/metaevolve/commit/f7c832e2b4c2013db40d0ed5bfc0eae08272b1c5))
+
+- Removed wizard example problem
+  ([`41f2c77`](https://github.com/KhrulkovV/metaevolve/commit/41f2c77cac9646ade02a5677013f2917cbc1e903))
+
+### Documentation
+
+- Updated wizard documentation
+  ([`a6d115e`](https://github.com/KhrulkovV/metaevolve/commit/a6d115e5281088bf3baab69b188b8dda5869ac67))
+
+### Features
+
+- Add problem scaffolding wizard
+  ([`e12e566`](https://github.com/KhrulkovV/metaevolve/commit/e12e566d4340b072af4d317e9a871f4f8250f2c5))
+
+### Refactoring
+
+- Moved wizard configs, made wizard a module
+  ([`e2af84b`](https://github.com/KhrulkovV/metaevolve/commit/e2af84b49e4630f72a1945802842b68a370adbd8))
+
+- Updated wizard code functionality
+  ([`43d0ab6`](https://github.com/KhrulkovV/metaevolve/commit/43d0ab686b5d695018d337bcd00ce1bdd85c1402))
+
+
 ## v1.8.1 (2025-11-14)
 
 
