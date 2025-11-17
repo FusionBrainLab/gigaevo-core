@@ -7,7 +7,7 @@ specs:
     lower_bound: 0.0
     upper_bound: 0.0365
     include_in_prompts: true
-    significant_change: 1.0e-6
+    significant_change: 0.001
     sentinel_value: -1000
   is_valid:
     description: Whether the program is valid (1 valid, 0 invalid)
