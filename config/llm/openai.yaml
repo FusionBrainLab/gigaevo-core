@@ -1,0 +1,29 @@
+# @package _global_
+
+# Heterogeneous: gpt-5 and gpt-5-mini
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  models:
+    # Model 1: Primary workhorse
+    - _target_: langchain_openai.ChatOpenAI
+      model: openai/gpt-5
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+    # Model 2: Alternative model (e.g., for different strengths)
+    # Change to your preferred alternative model
+    - _target_: langchain_openai.ChatOpenAI
+      model: openai/gpt-5-mini # Example alternative
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+  # Equal probability for both models
+  probabilities: [0.1, 0.9]
