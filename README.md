@@ -5,6 +5,9 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
+
+![Demo](./demos/quickstart.svg)
+
 ## 🚀 Getting Started
 
 - **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes ⭐
