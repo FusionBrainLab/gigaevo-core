@@ -8,7 +8,7 @@ Evolutionary algorithm that uses Large Language Models (LLMs) to automatically i
 
 ## 🎬 Demo
 
-[![asciicast](https://asciinema.org/a/AiSZFvlz4Icdv4QdZ9vBYjtOP.svg)](https://asciinema.org/a/AiSZFvlz4Icdv4QdZ9vBYjtOP)
+![Demo](./demos/demo-opt.gif)
 
 ## 🚀 Getting Started
 
