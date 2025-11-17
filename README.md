@@ -6,7 +6,9 @@
 
 Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
 
-![Demo](./demos/quickstart.svg)
+## 🎬 Demo
+
+[![asciicast](https://asciinema.org/a/AiSZFvlz4Icdv4QdZ9vBYjtOP.svg)](https://asciinema.org/a/AiSZFvlz4Icdv4QdZ9vBYjtOP)
 
 ## 🚀 Getting Started
 
