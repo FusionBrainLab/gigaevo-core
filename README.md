@@ -55,7 +55,8 @@ python run.py problem.name=heilbron
 ```
 
 That's it! Evolution will start and logs will be saved to `outputs/`.
-To study results, check `tools` or start `tensorboard` / `wandb`
+To study results, check `tools` or start `tensorboard` / `wandb`.
+Sample analysis code is available at `tools/playground.ipynb`.
 
 ## What Happens
 
