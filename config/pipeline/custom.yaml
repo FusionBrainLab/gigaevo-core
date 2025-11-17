@@ -14,7 +14,7 @@ dag_blueprint:
   _convert_: all
   # Stage definitions
   nodes:
-    # Validation stage
+    # Validation stage (checks syntax and security)
     ValidateCodeStage:
       _target_: gigaevo.programs.stages.validation.ValidateCodeStage
       _partial_: true
@@ -22,7 +22,7 @@ dag_blueprint:
       timeout: ${stage_timeout}
       safe_mode: true
 
-    # Execution stages
+    # Execution stages (runs the program)
     CallProgramFunction:
       _target_: gigaevo.programs.stages.python_executors.execution.CallProgramFunction
       _partial_: true
@@ -31,6 +31,7 @@ dag_blueprint:
         - ${problem.dir}
       timeout: ${stage_timeout}
 
+    # Validation stage (evaluates the output)
     CallValidatorFunction:
       _target_: gigaevo.programs.stages.python_executors.execution.CallValidatorFunction
       _partial_: true
@@ -38,19 +39,19 @@ dag_blueprint:
       function_name: validate
       timeout: ${stage_timeout}
 
-    # Complexity analysis
+    # Complexity analysis (measures the length of the code)
     ComputeComplexityStage:
       _target_: gigaevo.programs.stages.complexity.ComputeComplexityStage
       _partial_: true
       timeout: ${stage_timeout}
 
-    # Merge validator and complexity metrics (dict[str, float])
+    # Merge validator and complexity metrics (dict[str, float]) into a single dictionary
     MergeMetricsStage:
       _target_: gigaevo.programs.stages.json_processing.MergeStrFloatDict
       _partial_: true
       timeout: ${stage_timeout}
 
-    # Ensure all required metrics exist
+    # Ensure all required metrics exist (e.g. is_valid, fitness)
     EnsureMetricsStage:
       _target_: gigaevo.programs.stages.metrics.EnsureMetricsStage
       _partial_: true
@@ -58,7 +59,7 @@ dag_blueprint:
       metrics_context: ${metrics_context}
       timeout: ${stage_timeout}
 
-    # Insights generation
+    # Insights generation (uses LLM to generate insights)
     InsightsStage:
       _target_: gigaevo.programs.stages.insights.InsightsStage
       _partial_: true
@@ -68,7 +69,7 @@ dag_blueprint:
       max_insights: ${max_insights}
       timeout: ${stage_timeout}
 
-    # Lineage tracking - descendants
+    # Lineage tracking - descendants (tracks the descendants of the program)
     DescendantProgramIds:
       _target_: gigaevo.programs.stages.collector.DescendantProgramIds
       _partial_: true
@@ -80,7 +81,7 @@ dag_blueprint:
         max_selected: 1
       timeout: ${stage_timeout}
 
-    # Lineage tracking - ancestors
+    # Lineage tracking - ancestors (tracks the ancestors of the program)
     AncestorProgramIds:
       _target_: gigaevo.programs.stages.collector.AncestorProgramIds
       _partial_: true
@@ -92,7 +93,7 @@ dag_blueprint:
         max_selected: 2
       timeout: ${stage_timeout}
 
-    # Lineage analysis
+    # Lineage analysis (uses LLM to generate insights about the lineage)
     LineageStage:
       _target_: gigaevo.programs.stages.insights_lineage.LineageStage
       _partial_: true
@@ -102,6 +103,7 @@ dag_blueprint:
       storage: ${ref:redis_storage}
       timeout: ${stage_timeout}
 
+    # Lineage tracking - descendants (aggregates the lineage of the descendants)
     LineagesToDescendants:
       _target_: gigaevo.programs.stages.insights_lineage.LineagesToDescendants
       _partial_: true
@@ -109,6 +111,7 @@ dag_blueprint:
       source_stage_name: LineageStage
       timeout: ${stage_timeout}
 
+    # Lineage tracking - ancestors (aggregates the lineage of the ancestors)
     LineagesFromAncestors:
       _target_: gigaevo.programs.stages.insights_lineage.LineagesFromAncestors
       _partial_: true
@@ -116,14 +119,14 @@ dag_blueprint:
       source_stage_name: LineageStage
       timeout: ${stage_timeout}
 
-    # Mutation context assembly
+    # Mutation context assembly (aggregates the metrics, insights, and lineage) into a single context
     MutationContextStage:
       _target_: gigaevo.programs.stages.mutation_context.MutationContextStage
       _partial_: true
       metrics_context: ${metrics_context}
       timeout: ${stage_timeout}
 
-  # Data flow edges (source -> destination with input name)
+  # Data flow edges (source -> destination with input name) (defines how the data flows between the stages)
   data_flow_edges:
     # Main execution flow
     - source_stage: CallProgramFunction

@@ -4,10 +4,11 @@ specs:
     decimals: 5
     is_primary: true
     higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 100.0
+    lower_bound: -10.0
+    upper_bound: -3.92
     include_in_prompts: true
-    significant_change: 1.0e-6
+    significant_change: 0.01
+    sentinel_value: -1000
   is_valid:
     description: Whether the program is valid (1 valid, 0 invalid)
     decimals: 0
@@ -17,3 +18,4 @@ specs:
     upper_bound: 1.0
     include_in_prompts: true
     significant_change: 1.0
+    sentinel_value: 0

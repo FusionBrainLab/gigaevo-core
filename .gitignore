@@ -576,3 +576,4 @@ problems/*/*.json
 !docs/**/*.md
 !docs/**/*.rst
 !docs/**/*.txt
+!tools/**/*.ipynb

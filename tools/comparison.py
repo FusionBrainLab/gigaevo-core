@@ -183,7 +183,7 @@ def plot_comparison(
                             x = row[iteration_col]
                             y = row["frontier_fitness"]
                             ax.annotate(
-                                f"{y:.5f}",
+                                f"{y:.4f}",
                                 (x, y),
                                 textcoords="offset points",
                                 xytext=(0, 6),
@@ -194,7 +194,7 @@ def plot_comparison(
                             )
 
     ax.set_xlabel("Iteration")
-    ax.set_ylabel("Fitness (negative enclosing hexagon side length)")
+    ax.set_ylabel("Fitness")
     ax.set_title("Evolution Runs: Rolling Fitness vs Iteration")
     ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
     ax.grid(True, alpha=0.3)
