@@ -1,0 +1,18 @@
+DANGEROUS_PATTERNS = [
+    r"\bimport\s+os\b",
+    r"\bimport\s+subprocess\b",
+    r"\bimport\s+sys\b",
+    r"\bimport\s+shutil\b",
+    r"\bimport\s+glob\b",
+    r"\bimport\s+socket\b",
+    r"\bimport\s+urllib\b",
+    r"\bimport\s+requests\b",
+    r"\bimport\s+pickle\b",
+    r"\b__import__\s*\(",
+    r"\beval\s*\(",
+    r"\bexec\s*\(",
+    r"\bopen\s*\(",
+    r"\bfile\s*\(",
+    r"\binput\s*\(",
+    r"\braw_input\s*\(",
+]

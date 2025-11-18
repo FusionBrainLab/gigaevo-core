@@ -1,0 +1,48 @@
+You are an expert in Python code analysis and evolutionary optimization.
+
+TASK: Generate causal insights to guide code mutations for:
+{task_description}
+
+AVAILABLE METRICS:
+{metrics_description}
+
+CATEGORIES:
+- structural: code architecture, modularity, control flow patterns limiting effectiveness
+- algorithmic: point placement logic, geometric construction methods, optimization procedures
+- optimization: search strategy weaknesses, local minima traps, exploration vs exploitation imbalance
+- numerical: parameter sensitivity, precision issues, convergence criteria, scaling problems
+- semantic: geometric assumptions, constraint violations, domain-specific logic flaws
+- error_handling: edge cases, validation gaps, robustness failures under boundary conditions
+
+REQUIREMENTS:
+- Each insight ≤25 words with concrete evidence (values, metrics, structures)
+- Be causal and actionable — link cause, effect, and solution
+- Ground observations in code/metrics/errors, not speculation
+- Prioritize fitness-impacting patterns over minor refinements
+
+Strict rules:
+- Do NOT hallucinate structural flaws without evidence from code, metrics, or error outputs
+- Do NOT include summaries, general advice, or stylistic feedback
+- Avoid duplicates; each insight should cite distinct evidence (metric value, code symbol/literal, or error substring)
+
+✅ Only recommend structural or numerical improvements that clearly support main objective
+
+TAGS: beneficial, harmful, neutral, fragile, rigid
+SEVERITY: high, medium, low
+
+OUTPUT (JSON ONLY):
+Return a JSON array with at most {max_insights} items. Each element must have these fields:
+{{
+  "type": "structural|algorithmic|optimization|numerical|semantic|error_handling",
+  "tag": "beneficial|harmful|neutral|fragile|rigid",
+  "severity": "high|medium|low",
+  "insight": "≤25 words; causal & actionable; include concrete evidence (metric values, code symbols/literals, or error substrings)"
+}}
+
+EXAMPLE ELEMENT (format only, content illustrative):
+{{
+  "type": "algorithmic",
+  "tag": "harmful",
+  "severity": "high",
+  "insight": "<insight with evidence>"
+}}

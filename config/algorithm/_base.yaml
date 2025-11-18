@@ -1,0 +1,45 @@
+# @package _global_
+
+# Base MAP-Elites configuration shared by all island configs
+# This sets up problem context and metrics, but NOT the islands themselves
+
+# Load problem context to extract metrics
+problem_context:
+  _target_: gigaevo.problems.context.ProblemContext
+  problem_dir: ${problem.dir}
+
+# Extract metrics context and add auxiliary metrics
+# This mutates problem_context.metrics_context in-place
+metrics_context:
+  _target_: gigaevo.config.helpers.add_auxiliary_metrics
+  metrics_context: ${ref:problem_context::metrics_context}
+  auxiliary_metrics: ${auxiliary_metrics}
+
+# Compute primary key and metadata
+primary_key:
+  _target_: gigaevo.config.helpers.get_primary_key
+  metrics_context: ${metrics_context}
+
+higher_is_better:
+  _target_: gigaevo.config.helpers.is_higher_better
+  metrics_context: ${metrics_context}
+  key: ${primary_key}
+
+# Compute bounds for commonly used metrics
+primary_bounds:
+  _target_: gigaevo.config.helpers.get_bounds
+  metrics_context: ${metrics_context}
+  key: ${primary_key}
+
+validity_bounds:
+  _target_: gigaevo.config.helpers.get_bounds
+  metrics_context: ${metrics_context}
+  key: ${validity_key}
+
+# Mutation operator (shared by all configs)
+mutation_operator:
+  _target_: gigaevo.evolution.mutation.mutation_operator.LLMMutationOperator
+  llm_wrapper: ${llm}
+  mutation_mode: ${mutation_mode}
+  problem_context: ${problem_context}
+  strip_comments_and_docstrings: ${strip_comments_and_docstrings}

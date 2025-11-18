@@ -1,0 +1,15 @@
+# @package _global_
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${llm}
+  storage: ${redis_storage}
+
+pipeline_builder:
+  _target_: gigaevo.entrypoint.default_pipelines.DefaultPipelineBuilder
+  ctx: ${evolution_context}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}
