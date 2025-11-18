@@ -1,0 +1,36 @@
+TASK DEFINITION – HEXAGON PACKING PROBLEM (11 UNIT HEXAGONS)
+
+Challenge: Pack exactly 11 non-overlapping unit regular hexagons inside a regular enclosing hexagon to minimize the enclosing hexagon's side length. Hexagons may be placed and rotated arbitrarily in 2D.
+
+OBJECTIVE
+Arrange 11 unit regular hexagons (circumradius = 1.0) inside a minimal flat-topped regular enclosing hexagon centered at origin, such that:
+1) (Non-overlap) All hexagons are strictly non-overlapping (minimum separation ≥ 0)
+2) (Containment) All hexagons lie completely inside the enclosing hexagon
+3) (Minimality) The enclosing hexagon's side length is minimized
+
+Output: Tuple of (centers, angles)  |  Fitness: -side_length  |  Goal: side_length ≤ 3.93
+
+CONSTRAINTS
+- Exactly 11 unit regular hexagons with circumradius = 1.0
+- Enclosing hexagon: regular, flat-topped, centered at (0, 0)
+- All 11 hexagons fully contained inside enclosing hexagon
+- No overlaps between any pair of hexagons
+
+VALIDATION & EFFICIENCY (CRITICAL)
+- Verify all 11 hexagons are non-overlapping using pairwise collision detection
+- Check all hexagon vertices lie inside enclosing boundary
+- For flat-topped regular hexagon: vertices at angles [0°, 60°, 120°, 180°, 240°, 300°] from center
+
+FAILURE MODES
+- Overlapping hexagons; hexagons extending outside enclosing boundary
+- Incorrect hexagon geometry (wrong circumradius or vertex positions)
+- Non-flat-topped enclosing hexagon; wrong number of hexagons (≠ 11)
+- Not returning tuple format or wrong array shapes
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a tuple (centers, angles):
+- centers: (11, 2) NumPy float array of hexagon center coordinates (x, y)
+- angles: (11,) NumPy float array of rotation angles in radians [0, 2π)
+- Use numpy, scipy, sklearn, or standard library as needed
+- Fix random seeds if using randomness (e.g., np.random.seed(42))

@@ -1,0 +1,13 @@
+# @package _global_
+
+# Auxiliary metrics for code complexity analysis
+# These metrics are computed by ComputeComplexityStage in the DAG pipeline
+auxiliary_metrics:
+  complexity_score:
+    _target_: gigaevo.programs.metrics.context.MetricSpec
+    description: "Overall complexity score (weighted combination of AST features)"
+    higher_is_better: false
+    is_primary: false
+    decimals: 2
+    lower_bound: 0.0
+    upper_bound: 200.0

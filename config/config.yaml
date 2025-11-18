@@ -1,0 +1,8 @@
+defaults:
+  - experiment: base       # Base experiment setup (override with experiment=full_featured)
+  - _self_
+
+# Problem metadata (set via command line or problem-specific config)
+problem:
+  name: ???  # Required
+  dir: ${hydra:runtime.cwd}/problems/${problem.name}

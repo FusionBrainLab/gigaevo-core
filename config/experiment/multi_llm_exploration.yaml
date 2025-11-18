@@ -1,0 +1,17 @@
+# @package _global_
+
+# Multi-LLM Exploration
+# Uses multiple LLMs for diverse mutations
+# Single island for focused optimization
+
+defaults:
+  - /constants: base
+  - /redis: default
+  - /llm: heterogeneous
+  - /evolution: default
+  - /algorithm: single_island
+  - /pipeline: auto
+  - /runner: default
+  - /loader: directory
+  - /logging: tensorboard
+  - /metrics: default

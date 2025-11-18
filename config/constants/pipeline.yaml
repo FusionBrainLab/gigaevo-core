@@ -1,0 +1,8 @@
+# @package _global_
+# Pipeline execution constants
+
+stage_timeout: 1800
+dag_timeout: 3600
+dag_concurrency: 16
+max_code_length: 30000
+max_insights: 8

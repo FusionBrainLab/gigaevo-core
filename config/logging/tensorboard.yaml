@@ -1,0 +1,15 @@
+# @package _global_
+
+logging:
+  level: DEBUG
+  log_dir: ${log_dir}
+  rotation: ${log_rotation}
+  retention: ${log_retention}
+
+tb_config:
+  _target_: gigaevo.utils.trackers.configs.TBConfig
+  logdir: ${log_dir}/tb_logs
+
+writer:
+  _target_: gigaevo.utils.trackers.init_tb
+  cfg: ${tb_config}

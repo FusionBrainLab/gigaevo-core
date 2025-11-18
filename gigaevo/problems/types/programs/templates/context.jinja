@@ -1,0 +1,25 @@
+"""
+Context builder for: {{ problem.description }}
+
+This function is called once at the start of evolution.
+The returned context is passed to entrypoint(context) and validate(context, ...).
+"""
+
+import numpy as np
+
+
+def build_context() -> dict:
+    """
+    Build runtime context data.
+
+    {{ task_description.objective | indent(4) }}
+
+    Returns:
+        dict: Context data for all programs
+
+    Example:
+        {"X_train": ..., "X_test": ..., "y_train": ..., "y_test": ...}
+    """
+    # TODO: Load or generate data (called once at startup)
+
+    return {}

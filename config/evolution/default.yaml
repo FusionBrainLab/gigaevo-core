@@ -1,0 +1,42 @@
+# @package _global_
+
+# Compute required behavior keys from islands
+required_behavior_keys:
+  _target_: gigaevo.config.helpers.extract_behavior_keys_from_islands
+  island_configs: ${islands}
+
+# Parent selector
+parent_selector:
+  _target_: gigaevo.evolution.mutation.parent_selector.AllCombinationsParentSelector
+  num_parents: ${num_parents}
+
+# Program acceptor
+program_acceptor:
+  _target_: gigaevo.evolution.engine.MutationContextAndBehaviorKeysAcceptor
+  required_behavior_keys: ${required_behavior_keys}
+
+# Engine config
+engine_config:
+  _target_: gigaevo.evolution.engine.EngineConfig
+  loop_interval: ${loop_interval}
+  max_elites_per_generation: ${max_elites_per_generation}
+  max_mutations_per_generation: ${max_mutations_per_generation}
+  max_generations: ${max_generations}
+  program_acceptor: ${program_acceptor}
+  parent_selector: ${parent_selector}
+
+metrics_tracker:
+  _target_: gigaevo.utils.metrics_tracker.MetricsTracker
+  storage: ${ref:redis_storage}
+  metrics_context: ${metrics_context}
+  writer: ${writer}
+
+# Evolution engine
+evolution_engine:
+  _target_: gigaevo.evolution.engine.EvolutionEngine
+  storage: ${ref:redis_storage}
+  strategy: ${evolution_strategy}
+  mutation_operator: ${mutation_operator}
+  config: ${engine_config}
+  writer: ${writer}
+  metrics_tracker: ${metrics_tracker}

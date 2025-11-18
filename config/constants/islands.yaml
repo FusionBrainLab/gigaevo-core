@@ -1,0 +1,16 @@
+# @package _global_
+# MAP-Elites island constants
+
+# Multi-island settings
+migration_interval: 25
+max_migrants_per_island: 5
+enable_migration: true
+island_id: fitness_island
+
+# Island configuration
+island_max_size: 75
+migration_rate: 0.10
+primary_resolution: 150
+validity_resolution: 2
+binning_type: linear
+validity_key: ${get_object:gigaevo.programs.metrics.context.VALIDITY_KEY}

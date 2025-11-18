@@ -1,0 +1,14 @@
+# @package _global_
+
+runner_config:
+  _target_: gigaevo.runner.dag_runner.DagRunnerConfig
+  poll_interval: ${runner_poll_interval}
+  max_concurrent_dags: ${max_concurrent_dags}
+  dag_timeout: ${dag_timeout}
+
+dag_runner:
+  _target_: gigaevo.runner.dag_runner.DagRunner
+  storage: ${ref:redis_storage}
+  dag_blueprint: ${dag_blueprint}
+  config: ${runner_config}
+  writer: ${writer}
