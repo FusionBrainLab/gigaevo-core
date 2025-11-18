@@ -1,0 +1,46 @@
+TASK DEFINITION – SUMS AND DIFFERENCES OF FINITE SETS
+
+Challenge: Additive combinatorics on finite sets. Find a finite set U of non-negative integers that maximizes the constant C, defined as the largest constant for which there exist arbitrarily large finite integer sets A, B with |A + B| ≪ |A| and |A - B| ≫ |A + B|^C (where A + B = {a + b : a ∈ A, b ∈ B} and A - B = {a - b : a ∈ A, b ∈ B} denote the sumset and difference set). Target: C ≥ 1.1584
+
+OBJECTIVE
+
+Return a finite set U ⊂ ℤ≥₀ with 0 ∈ U such that:
+1) (Zero inclusion) Set contains 0
+2) (Non-negativity) All elements are non-negative integers
+3) (Non-triviality) max(U) > 0 (non-trivial set)
+4) (Constraint satisfaction) |U - U| ≤ 2·max(U) + 1
+5) (Maximality) The C constant C(U) = 1 + log(|U - U| / |U + U|) / log(2·max(U) + 1) is maximized
+
+Output: 1D NumPy array of integers  |  Fitness: C  |  Goal: C ≥ 1.1584
+
+CONSTRAINTS
+- Set U must contain 0
+- All elements must be non-negative integers
+- Must satisfy |U - U| ≤ 2·max(U) + 1 (where U - U = {a - b : a, b ∈ U})
+- Non-trivial: max(U) > 0
+- Known bounds: 1.14465 ≤ C ≤ 4/3
+
+FAILURE MODES
+- Trivial sets (U = {0}) produce undefined C due to log(1) = 0 in denominator
+- Dense sets with |U + U| ≈ |U - U| yield C ≈ 1 (below target)
+- Constraint violations: |U - U| > 2·max(U) + 1 invalidate the formula
+- Excessively large max(U) with small |U - U|/|U + U| ratio produces low C
+
+HELPER FUNCTIONS
+- `compute_c(u_set)` -> float - computes C constant from the sumset-difference inequality
+  - Input: (M,) array of non-negative integers representing set U
+  - Computes sumset U + U and difference set U - U via unique element counting
+  - Returns C = 1 + log(|U - U| / |U + U|) / log(2·max(U) + 1)
+These are available as import from `helper.py`
+
+PROBLEM COMPLEXITY
+This is a discrete combinatorial optimization problem with exponential search space. The objective involves a logarithmic ratio that creates complex interactions between set sparsity and maximum element. Sparse sets tend to have large |U - U|/|U + U| ratios, but max(U) in the denominator penalizes very spread-out sets. The known lower bound (1.14465) suggests structured constructions may outperform random search. Simulated annealing can navigate the discrete space effectively by accepting uphill moves to escape local optima.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a 1D NumPy array:
+- Shape: (M,) array of non-negative integers representing set U
+- Must contain 0 and satisfy all constraints
+- Use numpy, jax, or standard library as needed
+- Fix random seeds if using randomness (e.g., jax.random.PRNGKey(42))
+- Return type: np.ndarray with dtype int, shape (M,)
