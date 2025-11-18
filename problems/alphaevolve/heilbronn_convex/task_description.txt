@@ -24,7 +24,7 @@ FAILURE MODES
 HELPER FUNCTIONS
 - `get_smallest_triangle_area(coordinates)` -> float - minimum area among all C(n,3) triangles
   - Input: (n, 2) array, Output: scalar float
-This are available as import from `helper.py`
+These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY
 This is a non-convex optimization problem with sharp local minima. Small coordinate changes can drastically reduce minimum area due to geometric degeneracies. The search space includes discrete failure regions (exact alignments) and continuous low-fitness basins (clustered configurations). Solutions must balance global dispersion with local spacing. For large n, optimal value approaches O(1/n²) with logarithmic corrections.
