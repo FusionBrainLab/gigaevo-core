@@ -1,0 +1,42 @@
+TASK DEFINITION – THIRD AUTOCORRELATION INEQUALITY
+
+Challenge: Functional optimization in analysis. Find a function f: ℝ → ℝ that minimizes the constant C₃ in the inequality max_{-1/2≤t≤1/2} |f ★ f(t)| ≥ C₃ (∫_{-1/4}^{1/4} f(x) dx)². Target: C₃ ≤ 1.4557
+
+OBJECTIVE
+Return a discretized function f: ℝ → ℝ such that:
+1) (Finiteness) All values are finite real numbers (no NaN or infinity)
+2) (Non-triviality) Function integral is non-zero (∫f ≠ 0)
+3) (Minimality) The C₃ constant C₃ = max_{-1/2≤t≤1/2} |f ★ f(t)| / (∫_{-1/4}^{1/4} f(x) dx)² is minimized
+
+Output: 1D NumPy array  |  Fitness: C₃  |  Goal: C₃ ≤ 1.4557
+
+CONSTRAINTS
+- Function can take positive and negative values (no non-negativity constraint)
+- Represented as discrete samples on domain width 0.5 with uniform grid spacing
+- Convolution (f ★ f)(x) = ∫_{-∞}^{∞} f(t)f(x-t) dt computed via FFT
+- Known bounds: C₃ ≤ 1.45810 (upper bound from step function construction)
+
+FAILURE MODES
+- Zero or near-zero integral (C₃ undefined due to division by zero)
+- Functions with extreme peaks causing large max |f ★ f|
+- Poorly balanced functions creating unstable ratio
+- Numerical instabilities from insufficient discretization resolution
+
+HELPER FUNCTIONS
+- `compute_c3(f_values)` -> float - computes C₃ constant using FFT-based convolution
+  - Input: (N,) array of function values on domain width 0.5
+  - Grid spacing: dx = 0.5 / N
+  - Returns C₃ = max |f ★ f| / (∫f)²
+This are available as import from `helper.py`
+
+PROBLEM COMPLEXITY
+This is a non-convex functional optimization problem seeking an upper bound on C₃. Unlike the second inequality, functions may take negative values, expanding the search space. The objective involves maximizing the autocorrelation peak while minimizing the squared integral, creating competing objectives. The known upper bound (1.45810) comes from a step function construction. Gradient-based methods must navigate a complex landscape with local minima.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a 1D NumPy array:
+- Shape: (N,) array of function values (can be positive or negative)
+- Represents f on domain width 0.5 with uniform grid spacing
+- Use numpy, jax, scipy, or standard library as needed
+- Fix random seeds if using randomness (e.g., jax.random.PRNGKey(42))
+- Return type: np.ndarray with dtype float, shape (N,)
