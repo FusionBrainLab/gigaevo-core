@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: Primary objective (squared ratio of max to min pairwise distance)
+    description: Main objective [squared ratio of max to min pairwise distance]
     decimals: 3
     is_primary: true
     higher_is_better: false

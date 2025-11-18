@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 
-def compute_c2(f_values: jnp.ndarray) -> float:
+def compute_c(f_values: jnp.ndarray) -> float:
     f_non_negative = jax.nn.relu(f_values)
 
     N = len(f_values)

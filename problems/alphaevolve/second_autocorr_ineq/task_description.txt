@@ -1,33 +1,33 @@
 TASK DEFINITION – SECOND AUTOCORRELATION INEQUALITY
 
-Challenge: Functional optimization in analysis. Find a non-negative function f: ℝ → ℝ that maximizes the constant C₂ in the second autocorrelation inequality ||f ★ f||₂² ≤ C₂ ||f ★ f||₁ ||f ★ f||_{∞}. Target: C₂ ≥ 0.8962
+Challenge: Functional optimization in analysis. Find a non-negative function f: ℝ → ℝ that maximizes the constant C in the second autocorrelation inequality ||f ★ f||₂² ≤ C ||f ★ f||₁ ||f ★ f||_{∞}. Target: C ≥ 0.8962
 
 OBJECTIVE
 Return a discretized non-negative function f: ℝ → ℝ such that:
 1) (Non-negativity) All function values are non-negative: f(x) ≥ 0 for all x
 2) (Finiteness) All values are finite real numbers (no NaN or infinity)
 3) (Non-triviality) Function is not identically zero (∫f > 0)
-4) (Maximality) The C₂ constant C₂ = ||f ★ f||₂² / (||f ★ f||₁ ||f ★ f||_{∞}) is maximized
+4) (Maximality) The C constant C = ||f ★ f||₂² / (||f ★ f||₁ ||f ★ f||_{∞}) is maximized
 
-Output: 1D NumPy array  |  Fitness: C₂  |  Goal: C₂ ≥ 0.8962
+Output: 1D NumPy array  |  Fitness: C  |  Goal: C ≥ 0.8962
 
 CONSTRAINTS
 - Function must be non-negative: f(x) ≥ 0 for all x ∈ ℝ
 - Represented as discrete samples (uniform grid implied by array length)
 - Convolution (f ★ f)(x) = ∫_{-∞}^{∞} f(t)f(x-t) dt computed via FFT
-- Known bounds: 0.88922 ≤ C₂ ≤ 1 (lower bound from step function construction)
+- Known bounds: 0.88922 ≤ C ≤ 1 (lower bound from step function construction)
 
 FAILURE MODES
-- Zero or near-zero functions (C₂ undefined due to division by zero)
-- Functions with extreme spikes (large L∞ reduces C₂)
+- Zero or near-zero functions (C undefined due to division by zero)
+- Functions with extreme spikes (large L∞ reduces C)
 - Functions with oscillations creating small L₁ relative to L₂
 - Numerical instabilities from insufficient discretization resolution
 
 HELPER FUNCTIONS
-- `compute_c2(f_values)` -> float - computes C₂ constant using rigorous piecewise linear integration
+- `compute_c(f_values)` -> float - computes C constant using rigorous piecewise linear integration
   - Input: (N,) array of non-negative function values
   - Computes convolution (f ★ f) via FFT
-  - Returns C₂ = ||f ★ f||₂² / (||f ★ f||₁ ||f ★ f||_{∞})
+  - Returns C = ||f ★ f||₂² / (||f ★ f||₁ ||f ★ f||_{∞})
 This are available as import from `helper.py`
 
 PROBLEM COMPLEXITY

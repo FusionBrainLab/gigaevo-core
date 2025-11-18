@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: Primary objective (constant in third autocorrelation inequality)
+    description: Main objective [C constant in third autocorrelation inequality]
     decimals: 4
     is_primary: true
     higher_is_better: false

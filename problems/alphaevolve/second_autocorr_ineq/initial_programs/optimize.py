@@ -2,7 +2,7 @@ import jax
 import numpy as np
 import optax
 
-from helper import compute_c2
+from helper import compute_c
 
 
 def entrypoint() -> np.ndarray:
@@ -12,7 +12,7 @@ def entrypoint() -> np.ndarray:
     warmup_steps = 1000
 
     def objective_fn(f_values):
-        return -compute_c2(f_values)
+        return -compute_c(f_values)
 
     schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,

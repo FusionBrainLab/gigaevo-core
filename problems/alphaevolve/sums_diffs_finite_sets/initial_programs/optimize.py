@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from helper import compute_c6
+from helper import compute_c
 
 
 def entrypoint() -> np.ndarray:
@@ -13,8 +13,8 @@ def entrypoint() -> np.ndarray:
 
     def objective_fn(u_mask):
         U = jnp.where(u_mask)[0]
-        c6_value = compute_c6(U)
-        return -c6_value
+        c_value = compute_c(U)
+        return -c_value
 
     def anneal_step(key, temp, current_mask, current_loss):
         idx_to_flip = jax.random.randint(key, (), 1, len(current_mask))
