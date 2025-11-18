@@ -5,7 +5,7 @@ specs:
     is_primary: true
     higher_is_better: false
     lower_bound: 1.5053
-    upper_bound: 3.0
+    upper_bound: 5.0
     include_in_prompts: true
     significant_change: 0.0001
     sentinel_value: 1000.0
