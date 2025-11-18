@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gigaevo"
-version = "1.10.0"
+version = "1.11.0"
 description = "Advanced evolutionary computation framework with MAP-Elites and DAG-based program execution"
 authors = [
     {name = "GigaEvo Team", email = "team@gigaevo.ai"}

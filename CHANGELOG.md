@@ -2,6 +2,34 @@
 
 <!-- version list -->
 
+## v1.11.0 (2025-11-18)
+
+### Chores
+
+- Add terminal gif
+  ([`4286fd2`](https://github.com/KhrulkovV/metaevolve/commit/4286fd2c826a19ffb99fa5be877c3332caeb28be))
+
+- Add terminal gif
+  ([`398056b`](https://github.com/KhrulkovV/metaevolve/commit/398056b7110b24f88b4e39a8007b0c1b3677366d))
+
+- Add terminal gif
+  ([`ed4aba1`](https://github.com/KhrulkovV/metaevolve/commit/ed4aba1217763fb19c97a99ad40744bf0ec52228))
+
+- Fix license
+  ([`5592e05`](https://github.com/KhrulkovV/metaevolve/commit/5592e0565dadeaf8ef3cd6edf156d8d8923c3cfd))
+
+- Fix license
+  ([`1394967`](https://github.com/KhrulkovV/metaevolve/commit/1394967babb59912ddb82f71bf91a762c464367d))
+
+- Remove emoji
+  ([`7c4e0f5`](https://github.com/KhrulkovV/metaevolve/commit/7c4e0f5a332a21d5eaec880b853eb8121a8ef33a))
+
+### Features
+
+- Better stage scheduling
+  ([`d2e35b0`](https://github.com/KhrulkovV/metaevolve/commit/d2e35b0364c14d2fd0db88e08962230d7c660119))
+
+
 ## v1.10.0 (2025-11-17)
 
 
