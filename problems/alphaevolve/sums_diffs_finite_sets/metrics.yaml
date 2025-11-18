@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: C₆ constant in sums and differences inequality
+    description: Main objective [C constant in sums and differences inequality]
     decimals: 4
     is_primary: true
     higher_is_better: true

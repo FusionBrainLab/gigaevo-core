@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: C₁ constant in first autocorrelation inequality
+    description: Main objective [C constant in first autocorrelation inequality]
     decimals: 4
     is_primary: true
     higher_is_better: false

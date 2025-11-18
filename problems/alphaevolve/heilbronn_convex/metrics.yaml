@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: Minimum triangle area among all 286 triangles
+    description: Main objective [minimum triangle area among all 286 triangles]
     decimals: 4
     is_primary: true
     higher_is_better: true

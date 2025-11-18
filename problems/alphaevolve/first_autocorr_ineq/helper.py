@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 
-def compute_c1(f_values: jnp.ndarray) -> float:
+def compute_c(f_values: jnp.ndarray) -> float:
     domain_width = 0.5
     dx = domain_width / len(f_values)
 

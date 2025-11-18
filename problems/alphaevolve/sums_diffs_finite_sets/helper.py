@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 
-def compute_c6(u_set: jnp.ndarray) -> float:
+def compute_c(u_set: jnp.ndarray) -> float:
     U = jnp.sort(u_set)
 
     sums = U[:, None] + U[None, :]
