@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.11.1 (2025-11-18)
+
+### Bug Fixes
+
+- Set flush_at and flush_interval via client instead of constructor
+  ([`887232d`](https://github.com/KhrulkovV/metaevolve/commit/887232dc6d4fb78c8124ca3baafa1df31209b36f))
+
+### Refactoring
+
+- Optimize Langfuse integration
+  ([`6876a9d`](https://github.com/KhrulkovV/metaevolve/commit/6876a9d39583fca850b6e4c0cb44c56ff0604a3b))
+
+- Pass flush_at and flush_interval to CallbackHandler constructor
+  ([`fc6fbd2`](https://github.com/KhrulkovV/metaevolve/commit/fc6fbd2200316c2b1e2d3b79558ae48bbc61837f))
+
+- Remove redundant try-except for CallbackHandler initialization
+  ([`72884b5`](https://github.com/KhrulkovV/metaevolve/commit/72884b5856f1009b4d865c7d35567270ca719634))
+
+- Remove unused flush_traces method
+  ([`3b5ccb3`](https://github.com/KhrulkovV/metaevolve/commit/3b5ccb35456ad019bbfa25b6dc28b8bc14846743))
+
+
 ## v1.11.0 (2025-11-18)
 
 ### Chores
