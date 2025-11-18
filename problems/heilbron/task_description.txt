@@ -28,7 +28,7 @@ HELPER FUNCTIONS
   - Input: (n, 2) array, Output: scalar float
 - `is_inside_triangle(points, a, b, c)` -> bool - True if all points inside/on triangle boundary
   - Input: points (n, 2), vertices a,b,c each (2,), Output: bool
-This are available as import from `helper.py`
+These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY
 This is a non-convex optimization problem with sharp local minima. Small coordinate changes can drastically reduce minimum area due to geometric degeneracies. The search space includes discrete failure regions (exact alignments) and continuous low-fitness basins (clustered configurations). Solutions must balance global dispersion with local spacing under strict boundary constraints.

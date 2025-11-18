@@ -40,14 +40,12 @@ dependencies = [
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",
     "langchain>=0.3.0",
-    "langfuse>=2.0.0"
+    "langfuse>=2.0.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pre-commit",
-    "python-semantic-release",
-]
+dev = ["pre-commit", "python-semantic-release"]
+opt = ["jax", "optax", "numpy>=2.0.0", "pandas==2.2.2"]
 
 [project.urls]
 Repository = "https://github.com/gigaevo/gigaevo"
@@ -124,7 +122,15 @@ default = "semantic-release <semantic-release>"
 [tool.semantic_release.commit_parser_options]
 minor_tags = ["feat"]
 patch_tags = ["fix", "perf"]
-other_allowed_tags = ["build", "chore", "ci", "docs", "style", "refactor", "test"]
+other_allowed_tags = [
+    "build",
+    "chore",
+    "ci",
+    "docs",
+    "style",
+    "refactor",
+    "test",
+]
 
 [tool.semantic_release.remote]
 name = "origin"
