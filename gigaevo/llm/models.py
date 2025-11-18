@@ -77,11 +77,11 @@ class MultiModelRouter(Runnable):
         self.langfuse_handler: Optional[CallbackHandler] = None
         if self._is_langfuse_available():
             try:
-                self.langfuse_handler = CallbackHandler()
-                # Configure handler's client for immediate flushing
-                if hasattr(self.langfuse_handler, 'client') and self.langfuse_handler.client:
-                    self.langfuse_handler.client.flush_at = 1
-                    self.langfuse_handler.client.flush_interval = 1
+                # Configure for immediate flushing: flush after 1 event, every 1 second
+                self.langfuse_handler = CallbackHandler(
+                    flush_at=1,
+                    flush_interval=1
+                )
                 logger.info("[MultiModelRouter] Langfuse tracing enabled (immediate mode)")
             except Exception as e:
                 logger.warning(
