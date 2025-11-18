@@ -6,13 +6,13 @@
 
 Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
 
-## 🎬 Demo
+## Demo
 
 ![Demo](./demos/demo-opt.gif)
 
 ## Getting Started
 
-- **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes ⭐
+- **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes
 - **[Architecture Guide](docs/ARCHITECTURE.md)** - Understand the system design
 
 ## Documentation
