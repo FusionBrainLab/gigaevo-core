@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Iterator
+import os
 import random
 from typing import Any, Optional
 
@@ -6,9 +7,9 @@ from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
-from langfuse import Langfuse
-from langfuse.langchain import CallbackHandler
 from loguru import logger
+
+from langfuse.langchain import CallbackHandler
 
 
 class MultiModelRouter(Runnable):
@@ -28,8 +29,7 @@ class MultiModelRouter(Runnable):
     Attributes:
         models: List of ChatOpenAI models to choose from
         probabilities: Normalized probability distribution over models
-        langfuse_handler: Langfuse callback handler for tracing (auto-created)
-        langfuse_client: Langfuse client for manual flushing
+        langfuse_handler: Langfuse callback handler for tracing (auto-created if env vars set)
 
     Example:
         >>> models = [
@@ -72,29 +72,30 @@ class MultiModelRouter(Runnable):
         self.probabilities = [p / total for p in probabilities]
         self._default_model = models[0]
         self.selected_model: Optional[ChatOpenAI] = None
-        self.langfuse_handler = None
-        self.langfuse_client = None
 
-        # Auto-initialize Langfuse tracing
-        self.langfuse_handler = CallbackHandler()
-
-        # Create client for immediate flushing and manual control
-        self.langfuse_client = Langfuse(
-            flush_at=1,  # Send every event immediately
-            flush_interval=1,  # Check every 1 second
-        )
-
-        # Warn if Langfuse is not initialized
-        if self.langfuse_handler is None or self.langfuse_client is None:
-            logger.warning(
+        # Auto-initialize Langfuse tracing if environment variables are set
+        self.langfuse_handler: Optional[CallbackHandler] = None
+        if self._is_langfuse_available():
+            # CallbackHandler initializes gracefully even with invalid credentials
+            self.langfuse_handler = CallbackHandler()
+            # Configure for immediate flushing: flush after 1 event, every 1 second
+            self.langfuse_handler.client.flush_at = 1
+            self.langfuse_handler.client.flush_interval = 1
+            logger.info("[MultiModelRouter] Langfuse tracing enabled (immediate mode)")
+        else:
+            logger.debug(
                 "[MultiModelRouter] Langfuse tracing is disabled. "
                 "Set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY environment variables to enable tracing."
             )
-        else:
-            logger.info("[MultiModelRouter] Langfuse tracing enabled (immediate mode)")
-
-        self.selected_model: ChatOpenAI | None = None
+        
         logger.info(f"[MultiModelRouter] Initialized with {len(models)} models")
+
+    @staticmethod
+    def _is_langfuse_available() -> bool:
+        """Check if Langfuse environment variables are set."""
+        return bool(
+            os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")
+        )
 
     def _select_model(self) -> ChatOpenAI:
         """Select a model based on probabilities."""
@@ -233,15 +234,5 @@ class MultiModelRouter(Runnable):
 
         # Preserve Langfuse handler from parent router
         new_router.langfuse_handler = self.langfuse_handler
-        new_router.langfuse_client = self.langfuse_client
-
+        
         return new_router
-
-    def flush_traces(self):
-        """Flush pending Langfuse traces. Call at end of script/request."""
-        if self.langfuse_client:
-            try:
-                self.langfuse_client.flush()
-                logger.info("[MultiModelRouter] Flushed Langfuse traces")
-            except Exception as e:
-                logger.warning(f"[MultiModelRouter] Failed to flush traces: {e}")
