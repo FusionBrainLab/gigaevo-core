@@ -1,0 +1,34 @@
+TASK DEFINITION – MINIMIZING DISTANCE RATIO (16 POINTS IN 2D)
+
+Challenge: Non-convex geometric optimization in 2D space. Place 16 distinct points to minimize the squared ratio of maximum to minimum pairwise distances. Target: ratio² ≤ 12.889
+
+OBJECTIVE
+Return 16 distinct 2D coordinates such that:
+1) (Distinctness) All points are distinct (no duplicates)
+2) (Finiteness) All coordinates are finite real numbers (no NaN or infinity)
+3) (Minimality) The squared ratio (max_distance / min_distance)² is minimized
+
+Output: (16, 2) NumPy array  |  Fitness: (max_dist/min_dist)²  |  Goal: ratio² ≤ 12.889
+
+CONSTRAINTS
+- Exactly 16 distinct points in 2D Euclidean space
+- All pairwise distances must be finite and positive
+- Minimum pairwise distance must be at least 1e-9
+
+FAILURE MODES
+- Point clustering (very small minimum distances); extreme spreads (very large maximum distances)
+- Duplicate or overlapping coordinates; collinear arrangements creating poor ratios
+- Unbounded coordinates causing numerical instability
+- Float precision errors leading to degenerate point configurations
+
+PROBLEM COMPLEXITY
+This is a non-convex geometric optimization problem with many local minima. The optimal configuration likely involves regular patterns such as grids, hexagonal packings, or symmetric arrangements. Small coordinate changes can significantly affect the distance ratio due to changes in either the minimum or maximum pairwise distance. The search space includes discrete failure regions (duplicate points) and continuous low-fitness basins (clustered or poorly distributed configurations). Solutions must balance global uniformity with local spacing constraints.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a (16, 2) NumPy array:
+- Shape: (16, 2) array of point coordinates (x, y)
+- All coordinates must be finite real numbers
+- Use numpy, scipy, sklearn, or standard library as needed
+- Fix random seeds if using randomness (e.g., np.random.seed(42))
+- Return type: np.ndarray with dtype float32, shape (16, 2)
