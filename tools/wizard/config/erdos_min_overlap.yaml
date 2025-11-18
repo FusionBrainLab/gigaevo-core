@@ -1,0 +1,114 @@
+# Erdős Minimum Overlap Problem Configuration
+# Example configuration for the wizard scaffolding system
+#
+# This is based on the alphaevolve_math_problems/erdos_min_overlap problem.
+
+name: "erdos_min_overlap"
+description: "Erdős Minimum Overlap Problem - finding optimal step function to minimize upper bound for constant C₅"
+
+# Function signatures
+entrypoint:
+  params: []
+  returns: "(h_values, c5_bound, n_points) where h_values is (n_points,) NumPy array, c5_bound is float, n_points is int"
+  inputs: null
+
+validation:
+  params: ["h_values", "c5_bound", "n_points"]
+  returns: "dict with metrics: c5_bound, combined_score, n_points, is_valid"
+  inputs: "h_values: (n_points,) array from entrypoint(), c5_bound: float, n_points: int"
+
+# Metrics (is_valid is auto-generated, don't include it)
+metrics:
+  c5_bound:
+    description: "The upper bound for constant C₅ found by the program (PRIMARY OBJECTIVE - minimize)"
+    decimals: 8
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.00000001
+    sentinel_value: 1.0
+  combined_score:
+    description: "Progress toward benchmark: 0.38092303510845016 / c5_bound (PRIMARY OBJECTIVE - maximize, > 1 means new record)"
+    decimals: 8
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 2.0
+    include_in_prompts: true
+    significant_change: 0.00000001
+    sentinel_value: 0.0
+  n_points:
+    description: "Number of points used in the discretization"
+    decimals: 0
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 1
+    upper_bound: 10000
+    include_in_prompts: true
+    significant_change: 1
+    sentinel_value: 0
+
+# Task description
+task_description:
+  objective: |
+    TASK DEFINITION – ERDŐS MINIMUM OVERLAP PROBLEM
+
+    Problem Type: Harmonic Analysis and Numerical Optimization
+    Challenge: Find a step function h: [0, 2] → [0, 1] that minimizes the objective:
+    max_k ∫ h(x)(1 - h(x+k)) dx
+
+    This minimal value provides a tight upper bound for the constant C₅ in the Erdős minimum overlap problem.
+
+    PROBLEM COMPLEXITY
+
+    This is a constrained optimization problem in function space with integral constraints. The objective involves finding the maximum correlation between a step function and its complement over all possible shifts. The search space is high-dimensional (determined by discretization), and the problem requires balancing the constraint satisfaction (integral of h = 1) with minimizing the maximum overlap integral. Effective solutions must use sophisticated optimization techniques to navigate the non-convex landscape while maintaining strict constraint satisfaction.
+
+    You are an expert in harmonic analysis, numerical optimization, and AI-driven mathematical discovery. Your mission is to evolve and optimize a Python script to find a better upper bound for the Erdős minimum overlap problem constant C₅.
+
+    OBJECTIVE:
+    Implement a Python function that returns a step function h and its corresponding C₅ bound, such that the bound is minimized (or equivalently, combined_score = benchmark / c5_bound is maximized).
+
+    - Output: (h_values, c5_bound, n_points) where:
+      * h_values: (n_points,) NumPy array representing the step function values
+      * c5_bound: float representing the computed upper bound
+      * n_points: int representing the number of discretization points
+    - Fitness: combined_score = 0.38092303510845016 / c5_bound (PRIMARY OBJECTIVE - maximize)
+    - Goal: Beat the AlphaEvolve state-of-the-art result of c5_bound = 0.38092303510845016 (combined_score > 1.0)
+    - Performance metrics: combined_score (primary), c5_bound, n_points
+    - Technical requirements: Determinism (fixed random seeds), error handling, constraint satisfaction, numerical precision
+
+    PROBLEM SETUP:
+    - Domain: [0, 2] interval
+    - Function range: h(x) ∈ [0, 1] for all x
+    - Discretization: n_points equally spaced points in [0, 2]
+    - Step size: dx = 2.0 / n_points
+
+    CONSTRAINTS:
+    - h(x) must be in [0, 1] for all x (hard constraint)
+    - Integral of h over [0, 2] must be exactly 1: ∫₀² h(x) dx = 1 (hard constraint)
+    - The C₅ bound is computed as: max_k ∫ h(x)(1 - h(x+k)) dx
+    - Numerical precision matters for integral computations and correlation calculations
+
+  hints:
+    - "Constraint violation: Integral of h is not close to 1 → adjust normalization"
+    - "Range violation: h(x) values outside [0, 1] → use sigmoid or clipping"
+    - "Suboptimal bound: Maximum correlation not minimized → explore different step function shapes"
+    - "Discretization: Too few points may miss optimal solutions, too many may slow computation"
+    - "Optimization strategy: Consider gradient-based methods (JAX, PyTorch) or evolutionary approaches"
+    - "Use program insights to identify patterns affecting the maximum correlation"
+    - "Leverage lineage outcomes to guide optimization decisions"
+
+# Optional features
+add_context: false
+add_helper: true
+
+# Initial programs
+initial_programs:
+  - name: "jax_optimizer"
+    description: "JAX-based gradient optimization with constraint penalty"
+  - name: "uniform"
+    description: "Uniform step function with proper normalization"
+  - name: "piecewise_constant"
+    description: "Piecewise constant function with optimization"

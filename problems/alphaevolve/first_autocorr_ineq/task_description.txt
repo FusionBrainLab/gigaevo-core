@@ -1,0 +1,55 @@
+TASK DEFINITION - FIRST AUTOCORRELATION INEQUALITY PROBLEM
+
+Problem Type: Functional Analysis and Numerical Optimization
+Challenge: Find a non-negative function f: R -> R that minimizes the upper bound of the constant C1 in the inequality:
+max_{-1/2<=t<=1/2} f*f(t) >= C1 (integral_{-1/4}^{1/4} f(x) dx)^2
+where f*f(t) = integral f(t-x)f(x) dx is the autoconvolution.
+
+PROBLEM COMPLEXITY
+
+This is a constrained optimization problem in function space with non-negativity constraints. The objective involves finding the maximum of the autoconvolution over a specific interval, normalized by the square of the integral. The search space is high-dimensional (determined by discretization), and the problem requires balancing the autoconvolution maximum with the integral constraint. Effective solutions must use sophisticated optimization techniques to navigate the non-convex landscape while maintaining strict non-negativity throughout the domain.
+
+You are an expert in functional analysis, harmonic analysis, numerical optimization, and AI-driven mathematical discovery. Your mission is to evolve and optimize a Python script to find the optimal function that minimizes the upper bound of the constant C1.
+
+OBJECTIVE:
+Implement a Python function that returns a non-negative function f and its corresponding C1 bound, such that the bound is minimized (or equivalently, combined_score = benchmark / c1 is maximized).
+
+- Output: (f_values, c1_achieved, loss, n_points) where:
+  * f_values: (n_points,) NumPy array representing the function values on the discretized domain [-1/4, 1/4]
+  * c1_achieved: float representing the computed upper bound
+  * loss: float representing the loss value used in minimization
+  * n_points: int representing the number of discretization points
+- Fitness: combined_score = 1.5052939684401607 / c1 (PRIMARY OBJECTIVE - maximize)
+- Goal: Beat the AlphaEvolve state-of-the-art result of c1 = 1.5052939684401607 (combined_score > 1.0)
+- Performance metrics: combined_score (primary), c1, loss, n_points
+- Technical requirements: Determinism (fixed random seeds), error handling, constraint satisfaction, numerical precision
+
+PROBLEM SETUP:
+- Domain: [-1/4, 1/4] interval for function definition
+- Autoconvolution domain: [-1/2, 1/2] for evaluation
+- Function range: f(x) >= 0 for all x (hard constraint)
+- Discretization: n_points equally spaced points in [-1/4, 1/4]
+- Step size: dx = 0.5 / n_points
+
+CONSTRAINTS:
+- f(x) must be non-negative everywhere: f(x) >= 0 (hard constraint)
+- Integral of f over [-1/4, 1/4] must be positive: integral f dx > 0 (hard constraint)
+- The C1 bound is computed as: max_{t in [-1/2,1/2]} (f*f)(t) / (integral f dx)^2
+- Numerical precision matters for autoconvolution and integral computations
+
+MATHEMATICAL FORMULATION:
+Given: Discretized domain [-1/4, 1/4] with n_points equally-spaced grid points.
+Objective: Minimize min_{t in [-1/2,1/2]} (f*f)(t) / (integral f dx)^2 over all non-negative functions f.
+Discretization: Use finite differences and discrete convolution to approximate integrals and autoconvolution.
+
+
+**STRATEGY HINTS**:
+- Non-negativity violation: f(x) values negative -> use ReLU or clipping to enforce constraint
+- Integral too small: Function integral near zero -> avoid degenerate solutions
+- Suboptimal bound: Autoconvolution maximum not minimized -> explore different function shapes
+- Discretization: Too few points may miss optimal solutions, too many may slow computation
+- Optimization strategy: Consider gradient-based methods (JAX, PyTorch) with non-negativity constraints
+- Autoconvolution computation: Use FFT for efficient convolution calculation
+- Use program insights to identify patterns affecting the autoconvolution maximum
+- Leverage lineage outcomes to guide optimization decisions
+

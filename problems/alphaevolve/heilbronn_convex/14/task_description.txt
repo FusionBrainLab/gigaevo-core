@@ -1,0 +1,52 @@
+TASK DEFINITION - HEILBRONN TRIANGLE PROBLEM FOR CONVEX REGIONS (14 POINTS)
+
+Problem Type: Computational Geometry and Discrete Optimization
+Challenge: Design optimal arrangement of exactly 14 points within or on the boundary of a unit-area convex region to maximize the area of the smallest triangle formed by any three of these points.
+
+PROBLEM COMPLEXITY
+
+The Heilbronn problem is among the most challenging in discrete geometry, with optimal configurations rigorously known only for n <= 4 points. For large n, the optimal value approaches O(1/n^2) with logarithmic corrections, but the exact constant remains unknown. This is a high-dimensional, non-convex optimization problem where points must balance competing objectives: interior points can form larger triangles but create crowding, while boundary points avoid area penalties but limit triangle formation. Effective solutions must use sophisticated optimization techniques to navigate the complex geometric landscape while maintaining strict constraint satisfaction.
+
+You are an expert computational geometer and optimization specialist with deep expertise in the Heilbronn triangle problem - a fundamental challenge in discrete geometry first posed by Hans Heilbronn in 1957. Your mission is to evolve and optimize a constructor function that generates an optimal arrangement of exactly 14 points within or on the boundary of a unit-area convex region.
+
+OBJECTIVE:
+Implement a Python function that returns optimal (x, y) coordinates for 14 points, such that the minimum triangle area (normalized by convex hull area) is maximized.
+
+- Output shape: (14, 2) NumPy array of (x, y) coordinates
+- Fitness: min_area_normalized = (Area of smallest triangle) / (Area of convex hull) (PRIMARY OBJECTIVE - maximize)
+- Goal: Beat the AlphaEvolve state-of-the-art result of min_area_normalized = 0.027835571458482138 (combined_score > 1.0)
+- Performance metrics: min_area_normalized (primary), combined_score = min_area_normalized / 0.027835571458482138
+- Technical requirements: Determinism (fixed random seeds), error handling, geometric constraint satisfaction, numerical precision
+
+GEOMETRIC SETUP:
+- Number of points: Exactly 14 points required
+- Region: Convex region of unit area (points must be within or on boundary)
+- Triangle count: C(14,3) = 364 possible triangles
+- All points must be within or on the boundary of the convex hull
+
+CONSTRAINTS:
+- Exactly 14 points required
+- All points must be within or on the boundary of a convex region
+- Points must form valid geometric configuration (no degenerate cases)
+- All coordinates must be finite real numbers
+- No duplicate points (within numerical tolerance)
+- Numerical precision matters for geometric computations
+
+MATHEMATICAL CONTEXT:
+- The problem is scale-invariant; solutions can be normalized to any convex region
+- Optimal configurations often exhibit rotational symmetries (particularly 3-fold due to triangular geometry)
+- Points should balance between interior placement (larger triangles) and boundary placement (avoid crowding)
+- Delaunay triangulation properties and Voronoi diagram regularity indicate point distribution quality
+- Relationship between circumradius and triangle area is critical
+
+
+**STRATEGY HINTS**:
+- Triangle degeneracy: Three points nearly collinear -> avoid near-collinear configurations
+- Boundary vs interior: Balance between boundary points (avoid crowding) and interior points (larger triangles)
+- Symmetry: Optimal configurations often exhibit 3-fold rotational symmetry
+- Point distribution: Use Voronoi cell area variance as indicator of distribution quality
+- Initialization: Consider perturbed regular grids, hexagonal lattices, or low-discrepancy sequences
+- Optimization: Multi-scale approach with coarse global search and fine local refinement
+- Constraint handling: Use penalty methods or projection operators for convexity constraints
+- Use program insights to identify patterns affecting minimum triangle area
+- Leverage lineage outcomes to guide optimization decisions

@@ -1,0 +1,47 @@
+specs:
+  c1:
+    description: The upper bound for constant C1 found by the program (PRIMARY OBJECTIVE - minimize)
+    decimals: 8
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 10.0
+    include_in_prompts: true
+    significant_change: 1e-08
+  combined_score:
+    description: "Progress toward benchmark: 1.5052939684401607 / c1 (PRIMARY OBJECTIVE - maximize, > 1 means new record)"
+    decimals: 8
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 2.0
+    include_in_prompts: true
+    significant_change: 1e-08
+  loss:
+    description: Loss value used in minimization
+    decimals: 8
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 10.0
+    include_in_prompts: true
+    significant_change: 1e-08
+  n_points:
+    description: Number of points used in the discretization
+    decimals: 0
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 1.0
+    upper_bound: 10000.0
+    include_in_prompts: true
+    significant_change: 1.0
+  is_valid:
+    description: Whether the program is valid (1 valid, 0 invalid)
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+
