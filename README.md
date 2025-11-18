@@ -10,12 +10,12 @@ Evolutionary algorithm that uses Large Language Models (LLMs) to automatically i
 
 ![Demo](./demos/demo-opt.gif)
 
-## 🚀 Getting Started
+## Getting Started
 
 - **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes ⭐
 - **[Architecture Guide](docs/ARCHITECTURE.md)** - Understand the system design
 
-## 📚 Documentation
+## Documentation
 
 - **[DAG System](docs/DAG_SYSTEM.md)** - Comprehensive guide to GigaEvo's execution engine
 - **[Evolution Strategies](docs/EVOLUTION_STRATEGIES.md)** - MAP-Elites and multi-island evolution system
