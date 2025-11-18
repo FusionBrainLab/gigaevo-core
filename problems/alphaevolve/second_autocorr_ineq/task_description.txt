@@ -28,7 +28,7 @@ HELPER FUNCTIONS
   - Input: (N,) array of non-negative function values
   - Computes convolution (f ★ f) via FFT
   - Returns C = ||f ★ f||₂² / (||f ★ f||₁ ||f ★ f||_{∞})
-This are available as import from `helper.py`
+These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY
 This is a non-convex functional optimization problem with a high-dimensional search space. The objective involves a triple norm ratio that creates complex interactions between function shape and autocorrelation structure. The known lower bound (0.88922) comes from a step function construction, suggesting discontinuous or piecewise solutions may be optimal. Gradient-based methods face challenges from local maxima and the discrete representation of continuous functions.

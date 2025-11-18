@@ -27,7 +27,7 @@ HELPER FUNCTIONS
   - Input: (N,) array of function values on domain width 0.5
   - Grid spacing: dx = 0.5 / N
   - Returns C = max |f ★ f| / (∫f)²
-This are available as import from `helper.py`
+These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY
 This is a non-convex functional optimization problem seeking an upper bound on C. Unlike the second inequality, functions may take negative values, expanding the search space. The objective involves maximizing the autocorrelation peak while minimizing the squared integral, creating competing objectives. The known upper bound (1.45810) comes from a step function construction. Gradient-based methods must navigate a complex landscape with local minima.

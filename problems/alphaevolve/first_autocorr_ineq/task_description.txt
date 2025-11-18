@@ -30,7 +30,7 @@ HELPER FUNCTIONS
   - Input: (N,) array of non-negative function values on domain [-1/4, 1/4]
   - Computes autoconvolution (f ★ f) via FFT (full mode)
   - Returns C = max(f ★ f) / (∫f)²
-This are available as import from `helper.py`
+These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY
 This is a non-convex functional optimization problem in high-dimensional space. The objective involves finding the maximum of autoconvolution normalized by squared integral, creating complex interactions between function shape and convolution structure. The problem arises in additive combinatorics (Sidon sets) and requires balancing autoconvolution peak height with integral magnitude. Gradient-based methods can navigate the landscape but face challenges from non-negativity constraints and discrete representation of continuous functions.

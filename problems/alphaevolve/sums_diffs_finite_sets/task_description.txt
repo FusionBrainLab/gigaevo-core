@@ -31,7 +31,7 @@ HELPER FUNCTIONS
   - Input: (M,) array of non-negative integers representing set U
   - Computes sumset U + U and difference set U - U via unique element counting
   - Returns C = 1 + log(|U - U| / |U + U|) / log(2·max(U) + 1)
-This are available as import from `helper.py`
+These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY
 This is a discrete combinatorial optimization problem with exponential search space. The objective involves a logarithmic ratio that creates complex interactions between set sparsity and maximum element. Sparse sets tend to have large |U - U|/|U + U| ratios, but max(U) in the denominator penalizes very spread-out sets. The known lower bound (1.14465) suggests structured constructions may outperform random search. Simulated annealing can navigate the discrete space effectively by accepting uphill moves to escape local optima.
