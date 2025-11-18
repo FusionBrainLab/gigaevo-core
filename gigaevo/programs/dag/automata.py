@@ -8,7 +8,7 @@ import networkx as nx
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.programs.core_types import FINAL_STATES, StageError, StageIO
-from gigaevo.programs.dag.compatibiliy import (
+from gigaevo.programs.dag.compatibility import (
     _covariant_type_compatible,
     _normalize_annotation,
     _type_origin_args,
