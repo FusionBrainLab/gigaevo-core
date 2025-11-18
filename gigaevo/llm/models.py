@@ -243,14 +243,3 @@ class MultiModelRouter(Runnable):
         new_router.langfuse_handler = self.langfuse_handler
         
         return new_router
-
-    def flush_traces(self):
-        """Flush pending Langfuse traces. Call at end of script/request."""
-        if self.langfuse_handler and hasattr(self.langfuse_handler, 'client'):
-            try:
-                client = self.langfuse_handler.client
-                if client:
-                    client.flush()
-                    logger.info("[MultiModelRouter] Flushed Langfuse traces")
-            except Exception as e:
-                logger.warning(f"[MultiModelRouter] Failed to flush traces: {e}")
