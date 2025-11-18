@@ -76,19 +76,13 @@ class MultiModelRouter(Runnable):
         # Auto-initialize Langfuse tracing if environment variables are set
         self.langfuse_handler: Optional[CallbackHandler] = None
         if self._is_langfuse_available():
-            try:
-                # Configure for immediate flushing: flush after 1 event, every 1 second
-                self.langfuse_handler = CallbackHandler(
-                    flush_at=1,
-                    flush_interval=1
-                )
-                logger.info("[MultiModelRouter] Langfuse tracing enabled (immediate mode)")
-            except Exception as e:
-                logger.warning(
-                    f"[MultiModelRouter] Failed to initialize Langfuse tracing: {e}. "
-                    "Tracing will be disabled."
-                )
-                self.langfuse_handler = None
+            # Configure for immediate flushing: flush after 1 event, every 1 second
+            # CallbackHandler initializes gracefully even with invalid credentials
+            self.langfuse_handler = CallbackHandler(
+                flush_at=1,
+                flush_interval=1
+            )
+            logger.info("[MultiModelRouter] Langfuse tracing enabled (immediate mode)")
         else:
             logger.debug(
                 "[MultiModelRouter] Langfuse tracing is disabled. "
