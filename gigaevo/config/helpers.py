@@ -9,8 +9,12 @@ from gigaevo.entrypoint.default_pipelines import (
     DefaultPipelineBuilder,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
-from gigaevo.evolution.strategies.map_elites import BehaviorSpace, IslandConfig
-from gigaevo.evolution.strategies.models import BinningType
+from gigaevo.evolution.strategies.map_elites import IslandConfig
+from gigaevo.evolution.strategies.models import (
+    BehaviorSpace,
+    DynamicBehaviorSpace,
+    LinearBinning,
+)
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
@@ -40,24 +44,30 @@ def build_behavior_space(
     bounds: list[tuple[float, float]],
     resolutions: list[int],
     binning_types: list[str],
+    dynamic: bool = True,
+    expansion_buffer_ratio: float = 0.1,
 ) -> Any:
     """Build a BehaviorSpace from lists of parameters.
 
     Args:
         keys: List of behavior feature keys (e.g., ['fitness', 'is_valid'])
         bounds: List of (min, max) bounds tuples (e.g., [(0, 1), (0, 1)])
+                For dynamic spaces, these act as hard limits (clamping bounds).
         resolutions: List of resolution integers (e.g., [150, 2])
         binning_types: List of binning type strings (e.g., ['linear', 'linear'])
+        dynamic: Whether to return a DynamicBehaviorSpace (default: True)
+        expansion_buffer_ratio: Buffer ratio for dynamic space (default: 0.1)
 
     Returns:
-        BehaviorSpace instance
+        BehaviorSpace instance (or DynamicBehaviorSpace)
 
     Example:
         build_behavior_space(
             keys=['fitness', 'is_valid'],
-            bounds=[(0.0, 1.0), (0.0, 1.0)],
+            bounds=[(0.0, 1.0), (0.0, 1.0)],  # Hard limits for dynamic adjustment
             resolutions=[150, 2],
-            binning_types=['linear', 'linear']
+            binning_types=['linear', 'linear'],
+            dynamic=True
         )
     """
 
@@ -68,17 +78,30 @@ def build_behavior_space(
     ):
         raise ValueError("All parameter lists must have the same length")
 
-    feature_bounds = {keys[i]: bounds[i] for i in range(len(keys))}
-    resolution = {keys[i]: resolutions[i] for i in range(len(keys))}
-    binning_types_dict = {
-        keys[i]: BinningType(bt) for i, bt in enumerate(binning_types)
-    }
+    bins = {}
+    for i, key in enumerate(keys):
+        min_val, max_val = bounds[i]
+        num_bins = resolutions[i]
+        b_type = binning_types[i]
 
-    return BehaviorSpace(
-        feature_bounds=feature_bounds,
-        resolution=resolution,
-        binning_types=binning_types_dict,
-    )
+        if b_type == "linear":
+            strategy = LinearBinning(
+                min_val=float(min_val), max_val=float(max_val), num_bins=num_bins
+            )
+        else:
+            # Fallback to linear
+            strategy = LinearBinning(
+                min_val=float(min_val), max_val=float(max_val), num_bins=num_bins
+            )
+
+        bins[key] = strategy
+
+    if dynamic:
+        return DynamicBehaviorSpace(
+            bins=bins,
+            expansion_buffer_ratio=expansion_buffer_ratio,
+        )
+    return BehaviorSpace(bins=bins)
 
 
 def build_behavior_space_params(
@@ -90,7 +113,7 @@ def build_behavior_space_params(
     """Build all parameters needed for BehaviorSpace construction.
 
     This is a convenience helper that takes separate lists and constructs
-    the dicts needed for BehaviorSpace feature_bounds, resolution, and binning_types.
+    the dicts needed for BehaviorSpace.
 
     Args:
         keys: List of behavior feature keys (e.g., ['fitness', 'is_valid'])
@@ -99,38 +122,27 @@ def build_behavior_space_params(
         binning_types: Optional list of binning type strings (e.g., ['linear', 'linear'])
 
     Returns:
-        OmegaConf DictConfig with keys: feature_bounds, resolution, binning_types
-
-    Example:
-        build_behavior_space_params(
-            keys=['fitness', 'is_valid'],
-            bounds=[(0, 1), (0, 1)],
-            resolutions=[150, 2],
-            binning_types=['linear', 'linear']
-        )
-        -> {
-            'feature_bounds': {'fitness': (0, 1), 'is_valid': (0, 1)},
-            'resolution': {'fitness': 150, 'is_valid': 2},
-            'binning_types': {'fitness': 'linear', 'is_valid': 'linear'}
-        }
+        OmegaConf DictConfig with structure matching BehaviorSpace.bins
     """
-    feature_bounds = {keys[i]: bounds[i] for i in range(len(keys))}
-    resolution = {keys[i]: resolutions[i] for i in range(len(keys))}
+    if binning_types is None:
+        binning_types = ["linear"] * len(keys)
 
-    binning_types_dict: dict[str, BinningType] = {}
-    if binning_types:
-        binning_types_dict = {
-            keys[i]: BinningType(bt) if isinstance(bt, str) else bt
-            for i, bt in enumerate(binning_types)
-        }
+    bins = {}
+    for i, key in enumerate(keys):
+        min_val, max_val = bounds[i]
+        num_bins = resolutions[i]
+        b_type = binning_types[i]
 
-    return OmegaConf.create(
-        {
-            "feature_bounds": feature_bounds,
-            "resolution": resolution,
-            "binning_types": binning_types_dict,
+        # Construct a dict representation of the strategy
+        strategy_conf = {
+            "type": b_type,
+            "min_val": min_val,
+            "max_val": max_val,
+            "num_bins": num_bins,
         }
-    )
+        bins[key] = strategy_conf
+
+    return OmegaConf.create({"bins": bins})
 
 
 def extract_behavior_keys_from_islands(island_configs: list[IslandConfig]) -> set[str]:

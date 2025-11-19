@@ -76,8 +76,7 @@ def _format_syntax_error(e: SyntaxError) -> str:
 def main() -> None:
     captured = io.StringIO()
     try:
-        payload_bytes = sys.stdin.buffer.read()
-        payload: dict[str, Any] = cloudpickle.loads(payload_bytes)
+        payload: dict[str, Any] = cloudpickle.load(sys.stdin.buffer)
 
         code: str = payload["code"]
         fn_name: str = payload["function_name"]
@@ -102,7 +101,7 @@ def main() -> None:
             sys.stderr.write(printed)
             sys.stderr.flush()
 
-        sys.stdout.buffer.write(cloudpickle.dumps(result))
+        cloudpickle.dump(result, sys.stdout.buffer)
         sys.stdout.buffer.flush()
 
     except SyntaxError as e:

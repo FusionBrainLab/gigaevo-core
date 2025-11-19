@@ -1,286 +1,322 @@
-from enum import Enum
-import math
-from typing import Any
+from __future__ import annotations
 
-from loguru import logger
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+import abc
+from typing import Annotated, Any, Literal
 
-
-class SelectionMode(Enum):
-    """Selection modes for elite choosing."""
-
-    RANDOM = "random"
-    FITNESS_PROPORTIONAL = "fitness_proportional"
-    TOURNAMENT = "tournament"
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
-class BinningType(Enum):
-    """Different binning strategies for behavior space discretization."""
+class BinningStrategy(BaseModel, abc.ABC):
+    """Abstract base class for behavior space binning strategies."""
 
-    LINEAR = "linear"  # Standard linear binning
-    LOGARITHMIC = "logarithmic"  # Log-scaled bins for exponential distributions
-    SQUARE_ROOT = "square_root"  # Square root scaling for moderate non-linearity
-    QUANTILE = "quantile"  # Quantile-based binning (requires pre-computed data)
+    min_val: float
+    max_val: float
+    num_bins: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def check_bounds(self) -> "BinningStrategy":
+        if self.min_val > self.max_val:
+            raise ValueError(
+                f"Invalid bounds: min ({self.min_val}) > max ({self.max_val})"
+            )
+        return self
+
+    def _clamp(self, value: float) -> float:
+        return max(self.min_val, min(value, self.max_val))
+
+    @abc.abstractmethod
+    def get_index(self, value: float) -> int:
+        """Map a value to a 0-based bin index."""
+
+    @abc.abstractmethod
+    def get_bin_center(self, index: int) -> float:
+        """Get the center value of a bin."""
+
+    @abc.abstractmethod
+    def get_bin_width(self, index: int) -> float:
+        """Get the width of a bin."""
+
+    @abc.abstractmethod
+    def get_bin_edges(self, index: int) -> tuple[float, float]:
+        """Get the (lower, upper) edges of a bin."""
+
+    def update_bounds(
+        self, new_min: float | None = None, new_max: float | None = None
+    ) -> bool:
+        """Update bounds if new values are outside current range (expand) OR to tighten (shrink).
+
+        Args:
+            new_min: If provided, update min_val.
+            new_max: If provided, update max_val.
+
+        Returns:
+            bool: True if bounds changed, False otherwise.
+        """
+        changed = False
+
+        # Logic update: we now allow shrinking (setting min > old_min or max < old_max)
+        # The caller is responsible for ensuring this doesn't exclude valid data.
+
+        if new_min is not None and new_min != self.min_val:
+            self.min_val = new_min
+            changed = True
+
+        if new_max is not None and new_max != self.max_val:
+            self.max_val = new_max
+            changed = True
+
+        if changed:
+            # Re-validate post-update state
+            if self.min_val > self.max_val:
+                raise ValueError(
+                    f"Invalid bounds update: {self.min_val} > {self.max_val}"
+                )
+
+        return changed
+
+
+class LinearBinning(BinningStrategy):
+    """Standard linear binning."""
+
+    type: Literal["linear"] = "linear"
+
+    def get_index(self, value: float) -> int:
+        if self.max_val == self.min_val:
+            return 0
+        value = self._clamp(value)
+        normalized = (value - self.min_val) / (self.max_val - self.min_val)
+        # Handle edge case where value == max_val, should be in last bin
+        idx = int(normalized * self.num_bins)
+        return min(idx, self.num_bins - 1)
+
+    def get_bin_edges(self, index: int) -> tuple[float, float]:
+        step = (self.max_val - self.min_val) / self.num_bins
+        lower = self.min_val + index * step
+        upper = self.min_val + (index + 1) * step
+        return lower, upper
+
+    def get_bin_center(self, index: int) -> float:
+        lower, upper = self.get_bin_edges(index)
+        return (lower + upper) / 2
+
+    def get_bin_width(self, index: int) -> float:
+        return (self.max_val - self.min_val) / self.num_bins
+
+
+# With only one strategy, we technically don't need a Union/Annotated,
+# but keeping the structure allows for future strategies.
+BinningStrategyType = Annotated[
+    LinearBinning,
+    Field(discriminator="type"),
+]
 
 
 class BehaviorSpace(BaseModel):
-    """Enhanced discretized behavior space for MAP-Elites with multiple binning strategies."""
+    """Static behavior space (fixed bounds)."""
 
-    feature_bounds: dict[str, tuple[float, float]] = Field(
-        description="Bounds for each behavior feature (min, max)"
+    bins: dict[str, BinningStrategyType] = Field(
+        description="Map of behavior name to its binning strategy"
     )
-    resolution: dict[str, int] = Field(
-        description="Discretization resolution for each behavior feature"
-    )
-    binning_types: dict[str, "BinningType"] = Field(
-        default_factory=dict,
-        description="Binning strategy for each behavior feature (defaults to LINEAR)",
-    )
-
-    @computed_field
-    @property
-    def total_cells(self) -> int:
-        """Calculate total number of cells in the behavior space."""
-        total = 1
-        for key in self.behavior_keys:
-            if key in self.resolution:
-                total *= self.resolution[key]
-        return total
-
-    @field_validator("feature_bounds")
-    @classmethod
-    def validate_feature_bounds(cls, v):
-        for key, (min_val, max_val) in v.items():
-            if min_val > max_val:
-                raise ValueError(
-                    f"Invalid bounds for {key}: min ({min_val}) must be <= max ({max_val})"
-                )
-        return v
-
-    @field_validator("resolution")
-    @classmethod
-    def validate_resolution(cls, v):
-        for key, res in v.items():
-            if res <= 0:
-                raise ValueError(f"Resolution for {key} must be positive, got {res}")
-        return v
-
-    @field_validator("binning_types")
-    @classmethod
-    def validate_binning_types(cls, v):
-        for key, binning_type in v.items():
-            if not isinstance(binning_type, BinningType):
-                raise ValueError(f"Invalid binning type for {key}: {binning_type}")
-        return v
-
-    @model_validator(mode="after")
-    def validate_consistency(self):
-        missing_bounds = set(self.behavior_keys) - set(self.feature_bounds.keys())
-        if missing_bounds:
-            raise ValueError(f"Missing feature bounds for: {missing_bounds}")
-
-        missing_resolution = set(self.behavior_keys) - set(self.resolution.keys())
-        if missing_resolution:
-            raise ValueError(f"Missing resolution for: {missing_resolution}")
-
-        # Validate log binning bounds
-        for key in self.behavior_keys:
-            if self.get_binning_type(key) == BinningType.LOGARITHMIC:
-                min_val, max_val = self.feature_bounds[key]
-                if min_val <= 0:
-                    raise ValueError(
-                        f"Logarithmic binning requires positive bounds for {key}, got min={min_val}"
-                    )
-
-        if self.total_cells > 1_000_000:
-            logger.warning(
-                f"Large behavior space with {self.total_cells:,} cells may impact performance"
-            )
-
-        return self
 
     @computed_field
     @property
     def behavior_keys(self) -> list[str]:
-        return list(self.resolution.keys())
+        return list(self.bins.keys())
 
-    def get_binning_type(self, behavior_key: str) -> "BinningType":
-        """Get the binning type for a behavior key, defaulting to LINEAR."""
-        return self.binning_types.get(behavior_key, BinningType.LINEAR)
+    @computed_field
+    @property
+    def total_cells(self) -> int:
+        total = 1
+        for b in self.bins.values():
+            total *= b.num_bins
+        return total
+
+    @model_validator(mode="after")
+    def check_dimensionality(self) -> "BehaviorSpace":
+        if not self.bins:
+            raise ValueError("Behavior space must have at least one dimension")
+        return self
 
     def get_cell(self, metrics: dict[str, float]) -> tuple[int, ...]:
-        """Map program metrics to discrete cell coordinates using appropriate binning."""
+        """Map program metrics to a cell coordinate."""
         coordinates = []
-        details = []
 
-        for behavior_key in self.behavior_keys:
-            if behavior_key not in metrics:
-                raise KeyError(
-                    f"Missing required behavior key '{behavior_key}' in program metrics"
-                )
-            value = metrics[behavior_key]
-            coordinate = self._map_value_to_coordinate(behavior_key, value)
-            coordinates.append(coordinate)
+        for key, strategy in self.bins.items():
+            if key not in metrics:
+                raise KeyError(f"Missing required behavior key '{key}'")
 
-            # Track mapping details for debug logging
-            min_val, max_val = self.feature_bounds[behavior_key]
-            binning_type = self.get_binning_type(behavior_key)
-            details.append(
-                f"{behavior_key}={value:.3f}->{coordinate} (bounds=[{min_val:.1f},{max_val:.1f}], {binning_type.value})"
-            )
+            val = metrics[key]
+            idx = strategy.get_index(val)
+            coordinates.append(idx)
 
-        cell = tuple(coordinates)
-        logger.debug(
-            "BehaviorSpace: mapped to cell {} | {}",
-            cell,
-            " | ".join(details),
+        return tuple(coordinates)
+
+    def describe(self) -> dict[str, Any]:
+        """Return human-readable description of the space."""
+        return {
+            key: {
+                "type": strategy.type,
+                "min": strategy.min_val,
+                "max": strategy.max_val,
+                "bins": strategy.num_bins,
+                "centers": [
+                    strategy.get_bin_center(i) for i in range(strategy.num_bins)
+                ],
+            }
+            for key, strategy in self.bins.items()
+        }
+
+
+class DynamicBehaviorSpace(BehaviorSpace):
+    """Dynamic behavior space that can expand/shrink based on observed metrics.
+
+    The initial min/max values act as hard limits (used for clamping in BinningStrategy).
+    Dynamic adjustments stay within these initial bounds.
+
+    When a value exceeds current bounds, only the violated bound is adjusted (with margin).
+    For example, if a value is above max, only max is pushed up; min stays unchanged.
+    """
+
+    expansion_buffer_ratio: float = Field(
+        default=0.1,
+        ge=0.0,
+        description="Ratio of range to add as buffer when expanding/shrinking",
+    )
+
+    # Store initial bounds as hard limits for clamping
+    _initial_bounds: dict[str, tuple[float, float]] = {}
+
+    def model_post_init(self, __context) -> None:
+        """Store initial bounds after model initialization."""
+        super().model_post_init(__context)
+        # Capture initial bounds for each dimension
+        self._initial_bounds = {
+            key: (strategy.min_val, strategy.max_val)
+            for key, strategy in self.bins.items()
+        }
+
+    def _calculate_margin(self, current_range: float) -> float:
+        """Calculate margin based on current range."""
+        return (
+            current_range * self.expansion_buffer_ratio if current_range > 0 else 1e-5
         )
 
-        return cell
+    def _clamp_to_initial_bounds(self, key: str, value: float) -> float:
+        """Clamp a value to the initial (hard) bounds for this dimension."""
+        if key not in self._initial_bounds:
+            return value
+        initial_min, initial_max = self._initial_bounds[key]
+        return max(initial_min, min(value, initial_max))
 
-    def _map_value_to_coordinate(self, behavior_key: str, value: float) -> int:
-        """Map a single value to its coordinate using the appropriate binning strategy."""
-        min_val, max_val = self.feature_bounds[behavior_key]
-        num_bins = self.resolution[behavior_key]
-        binning_type = self.get_binning_type(behavior_key)
+    def _calculate_bounds_for_value(
+        self, key: str, value: float, strategy: BinningStrategy
+    ) -> tuple[float | None, float | None]:
+        """Calculate new bounds for a single value.
 
-        # Clamp value to bounds
-        value = max(min_val, min(value, max_val))
+        Only adjusts the bound that is violated (if any).
+        New bounds are clamped to initial bounds.
 
-        # Apply appropriate binning strategy
-        if binning_type == BinningType.LINEAR:
-            coordinate = self._linear_binning(value, min_val, max_val, num_bins)
-        elif binning_type == BinningType.LOGARITHMIC:
-            coordinate = self._logarithmic_binning(value, min_val, max_val, num_bins)
-        elif binning_type == BinningType.SQUARE_ROOT:
-            coordinate = self._square_root_binning(value, min_val, max_val, num_bins)
-        else:
-            # Fallback to linear
-            logger.warning(
-                f"Unknown binning type {binning_type} for {behavior_key}, using linear"
-            )
-            coordinate = self._linear_binning(value, min_val, max_val, num_bins)
+        Returns:
+            (new_min, new_max) where None means "don't change"
+        """
+        current_range = strategy.max_val - strategy.min_val
+        margin = self._calculate_margin(current_range)
 
-        return max(0, min(coordinate, num_bins - 1))
+        new_min, new_max = None, None
 
-    def _linear_binning(
-        self, value: float, min_val: float, max_val: float, num_bins: int
-    ) -> int:
-        """Standard linear binning."""
-        if max_val == min_val:
-            return 0
-        normalized = (value - min_val) / (max_val - min_val)
-        return int(normalized * num_bins)
+        # Only adjust min if value is BELOW current min
+        if value < strategy.min_val:
+            new_min = self._clamp_to_initial_bounds(key, value - margin)
 
-    def _logarithmic_binning(
-        self, value: float, min_val: float, max_val: float, num_bins: int
-    ) -> int:
-        """Logarithmic binning for exponential distributions (e.g., complexity, entropy)."""
-        if max_val == min_val:
-            return 0
+        # Only adjust max if value is ABOVE current max
+        if value > strategy.max_val:
+            new_max = self._clamp_to_initial_bounds(key, value + margin)
 
-        safe_value = max(value, min_val)
+        return new_min, new_max
 
-        log_min = math.log(min_val)
-        log_max = math.log(max_val)
-        log_value = math.log(safe_value)
+    def _calculate_bounds_for_batch(
+        self, key: str, values: list[float], strategy: BinningStrategy
+    ) -> tuple[float, float]:
+        """Calculate optimized bounds for a batch of values.
 
-        normalized = (log_value - log_min) / (log_max - log_min)
-        return int(normalized * num_bins)
+        Tightens bounds to observed range with margin on both sides.
+        New bounds are clamped to initial bounds.
 
-    def _square_root_binning(
-        self, value: float, min_val: float, max_val: float, num_bins: int
-    ) -> int:
-        """Square root binning for moderate non-linear distributions."""
-        if max_val == min_val:
-            return 0
+        Returns:
+            (new_min, new_max) - always returns both values
+        """
+        obs_min, obs_max = min(values), max(values)
 
-        sqrt_min = math.sqrt(max(min_val, 0))
-        sqrt_max = math.sqrt(max_val)
-        sqrt_value = math.sqrt(max(value, 0))
+        # Calculate margin based on observed range
+        value_range = obs_max - obs_min
+        margin = self._calculate_margin(value_range)
 
-        normalized = (sqrt_value - sqrt_min) / (sqrt_max - sqrt_min)
-        return int(normalized * num_bins)
+        # Calculate new bounds with margin, clamped to initial bounds
+        new_min = self._clamp_to_initial_bounds(key, obs_min - margin)
+        new_max = self._clamp_to_initial_bounds(key, obs_max + margin)
 
-    def get_bin_centers(self, behavior_key: str) -> list[float]:
-        """Get the center values of each bin for a behavior key."""
-        min_val, max_val = self.feature_bounds[behavior_key]
-        num_bins = self.resolution[behavior_key]
-        binning_type = self.get_binning_type(behavior_key)
+        return new_min, new_max
 
-        centers = []
-        for i in range(num_bins):
-            normalized_pos = (i + 0.5) / num_bins
+    def update_bounds(
+        self, new_bounds: dict[str, tuple[float | None, float | None]]
+    ) -> bool:
+        """Update bounds for multiple dimensions at once.
 
-            if binning_type == BinningType.LINEAR:
-                center = min_val + normalized_pos * (max_val - min_val)
-            elif binning_type == BinningType.LOGARITHMIC:
-                log_min = math.log(min_val)
-                log_max = math.log(max_val)
-                log_center = log_min + normalized_pos * (log_max - log_min)
-                center = math.exp(log_center)
-            elif binning_type == BinningType.SQUARE_ROOT:
-                sqrt_min = math.sqrt(min_val)
-                sqrt_max = math.sqrt(max_val)
-                sqrt_center = sqrt_min + normalized_pos * (sqrt_max - sqrt_min)
-                center = sqrt_center**2
-            else:
-                center = min_val + normalized_pos * (max_val - min_val)
+        Args:
+            new_bounds: Dictionary mapping key -> (new_min, new_max)
 
-            centers.append(center)
+        Returns:
+            bool: True if any dimension changed
+        """
+        changed = False
+        for key, (new_min, new_max) in new_bounds.items():
+            if key in self.bins:
+                if self.bins[key].update_bounds(new_min, new_max):
+                    changed = True
+        return changed
 
-        return centers
+    def check_and_expand(self, metrics: dict[str, float]) -> bool:
+        """Check if metrics are out of bounds and expand if necessary.
 
-    def describe_binning(self) -> dict[str, dict[str, Any]]:
-        """Get a description of the binning configuration for each behavior key."""
-        description = {}
-        for key in self.behavior_keys:
-            min_val, max_val = self.feature_bounds[key]
-            num_bins = self.resolution[key]
-            binning_type = self.get_binning_type(key)
+        Only expands bounds that are not marked as fixed.
 
-            description[key] = {
-                "bounds": (min_val, max_val),
-                "resolution": num_bins,
-                "binning_type": binning_type.value,
-                "bin_centers": self.get_bin_centers(key),
-                "bin_widths": self._calculate_bin_widths(key),
-            }
-        return description
+        Returns:
+            bool: True if any dimension was expanded.
+        """
+        expanded = False
+        for key, strategy in self.bins.items():
+            if key not in metrics:
+                continue  # get_cell will raise error later
 
-    def _calculate_bin_widths(self, behavior_key: str) -> list[float]:
-        """Calculate the width of each bin for a behavior key."""
-        min_val, max_val = self.feature_bounds[behavior_key]
-        num_bins = self.resolution[behavior_key]
-        binning_type = self.get_binning_type(behavior_key)
+            val = metrics[key]
+            new_min, new_max = self._calculate_bounds_for_value(key, val, strategy)
 
-        widths = []
-        for i in range(num_bins):
-            lower_norm = i / num_bins
-            upper_norm = (i + 1) / num_bins
+            if new_min is not None or new_max is not None:
+                if strategy.update_bounds(new_min, new_max):
+                    expanded = True
 
-            if binning_type == BinningType.LINEAR:
-                lower = min_val + lower_norm * (max_val - min_val)
-                upper = min_val + upper_norm * (max_val - min_val)
-            elif binning_type == BinningType.LOGARITHMIC:
-                log_min = math.log(min_val)
-                log_max = math.log(max_val)
-                log_lower = log_min + lower_norm * (log_max - log_min)
-                log_upper = log_min + upper_norm * (log_max - log_min)
-                lower = math.exp(log_lower)
-                upper = math.exp(log_upper)
-            elif binning_type == BinningType.SQUARE_ROOT:
-                sqrt_min = math.sqrt(min_val)
-                sqrt_max = math.sqrt(max_val)
-                sqrt_lower = sqrt_min + lower_norm * (sqrt_max - sqrt_min)
-                sqrt_upper = sqrt_min + upper_norm * (sqrt_max - sqrt_min)
-                lower = sqrt_lower**2
-                upper = sqrt_upper**2
-            else:
-                # Fallback to linear
-                lower = min_val + lower_norm * (max_val - min_val)
-                upper = min_val + upper_norm * (max_val - min_val)
+        return expanded
 
-            widths.append(upper - lower)
+    def calculate_optimized_bounds(
+        self, metrics_batch: list[dict[str, float]]
+    ) -> dict[str, tuple[float, float]]:
+        """Calculate new optimized bounds based on a batch of metrics.
 
-        return widths
+        Respects fixed bounds - only optimizes bounds that are marked as dynamic.
+
+        Returns:
+            Dictionary mapping key -> (new_min, new_max)
+        """
+        if not metrics_batch:
+            return {}
+
+        new_bounds = {}
+        for key, strategy in self.bins.items():
+            values = [m[key] for m in metrics_batch if key in m]
+            if not values:
+                continue
+
+            new_min, new_max = self._calculate_bounds_for_batch(key, values, strategy)
+            new_bounds[key] = (new_min, new_max)
+
+        return new_bounds

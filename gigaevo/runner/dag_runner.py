@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
 from datetime import datetime, timezone
 import gc
 import os
@@ -277,6 +278,11 @@ class DagRunner:
 
         if finished or timed_out:
             gc.collect()
+            try:
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
+
             logger.debug(
                 "[DagScheduler] Cleaned up {} finished + {} timed out tasks, forced GC",
                 len(finished),
@@ -370,17 +376,8 @@ class DagRunner:
             ok = False
             logger.error("[DagScheduler] DAG run failed for {}: {}", program.id, exc)
         finally:
-            # CRITICAL: Explicitly cleanup DAG to free memory
-            # Clear all Stage instances and their resources
-            if (
-                hasattr(dag, "automata")
-                and dag.automata
-                and hasattr(dag.automata, "topology")
-            ):
-                if dag.automata.topology and hasattr(dag.automata.topology, "nodes"):
-                    # Clear Stage instances which may hold LLM clients
-                    dag.automata.topology.nodes.clear()
-                dag.automata.topology = None
+            dag.automata.topology.nodes.clear()
+            dag.automata.topology = None
             dag.automata = None
             dag.state_manager = None
             dag._writer = None

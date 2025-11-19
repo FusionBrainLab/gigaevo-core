@@ -10,16 +10,14 @@ behavior_space:
   _target_: gigaevo.config.helpers.build_behavior_space
   keys:
     - ${primary_key}
-    - ${validity_key}
   bounds:
     - ${primary_bounds}
-    - ${validity_bounds}
   resolutions:
     - ${primary_resolution}
-    - ${validity_resolution}
   binning_types:
     - ${binning_type}
-    - ${binning_type}
+  dynamic: true
+  expansion_buffer_ratio: 0.1
 
 # Islands
 islands:

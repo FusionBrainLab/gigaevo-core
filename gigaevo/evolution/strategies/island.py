@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from typing import Union
+
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.storage.archive_storage import RedisArchiveStorage
 from gigaevo.evolution.strategies.elite_selectors import EliteSelector
 from gigaevo.evolution.strategies.migrant_selectors import MigrantSelector
-from gigaevo.evolution.strategies.models import BehaviorSpace
+from gigaevo.evolution.strategies.models import BehaviorSpace, DynamicBehaviorSpace
 from gigaevo.evolution.strategies.removers import ArchiveRemover
 from gigaevo.evolution.strategies.selectors import ArchiveSelector
 from gigaevo.programs.program import Program
@@ -32,7 +35,7 @@ class IslandConfig(BaseModel):
         ge=1,
         description="Max programs in the archive; excess entries are removed.",
     )
-    behavior_space: BehaviorSpace
+    behavior_space: Union[DynamicBehaviorSpace, BehaviorSpace]
     archive_selector: ArchiveSelector = Field(
         description="Comparator used by archive to decide if newcomer is better"
     )
@@ -69,8 +72,6 @@ class MapElitesIsland:
         self.archive_storage = RedisArchiveStorage(
             program_storage=program_storage, key_prefix=config.redis_prefix
         )
-        from gigaevo.database.state_manager import ProgramStateManager
-
         self.state_manager = ProgramStateManager(program_storage)
         logger.info("Island {} init (max_size={})", config.island_id, config.max_size)
 
@@ -89,6 +90,16 @@ class MapElitesIsland:
             raise KeyError(f"Program missing required behavior keys: {missing}")
 
         # Map program to behavior cell
+        # Check for expansion first (only if dynamic)
+        if isinstance(self.config.behavior_space, DynamicBehaviorSpace):
+            if self.config.behavior_space.check_and_expand(program.metrics):
+                logger.info(
+                    "Island {}: behavior space expanded by program {}, triggering re-indexing",
+                    self.config.island_id,
+                    program.id,
+                )
+                await self.reindex_archive()
+
         cell = self.config.behavior_space.get_cell(program.metrics)
         behavior_values = {
             k: program.metrics[k] for k in self.config.behavior_space.behavior_keys
@@ -143,6 +154,11 @@ class MapElitesIsland:
         program.metadata.setdefault(METADATA_KEY_HOME_ISLAND, self.config.island_id)
         program.metadata[METADATA_KEY_CURRENT_ISLAND] = self.config.island_id
         await self.state_manager.update_program(program)
+
+        # If behavior space is dynamic, optimize bounds aggressively on success
+        if isinstance(self.config.behavior_space, DynamicBehaviorSpace):
+            await self.optimize_space()
+
         await self._enforce_size_limit()
         return True
 
@@ -266,3 +282,91 @@ class MapElitesIsland:
             self.config.max_size,
             removed,
         )
+
+        # Opportunity to shrink/optimize space if we removed items
+        if removed > 0:
+            await self.optimize_space()
+
+    async def reindex_archive(self) -> None:
+        """Re-calculate cell coordinates for all elites based on current behavior space."""
+        # 1. Get all current elites
+        elites = await self.get_elites()
+        if not elites:
+            return
+
+        # 2. Clear the current mapping
+        await self.archive_storage.clear_all_elites()
+
+        # 3. Batch re-insert
+        # We can't simply use bulk_add because we need to handle collisions
+        # (two elites might now map to the same cell).
+        # We sort by fitness (or whatever archive_selector prioritizes) to ensure best ones win.
+        # However, archive_selector is a comparator, not a key.
+        # For simplicity, we just re-add them one by one. The archive logic handles replacements.
+
+        readded = 0
+
+        # Pre-calculate placements
+        placements = []
+        for p in elites:
+            try:
+                cell = self.config.behavior_space.get_cell(p.metrics)
+                placements.append((cell, p))
+            except Exception as e:
+                logger.warning(
+                    "Island {}: failed to map program {} during re-index: {}",
+                    self.config.island_id,
+                    p.id,
+                    e,
+                )
+
+        # Use bulk add (which handles is_better logic internally per item)
+        readded = await self.archive_storage.bulk_add_elites(
+            placements, self.config.archive_selector
+        )
+
+        logger.info(
+            "Island {}: re-indexed {} elites ({} preserved)",
+            self.config.island_id,
+            len(elites),
+            readded,
+        )
+
+    async def optimize_space(self) -> None:
+        """Analyze current population and optimize behavior space bounds (shrink/tighten)."""
+        if not isinstance(self.config.behavior_space, DynamicBehaviorSpace):
+            return
+
+        elites = await self.get_elites()
+        if not elites:
+            return
+
+        metrics_batch = [p.metrics for p in elites]
+
+        # Calculate tight bounds with buffer
+        new_bounds = self.config.behavior_space.calculate_optimized_bounds(
+            metrics_batch
+        )
+
+        old_description = self.config.behavior_space.describe()
+        if self.config.behavior_space.update_bounds(new_bounds):
+            new_description = self.config.behavior_space.describe()
+
+            changes = []
+            for key in self.config.behavior_space.behavior_keys:
+                old_min = old_description[key]["min"]
+                old_max = old_description[key]["max"]
+                new_min = new_description[key]["min"]
+                new_max = new_description[key]["max"]
+
+                if old_min != new_min or old_max != new_max:
+                    changes.append(
+                        f"{key}: [{old_min:.3f}, {old_max:.3f}] -> [{new_min:.3f}, {new_max:.3f}]"
+                    )
+
+            logger.info(
+                "Island {}: optimized behavior space bounds:\n  {}",
+                self.config.island_id,
+                "\n  ".join(changes),
+            )
+            await self.reindex_archive()

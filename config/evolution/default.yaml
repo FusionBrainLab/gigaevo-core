@@ -12,7 +12,7 @@ parent_selector:
 
 # Program acceptor
 program_acceptor:
-  _target_: gigaevo.evolution.engine.MutationContextAndBehaviorKeysAcceptor
+  _target_: gigaevo.evolution.engine.acceptor.StandardEvolutionAcceptor
   required_behavior_keys: ${required_behavior_keys}
 
 # Engine config

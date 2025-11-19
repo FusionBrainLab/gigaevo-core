@@ -53,7 +53,11 @@ async def run_experiment(cfg: DictConfig):
             ) from e
 
         # Safety check: prevent accidental data loss
-        if await redis_storage.has_data():
+        has_data = await redis_storage.has_data()
+        resume = cfg.redis.get("resume", False)
+
+        # If data exists and we are NOT resuming, this is an error.
+        if has_data and not resume:
             db_num = cfg.redis.db
             redis_host = cfg.redis.host
             redis_port = cfg.redis.port
@@ -69,17 +73,39 @@ Run this command to flush:
 
 Or use a different database number:
   python run.py redis.db=<number> ...
+
+Or set resume=true to continue with existing data:
+  python run.py redis.resume=true ...
 """
             logger.error(error_msg)
             raise RuntimeError(
                 f"Redis database {db_num} is not empty. Flush manually to proceed."
             )
-        logger.info("Step 2/5: Database is empty and instance lock acquired")
+
+        if has_data and resume:
+            logger.info(
+                f"Resuming experiment on database {cfg.redis.db} (found existing data)"
+            )
+        elif resume:
+            logger.info(
+                f"Resume requested but database {cfg.redis.db} is empty. Starting fresh."
+            )
+
+        logger.info("Step 2/5: Database check complete and instance lock acquired")
         logger.info("")
 
-        logger.info("Step 3/5: Loading initial programs...")
-        programs = await program_loader.load(redis_storage)
-        logger.info(f"Step 3/5: Loaded {len(programs)} initial programs")
+        logger.info("Step 3/5: Loading programs...")
+        # Determine whether to load from existing Redis data or run the initial loader
+        should_resume = has_data and resume
+
+        if should_resume:
+            programs = await redis_storage.get_all()
+            logger.info(
+                f"Step 3/5: Resumed with {len(programs)} existing programs from Redis"
+            )
+        else:
+            programs = await program_loader.load(redis_storage)
+            logger.info(f"Step 3/5: Loaded {len(programs)} initial programs")
         logger.info("")
 
         logger.info("Step 4/5: Starting evolution...")

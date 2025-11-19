@@ -91,18 +91,8 @@ class PythonCodeExecutor(Stage):
                 python_path=self.python_path,
                 timeout=int(self.timeout),
                 max_memory_mb=self.max_memory_mb,
+                max_output_size=self.max_output_size,
             )
-
-            # Check output size
-            output_size = len(stdout_bytes)
-            if output_size > self.max_output_size:
-                return ProgramStageResult.failure(
-                    error=StageError(
-                        type="OutputTooLarge",
-                        message=f"Output {output_size} bytes exceeds limit of {self.max_output_size} bytes",
-                        stage=stage_name,
-                    )
-                )
 
             del stdout_bytes
             del stderr_text

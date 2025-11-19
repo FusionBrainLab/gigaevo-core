@@ -9,6 +9,7 @@ from gigaevo.entrypoint.constants import (
     DEFAULT_STAGE_TIMEOUT,
     MAX_CODE_LENGTH,
     MAX_MEMORY_MB,
+    MAX_OUTPUT_SIZE,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.problems.layout import ProblemLayout
@@ -158,6 +159,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 python_path=[problem_ctx.problem_dir.resolve()],
                 timeout=DEFAULT_STAGE_TIMEOUT,
                 max_memory_mb=MAX_MEMORY_MB,
+                max_output_size=MAX_OUTPUT_SIZE,
             ),
         )
 
@@ -169,6 +171,8 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 path=validator_path,
                 function_name="validate",
                 timeout=DEFAULT_STAGE_TIMEOUT,
+                max_memory_mb=MAX_MEMORY_MB,
+                max_output_size=MAX_OUTPUT_SIZE,
             ),
         )
 

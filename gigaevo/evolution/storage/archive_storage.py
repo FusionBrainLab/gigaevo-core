@@ -45,6 +45,15 @@ class ArchiveStorage(ABC):
     # Returns number of cells cleared.
 
     @abstractmethod
+    async def bulk_add_elites(
+        self,
+        placements: list[tuple[CellDescriptor, Program]],
+        is_better: Callable[[Program, Program | None], bool],
+    ) -> int: ...
+
+    # Adds multiple elites at once (e.g., during re-indexing). Returns number of successful adds.
+
+    @abstractmethod
     async def size(self) -> int: ...
 
     # Returns number of occupied cells.
@@ -188,3 +197,22 @@ class RedisArchiveStorage(ArchiveStorage):
             len(set(mapping.values())),
         )
         return count
+
+    async def bulk_add_elites(
+        self,
+        placements: list[tuple[CellDescriptor, Program]],
+        is_better: Callable[[Program, Program | None], bool],
+    ) -> int:
+        if not placements:
+            return 0
+
+        # Note: This naive implementation processes items sequentially.
+        # A more optimized version would group by cell and select the best per cell first,
+        # but since this runs during re-indexing (rarely), correctness > raw speed for now.
+
+        added_count = 0
+        for cell, program in placements:
+            if await self.add_elite(cell, program, is_better):
+                added_count += 1
+
+        return added_count

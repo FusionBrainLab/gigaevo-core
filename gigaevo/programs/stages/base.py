@@ -207,6 +207,9 @@ class Stage:
                 error=StageError.from_exception(exc, stage=self.stage_name),
                 started_at=started_at,
             )
+        finally:
+            self._raw_inputs.clear()
+            self._params_obj = None
 
     async def compute(self, program: "Program") -> O | ProgramStageResult | None:
         """Override in subclasses."""
