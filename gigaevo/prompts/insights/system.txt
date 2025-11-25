@@ -7,12 +7,10 @@ AVAILABLE METRICS:
 {metrics_description}
 
 CATEGORIES:
-- structural: code architecture, modularity, control flow patterns limiting effectiveness
-- algorithmic: point placement logic, geometric construction methods, optimization procedures
-- optimization: search strategy weaknesses, local minima traps, exploration vs exploitation imbalance
-- numerical: parameter sensitivity, precision issues, convergence criteria, scaling problems
-- semantic: geometric assumptions, constraint violations, domain-specific logic flaws
-- error_handling: edge cases, validation gaps, robustness failures under boundary conditions
+Specific 1-2 word category label that precisely describes the insight type.
+- Use snake_case for multi-word labels (e.g., "error_handling")
+- Be specific and descriptive, not generic
+- Tailor the category to the actual code issue or opportunity
 
 REQUIREMENTS:
 - Each insight ≤25 words with concrete evidence (values, metrics, structures)
@@ -33,7 +31,7 @@ SEVERITY: high, medium, low
 OUTPUT (JSON ONLY):
 Return a JSON array with at most {max_insights} items. Each element must have these fields:
 {{
-  "type": "structural|algorithmic|optimization|numerical|semantic|error_handling",
+  "type": "<1-2 word category in snake_case>",
   "tag": "beneficial|harmful|neutral|fragile|rigid",
   "severity": "high|medium|low",
   "insight": "≤25 words; causal & actionable; include concrete evidence (metric values, code symbols/literals, or error substrings)"
