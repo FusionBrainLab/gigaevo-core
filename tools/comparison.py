@@ -103,6 +103,7 @@ def plot_comparison(
     frontier_annotations_max: int = 15,
     fitness_col: str = "metric_fitness",
     iteration_col: str = "metadata_iteration",
+    minimize: bool = False,
 ):
     if not prepared_dfs:
         logger.error("No prepared data to plot")
@@ -164,7 +165,12 @@ def plot_comparison(
                 )
                 if not fp.empty:
                     diffs = fp["frontier_fitness"].diff()
-                    improve_mask = diffs.fillna(True) > 0
+                    # For minimization, improvement means decrease (diff < 0)
+                    # For maximization, improvement means increase (diff > 0)
+                    if minimize:
+                        improve_mask = diffs.fillna(True) < 0
+                    else:
+                        improve_mask = diffs.fillna(True) > 0
                     improvements = fp[improve_mask]
                     if not improvements.empty:
                         # Downsample annotations if too many
@@ -232,16 +238,37 @@ async def main():
         help="Rolling window size for iteration-based running mean/std (default: 5)",
     )
     parser.add_argument(
-        "--extreme-threshold",
-        type=float,
-        default=100.0,
-        help="Threshold for extreme outliers (default: 100.0)",
+        "--outlier-method",
+        type=str,
+        choices=["iqr", "mad", "zscore", "percentile"],
+        default="percentile",
+        help=(
+            "Outlier detection method (default: percentile). "
+            "percentile=Simple percentile cutoff (recommended), "
+            "mad=Median Absolute Deviation (robust), "
+            "iqr=Interquartile Range (Tukey), zscore=Modified Z-score"
+        ),
     )
     parser.add_argument(
         "--outlier-multiplier",
         type=float,
-        default=3.0,
-        help="IQR multiplier for outlier detection (default: 3.0)",
+        default=None,
+        help=(
+            "Outlier method multiplier/threshold. Defaults: iqr=1.5, mad=3.5, zscore=3.0. "
+            "Higher values = fewer outliers removed."
+        ),
+    )
+    parser.add_argument(
+        "--outlier-lower-percentile",
+        type=float,
+        default=5.0,
+        help="For percentile method: lower percentile cutoff (default: 5.0)",
+    )
+    parser.add_argument(
+        "--outlier-upper-percentile",
+        type=float,
+        default=95.0,
+        help="For percentile method: upper percentile cutoff (default: 95.0)",
     )
     parser.add_argument(
         "--no-outlier-removal",
@@ -293,6 +320,11 @@ async def main():
         default="metadata_iteration",
         help="Iteration column name (default: metadata_iteration)",
     )
+    parser.add_argument(
+        "--minimize",
+        action="store_true",
+        help="Set if lower fitness values are better (minimization problem)",
+    )
     args = parser.parse_args()
     output_folder = Path(args.output_folder)
 
@@ -318,10 +350,13 @@ async def main():
             df,
             iteration_rolling_window=args.iteration_rolling_window,
             remove_outliers=not args.no_outlier_removal,
-            extreme_threshold=args.extreme_threshold,
+            outlier_method=args.outlier_method,
             outlier_multiplier=args.outlier_multiplier,
+            outlier_lower_percentile=args.outlier_lower_percentile,
+            outlier_upper_percentile=args.outlier_upper_percentile,
             fitness_col=args.fitness_col,
             iteration_col=args.iteration_col,
+            minimize=args.minimize,
         )
         if prepared_df.empty:
             logger.warning(
@@ -340,6 +375,7 @@ async def main():
         frontier_annotations_max=args.frontier_annotations_max,
         fitness_col=args.fitness_col,
         iteration_col=args.iteration_col,
+        minimize=args.minimize,
     )
 
 

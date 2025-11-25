@@ -311,5 +311,13 @@ MIT License - see [LICENSE](LICENSE) file for details.
 If you use GigaEvo in your research, please cite:
 
 ```bibtex
-[Citation coming soon]
+@misc{khrulkov2025gigaevoopensourceoptimization,
+      title={GigaEvo: An Open Source Optimization Framework Powered By LLMs And Evolution Algorithms},
+      author={Valentin Khrulkov and Andrey Galichin and Denis Bashkirov and Dmitry Vinichenko and Oleg Travkin and Roman Alferov and Andrey Kuznetsov and Ivan Oseledets},
+      year={2025},
+      eprint={2511.17592},
+      archivePrefix={arXiv},
+      primaryClass={cs.NE},
+      url={https://arxiv.org/abs/2511.17592},
+}
 ```
