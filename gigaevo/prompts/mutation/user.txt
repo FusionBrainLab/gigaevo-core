@@ -5,7 +5,7 @@ Transform the program using program insights and historical lineage intelligence
 ## INTELLIGENCE INPUTS
 
 **PROGRAM INSIGHTS**: category [tag] (severity): concrete evidence
-- Categories: structural, algorithmic, optimization, numerical, semantic, error_handling
+- Categories: LLM-generated 1-2 word labels
 - Tags: beneficial, harmful, neutral, fragile, rigid
 - Severity: high, medium, low
 
