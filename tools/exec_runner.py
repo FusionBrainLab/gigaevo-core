@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import linecache
+import os
 from pathlib import Path
 import sys
 import traceback
@@ -37,6 +38,17 @@ def _prepend_sys_path(paths: list[str] | None) -> None:
     for p in paths:
         if p and p not in sys.path:
             sys.path.insert(0, str(Path(p).resolve()))
+
+
+def _ensure_cwd_in_path() -> None:
+    """
+    Ensure the current working directory is in sys.path.
+    This allows imports like 'import problems.some_module' when running
+    from the project root.
+    """
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
 
 
 def _write_code_context(tb: BaseException, *, out: io.TextIOBase) -> None:
@@ -87,6 +99,7 @@ def main() -> None:
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             raise TypeError("Payload must contain 'args': list and 'kwargs': dict")
 
+        _ensure_cwd_in_path()
         _prepend_sys_path(py_path)
         mod = _load_module_from_code(code)
         fn = getattr(mod, fn_name, None)
