@@ -200,7 +200,7 @@ class ProblemLayout:
         if config.utils_imports:
             all_funcs: set[str] = set()
             for spec in [
-                config.utils_imports.validate,
+                config.utils_imports.validator,
                 config.utils_imports.helper,
                 config.utils_imports.context,
                 config.utils_imports.initial_programs,
@@ -259,7 +259,7 @@ class ProblemLayout:
 
         spec = None
         if output_file == cls.VALIDATOR:
-            spec = config.utils_imports.validate
+            spec = config.utils_imports.validator
         elif output_file == "helper.py":
             spec = config.utils_imports.helper
         elif output_file == cls.CONTEXT_FILE:

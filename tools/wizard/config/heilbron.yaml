@@ -22,7 +22,7 @@ validation:
   returns:
     type_hint: dict[str, float]
     description: "Metrics dict containing fitness and is_valid"
-    schema:
+    fields:
       fitness: "Area of smallest triangle (float)"
       is_valid: "1 if valid, 0 otherwise"
 

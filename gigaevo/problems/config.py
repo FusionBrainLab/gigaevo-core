@@ -34,7 +34,7 @@ class ReturnSpec(BaseModel):
         default=None,
         description="Human-readable description of return value",
     )
-    schema: dict[str, str] | None = Field(
+    fields: dict[str, str] | None = Field(
         default=None,
         description="For dict returns: mapping of key -> type/description",
     )
@@ -82,7 +82,7 @@ class ContextSpec(BaseModel):
         default=None,
         description="What this context contains",
     )
-    schema: dict[str, str] = Field(
+    fields: dict[str, str] = Field(
         default_factory=dict,
         description="Mapping of context key -> type/description",
     )
@@ -108,7 +108,7 @@ class UtilsImportSpec(BaseModel):
 class UtilsConfig(BaseModel):
     """Configuration for utils imports across generated files."""
 
-    validate: UtilsImportSpec | None = Field(
+    validator: UtilsImportSpec | None = Field(
         default=None,
         description="Utils imports for validate.py",
     )

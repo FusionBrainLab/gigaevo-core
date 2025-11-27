@@ -136,7 +136,7 @@ def main(
         if problem_config.utils_imports:
             click.echo("   Utils imports:")
             for target, spec in [
-                ("validate", problem_config.utils_imports.validate),
+                ("validate", problem_config.utils_imports.validator),
                 ("helper", problem_config.utils_imports.helper),
                 ("context", problem_config.utils_imports.context),
                 ("initial_programs", problem_config.utils_imports.initial_programs),

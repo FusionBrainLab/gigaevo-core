@@ -17,9 +17,9 @@ def build_context() -> dict:
 {% endif %}
 
     Returns:
-{% if context_spec and context_spec.schema %}
+{% if context_spec and context_spec.fields %}
         dict: Context data containing:
-{% for key, desc in context_spec.schema.items() %}
+{% for key, desc in context_spec.fields.items() %}
             - '{{ key }}': {{ desc }}
 {% endfor %}
 {% else %}
@@ -27,9 +27,9 @@ def build_context() -> dict:
 {% endif %}
 
     Example:
-{% if context_spec and context_spec.schema %}
+{% if context_spec and context_spec.fields %}
         {
-{% for key in context_spec.schema.keys() %}
+{% for key in context_spec.fields.keys() %}
             "{{ key }}": ...,
 {% endfor %}
         }
