@@ -88,6 +88,8 @@ def _format_syntax_error(e: SyntaxError) -> str:
 def main() -> None:
     captured = io.StringIO()
     try:
+        _ensure_cwd_in_path()
+
         payload: dict[str, Any] = cloudpickle.load(sys.stdin.buffer)
 
         code: str = payload["code"]
@@ -99,7 +101,6 @@ def main() -> None:
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             raise TypeError("Payload must contain 'args': list and 'kwargs': dict")
 
-        _ensure_cwd_in_path()
         _prepend_sys_path(py_path)
         mod = _load_module_from_code(code)
         fn = getattr(mod, fn_name, None)
