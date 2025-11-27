@@ -133,6 +133,19 @@ def main(
             if enabled
         ]
         click.echo(f"   Features: {', '.join(features) if features else 'none'}")
+        if problem_config.utils_imports:
+            click.echo("   Utils imports:")
+            for target, spec in [
+                ("validate", problem_config.utils_imports.validate),
+                ("helper", problem_config.utils_imports.helper),
+                ("context", problem_config.utils_imports.context),
+                ("initial_programs", problem_config.utils_imports.initial_programs),
+            ]:
+                if spec:
+                    funcs = (
+                        "*" if spec.functions == ["*"] else ", ".join(spec.functions)
+                    )
+                    click.echo(f"     - {target}: {funcs}")
         return
 
     # Determine output directory

@@ -1,15 +1,40 @@
 """
 Helper functions for: {{ problem.description }}
 
-Utility functions shared between validate.py and user programs.
+Utility functions for evolved programs.
 These functions are importable via: from helper import function_name
 """
+{{ utils_import | utils_import }}
 
-# TODO: Add necessary imports
+{% if helper_functions %}
+{% for func in helper_functions %}
+def {{ func.name }}({{ func.signature | param_string }}):
+    """{{ func.description }}
+{% if func.signature.params %}
 
+    Args:
+{% for param in func.signature.params %}
+        {{ param.name }}{% if param.type_hint %} ({{ param.type_hint }}){% endif %}: {{ param.description | default("TODO: describe parameter") }}
+{% endfor %}
+{% endif %}
+{% if func.signature.returns %}
 
+    Returns:
+{% if func.signature.returns.type_hint %}
+        {{ func.signature.returns.type_hint }}: {{ func.signature.returns.description | default("TODO: describe return value") }}
+{% else %}
+        {{ func.signature.returns.description | default("TODO: describe return value") }}
+{% endif %}
+{% endif %}
+    """
+    # TODO: Implement {{ func.name }}
+    raise NotImplementedError("{{ func.name }} not implemented")
+
+{% endfor %}
+{% else %}
 # TODO: Add helper functions here
 # Example:
 # def compute_distance(p1: np.ndarray, p2: np.ndarray) -> float:
 #     """Compute Euclidean distance between two points."""
 #     return np.linalg.norm(p1 - p2)
+{% endif %}

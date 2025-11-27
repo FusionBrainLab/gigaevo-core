@@ -1,8 +1,74 @@
-{{ task_description.objective }}
-{% if task_description.hints %}
+TASK DEFINITION – {{ problem.name | upper }}
 
-**STRATEGY HINTS**:
+Challenge: {{ problem.description }}
+
+OBJECTIVE
+
+{{ task_description.objective }}
+
+{% if task_description.output_shape or entrypoint.returns %}
+Output: {{ task_description.output_shape | default(entrypoint.returns.description if entrypoint.returns else "TODO: specify output") }}{% if primary_key %} | Fitness: {{ primary_key }}{% endif %}{% if task_description.fitness_goal %} | Goal: {{ task_description.fitness_goal }}{% endif %}
+
+{% endif %}
+{% if task_description.constraints %}
+CONSTRAINTS
+{% for constraint in task_description.constraints %}
+- {{ constraint }}
+{% endfor %}
+
+{% endif %}
+{% if task_description.failure_modes %}
+FAILURE MODES
+{% for mode in task_description.failure_modes %}
+- {{ mode }}
+{% endfor %}
+
+{% endif %}
+{% if task_description.validation_notes %}
+VALIDATION & EFFICIENCY (CRITICAL)
+{% for note in task_description.validation_notes %}
+- {{ note }}
+{% endfor %}
+
+{% endif %}
+{% if add_helper and helper_functions %}
+HELPER FUNCTIONS
+
+Available as `from helper import *`:
+{% for func in helper_functions %}
+- `{{ func.name }}({{ func.signature | param_string(with_types=False) }})` -> {{ func.signature.returns.type_hint | default("result") }}: {{ func.description }}
+{% endfor %}
+
+{% endif %}
+{% if utils_functions %}
+UTILITIES
+
+Available from `gigaevo.problems.types.{{ problem_type }}.utils`:
+{% for func in utils_functions %}
+- `{{ func }}`
+{% endfor %}
+
+{% endif %}
+{% if task_description.complexity_notes %}
+PROBLEM COMPLEXITY
+
+{{ task_description.complexity_notes }}
+
+{% endif %}
+{% if task_description.hints %}
+STRATEGY HINTS
 {% for hint in task_description.hints %}
 - {{ hint }}
 {% endfor %}
+
 {% endif %}
+OUTPUT FORMAT
+
+Implement `def entrypoint({{ entrypoint | param_string }}):` that returns:
+{% if task_description.output_shape %}
+- Shape: {{ task_description.output_shape }}
+{% elif entrypoint.returns and entrypoint.returns.description %}
+- {{ entrypoint.returns.description }}
+{% endif %}
+- Libraries: numpy, scipy, sklearn, or standard library
+- Fix random seeds if using randomness (e.g., np.random.seed(42))

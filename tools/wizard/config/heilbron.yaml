@@ -7,16 +7,24 @@
 name: "heilbron_wizard"
 description: "Heilbronn Triangle Problem - maximize minimum triangle area"
 
-# Function signatures
+# Function signatures with structured parameter specs
 entrypoint:
-  params: []
-  returns: "(11, 2) NumPy array of point coordinates"
-  inputs: null
+  params: []  # No parameters
+  returns:
+    type_hint: np.ndarray
+    description: "(11, 2) NumPy array of point coordinates inside unit equilateral triangle"
 
 validation:
-  params: ["coordinates"]
-  returns: "dict with metrics: fitness, is_valid"
-  inputs: "coordinates: (11, 2) array from entrypoint()"
+  params:
+    - name: coordinates
+      type_hint: np.ndarray
+      description: "(11, 2) array of point coordinates from entrypoint"
+  returns:
+    type_hint: dict[str, float]
+    description: "Metrics dict containing fitness and is_valid"
+    schema:
+      fitness: "Area of smallest triangle (float)"
+      is_valid: "1 if valid, 0 otherwise"
 
 # Metrics (is_valid is auto-generated, don't include it)
 metrics:
@@ -31,47 +39,89 @@ metrics:
     significant_change: 0.000001
     sentinel_value: -1000
 
-# Task description
+# Task description with structured metadata
 task_description:
   objective: |
-    TASK DEFINITION – HEILBRONN TRIANGLE PROBLEM
-
-    Problem Type: Evolutionary Geometric Optimization
-    Challenge: Design 11-point layouts that maximize the area of the smallest triangle formed by any three points.
-
-    PROBLEM COMPLEXITY
-
-    This is a high-dimensional, non-convex optimization problem with sharp local minima. Small changes to point coordinates can drastically reduce the smallest triangle area due to geometric degeneracies. The search space includes both discrete failure regions (e.g. exact alignments) and continuous low-fitness basins (e.g. clustered configurations). Effective solutions must balance global dispersion with local spacing constraints under strict boundary and uniqueness conditions.
-
-    OBJECTIVE:
-    Implement a Python function that returns 11 distinct 2D coordinates inside a unit-area equilateral triangle, such that the minimum area among all C(11, 3) = 165 triangles formed by point triplets is as large as possible.
-
-    - Output shape: (11, 2) NumPy array
-    - Fitness: Area of the smallest triangle formed by any 3 points
-    - Goal: Maximize this minimum triangle area
+    Implement a Python function that returns 11 distinct 2D coordinates inside a unit-area
+    equilateral triangle, such that the minimum area among all C(11, 3) = 165 triangles
+    formed by point triplets is as large as possible.
 
     GEOMETRIC SETUP:
     - Enclosing triangle: Equilateral, area = 1.0
     - Orientation: Flat-bottomed, base along x-axis, vertex at (0, 0)
     - Point configuration: All 11 points must lie strictly inside or on the boundary
 
-    CONSTRAINTS:
-    - All points must be distinct
-    - All points must lie within or on the boundary of the enclosing triangle
-    - No three points may be collinear
-    - Numerical precision matters for geometric computations
+  constraints:
+    - "All 11 points must be distinct (no duplicate coordinates)"
+    - "All points must lie within or on the boundary of the unit equilateral triangle"
+    - "No three points may be exactly collinear (zero-area triangles are invalid)"
+    - "Numerical precision matters for geometric computations"
 
-  hints:
+  failure_modes:
     - "Clustering: Points too close together → small triangle areas"
     - "Alignment: Three or more points nearly collinear → flat or degenerate triangles"
     - "Overlap: Duplicate or nearly identical coordinates"
     - "Boundary violations: Points placed outside the triangle"
+
+  output_shape: "(11, 2) NumPy array"
+  fitness_goal: "min_triangle_area > 0.032"
+
+  complexity_notes: |
+    This is a high-dimensional, non-convex optimization problem with sharp local minima.
+    Small changes to point coordinates can drastically reduce the smallest triangle area
+    due to geometric degeneracies. The search space includes both discrete failure regions
+    (e.g. exact alignments) and continuous low-fitness basins (e.g. clustered configurations).
+
+  hints:
     - "Use program insights to identify patterns affecting performance"
     - "Leverage lineage outcomes to guide decisions"
+    - "Consider symmetric arrangements of points"
+    - "Balance global dispersion with local spacing constraints"
 
 # Optional features
 add_context: false
 add_helper: true
+
+# Helper function specifications
+helper_functions:
+  - name: triangle_area
+    description: "Compute area of triangle from 3 points using cross product formula"
+    signature:
+      params:
+        - name: p1
+          type_hint: np.ndarray
+          description: "First point (2,)"
+        - name: p2
+          type_hint: np.ndarray
+          description: "Second point (2,)"
+        - name: p3
+          type_hint: np.ndarray
+          description: "Third point (2,)"
+      returns:
+        type_hint: float
+        description: "Triangle area (always non-negative)"
+
+  - name: min_triangle_area
+    description: "Find minimum triangle area among all point triplets"
+    signature:
+      params:
+        - name: points
+          type_hint: np.ndarray
+          description: "(N, 2) array of 2D points"
+      returns:
+        type_hint: float
+        description: "Minimum area across all C(N,3) triangles"
+
+  - name: point_in_triangle
+    description: "Check if a point lies inside/on the enclosing equilateral triangle"
+    signature:
+      params:
+        - name: point
+          type_hint: np.ndarray
+          description: "(2,) array - point to check"
+      returns:
+        type_hint: bool
+        description: "True if point is inside/on boundary"
 
 # Initial programs
 initial_programs:

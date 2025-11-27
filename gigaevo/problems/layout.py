@@ -38,7 +38,7 @@ class ProblemLayout:
         target_dir: Path,
         config: ProblemConfig,
         overwrite: bool = False,
-        problem_type: str = "base",
+        problem_type: str = "programs",
     ) -> dict:
         """Generate problem directory from config.
 
@@ -65,8 +65,9 @@ class ProblemLayout:
             trim_blocks=True,
             lstrip_blocks=True,
         )
+        cls._register_jinja_filters(env, problem_type)
 
-        context = cls._build_template_context(config)
+        context = cls._build_template_context(config, problem_type)
 
         target_dir.mkdir(parents=True, exist_ok=True)
         (target_dir / cls.INITIAL_PROGRAMS_DIR).mkdir(exist_ok=True)
@@ -75,7 +76,9 @@ class ProblemLayout:
 
         for output_file, template_name in file_map.items():
             template = env.get_template(template_name)
-            content = template.render(**context)
+            # Pass file-specific utils_import to template
+            utils_import = cls._get_utils_import_for_file(config, output_file)
+            content = template.render(**context, utils_import=utils_import)
             output_path = target_dir / output_file
             output_path.write_text(content)
 
@@ -113,12 +116,57 @@ class ProblemLayout:
 
     @staticmethod
     def _to_dict(obj) -> dict:
-        """Convert Pydantic model to dict (v1/v2 compatible)."""
-        return obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
+        """Convert Pydantic model to dict."""
+        return obj.model_dump()
+
+    @staticmethod
+    def _register_jinja_filters(env: Environment, problem_type: str) -> None:
+        """Register custom Jinja filters for template rendering."""
+        from gigaevo.problems.config import FunctionSignature
+
+        def param_string_filter(sig_dict: dict, with_types: bool = True) -> str:
+            """Generate parameter string from signature dict."""
+            sig = FunctionSignature(**sig_dict)
+            return sig.get_param_string(with_types=with_types)
+
+        def param_names_filter(sig_dict: dict) -> list[str]:
+            """Extract parameter names from signature dict."""
+            sig = FunctionSignature(**sig_dict)
+            return sig.get_param_names()
+
+        def utils_import_filter(utils_import: dict | None) -> str:
+            """Generate import statement from utils_import spec.
+
+            Args:
+                utils_import: Dict with 'functions' key, or None
+
+            Returns:
+                Import statement string or empty string
+            """
+            if not utils_import:
+                return ""
+            functions = utils_import.get("functions", [])
+            if not functions:
+                return ""
+            if functions == ["*"]:
+                return f"from gigaevo.problems.types.{problem_type}.utils import *"
+            return f"from gigaevo.problems.types.{problem_type}.utils import {', '.join(functions)}"
+
+        env.filters["param_string"] = param_string_filter
+        env.filters["param_names"] = param_names_filter
+        env.filters["utils_import"] = utils_import_filter
 
     @classmethod
-    def _build_template_context(cls, config: ProblemConfig) -> dict:
-        """Build Jinja template context with auto-generated is_valid metric."""
+    def _build_template_context(cls, config: ProblemConfig, problem_type: str) -> dict:
+        """Build Jinja template context with auto-generated is_valid metric.
+
+        Args:
+            config: Problem configuration
+            problem_type: Problem type name (for utils import path)
+
+        Returns:
+            Template context dictionary
+        """
         primary_key = next(
             (key for key, spec in config.metrics.items() if spec.is_primary), None
         )
@@ -132,11 +180,34 @@ class ProblemLayout:
             upper_bound=1.0,
             include_in_prompts=True,
             significant_change=1.0,
+            sentinel_value=0.0,
         )
 
         all_metrics = {**config.metrics, VALIDITY_KEY: is_valid_spec}
 
         metrics_dict = {key: cls._to_dict(spec) for key, spec in all_metrics.items()}
+
+        helper_functions = None
+        if config.helper_functions:
+            helper_functions = [cls._to_dict(hf) for hf in config.helper_functions]
+
+        context_spec = None
+        if config.context_spec:
+            context_spec = cls._to_dict(config.context_spec)
+
+        # Collect all unique utils function names for task_description
+        utils_functions: list[str] = []
+        if config.utils_imports:
+            all_funcs: set[str] = set()
+            for spec in [
+                config.utils_imports.validate,
+                config.utils_imports.helper,
+                config.utils_imports.context,
+                config.utils_imports.initial_programs,
+            ]:
+                if spec and spec.functions != ["*"]:
+                    all_funcs.update(spec.functions)
+            utils_functions = sorted(all_funcs)
 
         return {
             "problem": {"name": config.name, "description": config.description},
@@ -147,6 +218,10 @@ class ProblemLayout:
             "task_description": cls._to_dict(config.task_description),
             "add_context": config.add_context,
             "add_helper": config.add_helper,
+            "helper_functions": helper_functions,
+            "context_spec": context_spec,
+            "problem_type": problem_type,
+            "utils_functions": utils_functions,
         }
 
     @classmethod
@@ -167,6 +242,32 @@ class ProblemLayout:
         return file_map
 
     @classmethod
+    def _get_utils_import_for_file(
+        cls, config: ProblemConfig, output_file: str
+    ) -> dict | None:
+        """Get utils import spec for a specific output file.
+
+        Args:
+            config: Problem configuration
+            output_file: Output filename (e.g., 'validate.py', 'helper.py')
+
+        Returns:
+            Utils import spec as dict, or None if not configured
+        """
+        if not config.utils_imports:
+            return None
+
+        spec = None
+        if output_file == cls.VALIDATOR:
+            spec = config.utils_imports.validate
+        elif output_file == "helper.py":
+            spec = config.utils_imports.helper
+        elif output_file == cls.CONTEXT_FILE:
+            spec = config.utils_imports.context
+
+        return cls._to_dict(spec) if spec else None
+
+    @classmethod
     def _generate_initial_programs(
         cls,
         target_dir: Path,
@@ -176,6 +277,7 @@ class ProblemLayout:
     ) -> int:
         """Generate initial program stubs.
 
+
         Returns:
             Number of initial programs generated
         """
@@ -184,11 +286,17 @@ class ProblemLayout:
 
         template = env.get_template("initial_program.jinja")
 
+        # Get utils import for initial programs
+        utils_import = None
+        if config.utils_imports and config.utils_imports.initial_programs:
+            utils_import = cls._to_dict(config.utils_imports.initial_programs)
+
         for prog_spec in config.initial_programs:
             content = template.render(
                 **context,
                 program_name=prog_spec.name,
                 program_description=prog_spec.description,
+                utils_import=utils_import,
             )
 
             prog_path = target_dir / cls.INITIAL_PROGRAMS_DIR / f"{prog_spec.name}.py"

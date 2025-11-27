@@ -1,18 +1,19 @@
 """
 Validation function for: {{ problem.description }}
 """
-
-{% if add_helper %}
-from helper import *
-{% endif %}
+{{ utils_import | utils_import }}
 
 
-def validate({{ validation.params | join(', ') }}):
+def validate({{ validation | param_string }}):
     """
     Validate the solution and compute fitness metrics.
 
+{% if validation.params %}
     Args:
-        {{ validation.inputs | default("TODO: Describe input parameters") }}
+{% for param in validation.params %}
+        {{ param.name }}{% if param.type_hint %} ({{ param.type_hint }}){% endif %}: {{ param.description | default("TODO: describe parameter") }}
+{% endfor %}
+{% endif %}
 
     Returns:
         dict with metrics:

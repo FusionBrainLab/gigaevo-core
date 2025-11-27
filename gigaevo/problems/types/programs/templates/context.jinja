@@ -1,24 +1,41 @@
 """
 Context builder for: {{ problem.description }}
 
-This function is called once at the start of evolution.
 The returned context is passed to entrypoint(context) and validate(context, ...).
 """
-
-import numpy as np
+{{ utils_import | utils_import }}
 
 
 def build_context() -> dict:
     """
     Build runtime context data.
 
+{% if context_spec and context_spec.description %}
+    {{ context_spec.description | indent(4) }}
+{% else %}
     {{ task_description.objective | indent(4) }}
+{% endif %}
 
     Returns:
+{% if context_spec and context_spec.schema %}
+        dict: Context data containing:
+{% for key, desc in context_spec.schema.items() %}
+            - '{{ key }}': {{ desc }}
+{% endfor %}
+{% else %}
         dict: Context data for all programs
+{% endif %}
 
     Example:
+{% if context_spec and context_spec.schema %}
+        {
+{% for key in context_spec.schema.keys() %}
+            "{{ key }}": ...,
+{% endfor %}
+        }
+{% else %}
         {"X_train": ..., "X_test": ..., "y_train": ..., "y_test": ...}
+{% endif %}
     """
     # TODO: Load or generate data (called once at startup)
 

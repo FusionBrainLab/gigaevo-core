@@ -18,4 +18,7 @@ specs:
 {% if metric_spec.significant_change is not none %}
     significant_change: {{ metric_spec.significant_change }}
 {% endif %}
+{% if metric_spec.sentinel_value is not none %}
+    sentinel_value: {{ metric_spec.sentinel_value }}
+{% endif %}
 {% endfor %}

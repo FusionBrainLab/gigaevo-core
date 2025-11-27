@@ -1,19 +1,32 @@
 {% if add_helper %}
+{% if helper_functions %}
+from helper import {{ helper_functions | map(attribute='name') | join(', ') }}
+{% else %}
 from helper import *
 {% endif %}
+{% endif %}
+{{ utils_import | utils_import }}
 
 
-def entrypoint({{ entrypoint.params | join(', ') }}):
+def entrypoint({{ entrypoint | param_string }}):
     """
     {{ program_description }}
-    {% if entrypoint.inputs %}
+{% if entrypoint.params %}
 
     Args:
-        {{ entrypoint.inputs }}
-    {% endif %}
+{% for param in entrypoint.params %}
+        {{ param.name }}{% if param.type_hint %} ({{ param.type_hint }}){% endif %}: {{ param.description | default("TODO: describe parameter") }}
+{% endfor %}
+{% endif %}
+{% if entrypoint.returns %}
 
     Returns:
-        {{ entrypoint.returns | default("Solution matching problem specification") }}
+{% if entrypoint.returns.type_hint %}
+        {{ entrypoint.returns.type_hint }}: {{ entrypoint.returns.description | default("Solution matching problem specification") }}
+{% else %}
+        {{ entrypoint.returns.description | default("Solution matching problem specification") }}
+{% endif %}
+{% endif %}
     """
     # TODO: Implement strategy
 
