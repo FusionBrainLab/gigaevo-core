@@ -20,7 +20,10 @@ Transform the program using program insights and historical lineage intelligence
 - strategy: imitation/generalization/avoidance/exploration (past action taken)
 - description: causal explanation with quantified impact (≤30 words)
 - delta: measured performance impact (relative change)
-- diff: exact code modifications made
+
+**EVOLUTIONARY STATISTICS**: Population-level context
+- Generation history table: fitness trends across generations (← marks current)
+- Is useful to gauge population progress and inform exploration/exploitation balance
 
 ## EVOLUTIONARY ARCHETYPE SELECTION
 

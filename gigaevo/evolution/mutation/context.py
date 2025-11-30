@@ -5,7 +5,9 @@ from pydantic import BaseModel
 
 from gigaevo.llm.agents.insights import ProgramInsights
 from gigaevo.llm.agents.lineage import TransitionAnalysis
+from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
+from gigaevo.programs.stages.collector import EvolutionaryStatistics
 
 MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
 
@@ -76,22 +78,22 @@ class FamilyTreeMutationContext(MutationContext):
         )
 
         if self.ancestors:
-            lines.append("### Ancestors")
+            lines.append("### Parents")
             lines.append("")
             for i, analysis in enumerate(self.ancestors):
                 lines.append(
-                    f"#### Ancestor {i + 1}: {analysis.from_id[:8]} → {analysis.to_id[:8]}"
+                    f"#### Parent {i + 1}: {analysis.from_id[:8]} → {analysis.to_id[:8]}"
                 )
                 lines.append("")
                 lines.append(self._format_lineage_block(analysis))
                 lines.append("")
 
         if self.descendants:
-            lines.append("### Descendants")
+            lines.append("### Children")
             lines.append("")
             for i, analysis in enumerate(self.descendants):
                 lines.append(
-                    f"#### Descendant {i + 1}: {analysis.from_id[:8]} → {analysis.to_id[:8]}"
+                    f"#### Child {i + 1}: {analysis.from_id[:4]} → {analysis.to_id[:4]}"
                 )
                 lines.append("")
                 lines.append(self._format_lineage_block(analysis))
@@ -123,6 +125,88 @@ class FamilyTreeMutationContext(MutationContext):
         return "\n".join(lines)
 
 
+class EvolutionaryStatisticsMutationContext(MutationContext):
+    """Context with evolutionary statistics."""
+
+    evolutionary_statistics: EvolutionaryStatistics
+    metrics_context: MetricsContext
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    def format(self) -> str:
+        """Format evolutionary statistics into readable string for mutation prompt."""
+        stats = self.evolutionary_statistics
+        lines = ["## Evolutionary Statistics", ""]
+
+        # Current generation (← marks it in table)
+        lines.append(
+            f"**Generation**: {stats.generation} | **Total Programs**: {stats.total_program_count}"
+        )
+        lines.append("")
+
+        # Generation history table - LLM interprets trends directly
+        lines.append(self._format_generation_history_table())
+
+        return "\n".join(lines)
+
+    def _format_generation_history_table(self) -> str:
+        """Format generation history as a compact table (window around current generation).
+
+        Shows past generations for context and future generations to peek ahead.
+        Window: [-3, +3] around current generation.
+        """
+        history = self.evolutionary_statistics.generation_history
+        if not history:
+            return "_No generation history available_"
+
+        primary_key = self.metrics_context.get_primary_key()
+        decimals = self.metrics_context.get_decimals(primary_key)
+
+        lines = []
+        lines.append(
+            "| Gen | Best | Avg | Worst | Valid % | #Progs | Avg Children | Max Children |"
+        )
+        lines.append(
+            "|-----|------|-----|-------|---------|--------|--------------|--------------|"
+        )
+
+        # Show window around current generation: [-3, +3]
+        current_gen = self.evolutionary_statistics.generation
+        window_start = current_gen - 3
+        window_end = current_gen + 3
+
+        # Get generations within window that exist in history
+        gens_in_window = sorted(
+            g for g in history.keys() if window_start <= g <= window_end
+        )
+
+        for gen_num in gens_in_window:
+            metrics = history[gen_num]
+            marker = " ←" if gen_num == current_gen else ""
+
+            # Format fitness values, handling None
+            best_str = (
+                f"{metrics.best:.{decimals}f}" if metrics.best is not None else "-"
+            )
+            avg_str = (
+                f"{metrics.average:.{decimals}f}"
+                if metrics.average is not None
+                else "-"
+            )
+            worst_str = (
+                f"{metrics.worst:.{decimals}f}" if metrics.worst is not None else "-"
+            )
+
+            lines.append(
+                f"| {gen_num}{marker} | {best_str} | {avg_str} | "
+                f"{worst_str} | {metrics.valid_rate * 100:.1f}% | "
+                f"{metrics.program_count} | {metrics.avg_num_children:.2f} | {metrics.max_num_children} |"
+            )
+
+        return "\n".join(lines)
+
+
 class CompositeMutationContext(MutationContext):
     """Aggregator that composes multiple mutation contexts."""
 
@@ -131,4 +215,5 @@ class CompositeMutationContext(MutationContext):
     def format(self) -> str:
         formatted_parts = [ctx.format() for ctx in self.contexts]
         non_empty = [part for part in formatted_parts if part.strip()]
-        return "\n\n".join(non_empty) if non_empty else "No context available."
+        # Use a clear separator between different context types
+        return "\n\n---\n\n".join(non_empty) if non_empty else "No context available."

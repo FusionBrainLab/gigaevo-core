@@ -16,7 +16,11 @@ from gigaevo.problems.layout import ProblemLayout
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.collector import AncestorProgramIds, DescendantProgramIds
+from gigaevo.programs.stages.collector import (
+    AncestorProgramIds,
+    DescendantProgramIds,
+    EvolutionaryStatisticsCollector,
+)
 from gigaevo.programs.stages.complexity import ComputeComplexityStage
 from gigaevo.programs.stages.insights import InsightsStage
 from gigaevo.programs.stages.insights_lineage import (
@@ -272,6 +276,14 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 timeout=DEFAULT_STAGE_TIMEOUT,
             ),
         )
+        self.add_stage(
+            "EvolutionaryStatisticsCollector",
+            lambda: EvolutionaryStatisticsCollector(
+                storage=storage,
+                metrics_context=metrics_context,
+                timeout=DEFAULT_STAGE_TIMEOUT,
+            ),
+        )
 
     def _contribute_default_edges(self) -> None:
         self.add_data_flow_edge(
@@ -294,6 +306,11 @@ class DefaultPipelineBuilder(PipelineBuilder):
         self.add_data_flow_edge(
             "LineagesFromAncestors", "MutationContextStage", "lineage_ancestors"
         )
+        self.add_data_flow_edge(
+            "EvolutionaryStatisticsCollector",
+            "MutationContextStage",
+            "evolutionary_statistics",
+        )
 
     def _contribute_default_deps(self) -> None:
         self._deps = {
@@ -311,6 +328,9 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ],
             "LineagesFromAncestors": [
                 ExecutionOrderDependency.always_after("LineageStage"),
+            ],
+            "EvolutionaryStatisticsCollector": [
+                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
             ],
         }
 
