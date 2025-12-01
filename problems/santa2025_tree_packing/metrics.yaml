@@ -1,0 +1,71 @@
+specs:
+  fitness:
+    description: Sum of normalized square areas across all configurations (lower is better)
+    decimals: 4
+    is_primary: true
+    higher_is_better: false
+    lower_bound: 60.0
+    upper_bound: 500.0
+    include_in_prompts: true
+    significant_change: 0.001
+    sentinel_value: 1000.0
+  is_valid:
+    description: Whether the program is valid (1 valid, 0 invalid)
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0
+  sum_score_small:
+    description: Sum of s_n^2/n for small configurations (n=1 to 20)
+    decimals: 4
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 3.0
+    upper_bound: 500.0
+    include_in_prompts: true
+    significant_change: 0.001
+    sentinel_value: 1000.0
+  sum_score_medium:
+    description: Sum of s_n^2/n for medium configurations (n=21 to 100)
+    decimals: 4
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 18.0
+    upper_bound: 500.0
+    include_in_prompts: true
+    significant_change: 0.001
+    sentinel_value: 1000.0
+  sum_score_large:
+    description: Sum of s_n^2/n for large configurations (n=101 to 200)
+    decimals: 4
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 24.0
+    upper_bound: 500.0
+    include_in_prompts: true
+    significant_change: 0.001
+    sentinel_value: 1000.0
+  avg_rotation_variance:
+    description: Average rotation variance across all configurations
+    decimals: 2
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 180.0
+    include_in_prompts: false
+    significant_change: 1.0
+    sentinel_value: 1000.0
+  avg_centroid_distance:
+    description: Average distance from origin across all tree centroids
+    decimals: 2
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 100.0
+    include_in_prompts: false
+    significant_change: 0.1
+    sentinel_value: 1000.0
