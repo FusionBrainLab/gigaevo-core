@@ -14,6 +14,7 @@ scale_factor = Decimal('1e18')
 class ChristmasTree:
     """Represents a single, rotatable Christmas tree of a fixed size."""
 
+    # NON-EVOLVE-BLOCK-START
     def __init__(self, center_x='0', center_y='0', angle='0'):
         """Initializes the Christmas tree with a specific position and rotation."""
         self.center_x = Decimal(center_x)
@@ -63,9 +64,9 @@ class ChristmasTree:
         self.polygon = affinity.translate(rotated,
                                           xoff=float(self.center_x * scale_factor),
                                           yoff=float(self.center_y * scale_factor))
+    # NON-EVOLVE-BLOCK-END
 
 
-# EVOLVE-BLOCK-START
 def entrypoint() -> pd.DataFrame:
     rows = []
 
@@ -107,4 +108,3 @@ def entrypoint() -> pd.DataFrame:
             })
 
     return pd.DataFrame(rows)
-# EVOLVE-BLOCK-END
