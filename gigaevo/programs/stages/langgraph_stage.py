@@ -37,7 +37,6 @@ class LangGraphStage(Stage):
 
     InputsModel = VoidInput
     OutputModel = VoidOutput
-    cacheable: bool = True
 
     def __init__(
         self,

@@ -1,38 +1,52 @@
-You are an expert in evolutionary programming analyzing code transitions between parent-child programs.
+You are an expert analyzing evolutionary code transitions. Your goal: extract **transferable lessons** from parent→child changes that can guide future mutations.
 
-TASK: Produce 3-5 JSON insights analyzing what strategies were used in code changes and how they contributed to observed metric/error changes.
+TASK: Produce 3-5 JSON insights explaining WHY specific code changes caused the observed metric changes.
 
-STRATEGY TYPES (describing what the child did):
-- "imitation": preserved/extended parent logic (kept successful patterns)
-- "avoidance": removed/bypassed parent logic (eliminated failing patterns)
-- "generalization": added abstraction/parameterization (made approach more flexible)
-- "exploration": introduced novel mechanisms (tried completely new approaches)
+STRATEGY TYPES (pick the most precise):
+- "imitation": Kept/extended working logic (e.g., preserved edge-case handling, retained a successful algorithm)
+- "avoidance": Removed/bypassed failing logic (e.g., eliminated a buggy heuristic, removed dead code paths)
+- "generalization": Added flexibility (e.g., parameterized constants, unified duplicate logic, abstracted patterns)
+- "exploration": Introduced novel approach (e.g., new algorithm, different data structure, alternative strategy)
+- "refinement": Tuned existing approach (e.g., adjusted thresholds, changed loop bounds, modified constants)
 
-ANALYSIS FOCUS:
-- **Causal mechanisms**: How specific code changes led to metric delta
-- **Risk assessment**: Whether changes introduced fragility or improved robustness
-- **Success patterns**: What made positive changes work and negative changes fail
+ANALYSIS FRAMEWORK - For each significant code change, explain:
+1. **WHAT changed**: The specific code modification (reference diff hunks)
+2. **WHY it helped/hurt**: The underlying mechanism (algorithmic, logical, or structural reason)
+3. **TRANSFERABLE LESSON**: What principle can be applied to future mutations
 
-REQUIREMENTS:
-- Each insight: JSON object with "strategy" and "description" (≤30 words)
-- Reference diff blocks (e.g., "(@@ -32,7 +33,9 @@)") when possible
-- Cite concrete evidence (code lines, metric deltas, error messages)
-- Focus on causal relationships with **quantified impact** when available
-- One focused change per insight - don't combine multiple modifications
+DEPTH REQUIREMENTS:
+- Go beyond surface descriptions ("added a loop") to root causes ("loop enables batch processing, reducing API overhead")
+- Connect code structure to algorithmic behavior
+- Identify **fragile vs robust** patterns: did the change improve generalization or overfit to specific cases?
+- When metrics improved, explain the mechanism; when they degraded, explain what was lost
 
-EXAMPLE:
+FORMAT:
+- Each insight: JSON with "strategy" and "description" (≤50 words)
+- Reference diff blocks: "(@@ -X,Y +A,B @@)"
+- Include quantified impact when metrics changed
+
+EXAMPLES:
 [
   {
-    "strategy": "imitation",
-    "description": "(@@ -45,10 +47,12 @@) Preserved parent's <text>, maintaining <text>; explains +0.012 improvement."
+    "strategy": "refinement",
+    "description": "(@@ -45,3 +47,5 @@) Changed threshold from 0.5 to 0.3, catching 20% more edge cases where input values cluster near boundary; correlates with +0.018 accuracy gain."
   },
-  {    "strategy": "avoidance",
-    "description": "(@@ -78,6 +0,0 @@) Removed <text>, eliminating <text>."
+  {
+    "strategy": "avoidance",
+    "description": "(@@ -78,8 +0,0 @@) Removed greedy selection that was discarding valid candidates too early, allowing exhaustive evaluation; eliminated ValueError on sparse inputs."
+  },
+  {
+    "strategy": "exploration",
+    "description": "(@@ -22,4 +24,12 @@) Replaced O(n²) nested loops with sorted-merge approach, trading memory for speed; explains +0.031 efficiency but risks memory pressure on large inputs."
+  },
+  {
+    "strategy": "imitation",
+    "description": "(@@ -91,2 +95,2 @@) Preserved parent's fallback return for empty input; maintaining robustness that prevented 3 test failures."
   },
   {
     "strategy": "generalization",
-    "description": "(@@ -22,1 +24,3 @@) Parameterized <text>, enabling <text>; correlates with +0.007 gain."
+    "description": "(@@ -15 @@) + (@@ -67 @@) Added helper function and replaced 3 inline calculations with calls to it; reduces duplication but single point of failure if helper has bugs."
   }
 ]
 
-Respond with only valid JSON, no commentary.
+Respond with only valid JSON array, no commentary.

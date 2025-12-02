@@ -26,6 +26,10 @@ from gigaevo.programs.core_types import (
     StageIO,
     VoidOutput,
 )
+from gigaevo.programs.stages.cache_handler import (
+    DEFAULT_CACHE,
+    CacheHandler,
+)
 
 if TYPE_CHECKING:
     from gigaevo.programs.program import Program
@@ -51,7 +55,7 @@ class Stage:
 
     Public surface:
         - timeout: float
-        - cacheable: ClassVar[bool]
+        - cache_handler: CacheHandler (controls caching behavior)
         - attach_inputs(data: Mapping[str, Any]) -> None
         - params: InputsModel            (read-only; validated)
         - execute(program) -> ProgramStageResult
@@ -64,7 +68,9 @@ class Stage:
 
     InputsModel: ClassVar[Type[I]]
     OutputModel: ClassVar[Type[O]]
-    cacheable: ClassVar[bool] = True
+
+    # Caching behavior
+    cache_handler: ClassVar[CacheHandler] = DEFAULT_CACHE
 
     _required_names: ClassVar[list[str]]
     _optional_names: ClassVar[list[str]]
@@ -95,10 +101,25 @@ class Stage:
         self.timeout = timeout
         self._raw_inputs: dict[str, Any] = {}
         self._params_obj: Optional[I] = None
+        self._current_inputs_hash: Optional[str] = None
 
     @property
     def stage_name(self) -> str:
         return self.__class__.__name__
+
+    def get_cache_handler(self) -> CacheHandler:
+        """Get the cache handler for this stage."""
+        return self.__class__.cache_handler
+
+    def compute_inputs_hash(self) -> str | None:
+        """Compute hash of current inputs for cache invalidation.
+
+        Override in subclasses to customize what's included in the hash.
+        Return None to disable input-hash caching for this stage.
+
+        Default implementation uses params.content_hash.
+        """
+        return self.params.content_hash
 
     @classmethod
     def required_fields(cls) -> list[str]:
@@ -151,6 +172,9 @@ class Stage:
         t0 = time.monotonic()
         logger.info(f"[{self.stage_name}] Executing for {program.id[:8]}")
 
+        # Compute inputs hash before execution (for cache handler)
+        self._current_inputs_hash = self.compute_inputs_hash()
+
         try:
             self._ensure_required_present()
             result = await asyncio.wait_for(self.compute(program), timeout=self.timeout)
@@ -161,6 +185,10 @@ class Stage:
                     result.started_at = started_at
                 if result.finished_at is None and result.status in FINAL_STATES:
                     result.finished_at = datetime.now(timezone.utc)
+                # Let cache handler augment result
+                result = self.get_cache_handler().on_complete(
+                    result, self._current_inputs_hash
+                )
                 logger.debug(
                     "[{stage}] ok (pass-through) in {dur:.2f}s",
                     stage=self.stage_name,
@@ -172,6 +200,9 @@ class Stage:
             if result is None:
                 if self.__class__.OutputModel is VoidOutput:
                     ok = ProgramStageResult.success(started_at=started_at)
+                    ok = self.get_cache_handler().on_complete(
+                        ok, self._current_inputs_hash
+                    )
                     logger.debug(
                         "[{stage}] ok (void) in {dur:.2f}s",
                         stage=self.stage_name,
@@ -190,6 +221,7 @@ class Stage:
                 )
 
             ok = ProgramStageResult.success(output=result, started_at=started_at)
+            ok = self.get_cache_handler().on_complete(ok, self._current_inputs_hash)
             logger.debug(
                 "[{stage}] ok in {dur:.2f}s",
                 stage=self.stage_name,
@@ -210,6 +242,7 @@ class Stage:
         finally:
             self._raw_inputs.clear()
             self._params_obj = None
+            self._current_inputs_hash = None
 
     async def compute(self, program: "Program") -> O | ProgramStageResult | None:
         """Override in subclasses."""

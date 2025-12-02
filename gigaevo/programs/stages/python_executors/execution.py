@@ -46,7 +46,6 @@ class PythonCodeExecutor(Stage):
 
     InputsModel = VoidInput
     OutputModel = Box[Any]
-    cacheable = True
 
     def __init__(
         self,

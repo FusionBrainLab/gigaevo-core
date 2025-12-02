@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
+import pickle
 import traceback
 from typing import Any, Optional
 
@@ -11,9 +13,16 @@ from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
 
 
 class StageIO(BaseModel):
-    """Strict base for stage inputs/outputs (used by stage classes & DAG typing)."""
+    """Strict base for stage inputs/outputs (used by stage classes & DAG typing).
+
+    Provides a `content_hash` property for cache invalidation.
+    """
 
     model_config = {"extra": "forbid", "arbitrary_types_allowed": True}
+
+    @property
+    def content_hash(self) -> str:
+        return hashlib.sha256(pickle.dumps(self.model_dump())).hexdigest()[:16]
 
 
 class VoidInput(StageIO):
@@ -78,6 +87,10 @@ class ProgramStageResult(BaseModel):
     error: Optional[StageError] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    input_hash: Optional[str] = Field(
+        None,
+        description="Hash of inputs when stage was executed (for cache invalidation)",
+    )
 
     def duration_seconds(self) -> Optional[float]:
         if self.started_at and self.finished_at:

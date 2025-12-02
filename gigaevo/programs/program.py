@@ -152,12 +152,17 @@ class Program(BaseModel):
     @classmethod
     def from_mutation_spec(cls, spec: "MutationSpec") -> "Program":
         name = " -> ".join(p.id for p in spec.parents) + f" (mutation: {spec.name})"
-        return cls.create_child(
+        program = cls.create_child(
             parents=spec.parents,
             code=spec.code,
             mutation=spec.name,
             name=name,
         )
+        # Store mutation metadata (structured output) if available
+        if spec.metadata:
+            for key, value in spec.metadata.items():
+                program.set_metadata(key, value)
+        return program
 
     def add_metrics(self, metrics: Mapping[str, float | int]) -> None:
         for k, v in metrics.items():

@@ -18,6 +18,7 @@ from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.collector import EvolutionaryStatistics
 from gigaevo.programs.stages.common import FloatDictContainer, StageIO, StringContainer
 from gigaevo.programs.stages.insights import InsightsOutput
@@ -57,7 +58,7 @@ class MutationContextStage(Stage):
 
     InputsModel = MutationContextInputs
     OutputModel = StringContainer
-    cacheable: bool = False
+    cache_handler = NO_CACHE
 
     def __init__(self, *, metrics_context: MetricsContext, **kwargs):
         super().__init__(**kwargs)

@@ -32,9 +32,13 @@ class ProgramStateManager:
         """Mark a stage as RUNNING and persist."""
         async with self._lock_for(program.id):
             ts = started_at or datetime.now(timezone.utc)
+            # Preserve input_hash from existing result if present
+            existing = program.stage_results.get(stage_name)
+            input_hash = existing.input_hash if existing else None
             program.stage_results[stage_name] = ProgramStageResult(
                 status=StageState.RUNNING,
                 started_at=ts,
+                input_hash=input_hash,
             )
             await self.storage.update(program)
 

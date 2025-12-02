@@ -18,7 +18,6 @@ class StageInfo:
     input_types: dict[str, str]  # Mapping of input name to type annotation string
     output_fields: list[str]  # Fields from OutputModel
     output_model_name: str  # Name of the OutputModel class
-    cacheable: bool  # Whether this stage's results can be cached
 
 
 class StageRegistry:
@@ -90,9 +89,6 @@ class StageRegistry:
             output_model_name = stage_class.OutputModel.__name__
             output_fields = list(stage_class.OutputModel.model_fields.keys())
 
-            # Extract cacheable flag
-            cacheable = stage_class.cacheable
-
             # Auto-detect import path if not provided
             final_import_path = import_path or f"{stage_class.__module__}.{class_name}"
 
@@ -106,7 +102,6 @@ class StageRegistry:
                 input_types=input_types,
                 output_fields=output_fields,
                 output_model_name=output_model_name,
-                cacheable=cacheable,
             )
 
             return stage_class

@@ -1,27 +1,45 @@
 TASK: {task_description}
 
-METRIC TARGET: {metric_name} ({metric_description})
-Observed delta (child - parent): {delta:+.5f}
+METRIC: {metric_name} ({metric_description})
+Direction: {higher_is_better_text}
+Observed delta: {delta:+.5f} → {delta_interpretation}
 
 ADDITIONAL METRICS:
 {additional_metrics}
 
-ERROR CHANGES:
-Parent Errors: {parent_errors}
-Child Errors: {child_errors}
+ERRORS:
+Parent: {parent_errors}
+Child: {child_errors}
+
+---
 
 **ANALYSIS INSTRUCTIONS:**
-Analyze what strategies the child used compared to the parent and how these changes contributed to the metric delta or error changes.
 
-For POSITIVE deltas (+): Focus on what successful patterns were preserved, what failing patterns were removed, or what new mechanisms were introduced that led to improvement.
+Analyze the diff for **logical changes** (one insight per logical change). Related hunks implementing the same modification should be grouped into a single insight. For each logical change, explain:
 
-For NEGATIVE deltas (-): Focus on what successful patterns were lost, what problematic patterns were introduced, or what mechanisms failed.
+1. **The mechanism**: WHY did this specific change affect the metric? (e.g., "reduced exploration pressure → premature convergence", "tighter bounds → missed edge cases", "batch processing → amortized overhead")
 
-For ERROR changes: Identify how code modifications resolved errors (positive) or introduced new failures (negative).
+2. **The trade-off**: What did the change gain vs lose? (e.g., "gained stability but lost adaptability", "faster convergence but narrower search")
+
+3. **Actionable lesson**: What should future mutations learn? (e.g., "preserve fallback logic when optimizing", "avoid clamping near optimal regions")
+
+**REGRESSION CHECKLIST** (use when performance degraded):
+- Did a successful heuristic get weakened? (threshold changes, bound restrictions)
+- Did exploration get reduced? (smaller populations, tighter constraints, fewer iterations)
+- Did a useful code path get removed or bypassed?
+- Did new code introduce a bottleneck or failure mode?
+
+**QUALITY BAR:**
+❌ BAD: "Changed mutation rate from 0.65 to 0.3" (just restates the diff)
+✅ GOOD: "Halving mutation rate (0.65→0.3) reduced diversity injection, causing premature convergence before reaching high-fitness basin; lesson: preserve mutation > 0.5 for rugged fitness landscapes"
+
+Reference hunks by their headers. Group related hunks (e.g., "(@@ -12 @@) + (@@ -45 @@)") when they implement one logical change.
+
+---
 
 {diff_blocks}
 
-PARENT PROGRAM (reference):
+PARENT CODE (reference):
 ```python
 {parent_code}
 ```

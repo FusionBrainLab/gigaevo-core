@@ -8,6 +8,7 @@ from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.evolution.mutation.utils import _DocstringRemover
 from gigaevo.exceptions import MutationError
 from gigaevo.llm.agents.factories import create_mutation_agent
+from gigaevo.llm.agents.mutation import MUTATION_OUTPUT_METADATA_KEY
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.program import Program
@@ -118,10 +119,19 @@ class LLMMutationOperator(MutationOperator):
                 )
                 final_code = self._canonicalize_code(final_code)
 
+            # Extract structured mutation metadata
+            structured_output = result.get("structured_output")
+            mutation_metadata = {}
+            if structured_output:
+                mutation_metadata[MUTATION_OUTPUT_METADATA_KEY] = structured_output
+                archetype = result.get("archetype", "unknown")
+                logger.debug(f"[LLMMutationOperator] Mutation archetype: {archetype}.")
+
             mutation_spec = MutationSpec(
                 code=final_code,
                 parents=selected_parents,
                 name=f"LLM Mutation: {self.mutation_mode} | {self.llm_wrapper.__class__.__name__}",
+                metadata=mutation_metadata,
             )
             return mutation_spec
         except Exception as e:

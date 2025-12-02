@@ -18,6 +18,7 @@ from gigaevo.programs.core_types import (
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import ListOf
 from gigaevo.programs.stages.langgraph_stage import LangGraphStage
 from gigaevo.programs.stages.stage_registry import StageRegistry
@@ -44,7 +45,6 @@ class LineageStage(LangGraphStage):
 
     InputsModel = VoidInput
     OutputModel = LineageAnalysesOutput  # Output: list of TransitionAnalysis from parent<i> to child
-    cacheable: bool = True
 
     def __init__(
         self,
@@ -85,7 +85,7 @@ class LineagesToDescendants(Stage):
 
     InputsModel = LineagesToDescendantsInputs
     OutputModel = TransitionAnalysisList
-    cacheable = False  # descendants and their lineage may evolve over time
+    cache_handler = NO_CACHE  # descendants and their lineage may evolve over time
 
     def __init__(
         self, *, storage: ProgramStorage, source_stage_name: str, **kwargs: Any
@@ -145,7 +145,7 @@ class LineagesFromAncestors(Stage):
 
     InputsModel = LineagesFromAncestorsInputs
     OutputModel = TransitionAnalysisList
-    cacheable = False
+    cache_handler = NO_CACHE
 
     def __init__(
         self, *, storage: ProgramStorage, source_stage_name: str, **kwargs: Any

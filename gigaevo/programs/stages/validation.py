@@ -31,7 +31,6 @@ class ValidateCodeStage(Stage):
 
     InputsModel = VoidInput
     OutputModel = CodeValidationOutput
-    cacheable: bool = True
 
     def __init__(
         self,
