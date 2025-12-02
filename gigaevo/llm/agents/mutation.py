@@ -13,6 +13,29 @@ from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.program import Program
 
 
+class MutationStructuredOutput(BaseModel):
+    """Structured output from the mutation LLM.
+
+    Simplified schema to reduce cognitive overhead and let LLM focus on code quality.
+    """
+
+    archetype: str = Field(
+        description="Selected evolutionary archetype (e.g., 'Precision Optimization', 'Computational Reinvention')"
+    )
+    justification: str = Field(
+        description="2-3 sentences: which insights acted on, strategy used, expected mechanism of improvement"
+    )
+    insights_used: list[str] = Field(
+        default_factory=list,
+        description="Flat list of insight strings that were acted on (verbatim from input)",
+    )
+    code: str = Field(description="The mutated Python program code")
+
+
+# Metadata key for storing structured mutation output
+MUTATION_OUTPUT_METADATA_KEY = "mutation_output"
+
+
 class MutationPromptFields(BaseModel):
     """
     Example template:
@@ -39,6 +62,7 @@ class MutationState(TypedDict):
     user_prompt: NotRequired[str]
     # Fields set during response parsing (optional initially)
     parsed_output: NotRequired[dict[str, Any]]
+    structured_output: NotRequired[MutationStructuredOutput]
     error: NotRequired[str]
 
 
@@ -47,13 +71,14 @@ class MutationAgent(LangGraphAgent):
 
     This agent handles the complete workflow of mutating programs:
     1. Build prompt from parent programs using pre-formatted mutation context
-    2. Call LLM to generate mutated code
-    3. Extract and parse the code (handling diffs if needed)
+    2. Call LLM to generate structured output (archetype, justification, code)
+    3. Extract and parse the structured output (handling diffs if needed)
 
     Attributes:
         mutation_mode: "rewrite" or "diff"
         system_prompt: System prompt
         user_prompt_template: User prompt template string
+        structured_llm: LLM configured for structured output
     """
 
     StateSchema = MutationState
@@ -77,6 +102,9 @@ class MutationAgent(LangGraphAgent):
         self.system_prompt = system_prompt
         self.user_prompt_template = user_prompt_template
 
+        # Create structured output LLM
+        self.structured_llm = llm.with_structured_output(MutationStructuredOutput)
+
         super().__init__(llm)
 
     async def arun(self, input: list[Program], mutation_mode: str) -> dict:
@@ -87,7 +115,7 @@ class MutationAgent(LangGraphAgent):
             mutation_mode: Mutation mode
 
         Returns:
-            Dict with 'code', 'response', and other mutation results
+            Dict with 'code', 'structured_output', and other mutation results
         """
         initial_state: MutationState = {
             "input": input,
@@ -100,6 +128,34 @@ class MutationAgent(LangGraphAgent):
 
         final_state = await self.graph.ainvoke(initial_state)
         return final_state.get("parsed_output", {})
+
+    async def acall_llm(self, state: MutationState) -> MutationState:
+        """Call LLM with structured output.
+
+        Uses the structured LLM to get a MutationStructuredOutput response.
+
+        Args:
+            state: State with messages field
+
+        Returns:
+            Updated state with llm_response and structured_output fields
+        """
+        try:
+            structured_response = await self.structured_llm.ainvoke(state["messages"])
+            state["llm_response"] = structured_response
+            state["structured_output"] = structured_response
+
+            logger.debug(
+                f"[MutationAgent] Received structured output with archetype: "
+                f"{structured_response.archetype}"
+            )
+
+        except Exception as e:
+            logger.error(f"[MutationAgent] Structured LLM call failed: {e}")
+            state["error"] = str(e)
+            state["llm_response"] = None
+
+        return state
 
     def build_prompt(self, state: MutationState) -> MutationState:
         """Build mutation prompt from parent programs.
@@ -160,51 +216,77 @@ class MutationAgent(LangGraphAgent):
         return state
 
     def parse_response(self, state: MutationState) -> MutationState:
-        """Parse LLM response to extract code.
+        """Parse LLM structured response to extract code and metadata.
 
-        Handles both rewrite mode (extract code block) and diff mode
-        (extract and apply diff).
+        Handles both rewrite mode (direct code from structured output) and diff mode
+        (extract and apply diff from code field).
 
         Args:
-            state: Current state with llm_response field
+            state: Current state with llm_response (structured output) field
 
         Returns:
-            Updated state with parsed_output field containing final code
+            Updated state with parsed_output field containing final code and metadata
         """
-        llm_response = state["llm_response"]
-        response_text = llm_response.content if llm_response else ""
+        structured_output: MutationStructuredOutput | None = state.get(
+            "structured_output"
+        )
+
+        if structured_output is None:
+            error_msg = state.get("error", "No structured output received")
+            logger.error(f"[MutationAgent] No structured output: {error_msg}")
+            state["parsed_output"] = {
+                "code": "",
+                "structured_output": None,
+                "error": error_msg,
+            }
+            return state
 
         try:
+            # Get code from structured output
+            code_from_llm = structured_output.code
+
             if state["mutation_mode"] == "diff":
-                # Extract diff and apply to parent
+                # Apply diff to parent code
                 parents = state["input"]
                 if len(parents) != 1:
                     raise ValueError("Diff mode requires exactly 1 parent")
 
                 parent_code = parents[0].code
-                final_code = self._apply_diff_and_extract(parent_code, response_text)
+                # The code field contains the diff in diff mode
+                final_code = self._apply_diff_and_extract(parent_code, code_from_llm)
             else:
-                # Extract code block directly
-                final_code = self._extract_code_block(response_text)
+                # In rewrite mode, clean up the code (remove any remaining fences)
+                final_code = self._extract_code_block(code_from_llm)
+                # If no code block markers found, use as-is
+                if final_code == code_from_llm.strip():
+                    final_code = code_from_llm.strip()
 
             state["final_code"] = final_code
+
+            # Convert structured output to dict for storage
+            structured_dict = structured_output.model_dump()
+
             state["parsed_output"] = {
                 "code": final_code,
-                "response": response_text,
+                "structured_output": structured_dict,
+                "archetype": structured_output.archetype,
+                "justification": structured_output.justification,
+                "insights_used": structured_output.insights_used,
             }
 
             logger.debug(
-                f"[MutationAgent] Extracted code "
-                f"({len(final_code)} chars from {len(response_text)} chars response)"
+                f"[MutationAgent] Extracted code ({len(final_code)} chars) "
+                f"with archetype: {structured_output.archetype}"
             )
 
         except Exception as e:
-            logger.error(f"[MutationAgent] Failed to parse response: {e}")
+            logger.error(f"[MutationAgent] Failed to parse structured response: {e}")
             state["error"] = str(e)
-            # Ensure parsed_output is set even on error to prevent KeyError downstream
             state["parsed_output"] = {
                 "code": "",
-                "response": response_text,
+                "structured_output": (
+                    structured_output.model_dump() if structured_output else None
+                ),
                 "error": str(e),
             }
 

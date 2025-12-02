@@ -17,6 +17,7 @@ from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import StringList
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
@@ -34,7 +35,7 @@ class RelatedCollectorBase(Stage):
 
     InputsModel = VoidInput
     OutputModel = VoidOutput
-    cacheable: bool = False  # lineage-derived sets usually change over time
+    cache_handler = NO_CACHE  # lineage-derived sets usually change over time
 
     def __init__(self, *, storage: ProgramStorage, **kwargs: Any):
         super().__init__(**kwargs)
@@ -63,7 +64,7 @@ class ProgramIdsCollector(RelatedCollectorBase):
 
 @StageRegistry.register(description="Collect ids of descendant Programs")
 class DescendantProgramIds(ProgramIdsCollector):
-    cacheable: bool = False
+    cache_handler = NO_CACHE
 
     def __init__(self, *, selector: AncestrySelector, **kwargs: Any):
         super().__init__(**kwargs)
@@ -81,7 +82,7 @@ class DescendantProgramIds(ProgramIdsCollector):
 
 @StageRegistry.register(description="Collect ids of ancestor Programs")
 class AncestorProgramIds(ProgramIdsCollector):
-    cacheable: bool = False
+    cache_handler = NO_CACHE
 
     def __init__(self, *, selector: AncestrySelector, **kwargs: Any):
         super().__init__(**kwargs)

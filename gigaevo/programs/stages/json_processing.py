@@ -29,7 +29,6 @@ class MergeDictStage(Stage, Generic[K, V]):
 
     InputsModel = MergeDictInputs[Any, Any]
     OutputModel = Box[dict[Any, Any]]
-    cacheable: bool = True
 
     async def compute(self, program: Program) -> StageIO:
         first = self.params.first.data
@@ -64,7 +63,7 @@ class MergeDictStage(Stage, Generic[K, V]):
             ns["__doc__"] = {cls.__doc__}
             ns["InputsModel"] = MergeDictInputs[K_t, V_t]
             ns["OutputModel"] = Box[dict[K_t, V_t]]
-            ns["cacheable"] = cls.cacheable
+            ns["cache_handler"] = cls.cache_handler
             ns["compute"] = cls.compute  # reuse implementation
 
         return types.new_class(cls.__name__, (cls,), exec_body=_exec_body)
@@ -114,7 +113,6 @@ class MergeStrFloatDict(Stage):
 
     InputsModel = StrFloatDictInputs
     OutputModel = Box[dict[str, float]]
-    cacheable: bool = True
 
     async def compute(self, program: Program) -> StageIO:
         first = self.params.first.data
@@ -145,7 +143,6 @@ class MergeStrFloatDict(Stage):
 class ParseJSONStage(Stage):
     InputsModel = StringContainer
     OutputModel = AnyContainer
-    cacheable: bool = True
 
     async def compute(self, program: Program) -> StageIO:
         s = self.params.data
@@ -163,7 +160,6 @@ class ParseJSONStage(Stage):
 class StringifyJSONStage(Stage):
     InputsModel = AnyContainer
     OutputModel = StringContainer
-    cacheable: bool = True
 
     def __init__(self, *, indent: int | None = None, **kwargs):
         super().__init__(**kwargs)

@@ -204,12 +204,22 @@ class LineageAgent(LangGraphAgent):
 
         metric_name = self.metrics_formatter.context.get_primary_key()
         metric_description = self.metrics_formatter.context.get_description(metric_name)
+        higher_is_better = self.metrics_formatter.context.is_higher_better(metric_name)
+
+        # Compute interpretation based on direction
+        higher_is_better_text = (
+            "↑ higher is better" if higher_is_better else "↓ lower is better"
+        )
+        is_improvement = (delta > 0) == higher_is_better
+        delta_interpretation = "IMPROVEMENT ✓" if is_improvement else "REGRESSION ✗"
 
         user_prompt = self.user_prompt_template.format(
             task_description=self.task_description,
             metric_name=metric_name,
             metric_description=metric_description,
             delta=delta,
+            higher_is_better_text=higher_is_better_text,
+            delta_interpretation=delta_interpretation,
             parent_errors=parent_errors,
             child_errors=child_errors,
             additional_metrics=additional_metrics_str,

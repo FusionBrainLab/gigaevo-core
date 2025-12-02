@@ -37,7 +37,6 @@ class EnsureMetricsStage(Stage):
 
     InputsModel = EnsureMetricsInputs
     OutputModel = FloatDictContainer
-    cacheable: bool = True
 
     def __init__(
         self,
@@ -124,7 +123,6 @@ class NormalizeMetricsStage(Stage):
 
     InputsModel = VoidInput
     OutputModel = FloatDictContainer
-    cacheable: bool = True
 
     def __init__(
         self,

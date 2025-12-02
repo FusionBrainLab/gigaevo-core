@@ -24,7 +24,6 @@ class LLMScoreStage(LangGraphStage):
 
     InputsModel = VoidInput
     OutputModel = Box[dict[str, float]]
-    cacheable: bool = True
 
     def __init__(
         self,

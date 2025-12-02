@@ -92,9 +92,6 @@ class _Topology:
     preds_by_dest: Dict[str, List[str]]
     exec_rules: Dict[str, StageTransitionRule]
 
-    def is_cacheable(self, stage_name: str) -> bool:
-        return self.nodes[stage_name].cacheable
-
     def declared_inputs(self, stage_name: str) -> Tuple[Set[str], Set[str]]:
         st = self.nodes[stage_name].__class__
         return set(st._required_names), set(st._optional_names)
@@ -225,27 +222,6 @@ class DAGAutomata(BaseModel):
                     f"Stage '{stage_name}' missing required inputs: {sorted(missing)}"
                 )
 
-        # Validate cacheability safety
-        for e in data_flow_edges:
-            dst_cls = stage_classes[e.destination_stage]
-            src_cls = stage_classes[e.source_stage]
-            if dst_cls.cacheable and not src_cls.cacheable:
-                errors.append(
-                    f"Cacheability violation: cacheable '{e.destination_stage}' depends on "
-                    f"non-cacheable '{e.source_stage}' via data-flow"
-                )
-
-        execution_order_deps = execution_order_deps or {}
-        for stage_name, deps in execution_order_deps.items():
-            dst_cls = stage_classes[stage_name]
-            for dep in deps:
-                src_cls = stage_classes[dep.stage_name]
-                if dst_cls.cacheable and not src_cls.cacheable:
-                    errors.append(
-                        f"Cacheability violation: cacheable '{stage_name}' depends on "
-                        f"non-cacheable '{dep.stage_name}' via execution-order"
-                    )
-
         # ---------- DAG must be acyclic (data + exec deps) ----------
         G = nx.DiGraph()
         G.add_nodes_from(stage_classes.keys())
@@ -335,7 +311,6 @@ class DAGAutomata(BaseModel):
     @dataclass(frozen=True)
     class _StatusView:
         res: Optional[ProgramStageResult]
-        cacheable: bool
         finalized: bool
         completed: bool
         finalized_this_run: bool
@@ -346,13 +321,11 @@ class DAGAutomata(BaseModel):
     ) -> "_StatusView":
         assert self.topology is not None
         res = program.stage_results.get(stage_name)
-        cacheable = self.topology.is_cacheable(stage_name)
         finalized = bool(res and res.status in FINAL_STATES)
         completed = bool(res and res.status == StageState.COMPLETED)
         finished_now = stage_name in finished_this_run
         return self._StatusView(
             res=res,
-            cacheable=cacheable,
             finalized=finalized,
             completed=completed,
             finalized_this_run=finished_now and finalized,
@@ -376,20 +349,12 @@ class DAGAutomata(BaseModel):
         """Exec-order gate for a single dependency → (state, reason)."""
         sv = self._status_view(program, dep.stage_name, finished_this_run)
         if dep.condition == "always":
-            if sv.cacheable:
-                if sv.finalized:
-                    return (self.GateState.READY, "")
-                return (
-                    self.GateState.WAIT,
-                    f"exec: wait FINAL of {dep.stage_name} (cacheable; status={sv.status_name})",
-                )
-            else:
-                if sv.finalized_this_run:
-                    return (self.GateState.READY, "")
-                return (
-                    self.GateState.WAIT,
-                    f"exec: wait FINAL of {dep.stage_name} in this run (non-cacheable; status={sv.status_name})",
-                )
+            if sv.finalized_this_run:
+                return (self.GateState.READY, "")
+            return (
+                self.GateState.WAIT,
+                f"exec: wait FINAL of {dep.stage_name} in this run",
+            )
 
         expected_ok = {
             "success": sv.completed,
@@ -400,33 +365,17 @@ class DAGAutomata(BaseModel):
             ),
         }[dep.condition]
 
-        if sv.cacheable:
-            if sv.res is None or sv.res.status in (
-                StageState.PENDING,
-                StageState.RUNNING,
-            ):
-                return (
-                    self.GateState.WAIT,
-                    f"exec: {dep.stage_name}[{dep.condition}] pending (cacheable; status={sv.status_name})",
-                )
-            if expected_ok:
-                return (self.GateState.READY, "")
+        if not sv.finalized_this_run:
             return (
-                self.GateState.IMPOSSIBLE,
-                f"exec: {dep.stage_name}[{dep.condition}] not satisfied historically (status={sv.status_name})",
+                self.GateState.WAIT,
+                f"exec: {dep.stage_name}[{dep.condition}] pending this run (status={sv.status_name})",
             )
-        else:
-            if not sv.finalized_this_run:
-                return (
-                    self.GateState.WAIT,
-                    f"exec: {dep.stage_name}[{dep.condition}] pending this run (status={sv.status_name})",
-                )
-            if expected_ok:
-                return (self.GateState.READY, "")
-            return (
-                self.GateState.IMPOSSIBLE,
-                f"exec: {dep.stage_name}[{dep.condition}] failed this run (status={sv.status_name})",
-            )
+        if expected_ok:
+            return (self.GateState.READY, "")
+        return (
+            self.GateState.IMPOSSIBLE,
+            f"exec: {dep.stage_name}[{dep.condition}] failed this run (status={sv.status_name})",
+        )
 
     def _dataflow_gate(
         self, program: Program, stage_name: str, finished_this_run: set[str]
@@ -450,53 +399,30 @@ class DAGAutomata(BaseModel):
             e = edges[0]  # build() prevents duplicates
             sv = self._status_view(program, e.source_stage, finished_this_run)
 
-            if sv.cacheable:
-                if sv.completed:
-                    continue
-                if sv.finalized:
-                    return (
-                        self.GateState.IMPOSSIBLE,
-                        [
-                            f"data: '{inp}' <- {e.source_stage} finalized as {sv.status_name} (cacheable)"
-                        ],
-                    )
-                reasons.append(
-                    f"data: '{inp}' <- {e.source_stage} needs COMPLETED (cacheable; status={sv.status_name})"
+            if sv.finalized_this_run and sv.completed:
+                continue
+            if sv.finalized_this_run and not sv.completed:
+                return (
+                    self.GateState.IMPOSSIBLE,
+                    [
+                        f"data: '{inp}' <- {e.source_stage} finalized as {sv.status_name} this run (non-cacheable)"
+                    ],
                 )
-            else:
-                # must COMPLETE in this run
-                if sv.finalized_this_run and sv.completed:
-                    continue
-                if sv.finalized_this_run and not sv.completed:
-                    return (
-                        self.GateState.IMPOSSIBLE,
-                        [
-                            f"data: '{inp}' <- {e.source_stage} finalized as {sv.status_name} this run (non-cacheable)"
-                        ],
-                    )
-                reasons.append(
-                    f"data: '{inp}' <- {e.source_stage} needs COMPLETED this run (non-cacheable; status={sv.status_name})"
-                )
+            reasons.append(
+                f"data: '{inp}' <- {e.source_stage} needs COMPLETED this run (non-cacheable; status={sv.status_name})"
+            )
 
-        # Optional inputs: when wired, wait for FINAL; never "impossible"
         for inp in sorted(optional):
             edges = edges_by_input.get(inp, [])
             if not edges:
                 continue
             for e in edges:
                 sv = self._status_view(program, e.source_stage, finished_this_run)
-                if sv.cacheable:
-                    if sv.finalized:
-                        continue
-                    reasons.append(
-                        f"data: optional '{inp}' <- {e.source_stage} wait FINAL (cacheable; status={sv.status_name})"
-                    )
-                else:
-                    if sv.finalized_this_run:
-                        continue
-                    reasons.append(
-                        f"data: optional '{inp}' <- {e.source_stage} wait FINAL this run (non-cacheable; status={sv.status_name})"
-                    )
+                if sv.finalized_this_run:
+                    continue
+                reasons.append(
+                    f"data: optional '{inp}' <- {e.source_stage} wait FINAL this run (non-cacheable; status={sv.status_name})"
+                )
 
         if reasons:
             return (self.GateState.WAIT, reasons)
@@ -538,28 +464,8 @@ class DAGAutomata(BaseModel):
     def _compute_done_sets(
         self, program: Program, finished_this_run: set[str]
     ) -> tuple[set[str], set[str]]:
-        """Return (effective_done, effective_skipped) for checks.
-
-        - Cacheable: any FINAL historical result counts as done.
-        - Non-cacheable: only stages finalized in THIS run count as done.
-        """
-        assert self.topology is not None
-
-        cacheable_done: set[str] = set()
-        cacheable_skipped: set[str] = set()
-
-        for name, res in (program.stage_results or {}).items():
-            if name not in self.topology.nodes:
-                continue
-            if self.topology.is_cacheable(name) and res.status in FINAL_STATES:
-                cacheable_done.add(name)
-                if res.status == StageState.SKIPPED:
-                    cacheable_skipped.add(name)
-
-        effective_done = cacheable_done | (
-            finished_this_run & set(self.topology.nodes.keys())
-        )
-        effective_skipped = cacheable_skipped | {
+        effective_done = finished_this_run & set(self.topology.nodes.keys())
+        effective_skipped = {
             s
             for s in finished_this_run
             if (
@@ -585,15 +491,29 @@ class DAGAutomata(BaseModel):
         for stage_name in sorted(all_names - running - launched_this_run - skipped):
             st = self.topology.nodes[stage_name]
             res = program.stage_results.get(stage_name)
-            # Cacheables: NEVER re-run if FINAL result exists
-            if st.cacheable and res and res.status in FINAL_STATES:
-                continue
+            cache_handler = st.get_cache_handler()
+
+            if res and res.status in FINAL_STATES:
+                # Build inputs to compute hash for cache check
+                inputs_hash = None
+                try:
+                    named_inputs = self.build_named_inputs(program, stage_name)
+                    st.attach_inputs(named_inputs)
+                    inputs_hash = st.compute_inputs_hash()
+                except (KeyError, Exception):
+                    inputs_hash = None
+                finally:
+                    st._raw_inputs.clear()
+                    st._params_obj = None
+
+                if not cache_handler.should_rerun(res, inputs_hash, finished_this_run):
+                    finished_this_run.add(stage_name)
+                    continue  # Skip - use cached result
+
             state, _ = self._diagnose_stage(program, stage_name, finished_this_run)
             if state is self.GateState.READY:
                 ready.add(stage_name)
         return ready
-
-    # --------------------------- Diagnostics ---------------------------
 
     def explain_blockers(
         self,

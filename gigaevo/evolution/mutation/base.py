@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Iterable
+from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,6 +12,10 @@ class MutationSpec(BaseModel):
     code: str = Field(description="The code of the mutated program")
     parents: list[Program] = Field(description="List of parent programs")
     name: str = Field(description="Description of the mutation")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured mutation metadata (archetype, justification, etc.)",
+    )
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __iter__(self) -> Iterable:

@@ -10,6 +10,7 @@ from gigaevo.llm.agents.insights import ProgramInsights
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.core_types import StageIO, VoidInput
 from gigaevo.programs.metrics.context import MetricsContext
+from gigaevo.programs.program import Program
 from gigaevo.programs.stages.langgraph_stage import LangGraphStage
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
@@ -32,7 +33,6 @@ class InsightsStage(LangGraphStage):
 
     InputsModel = VoidInput
     OutputModel = InsightsOutput
-    cacheable: bool = True
 
     def __init__(
         self,
@@ -50,3 +50,6 @@ class InsightsStage(LangGraphStage):
             program_kwarg="program",
             **kwargs,
         )
+
+    async def compute(self, program: Program) -> InsightsOutput:
+        return InsightsOutput(insights=await self.agent.arun(program))
