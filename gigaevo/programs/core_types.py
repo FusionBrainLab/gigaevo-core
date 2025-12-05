@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 import hashlib
-import pickle
 import traceback
 from typing import Any, Optional
 
+import cloudpickle
 from pydantic import BaseModel, Field, field_serializer
 
 from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
@@ -22,7 +22,7 @@ class StageIO(BaseModel):
 
     @property
     def content_hash(self) -> str:
-        return hashlib.sha256(pickle.dumps(self.model_dump())).hexdigest()[:16]
+        return hashlib.sha256(cloudpickle.dumps(self.model_dump())).hexdigest()[:16]
 
 
 class VoidInput(StageIO):
