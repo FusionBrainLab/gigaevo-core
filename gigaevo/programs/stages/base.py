@@ -112,14 +112,27 @@ class Stage:
         return self.__class__.cache_handler
 
     def compute_inputs_hash(self) -> str | None:
-        """Compute hash of current inputs for cache invalidation.
+        """Compute hash of current inputs for cache invalidation."""
+        return self.compute_hash(self.params)
 
-        Override in subclasses to customize what's included in the hash.
-        Return None to disable input-hash caching for this stage.
+    @classmethod
+    def compute_hash(cls, params: StageIO) -> str | None:
+        """Compute hash from validated params object.
 
-        Default implementation uses params.content_hash.
+        Override this to customize hashing logic (e.g. ignore certain fields).
         """
-        return self.params.content_hash
+        return params.content_hash
+
+    @classmethod
+    def compute_hash_from_inputs(cls, inputs: Mapping[str, Any]) -> str | None:
+        """Compute hash from raw inputs without instantiating the stage."""
+        try:
+            # Validate inputs against the model
+            params = cls.InputsModel.model_validate(inputs)
+            return cls.compute_hash(params)
+        except Exception:
+            # If validation fails, we can't compute a hash
+            return None
 
     @classmethod
     def required_fields(cls) -> list[str]:

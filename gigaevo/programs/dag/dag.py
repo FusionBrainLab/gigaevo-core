@@ -173,9 +173,10 @@ class DAG:
                 raise RuntimeError(msg)
 
             # 2) Ready set
-            ready = self.automata.get_ready_stages(
+            ready, newly_cached = self.automata.get_ready_stages(
                 program, running, launched_this_run, finished_this_run
             )
+            finished_this_run.update(newly_cached)
 
             # 3) Launch ready
             new_tasks_map = await self._launch_ready(program, ready)
