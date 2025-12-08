@@ -115,6 +115,7 @@ def main() -> None:
             sys.stderr.write(printed)
             sys.stderr.flush()
 
+        cloudpickle.register_pickle_by_value(mod)
         cloudpickle.dump(result, sys.stdout.buffer)
         sys.stdout.buffer.flush()
 
