@@ -1,0 +1,57 @@
+TASK DEFINITION – CHRISTMAS TREE PACKING (N=100)
+
+Challenge: Pack exactly 100 Christmas trees into the smallest square bounding box without overlaps.
+Fitness: s^2/100 where s = bounding square side length. Goal: fitness <= 1.0
+
+OBJECTIVE
+Return positions and rotations for 100 Christmas trees such that:
+1) No trees overlap (touching edges is allowed)
+2) All tree positions within [-100, 100] coordinate range
+3) The normalized bounding area s^2/100 is minimized
+
+Output: (100, 3) NumPy array with columns [x, y, deg]
+
+CONSTRAINTS
+- Exactly 100 trees required
+- Fixed tree geometry as specified by the ChristmasTree class
+- Position bounds: -100 <= x, y <= 100
+- No overlapping trees
+- Touching (shared boundary) is allowed
+
+FAILURE MODES
+- Overlapping trees causing validation errors (most common)
+- Ignoring tree geometry when estimating spacing
+- Exceeding position bounds [-100, 100]
+- Floating-point precision errors causing false overlaps in tight packings
+
+TREE GEOMETRY CLASS
+The ChristmasTree class is provided in each initial program file and represents the fixed tree geometry:
+- It is defined with NON-EVOLVE-BLOCK-START and NON-EVOLVE-BLOCK-END fence comments around.
+- DO NOT modify code within these fences - the tree geometry is fixed and should not be changed.
+- Implementation:
+```python
+# NON-EVOLVE-BLOCK-START
+class ChristmasTree:
+    # Fixed tree geometry implementation (DO NOT MODIFY)
+    def __init__(self, center_x=0, center_y=0, angle=0):
+        ...
+# NON-EVOLVE-BLOCK-END
+```
+
+PROBLEM COMPLEXITY
+This is a multi-scale geometric packing problem. The asymmetric tree shape means rotation matters significantly. The problem requires balancing local packing efficiency (minimizing gaps), global arrangement strategy, and rotation optimization (trees pack tighter when rotated strategically). The search space is non-convex with many local minima corresponding to different packing patterns.
+
+HINTS
+- Alternating rotations (0 and 180 deg) can improve row packing
+- Round final positions to 12 decimal places to avoid precision errors
+- Using scipy.optimize or similar optimization methods can improve results
+- Symmetric arrangements tend to pack more efficiently
+- Consider local optimization to fine-tune positions after initial arrangement
+
+OUTPUT FORMAT
+Implement `def entrypoint():` returning (100, 3) numpy array:
+- Column 0: x-coordinate of tree center
+- Column 1: y-coordinate of tree center
+- Column 2: rotation angle in degrees
+- Validation uses high-precision arithmetic; tight packings without rounding may cause false overlap errors.
+- Use numpy, scipy, jax, and torch as needed. Fix random seeds for reproducibility.

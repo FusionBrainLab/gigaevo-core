@@ -1,0 +1,41 @@
+specs:
+  fitness:
+    description: Normalized bounding square area s^2/100 (lower is better)
+    decimals: 4
+    is_primary: true
+    higher_is_better: false
+    lower_bound: 0.1
+    upper_bound: 2.0
+    include_in_prompts: true
+    significant_change: 0.0001
+    sentinel_value: 1000.0
+  is_valid:
+    description: Whether the program is valid (1 valid, 0 invalid)
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0
+  packing_density:
+    description: Ratio of total tree area to bounding square area
+    decimals: 4
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.0001
+    sentinel_value: 0.0
+  min_tree_spacing:
+    description: Minimum center-to-center distance between trees
+    decimals: 4
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 10.0
+    include_in_prompts: true
+    significant_change: 0.0005
+    sentinel_value: 0.0
