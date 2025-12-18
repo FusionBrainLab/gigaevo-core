@@ -1,0 +1,50 @@
+TASK DEFINITION – AN UNCERTAINTY INEQUALITY
+
+Challenge: Functional optimization in Fourier analysis. Find an even polynomial P(x) that minimizes the constant C in the uncertainty inequality A(f)A(f̂) ≥ C, where f(x) = P(x)e^(-πx²) and A(f) = inf{r > 0 : f(x) ≥ 0 for all |x| ≥ r}. Target: C ≤ 0.3521
+
+OBJECTIVE
+
+Return coefficients for an even polynomial P(x) = c₀H₀(x) + c₁H₄(x) + c₂H₈(x) + ... such that:
+1) (Even polynomial) P(x) is constructed from Hermite polynomials H₄ₖ(x) with k = 0, 1, 2, ...
+2) (Constraint) P(0) = 0 (polynomial has a factor of x²)
+3) (Sign conditions) f(0) < 0 and f̂(0) < 0, where f(x) = P(x)e^(-πx²)
+4) (Positivity) P(x) ≥ 0 for large |x|
+5) (Minimality) The constant C = (r_max)²/(2π) is minimized, where r_max is the largest positive root of P(x)/x²
+
+Output: 1D NumPy array of coefficients [c₀, c₁, c₂, ...]  |  Fitness: C  |  Goal: C ≤ 0.3521
+
+CONSTRAINTS
+- Polynomial P(x) = Σ cₖH₄ₖ(x) where H₄ₖ are Hermite polynomials
+- P(0) = 0 (ensures factor of x²)
+- f(x) = P(x)e^(-πx²) must satisfy f(0) < 0 and f̂(0) < 0
+- P(x) must be non-negative for large |x|
+- Known bounds: 0.2025 ≤ C ≤ 0.3523
+
+FAILURE MODES
+- Polynomials that don't satisfy P(0) = 0
+- Violations of sign conditions f(0) < 0 or f̂(0) < 0
+- Polynomials that are negative for large |x|
+- Coefficients producing invalid or undefined C values
+- Numerical instabilities in root finding
+
+HELPER FUNCTIONS
+- `compute_c(coefficients)` -> float - computes C constant from polynomial coefficients
+  - Input: (M,) array of coefficients [c₀, c₁, c₂, ...] for P(x) = Σ cₖH₄ₖ(x)
+  - Constructs P(x), finds largest positive root r_max of P(x)/x²
+  - Returns C = (r_max)²/(2π)
+- Hermite polynomials H₄ₖ(x) can be computed using scipy.special.hermite
+- Fourier transform property: F[Hₙ(x)e^(-πx²)] = iⁿHₙ(ξ)e^(-πξ²)
+These are available as import from `helper.py`
+
+PROBLEM COMPLEXITY
+This is a non-convex optimization problem in the space of polynomial coefficients. The objective involves finding the largest positive root of a polynomial, which creates complex interactions between coefficient values and root locations. The constraint P(0) = 0 simplifies the problem by ensuring a factor of x². The known bounds suggest that optimal solutions involve carefully balanced linear combinations of Hermite polynomials. Gradient-based optimization can navigate the coefficient space, but must respect sign and positivity constraints.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a 1D NumPy array:
+- Shape: (M,) array of coefficients [c₀, c₁, c₂, ...] for polynomial P(x) = Σ cₖH₄ₖ(x)
+- Must satisfy P(0) = 0 and all sign/positivity constraints
+- Use numpy, scipy, jax, or standard library as needed
+- Fix random seeds if using randomness (e.g., jax.random.PRNGKey(42))
+- Return type: np.ndarray with dtype float, shape (M,)
+

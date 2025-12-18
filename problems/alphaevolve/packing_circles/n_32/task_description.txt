@@ -1,0 +1,47 @@
+TASK DEFINITION – PACKING CIRCLES INSIDE A UNIT SQUARE (32 CIRCLES)
+
+Challenge: High-dimensional non-convex geometric optimization. Pack exactly 32 non-overlapping circles with variable radii inside a unit square [0, 1] × [0, 1] to maximize the sum of their radii. Target: sum_radii >= 2.937
+
+OBJECTIVE
+Arrange 32 circles inside the unit square such that:
+1) (Containment) All circles lie completely inside the unit square [0, 1] × [0, 1]
+2) (Non-overlap) No two circles overlap (distance between centers ≥ sum of radii)
+3) (Maximality) The sum of all circle radii is maximized
+
+Output: (32, 3) NumPy array (x, y, radius)  |  Fitness: sum(radii)  |  Goal: sum(radii) ≥ 2.937
+
+CONSTRAINTS
+- Exactly 32 circles with variable radii
+- All circles must be completely contained within [0, 1] × [0, 1]
+- No overlaps between any pair of circles
+- All radii must be positive
+- All coordinates and radii must be finite real numbers
+
+VALIDATION
+- Verify all circles are inside unit square: for circle at (x, y) with radius r:
+  * x - r ≥ 0, x + r ≤ 1
+  * y - r ≥ 0, y + r ≤ 1
+- Verify no overlaps: for circles i and j with centers (xi, yi), (xj, yj) and radii ri, rj:
+  * distance((xi, yi), (xj, yj)) ≥ ri + rj
+- Check all values are finite and positive
+
+FAILURE MODES
+- Circles extending outside unit square boundaries
+- Overlapping circles (distance < sum of radii)
+- Negative or zero radii
+- NaN or infinite values in coordinates or radii
+- Wrong number of circles (≠ 32)
+
+PROBLEM COMPLEXITY
+This is a non-convex geometric optimization problem with many local optima. Optimal solutions typically involve variable radius sizes to efficiently fill space, strategic placement near corners and edges, dense packing patterns combining both large and small circles, and avoidance of uniform grids in favor of adaptive, irregular arrangements that better exploit available space.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a (32, 3) NumPy float array:
+- Each row contains (x, y, radius) for one circle
+- x, y: circle center coordinates in [0, 1] × [0, 1]
+- radius: positive circle radius
+- Use numpy, scipy, sklearn, or standard library as needed
+- Fix random seeds if using randomness (e.g., np.random.seed(42))
+- Return type: np.ndarray with shape (32, 3)
+

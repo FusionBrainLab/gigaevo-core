@@ -1,0 +1,39 @@
+TASK DEFINITION – HEILBRONN TRIANGLE PROBLEM (14 POINTS)
+
+Challenge: High-dimensional non-convex geometric optimization. Place 14 distinct points inside a unit-area convex region to maximize the smallest triangle area formed by any three points. Target: min_area ≥ 0.0278
+
+OBJECTIVE
+Return 14 distinct 2D coordinates inside a unit-area convex region such that:
+1) (Containment) All points lie inside or on the boundary of a convex region
+2) (Distinctness) All points are distinct (no duplicates)
+3) (Non-degeneracy) No three points are collinear
+4) (Maximality) The minimum area among all C(14,3) = 364 triangles is maximized
+
+Output: (14, 2) NumPy array  |  Fitness: min_triangle_area_normalized  |  Goal: min_area_normalized ≥ 0.0278
+
+CONSTRAINTS
+- Convex region: unit area, points within or on boundary
+- Exactly 14 distinct points, all within or on boundary
+- No collinear triplets (all 364 triangles must have non-zero area)
+
+FAILURE MODES
+- Point clustering (small triangle areas); nearly collinear triplets (flat triangles)
+- Duplicate or overlapping coordinates; points forming degenerate configurations
+- Float precision errors causing false collinearity detection
+
+HELPER FUNCTIONS
+- `get_smallest_triangle_area(coordinates)` -> float - minimum area among all C(n,3) triangles
+  - Input: (n, 2) array, Output: scalar float
+These are available as import from `helper.py`
+
+PROBLEM COMPLEXITY
+This is a non-convex optimization problem with sharp local minima. Small coordinate changes can drastically reduce minimum area due to geometric degeneracies. The search space includes discrete failure regions (exact alignments) and continuous low-fitness basins (clustered configurations). Solutions must balance global dispersion with local spacing. For large n, optimal value approaches O(1/n²) with logarithmic corrections.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a (14, 2) NumPy array:
+- Shape: (14, 2) array of point coordinates (x, y)
+- All points inside unit-area convex region
+- Use numpy, scipy, sklearn, or standard library as needed
+- Fix random seeds if using randomness (e.g., np.random.seed(42))
+- Return type: np.ndarray with dtype float32, shape (14, 2)

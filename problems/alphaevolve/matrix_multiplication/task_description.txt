@@ -1,0 +1,51 @@
+TASK DEFINITION – FASTER MATRIX MULTIPLICATION VIA TENSOR DECOMPOSITION (2×4 × 4×5 MATRICES)
+
+Challenge: Tensor decomposition optimization. Find a low-rank decomposition of the matrix multiplication tensor ⟨2, 4, 5⟩ that minimizes the number of scalar multiplications required to compute the product of a 2×4 matrix by a 4×5 matrix. Target: rank ≤ 33
+
+OBJECTIVE
+
+Return a rank-R decomposition of the matrix multiplication tensor ⟨2, 4, 5⟩ such that:
+1) (Tensor structure) The tensor represents multiplication of 2×4 matrix by 4×5 matrix
+2) (Decomposition) Tensor is decomposed as sum of R rank-one tensors
+3) (Exactness) Decomposition exactly represents matrix multiplication (within numerical tolerance)
+4) (Minimality) The rank R (number of terms) is minimized
+
+Output: Dictionary with 'rank', 'u_vectors', 'v_vectors', 'w_vectors'  |  Fitness: 32 - rank  |  Goal: rank ≤ 33 (fitness ≥ -1)
+
+CONSTRAINTS
+- Tensor ⟨2, 4, 5⟩ represents multiplication of 2×4 matrix A by 4×5 matrix B to get 2×5 matrix C
+- Decomposition: T = Σᵣ uᵣ ⊗ vᵣ ⊗ wᵣ where r = 1, ..., R
+- uᵣ has shape (2, 4) or flattened to (8,)
+- vᵣ has shape (4, 5) or flattened to (20,)
+- wᵣ has shape (2, 5) or flattened to (10,)
+- Decomposition must exactly reconstruct the matrix multiplication (error < 1e-6)
+- All values should be near-integer or near-half-integer (to encourage exact solutions)
+- Known bounds: rank ≤ 33 (from get_target_rank(2, 4, 5))
+
+FAILURE MODES
+- Decompositions that don't exactly represent matrix multiplication
+- Ranks higher than target
+- Non-integer or non-half-integer values (numerical errors)
+- Invalid tensor dimensions
+- Decompositions with incorrect structure
+
+HELPER FUNCTIONS
+- `reconstruct_tensor(u_vectors, v_vectors, w_vectors, m, n, p)` -> float - computes max reconstruction error
+- `compute_decomposition_error(u_vectors, v_vectors, w_vectors, m, n, p)` -> float - computes error
+- `get_target_rank(m, n, p)` -> int - returns target rank (33 for ⟨2, 4, 5⟩)
+These are available as import from `helper.py`
+
+PROBLEM COMPLEXITY
+This is a non-convex tensor decomposition problem with discrete structure (near-integer solutions). The search space is high-dimensional and contains many local minima. The problem has been studied for decades, with known bounds for small parameters. Optimal solutions often require complex-valued decompositions for some parameters. Gradient-based methods can find approximate solutions, but exact integer/half-integer solutions require specialized techniques.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a dictionary:
+- 'rank': int - the rank R of the decomposition (should be ≤ 33)
+- 'u_vectors': (R, 8) NumPy array - u vectors (flattened 2×4 matrices)
+- 'v_vectors': (R, 20) NumPy array - v vectors (flattened 4×5 matrices)  
+- 'w_vectors': (R, 10) NumPy array - w vectors (flattened 2×5 matrices)
+- Use numpy, scipy, jax, or standard library as needed
+- Fix random seeds if using randomness (e.g., jax.random.PRNGKey(42))
+- Return type: dict with keys 'rank', 'u_vectors', 'v_vectors', 'w_vectors'
+
