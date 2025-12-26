@@ -62,7 +62,7 @@ def validate(result):
         )
     
     BENCHMARK = 32
-    fitness = BENCHMARK - float(rank)
+    fitness = BENCHMARK / float(rank)
     is_valid = 1
     
     return {

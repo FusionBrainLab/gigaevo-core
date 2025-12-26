@@ -1,6 +1,6 @@
 TASK DEFINITION – FASTER MATRIX MULTIPLICATION VIA TENSOR DECOMPOSITION (2×4 × 4×5 MATRICES)
 
-Challenge: Tensor decomposition optimization. Find a low-rank decomposition of the matrix multiplication tensor ⟨2, 4, 5⟩ that minimizes the number of scalar multiplications required to compute the product of a 2×4 matrix by a 4×5 matrix. Target: rank ≤ 33
+Challenge: Tensor decomposition optimization. Find a low-rank decomposition of the matrix multiplication tensor ⟨2, 4, 5⟩ that minimizes the number of scalar multiplications required to compute the product of a 2×4 matrix by a 4×5 matrix. Target: rank <= 32
 
 OBJECTIVE
 
@@ -10,7 +10,7 @@ Return a rank-R decomposition of the matrix multiplication tensor ⟨2, 4, 5⟩ 
 3) (Exactness) Decomposition exactly represents matrix multiplication (within numerical tolerance)
 4) (Minimality) The rank R (number of terms) is minimized
 
-Output: Dictionary with 'rank', 'u_vectors', 'v_vectors', 'w_vectors'  |  Fitness: 32 - rank  |  Goal: rank ≤ 33 (fitness ≥ -1)
+Output: Dictionary with 'rank', 'u_vectors', 'v_vectors', 'w_vectors'  |  Fitness: 32/rank (inverse rank)  |  Goal: rank <= 32 (32/rank >= 1.0)
 
 CONSTRAINTS
 - Tensor ⟨2, 4, 5⟩ represents multiplication of 2×4 matrix A by 4×5 matrix B to get 2×5 matrix C
@@ -20,19 +20,18 @@ CONSTRAINTS
 - wᵣ has shape (2, 5) or flattened to (10,)
 - Decomposition must exactly reconstruct the matrix multiplication (error < 1e-6)
 - All values should be near-integer or near-half-integer (to encourage exact solutions)
-- Known bounds: rank ≤ 33 (from get_target_rank(2, 4, 5))
+- Known bounds: rank <= 33
 
 FAILURE MODES
 - Decompositions that don't exactly represent matrix multiplication
-- Ranks higher than target
 - Non-integer or non-half-integer values (numerical errors)
 - Invalid tensor dimensions
 - Decompositions with incorrect structure
 
 HELPER FUNCTIONS
-- `reconstruct_tensor(u_vectors, v_vectors, w_vectors, m, n, p)` -> float - computes max reconstruction error
-- `compute_decomposition_error(u_vectors, v_vectors, w_vectors, m, n, p)` -> float - computes error
-- `get_target_rank(m, n, p)` -> int - returns target rank (33 for ⟨2, 4, 5⟩)
+- `get_matrix_multiplication_tensor(n, m, p)` -> jnp.ndarray - constructs the matrix multiplication tensor for given dimensions
+- `reconstruct_tensor(u_vectors, v_vectors, w_vectors, n, m, p)` -> float - computes max reconstruction error across multiple random test matrices
+- `compute_decomposition_error(u_vectors, v_vectors, w_vectors, n, m, p, tolerance=1e-6)` -> float - computes decomposition error (wrapper around reconstruct_tensor)
 These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY
@@ -41,7 +40,7 @@ This is a non-convex tensor decomposition problem with discrete structure (near-
 OUTPUT FORMAT:
 
 Implement `def entrypoint():` that returns a dictionary:
-- 'rank': int - the rank R of the decomposition (should be ≤ 33)
+- 'rank': int - the rank R of the decomposition
 - 'u_vectors': (R, 8) NumPy array - u vectors (flattened 2×4 matrices)
 - 'v_vectors': (R, 20) NumPy array - v vectors (flattened 4×5 matrices)  
 - 'w_vectors': (R, 10) NumPy array - w vectors (flattened 2×5 matrices)

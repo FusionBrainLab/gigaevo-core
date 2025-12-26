@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def entrypoint() -> tuple[np.ndarray, np.ndarray]:
+def entrypoint() -> np.ndarray:
     np.random.seed(42)
     n = 32
     centers = []
@@ -14,5 +14,8 @@ def entrypoint() -> tuple[np.ndarray, np.ndarray]:
         centers.append([x, y])
         radii.append(r)
     
-    return np.array(centers, dtype=np.float32), np.array(radii, dtype=np.float32)
+    centers = np.array(centers, dtype=np.float32)
+    radii = np.array(radii, dtype=np.float32)
+    result = np.column_stack([centers, radii])
+    return result
 

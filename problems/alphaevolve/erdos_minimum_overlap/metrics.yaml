@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: Main objective [C₅ constant in Erdős minimum overlap problem]
+    description: Main objective [C constant in Erdős minimum overlap problem]
     decimals: 6
     is_primary: true
     higher_is_better: false

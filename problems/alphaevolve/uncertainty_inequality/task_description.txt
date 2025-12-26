@@ -32,8 +32,6 @@ HELPER FUNCTIONS
   - Input: (M,) array of coefficients [c₀, c₁, c₂, ...] for P(x) = Σ cₖH₄ₖ(x)
   - Constructs P(x), finds largest positive root r_max of P(x)/x²
   - Returns C = (r_max)²/(2π)
-- Hermite polynomials H₄ₖ(x) can be computed using scipy.special.hermite
-- Fourier transform property: F[Hₙ(x)e^(-πx²)] = iⁿHₙ(ξ)e^(-πξ²)
 These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY

@@ -32,8 +32,6 @@ HELPER FUNCTIONS
   - Input: (N,) array of function values on uniform grid over [0, 2]
   - Computes max_k ∫ h(x)(1 - h(x+k)) dx for k in appropriate range
   - Returns C = max_k ∫ h(x)(1 - h(x+k)) dx
-- Grid spacing: dx = 2.0 / N where N is the length of h_values
-- Integration performed via discrete summation
 These are available as import from `helper.py`
 
 PROBLEM COMPLEXITY

@@ -62,11 +62,14 @@ def _largest_positive_root_of_P_over_x2_jax(coeffs: jnp.ndarray) -> jnp.ndarray:
         largest_idx = sign_changes[-1]
         x_guess = x_grid[largest_idx + 1]
         
+        def f_scalar(x_val):
+            P_val = _construct_P_with_forced_zero_jax(coeffs, jnp.array([x_val]))
+            return P_val[0] / (x_val**2 + 1e-12)
+        
         def newton_step(x):
-            P_val = _construct_P_with_forced_zero_jax(coeffs, x)
-            f = P_val / (x**2 + 1e-12)
-            f_prime = jax.grad(lambda x_val: _construct_P_with_forced_zero_jax(coeffs, x_val) / (x_val**2 + 1e-12))(x)
-            return x - f / (f_prime + 1e-12)
+            f_val = f_scalar(x)
+            f_prime = jax.grad(f_scalar)(x)
+            return x - f_val / (f_prime + 1e-12)
         
         x_current = x_guess
         def refine_iteration(i, x_curr):
