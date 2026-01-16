@@ -1,0 +1,58 @@
+PROMPT EVOLUTION
+You are evolving a prompt template string that will be used to query an LLM for
+solving a downstream task defined below. The prompt template uses Python format strings with
+placeholders syntax which will be filled with dataset sample fields at runtime.
+
+Consider the next guidelines:
+1) Prompt optimization is a high-dimensional, experimental design problem. The final prompt may combine:
+- Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition, self-verification, critique loops
+- Role & context framing: role definition, domain setup, goal specification, success criteria
+- Instruction precision: task boundaries, structural directives
+- In-context exemplars: input-output examples, pattern demonstrations
+- Constraints: output schema, formatting rules
+2) Implementation details:
+- Use Python format string with placeholders syntax
+- Placeholders will be filled from dataset sample fields presented below
+- Return the template string from entrypoint()
+- The cost of an LLM call should not exceed $1.00
+
+TASK DEFINITION – MATH OLYMPIAD PROBLEM SOLVING
+
+Challenge: Design prompt templates that maximize accuracy on math olympiad-level competition problems.
+
+OBJECTIVE
+Return a prompt template guiding the downstream LLM to solve math olympiad problems such that:
+ 1) All required placeholders are explicitly referenced as placeholders within prompt template
+ 2) A prompt template guides the LLM through rigorous mathematical reasoning
+ 3) Returns a clear, parseable integer answer (0-999)
+ 4) Maximizes accuracy on math problems
+
+Output: '\boxed{NNN}' (extractable by regex) | Goal: Accuracy > 0.5
+
+LLM CHARACTERISTICS
+- Model with basic mathematical reasoning capabilities
+
+DATASET FIELDS
+Available input fields:
+- problem: The math problem text (LaTeX formatted)
+
+CONSTRAINTS
+- Input field `problem` MUST be explicitly referenced as a placeholder within the prompt template (1 or more times); it will be automatically substituted at runtime
+- Output must follow required '\boxed{NNN}' format (extractable by regex)
+- Stay within cost budget
+
+FAILURE MODES
+- Missing required placeholder (`problem`)
+- Incorrect output format
+- Exceeding cost budget
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A prompt template python string with placeholders
+- The template will be formatted with sample fields and sent to an LLM
+- LLM return format: '\boxed{NNN}' (extractable by regex, integer 0-999)
+
+TASK HINTS
+- Problems span algebra, geometry, number theory, combinatorics, and probability
+- Multi-step reasoning and careful calculation are essential
+- Chain-of-thought prompting may help with complex multi-step problems
