@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import time
+import types
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -39,9 +40,36 @@ O = TypeVar("O", bound=StageIO)  # noqa: E741
 
 
 def _is_optional_type(tp: Any) -> bool:
+    """Check if a type annotation represents an optional type (allows None).
+
+    Handles both:
+      - typing.Optional[X] / typing.Union[X, None]
+      - X | None (Python 3.10+ union syntax using types.UnionType)
+
+    Fields with optional types will be automatically set to None when not
+    provided via DAG data flow edges. This ensures consistent behavior
+    between stage execution and cache hash computation.
+
+    Examples:
+        >>> _is_optional_type(Optional[str])
+        True
+        >>> _is_optional_type(str | None)  # Python 3.10+
+        True
+        >>> _is_optional_type(Union[str, int, None])
+        True
+        >>> _is_optional_type(str)
+        False
+    """
     origin = get_origin(tp)
+
+    # Handle typing.Union (includes Optional[X] which is Union[X, None])
     if origin is Union:
         return any(arg is type(None) for arg in get_args(tp))  # noqa: E721
+
+    # Handle Python 3.10+ union syntax: X | None (types.UnionType)
+    if isinstance(tp, types.UnionType):
+        return any(arg is type(None) for arg in get_args(tp))  # noqa: E721
+
     return False
 
 
@@ -52,6 +80,19 @@ class Stage:
     Subclasses MUST define:
         InputsModel: Type[StageIO]   (fields with Optional[...] are optional inputs)
         OutputModel: Type[StageIO]   (use VoidOutput for no-output stages)
+
+    Optional Input Fields:
+        Fields annotated with Optional[X] or X | None are considered optional.
+        When not provided via DAG data flow edges, they are automatically set
+        to None. This applies to both stage execution and cache hash computation.
+
+        Example InputsModel with optional field:
+            class MyInputs(StageIO):
+                required_field: SomeType      # Must be provided via DAG edge
+                optional_field: Optional[X]   # Set to None if no edge provides it
+
+        IMPORTANT: Use Optional[X] for fields that may not have a DAG edge.
+        Without Optional, missing fields will cause validation errors.
 
     Public surface:
         - timeout: float
@@ -124,11 +165,29 @@ class Stage:
         return params.content_hash
 
     @classmethod
+    def _normalize_inputs(cls, inputs: Mapping[str, Any]) -> dict[str, Any]:
+        """Normalize raw inputs by setting missing optional fields to None.
+
+        This ensures consistent hash computation between execution time and
+        cache check time. Without this, optional fields missing from inputs
+        would cause Pydantic validation to fail during cache checks.
+        """
+        payload = dict(inputs)
+        for name in cls._optional_names:
+            if name not in payload:
+                payload[name] = None
+        return payload
+
+    @classmethod
     def compute_hash_from_inputs(cls, inputs: Mapping[str, Any]) -> str | None:
-        """Compute hash from raw inputs without instantiating the stage."""
+        """Compute hash from raw inputs without instantiating the stage.
+
+        Normalizes inputs first (setting optional fields to None) to ensure
+        the hash matches what would be computed during actual execution.
+        """
         try:
-            # Validate inputs against the model
-            params = cls.InputsModel.model_validate(inputs)
+            normalized = cls._normalize_inputs(inputs)
+            params = cls.InputsModel.model_validate(normalized)
             return cls.compute_hash(params)
         except Exception:
             # If validation fails, we can't compute a hash
@@ -150,10 +209,8 @@ class Stage:
             raise KeyError(
                 f"[{self.stage_name}] Unknown input fields: {sorted(extras)}; allowed={sorted(declared)}"
             )
-        for n in self.__class__._optional_names:
-            if n not in payload:
-                payload[n] = None
-        self._raw_inputs = payload
+        # Use shared normalization to ensure consistency with hash computation
+        self._raw_inputs = self.__class__._normalize_inputs(payload)
         self._params_obj = None
 
     @property
