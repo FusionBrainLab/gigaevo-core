@@ -199,8 +199,8 @@ class LineageAgent(LangGraphAgent):
             else ""
         )
 
-        parent_errors = parent.format_errors()
-        child_errors = child.format_errors()
+        parent_errors = parent.format_errors(include_traceback=True)
+        child_errors = child.format_errors(include_traceback=True)
 
         metric_name = self.metrics_formatter.context.get_primary_key()
         metric_description = self.metrics_formatter.context.get_description(metric_name)
