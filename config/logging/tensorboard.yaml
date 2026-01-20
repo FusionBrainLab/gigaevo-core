@@ -10,6 +10,12 @@ tb_config:
   _target_: gigaevo.utils.trackers.configs.TBConfig
   logdir: ${log_dir}/tb_logs
 
+redis_metrics_config:
+  _target_: gigaevo.utils.trackers.configs.RedisMetricsConfig
+  redis_url: redis://${redis.host}:${redis.port}/${redis.db}
+  key_prefix: ${problem.name}:metrics
+
 writer:
-  _target_: gigaevo.utils.trackers.init_tb
-  cfg: ${tb_config}
+  _target_: gigaevo.utils.trackers.init_tb_redis
+  tb_cfg: ${tb_config}
+  redis_cfg: ${redis_metrics_config}
