@@ -2,93 +2,84 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
-import contextlib
 import gc
 from itertools import islice
-import os
-import socket
-import time
+from types import TracebackType
 from typing import Any, TypeVar
-import uuid
 
 from loguru import logger
-from pydantic import AnyUrl, BaseModel, Field
 from redis import asyncio as aioredis
 from redis.exceptions import WatchError
 
 from gigaevo.database.merge_strategies import resolve_merge_strategy
 from gigaevo.database.program_storage import ProgramStorage
+from gigaevo.database.redis import (
+    RedisConnection,
+    RedisInstanceLock,
+    RedisMetricsCollector,
+    RedisProgramKeys,
+    RedisProgramStorageConfig,
+)
 from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
 from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
-from gigaevo.utils.metrics_collector import start_metrics_collector
 from gigaevo.utils.trackers.base import LogWriter
 
-__all__ = ["RedisProgramStorageConfig", "RedisProgramStorage"]
 T = TypeVar("T")
 
+__all__ = ["RedisProgramStorageConfig", "RedisProgramStorage"]
 
-class RedisProgramStorageConfig(BaseModel):
-    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")
-    key_prefix: str = Field(default="gigaevo")
-
-    program_key_tpl: str = Field(default="{prefix}:program:{pid}")
-    status_stream_tpl: str = Field(default="{prefix}:status_events")
-    status_set_tpl: str = Field(default="{prefix}:status:{status}")
-
-    # Behavior
-    max_retries: int = Field(default=5, ge=1)
-    retry_delay: float = Field(default=0.2, ge=0.0)
-    max_connections: int = Field(default=100, ge=10)
-    connection_pool_timeout: float = Field(default=60.0, ge=1.0)
-    health_check_interval: int = Field(default=180, ge=1)
-
-    merge_strategy: str | Callable[[Program | None, Program], Program] = Field(
-        default="additive"
-    )
-
-    metrics_interval: float = Field(
-        default=1.0, ge=0.1, description="Interval (s) for Redis metrics collection"
-    )
-
-    read_only: bool = Field(
-        default=False,
-        description="If True, skip instance locking and disable write operations. "
-        "Use for read-only inspection (e.g., from Jupyter notebooks).",
-    )
-
-    model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
+# Constants
+MGET_CHUNK_SIZE = 1024
+SCAN_BATCH_SIZE = 1000
+STREAM_MAX_LEN = 10_000
 
 
 class RedisProgramStorage(ProgramStorage):
-    _MGET_CHUNK: int = 1024
+    """Redis-backed program storage with distributed locking and metrics."""
 
     def __init__(
         self, config: RedisProgramStorageConfig, writer: LogWriter | None = None
     ):
         self.config = config
-        self._merge = resolve_merge_strategy(self.config.merge_strategy)
-        self._redis: aioredis.Redis | None = None
-        self._lock = asyncio.Lock()
-        self._writer = (
-            writer.bind(path=["redis_storage"]) if writer is not None else None
+        self._merge = resolve_merge_strategy(config.merge_strategy)
+
+        # Composed components
+        self._conn = RedisConnection(config.to_connection_config())
+        self._keys = RedisProgramKeys(config.to_key_config())
+        self._lock = RedisInstanceLock(self._conn, self._keys, config.to_lock_config())
+        self._metrics = RedisMetricsCollector(
+            self._conn, self._keys, writer, config.metrics_interval
         )
 
-        self._metrics_task: asyncio.Task | None = None
-        self._metrics_stop_flag: bool = False
+    # --------------------- Context Manager ---------------------
 
-        # prevents new connections & waits while closing
-        self._closing = False
+    async def __aenter__(self) -> "RedisProgramStorage":
+        """Acquire instance lock and start metrics collection."""
+        if not self.config.read_only:
+            await self._lock.acquire()
+        # Ensure connection is established
+        await self._conn.get()
+        self._metrics.start()
+        return self
 
-        # Instance lock management (prevents multiple instances on same Redis prefix)
-        self._instance_lock_token: str | None = None
-        self._instance_lock_renewal_task: asyncio.Task | None = None
-        self._instance_id = (
-            f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-        )
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Release resources."""
+        await self.close()
 
-    # --------------------- Keys ---------------------
+    # --------------------- Helpers ---------------------
+
+    async def with_redis(
+        self, name: str, fn: Callable[[aioredis.Redis], Awaitable[T]]
+    ) -> T:
+        """Execute Redis operation. Compatibility shim for external code."""
+        return await self._conn.execute(name, fn)
 
     def _check_write_allowed(self, operation: str) -> None:
         """Raise error if write operation is attempted in read-only mode."""
@@ -97,76 +88,6 @@ class RedisProgramStorage(ProgramStorage):
                 f"Cannot perform '{operation}' in read-only mode. "
                 f"Create storage without read_only=True for write operations."
             )
-
-    def _k_program(self, pid: str) -> str:
-        return self.config.program_key_tpl.format(
-            prefix=self.config.key_prefix, pid=pid
-        )
-
-    def _k_stream(self) -> str:
-        return self.config.status_stream_tpl.format(prefix=self.config.key_prefix)
-
-    def _k_status(self, status: str) -> str:
-        return self.config.status_set_tpl.format(
-            prefix=self.config.key_prefix, status=status
-        )
-
-    def _k_ts(self) -> str:
-        return f"{self.config.key_prefix}:ts"
-
-    def _k_instance_lock(self) -> str:
-        """Key for exclusive instance lock (prevents multiple instances)."""
-        return f"{self.config.key_prefix}:__instance_lock__"
-
-    async def _conn(self) -> aioredis.Redis:
-        if self._closing:
-            raise StorageError(
-                "RedisProgramStorage is closing; cannot open connection."
-            )
-        if self._redis is not None:
-            return self._redis
-        async with self._lock:
-            if self._redis is None:
-                if self._closing:
-                    raise StorageError(
-                        "RedisProgramStorage is closing; cannot open connection."
-                    )
-                r = aioredis.from_url(
-                    str(self.config.redis_url),
-                    decode_responses=True,
-                    max_connections=self.config.max_connections,
-                    health_check_interval=self.config.health_check_interval,
-                    socket_connect_timeout=self.config.connection_pool_timeout,
-                    socket_timeout=self.config.connection_pool_timeout,
-                    retry_on_timeout=True,
-                )
-                await r.ping()
-                logger.debug(
-                    "[RedisProgramStorage] connected {}", self.config.redis_url
-                )
-                self._redis = r
-
-                if self._writer is not None and (
-                    self._metrics_task is None or self._metrics_task.done()
-                ):
-                    self._start_metrics_collector()
-        return self._redis
-
-    async def _with_redis(
-        self, name: str, fn: Callable[[aioredis.Redis], Awaitable[T]]
-    ) -> T:
-        if self._closing:
-            raise StorageError(f"Redis op {name} refused: storage is closing.")
-        delay = self.config.retry_delay
-        for attempt in range(1, self.config.max_retries + 1):
-            try:
-                return await fn(await self._conn())
-            except Exception as e:
-                if attempt == self.config.max_retries or self._closing:
-                    logger.debug("[RedisProgramStorage] {} failed: {}", name, e)
-                    raise StorageError(f"Redis op {name} failed: {e}") from e
-                await asyncio.sleep(min(delay, 1.0))
-                delay *= 2
 
     @staticmethod
     def _chunks(items: Iterable[str], n: int) -> Iterable[list[str]]:
@@ -179,14 +100,14 @@ class RedisProgramStorage(ProgramStorage):
         try:
             return Program.from_dict(_loads(raw))
         except Exception as e:
-            logger.debug("[RedisProgramStorage] bad JSON in {}: {}", ctx, e)
+            logger.warning("[RedisProgramStorage] Corrupt data in {}: {}", ctx, e)
             return None
 
     async def _mget_by_keys(
         self, r: aioredis.Redis, keys: list[str], ctx: str
     ) -> list[Program]:
         out: list[Program] = []
-        for batch in self._chunks(keys, self._MGET_CHUNK):
+        for batch in self._chunks(keys, MGET_CHUNK_SIZE):
             blobs = await r.mget(*batch)
             for raw in blobs:
                 if raw:
@@ -195,40 +116,59 @@ class RedisProgramStorage(ProgramStorage):
                         out.append(p)
         return out
 
+    # --------------------- CRUD Operations ---------------------
+
     async def add(self, program: Program) -> None:
+        """Add a new program. If program exists, cleans up old status set first."""
         self._check_write_allowed("add")
 
-        async def _add(r: aioredis.Redis):
-            key = self._k_program(program.id)
-            status = program.state.value
-            pipe = r.pipeline(transaction=False)
-            counter = await r.incr(self._k_ts())
+        async def _add(r: aioredis.Redis) -> None:
+            key = self._keys.program(program.id)
+            new_status = program.state.value
+
+            # Check if program already exists and get old status
+            existing_raw = await r.get(key)
+            old_status: str | None = None
+            if existing_raw:
+                existing = self._safe_deserialize(existing_raw, "add/get")
+                if existing:
+                    old_status = existing.state.value
+
+            counter = await r.incr(self._keys.timestamp())
             new_program = program.model_copy(
                 update={"atomic_counter": counter}, deep=True
             )
+
+            pipe = r.pipeline(transaction=False)
             pipe.set(key, _dumps(new_program.to_dict()))
-            pipe.sadd(self._k_status(status), program.id)
+
+            # Clean up old status set if different
+            if old_status and old_status != new_status:
+                pipe.srem(self._keys.status_set(old_status), program.id)
+
+            pipe.sadd(self._keys.status_set(new_status), program.id)
             pipe.xadd(
-                self._k_stream(),
-                {"id": program.id, "status": status, "event": "created"},
-                maxlen=10_000,
+                self._keys.status_stream(),
+                {"id": program.id, "status": new_status, "event": "created"},
+                maxlen=STREAM_MAX_LEN,
                 approximate=True,
             )
             await pipe.execute()
 
-        await self._with_redis("add", _add)
+        await self._conn.execute("add", _add)
 
-    async def size(self) -> int:
-        async def _size(r: aioredis.Redis):
-            return len(await r.keys(pattern=self._k_program("*")))
+    async def get(self, program_id: str) -> Program | None:
+        async def _get(r: aioredis.Redis) -> Program | None:
+            raw = await r.get(self._keys.program(program_id))
+            return self._safe_deserialize(raw, f"get:{program_id}") if raw else None
 
-        return await self._with_redis("size", _size)
+        return await self._conn.execute("get", _get)
 
-    async def update(self, program: Program):
+    async def update(self, program: Program) -> None:
         self._check_write_allowed("update")
 
-        async def _update(r: aioredis.Redis):
-            key = self._k_program(program.id)
+        async def _update(r: aioredis.Redis) -> None:
+            key = self._keys.program(program.id)
             while True:
                 try:
                     async with r.pipeline(transaction=True) as pipe:
@@ -239,7 +179,7 @@ class RedisProgramStorage(ProgramStorage):
                             if existing_raw
                             else None
                         )
-                        counter = await r.incr(self._k_ts())
+                        counter = await r.incr(self._keys.timestamp())
                         new_program = program.model_copy(
                             update={"atomic_counter": int(counter)}, deep=True
                         )
@@ -253,333 +193,164 @@ class RedisProgramStorage(ProgramStorage):
                 except WatchError:
                     continue
 
-        await self._with_redis("update", _update)
+        await self._conn.execute("update", _update)
 
-    async def get(self, program_id: str) -> Program | None:
-        async def _get(r: aioredis.Redis):
-            raw = await r.get(self._k_program(program_id))
-            return self._safe_deserialize(raw, f"get:{program_id}") if raw else None
-
-        return await self._with_redis("get", _get)
-
-    async def exists(self, program_id: str) -> bool:
-        async def _exists(r: aioredis.Redis):
-            return bool(await r.exists(self._k_program(program_id)))
-
-        return await self._with_redis("exists", _exists)
-
-    async def remove(self, program_id: str):
+    async def remove(self, program_id: str) -> None:
+        """Remove a program and clean up its status set entry."""
         self._check_write_allowed("remove")
 
-        async def _del(r: aioredis.Redis):
-            await r.delete(self._k_program(program_id))
+        async def _del(r: aioredis.Redis) -> None:
+            key = self._keys.program(program_id)
 
-        await self._with_redis("remove", _del)
+            # Get program to find its status
+            existing_raw = await r.get(key)
+            old_status: str | None = None
+            if existing_raw:
+                existing = self._safe_deserialize(existing_raw, "remove/get")
+                if existing:
+                    old_status = existing.state.value
+
+            pipe = r.pipeline(transaction=False)
+            pipe.delete(key)
+
+            # Clean up status set
+            if old_status:
+                pipe.srem(self._keys.status_set(old_status), program_id)
+
+            await pipe.execute()
+
+        await self._conn.execute("remove", _del)
+
+    async def exists(self, program_id: str) -> bool:
+        async def _exists(r: aioredis.Redis) -> bool:
+            return bool(await r.exists(self._keys.program(program_id)))
+
+        return await self._conn.execute("exists", _exists)
+
+    async def mget(self, program_ids: list[str]) -> list[Program]:
+        if not program_ids:
+            return []
+
+        async def _mget(r: aioredis.Redis) -> list[Program]:
+            keys = [self._keys.program(pid) for pid in program_ids]
+            return await self._mget_by_keys(r, keys, "mget")
+
+        return await self._conn.execute("mget", _mget)
+
+    async def size(self) -> int:
+        """Count programs using SCAN (non-blocking)."""
+
+        async def _size(r: aioredis.Redis) -> int:
+            count = 0
+            async for _ in r.scan_iter(
+                match=self._keys.program_pattern(), count=SCAN_BATCH_SIZE
+            ):
+                count += 1
+            return count
+
+        return await self._conn.execute("size", _size)
+
+    async def get_all(self) -> list[Program]:
+        """Get all programs using SCAN + chunked MGET."""
+
+        async def _scan_then_mget(r: aioredis.Redis) -> list[Program]:
+            keys: list[str] = []
+            async for key in r.scan_iter(
+                match=self._keys.program_pattern(), count=SCAN_BATCH_SIZE
+            ):
+                keys.append(key)
+            if not keys:
+                return []
+            return await self._mget_by_keys(r, keys, "get_all")
+
+        return await self._conn.execute("get_all", _scan_then_mget)
+
+    async def get_all_program_ids(self) -> list[str]:
+        """Return program IDs (not full Redis keys) using SCAN."""
+
+        async def _get_all_ids(r: aioredis.Redis) -> list[str]:
+            ids: list[str] = []
+            async for key in r.scan_iter(
+                match=self._keys.program_pattern(), count=SCAN_BATCH_SIZE
+            ):
+                ids.append(key.split(":")[-1])
+            return ids
+
+        return await self._conn.execute("get_all_program_ids", _get_all_ids)
+
+    async def has_data(self) -> bool:
+        """Check if database has any programs."""
+
+        async def _check(r: aioredis.Redis) -> bool:
+            async for _ in r.scan_iter(match=self._keys.program_pattern(), count=1):
+                return True
+            return False
+
+        return await self._conn.execute("has_data", _check)
+
+    # --------------------- Status Operations ---------------------
 
     async def transition_status(
         self, program_id: str, old: str | None, new: str
     ) -> None:
         self._check_write_allowed("transition_status")
 
-        async def _tx(r: aioredis.Redis):
+        async def _tx(r: aioredis.Redis) -> None:
             pipe = r.pipeline(transaction=False)
             if old:
-                pipe.srem(self._k_status(old), program_id)
-            pipe.sadd(self._k_status(new), program_id)
+                pipe.srem(self._keys.status_set(old), program_id)
+            pipe.sadd(self._keys.status_set(new), program_id)
             await pipe.execute()
 
-        await self._with_redis("transition_status", _tx)
+        await self._conn.execute("transition_status", _tx)
 
     async def publish_status_event(
         self, status: str, program_id: str, extra: dict[str, Any] | None = None
     ) -> None:
         self._check_write_allowed("publish_status_event")
 
-        async def _event(r: aioredis.Redis):
+        async def _event(r: aioredis.Redis) -> None:
             data = {"id": program_id, "status": status, **(extra or {})}
-            await r.xadd(self._k_stream(), data, maxlen=10_000, approximate=True)
+            await r.xadd(
+                self._keys.status_stream(),
+                data,
+                maxlen=STREAM_MAX_LEN,
+                approximate=True,
+            )
 
-        await self._with_redis("publish_status_event", _event)
-
-    async def _ids_for_status(self, status: str) -> list[str]:
-        async def _members(r: aioredis.Redis):
-            return list(await r.smembers(self._k_status(status)))
-
-        return await self._with_redis("_ids_for_status", _members)
+        await self._conn.execute("publish_status_event", _event)
 
     async def get_all_by_status(self, status: str) -> list[Program]:
         ids = await self._ids_for_status(status)
         if not ids:
             return []
 
-        async def _by_status(r: aioredis.Redis):
-            keys = [self._k_program(pid) for pid in ids]
+        async def _by_status(r: aioredis.Redis) -> list[Program]:
+            keys = [self._keys.program(pid) for pid in ids]
             programs = await self._mget_by_keys(r, keys, f"get_all_by_status:{status}")
             return [p for p in programs if p.state.value == status]
 
-        return await self._with_redis("get_all_by_status", _by_status)
+        return await self._conn.execute("get_all_by_status", _by_status)
 
-    async def mget(self, program_ids: list[str]) -> list[Program]:
-        if not program_ids:
-            return []
+    async def _ids_for_status(self, status: str) -> list[str]:
+        async def _members(r: aioredis.Redis) -> list[str]:
+            return list(await r.smembers(self._keys.status_set(status)))
 
-        async def _mget(r: aioredis.Redis):
-            keys = [self._k_program(pid) for pid in program_ids]
-            return await self._mget_by_keys(r, keys, "mget")
-
-        return await self._with_redis("mget", _mget)
-
-    async def get_all(self) -> list[Program]:
-        """SCAN keys then fetch values via chunked MGET."""
-
-        async def _scan_then_mget(r: aioredis.Redis):
-            match = self._k_program("*")
-            cursor = 0
-            keys: list[str] = []
-            while True:
-                cursor, batch = await r.scan(cursor=cursor, match=match, count=1000)
-                if batch:
-                    keys.extend(batch)
-                if cursor == 0:
-                    break
-            if not keys:
-                return []
-            return await self._mget_by_keys(r, keys, "get_all")
-
-        return await self._with_redis("get_all", _scan_then_mget)
-
-    async def get_all_program_ids(self) -> list[str]:
-        """Return program IDs (not full Redis keys)."""
-
-        async def _get_all_ids(r: aioredis.Redis):
-            keys = await r.keys(pattern=self._k_program("*"))
-            return [key.split(":")[-1] for key in keys]
-
-        return await self._with_redis("get_all_program_ids", _get_all_ids)
-
-    async def wait_for_activity(self, timeout: float):
-        """Block on stream read; exits quickly during shutdown."""
-        if self._closing:
-            return
-        poll_ms = max(1, int(timeout * 1000))
-        try:
-            r = await self._conn()
-            stream = self._k_stream()
-            await r.xread({stream: "$"}, block=poll_ms, count=1)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.debug("[RedisProgramStorage] wait_for_activity fallback: {}", e)
-            await asyncio.sleep(timeout)
-
-    async def has_data(self) -> bool:
-        """Check if database has any programs."""
-
-        async def _check(r: aioredis.Redis) -> bool:
-            # Check if there are any program keys
-            async for _ in r.scan_iter(match=self._k_program("*"), count=1):
-                return True
-            return False
-
-        return await self._with_redis("has_data", _check)
-
-    async def flushdb(self):
-        self._check_write_allowed("flushdb")
-
-        async def _flush(r: aioredis.Redis):
-            await r.flushdb()
-
-        return await self._with_redis("flushdb", _flush)
-
-    def _start_metrics_collector(self) -> None:
-        if self._metrics_task is not None and not self._metrics_task.done():
-            return
-
-        self._metrics_stop_flag = False
-
-        async def _collect() -> dict[str, Any]:
-            # During close, refuse to collect to avoid late connects
-            if self._closing:
-                return {}
-            try:
-                r = await self._conn()
-            except StorageError:
-                return {}
-
-            metrics: dict[str, Any] = {}
-
-            count = 0
-
-            async for _ in r.scan_iter(match=self._k_program("*"), count=1000):
-                count += 1
-            metrics["size"] = float(count)
-
-            for section in (
-                "stats",
-                "memory",
-                "clients",
-                "server",
-                "cpu",
-                "keyspace",
-                "replication",
-            ):
-                try:
-                    info = await r.info(section=section)
-                    for k, v in _flatten_numbers(info, prefix=f"{section}/").items():
-                        metrics[k] = v
-                except Exception:
-                    continue
-
-            return metrics
-
-        def _stop_flag() -> bool:
-            return self._metrics_stop_flag
-
-        self._metrics_task = start_metrics_collector(
-            writer=self._writer,  # type: ignore[arg-type]
-            collect_fn=_collect,
-            interval=self.config.metrics_interval,
-            stop_flag=_stop_flag,
-            task_name="redis-metrics-collector",
-        )
-
-    # --------------------- Instance Locking ---------------------
-
-    async def acquire_instance_lock(self) -> bool:
-        """Acquire exclusive lock to prevent multiple instances on same prefix.
-
-        Skip locking in read-only mode to allow inspection from multiple sources.
-        """
-        if self.config.read_only:
-            logger.info(
-                f"[RedisProgramStorage] Skipping instance lock (read-only mode) for prefix '{self.config.key_prefix}'"
-            )
-            return True
-
-        async def _acquire(r: aioredis.Redis) -> bool:
-            lock_key = self._k_instance_lock()
-            lock_value = f"{self._instance_id}:{time.time()}"
-
-            # Try to acquire lock with SET NX (only if not exists)
-            # EX 300 = expires in 5 minutes as safety mechanism
-            acquired = await r.set(lock_key, lock_value, nx=True, ex=300)
-
-            if not acquired:
-                # Lock is held by another instance
-                existing = await r.get(lock_key)
-                raise StorageError(
-                    f"Cannot start: another instance is using Redis prefix '{self.config.key_prefix}'. "
-                    f"Lock held by: {existing}. "
-                    f"If this is a stale lock from a crashed instance, manually delete Redis key: {lock_key}"
-                )
-
-            logger.info(
-                f"[RedisProgramStorage] Acquired exclusive instance lock for prefix '{self.config.key_prefix}'"
-            )
-            self._instance_lock_token = lock_value
-
-            # Start renewal task to keep lock alive
-            self._instance_lock_renewal_task = asyncio.create_task(
-                self._renew_lock_periodically()
-            )
-            return True
-
-        return await self._with_redis("acquire_instance_lock", _acquire)
-
-    async def release_instance_lock(self) -> None:
-        """Release the instance lock."""
-        if self.config.read_only:
-            return
-
-        # Stop renewal task
-        if self._instance_lock_renewal_task:
-            self._instance_lock_renewal_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._instance_lock_renewal_task
-            self._instance_lock_renewal_task = None
-
-        if not self._instance_lock_token:
-            return
-
-        async def _release(r: aioredis.Redis):
-            lock_key = self._k_instance_lock()
-            # Only delete if we still own the lock (check token matches)
-            current = await r.get(lock_key)
-            if current and current.startswith(self._instance_id):
-                await r.delete(lock_key)
-                logger.info(
-                    f"[RedisProgramStorage] Released instance lock for prefix '{self.config.key_prefix}'"
-                )
-            self._instance_lock_token = None
-
-        try:
-            await self._with_redis("release_instance_lock", _release)
-        except Exception as e:
-            logger.warning(
-                f"[RedisProgramStorage] Failed to release instance lock: {e}"
-            )
-
-    async def renew_instance_lock(self) -> bool:
-        """Renew the instance lock to prevent expiry."""
-        if not self._instance_lock_token:
-            return False
-
-        async def _renew(r: aioredis.Redis) -> bool:
-            lock_key = self._k_instance_lock()
-            # Check we still own the lock
-            current = await r.get(lock_key)
-            if not current or not current.startswith(self._instance_id):
-                logger.error(
-                    "[RedisProgramStorage] Lost instance lock! Another instance may have taken over."
-                )
-                return False
-
-            # Renew expiry
-            lock_value = f"{self._instance_id}:{time.time()}"
-            await r.set(lock_key, lock_value, ex=300)
-            self._instance_lock_token = lock_value
-            return True
-
-        try:
-            return await self._with_redis("renew_instance_lock", _renew)
-        except Exception as e:
-            logger.error(f"[RedisProgramStorage] Failed to renew instance lock: {e}")
-            return False
-
-    async def _renew_lock_periodically(self):
-        """Background task to renew instance lock every 2 minutes."""
-        while not self._closing:
-            try:
-                await asyncio.sleep(
-                    120
-                )  # Renew every 2 minutes (lock expires in 5 minutes)
-                if not await self.renew_instance_lock():
-                    logger.critical(
-                        "[RedisProgramStorage] Failed to renew instance lock! "
-                        "Another instance may be using the same prefix. STOPPING."
-                    )
-                    break
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"[RedisProgramStorage] Lock renewal error: {e}")
+        return await self._conn.execute("_ids_for_status", _members)
 
     async def atomic_state_transition(
         self, program: Program, old_state: str | None, new_state: str
     ) -> None:
         self._check_write_allowed("atomic_state_transition")
 
-        async def _atomic(r: aioredis.Redis):
-            key = self._k_program(program.id)
+        async def _atomic(r: aioredis.Redis) -> None:
+            key = self._keys.program(program.id)
 
-            # Use WATCH-MULTI-EXEC for optimistic locking
             while True:
                 try:
                     async with r.pipeline(transaction=True) as pipe:
-                        # Watch the program key for concurrent modifications
                         await pipe.watch(key)
 
-                        # Get existing program and merge
                         existing_raw = await pipe.get(key)
                         existing = (
                             self._safe_deserialize(existing_raw, "atomic_transition")
@@ -587,8 +358,7 @@ class RedisProgramStorage(ProgramStorage):
                             else None
                         )
 
-                        # Increment counter for this update
-                        counter = await r.incr(self._k_ts())
+                        counter = await r.incr(self._keys.timestamp())
                         updated = program.model_copy(
                             update={"atomic_counter": int(counter)}, deep=True
                         )
@@ -598,80 +368,108 @@ class RedisProgramStorage(ProgramStorage):
                                 update={"atomic_counter": int(counter)}, deep=True
                             )
 
-                        # Begin transaction
                         pipe.multi()
-
-                        # 1. Update program in hash
                         pipe.set(key, _dumps(updated.to_dict()))
 
-                        # 2. Update status set membership
                         if old_state:
-                            pipe.srem(self._k_status(old_state), program.id)
-                        pipe.sadd(self._k_status(new_state), program.id)
+                            pipe.srem(self._keys.status_set(old_state), program.id)
+                        pipe.sadd(self._keys.status_set(new_state), program.id)
 
-                        # 3. Publish event
                         pipe.xadd(
-                            self._k_stream(),
+                            self._keys.status_stream(),
                             {
                                 "id": program.id,
                                 "status": new_state,
                                 "event": "transition",
                             },
-                            maxlen=10_000,
+                            maxlen=STREAM_MAX_LEN,
                             approximate=True,
                         )
 
-                        # Execute all operations atomically
                         await pipe.execute()
-                        break  # Success!
+                        break
 
                 except WatchError:
-                    # Another client modified the key, retry
                     logger.debug(
-                        f"[RedisProgramStorage] Concurrent modification detected for {program.id}, retrying..."
+                        "[RedisProgramStorage] Concurrent modification for {}, retrying",
+                        program.id,
                     )
                     continue
 
-        await self._with_redis("atomic_state_transition", _atomic)
+        await self._conn.execute("atomic_state_transition", _atomic)
+
+    # --------------------- Activity Monitoring ---------------------
+
+    async def wait_for_activity(self, timeout: float) -> None:
+        """Block on stream read; exits quickly during shutdown."""
+        if self._conn.is_closing:
+            return
+
+        poll_ms = max(1, int(timeout * 1000))
+        try:
+            r = await self._conn.get()
+            await r.xread({self._keys.status_stream(): "$"}, block=poll_ms, count=1)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug("[RedisProgramStorage] wait_for_activity fallback: {}", e)
+            await asyncio.sleep(timeout)
+
+    # --------------------- Admin Operations ---------------------
+
+    async def flushdb(self) -> None:
+        self._check_write_allowed("flushdb")
+
+        async def _flush(r: aioredis.Redis) -> None:
+            await r.flushdb()
+
+        await self._conn.execute("flushdb", _flush)
+
+    # --------------------- Instance Locking (delegates) ---------------------
+
+    async def acquire_instance_lock(self) -> bool:
+        """Acquire exclusive lock to prevent multiple instances."""
+        if self.config.read_only:
+            logger.info(
+                "[RedisProgramStorage] Skipping instance lock (read-only mode) "
+                "for prefix '{}'",
+                self._keys.prefix,
+            )
+            return True
+        return await self._lock.acquire()
+
+    async def release_instance_lock(self) -> None:
+        """Release the instance lock."""
+        if self.config.read_only:
+            return
+        await self._lock.release()
+
+    async def renew_instance_lock(self) -> bool:
+        """Renew the instance lock to prevent expiry."""
+        if self.config.read_only:
+            return True
+        return await self._lock.renew()
 
     # --------------------- Shutdown ---------------------
 
-    async def close(self):
-        # Release instance lock first
-        await self.release_instance_lock()
+    async def close(self) -> None:
+        """Close all resources gracefully."""
+        # Release lock first
+        if not self.config.read_only:
+            await self._lock.release()
 
-        self._metrics_stop_flag = True
-        task, self._metrics_task = self._metrics_task, None
-        if task is not None:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        # Stop metrics collection
+        await self._metrics.stop()
 
-        self._closing = True
+        # Close connection
+        await self._conn.close()
 
-        r, self._redis = self._redis, None
-        if r is not None:
-            with contextlib.suppress(Exception):
-                await r.aclose()
-            with contextlib.suppress(Exception):
-                await r.connection_pool.disconnect(inuse_connections=True)
-
-        await asyncio.sleep(0)
         gc.collect()
-        await asyncio.sleep(0)
 
-
-def _flatten_numbers(d: Any, prefix: str = "") -> dict[str, float]:
-    out: dict[str, float] = {}
-
-    def _walk(x: Any, p: str):
-        if isinstance(x, dict):
-            for k, v in x.items():
-                key = f"{p}{k}" if not p.endswith("/") else f"{p}{k}"
-                if isinstance(v, (int, float)):
-                    out[key] = float(v)
-                elif isinstance(v, dict):
-                    _walk(v, key + "/")
-
-    _walk(d, prefix)
-    return out
+    def __repr__(self) -> str:
+        return (
+            f"<RedisProgramStorage "
+            f"prefix={self._keys.prefix!r} "
+            f"connected={self._conn.is_connected} "
+            f"read_only={self.config.read_only}>"
+        )
