@@ -168,8 +168,8 @@ class _StructuredOutputRouter(Runnable):
         idx = random.choices(range(len(self._models)), weights=self._probs)[0]
         return self._models[idx], self._names[idx]
 
-    def _config(self, config: RunnableConfig | None) -> RunnableConfig:
-        return _with_langfuse(config, self._langfuse)
+    def _config(self, config: RunnableConfig | None, model_name: str) -> RunnableConfig:
+        return _with_langfuse(config, self._langfuse, model_name)
 
     def _process(self, response: dict, name: str) -> Any:
         if raw := response.get("raw"):
@@ -180,12 +180,14 @@ class _StructuredOutputRouter(Runnable):
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> Any:
         model, name = self._select()
-        return self._process(model.invoke(input, self._config(config), **kwargs), name)
+        return self._process(
+            model.invoke(input, self._config(config, name), **kwargs), name
+        )
 
     async def ainvoke(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> Any:
         model, name = self._select()
         return self._process(
-            await model.ainvoke(input, self._config(config), **kwargs), name
+            await model.ainvoke(input, self._config(config, name), **kwargs), name
         )
