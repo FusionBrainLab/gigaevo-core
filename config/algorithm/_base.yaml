@@ -39,7 +39,7 @@ validity_bounds:
 # Mutation operator (shared by all configs)
 mutation_operator:
   _target_: gigaevo.evolution.mutation.mutation_operator.LLMMutationOperator
-  llm_wrapper: ${llm}
+  llm_wrapper: ${ref:llm}
   mutation_mode: ${mutation_mode}
   problem_context: ${problem_context}
   strip_comments_and_docstrings: ${strip_comments_and_docstrings}

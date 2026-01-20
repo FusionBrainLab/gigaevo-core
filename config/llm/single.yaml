@@ -11,3 +11,4 @@ llm:
       max_tokens: ${max_tokens}
       base_url: ${llm_base_url}
   probabilities: [1.0]
+  writer: ${writer}

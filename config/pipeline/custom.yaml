@@ -6,7 +6,7 @@
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
-  llm_wrapper: ${llm}
+  llm_wrapper: ${ref:llm}
   storage: ${ref:redis_storage}
 
 dag_blueprint:
@@ -63,7 +63,7 @@ dag_blueprint:
     InsightsStage:
       _target_: gigaevo.programs.stages.insights.InsightsStage
       _partial_: true
-      llm: ${llm}
+      llm: ${ref:llm}
       task_description: ${ref:problem_context::task_description}
       metrics_context: ${metrics_context}
       max_insights: ${max_insights}
@@ -97,7 +97,7 @@ dag_blueprint:
     LineageStage:
       _target_: gigaevo.programs.stages.insights_lineage.LineageStage
       _partial_: true
-      llm: ${llm}
+      llm: ${ref:llm}
       task_description: ${ref:problem_context::task_description}
       metrics_context: ${metrics_context}
       storage: ${ref:redis_storage}

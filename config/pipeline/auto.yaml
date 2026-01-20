@@ -4,7 +4,7 @@
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
-  llm_wrapper: ${llm}
+  llm_wrapper: ${ref:llm}
   storage: ${ref:redis_storage}
 
 # Pipeline builder - automatically selects based on problem_context.is_contextual

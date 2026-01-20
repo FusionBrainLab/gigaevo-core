@@ -573,7 +573,7 @@ dag_blueprint:
     Insights:
       _target_: gigaevo.programs.stages.insights.InsightsStage
       _partial_: true
-      llm: ${llm}
+      llm: ${ref:llm}
       timeout: 60.0
 
   data_flow_edges:

@@ -1,238 +1,191 @@
 from collections.abc import AsyncIterator, Iterator
 import os
 import random
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
+from langfuse.langchain import CallbackHandler
 from loguru import logger
 
-from langfuse.langchain import CallbackHandler
+from gigaevo.llm.token_tracking import TokenTracker
+from gigaevo.utils.trackers.base import LogWriter
+
+
+def _create_langfuse_handler() -> CallbackHandler | None:
+    """Create Langfuse handler if credentials are configured."""
+    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
+        return None
+
+    handler = CallbackHandler()
+    handler.client.flush_at = 1
+    handler.client.flush_interval = 1
+    logger.info("[MultiModelRouter] Langfuse tracing enabled")
+    return handler
+
+
+def _with_langfuse(
+    config: RunnableConfig | None,
+    handler: CallbackHandler | None,
+    model_name: str | None = None,
+) -> RunnableConfig:
+    """Add Langfuse handler and metadata to config."""
+    if handler is None:
+        return config
+
+    cfg = dict(config or {})
+    callbacks = cfg.setdefault("callbacks", [])
+    if handler not in callbacks:
+        callbacks.append(handler)
+
+    if model_name:
+        cfg.setdefault("metadata", {})["selected_model"] = model_name
+
+    return cfg
 
 
 class MultiModelRouter(Runnable):
-    """Probabilistic model selector - drop-in replacement for ChatOpenAI.
-
-    This router implements the same interface as ChatOpenAI, making it a true
-    drop-in replacement. It probabilistically selects one of the provided models
-    for each invocation, enabling A/B testing and load distribution.
-
-    Supports all ChatOpenAI features:
-    - Structured output via .with_structured_output()
-    - Streaming
-    - Async operations
-    - LCEL chaining
-    - Built-in Langfuse tracing (automatic, immediate mode)
-
-    Attributes:
-        models: List of ChatOpenAI models to choose from
-        probabilities: Normalized probability distribution over models
-        langfuse_handler: Langfuse callback handler for tracing (auto-created if env vars set)
+    """Probabilistic model router with token tracking and Langfuse tracing.
 
     Example:
-        >>> models = [
-        ...     ChatOpenAI(model="gpt-4"),
-        ...     ChatOpenAI(model="gpt-3.5-turbo")
-        ... ]
-        >>> router = MultiModelRouter(models, [0.8, 0.2])
-        >>>
-        >>> # Works exactly like ChatOpenAI - all calls automatically traced
+        >>> router = MultiModelRouter(
+        ...     [ChatOpenAI(model="gpt-4"), ChatOpenAI(model="gpt-3.5-turbo")],
+        ...     [0.8, 0.2],
+        ...     writer=metrics_writer,
+        ...     name="mutation",  # metrics go to llm/tokens/mutation/...
+        ... )
         >>> response = await router.ainvoke("Hello!")
-        >>>
-        >>> # Supports structured output
-        >>> router_with_schema = router.with_structured_output(MySchema)
+        >>> structured = router.with_structured_output(MySchema)
     """
 
-    def __init__(self, models: list[ChatOpenAI], probabilities: list[float]):
-        """Initialize router with models and selection probabilities.
-
-        Automatically enables Langfuse tracing if LANGFUSE_PUBLIC_KEY and
-        LANGFUSE_SECRET_KEY environment variables are set.
-
-        Args:
-            models: List of LangChain ChatOpenAI instances
-            probabilities: Selection probabilities (will be normalized)
-
-        Raises:
-            ValueError: If models/probabilities length mismatch or invalid probs
-        """
+    def __init__(
+        self,
+        models: list[ChatOpenAI],
+        probabilities: list[float],
+        writer: LogWriter | None = None,
+        name: str = "default",
+    ):
         if len(models) != len(probabilities):
             raise ValueError(
-                f"models and probabilities must have same length: "
-                f"{len(models)} != {len(probabilities)}"
+                f"Length mismatch: {len(models)} models, {len(probabilities)} probabilities"
             )
-
         if any(p <= 0 for p in probabilities):
             raise ValueError("All probabilities must be positive")
 
         self.models = models
-        total = sum(probabilities)
-        self.probabilities = [p / total for p in probabilities]
-        self._default_model = models[0]
-        self.selected_model: Optional[ChatOpenAI] = None
+        self.model_names = [m.model_name for m in models]
+        self.probabilities = [p / sum(probabilities) for p in probabilities]
 
-        # Auto-initialize Langfuse tracing if environment variables are set
-        self.langfuse_handler: Optional[CallbackHandler] = None
-        if self._is_langfuse_available():
-            # CallbackHandler initializes gracefully even with invalid credentials
-            self.langfuse_handler = CallbackHandler()
-            # Configure for immediate flushing: flush after 1 event, every 1 second
-            self.langfuse_handler.client.flush_at = 1
-            self.langfuse_handler.client.flush_interval = 1
-            logger.info("[MultiModelRouter] Langfuse tracing enabled (immediate mode)")
-        else:
-            logger.debug(
-                "[MultiModelRouter] Langfuse tracing is disabled. "
-                "Set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY environment variables to enable tracing."
-            )
-        
-        logger.info(f"[MultiModelRouter] Initialized with {len(models)} models")
+        self._tracker = TokenTracker(
+            name=name,
+            writer=writer.bind(path=["llm", "tokens"]) if writer else None,
+        )
+        self._langfuse = _create_langfuse_handler()
 
-    @staticmethod
-    def _is_langfuse_available() -> bool:
-        """Check if Langfuse environment variables are set."""
-        return bool(
-            os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")
+        logger.info(
+            "[MultiModelRouter:{}] Initialized with {} models", name, len(models)
         )
 
-    def _select_model(self) -> ChatOpenAI:
+    def _select(self) -> tuple[ChatOpenAI, str]:
         """Select a model based on probabilities."""
-        self.selected_model = random.choices(self.models, weights=self.probabilities)[0]
-        return self.selected_model
+        idx = random.choices(range(len(self.models)), weights=self.probabilities)[0]
+        return self.models[idx], self.model_names[idx]
 
-    def _add_langfuse_to_config(
-        self, config: Optional[RunnableConfig]
-    ) -> RunnableConfig:
-        """Add Langfuse handler and metadata to config if tracing is enabled."""
-        if not self.langfuse_handler:
-            return config
-
-        cfg = dict(config or {})
-
-        # Add Langfuse handler to callbacks
-        callbacks = cfg.setdefault("callbacks", [])
-        if self.langfuse_handler not in callbacks:
-            callbacks.append(self.langfuse_handler)
-
-        # Add model metadata and tags
-        if self.selected_model:
-            metadata = dict(cfg.get("metadata", {}))
-            model_data = str(self.selected_model)
-            metadata["selected_model"] = model_data
-            cfg["metadata"] = metadata
-
-        return cfg
+    def _config(self, config: RunnableConfig | None, model_name: str) -> RunnableConfig:
+        return _with_langfuse(config, self._langfuse, model_name)
 
     def invoke(
-        self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> BaseMessage:
-        """Synchronously select and invoke a model.
-
-        Automatically traces the call to Langfuse if enabled.
-
-        Args:
-            input: Input to the model (messages or string)
-            config: Optional runnable configuration
-            **kwargs: Additional arguments passed to model
-
-        Returns:
-            Model response (BaseMessage)
-        """
-        model = self._select_model()
-        config = self._add_langfuse_to_config(config)
-        return model.invoke(input, config, **kwargs)
+        model, name = self._select()
+        response = model.invoke(input, self._config(config, name), **kwargs)
+        self._tracker.track(response, name)
+        return response
 
     async def ainvoke(
-        self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> BaseMessage:
-        """Asynchronously select and invoke a model.
-
-        Automatically traces the call to Langfuse if enabled.
-
-        Args:
-            input: Input to the model (messages or string)
-            config: Optional runnable configuration
-            **kwargs: Additional arguments passed to model
-
-        Returns:
-            Model response (BaseMessage)
-        """
-        model = self._select_model()
-        config = self._add_langfuse_to_config(config)
-        return await model.ainvoke(input, config, **kwargs)
+        model, name = self._select()
+        response = await model.ainvoke(input, self._config(config, name), **kwargs)
+        self._tracker.track(response, name)
+        return response
 
     def stream(
-        self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> Iterator[BaseMessage]:
-        """Stream response from selected model.
-
-        Automatically traces the call to Langfuse if enabled.
-
-        Args:
-            input: Input to the model
-            config: Optional runnable configuration
-            **kwargs: Additional arguments passed to model
-
-        Yields:
-            Response chunks (BaseMessage)
-        """
-        model = self._select_model()
-        config = self._add_langfuse_to_config(config)
-        return model.stream(input, config, **kwargs)
+        model, name = self._select()
+        last = None
+        for chunk in model.stream(input, self._config(config, name), **kwargs):
+            last = chunk
+            yield chunk
+        if last:
+            self._tracker.track(last, name)
 
     async def astream(
-        self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> AsyncIterator[BaseMessage]:
-        """Async stream response from selected model.
-
-        Automatically traces the call to Langfuse if enabled.
-
-        Args:
-            input: Input to the model
-            config: Optional runnable configuration
-            **kwargs: Additional arguments passed to model
-
-        Yields:
-            Response chunks (BaseMessage)
-        """
-        model = self._select_model()
-        config = self._add_langfuse_to_config(config)
-        async for chunk in model.astream(input, config, **kwargs):
+        model, name = self._select()
+        last = None
+        async for chunk in model.astream(input, self._config(config, name), **kwargs):
+            last = chunk
             yield chunk
+        if last:
+            self._tracker.track(last, name)
 
-    def with_structured_output(self, schema: Any, **kwargs: Any) -> "MultiModelRouter":
-        """Return a router with structured output - wraps all models.
-
-        This creates a new router where each model is wrapped with structured output.
-        Langfuse tracing is automatically preserved.
-
-        Args:
-            schema: Pydantic model or JSON schema
-            **kwargs: Additional arguments for structured output
-
-        Returns:
-            New MultiModelRouter with structured output
-        """
-        wrapped_models = [
-            model.with_structured_output(schema, **kwargs) for model in self.models
+    def with_structured_output(
+        self, schema: Any, **kwargs
+    ) -> "_StructuredOutputRouter":
+        """Create a router that returns parsed Pydantic models with token tracking."""
+        wrapped = [
+            m.with_structured_output(schema, include_raw=True, **kwargs)
+            for m in self.models
         ]
-        new_router = MultiModelRouter(wrapped_models, self.probabilities)
+        return _StructuredOutputRouter(
+            wrapped, self.model_names, self.probabilities, self._langfuse, self._tracker
+        )
 
-        # Preserve Langfuse handler from parent router
-        new_router.langfuse_handler = self.langfuse_handler
-        
-        return new_router
+
+class _StructuredOutputRouter(Runnable):
+    """Router for structured output with token tracking from raw responses."""
+
+    def __init__(
+        self,
+        models: list,
+        model_names: list[str],
+        probabilities: list[float],
+        langfuse: CallbackHandler | None,
+        tracker: TokenTracker,
+    ):
+        self._models = models
+        self._names = model_names
+        self._probs = probabilities
+        self._langfuse = langfuse
+        self._tracker = tracker
+
+    def _select(self) -> tuple[Any, str]:
+        idx = random.choices(range(len(self._models)), weights=self._probs)[0]
+        return self._models[idx], self._names[idx]
+
+    def _config(self, config: RunnableConfig | None) -> RunnableConfig:
+        return _with_langfuse(config, self._langfuse)
+
+    def _process(self, response: dict, name: str) -> Any:
+        if raw := response.get("raw"):
+            self._tracker.track(raw, name)
+        return response.get("parsed")
+
+    def invoke(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
+    ) -> Any:
+        model, name = self._select()
+        return self._process(model.invoke(input, self._config(config), **kwargs), name)
+
+    async def ainvoke(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
+    ) -> Any:
+        model, name = self._select()
+        return self._process(
+            await model.ainvoke(input, self._config(config), **kwargs), name
+        )

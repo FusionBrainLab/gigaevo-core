@@ -12,17 +12,11 @@ from gigaevo.utils.trackers.base import LogWriter
 
 
 def _sanitize(s: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in "-_.=," else "_" for ch in str(s))
+    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(s))
 
 
-def _render_tag(path: list[str], metric: str, labels: dict[str, str]) -> str:
-    base = "/".join(_sanitize(x) for x in [*path, metric] if x)
-    if not labels:
-        return base
-    return base + (
-        "/"
-        + ",".join(f"{_sanitize(k)}={_sanitize(v)}" for k, v in sorted(labels.items()))
-    )
+def _render_tag(path: list[str], metric: str) -> str:
+    return "/".join(_sanitize(x) for x in [*path, metric] if x)
 
 
 class _SeriesState(BaseModel):
@@ -31,12 +25,8 @@ class _SeriesState(BaseModel):
     last_ts: float = Field(default=0.0)
 
 
-# Backend adapter interface
 class LoggerBackend:
-    """
-    Minimal adapter every backend must implement.
-    write_* may buffer; flush() must push buffered data to remote if applicable.
-    """
+    """Minimal adapter every backend must implement."""
 
     def open(self) -> None:
         raise NotImplementedError
@@ -54,10 +44,6 @@ class LoggerBackend:
         raise NotImplementedError
 
     def flush(self) -> None:
-        """
-        Ensure buffered events are sent to the backend.
-        Called periodically by GenericLogger (every `flush_secs`).
-        """
         raise NotImplementedError
 
 
@@ -72,10 +58,8 @@ class GenericLogger(LogWriter):
         self._closed = False
         self._flush_secs = float(flush_secs)
 
-        # open backend
         self.backend.open()
 
-        # background thread
         self._t = threading.Thread(
             target=self._loop, name="generic-writer", daemon=True
         )
@@ -83,10 +67,8 @@ class GenericLogger(LogWriter):
 
         self._last_flush = time.time()
 
-    def bind(
-        self, *, path: list[str] | None = None, labels: dict[str, str] | None = None
-    ) -> "BoundGeneric":
-        return BoundGeneric(self, path or [], labels or {})
+    def bind(self, *, path: list[str] | None = None) -> "BoundGeneric":
+        return BoundGeneric(self, path or [])
 
     def scalar(self, metric: str, value: float, **kw) -> None:
         if self._closed:
@@ -99,7 +81,6 @@ class GenericLogger(LogWriter):
                 "step": kw.get("step"),
                 "t": kw.get("wall_time") or time.time(),
                 "path": kw.get("path") or [],
-                "labels": kw.get("labels") or {},
                 "thr": kw.get("throttle") or {},
             }
         )
@@ -115,7 +96,6 @@ class GenericLogger(LogWriter):
                 "step": kw.get("step"),
                 "t": kw.get("wall_time") or time.time(),
                 "path": kw.get("path") or [],
-                "labels": kw.get("labels") or {},
             }
         )
 
@@ -130,7 +110,6 @@ class GenericLogger(LogWriter):
                 "step": kw.get("step"),
                 "t": kw.get("wall_time") or time.time(),
                 "path": kw.get("path") or [],
-                "labels": kw.get("labels") or {},
             }
         )
 
@@ -140,7 +119,6 @@ class GenericLogger(LogWriter):
         self._closed = True
         self._stop.set()
 
-        # drain queue
         deadline = time.time() + max(0.0, drain_timeout_s)
         while time.time() < deadline:
             try:
@@ -150,11 +128,9 @@ class GenericLogger(LogWriter):
             else:
                 self._handle(event)
 
-        # join thread
         if self._t.is_alive():
             self._t.join(timeout=2.0)
 
-        # final flush & backend close
         try:
             try:
                 self.backend.flush()
@@ -164,12 +140,10 @@ class GenericLogger(LogWriter):
         finally:
             self._closed = True
 
-    # internals
     def _offer(self, event: dict[str, Any]) -> None:
         try:
             self._q.put_nowait(event)
         except Exception:
-            # drop event on full queue or any error
             pass
 
     def _loop(self) -> None:
@@ -177,7 +151,6 @@ class GenericLogger(LogWriter):
             try:
                 event = self._q.get(timeout=0.1)
             except Empty:
-                # periodic flush
                 now = time.time()
                 if (now - self._last_flush) >= self._flush_secs:
                     try:
@@ -188,7 +161,6 @@ class GenericLogger(LogWriter):
                 continue
             self._handle(event)
 
-            # optionally flush if time passed
             now = time.time()
             if (now - self._last_flush) >= self._flush_secs:
                 try:
@@ -198,7 +170,7 @@ class GenericLogger(LogWriter):
                 self._last_flush = now
 
     def _handle(self, e: dict[str, Any]) -> None:
-        tag = _render_tag(e["path"], e["metric"], e["labels"])
+        tag = _render_tag(e["path"], e["metric"])
         step = self._resolve_step(tag, e.get("step"))
         wall_time = e.get("t", time.time())
         kind = e["k"]
@@ -256,32 +228,24 @@ class GenericLogger(LogWriter):
 
 
 class BoundGeneric(LogWriter):
-    def __init__(self, base: GenericLogger, path: list[str], labels: dict[str, str]):
+    def __init__(self, base: GenericLogger, path: list[str]):
         self._base = base
         self._path = list(path)
-        self._labels = dict(labels)
 
-    def bind(
-        self, *, path: list[str] | None = None, labels: dict[str, str] | None = None
-    ) -> "BoundGeneric":
-        return BoundGeneric(
-            self._base, [*self._path, *(path or [])], {**self._labels, **(labels or {})}
-        )
+    def bind(self, *, path: list[str] | None = None) -> "BoundGeneric":
+        return BoundGeneric(self._base, [*self._path, *(path or [])])
 
     def scalar(self, metric: str, value: float, **kw) -> None:
         path = [*self._path, *kw.pop("path", [])]
-        labels = {**self._labels, **kw.pop("labels", {})}
-        self._base.scalar(metric, value, path=path, labels=labels, **kw)
+        self._base.scalar(metric, value, path=path, **kw)
 
     def hist(self, metric: str, values: Any, **kw) -> None:
         path = [*self._path, *kw.pop("path", [])]
-        labels = {**self._labels, **kw.pop("labels", {})}
-        self._base.hist(metric, values, path=path, labels=labels, **kw)
+        self._base.hist(metric, values, path=path, **kw)
 
     def text(self, tag: str, text: str, **kw) -> None:
         path = [*self._path, *kw.pop("path", [])]
-        labels = {**self._labels, **kw.pop("labels", {})}
-        self._base.text(tag, text, path=path, labels=labels, **kw)
+        self._base.text(tag, text, path=path, **kw)
 
     def close(self) -> None:
         self._base.close()
