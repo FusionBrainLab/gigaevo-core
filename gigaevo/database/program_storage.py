@@ -40,6 +40,11 @@ class ProgramStorage(ABC):
     async def get_all_by_status(self, status: str) -> list[Program]: ...
 
     @abstractmethod
+    async def count_by_status(self, status: str) -> int:
+        """Return count of programs with the given status (without fetching data)."""
+        ...
+
+    @abstractmethod
     async def get_all_program_ids(self) -> list[str]: ...
 
     @abstractmethod

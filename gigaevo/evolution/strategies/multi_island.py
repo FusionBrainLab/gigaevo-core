@@ -213,7 +213,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
     async def get_global_archive_size(self) -> int:
         """Total elites across all islands (fast path via island counts)."""
         tasks = [
-            asyncio.create_task(island.__len__) for island in self.islands.values()
+            asyncio.create_task(island.__len__()) for island in self.islands.values()
         ]
         sizes = await asyncio.gather(*tasks)
         return sum(int(s) for s in sizes)
@@ -236,7 +236,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
     async def get_metrics(self) -> StrategyMetrics:
         # per-island counts concurrently
         island_ids = list(self.islands.keys())
-        counts = [await self.islands[i].__len__() for i in island_ids]
+        counts = await asyncio.gather(*[self.islands[i].__len__() for i in island_ids])
         population_sizes = {f"size/{i}": int(c) for i, c in zip(island_ids, counts)}
         total_programs = sum(population_sizes.values())
 

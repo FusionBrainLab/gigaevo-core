@@ -61,31 +61,31 @@ class DagRunnerMetrics(BaseModel):
             else self.loop_iterations / self.uptime_seconds
         )
 
-    async def increment_loop_iterations(self) -> None:
+    def increment_loop_iterations(self) -> None:
         self.loop_iterations += 1
 
-    async def increment_dag_runs_started(self) -> None:
+    def increment_dag_runs_started(self) -> None:
         self.dag_runs_started += 1
 
-    async def increment_dag_runs_completed(self) -> None:
+    def increment_dag_runs_completed(self) -> None:
         self.dag_runs_completed += 1
 
-    async def increment_dag_errors(self) -> None:
+    def increment_dag_errors(self) -> None:
         self.dag_errors += 1
 
-    async def record_timeout(self) -> None:
+    def record_timeout(self) -> None:
         self.dag_timeouts += 1
         self.dag_errors += 1
 
-    async def record_orphaned(self) -> None:
+    def record_orphaned(self) -> None:
         self.orphaned_programs_discarded += 1
         self.dag_errors += 1
 
-    async def record_build_failure(self) -> None:
+    def record_build_failure(self) -> None:
         self.dag_build_failures += 1
         self.dag_errors += 1
 
-    async def record_state_update_failure(self) -> None:
+    def record_state_update_failure(self) -> None:
         self.state_update_failures += 1
         self.dag_errors += 1
 
@@ -207,7 +207,7 @@ class DagRunner:
         try:
             while not self._stopping:
                 try:
-                    await self._metrics.increment_loop_iterations()
+                    self._metrics.increment_loop_iterations()
 
                     # timeouts + harvest finished/failed tasks
                     await self._maintain()
@@ -252,7 +252,7 @@ class DagRunner:
                     await self._state_manager.set_program_state(
                         prog, ProgramState.DISCARDED
                     )
-                await self._metrics.record_timeout()
+                self._metrics.record_timeout()
                 logger.error("[DagScheduler] program {} timed out", info.program_id)
             except Exception as e:
                 logger.error(
@@ -265,13 +265,13 @@ class DagRunner:
             self._active.pop(info.program_id, None)
             try:
                 info.task.result()
-                await self._metrics.increment_dag_runs_completed()
+                self._metrics.increment_dag_runs_completed()
                 logger.debug(
                     "[DagScheduler] harvested completed task for program {}",
                     info.program_id,
                 )
             except Exception as e:
-                await self._metrics.increment_dag_errors()
+                self._metrics.increment_dag_errors()
                 logger.error("[DagScheduler] program {} failed: {}", info.program_id, e)
             finally:
                 del info
@@ -306,7 +306,7 @@ class DagRunner:
                     await self._state_manager.set_program_state(
                         p, ProgramState.DISCARDED
                     )
-                    await self._metrics.record_orphaned()
+                    self._metrics.record_orphaned()
                     logger.warning("[DagScheduler] orphaned program {} discarded", p.id)
                 except Exception as se:
                     logger.error(
@@ -339,12 +339,12 @@ class DagRunner:
                     await self._state_manager.set_program_state(
                         program, ProgramState.DISCARDED
                     )
-                    await self._metrics.record_build_failure()
+                    self._metrics.record_build_failure()
                 except Exception as se:
                     logger.error(
                         "[DagScheduler] state update failed for {}: {}", program.id, se
                     )
-                    await self._metrics.record_state_update_failure()
+                    self._metrics.record_state_update_failure()
                 continue
 
             async def _run_one(prog: Program = program, dag_inst: DAG = dag) -> None:
@@ -359,7 +359,7 @@ class DagRunner:
                 await self._state_manager.set_program_state(
                     program, ProgramState.DAG_PROCESSING_STARTED
                 )
-                await self._metrics.increment_dag_runs_started()
+                self._metrics.increment_dag_runs_started()
                 logger.info("[DagScheduler] launched {}", program.id)
             except Exception as e:
                 logger.error(
@@ -395,7 +395,7 @@ class DagRunner:
                     "[DagScheduler] DAG completed for {} (state updated)", program.id
                 )
         except Exception as se:
-            await self._metrics.record_state_update_failure()
+            self._metrics.record_state_update_failure()
             logger.error(
                 "[DagScheduler] state update failed for {}: {}", program.id, se
             )

@@ -29,7 +29,12 @@ class ProgramStateManager:
         *,
         started_at: datetime | None = None,
     ) -> None:
-        """Mark a stage as RUNNING and persist."""
+        """Mark a stage as RUNNING in-memory (not persisted to Redis).
+
+        The RUNNING state is only used locally during DAG execution.
+        The final COMPLETED/FAILED state (with started_at preserved) is
+        persisted by update_stage_result().
+        """
         async with self._lock_for(program.id):
             ts = started_at or datetime.now(timezone.utc)
             # Preserve input_hash from existing result if present

@@ -327,12 +327,10 @@ class EvolutionEngine:
 
     async def _has_active_dags(self) -> bool:
         """True if any programs are FRESH or DAG_PROCESSING_STARTED (i.e., engine not idle)."""
-        fresh_programs = await self.storage.get_all_by_status(ProgramState.FRESH.value)
-        proc_programs = await self.storage.get_all_by_status(
+        fresh = await self.storage.count_by_status(ProgramState.FRESH.value)
+        proc = await self.storage.count_by_status(
             ProgramState.DAG_PROCESSING_STARTED.value
         )
-        fresh = len(fresh_programs)
-        proc = len(proc_programs)
 
         if fresh or proc:
             current_counts = (fresh, proc)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import asyncio
 import random
 
 from gigaevo.evolution.strategies.island import MapElitesIsland
@@ -19,6 +20,18 @@ class IslandCompatibilityMixin:
         cell = island.config.behavior_space.get_cell(program.metrics)
         current = await island.archive_storage.get_elite(cell)
         return (current is None) or island.config.archive_selector(program, current)
+
+    @staticmethod
+    async def _filter_accepting_islands(
+        islands: list[MapElitesIsland], program: Program
+    ) -> list[MapElitesIsland]:
+        """Filter islands that can accept the program (parallel checks)."""
+        if not islands:
+            return []
+        results = await asyncio.gather(
+            *[IslandCompatibilityMixin._can_accept_program(i, program) for i in islands]
+        )
+        return [i for i, ok in zip(islands, results) if ok]
 
 
 class IslandSelector(ABC):
@@ -40,12 +53,14 @@ class WeightedIslandSelector(IslandSelector, IslandCompatibilityMixin):
         if not islands:
             return None
 
-        accepting = [i for i in islands if await self._can_accept_program(i, program)]
+        accepting = await self._filter_accepting_islands(islands, program)
         if not accepting:
             return None
 
         # Inverse-size weighting: weight = 1 / (len(island) + 1)
-        weights = [1.0 / (await i.__len__() + 1) for i in accepting]
+        # Fetch sizes in parallel
+        sizes = await asyncio.gather(*[i.__len__() for i in accepting])
+        weights = [1.0 / (size + 1) for size in sizes]
         return random.choices(accepting, weights=weights, k=1)[0]
 
 
@@ -61,7 +76,7 @@ class RoundRobinIslandSelector(IslandSelector, IslandCompatibilityMixin):
         if not islands:
             return None
 
-        accepting = [i for i in islands if await self._can_accept_program(i, program)]
+        accepting = await self._filter_accepting_islands(islands, program)
         if not accepting:
             return None
 
@@ -78,7 +93,7 @@ class RandomIslandSelector(IslandSelector, IslandCompatibilityMixin):
         if not islands:
             return None
 
-        accepting = [i for i in islands if await self._can_accept_program(i, program)]
+        accepting = await self._filter_accepting_islands(islands, program)
         if not accepting:
             return None
 

@@ -180,11 +180,8 @@ class RedisProgramStorage(ProgramStorage):
                             else None
                         )
                         counter = await r.incr(self._keys.timestamp())
-                        new_program = program.model_copy(
-                            update={"atomic_counter": int(counter)}, deep=True
-                        )
-                        merged = self._merge(existing, new_program).model_copy(
-                            update={"atomic_counter": int(counter)}, deep=True
+                        merged = self._merge(existing, program).model_copy(
+                            update={"atomic_counter": int(counter)}
                         )
                         pipe.multi()
                         pipe.set(key, _dumps(merged.to_dict()))
@@ -332,6 +329,14 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("get_all_by_status", _by_status)
 
+    async def count_by_status(self, status: str) -> int:
+        """Return count of programs with the given status (without fetching data)."""
+
+        async def _count(r: aioredis.Redis) -> int:
+            return await r.scard(self._keys.status_set(status))
+
+        return await self._conn.execute("count_by_status", _count)
+
     async def _ids_for_status(self, status: str) -> list[str]:
         async def _members(r: aioredis.Redis) -> list[str]:
             return list(await r.smembers(self._keys.status_set(status)))
@@ -365,7 +370,7 @@ class RedisProgramStorage(ProgramStorage):
 
                         if existing:
                             updated = self._merge(existing, updated).model_copy(
-                                update={"atomic_counter": int(counter)}, deep=True
+                                update={"atomic_counter": int(counter)}, deep=False
                             )
 
                         pipe.multi()
