@@ -524,16 +524,25 @@ class DAGAutomata(BaseModel):
         """
         assert self.topology is not None
         all_names = set(self.topology.nodes.keys())
-        _, skipped = self._compute_done_sets(program, finished_this_run)
+        done, skipped = self._compute_done_sets(program, finished_this_run)
 
         ready: set[str] = set()
         newly_cached: set[str] = set()
 
-        for stage_name in sorted(all_names - running - launched_this_run - skipped):
+        for stage_name in sorted(
+            all_names - running - launched_this_run - skipped - done
+        ):
+            # 1. Check if the stage is ready (dependencies satisfied)
+            state, _ = self._diagnose_stage(program, stage_name, finished_this_run)
+            if state is not self.GateState.READY:
+                continue
+
+            # 2. If ready, check if we can skip execution using cache
             st = self.topology.nodes[stage_name]
             res = program.stage_results.get(stage_name)
             cache_handler = st.get_cache_handler()
 
+            is_cached = False
             if res and res.status in FINAL_STATES:
                 # Build inputs to compute hash for cache check
                 inputs_hash = None
@@ -545,11 +554,11 @@ class DAGAutomata(BaseModel):
                     inputs_hash = None
 
                 if not cache_handler.should_rerun(res, inputs_hash, finished_this_run):
-                    newly_cached.add(stage_name)
-                    continue  # Skip - use cached result
+                    is_cached = True
 
-            state, _ = self._diagnose_stage(program, stage_name, finished_this_run)
-            if state is self.GateState.READY:
+            if is_cached:
+                newly_cached.add(stage_name)
+            else:
                 ready.add(stage_name)
 
         return ready, newly_cached
