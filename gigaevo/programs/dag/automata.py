@@ -429,15 +429,21 @@ class DAGAutomata(BaseModel):
             e = edges[0]
             status = self._get_stage_status(program, e.source_stage, finished_this_run)
 
+            # If the source stage is COMPLETED, we are good.
             if status.finalized_this_run and status.completed:
                 continue
+
+            # If the source stage is FINALIZED but NOT COMPLETED (e.g. FAILED, SKIPPED, CANCELLED)
+            # then the mandatory input can NEVER arrive. Impossible.
             if status.finalized_this_run and not status.completed:
                 return (
                     self.GateState.IMPOSSIBLE,
                     [
-                        f"data: '{inp}' <- {e.source_stage} finalized as {status.status_name} this run (non-cacheable)"
+                        f"data: mandatory '{inp}' <- {e.source_stage} finalized as {status.status_name} this run (non-cacheable)"
                     ],
                 )
+
+            # Otherwise, we wait.
             reasons.append(
                 f"data: '{inp}' <- {e.source_stage} needs COMPLETED this run (non-cacheable; status={status.status_name})"
             )

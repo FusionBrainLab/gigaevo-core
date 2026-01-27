@@ -177,6 +177,12 @@ class DAG:
                 program, running, launched_this_run, finished_this_run
             )
             finished_this_run.update(newly_cached)
+            if newly_cached:
+                logger.info(
+                    "[DAG][{}] Stages CACHED (skipped execution): {}",
+                    pid,
+                    sorted(list(newly_cached)),
+                )
 
             # 3) Launch ready
             new_tasks_map = await self._launch_ready(program, ready)
@@ -187,13 +193,18 @@ class DAG:
                 for name, task in new_tasks_map.items():
                     pending_tasks[task] = name
 
-            # 4) Progress accounting (skips or launches)
-            if skip_progress or new_tasks_map:
+            # 4) Progress accounting (skips, launches, or cache hits)
+            if skip_progress or new_tasks_map or newly_cached:
                 last_progress_ts = time.time()
                 stalled_reported = False
 
             # 5) Termination check
-            if not pending_tasks and not to_skip and not new_tasks_map:
+            if (
+                not pending_tasks
+                and not to_skip
+                and not new_tasks_map
+                and not newly_cached
+            ):
                 # Are there unresolved stages left (neither done nor skipped)?
                 all_names = set(self.automata.topology.nodes.keys())
                 done, skipped = self.automata._compute_done_sets(
@@ -258,12 +269,18 @@ class DAG:
                 not collected_any
                 and not new_tasks_map
                 and not skip_progress
+                and not newly_cached
                 and pending_tasks
             ):
                 # If we have pending tasks but didn't collect any (timeout), we are fine.
                 # The asyncio.wait timeout acts as our yield.
                 pass
-            elif not collected_any and not new_tasks_map and not skip_progress:
+            elif (
+                not collected_any
+                and not new_tasks_map
+                and not skip_progress
+                and not newly_cached
+            ):
                 # Should mostly be covered by the wait, but if we have no tasks running
                 # and are just looping (e.g. waiting for something else? unlikely here), sleep briefly.
                 await asyncio.sleep(0.005)
