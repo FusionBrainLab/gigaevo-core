@@ -20,6 +20,8 @@ async def generate_mutations(
     parent_selector: ParentSelector,
     limit: int,
     iteration: int,
+    memory_instructions: str | None = None,
+    memory_used: bool = False,
 ) -> list[str]:
     """Generate at most *limit* mutations from *elites* and persist them immediately.
 
@@ -33,6 +35,8 @@ async def generate_mutations(
         parent_selector: Strategy for selecting parents from elites
         limit: Maximum number of mutations to generate
         iteration: Current iteration number
+        memory_instructions: Optional memory string to guide mutation
+        memory_used: Whether to mark resulting programs as memory-based mutations
     Returns:
         List of program IDs for persisted mutations.
     """
@@ -69,7 +73,9 @@ async def generate_mutations(
             """
             persisted_id: str | None = None
             try:
-                mutation_spec = await mutator.mutate_single(parents)
+                mutation_spec = await mutator.mutate_single(
+                    parents, memory_instructions=memory_instructions
+                )
 
                 if mutation_spec is None:
                     logger.debug(
@@ -81,6 +87,7 @@ async def generate_mutations(
 
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
+                program.set_metadata("memory_used", bool(memory_used))
 
                 await storage.add(program)
                 persisted_id = program.id  # Point of no return — ID must be returned

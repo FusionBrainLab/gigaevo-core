@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -19,6 +20,7 @@ from gigaevo.evolution.mutation.mutation_operator import (
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
+from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
@@ -391,7 +393,43 @@ class EvolutionEngine:
             parent_selector=self.config.parent_selector,
             limit=self.config.max_mutations_per_generation,
             iteration=self.metrics.total_generations,
+            memory_used=False,
         )
+        if self.config.memory_enabled:
+            memory_instructions = self._read_memory_instructions()
+            if memory_instructions:
+                fitness_key = self.config.fitness_key
+                if not fitness_key:
+                    logger.warning(
+                        "[EvolutionEngine] Memory enabled but fitness_key is not configured"
+                    )
+                    memory_parents = elites[: self.config.memory_top_n]
+                else:
+                    memory_parents = await self._select_top_programs_by_fitness(
+                        self.config.memory_top_n
+                    )
+                if memory_parents:
+                    memory_ids = await generate_mutations(
+                        memory_parents,
+                        mutator=self.mutation_operator,
+                        storage=self.storage,
+                        state_manager=self.state,
+                        parent_selector=self.config.parent_selector,
+                        limit=self.config.memory_top_n,
+                        iteration=self.metrics.total_generations,
+                        memory_instructions=memory_instructions,
+                        memory_used=True,
+                    )
+                    mutation_ids.extend(memory_ids)
+                else:
+                    logger.debug(
+                        "[EvolutionEngine] No eligible programs for memory mutations"
+                    )
+            else:
+                logger.debug(
+                    "[EvolutionEngine] Memory enabled but no instructions loaded"
+                )
+
         self.metrics.record_mutation_metrics(len(mutation_ids), 0)
         return mutation_ids
 
@@ -655,3 +693,56 @@ class EvolutionEngine:
     def _reached_generation_cap(self) -> bool:
         cap = self.config.max_generations
         return cap is not None and self.metrics.total_generations >= cap
+
+    async def _select_top_programs_by_fitness(self, total: int) -> list[Program]:
+        if total <= 0:
+            return []
+        fitness_key = self.config.fitness_key
+        if not fitness_key:
+            logger.warning(
+                "[EvolutionEngine] Memory enabled but fitness_key is not configured"
+            )
+            return []
+
+        program_ids = await self.strategy.get_program_ids()
+        if not program_ids:
+            return []
+
+        programs = await self.storage.mget(program_ids)
+        scored: list[tuple[Program, float]] = []
+        for prog in programs:
+            if not prog:
+                continue
+            metrics = prog.metrics or {}
+            fitness_val = metrics.get(fitness_key)
+            if fitness_val is None:
+                continue
+            validity = metrics.get(VALIDITY_KEY)
+            if validity is not None and validity < 0.5:
+                continue
+            scored.append((prog, float(fitness_val)))
+
+        if not scored:
+            return []
+
+        scored.sort(
+            key=lambda item: item[1],
+            reverse=bool(self.config.fitness_key_higher_is_better),
+        )
+        return [prog for prog, _ in scored[:total]]
+
+    def _read_memory_instructions(self) -> str | None:
+        path = Path(self.config.memory_path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            logger.warning("[EvolutionEngine] Memory file not found: {}", path)
+            return None
+        except Exception as exc:
+            logger.warning("[EvolutionEngine] Failed to read memory file {}: {}", path, exc)
+            return None
+
+        text = text.strip()
+        if not text:
+            return None
+        return text

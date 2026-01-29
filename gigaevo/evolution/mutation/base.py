@@ -53,12 +53,15 @@ class MutationOperator(ABC):
 
     @abstractmethod
     async def mutate_single(
-        self, selected_parents: list[Program]
+        self,
+        selected_parents: list[Program],
+        memory_instructions: str | None = None,
     ) -> MutationSpec | None:
         """Generate a single mutation from the selected parents.
 
         Args:
             selected_parents: List of parent programs to mutate
+            memory_instructions: Optional memory text to guide mutation
 
         Returns:
             MutationSpec if successful, None if no mutation could be generated

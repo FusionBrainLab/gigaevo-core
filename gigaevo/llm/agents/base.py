@@ -13,7 +13,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from loguru import logger
 
-from gigaevo.llm.models import MultiModelRouter
+from gigaevo.llm.models import MultiModelRouter, get_selected_model
 
 
 class LangGraphAgent(ABC):
@@ -93,7 +93,11 @@ class LangGraphAgent(ABC):
         # Track metadata
         if "metadata" not in state:
             state["metadata"] = {}
-        state["metadata"]["model_used"] = "llm"
+        model_used = get_selected_model()
+        if model_used is None and hasattr(self.llm, "model_name"):
+            model_used = getattr(self.llm, "model_name")
+        if model_used:
+            state["metadata"]["model_used"] = model_used
 
         return state
 

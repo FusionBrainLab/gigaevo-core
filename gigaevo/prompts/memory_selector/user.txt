@@ -1,0 +1,7 @@
+MUTATION PROMPT (what the mutation model will see):
+{mutation_prompt}
+
+FULL MEMORY TEXT:
+{memory_text}
+
+Select up to {max_ideas} memory ideas that are most helpful for this mutation.

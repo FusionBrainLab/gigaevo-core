@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Iterator
+from contextvars import ContextVar
 import os
 import random
 from typing import TYPE_CHECKING, Any
@@ -18,6 +19,18 @@ from gigaevo.utils.trackers.base import LogWriter
 
 if TYPE_CHECKING:
     from gigaevo.programs.program import Program
+
+
+_selected_model_var: ContextVar[str | None] = ContextVar("selected_model", default=None)
+
+
+def get_selected_model() -> str | None:
+    """Return the last selected model name for the current async context."""
+    return _selected_model_var.get()
+
+
+def _remember_selected_model(model_name: str) -> None:
+    _selected_model_var.set(model_name)
 
 
 def _create_langfuse_handler() -> CallbackHandler | None:
@@ -172,6 +185,7 @@ class MultiModelRouter(Runnable):
         """Select a model based on probabilities."""
         idx = random.choices(range(len(self.models)), weights=self.probabilities)[0]
         model, name = self.models[idx], self.model_names[idx]
+        _remember_selected_model(name)
         tid = self._current_task_id()
         if tid is not None:
             self._task_model_map[tid] = name
@@ -275,6 +289,7 @@ class _StructuredOutputRouter(Runnable):
             return self._select_override()
         idx = random.choices(range(len(self._models)), weights=self._probs)[0]
         model, name = self._models[idx], self._names[idx]
+        _remember_selected_model(name)
         if self._task_model_map is not None:
             tid = MultiModelRouter._current_task_id()
             if tid is not None:
