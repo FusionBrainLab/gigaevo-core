@@ -204,6 +204,25 @@ PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O -n 1 
 
 ---
 
+### `csv_comparison.py` - Compare CSV Exports
+
+Compares multiple exported CSVs by plotting rolling fitness statistics over iterations.
+
+**Usage:**
+```bash
+python -m tools.csv_comparison \
+  --run "outputs/runA.csv:Run_A" \
+  --run "outputs/runB.csv:Run_B" \
+  --iteration-rolling-window 5 \
+  --output-folder results/comparison
+```
+
+**Notes:**
+- Uses the same plotting logic as `comparison.py`
+- `--run` format is `path[:label]` (label defaults to filename stem)
+
+---
+
 ### `comparison.py` — Fitness curve plots
 
 Plots rolling fitness vs iteration across multiple runs. Always emits all three formats
