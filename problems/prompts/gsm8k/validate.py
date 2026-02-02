@@ -1,3 +1,4 @@
+import re
 from typing import List, Union
 from statistics import mean
 
@@ -5,8 +6,8 @@ import pandas as pd
 
 from problems.prompts.client import LLMClient
 from problems.prompts.utils import validate_prompt_template, run_prompts
-from problems.prompts.aime.config import LLM_CONFIG, load_context
-from problems.prompts.aime.utils import remove_boxed, last_boxed_only_string, strip_string
+from problems.prompts.gsm8k.config import LLM_CONFIG, load_context
+from problems.prompts.gsm8k.utils import remove_boxed, last_boxed_only_string, strip_string
 
 
 def extract_answer(response: str) -> str | None:
@@ -26,12 +27,21 @@ def extract_answer(response: str) -> str | None:
     return answer
 
 
+def normalize_number(value: str) -> str:
+    """Normalize a number string for comparison."""
+    try:
+        # Remove commas and convert to float, then back to string
+        return str(float(value.replace(",", "")))
+    except (ValueError, AttributeError):
+        return value
+
+
 def calculate_fitness(
     data: pd.DataFrame,
     preds: List[Union[str, None]],
     target_field: str = "answer",
 ):
-    """Calculate Accuracy."""
+    """Calculate accuracy."""
     accuracy = []
     for pred, target in zip(preds, data[target_field].tolist()):
         target = str(target)
@@ -39,8 +49,8 @@ def calculate_fitness(
             accuracy.append(0)
             continue
         try:
-            pred = strip_string(pred)
-            target = strip_string(target)
+            pred = normalize_number(strip_string(pred))
+            target = normalize_number(target)
             accuracy.append(pred == target)
         except:
             accuracy.append(pred == target)
@@ -49,28 +59,17 @@ def calculate_fitness(
 
 
 def validate(prompt_template: str):
-    """Validate prompt template and compute fitness metrics.
+    """Validate prompt template and compute fitness metrics."""
+    context = load_context(n_samples=300)
 
-    Args:
-        prompt_template: The evolved prompt template with {field} placeholders
-
-    Returns:
-        dict: Metrics including fitness, avg_extraction_failures, avg_cost_utilization, is_valid
-    """
-    # 1. Load dataset context
-    context = load_context(years=(2023, 2024), n_trials=3)
-
-    # 2. Validate template structure
     validate_prompt_template(
         prompt_template,
         required_placeholders=context.get("required_placeholders", []),
         available_placeholders=context.get("available_placeholders", []),
     )
 
-    # 3. Create LLM client
     client = LLMClient(**LLM_CONFIG)
 
-    # 4. Run on dataset
     results = run_prompts(
         prompt_template,
         client,
@@ -78,20 +77,17 @@ def validate(prompt_template: str):
         dataset_key="train_dataset",
     )
 
-    # 5. Extract predictions from raw responses
-    raw_responses = results["predictions"]  # Raw LLM response strings
+    raw_responses = results["predictions"]
     predictions = [extract_answer(r) for r in raw_responses]
 
     dataset = context["train_dataset"]
 
-    # 6. Extraction failures: predictions that failed to parse (None)
     extraction_failures = (
         sum(1 for p in predictions if p is None) / len(predictions)
         if predictions
         else 0.0
     )
 
-    # 7. Main objective
     fitness = calculate_fitness(dataset, predictions, context["target_field"])
 
     return {

@@ -5,8 +5,8 @@ LLM_CONFIG = {
     "model": "Qwen/Qwen3-8B",
     "max_cost": 10.0,  # we don't constrain the cost here
     "model_pricing": {
-        "prompt": 0.05,  # Price per 1M prompt tokens
-        "completion": 0.25,  # Price per 1M completion tokens
+        "prompt": 0.05,
+        "completion": 0.25,
     },
     "generation_kwargs": {
         "temperature": 0.6,
@@ -14,7 +14,7 @@ LLM_CONFIG = {
         "extra_body": {
             "top_k": 20,
         },
-        "max_tokens": 16384
+        "max_tokens": 8192
     },
     "client_kwargs": {
         "api_key": "None",
@@ -22,15 +22,14 @@ LLM_CONFIG = {
     },
 }
 
-# Dataset configuration
 DATASET_CONFIG = {
-    "path": "problems/prompts/aime/dataset/AIME_Dataset_2023_2025.csv",
-    "required_placeholders": ["problem"],
-    "target_field": "answer",
+    "train_path": "problems/prompts/ifbench/dataset/IFBench_train.jsonl",
+    "test_path": "problems/prompts/ifbench/dataset/IFBench_test.jsonl",
+    "required_placeholders": ["prompt"],
 }
 
 
-def load_context(years=(2023, 2024), n_trials: int = 2) -> dict:
+def load_context(n_samples: int = 300) -> dict:
     """Load dataset and return context for validation.
 
     Returns:
@@ -38,19 +37,11 @@ def load_context(years=(2023, 2024), n_trials: int = 2) -> dict:
             - train_dataset (pd.DataFrame): Dataset for evaluation
             - available_placeholders (list[str]): Column names usable in templates
             - required_placeholders (list[str]): Fields that MUST be in template
-            - target_field (str): Target/label column name
     """
-    train_dataset = pd.read_csv(DATASET_CONFIG["path"])
-
-    # Evaluate on a specific year
-    train_dataset = train_dataset[train_dataset["Year"].isin(years)].reset_index(drop=True)
-
-    # Evaluate multiple independent times on each problem to reduce variance
-    train_dataset = pd.concat([train_dataset] * n_trials, ignore_index=True)
+    train_dataset = pd.read_json(DATASET_CONFIG["train_path"], lines=True)[:n_samples]
 
     return {
         "train_dataset": train_dataset,
         "available_placeholders": DATASET_CONFIG["required_placeholders"],
         "required_placeholders": DATASET_CONFIG["required_placeholders"],
-        "target_field": DATASET_CONFIG["target_field"],
     }

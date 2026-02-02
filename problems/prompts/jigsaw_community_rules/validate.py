@@ -74,7 +74,6 @@ def validate(prompt_template: str):
     raw_responses = results["predictions"]  # Raw LLM response strings
     predictions = [extract_answer(r) for r in raw_responses]
 
-    call_logs = results["call_logs"]
     dataset = context["train_dataset"]
 
     # 6. Extraction failures: predictions that failed to parse (None)
@@ -84,17 +83,11 @@ def validate(prompt_template: str):
         else 0.0
     )
 
-    # 7. Cost utilization: average across samples
-    avg_cost_utilization = (
-        mean(log.cost_utilization for log in call_logs) if call_logs else 0.0
-    )
-
-    # 8. Main objective: average ROC-AUC on the dataset (higher is better)
+    # 7. Main objective: average ROC-AUC on the dataset (higher is better)
     fitness = calculate_fitness(dataset, predictions, context["target_field"])
 
     return {
         "fitness": fitness,
         "avg_extraction_failures": extraction_failures,
-        "avg_cost_utilization": avg_cost_utilization,
         "is_valid": 1,
     }

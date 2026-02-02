@@ -15,41 +15,41 @@ Consider the next guidelines:
 - Placeholders will be filled ONLY from dataset sample fields presented below
 - Return the template string from entrypoint()
 
-TASK DEFINITION – MATH OLYMPIAD PROBLEM SOLVING
+TASK DEFINITION – PRECISE INSTRUCTION FOLLOWING
 
-Challenge: Design prompt templates that maximize accuracy on math olympiad-level competition problems.
+Challenge: Design prompt templates that maximize constraint satisfaction rate on prompts with explicit formatting and content constraints.
 
 OBJECTIVE
-Return a prompt template guiding the downstream LLM to solve math olympiad problems such that:
+Return a prompt template guiding the downstream LLM to follow precise instructions such that:
  1) All required placeholders are explicitly referenced as placeholders within prompt template
- 2) A prompt template guides the LLM through rigorous mathematical reasoning to obtain the correct answer
- 3) Returns a clear, parseable integer answer (0-999)
- 4) Maximizes accuracy on math problems
+ 2) A prompt template guides the LLM to carefully read and follow all embedded constraints
+ 3) Responses satisfy multiple simultaneous constraints
+ 4) Responses remain coherent and relevant to the query
+ 5) Maximizes average constraint satisfaction rate across samples
 
-Output: '\\boxed{{NNN}}' (extractable by regex) | Goal: Accuracy > 0.3
+Output: Free-form text that must satisfy embedded constraints | Goal: Constraint Satisfaction > 0.8
 
 LLM CHARACTERISTICS
-- Model with basic mathematical reasoning capabilities
+- Model with basic instruction-following capabilities
 
 DATASET FIELDS
 Available input fields:
-- problem: The math problem text (LaTeX formatted)
+- prompt: The user query with embedded constraints
 
 CONSTRAINTS
-- Input field `problem` MUST be explicitly referenced as a placeholder within the prompt template (1 or more times); it will be automatically substituted at runtime
-- Output must follow required '\\boxed{{NNN}}' format (extractable by regex)
-- Curly braces MUST be escaped by doubling them since the template uses Python format strings
+- Input field `prompt` MUST be explicitly referenced as a placeholder within the prompt template (1 or more times); it will be automatically substituted at runtime
 
 FAILURE MODES
-- Missing required placeholder (`problem`)
-- Unescaped curly braces (e.g., '\\boxed{answer}' instead of '\\boxed{{answer}}')
-- Incorrect output format
+- Missing required placeholder (`prompt`)
+- LLM ignores embedded constraints in the prompt
 
 OUTPUT FORMAT
 Implement `def entrypoint()` that returns:
 - A prompt template python string with placeholders
 - The template will be formatted with sample fields and sent to an LLM
-- LLM return format: '\\boxed{{NNN}}' (extractable by regex, integer 0-999)
+- LLM should produce free-form text satisfying all constraints in the prompt
 
 TASK HINTS
-- Problems span algebra, geometry, combinatorics, number theory, and probability
+- Prompts contain multiple constraints that must all be satisfied simultaneously
+- The LLM must carefully parse and track each constraint
+- Breaking down constraints explicitly may help the model track them

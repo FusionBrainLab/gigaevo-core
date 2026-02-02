@@ -15,33 +15,33 @@ Consider the next guidelines:
 - Placeholders will be filled ONLY from dataset sample fields presented below
 - Return the template string from entrypoint()
 
-TASK DEFINITION – MATH OLYMPIAD PROBLEM SOLVING
+TASK DEFINITION – GRADE SCHOOL MATH PROBLEM SOLVING
 
-Challenge: Design prompt templates that maximize accuracy on math olympiad-level competition problems.
+Challenge: Design prompt templates that maximize accuracy on multi-step arithmetic word problems.
 
 OBJECTIVE
-Return a prompt template guiding the downstream LLM to solve math olympiad problems such that:
+Return a prompt template guiding the downstream LLM to solve math word problems such that:
  1) All required placeholders are explicitly referenced as placeholders within prompt template
- 2) A prompt template guides the LLM through rigorous mathematical reasoning to obtain the correct answer
- 3) Returns a clear, parseable integer answer (0-999)
+ 2) A prompt template guides the LLM through step-by-step arithmetic reasoning
+ 3) Returns a clear, extractable numeric answer
  4) Maximizes accuracy on math problems
 
-Output: '\\boxed{{NNN}}' (extractable by regex) | Goal: Accuracy > 0.3
+Output: '\\boxed{{NNN}}' (extractable by regex) | Goal: Accuracy > 0.95
 
 LLM CHARACTERISTICS
 - Model with basic mathematical reasoning capabilities
 
 DATASET FIELDS
 Available input fields:
-- problem: The math problem text (LaTeX formatted)
+- question: The math word problem text
 
 CONSTRAINTS
-- Input field `problem` MUST be explicitly referenced as a placeholder within the prompt template (1 or more times); it will be automatically substituted at runtime
+- Input field `question` MUST be explicitly referenced as a placeholder within the prompt template (1 or more times); it will be automatically substituted at runtime
 - Output must follow required '\\boxed{{NNN}}' format (extractable by regex)
 - Curly braces MUST be escaped by doubling them since the template uses Python format strings
 
 FAILURE MODES
-- Missing required placeholder (`problem`)
+- Missing required placeholder (`question`)
 - Unescaped curly braces (e.g., '\\boxed{answer}' instead of '\\boxed{{answer}}')
 - Incorrect output format
 
@@ -49,7 +49,8 @@ OUTPUT FORMAT
 Implement `def entrypoint()` that returns:
 - A prompt template python string with placeholders
 - The template will be formatted with sample fields and sent to an LLM
-- LLM return format: '\\boxed{{NNN}}' (extractable by regex, integer 0-999)
+- LLM return format: '\\boxed{{NNN}}' (extractable by regex)
 
 TASK HINTS
-- Problems span algebra, geometry, combinatorics, number theory, and probability
+- Encourage step-by-step reasoning to track intermediate calculations
+- Problems are at grade school level - no advanced math concepts needed

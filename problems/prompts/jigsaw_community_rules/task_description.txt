@@ -14,7 +14,6 @@ Consider the next guidelines:
 - Use Python format string with placeholders syntax
 - Placeholders will be filled from dataset sample fields presented below
 - Return the template string from entrypoint()
-- The cost of an LLM call should not exceed $1.00
 
 TASK DEFINITION – BINARY CLASSIFICATION OF REDDIT COMMENTS
 
@@ -49,12 +48,10 @@ CONSTRAINTS
 - input fields `body` and `rule` available in the input data sample MUST be explicitly referenced as placeholders within the prompt template (1 or more times); each will be automatically substituted at runtime
 - all input fields except `body` and `rule` are available in the input data and can be OPTIONALLY referenced as placeholders within the prompt template (1 or more times); each will be automatically substituted at runtime
 - Output must follow required 'Answer: X.XX' (extractable by regex) format
-- Stay within cost budget
 
 FAILURE MODES
 - Missing required placeholders
 - Incorrect output format
-- Exceeding cost budget
 
 OUTPUT FORMAT
 Implement `def entrypoint()` that returns:

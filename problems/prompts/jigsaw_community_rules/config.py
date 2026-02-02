@@ -1,23 +1,24 @@
 import pandas as pd
 
-# LLM client configuration
+
 LLM_CONFIG = {
-    "model": "Qwen/Qwen2.5-14B-Instruct",
-    "max_cost": 1.0,  # Maximum cost budget per sample in dollars
+    "model": "Qwen/Qwen3-8B",
+    "max_cost": 10.0,  # we don't constrain the cost here
     "model_pricing": {
-        "prompt": 0.06,  # Price per 1M prompt tokens
-        "completion": 0.24,  # Price per 1M completion tokens
+        "prompt": 0.05,
+        "completion": 0.25,
     },
     "generation_kwargs": {
-        "temperature": 0.7,
-        "top_p": 0.8,
+        "temperature": 0.6,
+        "top_p": 0.95,
         "extra_body": {
             "top_k": 20,
         },
+        "max_tokens": 8192
     },
     "client_kwargs": {
-        "api_key": "token-classifier",
-        "base_url": "http://localhost:7732/v1",
+        "api_key": "None",
+        "base_url": "http://localhost:8000/v1",
     },
 }
 
