@@ -6,6 +6,9 @@ max_elites_per_generation: 5
 max_mutations_per_generation: 8
 num_parents: 2
 mutation_mode: rewrite
-max_generations: null
+max_generations: 100
 strip_comments_and_docstrings: false
 pre_step_hook: null
+memory_enabled: true
+memory_top_n: 5
+memory_path: ${hydra:runtime.cwd}/memory/memory_26.json

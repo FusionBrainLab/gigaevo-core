@@ -48,7 +48,7 @@ class EngineConfig(BaseModel):
     )
     memory_path: str = Field(
         default="memory.txt",
-        description="Path to memory instructions file",
+        description="Path to memory instructions file (.txt or .json)",
     )
     fitness_key: str | None = Field(
         default=None, description="Primary fitness metric key for memory selection"

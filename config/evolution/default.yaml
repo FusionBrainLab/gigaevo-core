@@ -1,4 +1,4 @@
-# @package _global_
+i78# @package _global_
 
 # Compute required behavior keys from islands
 required_behavior_keys:
@@ -24,6 +24,11 @@ engine_config:
   max_generations: ${max_generations}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
+  memory_enabled: ${memory_enabled}
+  memory_top_n: ${memory_top_n}
+  memory_path: ${memory_path}
+  fitness_key: ${primary_key}
+  fitness_key_higher_is_better: ${higher_is_better}
 
 metrics_tracker:
   _target_: gigaevo.utils.metrics_tracker.MetricsTracker

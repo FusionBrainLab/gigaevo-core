@@ -1,7 +1,12 @@
 MUTATION PROMPT (what the mutation model will see):
 {mutation_prompt}
 
-FULL MEMORY TEXT:
+MEMORY CARDS:
 {memory_text}
 
-Select up to {max_ideas} memory ideas that are most helpful for this mutation.
+Select up to {max_cards} memory card(s) that are most helpful for this mutation.
+Return each selected card as a compact block with:
+- CARD_ID
+- WHEN_TO_USE (1-3 bullets)
+- MUTATION_ACTIONS (1-3 bullets)
+- NOTES (optional)
