@@ -63,18 +63,6 @@ def test_best_prompt(
     exec_globals = {}
     exec(best["code"], exec_globals)
     prompt_template = exec_globals["entrypoint"]()
-    prompt_template = """
-Answer the following question based on the provided passages.
-
-Question: {question}
-
-Passages:
-{passages}
-
-Provide your answer in the exact format: Answer: <your answer>
-
-Answer: <answer>
-""".strip()
 
     context = load_test_context()
 
