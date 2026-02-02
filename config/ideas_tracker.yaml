@@ -1,0 +1,12 @@
+gen_delta: 100000
+
+# LLM model name used by IdeaAnalyzer
+model: "deepseek/deepseek-v3.2"
+
+# Connection settings for RedisRunConfig
+redis:
+  redis_host: "localhost"
+  redis_port: 6379
+  redis_db: 0
+  redis_prefix: "heilbron"
+  label: ""
