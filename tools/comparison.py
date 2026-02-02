@@ -366,6 +366,9 @@ def plot_comparison(
     ylabel: str | None = None,
     aggregate_iterations: bool = True,
     show: bool = False,
+    original_memory_score: float | None = None,
+    y_min: float | None = None,
+    y_max: float | None = None,
 ):
     """Plot comparison of multiple evolution runs with publication-quality styling.
 
@@ -526,6 +529,24 @@ def plot_comparison(
     ax.tick_params(axis="both", which="major", length=4, width=0.8)
     ax.tick_params(axis="both", which="minor", length=2, width=0.5)
 
+    if original_memory_score is not None:
+        ax.axhline(
+            y=original_memory_score,
+            color="red",
+            linestyle="--",
+            linewidth=2.0,
+            label=f"Original memory score ({original_memory_score:g})",
+        )
+
+    if y_min is not None or y_max is not None:
+        ax.set_ylim(bottom=y_min, top=y_max)
+    else:
+        # Zoom y-axis to data range (don't waste space starting at 0)
+        auto_y_min, auto_y_max = ax.get_ylim()
+        y_range = auto_y_max - auto_y_min
+        pad = max(y_range * 0.15, 0.005)
+        ax.set_ylim(bottom=auto_y_min - pad, top=auto_y_max + pad)
+
     # Legend - compact styling
     legend_kwargs = {
         "frameon": True,
@@ -543,12 +564,6 @@ def plot_comparison(
         )
     else:
         ax.legend(loc=legend_location, **legend_kwargs)
-
-    # Zoom y-axis to data range (don't waste space starting at 0)
-    y_min, y_max = ax.get_ylim()
-    y_range = y_max - y_min
-    pad = max(y_range * 0.15, 0.005)
-    ax.set_ylim(bottom=y_min - pad, top=y_max + pad)
 
     # Finalize layout
     fig.tight_layout()
