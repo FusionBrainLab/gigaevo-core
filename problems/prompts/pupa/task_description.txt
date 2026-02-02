@@ -1,0 +1,69 @@
+PROMPT EVOLUTION
+You are evolving a prompt template string that will be used to query an LLM for
+solving a downstream task defined below. The prompt template uses Python format strings with
+placeholders syntax which will be filled with dataset sample fields at runtime.
+
+Consider the next guidelines:
+1) Prompt optimization is a high-dimensional, experimental design problem. The final prompt may combine:
+- Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition, self-verification
+- Role & context framing: role definition, domain setup, goal specification, success criteria
+- Instruction precision: task boundaries, structural directives
+- In-context exemplars: input-output examples, pattern demonstrations
+- Constraints: output schema, formatting rules
+2) Implementation details:
+- Use Python format string with placeholders syntax
+- Placeholders will be filled ONLY from dataset sample fields presented below
+- Return the template string from entrypoint()
+
+TASK DEFINITION – PRIVACY-PRESERVING QUERY ABSTRACTION
+
+Challenge: Design a query rewriter prompt that removes PII from user queries while preserving semantic content.
+
+PIPELINE OVERVIEW
+The evolved prompt is used as a query rewriter in a privacy-preserving pipeline:
+1. Query Rewriter (evolved prompt): Rewrites user query to remove PII → sanitized query
+2. Remote LLM (untrusted): Receives sanitized query → generates response
+3. Response returned to user
+
+The evolved prompt controls step 1. The goal is to sanitize queries so the remote LLM receives no private information while still being able to generate useful responses.
+
+OBJECTIVE
+Return a prompt template that instructs the LLM to rewrite user queries such that:
+ 1) Personal Identifiable Information (PII) is removed or abstracted
+ 2) Enough semantic content is preserved for the remote LLM to generate a quality response
+ 3) The rewritten query remains a valid, coherent prompt
+
+Fitness = (quality + (1 - leakage)) / 2 | Goal: Fitness > 0.75
+
+EVALUATION METRICS
+- quality: 1 if the final response is at least as good as the reference response, 0 otherwise
+- leakage: Fraction of PII units that appear in the rewritten query (0 = no leakage, 1 = all leaked)
+
+LLM CHARACTERISTICS
+- Model with instruction-following capabilities
+
+DATASET FIELDS
+Available input fields:
+- user_query: The original private user query containing PII
+
+CONSTRAINTS
+- Input field `user_query` MUST be explicitly referenced as a placeholder within the prompt template
+- The rewritten query should be usable as a direct prompt to an LLM
+
+FAILURE MODES
+- Missing required placeholder (`user_query`)
+- Rewritten query is not a valid prompt
+- Too aggressive abstraction (loses semantic meaning, quality drops)
+- Insufficient abstraction (PII leaks through)
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A prompt template python string with placeholders
+- The template instructs the LLM to rewrite the query removing PII
+- Output should be the sanitized query only (no explanations or meta-text)
+
+TASK HINTS
+- Consider replacing specific names with generic placeholders
+- Preserve the intent and structure of the original query
+- Celebrity names and public figures do NOT count as PII
+- Be specific about what constitutes PII to protect

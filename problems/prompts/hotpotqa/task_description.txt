@@ -1,0 +1,59 @@
+PROMPT EVOLUTION
+You are evolving a prompt template string that will be used to query an LLM for
+solving a downstream task defined below. The prompt template uses Python format strings with
+placeholders syntax which will be filled with dataset sample fields at runtime.
+
+Consider the next guidelines:
+1) Prompt optimization is a high-dimensional, experimental design problem. The final prompt may combine:
+- Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition, evidence gathering
+- Role & context framing: role definition, domain setup, goal specification, success criteria
+- Instruction precision: task boundaries, structural directives
+- In-context exemplars: input-output examples, pattern demonstrations
+- Constraints: output schema, formatting rules
+2) Implementation details:
+- Use Python format string with placeholders syntax
+- Placeholders will be filled ONLY from dataset sample fields presented below
+- Return the template string from entrypoint()
+
+TASK DEFINITION – MULTI-HOP QUESTION ANSWERING
+
+Challenge: Design prompt templates that maximize exact match accuracy on multi-hop reasoning questions.
+
+OBJECTIVE
+Return a prompt template guiding the downstream LLM such that:
+ 1) All required placeholders are explicitly referenced within the prompt template
+ 2) The prompt guides the LLM to identify relevant passages and extract the answer
+ 3) Returns a clear, extractable answer
+ 4) Maximizes exact match accuracy after text normalization
+
+Output: 'Answer: <answer>' (extractable by regex) | Goal: Exact Match > 0.7
+
+LLM CHARACTERISTICS
+- Model with basic multi-hop reasoning capabilities
+
+DATASET FIELDS
+Available input fields:
+- question: A question that may require reasoning across multiple passages
+- passages: N numbered passages [1]-[N], formatted as "Title | sentence1 sentence2 ..."
+  - Some passages may be distractors not relevant to the answer
+
+CONSTRAINTS
+- Input fields `question` and `passages` MUST be explicitly referenced as placeholders
+- Output must follow 'Answer: <answer>' format (extractable by regex)
+
+FAILURE MODES
+- Missing required placeholders (`question`, `passages`)
+- Incorrect output format
+- Over-reasoning that leads to wrong answers
+- Ignoring relevant passages
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A prompt template python string with placeholders
+- The template will be formatted with sample fields and sent to an LLM
+- LLM return format: 'Answer: <answer>' (extractable by regex)
+
+TASK HINTS
+- Questions may require combining evidence from multiple passages
+- The answer is typically a short phrase or entity name
+- Encourage step-by-step reasoning to trace evidence across relevant passages

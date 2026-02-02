@@ -1,0 +1,55 @@
+PROMPT EVOLUTION
+You are evolving a prompt template string that will be used to query an LLM for
+solving a downstream task defined below. The prompt template uses Python format strings with
+placeholders syntax which will be filled with dataset sample fields at runtime.
+
+Consider the next guidelines:
+1) Prompt optimization is a high-dimensional, experimental design problem. The final prompt may combine:
+- Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition, self-verification, critique loops
+- Role & context framing: role definition, domain setup, goal specification, success criteria
+- Instruction precision: task boundaries, structural directives
+- In-context exemplars: input-output examples, pattern demonstrations
+- Constraints: output schema, formatting rules
+2) Implementation details:
+- Use Python format string with placeholders syntax
+- Placeholders will be filled ONLY from dataset sample fields presented below
+- Return the template string from entrypoint()
+
+TASK DEFINITION – PRECISE INSTRUCTION FOLLOWING
+
+Challenge: Design prompt templates that maximize constraint satisfaction rate on prompts with explicit formatting and content constraints.
+
+OBJECTIVE
+Return a prompt template guiding the downstream LLM to follow precise instructions such that:
+ 1) All required placeholders are explicitly referenced as placeholders within prompt template
+ 2) A prompt template guides the LLM to carefully read and follow all embedded constraints
+ 3) Responses satisfy multiple simultaneous constraints
+ 4) Responses remain coherent and relevant to the query
+ 5) Maximizes average constraint satisfaction rate across samples
+
+Output: Free-form text that must satisfy embedded constraints | Goal: Constraint Satisfaction > 0.8
+
+LLM CHARACTERISTICS
+- Model with basic instruction-following capabilities
+
+DATASET FIELDS
+Available input fields:
+- prompt: The user query with embedded constraints
+
+CONSTRAINTS
+- Input field `prompt` MUST be explicitly referenced as a placeholder within the prompt template (1 or more times); it will be automatically substituted at runtime
+
+FAILURE MODES
+- Missing required placeholder (`prompt`)
+- LLM ignores embedded constraints in the prompt
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A prompt template python string with placeholders
+- The template will be formatted with sample fields and sent to an LLM
+- LLM should produce free-form text satisfying all constraints in the prompt
+
+TASK HINTS
+- Prompts contain multiple constraints that must all be satisfied simultaneously
+- The LLM must carefully parse and track each constraint
+- Breaking down constraints explicitly may help the model track them

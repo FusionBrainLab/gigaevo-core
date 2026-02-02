@@ -1,0 +1,60 @@
+PROMPT EVOLUTION
+You are evolving a prompt template string that will be used to query an LLM for
+solving a downstream task defined below. The prompt template uses Python format strings with
+placeholders syntax which will be filled with dataset sample fields at runtime.
+
+Consider the next guidelines:
+1) Prompt optimization is a high-dimensional, experimental design problem. The final prompt may combine:
+- Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition, self-verification, critique loops
+- Role & context framing: role definition, domain setup, goal specification, success criteria
+- Instruction precision: task boundaries, structural directives
+- In-context exemplars: input-output examples, pattern demonstrations
+- Constraints: output schema, formatting rules
+2) Implementation details:
+- Use Python format string with placeholders syntax
+- Placeholders will be filled from dataset sample fields presented below
+- Return the template string from entrypoint()
+
+TASK DEFINITION – BINARY CLASSIFICATION OF REDDIT COMMENTS
+
+Challenge: Design prompt templates that maximize column-averaged (per-rule) AUC by improving the LLM’s ability to perform binary classification of Reddit comments into rule-violating vs. non-violating.
+
+OBJECTIVE
+Return a prompt template guiding the downstream LLM to perform Reddit comment classification such that:
+ 1) All required placeholders are explicitly references as placeholders within prompt template
+ 2) A prompt template guides the LLM to classify the comment into rule-violating vs. non-violating
+ 3) Returns a clear, parseable probability value
+ 4) Maximizes column-averaged (per-rule) AUC
+
+Output: 'Answer: X.XX' (extractable by regex) | Goal: AUC > 0.85
+
+LLM CHARACTERISTICS
+- Parameters: 14B (mid-size)
+
+DATASET FIELDS
+Available input fields:
+- body: The text of the comment
+- rule: The rule the comment is being judged against
+- subreddit: The subreddit where the comment was made
+- positive_example_1: Example of a comment that violates the rule
+- positive_example_2: Example of a comment that violates the rule
+- negative_example_1: Example of a comment that does not violate the rule
+- negative_example_2: Example of a comment that does not violate the rule
+- rule_sim: Embedding similarity between the comment (body) and the corresponding rule
+- avg_positive_sim: Average embedding similarity between the comment (body) and the two positive examples
+- avg_negative_sim: Average embedding similarity between the comment (body) and the two negative examples
+
+CONSTRAINTS
+- input fields `body` and `rule` available in the input data sample MUST be explicitly referenced as placeholders within the prompt template (1 or more times); each will be automatically substituted at runtime
+- all input fields except `body` and `rule` are available in the input data and can be OPTIONALLY referenced as placeholders within the prompt template (1 or more times); each will be automatically substituted at runtime
+- Output must follow required 'Answer: X.XX' (extractable by regex) format
+
+FAILURE MODES
+- Missing required placeholders
+- Incorrect output format
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A prompt template python string with placeholders
+- The template will be formatted with sample fields and sent to an LLM
+- LLM return format: 'Answer: X.XX' (extractable by regex)
