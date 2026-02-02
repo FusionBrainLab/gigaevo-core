@@ -1,4 +1,4 @@
-"""Memory selector agent for choosing relevant memory ideas for mutation."""
+"""Memory selector agent for choosing relevant memory cards for mutation."""
 
 from typing import TypedDict
 
@@ -13,9 +13,9 @@ from gigaevo.llm.models import MultiModelRouter
 class MemorySelectionOutput(BaseModel):
     """Structured output for memory selection."""
 
-    ideas: list[str] = Field(
+    cards: list[str] = Field(
         default_factory=list,
-        description="Top memory ideas relevant to the mutation prompt",
+        description="Selected memory cards relevant to the mutation prompt",
     )
 
 
@@ -24,14 +24,14 @@ class MemorySelectorState(TypedDict):
 
     mutation_prompt: str
     memory_text: str
-    max_ideas: int
+    max_cards: int
     messages: list[BaseMessage]
     llm_response: MemorySelectionOutput
-    ideas: list[str]
+    cards: list[str]
 
 
 class MemorySelectorAgent(LangGraphAgent):
-    """Agent that selects the most relevant memory ideas for a mutation."""
+    """Agent that selects the most relevant memory cards for a mutation."""
 
     StateSchema = MemorySelectorState
 
@@ -50,7 +50,7 @@ class MemorySelectorAgent(LangGraphAgent):
         user_prompt = self.user_prompt_template.format(
             mutation_prompt=state["mutation_prompt"],
             memory_text=state["memory_text"],
-            max_ideas=state["max_ideas"],
+            max_cards=state["max_cards"],
         )
         state["messages"] = [
             SystemMessage(content=self.system_prompt),
@@ -60,23 +60,23 @@ class MemorySelectorAgent(LangGraphAgent):
 
     def parse_response(self, state: MemorySelectorState) -> MemorySelectorState:
         response: MemorySelectionOutput = state["llm_response"]
-        max_ideas = max(0, int(state["max_ideas"]))
-        ideas = [i.strip() for i in response.ideas if i and i.strip()]
-        if max_ideas:
-            ideas = ideas[:max_ideas]
-        state["ideas"] = ideas
+        max_cards = max(0, int(state["max_cards"]))
+        cards = [c.strip() for c in response.cards if c and c.strip()]
+        if max_cards:
+            cards = cards[:max_cards]
+        state["cards"] = cards
         return state
 
     async def arun(
-        self, *, mutation_prompt: str, memory_text: str, max_ideas: int = 3
+        self, *, mutation_prompt: str, memory_text: str, max_cards: int = 1
     ) -> list[str]:
         initial_state: MemorySelectorState = {
             "mutation_prompt": mutation_prompt,
             "memory_text": memory_text,
-            "max_ideas": max_ideas,
+            "max_cards": max_cards,
             "messages": [],
             "llm_response": None,  # type: ignore
-            "ideas": [],
+            "cards": [],
         }
         final_state = await self.graph.ainvoke(initial_state)
-        return final_state["ideas"]
+        return final_state["cards"]

@@ -131,13 +131,13 @@ class LLMMutationOperator(MutationOperator):
                     "USER PROMPT:\n"
                     f"{mutation_user_prompt}"
                 )
-                selected_ideas = await self.memory_selector.arun(
+                selected_cards = await self.memory_selector.arun(
                     mutation_prompt=mutation_prompt,
                     memory_text=memory_text,
-                    max_ideas=3,
+                    max_cards=1,
                 )
-                if selected_ideas:
-                    memory_block = "\n".join(f"- {idea}" for idea in selected_ideas)
+                if selected_cards:
+                    memory_block = "\n\n".join(selected_cards)
                     parents_for_mutation = []
                     for parent in selected_parents:
                         clone = parent.model_copy(deep=True)
@@ -145,7 +145,7 @@ class LLMMutationOperator(MutationOperator):
                         parents_for_mutation.append(clone)
                 else:
                     logger.warning(
-                        "[LLMMutationOperator] Memory selection returned no ideas; continuing without memory"
+                        "[LLMMutationOperator] Memory selection returned no cards; continuing without memory"
                     )
 
             if self.mutation_mode == "diff" and len(selected_parents) != 1:

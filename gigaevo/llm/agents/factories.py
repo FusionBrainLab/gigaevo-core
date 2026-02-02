@@ -258,7 +258,7 @@ def create_scoring_agent(
 def create_memory_selector_agent(
     llm: ChatOpenAI | MultiModelRouter,
 ) -> MemorySelectorAgent:
-    """Create a memory selector agent for filtering memory ideas."""
+    """Create a memory selector agent for filtering memory cards."""
     system_prompt = MemorySelectorPrompts.system()
     user_template = MemorySelectorPrompts.user()
     return MemorySelectorAgent(

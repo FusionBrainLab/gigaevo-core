@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
 import time
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -745,4 +746,79 @@ class EvolutionEngine:
         text = text.strip()
         if not text:
             return None
+
+        if path.suffix.lower() == ".json":
+            formatted = self._format_memory_cards_json(text, path)
+            if not formatted:
+                return None
+            return formatted
+
         return text
+
+    @staticmethod
+    def _format_memory_cards_json(raw: str, path: Path) -> str | None:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "[EvolutionEngine] Failed to parse memory JSON {}: {}", path, exc
+            )
+            return None
+
+        cards = payload.get("memory_cards")
+        if not isinstance(cards, list) or not cards:
+            logger.warning(
+                "[EvolutionEngine] Memory JSON {} missing non-empty memory_cards list",
+                path,
+            )
+            return None
+
+        formatted_cards: list[str] = []
+        for idx, card in enumerate(cards, start=1):
+            if not isinstance(card, dict):
+                continue
+            formatted = EvolutionEngine._format_memory_card(card, idx)
+            if formatted:
+                formatted_cards.append(formatted)
+
+        if not formatted_cards:
+            logger.warning(
+                "[EvolutionEngine] Memory JSON {} contained no usable cards", path
+            )
+            return None
+
+        return "\n\n---\n\n".join(formatted_cards)
+
+    @staticmethod
+    def _format_memory_card(card: dict[str, Any], index: int) -> str:
+        card_id = str(card.get("card_id") or f"card_{index}")
+        lines = [f"CARD_ID: {card_id}"]
+
+        card_type = card.get("type")
+        if card_type:
+            lines.append(f"TYPE: {card_type}")
+
+        EvolutionEngine._append_card_section(lines, "WHEN_TO_USE", card.get("when_to_use"))
+        EvolutionEngine._append_card_section(
+            lines, "MUTATION_ACTIONS", card.get("mutation_actions")
+        )
+        EvolutionEngine._append_card_section(
+            lines, "WORKS_BEST_TOGETHER", card.get("works_best_together")
+        )
+        EvolutionEngine._append_card_section(lines, "NOTES", card.get("notes"))
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _append_card_section(
+        lines: list[str], label: str, items: object
+    ) -> None:
+        if not items:
+            return
+        if not isinstance(items, list):
+            items = [items]
+        cleaned = [str(item).strip() for item in items if item and str(item).strip()]
+        if not cleaned:
+            return
+        lines.append(f"{label}:")
+        lines.extend(f"- {item}" for item in cleaned)
