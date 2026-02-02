@@ -100,11 +100,13 @@ Your response format is enforced by the system — just fill in the fields.
 - **archetype**: One of the 8 archetypes above
 - **justification**: 2-3 sentences citing insights, strategy used, expected improvement
 - **insights_used**: 1-3 insight strings copied verbatim from the input
+- **changes**: 1 or more dictionaries describing key introduced changes. Each item should explain what changed and why, in a reusable way when possible.
 - **code**: The complete mutated Python program — valid Python only, no markdown, no JSON
 
 **CRITICAL**:
 - The `code` field must be valid Python source code that can be executed directly
 - Do NOT put JSON, templates, or format examples in the `code` field
+- Use `changes` to capture the main introduced modifications with both a description and explanation.
 - Focus on code quality — the justification should support your changes, not the other way around
 
 {parent_blocks}
