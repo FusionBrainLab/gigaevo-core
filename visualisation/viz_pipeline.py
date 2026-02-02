@@ -12,7 +12,7 @@ import matplotlib.colors as mcolors
 # =========================
 # CONFIG: ONLY SET THIS
 # =========================
-INPUT_CSV = "outputs/circles_26.csv"
+INPUT_CSV = "outputs/circles_32_qwen_mem.csv"
 
 # Optional: if you still want the JSON written to disk for debugging / reuse
 WRITE_JSON_TO_DISK = False
@@ -108,6 +108,7 @@ def row_to_node(row: dict):
     home_island = row.get("metadata_home_island", "").strip()
     current_island = row.get("metadata_current_island", "").strip()
     memory_used = parse_bool(row.get("metadata_memory_used") or row.get("memory_used"))
+    model_used = (row.get("metadata_model_used") or "").strip()
 
     original_insights_lines = []
     if name:
@@ -127,6 +128,8 @@ def row_to_node(row: dict):
         meta_lines.append(
             f"Islands: home={home_island or '-'}, current={current_island or '-'}"
         )
+    if model_used:
+        meta_lines.append(f"Model: {model_used}")
 
     if meta_lines:
         original_insights_lines.append("\n--- Metadata ---\n")
@@ -184,6 +187,38 @@ def is_hidden_fitness(value):
     except (TypeError, ValueError):
         return False
     return abs(v - HIDE_FITNESS_VALUE) < 1e-9
+
+
+def compute_memory_lineage(nodes):
+    nodes_by_id = {n["id"]: n for n in nodes}
+    memo = {}
+    visiting = set()
+
+    def has_memory(nid):
+        if nid in memo:
+            return memo[nid]
+
+        node = nodes_by_id.get(nid)
+        if not node:
+            memo[nid] = False
+            return False
+
+        if nid in visiting:
+            # Cycle guard: fall back to the node's own memory flag.
+            return bool(node.get("memory_used"))
+
+        visiting.add(nid)
+        if node.get("memory_used"):
+            memo[nid] = True
+        else:
+            memo[nid] = any(has_memory(parent_id) for parent_id in node.get("ancestors", []))
+        visiting.remove(nid)
+        return memo[nid]
+
+    for node_id in nodes_by_id:
+        has_memory(node_id)
+
+    return memo
 
 
 def get_color(norm_value):
@@ -576,33 +611,76 @@ def show_stats(n_clicks, all_data):
     if not filtered:
         return html.Div([html.H4("Статистика"), html.P("Нет данных (все = -1000).")])
 
+    memory_lineage = compute_memory_lineage(all_data)
     best_overall = max([x.get("fitness", 0) for x in filtered])
-    mem_vals = [x.get("fitness", 0) for x in filtered if x.get("memory_used")]
-    nonmem_vals = [x.get("fitness", 0) for x in filtered if not x.get("memory_used")]
+    mem_vals_lineage = [x.get("fitness", 0) for x in filtered if memory_lineage.get(x["id"], False)]
+    nonmem_vals_lineage = [x.get("fitness", 0) for x in filtered if not memory_lineage.get(x["id"], False)]
 
-    best_mem = max(mem_vals) if mem_vals else None
-    best_nonmem = max(nonmem_vals) if nonmem_vals else None
-    avg_mem = (sum(mem_vals) / len(mem_vals)) if mem_vals else None
-    avg_nonmem = (sum(nonmem_vals) / len(nonmem_vals)) if nonmem_vals else None
+    mem_vals_direct = [x.get("fitness", 0) for x in filtered if x.get("memory_used")]
+    nonmem_vals_direct = [x.get("fitness", 0) for x in filtered if not x.get("memory_used")]
+
+    best_mem_lineage = max(mem_vals_lineage) if mem_vals_lineage else None
+    best_nonmem_lineage = max(nonmem_vals_lineage) if nonmem_vals_lineage else None
+    avg_mem_lineage = (sum(mem_vals_lineage) / len(mem_vals_lineage)) if mem_vals_lineage else None
+    avg_nonmem_lineage = (sum(nonmem_vals_lineage) / len(nonmem_vals_lineage)) if nonmem_vals_lineage else None
+
+    best_mem_direct = max(mem_vals_direct) if mem_vals_direct else None
+    best_nonmem_direct = max(nonmem_vals_direct) if nonmem_vals_direct else None
+    avg_mem_direct = (sum(mem_vals_direct) / len(mem_vals_direct)) if mem_vals_direct else None
+    avg_nonmem_direct = (sum(nonmem_vals_direct) / len(nonmem_vals_direct)) if nonmem_vals_direct else None
 
     return html.Div(
         [
             html.H4("Статистика (fitness != -1000)"),
             html.P([html.Strong("Best overall: "), f"{best_overall:.3f}"]),
             html.P(
-                [html.Strong("Best with memory: "), f"{best_mem:.3f}" if best_mem is not None else "-"]
-            ),
-            html.P(
                 [
-                    html.Strong("Best without memory: "),
-                    f"{best_nonmem:.3f}" if best_nonmem is not None else "-",
+                    html.Strong("Best with memory (direct): "),
+                    f"{best_mem_direct:.3f}" if best_mem_direct is not None else "-",
                 ]
             ),
-            html.P([html.Strong("Avg with memory: "), f"{avg_mem:.3f}" if avg_mem is not None else "-"]),
             html.P(
                 [
-                    html.Strong("Avg without memory: "),
-                    f"{avg_nonmem:.3f}" if avg_nonmem is not None else "-",
+                    html.Strong("Best without memory (direct): "),
+                    f"{best_nonmem_direct:.3f}" if best_nonmem_direct is not None else "-",
+                ]
+            ),
+            html.P(
+                [
+                    html.Strong("Avg with memory (direct): "),
+                    f"{avg_mem_direct:.3f}" if avg_mem_direct is not None else "-",
+                ]
+            ),
+            html.P(
+                [
+                    html.Strong("Avg without memory (direct): "),
+                    f"{avg_nonmem_direct:.3f}" if avg_nonmem_direct is not None else "-",
+                ]
+            ),
+            html.Hr(),
+            html.P("Память по предкам: если есть у узла или у любого предка."),
+            html.P(
+                [
+                    html.Strong("Best with memory (lineage): "),
+                    f"{best_mem_lineage:.3f}" if best_mem_lineage is not None else "-",
+                ]
+            ),
+            html.P(
+                [
+                    html.Strong("Best without memory (lineage): "),
+                    f"{best_nonmem_lineage:.3f}" if best_nonmem_lineage is not None else "-",
+                ]
+            ),
+            html.P(
+                [
+                    html.Strong("Avg with memory (lineage): "),
+                    f"{avg_mem_lineage:.3f}" if avg_mem_lineage is not None else "-",
+                ]
+            ),
+            html.P(
+                [
+                    html.Strong("Avg without memory (lineage): "),
+                    f"{avg_nonmem_lineage:.3f}" if avg_nonmem_lineage is not None else "-",
                 ]
             ),
         ]
