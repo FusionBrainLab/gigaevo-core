@@ -42,7 +42,7 @@ class MutationStructuredOutput(BaseModel):
     )
     changes: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="Structured descriptions of the key changes introduced by the mutation.",
+        description="Structured descriptions and explanations of the key changes introduced by the mutation.",
     )
     code: str = Field(
         description=(
@@ -217,6 +217,7 @@ class MutationAgent(LangGraphAgent):
         Returns:
             Updated state with llm_response and structured_output fields
         """
+        structured_response: Any = None
         try:
             structured_response = await self.structured_llm.ainvoke(state["messages"])
             state["llm_response"] = structured_response
@@ -237,6 +238,35 @@ class MutationAgent(LangGraphAgent):
             logger.error(f"[MutationAgent] Structured LLM call failed: {e}")
             state["error"] = str(e)
             state["llm_response"] = None
+
+        # Best-effort debug dump of the raw structured response or error
+        try:
+            import json
+            import os
+            from pathlib import Path
+            from uuid import uuid4
+
+            uuid_v = uuid4()
+            p = Path(".").resolve() / "mut_dmp"
+            os.makedirs(p, exist_ok=True)
+
+            payload: Any
+            if structured_response is not None:
+                # Convert Pydantic model to plain dict for JSON serialization
+                if isinstance(structured_response, BaseModel):
+                    payload = structured_response.model_dump()
+                else:
+                    payload = structured_response  # type: ignore[assignment]
+            else:
+                # Fall back to error message if we never got a response
+                payload = {"error": state.get("error", "unknown error")}
+
+            with open(p / f"{uuid_v}.json", "w") as f:
+                json.dump(payload, f, indent=4, default=str)
+        except Exception as dump_exc:  # pragma: no cover - debug-only path
+            logger.warning(
+                f"[MutationAgent] Failed to dump mutation response: {dump_exc}"
+            )
 
         return state
 
