@@ -47,6 +47,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pre-commit", "python-semantic-release"]
 opt = ["jax", "optax"]
+prompt = ["nltk", "emoji", "syllapy", "langdetect", "immutabledict"]
 
 [project.urls]
 Repository = "https://github.com/gigaevo/gigaevo"
