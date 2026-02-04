@@ -100,7 +100,7 @@ Your response format is enforced by the system — just fill in the fields.
 - **archetype**: One of the 8 archetypes above
 - **justification**: 2-3 sentences citing insights, strategy used, expected improvement
 - **insights_used**: 1-3 insight strings copied verbatim from the input
-- **changes**: 1 or more dictionaries describing key introduced changes. Each item should explain what changed and why, in a reusable way when possible.
+- **changes**: 1 or more dictionaries describing key introduced changes. Each item should explain what changed and why, and should be specific enough for tracker logging. Include concrete constants or formulas when they matter.
 - **code**: The complete mutated Python program — valid Python only, no markdown, no JSON
 
 **CRITICAL**:
