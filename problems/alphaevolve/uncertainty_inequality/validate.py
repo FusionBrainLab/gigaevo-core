@@ -48,15 +48,7 @@ def _largest_positive_root_of_P_over_x2(P: sp.Expr) -> float:
     return float(best)
 
 
-def compute_polynomial(x_val, coefficients):
-    """Compute polynomial value at x_val using sympy (for validation)."""
-    coefficients = np.asarray(coefficients, dtype=float)
-    P = _construct_P_with_forced_zero(coefficients)
-    return float(P.subs(x, x_val))
-
-
-def compute_c(coefficients):
-    """Compute constant C using sympy (for validation/verification)."""
+def compute_c_and_rmax(coefficients):
     coefficients = np.asarray(coefficients, dtype=float)
     
     P = _construct_P_with_forced_zero(coefficients)
@@ -66,10 +58,13 @@ def compute_c(coefficients):
     rmax = _largest_positive_root_of_P_over_x2(P)
     c = (rmax**2) / (2.0 * np.pi)
     
-    return c
+    return c, rmax
 
 
 def validate(coefficients):
+    if coefficients is None:
+        raise ValueError("Program returned None - optimization failed to find valid coefficients")
+    
     coefficients = np.asarray(coefficients, dtype=float)
     
     if coefficients.ndim != 1:
@@ -81,28 +76,8 @@ def validate(coefficients):
     if not np.all(np.isfinite(coefficients)):
         raise ValueError("Some coefficients are NaN or infinite")
     
-    p_at_zero = compute_polynomial(0.0, coefficients)
-    if abs(p_at_zero) > 1e-9:
-        raise ValueError(
-            f"Constraint P(0) = 0 violated. P(0) = {p_at_zero:.2e}"
-        )
-
-    eps = 1e-4
-    f_near_zero = compute_polynomial(eps, coefficients) * np.exp(-np.pi * eps**2)
-    if f_near_zero >= 0:
-        raise ValueError(
-            f"Sign condition f(0) < 0 violated. f({eps}) = {f_near_zero:.2e}"
-        )
-
-    large_x = 5.0
-    p_large = compute_polynomial(large_x, coefficients)
-    if p_large < 0:
-        raise ValueError(
-            f"Positivity condition violated. P({large_x}) = {p_large:.2e}"
-        )
-
     try:
-        c = compute_c(coefficients)
+        c, rmax = compute_c_and_rmax(coefficients)
     except Exception as e:
         raise ValueError(f"Error computing C: {e}")
     

@@ -4,7 +4,7 @@ import optax
 import numpy as np
 from scipy.special import hermite
 
-from helper import compute_c
+from helper import _c_and_rmax_from_hermite_coeffs
 
 
 def entrypoint() -> np.ndarray:
@@ -69,15 +69,22 @@ def entrypoint() -> np.ndarray:
             params, opt_state, _ = train_step(params, opt_state)
         return params
     
-    def get_coeffs_from_params(params: np.ndarray):
+    def get_c_from_params(params: np.ndarray):
         c_others, log_c_last = params[:-1], params[-1]
         c_last = np.exp(log_c_last)
         
+        H_vals_at_zero_np = np.array([p(0) for p in hermite_polys])
+        
         c0 = (
-            -(np.sum(c_others * H_vals_at_zero[1:-1]) + c_last * H_vals_at_zero[-1]) / H_vals_at_zero[0]
+            -(np.sum(c_others * H_vals_at_zero_np[1:-1]) + c_last * H_vals_at_zero_np[-1]) 
+            / H_vals_at_zero_np[0]
         )
         hermite_coeffs = np.concatenate([[c0], np.array(c_others), [c_last]])
-        return jnp.array(hermite_coeffs, dtype=jnp.float32)
+        
+        c, rmax = _c_and_rmax_from_hermite_coeffs(hermite_coeffs, num_hermite_coeffs)
+        if c is None:
+            return None, None, None
+        return hermite_coeffs, c, rmax
     
     main_key = jax.random.PRNGKey(42)
     best_c = float("inf")
@@ -87,15 +94,10 @@ def entrypoint() -> np.ndarray:
         main_key, restart_key = jax.random.split(main_key)
         final_params = run_single_trial(restart_key)
         
-        coeffs = get_coeffs_from_params(np.array(final_params))
-        c = compute_c(coeffs)
+        coeffs, c, rmax = get_c_from_params(np.array(final_params))
         
-        if c < best_c:
-            best_c = float(c)
+        if c is not None and c < best_c:
+            best_c = c
             best_coeffs = coeffs
     
-    if best_coeffs is None:
-        raise RuntimeError("Failed to find a valid solution in any restart.")
-    
-    return np.array(best_coeffs[:num_hermite_coeffs])
-
+    return best_coeffs
