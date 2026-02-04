@@ -143,15 +143,16 @@ class RecordList:
         else:
             return True
 
-    def rankings(self) -> list[dict[str, str]]:
-        """Return a short representation of each idea: [{"id", "description", "score"}, ...]."""
+    def rankings(self) -> list[dict[str, str | list[str] | int]]:
+        """Return a short representation of each idea: [{"id", "description", "programs", "count"}, ...]."""
         ideas = []
         for idea in self.ideas:
             ideas.append(
                 {
                     "id": idea.id,
                     "description": idea.description,
-                    "score": len(idea.linked_programs),
+                    "programs": idea.linked_programs,
+                    "count": len(idea.linked_programs),
                 }
             )
         return ideas
@@ -294,17 +295,17 @@ class RecordBank:
             ideas_by_list[index] = {"descriptions": short_descriptions}
         return ideas_by_list
 
-    def rankings(self):
+    def rankings(self) -> list[dict[str, str | list[str] | list[float]]]:
         """
-        Return list of ids and descriptions of ideas alongside number of linked programs.
+        Returns:
+            List of dictionaries with keys: id, description, programs, fitness, an_fitness.
         """
-        ideas_rankings = {"scores": set(), "leaderboard": {}}
+        ideas_rankings = []
         for ideas_list in self.ideas_lists:
             ideas_with_scores = ideas_list.rankings()
             for idea in ideas_with_scores:
-                if idea["score"] not in ideas_rankings["scores"]:
-                    ideas_rankings["scores"].add(idea["score"])
-                    ideas_rankings["leaderboard"][idea["score"]] = [idea]
-                else:
-                    ideas_rankings["leaderboard"][idea["score"]].append(idea)
+                idea_dict = {**idea}
+                idea_dict["fitness"] = []
+                idea_dict["an_fitness"] = []
+                ideas_rankings.append(idea_dict)
         return ideas_rankings

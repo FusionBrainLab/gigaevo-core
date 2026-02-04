@@ -1,4 +1,5 @@
 from gigaevo.llm.ideas_tracker.components.data_components import RecordBank
+from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 
 
 class RecordManager:
@@ -8,6 +9,7 @@ class RecordManager:
         """Create empty active and inactive RecordBanks."""
         self.record_bank: RecordBank = RecordBank()
         self.inactive_record_bank: RecordBank = RecordBank()
+        self.logger: IdeasTrackerLogger | None = None
 
     def add_new_idea(
         self, description: str, linked_program: str, generation: int
@@ -15,17 +17,36 @@ class RecordManager:
         """Add a new idea to the main (active) ideas bank."""
         self.record_bank.add_idea(description, linked_program, generation)
 
+        if self.logger is not None:
+            self.logger.log_new_idea(
+                description=description,
+                generation=generation,
+                linked_program=linked_program,
+            )
+
     def modify_idea(
         self, idea_id: str, new_programs: list[str] | None, generation: int | None
     ) -> None:
         """Update a RecordCard's linked_programs and/or last_generation; move from inactive to active if in inactive bank."""
+        idea_bank = None
         if idea_id in self.record_bank.uuids:
             self.record_bank.modify_idea(idea_id, new_programs, generation)
+            idea_bank = self.record_bank
         elif idea_id in self.inactive_record_bank.uuids:
             self.inactive_record_bank.modify_idea(idea_id, new_programs, generation)
             self.move_to_active(idea_id)
+            idea_bank = self.inactive_record_bank
         else:
             raise ValueError(f"No idea with id {idea_id} found!")
+
+        if self.logger is not None and idea_bank is not None:
+            # Fetch updated idea to log its description
+            idea = idea_bank.get_idea(idea_id)
+            self.logger.log_modify_idea(
+                idea_id=idea.id,
+                description=idea.description,
+                new_linked_programs=new_programs or [],
+            )
 
     def move_inactive(self, generation: int, delta: int) -> None:
         """Move ideas deemed inactive (by generation/delta) from active bank to inactive bank."""
@@ -34,6 +55,13 @@ class RecordManager:
         )
         for inact_idea in inactive_ideas:
             self.inactive_record_bank.import_idea(inact_idea)
+            if self.logger is not None:
+                self.logger.log_move_idea(
+                    idea_id=inact_idea.id,
+                    description=inact_idea.description,
+                    linked_programs=list(inact_idea.linked_programs),
+                    destination="inactive_bank",
+                )
         for inact_idea in inactive_ideas:
             self.record_bank.remove_idea(inact_idea.id)
 
@@ -76,10 +104,17 @@ class RecordManager:
         self.record_bank.import_idea(idea)
         self.inactive_record_bank.remove_idea(idea_id)
 
-    def get_rankings(self, inactive: bool = False):
+    def get_rankings(
+        self, inactive: bool = False
+    ) -> list[dict[str, str | list[str] | list[float]]]:
         """
         Return ideas ranking from main bank.
-        If inactive=True, then return ideas ranking from inactive ideas bank.
+
+        Args:
+            inactive: If True, return rankings from inactive ideas bank instead.
+
+        Returns:
+            List of dictionaries with idea ranking information.
         """
         if not inactive:
             return self.record_bank.rankings()
@@ -87,7 +122,21 @@ class RecordManager:
             return self.inactive_record_bank.rankings()
 
     @staticmethod
-    def get_full_id(short_id: str, ideas_desc_lists) -> str:
+    def get_full_id(
+        short_id: str,
+        ideas_desc_lists: dict[int, dict[str, list[dict[str, str]] | str]],
+    ) -> str:
+        """
+        Resolve a short_id to its full UUID by searching through idea description lists.
+
+        Args:
+            short_id: Short UUID identifier (first part of full UUID).
+            ideas_desc_lists: Dictionary mapping list indices to idea data containing
+                "descriptions" key with list of idea dicts.
+
+        Returns:
+            Full UUID string if found, empty string otherwise.
+        """
         for desc_list in ideas_desc_lists.values():
             for description in desc_list["descriptions"]:
                 if description["short_id"] == short_id:
