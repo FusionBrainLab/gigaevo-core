@@ -2,9 +2,10 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
+if TYPE_CHECKING:
+    from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
 
 
 class IdeasTrackerLogger:
@@ -266,7 +267,7 @@ class IdeasTrackerLogger:
         with open(self.programs_file, "w", encoding="utf-8") as f:
             json.dump(existing_programs, f, indent=2)
 
-    def dump_final_state(self, record_manager: RecordManager) -> None:
+    def dump_final_state(self, record_manager: "RecordManager") -> None:
         """
         Dump final state of idea banks.
 
