@@ -214,7 +214,6 @@ def _select_interactions(
                 float(np.dot(prod_centered, y_centered)) / (prod_norm * y_norm)
             )
             candidates.append((i, j, corr, product))
-
     if not candidates:
         return X, feature_names, idea_ids
 
@@ -399,7 +398,7 @@ def impact_analysis(
             feature_names,
             y_scaled,
             max_pairs=max_interaction_pairs,
-            min_cooccurrence=max(3, int(n_samples * 0.1)),
+            min_cooccurrence=3,
             idea_ids=idea_ids,
         )
     else:
@@ -614,7 +613,11 @@ if __name__ == "__main__":
         RecordCard(**i) for i in json.load(open(ideas_path))[0]["active_bank"]
     ]
     ideas = inactive_ideas + activeideas
-    result = run_impact_pipeline(programs, ideas, n_iterations=50)
+    result = run_impact_pipeline(
+        programs,
+        ideas,
+        n_iterations=50,
+    )
     result.summary.to_csv(p_out / "impact_summary.csv")
     if result.interactions is not None:
         result.interactions.to_csv(p_out / "impact_interactions.csv")
