@@ -350,12 +350,9 @@ class IdeaTracker:
         new_programs = self.get_new_programs(df)
         new_programs_processed = self.wrap_data(new_programs)
         pbar = tqdm.tqdm(total=len(new_programs), leave=False)
-        c = 0
         for prog in new_programs_processed:
             self.process_program(prog)
             pbar.update(1)
-            c += 1
-            # if c == 2: break
         pbar.close()
         self.refresh_main_bank(last_gen)
 
