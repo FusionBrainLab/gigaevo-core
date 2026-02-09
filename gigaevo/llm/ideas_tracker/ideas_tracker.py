@@ -11,6 +11,11 @@ sys.path.append("../gigaevo-core-internal")
 from gigaevo.llm.ideas_tracker.components.analyzer import IdeaAnalyzer
 from gigaevo.llm.ideas_tracker.components.data_components import ProgramRecord
 from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
+from gigaevo.llm.ideas_tracker.utils.ideas_stats import (
+    top_delta_ideas,
+    top_fitness_ideas,
+)
+from gigaevo.llm.ideas_tracker.utils.impact_metrics import avg_score, delta_impact
 from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 from tools.utils import RedisRunConfig, fetch_evolution_dataframe
 
@@ -57,6 +62,12 @@ class IdeaTracker:
             label=redis_cfg.get("label", ""),
         )
 
+        statistics_config = self.config.get("statistics", {}) or {}
+        self.top_k_delta_fitness = statistics_config.get("top_k_delta_fitness", 5)
+        self.top_k_fitness = statistics_config.get("top_k_fitness", 5)
+        self.statistics_enabled = statistics_config.get("enabled", True)
+        self.statistics_mode = statistics_config.get("mode", "top_k")
+
         # Attach logger to components
         self.ideas_manager.logger = self.logger
         self.analyzer.logger = self.logger  # type: ignore[assignment]
@@ -71,6 +82,10 @@ class IdeaTracker:
             redis_db=self.redis_config.redis_db,
             redis_prefix=self.redis_config.redis_prefix,
             label=self.redis_config.label,
+            statistics_enabled=self.statistics_enabled,
+            statistics_mode=self.statistics_mode,
+            top_k_delta_fitness=self.top_k_delta_fitness,
+            top_k_fitness=self.top_k_fitness,
         )
 
     def _load_config(self, config_path: Optional[str | Path]) -> dict[str, Any]:
@@ -240,15 +255,13 @@ class IdeaTracker:
                 else:
                     programs_rk_stats[index]["an_fitness"].append(program.fitness)
         for index, idea in enumerate(programs_rk_stats):
-            programs_rk_stats[index]["avg_score_with"] = sum(idea["fitness"]) / len(
-                idea["fitness"]
-            )
-            programs_rk_stats[index]["avg_score_without"] = sum(
+            programs_rk_stats[index]["avg_score_with"] = avg_score(idea["fitness"])
+            programs_rk_stats[index]["avg_score_without"] = avg_score(
                 idea["an_fitness"]
-            ) / len(idea["an_fitness"])
-            programs_rk_stats[index]["impact"] = sum(idea["fitness"]) / len(
-                idea["fitness"]
-            ) - sum(idea["an_fitness"]) / len(idea["an_fitness"])
+            )
+            programs_rk_stats[index]["impact"] = delta_impact(
+                idea["fitness"], idea["an_fitness"]
+            )
 
         # Persist rankings snapshot via logger
         self.logger.log_rankings(programs_rk_stats)
@@ -271,6 +284,42 @@ class IdeaTracker:
             for prog in self.programs_card
         ]
 
+    def top_ideas(self) -> dict[str, Any]:
+        """ """
+        if not self.statistics_enabled:
+            return {}
+        active_ideas_card = [
+            idea for idea in self.ideas_manager.record_bank.all_ideas_cards()
+        ]
+        inactive_ideas_card = [
+            idea for idea in self.ideas_manager.inactive_record_bank.all_ideas_cards()
+        ]
+        all_ideas_card = active_ideas_card + inactive_ideas_card
+        if self.statistics_mode == "top_k":
+            statistics = {
+                "top_fitness_ideas": top_fitness_ideas(
+                    self.programs_card, all_ideas_card, self.top_k_fitness
+                ),
+                "top_delta_ideas": top_delta_ideas(
+                    self.programs_card, all_ideas_card, self.top_k_delta_fitness
+                ),
+            }
+        elif self.statistics_mode == "top_fitness":
+            statistics = {
+                "top_fitness_ideas": top_fitness_ideas(
+                    self.programs_card, all_ideas_card, self.top_k_fitness
+                )
+            }
+        elif self.statistics_mode == "delta_fitness":
+            statistics = {
+                "top_delta_ideas": top_delta_ideas(
+                    self.programs_card, all_ideas_card, self.top_k_delta_fitness
+                )
+            }
+        else:
+            raise ValueError(f"Invalid statistics mode: {self.statistics_mode}")
+        return statistics
+
     def run(self) -> None:
         """
         Main execution method: load database, process new programs, and update banks.
@@ -283,9 +332,12 @@ class IdeaTracker:
         new_programs = self.get_new_programs(df)
         new_programs_processed = self.wrap_data(new_programs)
         pbar = tqdm.tqdm(total=len(new_programs), leave=False)
+        c = 0
         for prog in new_programs_processed:
             self.process_program(prog)
             pbar.update(1)
+            c += 1
+            # if c == 2: break
         pbar.close()
         self.refresh_main_bank(last_gen)
 
@@ -296,6 +348,7 @@ class IdeaTracker:
         self.logger.log_programs(self._programs_to_dicts())
 
         self.get_rankings()
+        self.logger.log_best_ideas(self.top_ideas())
 
 
 if __name__ == "__main__":

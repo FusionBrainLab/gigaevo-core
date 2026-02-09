@@ -290,6 +290,13 @@ class RecordBank:
             ideas_by_list[index] = {"descriptions": short_descriptions}
         return ideas_by_list
 
+    def all_ideas_cards(self) -> list[RecordCard]:
+        """Return all ideas in the bank."""
+        ideas = []
+        for ideas_list in self.ideas_lists:
+            ideas.extend(ideas_list.ideas)
+        return ideas
+
     def rankings(self) -> list[dict[str, str | list[str] | list[float]]]:
         """
         Returns:
