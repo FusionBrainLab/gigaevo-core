@@ -282,7 +282,6 @@ class IdeasTrackerLogger:
                 active_bank_data.append(
                     {
                         "id": idea.id,
-                        "short_id": idea.short_id,
                         "description": idea.description,
                         "linked_programs": idea.linked_programs,
                         "last_generation": idea.last_generation,
@@ -297,7 +296,6 @@ class IdeasTrackerLogger:
                 inactive_bank_data.append(
                     {
                         "id": idea.id,
-                        "short_id": idea.short_id,
                         "description": idea.description,
                         "linked_programs": idea.linked_programs,
                         "last_generation": idea.last_generation,
