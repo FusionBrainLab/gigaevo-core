@@ -25,7 +25,6 @@ class RecordCard:
     """
 
     id: str = ""
-    short_id: str = ""
     description: str = ""
     linked_programs: list[str] = field(default_factory=list)
     last_generation: int = 0
@@ -120,7 +119,9 @@ class RecordList:
             ideas.append(
                 {
                     "id": idea.id,
-                    "short_id": idea.short_id,
+                    "short_id": idea.id.split("-")[
+                        0
+                    ],  # first part of the id is the short id
                     "description": idea.description,
                 }
             )
@@ -168,18 +169,16 @@ class RecordBank:
     num_lists: int = 0
     generation: int = 0
     uuids: list[str] = field(default_factory=list)
-    short_uuids: list[str] = field(default_factory=list)
 
-    def _unique_id_pair(self) -> tuple[str, str]:
-        """Return a (uuid, short_uuid) pair not present in uuids/short_uuids."""
+    def _unique_id_pair(self) -> str:
+        """Return a uuid not present in uuids."""
         generated = False
-        new_uuid, new_short_uuid = "", ""
+        new_uuid = ""
         while not generated:
             new_uuid = str(uuid4())
-            new_short_uuid = new_uuid.split("-")[0]
-            if new_uuid not in self.uuids and new_short_uuid not in self.short_uuids:
+            if new_uuid not in self.uuids:
                 generated = True
-        return new_uuid, new_short_uuid
+        return new_uuid
 
     def _append_record_list(self, idea_data: dict[str, Any]) -> None:
         """Append idea to first non-full list, or create a new RecordList and append there."""
@@ -194,22 +193,19 @@ class RecordBank:
         return
 
     def _remove_id_from_bank(self, idea_id: str) -> None:
-        """Remove idea_id and its short_id from uuids/short_uuids at same index."""
+        """Remove idea_id from uuids at same index."""
         try:
             idx = self.uuids.index(idea_id)
         except ValueError:
             return
         self.uuids.pop(idx)
-        self.short_uuids.pop(idx)
 
     def add_idea(self, description: str, linked_program: str, generation: int) -> None:
         """Create a new idea with a unique id and append it to a list in the bank."""
-        idea_id, idea_short_id = self._unique_id_pair()
+        idea_id = self._unique_id_pair()
         self.uuids.append(idea_id)
-        self.short_uuids.append(idea_short_id)
         idea_dict = {
             "id": idea_id,
-            "short_id": idea_short_id,
             "description": description,
             "linked_programs": [linked_program],
             "last_generation": generation,
@@ -235,10 +231,9 @@ class RecordBank:
     def import_idea(self, new_idea: RecordCard) -> None:
         """Append an existing RecordCard; assign new id if its id already exists in the bank."""
         if new_idea.id in self.uuids:
-            new_uuid, new_short_uuid = self._unique_id_pair()
-            new_idea.id, new_idea.short_id = new_uuid, new_short_uuid
+            new_uuid = self._unique_id_pair()
+            (new_idea.id,) = new_uuid
         self.uuids.append(new_idea.id)
-        self.short_uuids.append(new_idea.short_id)
         idea_dict = asdict(new_idea)
         idea_dict["linked_programs"] = list(idea_dict["linked_programs"])
         self._append_record_list(idea_dict)
@@ -268,7 +263,7 @@ class RecordBank:
         return excluded_ideas
 
     def remove_idea(self, idea_id: str) -> None:
-        """Remove the idea with the given id from its list and from uuids/short_uuids. Raises if not found."""
+        """Remove the idea with the given id from its list and from uuids. Raises if not found."""
         if idea_id not in self.uuids:
             raise ValueError(f"No idea with id {idea_id} found")
         for index, record_list in enumerate(self.ideas_lists):
