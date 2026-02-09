@@ -28,6 +28,7 @@ class IdeasTrackerLogger:
         self.rankings_file: Optional[Path] = None
         self.banks_file: Optional[Path] = None
         self.programs_file: Optional[Path] = None
+        self.best_ideas_file: Optional[Path] = None
 
         # Create logs directory if it doesn't exist
         os.makedirs(self.logs_dir, exist_ok=True)
@@ -46,6 +47,7 @@ class IdeasTrackerLogger:
         self.rankings_file = self.session_dir / "rankings.json"
         self.banks_file = self.session_dir / "banks.json"
         self.programs_file = self.session_dir / "programs.json"
+        self.best_ideas_file = self.session_dir / "best_ideas.json"
 
         # Initialize JSON files as empty arrays if they don't exist
         if not self.rankings_file.exists():
@@ -56,6 +58,9 @@ class IdeasTrackerLogger:
                 json.dump([], f)
         if not self.programs_file.exists():
             with open(self.programs_file, "w", encoding="utf-8") as f:
+                json.dump([], f)
+        if not self.best_ideas_file.exists():
+            with open(self.best_ideas_file, "w", encoding="utf-8") as f:
                 json.dump([], f)
 
     def _get_timestamp(self) -> str:
@@ -203,7 +208,7 @@ class IdeasTrackerLogger:
 
         # Write back
         with open(self.rankings_file, "w", encoding="utf-8") as f:
-            json.dump(existing_rankings, f, indent=2)
+            json.dump(existing_rankings, f, indent=4)
 
     def log_banks(
         self, active_bank: dict[str, Any], inactive_bank: dict[str, Any]
@@ -233,7 +238,7 @@ class IdeasTrackerLogger:
 
         # Write back
         with open(self.banks_file, "w", encoding="utf-8") as f:
-            json.dump(existing_banks, f, indent=2)
+            json.dump(existing_banks, f, indent=4)
 
     def log_programs(self, programs: list[dict[str, Any]]) -> None:
         """
@@ -265,7 +270,37 @@ class IdeasTrackerLogger:
 
         # Write back
         with open(self.programs_file, "w", encoding="utf-8") as f:
-            json.dump(existing_programs, f, indent=2)
+            json.dump(existing_programs, f, indent=4)
+
+    def log_best_ideas(self, statistics: dict[str, Any]) -> None:
+        """
+        Append best ideas statistics to best_ideas.json.
+
+        Args:
+            statistics: Result of get_statistics() (e.g. top_fitness_ideas, top_delta_ideas).
+        """
+        if self.best_ideas_file is None:
+            return
+
+        snapshot = {
+            "timestamp": self._get_timestamp(),
+            **statistics,
+        }
+
+        # Read existing snapshots
+        if self.best_ideas_file.exists():
+            with open(self.best_ideas_file, "r", encoding="utf-8") as f:
+                try:
+                    existing = json.load(f)
+                except json.JSONDecodeError:
+                    existing = []
+        else:
+            existing = []
+
+        existing.append(snapshot)
+
+        with open(self.best_ideas_file, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=4)
 
     def dump_final_state(self, record_manager: "RecordManager") -> None:
         """

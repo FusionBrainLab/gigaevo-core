@@ -10,3 +10,10 @@ redis:
   redis_db: 0
   redis_prefix: "alphaevolve/packing_circles/n_26"
   label: ""
+
+# Statistics settings
+statistics:
+  enabled: true
+  mode: "top_k" # available modes: top_k (top_delta_fitness and top_fitness), top_fitness, delta_fitness
+  top_k_delta_fitness: 5
+  top_k_fitness: 5
