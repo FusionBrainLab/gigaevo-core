@@ -11,6 +11,7 @@ sys.path.append("../gigaevo-core-internal")
 from gigaevo.llm.ideas_tracker.components.analyzer import IdeaAnalyzer
 from gigaevo.llm.ideas_tracker.components.data_components import ProgramRecord
 from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
+from gigaevo.llm.ideas_tracker.utils.ideas_impact_ml import run_impact_pipeline
 from gigaevo.llm.ideas_tracker.utils.ideas_stats import (
     top_delta_ideas,
     top_fitness_ideas,
@@ -67,6 +68,23 @@ class IdeaTracker:
         self.top_k_fitness = statistics_config.get("top_k_fitness", 5)
         self.statistics_enabled = statistics_config.get("enabled", True)
         self.statistics_mode = statistics_config.get("mode", "top_k")
+
+        # Experimental: ML impact pipeline settings
+        exp_cfg = self.config.get("experimental_features", {}) or {}
+        ml_cfg = exp_cfg.get("ml_impact_pipeline", {}) or {}
+        self.ml_impact_enabled: bool = bool(ml_cfg.get("enabled", False))
+        self.ml_impact_n_iterations: int = int(ml_cfg.get("n_iterations", 200))
+        self.ml_impact_include_interactions: bool = bool(
+            ml_cfg.get("include_interactions", True)
+        )
+        self.ml_impact_max_interaction_pairs: int = int(
+            ml_cfg.get("max_interaction_pairs", 10)
+        )
+        self.ml_impact_min_idea_programs: int = int(ml_cfg.get("min_idea_programs", 2))
+        self.ml_impact_confidence_level: float = float(
+            ml_cfg.get("confidence_level", 0.95)
+        )
+        self.ml_impact_random_state: int = int(ml_cfg.get("random_state", 42))
 
         # Attach logger to components
         self.ideas_manager.logger = self.logger
@@ -349,6 +367,30 @@ class IdeaTracker:
 
         self.get_rankings()
         self.logger.log_best_ideas(self.top_ideas())
+
+        # --- ML impact analysis (experimental) ---
+        if self.ml_impact_enabled:
+            all_ideas = (
+                self.ideas_manager.record_bank.all_ideas_cards()
+                + self.ideas_manager.inactive_record_bank.all_ideas_cards()
+            )
+            if self.programs_card and all_ideas:
+                impact_result = run_impact_pipeline(
+                    self.programs_card,
+                    all_ideas,
+                    n_iterations=self.ml_impact_n_iterations,
+                    include_interactions=self.ml_impact_include_interactions,
+                    max_interaction_pairs=self.ml_impact_max_interaction_pairs,
+                    min_idea_programs=self.ml_impact_min_idea_programs,
+                    confidence_level=self.ml_impact_confidence_level,
+                    random_state=self.ml_impact_random_state,
+                )
+                output_dir = Path(__file__).resolve().parent
+                impact_result.summary.to_csv(output_dir / "impact_summary.csv")
+                if impact_result.interactions is not None:
+                    impact_result.interactions.to_csv(
+                        output_dir / "impact_interactions.csv"
+                    )
 
 
 if __name__ == "__main__":

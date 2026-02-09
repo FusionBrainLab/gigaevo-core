@@ -17,3 +17,15 @@ statistics:
   mode: "top_k" # available modes: top_k (top_delta_fitness and top_fitness), top_fitness, delta_fitness
   top_k_delta_fitness: 5
   top_k_fitness: 5
+
+# Experimental features (may change or be removed in future versions)
+experimental_features:
+  # ML-based impact analysis pipeline (Bootstrap ElasticNet)
+  ml_impact_pipeline:
+    enabled: true
+    n_iterations: 200            # bootstrap repetitions (more = tighter CIs, slower)
+    include_interactions: true   # detect pairwise idea interaction effects
+    max_interaction_pairs: 10    # cap on interaction terms added
+    min_idea_programs: 2         # minimum linked programs for an idea to be included
+    confidence_level: 0.95       # CI width (0.90 / 0.95 / 0.99)
+    random_state: 42             # seed for reproducibility
