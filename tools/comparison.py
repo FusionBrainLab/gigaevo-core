@@ -22,12 +22,16 @@ for as many runs as you want.
 import argparse
 import asyncio
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from loguru import logger
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import savgol_filter
 import seaborn as sns
+from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from tools.utils import (
     RedisRunConfig,
@@ -35,27 +39,117 @@ from tools.utils import (
     prepare_iteration_dataframe,
 )
 
+# Standard matplotlib tab10 colors (the classic default)
+MATPLOTLIB_COLORS = [
+    "#1f77b4",  # Blue
+    "#ff7f0e",  # Orange
+    "#2ca02c",  # Green
+    "#d62728",  # Red
+    "#9467bd",  # Purple
+    "#8c564b",  # Brown
+    "#e377c2",  # Pink
+    "#7f7f7f",  # Gray
+    "#bcbd22",  # Olive
+    "#17becf",  # Cyan
+]
 
-def _configure_plotting_style():
-    sns.set_theme(style="whitegrid", context="talk", palette="deep")
-    plt.rcParams.update(
-        {
-            "font.family": "sans-serif",
-            "font.sans-serif": ["DejaVu Sans", "Helvetica", "Arial"],
-            "font.size": 13,
-            "axes.titlesize": 18,
-            "axes.titleweight": "bold",
-            "axes.labelsize": 14,
-            "axes.labelweight": "semibold",
-            "legend.fontsize": 11,
-            "axes.grid": True,
-            "grid.alpha": 0.25,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "savefig.dpi": 300,
-            "figure.dpi": 150,
-        }
-    )
+
+def _configure_plotting_style(use_latex: bool = False):
+    """Configure matplotlib for publication-quality plots.
+
+    Args:
+        use_latex: If True, use LaTeX for text rendering (requires LaTeX installation).
+    """
+    # Reset to defaults first for clean slate
+    plt.rcdefaults()
+
+    # Use seaborn's clean style as base
+    sns.set_theme(style="ticks", context="paper")
+
+    rc_params = {
+        # Typography - clean, professional fonts
+        "font.family": "serif" if use_latex else "sans-serif",
+        "font.serif": [
+            "Times New Roman",
+            "Times",
+            "DejaVu Serif",
+            "Computer Modern Roman",
+        ],
+        "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
+        "font.size": 10,
+        # Axes
+        "axes.titlesize": 12,
+        "axes.titleweight": "medium",
+        "axes.titlepad": 10,
+        "axes.labelsize": 11,
+        "axes.labelweight": "medium",
+        "axes.labelpad": 6,
+        "axes.linewidth": 0.8,
+        "axes.edgecolor": "#333333",
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        # Grid - subtle, unobtrusive
+        "axes.grid": True,
+        "axes.grid.which": "major",
+        "grid.color": "#E0E0E0",
+        "grid.linestyle": "-",
+        "grid.linewidth": 0.5,
+        "grid.alpha": 0.7,
+        # Ticks
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "xtick.major.width": 0.8,
+        "ytick.major.width": 0.8,
+        "xtick.major.size": 4,
+        "ytick.major.size": 4,
+        "xtick.minor.visible": True,
+        "ytick.minor.visible": True,
+        "xtick.minor.width": 0.5,
+        "ytick.minor.width": 0.5,
+        "xtick.minor.size": 2,
+        "ytick.minor.size": 2,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        # Legend
+        "legend.fontsize": 9,
+        "legend.frameon": True,
+        "legend.framealpha": 0.95,
+        "legend.edgecolor": "#CCCCCC",
+        "legend.fancybox": False,
+        "legend.borderpad": 0.5,
+        "legend.labelspacing": 0.4,
+        "legend.handlelength": 1.8,
+        "legend.handletextpad": 0.5,
+        # Lines
+        "lines.linewidth": 1.5,
+        "lines.markersize": 5,
+        "lines.solid_capstyle": "round",
+        "lines.solid_joinstyle": "round",
+        # Figure
+        "figure.dpi": 150,
+        "figure.facecolor": "white",
+        "figure.edgecolor": "white",
+        "figure.constrained_layout.use": True,
+        # Saving
+        "savefig.dpi": 300,
+        "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.05,
+        "savefig.facecolor": "white",
+        "savefig.edgecolor": "white",
+        # PDF/PS options for vector graphics
+        "pdf.fonttype": 42,  # TrueType fonts (editable in Illustrator)
+        "ps.fonttype": 42,
+    }
+
+    if use_latex:
+        rc_params.update(
+            {
+                "text.usetex": True,
+                "text.latex.preamble": r"\usepackage{amsmath}\usepackage{amssymb}",
+            }
+        )
+
+    plt.rcParams.update(rc_params)
 
 
 def _parse_run_arg(arg: str, default_host: str, default_port: int) -> RedisRunConfig:
@@ -86,10 +180,161 @@ async def _load_runs(configs: list[RedisRunConfig]):
     return dfs
 
 
-def _smooth_series(series, window: int):
-    if window is None or window <= 1:
+SmoothingMethod = Literal["lowess", "ema", "savgol", "gaussian", "rolling", "none"]
+
+
+def _smooth_series(
+    series,
+    window: int,
+    method: SmoothingMethod = "lowess",
+    polyorder: int = 3,
+    lowess_frac: float | None = None,
+):
+    """Apply smoothing to a series using various methods.
+
+    Args:
+        series: Input data series (pandas Series or numpy array).
+        window: Window size for smoothing. Interpretation varies by method:
+            - lowess: Used to compute fraction if lowess_frac not provided
+            - ema: Span for exponential moving average
+            - savgol: Window size (will be made odd)
+            - gaussian: Sigma value
+            - rolling: Window size
+        method: Smoothing method:
+            - "lowess": LOWESS (Locally Weighted Scatterplot Smoothing) - RECOMMENDED
+              Produces very smooth curves without ringing artifacts.
+            - "ema": Exponential Moving Average - smooth, fast, no edge artifacts.
+            - "savgol": Savitzky-Golay - preserves peaks but can have ringing.
+            - "gaussian": Gaussian kernel - smooth but can blur features.
+            - "rolling": Simple moving average - can create blocky artifacts.
+            - "none": No smoothing.
+        polyorder: Polynomial order for Savitzky-Golay filter (default: 3).
+        lowess_frac: Fraction of data used for LOWESS smoothing (0.0-1.0).
+            If None, computed from window as window / len(data).
+            Smaller = less smoothing, larger = more smoothing.
+
+    Returns:
+        Smoothed series of the same type as input.
+    """
+    if window is None or window <= 1 or method == "none":
         return series
-    return series.rolling(window=window, min_periods=1, center=True).mean()
+
+    import pandas as pd
+
+    # Convert to numpy for processing, handle NaNs
+    values = series.values if hasattr(series, "values") else np.asarray(series)
+    is_series = isinstance(series, pd.Series)
+    n = len(values)
+
+    # Handle NaN values by interpolating, smoothing, then restoring NaN positions
+    nan_mask = np.isnan(values)
+    if nan_mask.all():
+        return series
+
+    # Interpolate NaNs for smoothing
+    if nan_mask.any():
+        valid_idx = np.where(~nan_mask)[0]
+        if len(valid_idx) < 2:
+            return series
+        values_interp = np.interp(
+            np.arange(n),
+            valid_idx,
+            values[valid_idx],
+        )
+    else:
+        values_interp = values.copy()
+
+    if method == "lowess":
+        # LOWESS - excellent for smooth curves without artifacts
+        # Fraction controls smoothness: 0.05-0.1 = local, 0.2-0.3 = moderate, 0.5+ = very smooth
+        if lowess_frac is not None:
+            frac = lowess_frac
+        else:
+            # Convert window to fraction, with sensible bounds
+            frac = min(max(window / n, 0.05), 0.5)
+
+        x = np.arange(n)
+        # LOWESS returns sorted by x, so we just take the smoothed y values
+        smoothed_result = lowess(values_interp, x, frac=frac, return_sorted=True)
+        smoothed = smoothed_result[:, 1]
+
+    elif method == "ema":
+        # Exponential Moving Average - smooth without edge effects
+        # Use pandas EWM for proper handling
+        df_temp = pd.Series(values_interp)
+        # span parameter: larger = smoother
+        smoothed = df_temp.ewm(span=window, adjust=True, min_periods=1).mean().values
+
+    elif method == "savgol":
+        # Savitzky-Golay filter - can preserve features but may ring
+        win = int(window)
+        if win % 2 == 0:
+            win += 1
+        win = max(win, polyorder + 2)
+        if win > n:
+            win = n if n % 2 == 1 else n - 1
+            win = max(win, polyorder + 2)
+        if n >= win:
+            smoothed = savgol_filter(values_interp, win, polyorder, mode="interp")
+        else:
+            smoothed = values_interp
+
+    elif method == "gaussian":
+        # Gaussian filter - smooth, window is sigma
+        sigma = window / 2.0
+        smoothed = gaussian_filter1d(values_interp, sigma=sigma, mode="reflect")
+
+    elif method == "rolling":
+        # Simple rolling mean
+        kernel = np.ones(window) / window
+        padded = np.pad(values_interp, (window // 2, window // 2), mode="reflect")
+        smoothed = np.convolve(padded, kernel, mode="valid")
+        if len(smoothed) > n:
+            excess = len(smoothed) - n
+            smoothed = smoothed[excess // 2 : len(smoothed) - (excess - excess // 2)]
+
+    else:
+        smoothed = values_interp
+
+    # Restore NaN positions
+    if nan_mask.any():
+        smoothed[nan_mask] = np.nan
+
+    if is_series:
+        return pd.Series(smoothed, index=series.index)
+    return smoothed
+
+
+def _aggregate_per_iteration(
+    df,
+    iteration_col: str,
+    fitness_col: str,
+) -> tuple:
+    """Aggregate data per iteration to reduce noise before smoothing.
+
+    Returns (iterations, means, stds, frontier) arrays with one value per unique iteration.
+    """
+    # Group by iteration and compute mean/std
+    grouped = (
+        df.groupby(iteration_col)
+        .agg(
+            {
+                "running_mean_fitness": "mean",
+                "running_std_fitness": lambda x: np.sqrt((x**2).mean()),  # RMS of stds
+                "frontier_fitness": "last",  # Frontier is already cumulative
+            }
+        )
+        .reset_index()
+    )
+
+    grouped = grouped.sort_values(iteration_col)
+
+    return (
+        grouped[iteration_col].values,
+        grouped["running_mean_fitness"].values,
+        grouped["running_std_fitness"].values,
+        grouped["frontier_fitness"].values,
+    )
 
 
 def plot_comparison(
@@ -98,158 +343,355 @@ def plot_comparison(
     output_folder: Path,
     save_plots: bool = True,
     smooth_window: int = 0,
-    smooth_frontier_window: int = 0,
+    smooth_method: SmoothingMethod = "lowess",
+    lowess_frac: float | None = None,
     annotate_frontier: bool = False,
-    frontier_annotations_max: int = 15,
+    frontier_annotations_max: int = 5,
+    min_improvement_pct: float = 5.0,
     fitness_col: str = "metric_fitness",
     iteration_col: str = "metadata_iteration",
     minimize: bool = False,
+    use_latex: bool = False,
+    figure_width: float = 7.0,
+    figure_height: float = 4.5,
+    show_std_band: bool = True,
+    show_frontier: bool = True,
+    legend_location: str = "best",
+    title: Optional[str] = None,
+    xlabel: Optional[str] = None,
+    ylabel: Optional[str] = None,
+    aggregate_iterations: bool = True,
 ):
+    """Plot comparison of multiple evolution runs with publication-quality styling.
+
+    Args:
+        prepared_dfs: List of (label, dataframe) tuples.
+        output_folder: Directory for saving plots.
+        save_plots: Whether to save plots to disk.
+        smooth_window: Smoothing window for mean/std curves.
+        smooth_method: Smoothing algorithm (for mean/std only; frontier is never smoothed). Options:
+            - "lowess": LOWESS smoothing (RECOMMENDED - very smooth, no artifacts)
+            - "ema": Exponential Moving Average (smooth, fast)
+            - "savgol": Savitzky-Golay (preserves peaks but can ring)
+            - "gaussian": Gaussian kernel
+            - "rolling": Simple moving average
+            - "none": No smoothing
+        lowess_frac: Fraction for LOWESS smoothing (0.0-1.0). Higher = smoother.
+            If None, computed automatically from smooth_window.
+        annotate_frontier: Whether to annotate frontier improvement points.
+        frontier_annotations_max: Maximum frontier annotations per run.
+        min_improvement_pct: Minimum improvement (% of total) to annotate.
+        fitness_col: Name of fitness column.
+        iteration_col: Name of iteration column.
+        minimize: True if lower fitness is better.
+        use_latex: Use LaTeX for text rendering.
+        figure_width: Figure width in inches (default: 7.0 for single-column).
+        figure_height: Figure height in inches.
+        show_std_band: Show standard deviation bands (disable for cleaner plots with many runs).
+        show_frontier: Show frontier (best-so-far) lines.
+        legend_location: Legend location ("best", "upper right", "outside", etc.).
+        title: Custom title (default: auto-generated).
+        xlabel: Custom x-axis label.
+        ylabel: Custom y-axis label.
+        aggregate_iterations: If True, aggregate data per iteration before smoothing
+            to reduce point-to-point noise. Recommended for cleaner plots.
+    """
     if not prepared_dfs:
         logger.error("No prepared data to plot")
         return
 
-    _configure_plotting_style()
+    _configure_plotting_style(use_latex=use_latex)
 
-    fig, ax = plt.subplots(figsize=(14, 8))
-    colors = sns.color_palette(n_colors=len(prepared_dfs))
+    # Create figure with appropriate size
+    fig, ax = plt.subplots(figsize=(figure_width, figure_height))
+
+    # Use standard matplotlib colors
+    colors = MATPLOTLIB_COLORS
+    n_runs = len(prepared_dfs)
+
+    # Adjust visual parameters based on number of runs
+    if n_runs <= 3:
+        line_width = 2.0
+        band_alpha = 0.15
+        frontier_alpha = 0.8
+    elif n_runs <= 5:
+        line_width = 1.6
+        band_alpha = 0.10
+        frontier_alpha = 0.7
+    else:
+        # Many runs: thinner lines, lighter bands
+        line_width = 1.2
+        band_alpha = 0.08
+        frontier_alpha = 0.6
 
     for idx, (label, df) in enumerate(prepared_dfs):
         if df.empty:
             logger.warning(f"Run '{label}' has no valid iteration data; skipping plot")
             continue
 
-        c = colors[idx]
-        mean_s = _smooth_series(df["running_mean_fitness"], smooth_window)
-        std_s = _smooth_series(df["running_std_fitness"], smooth_window)
-        plus_s = mean_s + std_s
-        minus_s = mean_s - std_s
-        # Frontier (cumulative best per iteration, optionally smoothed)
-        frontier = df.get("frontier_fitness")
-        if frontier is not None:
-            frontier_s = _smooth_series(frontier, smooth_frontier_window)
-        ax.plot(
-            df[iteration_col],
-            mean_s,
-            linewidth=2.5,
-            color=c,
-            label=f"{label} (mean)",
-        )
-        ax.fill_between(
-            df[iteration_col],
-            minus_s,
-            plus_s,
-            color=c,
-            alpha=0.15,
-            label=None,
-        )
-        # Frontier line
-        if frontier is not None:
-            ax.plot(
-                df[iteration_col],
-                frontier_s,
-                linewidth=2.0,
-                color=c,
-                linestyle="--",
-                alpha=0.9,
-                label=f"{label} (frontier)",
-            )
-            if annotate_frontier:
-                # Annotate improvement points on the (unsmoothed) frontier
-                fp = (
-                    df[[iteration_col, "frontier_fitness"]]
-                    .dropna()
-                    .sort_values(iteration_col)
-                    .drop_duplicates()
-                    .reset_index(drop=True)
-                )
-                if not fp.empty:
-                    diffs = fp["frontier_fitness"].diff()
-                    # For minimization, improvement means decrease (diff < 0)
-                    # For maximization, improvement means increase (diff > 0)
-                    if minimize:
-                        improve_mask = diffs.fillna(True) < 0
-                    else:
-                        improve_mask = diffs.fillna(True) > 0
-                    improvements = fp[improve_mask]
-                    if not improvements.empty:
-                        # Downsample annotations if too many
-                        if (
-                            frontier_annotations_max > 0
-                            and len(improvements) > frontier_annotations_max
-                        ):
-                            idxs = np.linspace(
-                                0,
-                                len(improvements) - 1,
-                                frontier_annotations_max,
-                                dtype=int,
-                            )
-                            improvements = improvements.iloc[idxs]
-                        for _, row in improvements.iterrows():
-                            x = row[iteration_col]
-                            y = row["frontier_fitness"]
-                            ax.annotate(
-                                f"{y:.4f}",
-                                (x, y),
-                                textcoords="offset points",
-                                xytext=(0, 6),
-                                ha="center",
-                                fontsize=9,
-                                color=c,
-                                alpha=0.9,
-                            )
+        color = colors[idx % len(colors)]
 
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel("Fitness")
-    ax.set_title("Evolution Runs: Rolling Fitness vs Iteration")
-    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
+        # Aggregate per iteration to reduce noise (one point per iteration)
+        if aggregate_iterations:
+            x_vals, mean_vals, std_vals, frontier_vals = _aggregate_per_iteration(
+                df, iteration_col, fitness_col
+            )
+        else:
+            x_vals = df[iteration_col].values
+            mean_vals = df["running_mean_fitness"].values
+            std_vals = df["running_std_fitness"].values
+            frontier_vals = df.get("frontier_fitness")
+            if frontier_vals is not None:
+                frontier_vals = frontier_vals.values
+
+        # Apply smoothing
+        mean_s = _smooth_series(
+            mean_vals, smooth_window, method=smooth_method, lowess_frac=lowess_frac
+        )
+        std_s = _smooth_series(
+            std_vals, smooth_window, method=smooth_method, lowess_frac=lowess_frac
+        )
+
+        # Ensure std is non-negative after smoothing
+        std_s = np.maximum(std_s, 0)
+
+        # Plot confidence band (skip if disabled or too many runs)
+        if show_std_band:
+            plus_s = mean_s + std_s
+            minus_s = mean_s - std_s
+            ax.fill_between(
+                x_vals,
+                minus_s,
+                plus_s,
+                color=color,
+                alpha=band_alpha,
+                linewidth=0,
+                zorder=1,
+            )
+
+        # Plot mean line
+        ax.plot(
+            x_vals,
+            mean_s,
+            linewidth=line_width,
+            color=color,
+            label=label,
+            zorder=3,
+            solid_capstyle="round",
+        )
+
+        # Frontier line (cumulative best per iteration) - NEVER smoothed, strict step function
+        if show_frontier and frontier_vals is not None:
+            ax.step(
+                x_vals,
+                frontier_vals,
+                where="post",  # Step occurs after the x value (standard for cumulative best)
+                linewidth=line_width * 0.8,
+                color=color,
+                linestyle="--",
+                alpha=frontier_alpha,
+                zorder=2,
+            )
+
+            if annotate_frontier:
+                # Annotate significant frontier jumps
+                _annotate_frontier_points(
+                    ax,
+                    x_vals,
+                    frontier_vals,
+                    minimize,
+                    frontier_annotations_max,
+                    color,
+                    min_improvement_pct=min_improvement_pct,
+                )
+
+    # Axis labels
+    ax.set_xlabel(xlabel or "Iteration")
+    ax.set_ylabel(ylabel or "Fitness")
+
+    # Title (optional for papers, often omitted)
+    if title:
+        ax.set_title(title, pad=12)
+
+    # Configure axis formatting
+    ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, nbins=8))
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(nbins=6))
+
+    # Subtle axis formatting
+    ax.tick_params(axis="both", which="major", length=4, width=0.8)
+    ax.tick_params(axis="both", which="minor", length=2, width=0.5)
+
+    # Legend - compact styling
+    legend_kwargs = {
+        "frameon": True,
+        "fontsize": 8 if n_runs > 5 else 9,
+        "handlelength": 1.5,
+        "labelspacing": 0.3,
+    }
+
+    if legend_location == "outside":
+        ax.legend(
+            bbox_to_anchor=(1.02, 1),
+            loc="upper left",
+            borderaxespad=0,
+            **legend_kwargs,
+        )
+    else:
+        ax.legend(loc=legend_location, **legend_kwargs)
+
+    # Ensure y-axis starts at 0 if all values are positive
+    y_min, y_max = ax.get_ylim()
+    if y_min > 0:
+        ax.set_ylim(bottom=0)
+
+    # Finalize layout
+    fig.tight_layout()
 
     if save_plots:
         output_folder.mkdir(parents=True, exist_ok=True)
         png = output_folder / "evolution_runs_comparison.png"
         pdf = output_folder / "evolution_runs_comparison.pdf"
-        fig.savefig(png, bbox_inches="tight")
-        fig.savefig(pdf, bbox_inches="tight")
-        logger.info(f"Saved comparison plot to {png.name} & {pdf.name}")
+        svg = output_folder / "evolution_runs_comparison.svg"
+
+        fig.savefig(png, dpi=300, bbox_inches="tight", facecolor="white")
+        fig.savefig(pdf, bbox_inches="tight", facecolor="white")
+        fig.savefig(svg, bbox_inches="tight", facecolor="white")
+
+        logger.info(f"Saved comparison plots: {png.name}, {pdf.name}, {svg.name}")
 
     plt.show()
+    return fig, ax
+
+
+def _annotate_frontier_points(
+    ax,
+    x_vals,
+    frontier_vals,
+    minimize: bool,
+    max_annotations: int,
+    color,
+    min_improvement_pct: float = 5.0,
+):
+    """Annotate the latest N frontier jumps, filtered by minimum delta.
+
+    Args:
+        ax: Matplotlib axes object.
+        x_vals: Array of x values (iterations).
+        frontier_vals: Frontier values (monotonic step function).
+        minimize: True if lower is better.
+        max_annotations: Maximum number of jumps to annotate (latest N by iteration).
+        color: Color for the annotation text.
+        min_improvement_pct: Minimum jump size as % of total improvement to show.
+    """
+    import pandas as pd
+
+    if len(x_vals) == 0 or len(frontier_vals) == 0:
+        return
+
+    fp = pd.DataFrame(
+        {
+            "iteration": x_vals,
+            "frontier": frontier_vals,
+        }
+    ).dropna()
+
+    if len(fp) < 2:
+        return
+
+    first_val = fp["frontier"].iloc[0]
+    last_val = fp["frontier"].iloc[-1]
+    total_improvement = abs(last_val - first_val)
+
+    if total_improvement == 0:
+        return
+
+    # Find all jumps (where frontier value changes)
+    fp["prev"] = fp["frontier"].shift(1)
+    fp["jump_size"] = abs(fp["frontier"] - fp["prev"])
+
+    # First row has no previous, skip it for jump detection
+    jumps = fp.iloc[1:].copy()
+    jumps = jumps[jumps["jump_size"] > 0]  # Only actual changes
+
+    if jumps.empty:
+        return
+
+    # Filter by minimum improvement threshold
+    min_jump = total_improvement * (min_improvement_pct / 100.0)
+    significant_jumps = jumps[jumps["jump_size"] >= min_jump].copy()
+
+    if significant_jumps.empty:
+        return
+
+    # Take the latest N jumps by iteration (we care about late steps mostly)
+    significant_jumps = significant_jumps.sort_values("iteration", ascending=False)
+    if max_annotations > 0:
+        significant_jumps = significant_jumps.head(max_annotations)
+
+    # Sort back by iteration (ascending) for consistent display
+    significant_jumps = significant_jumps.sort_values("iteration")
+
+    # Annotate each significant jump - colored text only, no box
+    for _, row in significant_jumps.iterrows():
+        x = row["iteration"]
+        y = row["frontier"]
+
+        ax.annotate(
+            f"{y:.5g}",
+            xy=(x, y),
+            xytext=(0, 4),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=6,
+            fontweight="bold",
+            color=color,
+            zorder=10,
+        )
 
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Compare multiple evolution runs by plotting rolling fitness vs iteration"
+        description="Compare multiple evolution runs by plotting rolling fitness vs iteration",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--redis-host", default="localhost", help="Default Redis host")
-    parser.add_argument(
+
+    # === Redis Connection ===
+    conn_group = parser.add_argument_group("Redis Connection")
+    conn_group.add_argument(
+        "--redis-host", default="localhost", help="Default Redis host"
+    )
+    conn_group.add_argument(
         "--redis-port", type=int, default=6379, help="Default Redis port"
     )
-    parser.add_argument(
+    conn_group.add_argument(
         "--run",
         action="append",
         required=True,
         help="Run spec: prefix@db[:label]. Repeat for multiple runs.",
     )
-    parser.add_argument(
+
+    # === Data Processing ===
+    data_group = parser.add_argument_group("Data Processing")
+    data_group.add_argument(
         "--iteration-rolling-window",
         type=int,
         default=5,
-        help="Rolling window size for iteration-based running mean/std (default: 5)",
+        help="Rolling window size for iteration-based running mean/std",
     )
-    parser.add_argument(
+    data_group.add_argument(
         "--outlier-method",
         type=str,
         choices=["iqr", "mad", "zscore", "percentile"],
         default="percentile",
         help=(
-            "Outlier detection method (default: percentile). "
+            "Outlier detection method. "
             "percentile=Simple percentile cutoff (recommended), "
             "mad=Median Absolute Deviation (robust), "
             "iqr=Interquartile Range (Tukey), zscore=Modified Z-score"
         ),
     )
-    parser.add_argument(
+    data_group.add_argument(
         "--outlier-multiplier",
         type=float,
         default=None,
@@ -258,73 +700,178 @@ async def main():
             "Higher values = fewer outliers removed."
         ),
     )
-    parser.add_argument(
+    data_group.add_argument(
         "--outlier-lower-percentile",
         type=float,
         default=5.0,
-        help="For percentile method: lower percentile cutoff (default: 5.0)",
+        help="For percentile method: lower percentile cutoff",
     )
-    parser.add_argument(
+    data_group.add_argument(
         "--outlier-upper-percentile",
         type=float,
         default=95.0,
-        help="For percentile method: upper percentile cutoff (default: 95.0)",
+        help="For percentile method: upper percentile cutoff",
     )
-    parser.add_argument(
+    data_group.add_argument(
         "--no-outlier-removal",
         action="store_true",
         help="Disable outlier removal",
     )
-    parser.add_argument(
-        "--output-folder",
-        required=True,
-        help="Folder to save the comparison plot",
-    )
-    parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="Do not save plots to disk (show only)",
-    )
-    parser.add_argument(
-        "--smooth-window",
-        type=int,
-        default=0,
-        help="Additional smoothing window (rolling, centered) applied to mean/std before plotting. 0 disables.",
-    )
-    parser.add_argument(
-        "--smooth-frontier-window",
-        type=int,
-        default=0,
-        help="Smoothing window (rolling, centered) for the frontier line. 0 disables.",
-    )
-    parser.add_argument(
-        "--annotate-frontier",
-        action="store_true",
-        help="Annotate frontier improvement points with their values",
-    )
-    parser.add_argument(
-        "--frontier-annotations-max",
-        type=int,
-        default=15,
-        help="Maximum number of frontier annotations per run (0 = unlimited)",
-    )
-    parser.add_argument(
+    data_group.add_argument(
         "--fitness-col",
         type=str,
         default="metric_fitness",
-        help="Fitness column name (default: metric_fitness)",
+        help="Fitness column name",
     )
-    parser.add_argument(
+    data_group.add_argument(
         "--iteration-col",
         type=str,
         default="metadata_iteration",
-        help="Iteration column name (default: metadata_iteration)",
+        help="Iteration column name",
     )
-    parser.add_argument(
+    data_group.add_argument(
         "--minimize",
         action="store_true",
         help="Set if lower fitness values are better (minimization problem)",
     )
+
+    # === Smoothing Options ===
+    smooth_group = parser.add_argument_group("Smoothing Options")
+    smooth_group.add_argument(
+        "--smooth-window",
+        type=int,
+        default=10,
+        help="Smoothing window for mean/std curves. 0 disables smoothing.",
+    )
+    smooth_group.add_argument(
+        "--smooth-method",
+        type=str,
+        choices=["lowess", "ema", "savgol", "gaussian", "rolling", "none"],
+        default="lowess",
+        help=(
+            "Smoothing algorithm: "
+            "lowess=LOWESS (RECOMMENDED - very smooth, no artifacts), "
+            "ema=Exponential Moving Average (smooth, fast), "
+            "savgol=Savitzky-Golay (preserves peaks but can ring), "
+            "gaussian=Gaussian kernel, "
+            "rolling=Simple moving average, "
+            "none=No smoothing"
+        ),
+    )
+    smooth_group.add_argument(
+        "--lowess-frac",
+        type=float,
+        default=None,
+        help=(
+            "LOWESS smoothing fraction (0.0-1.0). Higher = smoother. "
+            "If not specified, computed from smooth-window. "
+            "Recommended: 0.1 (local), 0.2 (moderate), 0.3+ (very smooth)"
+        ),
+    )
+    smooth_group.add_argument(
+        "--no-aggregate",
+        action="store_true",
+        help="Disable per-iteration aggregation (may increase spikiness)",
+    )
+
+    # === Plot Appearance ===
+    style_group = parser.add_argument_group("Plot Appearance")
+    style_group.add_argument(
+        "--figure-width",
+        type=float,
+        default=7.0,
+        help="Figure width in inches (7.0 for single-column, 14.0 for double)",
+    )
+    style_group.add_argument(
+        "--figure-height",
+        type=float,
+        default=4.5,
+        help="Figure height in inches",
+    )
+    style_group.add_argument(
+        "--use-latex",
+        action="store_true",
+        help="Use LaTeX for text rendering (requires LaTeX installation)",
+    )
+    style_group.add_argument(
+        "--no-std-band",
+        action="store_true",
+        help="Hide standard deviation bands (cleaner with many runs)",
+    )
+    style_group.add_argument(
+        "--no-frontier",
+        action="store_true",
+        help="Hide frontier (best-so-far) lines",
+    )
+    style_group.add_argument(
+        "--legend-location",
+        type=str,
+        default="best",
+        choices=[
+            "best",
+            "upper right",
+            "upper left",
+            "lower right",
+            "lower left",
+            "outside",
+        ],
+        help="Legend placement",
+    )
+    style_group.add_argument(
+        "--title",
+        type=str,
+        default=None,
+        help="Custom plot title (omit for no title, common in papers)",
+    )
+    style_group.add_argument(
+        "--xlabel",
+        type=str,
+        default=None,
+        help="Custom x-axis label",
+    )
+    style_group.add_argument(
+        "--ylabel",
+        type=str,
+        default=None,
+        help="Custom y-axis label",
+    )
+
+    # === Annotations ===
+    annot_group = parser.add_argument_group("Annotations")
+    annot_group.add_argument(
+        "--annotate-frontier",
+        action="store_true",
+        help="Annotate frontier improvement points with their values",
+    )
+    annot_group.add_argument(
+        "--frontier-annotations-max",
+        type=int,
+        default=5,
+        help="Top-N largest jumps to annotate (0 = unlimited after filtering)",
+    )
+    annot_group.add_argument(
+        "--min-improvement-pct",
+        type=float,
+        default=5.0,
+        help=(
+            "Minimum jump size (as %% of total improvement) to annotate. "
+            "Higher = fewer annotations. Default: 5.0%%"
+        ),
+    )
+
+    # === Output ===
+    output_group = parser.add_argument_group("Output")
+    output_group.add_argument(
+        "--output-folder",
+        required=True,
+        help="Folder to save the comparison plot",
+    )
+    output_group.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Do not save plots to disk (show only)",
+    )
+
     args = parser.parse_args()
     output_folder = Path(args.output_folder)
 
@@ -370,12 +917,24 @@ async def main():
         output_folder=output_folder,
         save_plots=not args.no_save,
         smooth_window=args.smooth_window,
-        smooth_frontier_window=args.smooth_frontier_window,
+        smooth_method=args.smooth_method,
+        lowess_frac=args.lowess_frac,
         annotate_frontier=args.annotate_frontier,
         frontier_annotations_max=args.frontier_annotations_max,
+        min_improvement_pct=args.min_improvement_pct,
         fitness_col=args.fitness_col,
         iteration_col=args.iteration_col,
         minimize=args.minimize,
+        use_latex=args.use_latex,
+        figure_width=args.figure_width,
+        figure_height=args.figure_height,
+        show_std_band=not args.no_std_band,
+        show_frontier=not args.no_frontier,
+        legend_location=args.legend_location,
+        title=args.title,
+        xlabel=args.xlabel,
+        ylabel=args.ylabel,
+        aggregate_iterations=not args.no_aggregate,
     )
 
 

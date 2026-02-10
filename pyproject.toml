@@ -33,6 +33,7 @@ dependencies = [
     "matplotlib",
     "pandas==2.2.2",
     "seaborn",
+    "statsmodels",
     "tensorboardX",
     "python-dotenv",
     "click",
