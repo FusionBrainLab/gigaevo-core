@@ -369,6 +369,7 @@ coverage.xml
 *.h5
 *.hdf5
 *.parquet
+.nltk_data/
 
 # Model files
 *.model
