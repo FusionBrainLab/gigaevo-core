@@ -25,26 +25,38 @@ class RecordManager:
             )
 
     def modify_idea(
-        self, idea_id: str, new_programs: list[str] | None, generation: int | None
+        self,
+        idea_id: str,
+        new_programs: list[str] | None,
+        generation: int | None,
+        new_description: str | None = None,
     ) -> None:
         """Update a RecordCard's linked_programs and/or last_generation; move from inactive to active if in inactive bank."""
         idea_bank = None
+        old_description = None
         if idea_id in self.record_bank.uuids:
-            self.record_bank.modify_idea(idea_id, new_programs, generation)
+            old_description = self.record_bank.get_idea(idea_id).description
+            self.record_bank.modify_idea(
+                idea_id, new_programs, generation, new_description
+            )
             idea_bank = self.record_bank
         elif idea_id in self.inactive_record_bank.uuids:
-            self.inactive_record_bank.modify_idea(idea_id, new_programs, generation)
+            old_description = self.inactive_record_bank.get_idea(idea_id).description
+            self.inactive_record_bank.modify_idea(
+                idea_id, new_programs, generation, new_description
+            )
             self.move_to_active(idea_id)
-            idea_bank = self.inactive_record_bank
+            idea_bank = self.record_bank
         else:
             raise ValueError(f"No idea with id {idea_id} found!")
 
         if self.logger is not None and idea_bank is not None:
-            # Fetch updated idea to log its description
+            # Fetch updated idea to log its description change and new links
             idea = idea_bank.get_idea(idea_id)
             self.logger.log_modify_idea(
                 idea_id=idea.id,
-                description=idea.description,
+                old_description=old_description,
+                new_description=idea.description,
                 new_linked_programs=new_programs or [],
             )
 

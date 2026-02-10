@@ -21,7 +21,7 @@ class ProgramRecord:
 class RecordCard:
     """
     Holds information about a single record (idea or program insight).
-    Mutable after init: linked_programs, last_generation.
+    Mutable after init: linked_programs, last_generation, description.
     """
 
     id: str = ""
@@ -60,6 +60,7 @@ class RecordList:
         idea_id: str,
         new_programs: list[str] | None = None,
         new_generation: int | None = None,
+        new_description: str | None = None,
     ) -> bool:
         """Update linked_programs (extend) and/or last_generation (if greater). Returns True if found."""
         idea_index = self.find_idea_index(idea_id)
@@ -70,6 +71,8 @@ class RecordList:
             idea.linked_programs.extend(new_programs)
         if new_generation is not None and idea.last_generation < new_generation:
             idea.last_generation = new_generation
+        if new_description is not None:
+            idea.description = new_description
         return True
 
     def get_idea(self, idea_id: str) -> RecordCard:
@@ -113,7 +116,7 @@ class RecordList:
         return excluded_ideas
 
     def all_ideas_short(self) -> list[dict[str, str]]:
-        """Return a short representation of each idea: [{"short_id", "description"}, ...]."""
+        """Return a short representation of each idea: [{"id","short_id", "description"}, ...]."""
         ideas = []
         for idea in self.ideas:
             ideas.append(
@@ -217,6 +220,7 @@ class RecordBank:
         idea_id: str,
         new_programs: list[str] | None = None,
         new_generation: int | None = None,
+        new_description: str | None = None,
     ) -> None:
         """Update the RecordCard's linked_programs (extend) and/or last_generation (if greater)."""
         if idea_id not in self.uuids:
@@ -224,7 +228,7 @@ class RecordBank:
         for index, record_list in enumerate(self.ideas_lists):
             if record_list.find_idea_index(idea_id) is not None:
                 self.ideas_lists[index].modify_idea(
-                    idea_id, new_programs, new_generation
+                    idea_id, new_programs, new_generation, new_description
                 )
                 return
 
@@ -232,7 +236,7 @@ class RecordBank:
         """Append an existing RecordCard; assign new id if its id already exists in the bank."""
         if new_idea.id in self.uuids:
             new_uuid = self._unique_id_pair()
-            (new_idea.id,) = new_uuid
+            new_idea.id = new_uuid
         self.uuids.append(new_idea.id)
         idea_dict = asdict(new_idea)
         idea_dict["linked_programs"] = list(idea_dict["linked_programs"])

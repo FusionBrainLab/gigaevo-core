@@ -63,6 +63,9 @@ class IdeaTracker:
             label=redis_cfg.get("label", ""),
         )
 
+        self.description_rewriting = self.config.get("description_rewriting", False)
+        self.analyzer.description_rewriting = self.description_rewriting
+
         statistics_config = self.config.get("statistics", {}) or {}
         self.top_k_delta_fitness = statistics_config.get("top_k_delta_fitness", 5)
         self.top_k_fitness = statistics_config.get("top_k_fitness", 5)
@@ -216,7 +219,7 @@ class IdeaTracker:
         active_ideas = self.ideas_manager.ideas_groups_texts()
         inactive_ideas = self.ideas_manager.ideas_groups_texts(use_inactive=True)
         program_ideas = [pg_idea["description"] for pg_idea in program.improvements]
-        new_ideas, existing_ideas_short_ids = self.analyzer.process_ideas(
+        new_ideas, ideas_rewrite, existing_ideas_ids = self.analyzer.process_ideas(
             program_ideas, active_ideas, inactive_ideas
         )
 
@@ -225,15 +228,13 @@ class IdeaTracker:
             self.ideas_manager.add_new_idea(n_idea, program.id, program.generation)
 
         # For ideas that are already known, resolve their full UUID and update them.
-        for short_id in existing_ideas_short_ids:
-            # Try to find the idea first in the active bank, then in the inactive bank.
-            full_id = self.ideas_manager.get_full_id(short_id, active_ideas)
-            if not full_id:
-                full_id = self.ideas_manager.get_full_id(short_id, inactive_ideas)
-            if not full_id:
-                # If we cannot resolve the id from either bank snapshot, skip updating.
-                continue
-            self.ideas_manager.modify_idea(full_id, [program.id], program.generation)
+        for idea in ideas_rewrite:
+            self.ideas_manager.modify_idea(
+                idea["id"], [program.id], program.generation, idea["text"]
+            )
+
+        for idea in existing_ideas_ids:
+            self.ideas_manager.modify_idea(idea, [program.id], program.generation)
 
     def refresh_main_bank(self, current_generation: int) -> None:
         """
