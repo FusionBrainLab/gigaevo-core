@@ -636,3 +636,8 @@ problems/chains/hover/dataset/*.tar.bz2
 problems/chains/hover/dataset/bm25s_index/
 problems/chains/hover/dataset/*.jsonl
 gigaevo/llm/ideas_tracker/utils/it_logger_description.md
+
+evo_memory_agent/
+insights_appearence/
+selected_ideas/
+redis_commands.txt
