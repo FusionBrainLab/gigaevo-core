@@ -1,0 +1,102 @@
+**TASK DEFINITION – SECOND AUTOCORRELATION INEQUALITY**
+
+**Challenge:** Functional optimization in analysis. Implement a Python class that generates a non-negative function $f: \mathbb{R} \to [0, \infty)$ to maximize the constant $C$ in the second autocorrelation inequality.
+
+**Adaptive Resolution:** The solver is **allowed and encouraged** to change the resolution (array size $N$) of the function.
+*   *Coarse Grids (Lower $N$):* faster iteration and global structure search.
+*   *Fine Grids (Higher $N$):* higher precision and higher potential fitness $C$.
+*   Your solution must be scalable for $N$ up to 100 000 (but, of course, with larger time limits)
+
+**MATHEMATICAL SPECIFICATIONS**
+1.  **The Function ($f$):**
+    *   A discrete 1D array representing a function $f(x)$ on a finite support.
+    *   **Non-negativity:** $f(x) \ge 0$ for all $x$.
+    *   **Non-triviality:** $\sum f(x) > 0$.
+2.  **The Convolution ($g$):**
+    *   $g = f \star f$. In the discrete domain, this is the discrete convolution of the array $f$ with itself (linear convolution).
+3.  **The Objective:**
+    *   Maximize the ratio involving the $L_1, L_2,$ and $L_\infty$ norms of the autocorrelation $g$.
+
+**OBJECTIVE FUNCTION**
+Maximize the constant $C$:
+$$ C(f) = \frac{\|f \star f\|_2^2}{\|f \star f\|_1 \|f \star f\|_\infty} $$
+
+**Target:** $C \ge 0.962$.
+
+**CONSTRAINTS**
+1.  **Validity:** All elements of the output array must be non-negative finite floats.
+2.  **Bounds:** $0.961 \le C \le 1$.
+3.  **Minimum Resolution:** The final output array must have length $N \ge 1024$ to ensure the discretization approximates the continuous function reasonably well.
+
+**IMPLEMENTATION REQUIREMENTS**
+
+**Libraries:**
+Use `numpy`, `jax`, `optax`, `scipy`, `jaxopt`, or standard Python libraries. **JAX is preferred** for automatic differentiation and GPU acceleration.
+
+**Class Interface:**
+You must implement the following class structure exactly:
+
+```python
+import numpy as np
+
+class Improver:
+    def __init__(self, seed: int = 0):
+        """
+        Initialize with reproducible random state.
+        """
+        self.seed = seed
+        # Initialize JAX keys or RNG here
+
+    def improve(self, input_f: np.ndarray) -> np.ndarray:
+        """
+        Refines an existing function f using rigorous local optimization.
+        
+        ADAPTIVE RESOLUTION:
+        The output array does NOT need to match the input size.
+
+        Args:
+            input_f: 1D NumPy array of shape (N_in,)
+
+        Returns:
+            improved_f: 1D NumPy array of shape (N_out,)
+        """
+        pass
+
+    def perturb(self, input_f: np.ndarray, intensity: float) -> np.ndarray:
+        """
+        Applies DISCRETE, structural, or RESOLUTION modifications.
+        Args:
+            input_f: 1D NumPy array.
+            intensity: Float (1e-3 to 1e3).
+
+        Returns:
+            perturbed_f: 1D NumPy array (size may differ from input).
+        """
+        pass
+
+    def generate_config(self, initial_resolution: int = 1000) -> np.ndarray:
+        """
+        Generates a valid starting function f with a maximum possible fitness.
+
+        Args:
+            initial_resolution: Suggested starting size N.
+
+        Returns:
+            f: 1D NumPy array of shape (initial_resolution,)
+        """
+        pass
+
+def entrypoint():
+    return Improver
+```
+
+**CRITICAL FAILURE MODES**
+*   **Zero Function:** Returning an array of all zeros.
+*   **Negative Values:** Returning $f(x) < 0$.
+*   **Dimensionality Errors:** Returning a 2D array.
+*   **Excessively Low Resolution:** Returning $N < 1000$ where convolution properties degrade significantly.
+*   **Excessively High Resolution:** Returning $N > 20000$ where optimization is very slow. Your solution must work even for this case, but we will not validate it now, so put in the comments to your program how it should be scaled or program a "self.scale_mode" for your class. 
+*   **Inefficiency:** Ignoring the benefits of Multigrid strategies (not utilizing lower $N$ for fast initial convergence), using a wrong optimizer, or resorting to extremely large $N$.
+*   **Delusions:** Trying to "guess" optimal function rather than searching for it. Believe me, the example for C = 0.961 is a really strange function.
+**DOCUMENTATION**
+Supply your code with a brief explanation of the algorithm, using **LaTeX** in the introductory comment.

@@ -44,7 +44,7 @@ Implement `def entrypoint():` that returns a dictionary:
 - 'u_vectors': (R, 8) NumPy array - u vectors (flattened 2×4 matrices)
 - 'v_vectors': (R, 20) NumPy array - v vectors (flattened 4×5 matrices)  
 - 'w_vectors': (R, 10) NumPy array - w vectors (flattened 2×5 matrices)
-- Use numpy, scipy, jax, or standard library as needed
+- Use numpy, scipy, jax, optax, or standard library as needed
 - Fix random seeds if using randomness (e.g., jax.random.PRNGKey(42))
 - Return type: dict with keys 'rank', 'u_vectors', 'v_vectors', 'w_vectors'
 

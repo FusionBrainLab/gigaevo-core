@@ -364,6 +364,7 @@ coverage.xml
 # Large data files
 *.csv
 *.json
+*.jsonl
 *.pickle
 *.pkl
 *.h5
