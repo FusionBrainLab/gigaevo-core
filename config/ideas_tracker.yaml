@@ -3,6 +3,9 @@ gen_delta: 100000
 # LLM model name used by IdeaAnalyzer
 model: "qwen/qwen3-235b-a22b-2507"
 
+# Desription rewriting settings
+description_rewriting: true
+
 # Connection settings for RedisRunConfig
 redis:
   redis_host: "localhost"

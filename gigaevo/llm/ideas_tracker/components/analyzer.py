@@ -28,6 +28,7 @@ class IdeaAnalyzer:
         # LLM model name can be overridden via external configuration
         self.model = model
         self.logger: IdeasTrackerLogger | None = None
+        self.description_rewriting: bool = False
         self._init_analyzer()
 
     def _init_analyzer(self) -> None:
@@ -98,10 +99,11 @@ class IdeaAnalyzer:
         )
         retry_attempts = 10
         generated = False
-        classified_ideas = {"present_ideas": [], "new_ideas": []}
+        classified_ideas = {"present_ideas": [], "new_ideas": [], "updated_ideas": []}
+        prompt_name = "classify_ext" if self.description_rewriting else "classify"
         while not generated:
             try:
-                response = self._call_llm("classify", prompt_content)
+                response = self._call_llm(prompt_name, prompt_content)
                 classified_ideas = json.loads(response)
                 generated = True
             except Exception:
@@ -124,13 +126,25 @@ class IdeaAnalyzer:
         c = 1
         for change in changes:
             text += f"{c}) {change} \n"
+            c += 1
         return text
+
+    def short_id_to_full_id(
+        self, short_id: str, ideas_list: list[dict[str, str]]
+    ) -> str:
+        """
+        Convert a short id to a full id.
+        """
+        for idea in ideas_list:
+            if idea["short_id"] == short_id:
+                return idea["id"]
+        return ""
 
     def _extract_ideas(
         self,
         new_ideas: list[str],
         bank_data: dict[int, dict[str, list[dict[str, str]] | str]],
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[dict[str, str]], list[str]]:
         """
         Walk over all idea lists in a bank and:
         - accumulate ids of ideas that are already known (by short id);
@@ -147,24 +161,47 @@ class IdeaAnalyzer:
             - remaining_new_ideas: List of idea descriptions not found in the bank
         """
         known_ideas_ids = []
+        know_ideas_rewrite = []
         # Work on a shallow copy so callers' lists are not mutated.
         new_ideas_candidates = list(new_ideas)
         for ideas_block in bank_data.values():
             block_text = ideas_block["text"]
             new_ideas_text = self._ideas_to_text(new_ideas_candidates)
             parsed_ideas = self.classify_ideas(new_ideas_text, block_text)
+
+            # convert short_ids to full_ids, filtering out any that failed to resolve
+            present_ideas_full_ids = [
+                full_id
+                for idea in parsed_ideas.get("present_ideas", [])
+                if (
+                    full_id := self.short_id_to_full_id(
+                        idea, ideas_block["descriptions"]
+                    )
+                )
+            ]
+            updated_ideas = [
+                {"id": full_id, "text": idea["text"]}
+                for idea in parsed_ideas.get("updated_ideas", [])
+                if (
+                    full_id := self.short_id_to_full_id(
+                        idea["id"], ideas_block["descriptions"]
+                    )
+                )
+            ]
             # present_ideas are expected to be short_ids of known ideas
-            known_ideas_ids.extend(parsed_ideas.get("present_ideas", []))
+            known_ideas_ids.extend(present_ideas_full_ids)
+            # ideas that require description rewriting
+            know_ideas_rewrite.extend(updated_ideas)
             # new_ideas are descriptions of ideas that were not found in this block
             new_ideas_candidates = [idea for idea in parsed_ideas.get("new_ideas", [])]
-        return known_ideas_ids, new_ideas_candidates
+        return known_ideas_ids, know_ideas_rewrite, new_ideas_candidates
 
     def process_ideas(
         self,
         program_chages: list[str],
         ideas_active_bank: dict[int, dict[str, list[dict[str, str]] | str]],
         inactive_ideas_bank: dict[int, dict[str, list[dict[str, str]] | str]],
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[dict[str, str]], list[str]]:
         """
         Process ideas from a program against active and inactive idea banks.
 
@@ -185,20 +222,22 @@ class IdeaAnalyzer:
         # Start from a copy so the caller's list is not mutated.
         remaining_new_ideas = list(program_chages)
         known_ideas_ids: list[str] = []
-
+        ideas_rewrite_known: list[dict[str, str]] = []
         # First, check against the active ideas bank.
-        active_known_ids, remaining_new_ideas = self._extract_ideas(
-            remaining_new_ideas, ideas_active_bank
+        active_known_ids, ideas_rewrite_active, remaining_new_ideas = (
+            self._extract_ideas(remaining_new_ideas, ideas_active_bank)
         )
         known_ideas_ids.extend(active_known_ids)
+        ideas_rewrite_known.extend(ideas_rewrite_active)
 
         # Then, any ideas still considered new are checked against the inactive bank.
         if remaining_new_ideas:
-            inactive_known_ids, remaining_new_ideas = self._extract_ideas(
-                remaining_new_ideas, inactive_ideas_bank
+            inactive_known_ids, ideas_rewrite_inactive, remaining_new_ideas = (
+                self._extract_ideas(remaining_new_ideas, inactive_ideas_bank)
             )
             known_ideas_ids.extend(inactive_known_ids)
+            ideas_rewrite_known.extend(ideas_rewrite_inactive)
 
         # remaining_new_ideas: descriptions of ideas not found in any bank
         # known_ideas_ids: list of short_ids of ideas found in either active or inactive banks
-        return remaining_new_ideas, known_ideas_ids
+        return remaining_new_ideas, ideas_rewrite_known, known_ideas_ids

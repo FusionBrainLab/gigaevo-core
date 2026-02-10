@@ -134,14 +134,19 @@ class IdeasTrackerLogger:
         )
 
     def log_modify_idea(
-        self, idea_id: str, description: str, new_linked_programs: list[str]
+        self,
+        idea_id: str,
+        old_description: str | None,
+        new_description: str,
+        new_linked_programs: list[str],
     ) -> None:
         """
         Log modification of an existing idea.
 
         Args:
             idea_id: ID of the modified idea
-            description: Idea description
+            old_description: Previous idea description (if available)
+            new_description: Updated idea description
             new_linked_programs: List of newly linked program IDs
         """
         # Use the first program ID if available, otherwise use idea_id
@@ -153,7 +158,8 @@ class IdeasTrackerLogger:
             action="modify_idea",
             parameters={
                 "idea_id": idea_id,
-                "description": description,
+                "old_description": old_description,
+                "new_description": new_description,
                 "new_linked_programs": new_linked_programs,
             },
         )
