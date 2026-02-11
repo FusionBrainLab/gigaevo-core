@@ -47,7 +47,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pre-commit", "python-semantic-release"]
-opt = ["jax", "optax"]
+opt = ["jax", "optax", "cma"]
 prompt = ["nltk", "emoji", "syllapy", "langdetect", "immutabledict"]
 
 [project.urls]

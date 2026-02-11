@@ -16,6 +16,7 @@ from gigaevo.problems.layout import ProblemLayout
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cma_optimization import CMANumericalOptimizationStage
 from gigaevo.programs.stages.collector import (
     AncestorProgramIds,
     DescendantProgramIds,
@@ -357,6 +358,115 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
 
         self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
         self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+
+
+class CMAOptPipelineBuilder(DefaultPipelineBuilder):
+    """Default pipeline + CMA-ES numerical constant optimisation.
+
+    Inherits :class:`DefaultPipelineBuilder` and inserts a
+    :class:`CMANumericalOptimizationStage` between ``ValidateCodeStage``
+    and ``CallProgramFunction``.  If the problem provides a ``context.py``
+    the ``AddContext`` stage is wired automatically (same as
+    :class:`ContextPipelineBuilder`).
+
+    Execution order::
+
+        ValidateCodeStage ─(success)─► CMAOptStage ─(always)─► CallProgramFunction
+        AddContext* ───────(always)──►              ─(data)──►
+        (* only when context.py exists)
+
+    If CMA fails, the program still runs with the original code.
+
+    Override ``_cma_stage_kwargs`` in a subclass to tweak hyper-parameters.
+    """
+
+    # Sensible defaults for quick experiments – override in subclasses.
+    CMA_SCORE_KEY: str = "fitness"
+    CMA_SIGMA0: float = 0.2
+    CMA_MAX_GENERATIONS: int = 20
+    CMA_POPULATION_SIZE: int = 10
+    CMA_MAX_PARALLEL: int = 10
+    CMA_EVAL_TIMEOUT: int = 30
+    # Current experiment policy: CMA tunes float literals only.
+    # Integer literals are left to mutation/structural evolution.
+    CMA_TUNE_FLOATS_ONLY: bool = True
+
+    def __init__(self, ctx: EvolutionContext):
+        super().__init__(ctx)
+        has_context = ctx.problem_ctx.is_contextual
+        if has_context:
+            self._add_context_stage_and_edges()
+        self._add_cma_optimization(has_context=has_context)
+
+    def _add_context_stage_and_edges(self) -> None:
+        """Add the AddContext stage (same as ContextPipelineBuilder)."""
+        problem_ctx = self.ctx.problem_ctx
+        self.add_stage(
+            "AddContext",
+            lambda: CallFileFunction(
+                path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
+                function_name="build_context",
+                timeout=DEFAULT_STAGE_TIMEOUT,
+            ),
+        )
+        self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
+        self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+
+    def _cma_stage_kwargs(self) -> dict:
+        """Return extra kwargs forwarded to :class:`CMANumericalOptimizationStage`.
+
+        Override in a subclass to customise CMA hyper-parameters without
+        rewriting the whole pipeline.
+        """
+        return {}
+
+    def _add_cma_optimization(self, *, has_context: bool) -> None:
+        problem_ctx = self.ctx.problem_ctx
+        validator_path = problem_ctx.problem_dir / "validate.py"
+
+        extra = self._cma_stage_kwargs()
+
+        self.add_stage(
+            "CMAOptStage",
+            lambda: CMANumericalOptimizationStage(
+                validator_path=validator_path,
+                score_key=extra.pop("score_key", self.CMA_SCORE_KEY),
+                function_name="entrypoint",
+                validator_fn="validate",
+                python_path=[problem_ctx.problem_dir.resolve()],
+                minimize=False,
+                sigma0=extra.pop("sigma0", self.CMA_SIGMA0),
+                max_generations=extra.pop("max_generations", self.CMA_MAX_GENERATIONS),
+                population_size=extra.pop("population_size", self.CMA_POPULATION_SIZE),
+                max_parallel=extra.pop("max_parallel", self.CMA_MAX_PARALLEL),
+                eval_timeout=extra.pop("eval_timeout", self.CMA_EVAL_TIMEOUT),
+                skip_integers=extra.pop("skip_integers", self.CMA_TUNE_FLOATS_ONLY),
+                update_program_code=True,
+                timeout=4 * DEFAULT_STAGE_TIMEOUT,
+                max_memory_mb=MAX_MEMORY_MB,
+                **extra,
+            ),
+        )
+
+        # CMA runs after validation succeeds
+        self.add_exec_dep(
+            "CMAOptStage",
+            ExecutionOrderDependency.on_success("ValidateCodeStage"),
+        )
+
+        # If context exists, wire it into CMA and wait for it
+        if has_context:
+            self.add_data_flow_edge("AddContext", "CMAOptStage", "context")
+            self.add_exec_dep(
+                "CMAOptStage",
+                ExecutionOrderDependency.always_after("AddContext"),
+            )
+
+        # Program execution waits for CMA (but runs even if CMA fails)
+        self.add_exec_dep(
+            "CallProgramFunction",
+            ExecutionOrderDependency.always_after("CMAOptStage"),
+        )
 
 
 class CustomPipelineBuilder(PipelineBuilder):

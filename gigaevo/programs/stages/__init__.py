@@ -1,5 +1,6 @@
 from gigaevo.programs.stages import (
     base,
+    cma_optimization,
     collector,
     complexity,
     insights,
@@ -12,6 +13,10 @@ from gigaevo.programs.stages import (
     validation,
 )
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cma_optimization import (
+    CMANumericalOptimizationStage,
+    CMAOptimizationOutput,
+)
 from gigaevo.programs.stages.collector import RelatedCollectorBase
 from gigaevo.programs.stages.complexity import (
     ComputeComplexityStage,
