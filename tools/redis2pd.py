@@ -1,5 +1,9 @@
+import sys
+
+sys.path.append("../gigaevo-core-internal")
 import argparse
 import asyncio
+import json
 
 import pandas as pd
 
@@ -9,6 +13,25 @@ from tools.utils import (
     fetch_evolution_dataframe,
     prepare_iteration_dataframe,
 )
+
+
+def _serialize_complex_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Serialize dict/list columns to JSON strings for safe CSV roundtripping.
+
+    Pandas' default `str()` conversion produces Python repr (single quotes,
+    True/False, etc.) which cannot be reliably parsed back.  `json.dumps`
+    escapes newlines, quotes, and backslashes so the value stays in a single
+    CSV cell and can be restored with `json.loads`.
+    """
+    df = df.copy()
+    for col in df.columns:
+        if df[col].apply(lambda x: isinstance(x, (dict, list))).any():
+            df[col] = df[col].apply(
+                lambda x: json.dumps(x, ensure_ascii=False)
+                if isinstance(x, (dict, list))
+                else x
+            )
+    return df
 
 
 async def main():
@@ -103,6 +126,7 @@ Examples:
         frontier_df.to_csv(args.output_file, index=False)
         print(f"Frontier CSV: {len(frontier_df)} gens → {args.output_file}")
     else:
+        df = _serialize_complex_columns(df)
         df.to_csv(args.output_file, index=False)
         print(f"Full history: {len(df)} programs → {args.output_file}")
 
