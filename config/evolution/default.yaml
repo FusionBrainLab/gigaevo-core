@@ -1,4 +1,4 @@
-i78# @package _global_
+# @package _global_
 
 # Compute required behavior keys from islands
 required_behavior_keys:
