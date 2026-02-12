@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 import sys
 from typing import Any, Optional
@@ -161,6 +162,8 @@ class IdeaTracker:
 
         for _, program in programs.iterrows():
             mutation_metadata = program["metadata_mutation_output"]
+            if isinstance(mutation_metadata, str):
+                mutation_metadata = json.loads(mutation_metadata)
             new_program = ProgramRecord(
                 id=program["program_id"],
                 fitness=program["metric_fitness"],
@@ -339,14 +342,23 @@ class IdeaTracker:
             raise ValueError(f"Invalid statistics mode: {self.statistics_mode}")
         return statistics
 
-    def run(self) -> None:
+    def run(self, path_to_database: Optional[str | Path] = None) -> None:
         """
         Main execution method: load database, process new programs, and update banks.
 
         Loads programs from Redis, processes new programs to extract and classify ideas,
         moves inactive ideas to inactive bank, and dumps final state to logger.
         """
-        df = asyncio.run(self.load_database())
+        if path_to_database is not None:
+            if isinstance(path_to_database, str):
+                path_to_database = Path(path_to_database)
+            if path_to_database.is_file() and path_to_database.suffix == ".csv":
+                df = pd.read_csv(path_to_database)
+            else:
+                raise ValueError(f"Invalid database file: {path_to_database}")
+        else:
+            df = asyncio.run(self.load_database())
+
         last_gen = df["generation"].max()
         new_programs = self.get_new_programs(df)
         new_programs_processed = self.wrap_data(new_programs)
