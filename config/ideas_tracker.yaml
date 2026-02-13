@@ -1,7 +1,14 @@
 gen_delta: 100000
 
+# Number of known ideas bundled into one RecordList (and one LLM comparison block)
+list_max_ideas: 20
+
 # LLM model name used by IdeaAnalyzer
-model: "qwen/qwen3-235b-a22b-2507"
+model: "google/gemini-3-flash-preview"
+
+# OpenRouter reasoning controls (used when base_url points to openrouter.ai)
+reasoning:
+  effort: "minimal"
 
 # Desription rewriting settings
 description_rewriting: true
@@ -16,7 +23,7 @@ redis:
 
 # Statistics settings
 statistics:
-  enabled: true
+  enabled: false
   mode: "top_k" # available modes: top_k (top_delta_fitness and top_fitness), top_fitness, delta_fitness
   top_k_delta_fitness: 5
   top_k_fitness: 5

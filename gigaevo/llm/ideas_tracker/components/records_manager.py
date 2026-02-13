@@ -5,10 +5,12 @@ from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 class RecordManager:
     """Manages active and inactive idea banks; supports moving ideas between them and querying."""
 
-    def __init__(self) -> None:
+    def __init__(self, list_max_ideas: int = 5) -> None:
         """Create empty active and inactive RecordBanks."""
-        self.record_bank: RecordBank = RecordBank()
-        self.inactive_record_bank: RecordBank = RecordBank()
+        self.record_bank: RecordBank = RecordBank(list_max_ideas=list_max_ideas)
+        self.inactive_record_bank: RecordBank = RecordBank(
+            list_max_ideas=list_max_ideas
+        )
         self.logger: IdeasTrackerLogger | None = None
 
     def add_new_idea(

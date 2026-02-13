@@ -172,6 +172,7 @@ class RecordBank:
     num_lists: int = 0
     generation: int = 0
     uuids: list[str] = field(default_factory=list)
+    list_max_ideas: int = 5
 
     def _unique_id_pair(self) -> str:
         """Return a uuid not present in uuids."""
@@ -189,7 +190,7 @@ class RecordBank:
             if not record_list.is_full():
                 self.ideas_lists[index].add_idea(idea_data)
                 return
-        new_list = RecordList()
+        new_list = RecordList(max_ideas=self.list_max_ideas)
         new_list.add_idea(idea_data)
         self.ideas_lists.append(new_list)
         self.num_lists += 1

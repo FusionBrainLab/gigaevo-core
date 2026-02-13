@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -18,15 +19,23 @@ class IdeaAnalyzer:
     are new or already known, using prompt-based LLM classification.
     """
 
-    def __init__(self, model: str = "deepseek/deepseek-v3.2") -> None:
+    def __init__(
+        self,
+        model: str = "deepseek/deepseek-v3.2",
+        reasoning: dict[str, Any] | None = None,
+    ) -> None:
         """
         Initialize IdeaAnalyzer with LLM model.
 
         Args:
             model: Name of the LLM model to use for classification.
+            reasoning: Optional OpenRouter reasoning settings, for example
+                {"effort": "low"}.
         """
         # LLM model name can be overridden via external configuration
         self.model = model
+        self.reasoning = reasoning or {}
+        self._is_openrouter = False
         self.logger: IdeasTrackerLogger | None = None
         self.description_rewriting: bool = False
         self._init_analyzer()
@@ -38,9 +47,30 @@ class IdeaAnalyzer:
         Sets up the LLM client using environment variables and creates
         a PromptManager instance for loading classification prompts.
         """
-        self.llm = OpenAI(
-            api_key=os.environ["OPENAI_API_KEY"], base_url=os.environ["BASE_URL"]
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY is not set. Set it in your environment or .env file."
+            )
+
+        # Accept multiple base-url env names for compatibility with existing setups.
+        base_url = (
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("BASE_URL")
+            or os.getenv("LLM_BASE_URL")
         )
+
+        # OpenRouter keys typically start with "sk-or-"; infer base URL when missing.
+        if not base_url and api_key.startswith("sk-or-"):
+            base_url = "https://openrouter.ai/api/v1"
+
+        self._is_openrouter = bool(base_url and "openrouter.ai" in base_url)
+
+        client_kwargs = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        self.llm = OpenAI(**client_kwargs)
         self.prompt_manager = PromptManager()
 
         if self.logger is not None:
@@ -67,14 +97,18 @@ class IdeaAnalyzer:
         prompt_user = self.prompt_manager.load_prompt(
             prompt_name=prompt_user_name, insert_data=prompt_content
         )
-        response = self.llm.chat.completions.create(
-            messages=[
+        request_kwargs: dict[str, Any] = {
+            "messages": [
                 {"role": "system", "content": prompt_system},
                 {"role": "user", "content": prompt_user},
             ],
-            model=self.model,
-            temperature=0,
-        )
+            "model": self.model,
+            "temperature": 0,
+        }
+        if self._is_openrouter and self.reasoning:
+            request_kwargs["extra_body"] = {"reasoning": self.reasoning}
+
+        response = self.llm.chat.completions.create(**request_kwargs)
         if not response.choices[0].message.content:
             return ""
         return response.choices[0].message.content
