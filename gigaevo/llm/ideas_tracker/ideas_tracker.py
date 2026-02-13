@@ -44,10 +44,12 @@ class IdeaTracker:
         # Initialize logger (logs directory next to this file)
         self.logger = IdeasTrackerLogger(Path(__file__).resolve())
 
-        self.ideas_manager = RecordManager()
+        list_max_ideas = int(self.config.get("list_max_ideas", 5))
+        self.ideas_manager = RecordManager(list_max_ideas=list_max_ideas)
         # Initialize analyzer with model from config (fallback to default)
         model_name = self.config.get("model") or "deepseek/deepseek-v3.2"
-        self.analyzer = IdeaAnalyzer(model_name)
+        reasoning_cfg = self.config.get("reasoning", {}) or {}
+        self.analyzer = IdeaAnalyzer(model_name, reasoning=reasoning_cfg)
         self.programs_card: list[ProgramRecord] = []
         self.programs_ids: set[str] = set()
 
@@ -108,6 +110,7 @@ class IdeaTracker:
             statistics_mode=self.statistics_mode,
             top_k_delta_fitness=self.top_k_delta_fitness,
             top_k_fitness=self.top_k_fitness,
+            list_max_ideas=list_max_ideas,
         )
 
     def _load_config(self, config_path: Optional[str | Path]) -> dict[str, Any]:
@@ -133,6 +136,7 @@ class IdeaTracker:
             # Fallback to defaults if config file is missing
             return {
                 "gen_delta": 100000,
+                "list_max_ideas": 5,
                 "model": "deepseek/deepseek-v3.2",
                 "redis": {
                     "redis_host": "localhost",
