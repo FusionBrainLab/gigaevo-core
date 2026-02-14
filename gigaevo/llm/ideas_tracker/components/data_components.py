@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 from uuid import uuid4
 
@@ -28,6 +28,41 @@ class RecordCard:
     description: str = ""
     linked_programs: list[str] = field(default_factory=list)
     last_generation: int = 0
+
+
+@dataclass
+class RecordCardExtended:
+    id: str = ""
+    category: str = ""
+    description: str = ""
+    task_description: str = ""
+    strategy: str = ""
+    aliases: list[dict[str, str]] = field(default_factory=list)
+    programs: list[str] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)
+    evolution_statistics: dict[str, Any] = field(default_factory=dict)
+    explanation: dict[str, list[str] | str] = field(default_factory=dict)
+    works_with: list[str] = field(default_factory=list)
+    links: list[str] = field(default_factory=list)
+    usage: dict[str, str] = field(default_factory=dict)
+
+    def __init__(self, **kwargs: Any) -> None:
+        required_fields = [
+            "id",
+            "category",
+            "description",
+            "task_descriptio",
+            "strategy",
+            "programs",
+        ]
+        if not all(field in kwargs for field in required_fields):
+            missing_fields = [field for field in required_fields if field not in kwargs]
+            raise ValueError(f"Missing required fields: {missing_fields}")
+
+        names = set([f.name for f in fields(self)])
+        for arg, value in kwargs.items():
+            if arg in names:
+                setattr(self, arg, value)
 
 
 @dataclass
