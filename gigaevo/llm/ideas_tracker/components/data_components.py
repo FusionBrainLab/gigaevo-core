@@ -1,3 +1,4 @@
+from copy import copy
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 from uuid import uuid4
@@ -37,7 +38,7 @@ class RecordCardExtended:
     description: str = ""
     task_description: str = ""
     strategy: str = ""
-    aliases: list[dict[str, str]] = field(default_factory=list)
+    aliases: list[dict[str, dict[str, str | list[str]]]] = field(default_factory=list)
     programs: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     evolution_statistics: dict[str, Any] = field(default_factory=dict)
@@ -63,6 +64,56 @@ class RecordCardExtended:
         for arg, value in kwargs.items():
             if arg in names:
                 setattr(self, arg, value)
+
+        self.explanation = {"explanations": [], "summary": ""}
+
+    def update_idea(
+        self,
+        experiment_id: str,
+        program_id: str | list[str],
+        new_description: str | None = None,
+    ) -> None:
+        if isinstance(program_id, str):
+            program_id = [program_id]
+
+        if new_description is not None:
+            current_description = new_description
+            current_programs = copy(self.programs)
+            current_description = copy(self.description)
+            new_alias_key = f"{experiment_id}-{program_id[0]}"
+            self.aliases.append(
+                {
+                    new_alias_key: {
+                        "description": current_description,
+                        "programs": current_programs,
+                    }
+                }
+            )
+            self.description = new_description
+
+        self.programs.extend(program_id)
+
+    def add_explanation(self, explanation: str) -> None:
+        self.explanation["explanations"].append(explanation)
+
+    def update_metadata(
+        self,
+        keywords: list[str] | None = None,
+        evolution_statistics: dict[str, Any] | None = None,
+        works_with: list[str] | None = None,
+        links: list[str] | None = None,
+        usage: dict[str, str] | None = None,
+    ) -> None:
+        if keywords is not None:
+            self.keywords = keywords
+        if evolution_statistics is not None:
+            self.evolution_statistics = evolution_statistics
+        if works_with is not None:
+            self.works_with = works_with
+        if links is not None:
+            self.links = links
+        if usage is not None:
+            self.usage = usage
 
 
 @dataclass
