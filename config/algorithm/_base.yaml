@@ -43,3 +43,4 @@ mutation_operator:
   mutation_mode: ${mutation_mode}
   problem_context: ${problem_context}
   strip_comments_and_docstrings: ${strip_comments_and_docstrings}
+  prompts_dir: ${prompts.dir}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.database.program_storage import ProgramStorage
@@ -18,5 +20,9 @@ class EvolutionContext(BaseModel):
     )
     storage: ProgramStorage = Field(
         ..., description="Storage containing all programs and their metadata"
+    )
+    prompts_dir: str | Path | None = Field(
+        default=None,
+        description="Optional directory for prompt templates (e.g. from config.prompts.dir). Same layout as gigaevo/prompts.",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)

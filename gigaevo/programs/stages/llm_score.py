@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from langchain_openai import ChatOpenAI
@@ -32,12 +33,14 @@ class LLMScoreStage(LangGraphStage):
         trait_description: str,
         max_score: float,
         score_key: str,
+        prompts_dir: str | Path | None = None,
         **kwargs: Any,
     ) -> None:
         agent = create_scoring_agent(
             llm=llm,
             trait_description=trait_description,
             max_score=max_score,
+            prompts_dir=prompts_dir,
         )
         super().__init__(agent=agent, program_kwarg="program", **kwargs)
         self.score_key = score_key
