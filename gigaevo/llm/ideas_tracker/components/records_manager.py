@@ -1,3 +1,5 @@
+from typing import Any
+
 from gigaevo.llm.ideas_tracker.components.data_components import RecordBank
 from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 
@@ -14,16 +16,32 @@ class RecordManager:
         self.logger: IdeasTrackerLogger | None = None
 
     def add_new_idea(
-        self, description: str, linked_program: str, generation: int
+        self,
+        description: str,
+        linked_program: str,
+        generation: int,
+        category: str = "",
+        strategy: str = "",
+        task_description: str = "",
     ) -> None:
         """Add a new idea to the main (active) ideas bank."""
-        self.record_bank.add_idea(description, linked_program, generation)
+        self.record_bank.add_idea(
+            description,
+            linked_program,
+            generation,
+            category,
+            strategy,
+            task_description,
+        )
 
         if self.logger is not None:
             self.logger.log_new_idea(
                 description=description,
                 generation=generation,
                 linked_program=linked_program,
+                category=category,
+                strategy=strategy,
+                task_description=task_description,
             )
 
     def modify_idea(
@@ -55,11 +73,19 @@ class RecordManager:
         if self.logger is not None and idea_bank is not None:
             # Fetch updated idea to log its description change and new links
             idea = idea_bank.get_idea(idea_id)
+            extra: dict[str, Any] = {}
+            if hasattr(idea, "category"):
+                extra["category"] = getattr(idea, "category", "")
+            if hasattr(idea, "strategy"):
+                extra["strategy"] = getattr(idea, "strategy", "")
+            if hasattr(idea, "programs"):
+                extra["programs"] = list(getattr(idea, "programs", []))
             self.logger.log_modify_idea(
                 idea_id=idea.id,
                 old_description=old_description,
                 new_description=idea.description,
                 new_linked_programs=new_programs or [],
+                **extra,
             )
 
     def move_inactive(self, generation: int, delta: int) -> None:
@@ -70,10 +96,15 @@ class RecordManager:
         for inact_idea in inactive_ideas:
             self.inactive_record_bank.import_idea(inact_idea)
             if self.logger is not None:
+                # Support both RecordCard (linked_programs) and RecordCardExtended (programs)
+                programs_list = list(
+                    getattr(inact_idea, "programs", None)
+                    or getattr(inact_idea, "linked_programs", [])
+                )
                 self.logger.log_move_idea(
                     idea_id=inact_idea.id,
                     description=inact_idea.description,
-                    linked_programs=list(inact_idea.linked_programs),
+                    linked_programs=programs_list,
                     destination="inactive_bank",
                 )
         for inact_idea in inactive_ideas:

@@ -175,6 +175,9 @@ class IdeaTracker:
                 parents=program["parent_ids"],
                 insights=mutation_metadata["insights_used"],
                 improvements=mutation_metadata["changes"],
+                category="",
+                strategy=mutation_metadata["archetype"],
+                task_description="",
             )
             programs_processed.append(new_program)
             self.programs_ids.add(program["program_id"])
@@ -232,7 +235,14 @@ class IdeaTracker:
 
         # Add all truly new ideas into the main (active) ideas bank.
         for n_idea in new_ideas:
-            self.ideas_manager.add_new_idea(n_idea, program.id, program.generation)
+            self.ideas_manager.add_new_idea(
+                n_idea,
+                program.id,
+                program.generation,
+                program.category,
+                program.strategy,
+                program.task_description,
+            )
 
         # For ideas that are already known, resolve their full UUID and update them.
         for idea in ideas_rewrite:
