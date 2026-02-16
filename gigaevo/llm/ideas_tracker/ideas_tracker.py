@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Optional
@@ -65,6 +66,9 @@ class IdeaTracker:
             redis_prefix=redis_cfg.get("redis_prefix", ""),
             label=redis_cfg.get("label", ""),
         )
+
+        # Load optional task description text based on redis_prefix / problems folder
+        self.task_description: str = self._load_task_description()
 
         self.description_rewriting = self.config.get("description_rewriting", False)
         self.analyzer.description_rewriting = self.description_rewriting
@@ -151,6 +155,50 @@ class IdeaTracker:
             data = yaml.safe_load(f) or {}
         return data
 
+    def _load_task_description(self) -> str:
+        """
+        Try to load a human-readable task description for the current experiment.
+
+        Logic:
+        - Take `redis_prefix` from the configured Redis settings.
+        - Walk the `problems/` tree and collect all *leaf* directories.
+        - For each leaf directory, compare its name to `redis_prefix`.
+        - For the first leaf directory whose name matches `redis_prefix`,
+          try to load `task_description.txt` from it.
+        - If nothing matches or the file is missing, return a default placeholder.
+        """
+        prefix_value = getattr(self.redis_config, "redis_prefix", "") or ""
+        if not prefix_value:
+            return "No description available"
+        prefix_value = prefix_value.replace("/", "_")
+
+        # Resolve project root from this file's location:
+        # .../gigaevo-core-internal/gigaevo/llm/ideas_tracker/ideas_tracker.py
+        project_root = Path(__file__).resolve().parents[3]
+        problems_root = project_root / "problems"
+
+        try:
+            # Walk the problems tree and collect all leaf directories.
+            leaf_dirs: list[Path] = []
+            for root, dirs, _files in os.walk(problems_root):
+                if "initial_programs" in dirs:
+                    leaf_dirs.append(Path(root))
+
+            # Find the first leaf directory whose *name* matches redis_prefix.
+            for leaf in leaf_dirs:
+                split_index = leaf.parts.index("problems") + 1
+                true_name = "_".join(leaf.parts[split_index:])
+                print(true_name)
+                if true_name == prefix_value:
+                    candidate_file = leaf / "task_description.txt"
+                    if candidate_file.is_file():
+                        return candidate_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            # Best-effort: if anything goes wrong, fall back to default text.
+            return "No description available"
+
+        return "No description available"
+
     def wrap_data(self, programs: pd.DataFrame) -> list[ProgramRecord]:
         """
         Wrap program data in ProgramRecord dataclass instances and store them.
@@ -177,7 +225,7 @@ class IdeaTracker:
                 improvements=mutation_metadata["changes"],
                 category="",
                 strategy=mutation_metadata["archetype"],
-                task_description="",
+                task_description=self.task_description,
             )
             programs_processed.append(new_program)
             self.programs_ids.add(program["program_id"])
