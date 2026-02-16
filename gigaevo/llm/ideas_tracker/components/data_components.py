@@ -46,7 +46,9 @@ class RecordCardExtended:
     programs: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     evolution_statistics: dict[str, Any] = field(default_factory=dict)
-    explanation: dict[str, list[str] | str] = field(default_factory=dict) # explanations from mutations
+    explanation: dict[str, list[str] | str] = field(
+        default_factory=dict
+    )  # explanations from mutations
     works_with: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     usage: dict[str, str] = field(default_factory=dict)
