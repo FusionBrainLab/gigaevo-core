@@ -188,7 +188,6 @@ class IdeaTracker:
             for leaf in leaf_dirs:
                 split_index = leaf.parts.index("problems") + 1
                 true_name = "_".join(leaf.parts[split_index:])
-                print(true_name)
                 if true_name == prefix_value:
                     candidate_file = leaf / "task_description.txt"
                     if candidate_file.is_file():
