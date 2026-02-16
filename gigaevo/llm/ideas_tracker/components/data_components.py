@@ -16,6 +16,9 @@ class ProgramRecord:
     parents: list[str] = field(default_factory=list)
     insights: list[str] = field(default_factory=list)
     improvements: list[dict] = field(default_factory=list)
+    category: str = ""
+    strategy: str = ""
+    task_description: str = ""
 
 
 @dataclass
@@ -38,11 +41,12 @@ class RecordCardExtended:
     description: str = ""
     task_description: str = ""
     strategy: str = ""
+    last_generation: int = 0
     aliases: list[dict[str, dict[str, str | list[str]]]] = field(default_factory=list)
     programs: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     evolution_statistics: dict[str, Any] = field(default_factory=dict)
-    explanation: dict[str, list[str] | str] = field(default_factory=dict)
+    explanation: dict[str, list[str] | str] = field(default_factory=dict) # explanations from mutations
     works_with: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     usage: dict[str, str] = field(default_factory=dict)
@@ -52,7 +56,7 @@ class RecordCardExtended:
             "id",
             "category",
             "description",
-            "task_descriptio",
+            "task_description",
             "strategy",
             "programs",
         ]
@@ -66,11 +70,13 @@ class RecordCardExtended:
                 setattr(self, arg, value)
 
         self.explanation = {"explanations": [], "summary": ""}
+        self.aliases = []
 
     def update_idea(
         self,
         experiment_id: str,
         program_id: str | list[str],
+        generation: int,
         new_description: str | None = None,
     ) -> None:
         if isinstance(program_id, str):
@@ -90,7 +96,8 @@ class RecordCardExtended:
                 }
             )
             self.description = new_description
-
+        if generation is not None and generation > self.last_generation:
+            self.last_generation = generation
         self.programs.extend(program_id)
 
     def add_explanation(self, explanation: str) -> None:
@@ -114,6 +121,158 @@ class RecordCardExtended:
             self.links = links
         if usage is not None:
             self.usage = usage
+
+
+@dataclass
+class RecordListV2:
+    ideas: list[RecordCardExtended] = field(default_factory=list)
+    num_ideas: int = 0
+    max_ideas: int = 5
+
+    def add_idea(self, idea_dict: dict[str, Any]) -> None:
+        """Append a new idea from a dict of RecordCardExtended fields. Raises if list is full."""
+        if self.num_ideas >= self.max_ideas:
+            raise ValueError("Can't add new idea to list since it full")
+        new_idea = RecordCardExtended(**idea_dict)
+        self.ideas.append(new_idea)
+        self.num_ideas = len(self.ideas)
+
+    def find_idea_index(self, idea_id: str) -> int | None:
+        """Return index of idea with given id, or None if not found."""
+        for index, idea in enumerate(self.ideas):
+            if idea.id == idea_id:
+                return index
+        return None
+
+    def get_idea(self, idea_id: str) -> RecordCardExtended:
+        """Return the RecordCardExtended with the given id. Raises ValueError if not found."""
+        idea_index = self.find_idea_index(idea_id)
+        if idea_index is None:
+            raise ValueError(f"Can't find idea with id {idea_id}")
+        return self.ideas[idea_index]
+
+    def modify_idea(
+        self,
+        idea_id: str,
+        new_programs: list[str] | None = None,
+        new_generation: int | None = None,
+        new_description: str | None = None,
+    ) -> bool:
+        """Update last_generation and/or description (if greater). Returns True if found."""
+        idea_index = self.find_idea_index(idea_id)
+        if idea_index is None:
+            return False
+        idea = self.ideas[idea_index]
+        idea.update_idea(
+            experiment_id=idea_id,
+            program_id=new_programs,
+            generation=new_generation,
+            new_description=new_description,
+        )
+        return True
+
+    def modify_idea_metadata(
+        self,
+        idea_id: str,
+        new_keywords: list[str] | None = None,
+        new_evolution_statistics: dict[str, Any] | None = None,
+        new_works_with: list[str] | None = None,
+        new_links: list[str] | None = None,
+        new_usage: dict[str, str] | None = None,
+    ) -> bool:
+        """Update keywords, evolution_statistics, works_with, links, usage (if greater). Returns True if found."""
+        idea_index = self.find_idea_index(idea_id)
+        if idea_index is None:
+            return False
+        idea = self.ideas[idea_index]
+        if new_keywords is not None:
+            idea.keywords = new_keywords
+        if new_evolution_statistics is not None:
+            idea.evolution_statistics = new_evolution_statistics
+        if new_works_with is not None:
+            idea.works_with = new_works_with
+        if new_links is not None:
+            idea.links = new_links
+        if new_usage is not None:
+            idea.usage = new_usage
+        return True
+
+    def remove_idea(self, idea_id: str) -> bool:
+        """Remove the idea with the given id. Returns True if found and removed."""
+        idea_index = self.find_idea_index(idea_id)
+        if idea_index is None:
+            return False
+        self.ideas.pop(idea_index)
+        self.num_ideas = len(self.ideas)
+        return True
+
+    def import_idea(self, new_idea: RecordCardExtended) -> None:
+        """Append an existing RecordCardExtended. Raises if list is full."""
+        if self.num_ideas >= self.max_ideas:
+            raise ValueError("Can't import idea: list is full")
+        self.ideas.append(new_idea)
+        self.num_ideas = len(self.ideas)
+
+    def exclude_inactive_ideas(
+        self, generation: int, delta: int, persist_ideas: bool = False
+    ) -> list[RecordCardExtended]:
+        """Return ideas where |last_generation - generation| > delta; optionally remove them from this list."""
+        excluded_ideas = []
+        excluded_ideas_id = []
+        for idea in self.ideas:
+            if abs(idea.last_generation - generation) > delta:
+                excluded_ideas.append(idea)
+                excluded_ideas_id.append(idea.id)
+        if not persist_ideas:
+            for exc_idea_id in excluded_ideas_id:
+                self.remove_idea(exc_idea_id)
+        return excluded_ideas
+
+    def rankings(self) -> list[dict[str, str | list[str] | int]]:
+        """Return a short representation of each idea: [{"id", "description", "programs", "count"}, ...]."""
+        ideas = []
+        for idea in self.ideas:
+            ideas.append(
+                {
+                    "id": idea.id,
+                    "description": idea.description,
+                    "programs": idea.programs,
+                    "count": len(idea.programs),
+                }
+            )
+        return ideas
+
+    def all_ideas_short(self) -> list[dict[str, str]]:
+        """Return a short representation of each idea: [{"id","short_id", "description"}, ...]."""
+        ideas = []
+        for idea in self.ideas:
+            ideas.append(
+                {
+                    "id": idea.id,
+                    "short_id": idea.id.split("-")[
+                        0
+                    ],  # first part of the id is the short id
+                    "description": idea.description,
+                }
+            )
+        return ideas
+
+    def is_full(self) -> bool:
+        """Return True if this list has reached max_ideas."""
+        if self.num_ideas < self.max_ideas:
+            return False
+        else:
+            return True
+
+    def change_max_ideas(self, new_val: int) -> None:
+        """Set max_ideas to new_val. Raises if new_val is negative or less than current size."""
+        if new_val < 0:
+            raise ValueError(f"New max_ideas value {new_val} smaller than 0")
+        if new_val < self.num_ideas:
+            raise ValueError(
+                f"New max_ideas value {new_val} smaller than size of list {self.num_ideas}"
+            )
+        self.max_ideas = new_val
 
 
 @dataclass
@@ -254,7 +413,7 @@ class RecordBank:
     Holds multiple RecordList instances; manages unique ids and idea add/remove/import.
     """
 
-    ideas_lists: list[RecordList] = field(default_factory=list)
+    ideas_lists: list[RecordListV2] = field(default_factory=list)
     num_lists: int = 0
     generation: int = 0
     uuids: list[str] = field(default_factory=list)
@@ -276,7 +435,7 @@ class RecordBank:
             if not record_list.is_full():
                 self.ideas_lists[index].add_idea(idea_data)
                 return
-        new_list = RecordList(max_ideas=self.list_max_ideas)
+        new_list = RecordListV2(max_ideas=self.list_max_ideas)
         new_list.add_idea(idea_data)
         self.ideas_lists.append(new_list)
         self.num_lists += 1
@@ -290,7 +449,15 @@ class RecordBank:
             return
         self.uuids.pop(idx)
 
-    def add_idea(self, description: str, linked_program: str, generation: int) -> None:
+    def add_idea(
+        self,
+        description: str,
+        linked_program: str,
+        generation: int,
+        category: str = "",
+        strategy: str = "",
+        task_description: str = "",
+    ) -> None:
         """Create a new idea with a unique id and append it to a list in the bank."""
         idea_id = self._unique_id_pair()
         self.uuids.append(idea_id)
@@ -298,6 +465,10 @@ class RecordBank:
             "id": idea_id,
             "description": description,
             "linked_programs": [linked_program],
+            "programs": [linked_program],
+            "category": category,
+            "strategy": strategy,
+            "task_description": task_description,
             "last_generation": generation,
         }
         self._append_record_list(idea_dict)

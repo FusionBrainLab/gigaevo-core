@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from gigaevo.llm.ideas_tracker.components.data_components import (
+        RecordCard,
+        RecordCardExtended,
+    )
     from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
 
 
@@ -67,6 +71,37 @@ class IdeasTrackerLogger:
         """Get current timestamp in the format [time]"""
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    def _idea_to_dict(self, idea: "RecordCard | RecordCardExtended") -> dict[str, Any]:
+        """
+        Serialize a single idea to a JSON-serializable dict.
+        Supports both RecordCard (linked_programs) and RecordCardExtended (programs, etc.).
+        """
+        if hasattr(idea, "programs"):
+            # RecordCardExtended
+            return {
+                "id": idea.id,
+                "category": getattr(idea, "category", ""),
+                "description": idea.description,
+                "task_description": getattr(idea, "task_description", ""),
+                "strategy": getattr(idea, "strategy", ""),
+                "last_generation": idea.last_generation,
+                "programs": list(getattr(idea, "programs", [])),
+                "aliases": getattr(idea, "aliases", []),
+                "keywords": getattr(idea, "keywords", []),
+                "evolution_statistics": getattr(idea, "evolution_statistics", {}),
+                "explanation": getattr(idea, "explanation", {}),
+                "works_with": getattr(idea, "works_with", []),
+                "links": getattr(idea, "links", []),
+                "usage": getattr(idea, "usage", {}),
+            }
+        # RecordCard
+        return {
+            "id": idea.id,
+            "description": idea.description,
+            "linked_programs": list(getattr(idea, "linked_programs", [])),
+            "last_generation": idea.last_generation,
+        }
+
     def _write_log(
         self, program_id: str, destination: str, action: str, parameters: dict[str, Any]
     ) -> None:
@@ -112,25 +147,43 @@ class IdeasTrackerLogger:
         )
 
     def log_new_idea(
-        self, description: str, generation: int, linked_program: str
+        self,
+        description: str,
+        generation: int,
+        linked_program: str,
+        *,
+        category: str = "",
+        strategy: str = "",
+        task_description: str = "",
     ) -> None:
         """
         Log addition of a new idea.
+        Supports both RecordCard (base fields) and RecordCardExtended (category, strategy, task_description).
 
         Args:
             description: Idea description
             generation: Generation number
             linked_program: Program ID linked to this idea
+            category: Optional; used for RecordCardExtended
+            strategy: Optional; used for RecordCardExtended
+            task_description: Optional; used for RecordCardExtended
         """
+        parameters: dict[str, Any] = {
+            "description": description,
+            "generation": generation,
+            "linked_program": linked_program,
+        }
+        if category:
+            parameters["category"] = category
+        if strategy:
+            parameters["strategy"] = strategy
+        if task_description:
+            parameters["task_description"] = task_description
         self._write_log(
             program_id=linked_program,
             destination="active_bank",
             action="add_new_idea",
-            parameters={
-                "description": description,
-                "generation": generation,
-                "linked_program": linked_program,
-            },
+            parameters=parameters,
         )
 
     def log_modify_idea(
@@ -139,29 +192,42 @@ class IdeasTrackerLogger:
         old_description: str | None,
         new_description: str,
         new_linked_programs: list[str],
+        *,
+        category: str = "",
+        strategy: str = "",
+        programs: list[str] | None = None,
     ) -> None:
         """
         Log modification of an existing idea.
+        Supports both RecordCard (linked_programs) and RecordCardExtended (programs, category, strategy).
 
         Args:
             idea_id: ID of the modified idea
             old_description: Previous idea description (if available)
             new_description: Updated idea description
-            new_linked_programs: List of newly linked program IDs
+            new_linked_programs: List of newly linked program IDs (RecordCard) or current batch
+            category: Optional; for RecordCardExtended
+            strategy: Optional; for RecordCardExtended
+            programs: Optional; full programs list for RecordCardExtended (logged if provided)
         """
-        # Use the first program ID if available, otherwise use idea_id
         program_id = new_linked_programs[0] if new_linked_programs else idea_id
-
+        parameters: dict[str, Any] = {
+            "idea_id": idea_id,
+            "old_description": old_description,
+            "new_description": new_description,
+            "new_linked_programs": new_linked_programs,
+        }
+        if category:
+            parameters["category"] = category
+        if strategy:
+            parameters["strategy"] = strategy
+        if programs is not None:
+            parameters["programs"] = programs
         self._write_log(
             program_id=program_id,
             destination="active_bank",
             action="modify_idea",
-            parameters={
-                "idea_id": idea_id,
-                "old_description": old_description,
-                "new_description": new_description,
-                "new_linked_programs": new_linked_programs,
-            },
+            parameters=parameters,
         )
 
     def log_move_idea(
@@ -217,14 +283,17 @@ class IdeasTrackerLogger:
             json.dump(existing_rankings, f, indent=4)
 
     def log_banks(
-        self, active_bank: dict[str, Any], inactive_bank: dict[str, Any]
+        self,
+        active_bank: list[dict[str, Any]] | dict[str, Any],
+        inactive_bank: list[dict[str, Any]] | dict[str, Any],
     ) -> None:
         """
         Append banks state to banks.json.
+        Each bank can be a list of idea dicts (from _idea_to_dict) or a dict.
 
         Args:
-            active_bank: Dictionary representing the active bank state
-            inactive_bank: Dictionary representing the inactive bank state
+            active_bank: Active bank state (list of idea dicts or dict)
+            inactive_bank: Inactive bank state (list of idea dicts or dict)
         """
         banks_state = {
             "active_bank": active_bank,
@@ -311,37 +380,24 @@ class IdeasTrackerLogger:
     def dump_final_state(self, record_manager: "RecordManager") -> None:
         """
         Dump final state of idea banks.
+        Supports both RecordCard and RecordCardExtended in bank lists.
 
         Args:
             record_manager: RecordManager instance to extract bank states from
         """
-        # Extract active bank state
+        # Extract active bank state (RecordCard or RecordCardExtended)
         active_bank_data = []
         for list_idx in range(record_manager.record_bank.num_lists):
             record_list = record_manager.record_bank.get_record_list(list_idx)
             for idea in record_list.ideas:
-                active_bank_data.append(
-                    {
-                        "id": idea.id,
-                        "description": idea.description,
-                        "linked_programs": idea.linked_programs,
-                        "last_generation": idea.last_generation,
-                    }
-                )
+                active_bank_data.append(self._idea_to_dict(idea))
 
-        # Extract inactive bank state
+        # Extract inactive bank state (RecordCard or RecordCardExtended)
         inactive_bank_data = []
         for list_idx in range(record_manager.inactive_record_bank.num_lists):
             record_list = record_manager.inactive_record_bank.get_record_list(list_idx)
             for idea in record_list.ideas:
-                inactive_bank_data.append(
-                    {
-                        "id": idea.id,
-                        "description": idea.description,
-                        "linked_programs": idea.linked_programs,
-                        "last_generation": idea.last_generation,
-                    }
-                )
+                inactive_bank_data.append(self._idea_to_dict(idea))
 
         banks_state = {
             "active_bank": active_bank_data,

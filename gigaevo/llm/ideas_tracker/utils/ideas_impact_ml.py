@@ -101,7 +101,9 @@ def build_feature_matrix(
     prog_id_to_row: dict[str, int] = {prog.id: row for row, prog in enumerate(programs)}
 
     for col, idea in enumerate(ideas):
-        for linked_id in idea.linked_programs:
+        for linked_id in (
+            idea.linked_programs if hasattr(idea, "linked_programs") else idea.programs
+        ):
             row = prog_id_to_row.get(linked_id)
             if row is not None:
                 X[row, col] = 1.0
