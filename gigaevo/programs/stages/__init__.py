@@ -1,6 +1,5 @@
 from gigaevo.programs.stages import (
     base,
-    cma_optimization,
     collector,
     complexity,
     insights,
@@ -9,14 +8,11 @@ from gigaevo.programs.stages import (
     llm_score,
     metrics,
     mutation_context,
+    optimization,
     python_executors,
     validation,
 )
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.cma_optimization import (
-    CMANumericalOptimizationStage,
-    CMAOptimizationOutput,
-)
 from gigaevo.programs.stages.collector import RelatedCollectorBase
 from gigaevo.programs.stages.complexity import (
     ComputeComplexityStage,
@@ -36,6 +32,12 @@ from gigaevo.programs.stages.json_processing import (
 from gigaevo.programs.stages.llm_score import LLMScoreStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage, NormalizeMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
+from gigaevo.programs.stages.optimization import (
+    CMANumericalOptimizationStage,
+    CMAOptimizationOutput,
+    OptunaOptimizationOutput,
+    OptunaOptimizationStage,
+)
 from gigaevo.programs.stages.python_executors import (
     CallFileFunction,
     CallProgramFunction,

@@ -5,13 +5,13 @@ with a validator script as the fitness function, and returns the optimized code.
 
 Key features of the CMA-ES integration:
 
-* **Relative sigma** – per-variable step-size scaling (``CMA_stds``)
+* **Relative sigma** -- per-variable step-size scaling (``CMA_stds``)
   proportional to each constant's magnitude so that tiny and large constants
   are explored at an appropriate resolution.
-* **Adaptive penalty** – failed evaluations receive a penalty derived from
+* **Adaptive penalty** -- failed evaluations receive a penalty derived from
   the current generation's observed fitnesses rather than a fixed extreme
   value, preventing distortion of the CMA covariance matrix.
-* **Optional automatic bounds** – per-variable search bounds inferred from
+* **Optional automatic bounds** -- per-variable search bounds inferred from
   the initial constant values.
 """
 
@@ -19,25 +19,28 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import base64
 import copy
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import cma
 from loguru import logger
 from pydantic import BaseModel
 
-from gigaevo.exceptions import ValidationError
 from gigaevo.programs.core_types import StageIO
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.common import AnyContainer
-from gigaevo.programs.stages.python_executors.wrapper import (
-    ExecRunnerError,
-    run_exec_runner,
+from gigaevo.programs.stages.optimization.utils import (
+    OptimizationInput,
+    build_eval_code,
+    evaluate_single,
+    read_validator,
 )
 from gigaevo.programs.stages.stage_registry import StageRegistry
+
+# ---------------------------------------------------------------------------
+# AST helpers -- CMA-specific constant extraction & substitution
+# ---------------------------------------------------------------------------
 
 
 class _ConstantInfo(BaseModel, frozen=True):
@@ -88,7 +91,7 @@ def _extract_constants(
     """
     tree = ast.parse(code)
     constants: list[_ConstantInfo] = []
-    # Track inner Constant nodes already consumed by a UnaryOp(USub, …)
+    # Track inner Constant nodes already consumed by a UnaryOp(USub, ...)
     _consumed: set[int] = set()
 
     filter_kw = dict(
@@ -149,7 +152,7 @@ class _ConstantParameterizer(ast.NodeTransformer):
 
     def __init__(self, constants: list[_ConstantInfo], param_name: str = "_cma_params"):
         self._param_name = param_name
-        # Map (lineno, col) → index; separate maps for UnaryOp vs Constant.
+        # Map (lineno, col) -> index; separate maps for UnaryOp vs Constant.
         self._neg_positions: dict[tuple[int, int], int] = {}
         self._pos_positions: dict[tuple[int, int], int] = {}
         for i, c in enumerate(constants):
@@ -245,10 +248,9 @@ def _substitute(
     return ast.unparse(new_tree)
 
 
-class _CMAInput(StageIO):
-    """Input model for :class:`CMANumericalOptimizationStage`."""
-
-    context: Optional[AnyContainer]
+# ---------------------------------------------------------------------------
+# Stage I/O
+# ---------------------------------------------------------------------------
 
 
 class CMAOptimizationOutput(StageIO):
@@ -260,6 +262,11 @@ class CMAOptimizationOutput(StageIO):
     n_generations: int
     initial_constants: list[float]
     optimized_constants: list[float]
+
+
+# ---------------------------------------------------------------------------
+# The Stage
+# ---------------------------------------------------------------------------
 
 
 @StageRegistry.register(
@@ -290,7 +297,7 @@ class CMANumericalOptimizationStage(Stage):
 
     **DAG wiring**
 
-    The only (optional) DAG input is ``context`` – an :class:`AnyContainer`
+    The only (optional) DAG input is ``context`` -- an :class:`AnyContainer`
     forwarded to both the program function and the validator.
 
     Parameters
@@ -303,74 +310,44 @@ class CMANumericalOptimizationStage(Stage):
         If ``True`` minimise *score_key*; otherwise maximise.
         Default ``False`` (maximise).
     sigma0 : float
-        CMA-ES initial step-size (default ``0.2``).  When *relative_sigma*
-        is ``True`` (the default) this is interpreted as a **fraction** of
-        each constant's magnitude – e.g. ``0.2`` means "explore ±20 % of
-        the initial value per generation".  When *relative_sigma* is
-        ``False`` it is an absolute step-size shared by all variables.
+        CMA-ES initial step-size (default ``0.2``).
     relative_sigma : bool
-        Scale the step-size per variable proportional to its initial
-        magnitude via the CMA-ES ``CMA_stds`` option (default ``True``).
-        For each constant *v* the per-variable scale is
-        ``max(|v|, sigma_floor)``, so the effective sigma for variable *i*
-        is ``sigma0 × max(|v_i|, sigma_floor)``.  This prevents tiny
-        constants (e.g. ``0.05``) from being overwhelmed by a global sigma
-        sized for larger constants (e.g. ``5.0``), and vice-versa.
+        Scale step-size per variable (default ``True``).
     sigma_floor : float
-        Minimum per-variable scale when *relative_sigma* is active
-        (default ``0.01``).  Prevents near-zero constants from getting an
-        infinitesimal step-size.
+        Minimum per-variable scale (default ``0.01``).
     bound_margin : float | None
-        If set, automatically compute per-variable lower/upper bounds as
-        ``initial_value ± bound_margin × effective_scale``, where
-        *effective_scale* is the per-variable ``CMA_stds`` entry (or
-        ``1.0`` when *relative_sigma* is off).  Default ``None`` (no
-        automatic bounds).
+        Automatic per-variable bounds margin (default ``None``).
     adaptive_penalty : bool
-        When ``True`` (default), failed evaluations receive a penalty
-        derived from the *current generation's* observed fitnesses
-        (``worst_valid + 3 × scale``, where *scale* captures the fitness
-        range) rather than the fixed ``penalty_fitness``.  This keeps the
-        penalty on the same order of magnitude as real observations and
-        prevents distortion of CMA-ES covariance learning.
+        Generation-adaptive penalty for failed evals (default ``True``).
     max_generations : int
-        Hard cap on the number of CMA-ES generations (default ``100``).
+        Hard cap on CMA-ES generations (default ``100``).
     population_size : int | None
-        Override CMA population size.  Default ``None`` (library default).
+        Override CMA population size (default ``None``).
     max_parallel : int
-        Maximum concurrent evaluation sub-processes per generation
-        (default ``8``).
+        Max concurrent evaluation sub-processes (default ``8``).
     eval_timeout : int
-        Timeout in seconds for each single evaluation sub-process
-        (default ``30``).
+        Timeout in seconds per evaluation (default ``30``).
     function_name : str
-        Function to call inside ``program.code`` (default ``"run_code"``).
+        Function to call inside the program (default ``"run_code"``).
     validator_fn : str
-        Function to call inside the validator file (default ``"validate"``).
+        Function to call inside the validator (default ``"validate"``).
     skip_zero_one : bool
-        Skip constants ``0``, ``1``, ``-1`` during extraction
-        (default ``True``).
+        Skip constants 0, 1, -1 (default ``True``).
     skip_integers : bool
-        Skip integer-typed constants during extraction
-        (default ``False``).
+        Skip integer-typed constants (default ``False``).
     min_abs_value, max_abs_value : float | None
         Filter constants by absolute value (default ``None``).
     update_program_code : bool
-        If ``True`` (default), overwrite ``program.code`` in-place with the
-        optimised source.
+        Overwrite ``program.code`` in-place (default ``True``).
     penalty_fitness : float | None
-        Fallback fitness assigned to failed evaluations (in the *original*
-        score space) when *adaptive_penalty* is ``False`` or no valid
-        evaluations exist in a generation.  Default ``None`` → ``1e18``
-        for minimisation, ``-1e18`` for maximisation.
+        Fallback penalty for failed evaluations (default ``None``).
     python_path : list[Path] | None
-        Extra ``sys.path`` entries forwarded to evaluation sub-processes
-        (default ``None``).
+        Extra ``sys.path`` entries for sub-processes (default ``None``).
     max_memory_mb : int | None
         Per-evaluation RSS memory cap in MB (default ``None``).
     """
 
-    InputsModel = _CMAInput
+    InputsModel = OptimizationInput
     OutputModel = CMAOptimizationOutput
 
     def __init__(
@@ -402,14 +379,7 @@ class CMANumericalOptimizationStage(Stage):
     ):
         super().__init__(**kwargs)
 
-        # -- Read validator source -----------------------------------------
-        p = Path(validator_path)
-        if not p.exists():
-            raise ValidationError(f"Validator file not found: {p}")
-        try:
-            self._validator_code = p.read_text(encoding="utf-8")
-        except OSError as e:
-            raise ValidationError(f"Failed to read validator file: {e}") from e
+        self._validator_code = read_validator(validator_path)
 
         # -- Store hyper-parameters ----------------------------------------
         self.score_key = score_key
@@ -433,8 +403,7 @@ class CMANumericalOptimizationStage(Stage):
         self.python_path = python_path or []
         self.max_memory_mb = max_memory_mb
 
-        # Fallback penalty in CMA space (CMA minimises: higher → worse).
-        # Used when adaptive_penalty is False or no valid evals exist.
+        # Fallback penalty in CMA space (CMA minimises: higher -> worse).
         if penalty_fitness is not None:
             self._fallback_penalty: float = (
                 penalty_fitness if minimize else -penalty_fitness
@@ -443,82 +412,37 @@ class CMANumericalOptimizationStage(Stage):
             self._fallback_penalty = 1e18
 
     def _build_eval_code(self, parameterized_code: str, params: list[float]) -> str:
-        """Compose a self-contained script that runs *program → validator*."""
-        validator_b64 = base64.b64encode(self._validator_code.encode("utf-8")).decode(
-            "ascii"
-        )
-
-        fn = self.function_name
-        vfn = self.validator_fn
-
+        """Compose a self-contained script that runs *program -> validator*."""
         # Ensure plain Python floats (CMA-ES returns numpy.float64 whose
-        # repr is ``np.float64(...)`` – invalid in the subprocess).
+        # repr is ``np.float64(...)`` -- invalid in the subprocess).
         native_params = [float(p) for p in params]
-
-        # The validator is loaded into its own namespace to avoid collisions
-        # with names defined in the parameterized program code.
-        lines = [
-            "import base64, types",
-            f"_cma_params = {native_params!r}",
-            parameterized_code,
-            "",
-            "_val_ns = {}",
-            (
-                "exec(compile(base64.b64decode("
-                f'"{validator_b64}"'
-                ').decode(), "<validator>", "exec"), _val_ns)'
-            ),
-            "",
-            "def _cma_eval(*_args):",
-            f"    _prog_result = {fn}(*_args)",
-            f"    _val_fn = _val_ns['{vfn}']",
-            "    if _args:",
-            "        return _val_fn(_args[0], _prog_result)",
-            "    return _val_fn(_prog_result)",
-        ]
-        return "\n".join(lines)
+        return build_eval_code(
+            validator_code=self._validator_code,
+            program_code=parameterized_code,
+            function_name=self.function_name,
+            validator_fn=self.validator_fn,
+            eval_fn_name="_cma_eval",
+            preamble_lines=[f"_cma_params = {native_params!r}"],
+        )
 
     async def _evaluate_single(
         self,
         parameterized_code: str,
         candidate: list[float],
         context: Any,
-    ) -> dict[str, float] | None:
-        """Run one candidate and return the validator score dict, or *None*."""
+    ) -> tuple[dict[str, float] | None, str | None]:
+        """Run one candidate and return (score_dict, error_message)."""
         eval_code = self._build_eval_code(parameterized_code, candidate)
-        args: list[Any] = [context] if context is not None else []
-
-        try:
-            result, _, _ = await run_exec_runner(
-                code=eval_code,
-                function_name="_cma_eval",
-                args=args,
-                kwargs={},
-                python_path=self.python_path,
-                timeout=self.eval_timeout,
-                max_memory_mb=self.max_memory_mb,
-            )
-            if isinstance(result, dict) and self.score_key in result:
-                return result
-            logger.warning(
-                "[CMA] evaluation returned unexpected result (type={}): {}",
-                type(result).__name__,
-                result,
-            )
-            return None
-        except asyncio.TimeoutError:
-            logger.trace("[CMA] single evaluation timed out")
-            return None
-        except ExecRunnerError as exc:
-            # Only the last line of stderr (the actual error) is useful;
-            # full tracebacks are repetitive and bloat the log.
-            last_line = (exc.stderr or "").strip().rsplit("\n", 1)[-1]
-            logger.trace(
-                "[CMA] eval failed: {} | {}",
-                exc,
-                last_line,
-            )
-            return None
+        return await evaluate_single(
+            eval_code=eval_code,
+            eval_fn_name="_cma_eval",
+            context=context,
+            score_key=self.score_key,
+            python_path=self.python_path,
+            timeout=self.eval_timeout,
+            max_memory_mb=self.max_memory_mb,
+            log_tag="CMA",
+        )
 
     async def _evaluate_population(
         self,
@@ -535,9 +459,13 @@ class CMANumericalOptimizationStage(Stage):
 
         async def _bounded(candidate: list[float]):
             async with sem:
-                return await self._evaluate_single(
+                scores, error = await self._evaluate_single(
                     parameterized_code, candidate, context
                 )
+                if scores is None:
+                    # Return exception with error message to signal failure
+                    return RuntimeError(f"Evaluation failed: {error}")
+                return scores
 
         raw_results = await asyncio.gather(
             *(_bounded(c) for c in population), return_exceptions=True
@@ -551,14 +479,8 @@ class CMANumericalOptimizationStage(Stage):
                 valid_cma_fitnesses.append(score if self.minimize else -score)
 
         # -- Decide penalty for this generation ----------------------------
-        # The penalty must be clearly worse than any valid fitness (CMA
-        # minimises) but not so extreme that it warps covariance learning.
-        # We use: worst_valid + 3 × scale, where *scale* is the larger of
-        # the observed fitness range and the absolute worst value (so the
-        # penalty is always proportionally meaningful, even when all
-        # fitnesses are tiny like 0.01–0.03).
         if self.adaptive_penalty and valid_cma_fitnesses:
-            worst_valid = max(valid_cma_fitnesses)  # CMA minimises
+            worst_valid = max(valid_cma_fitnesses)
             best_valid = min(valid_cma_fitnesses)
             fitness_range = abs(worst_valid - best_valid)
             scale = max(fitness_range, abs(worst_valid)) or 1.0
@@ -582,7 +504,7 @@ class CMANumericalOptimizationStage(Stage):
 
     async def compute(self, program: Program) -> CMAOptimizationOutput:
         code = program.code
-        pid = program.id[:8]  # short id for log messages
+        pid = program.id[:8]
 
         # 1. Extract numerical constants ------------------------------------
         tree, constants = _extract_constants(
@@ -622,27 +544,16 @@ class CMANumericalOptimizationStage(Stage):
         # 4. Run CMA-ES ----------------------------------------------------
         opts: dict[str, Any] = {
             "maxiter": self.max_generations,
-            "verbose": -9,  # suppress CMA console output
+            "verbose": -9,
         }
         if self.population_size is not None:
             opts["popsize"] = self.population_size
 
-        # Tell CMA-ES which variables are integers so it can handle
-        # rounding internally (adapts covariance to the integer grid).
         int_indices = [i for i, c in enumerate(constants) if c.was_int]
         if int_indices:
             opts["integer_variables"] = int_indices
-            logger.debug(
-                "[CMA][{}] Integer variable indices: {}",
-                pid,
-                int_indices,
-            )
+            logger.debug("[CMA][{}] Integer variable indices: {}", pid, int_indices)
 
-        # -- Per-variable sigma scaling ------------------------------------
-        # When relative_sigma is True, each variable's step-size is
-        # proportional to its initial magnitude: sigma_i = sigma0 * |x0_i|.
-        # This prevents tiny constants (0.05) from being overwhelmed by a
-        # global sigma meant for larger constants (5.0), and vice versa.
         cma_stds: list[float] | None = None
         if self.relative_sigma:
             cma_stds = [max(abs(v), self.sigma_floor) for v in initial_values]
@@ -654,7 +565,6 @@ class CMANumericalOptimizationStage(Stage):
                 eff_sigmas,
             )
 
-        # -- Optional automatic bounds -------------------------------------
         if self.bound_margin is not None:
             scales = cma_stds if cma_stds is not None else [1.0] * n
             lower = [v - self.bound_margin * s for v, s in zip(initial_values, scales)]
@@ -670,9 +580,15 @@ class CMANumericalOptimizationStage(Stage):
 
         es = cma.CMAEvolutionStrategy(initial_values, self.sigma0, opts)
 
-        # Evaluate the original constants to get a baseline fitness
-        baseline_scores = await self._evaluate_single(
-            parameterized_code, initial_values, ctx
+        baseline_scores, baseline_err = await evaluate_single(
+            eval_code=self._build_eval_code(parameterized_code, initial_values),
+            eval_fn_name="_cma_eval",
+            context=ctx,
+            score_key=self.score_key,
+            python_path=self.python_path,
+            timeout=self.eval_timeout,
+            max_memory_mb=self.max_memory_mb,
+            log_tag="CMA",
         )
         best_solution = list(initial_values)
         best_fitness = self._fallback_penalty
@@ -684,15 +600,13 @@ class CMANumericalOptimizationStage(Stage):
             score = float(baseline_scores[self.score_key])
             best_fitness = score if self.minimize else -score
             ever_succeeded = True
-            logger.info(
-                "[CMA][{}] Baseline {}={:.6f}",
-                pid,
-                self.score_key,
-                score,
-            )
+            logger.info("[CMA][{}] Baseline {}={:.6f}", pid, self.score_key, score)
         else:
-            logger.warning(
-                "[CMA][{}] Baseline evaluation failed (original constants)", pid
+            logger.info(
+                "[CMA][{}] Baseline evaluation failed (original constants invalid). "
+                "Proceeding with optimization to find valid constants.\nError details: {}",
+                pid,
+                baseline_err or "Unknown error",
             )
 
         generation = 0
@@ -709,14 +623,14 @@ class CMANumericalOptimizationStage(Stage):
             if n_ok > 0:
                 ever_succeeded = True
 
-            # Track best across generations
             gen_best_idx = int(min(range(len(fitnesses)), key=lambda i: fitnesses[i]))
             improved = fitnesses[gen_best_idx] < best_fitness
             if improved:
                 best_fitness = fitnesses[gen_best_idx]
                 best_solution = list(solutions[gen_best_idx])
                 # Re-evaluate best to capture the full score dict
-                scores = await self._evaluate_single(
+                # Note: We use self._evaluate_single to ignore the error msg in this loop
+                scores, _ = await self._evaluate_single(
                     parameterized_code, best_solution, ctx
                 )
                 if scores is not None:
@@ -724,7 +638,6 @@ class CMANumericalOptimizationStage(Stage):
 
             display_score = -best_fitness if not self.minimize else best_fitness
 
-            # Log improving generations at INFO, steady ones at DEBUG.
             n_fail = n_pop - n_ok
             fail_tag = f" fail={n_fail}" if n_fail else ""
             log_fn = logger.info if improved else logger.debug
@@ -739,9 +652,6 @@ class CMANumericalOptimizationStage(Stage):
                 display_score,
             )
 
-            # Honour CMA convergence only once we have real signal.
-            # When all evaluations fail the criteria are meaningless
-            # (all-penalty → zero fitness variance → tolfun trivially met).
             stop_reasons = es.stop()
             if stop_reasons and ever_succeeded:
                 logger.info("[CMA][{}] Converged early: {}", pid, dict(stop_reasons))
@@ -764,7 +674,7 @@ class CMANumericalOptimizationStage(Stage):
         )
         init_disp = f"{initial_score:.6f}" if initial_score is not None else "FAILED"
         logger.info(
-            "[CMA][{}] ══ Done ══  gens={} constants={} {}={} → {:.6f}  updated={}",
+            "[CMA][{}] == Done ==  gens={} constants={} {}={} -> {:.6f}  updated={}",
             pid,
             generation,
             n,

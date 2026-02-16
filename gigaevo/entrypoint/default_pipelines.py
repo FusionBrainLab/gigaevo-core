@@ -16,7 +16,6 @@ from gigaevo.problems.layout import ProblemLayout
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.cma_optimization import CMANumericalOptimizationStage
 from gigaevo.programs.stages.collector import (
     AncestorProgramIds,
     DescendantProgramIds,
@@ -32,6 +31,8 @@ from gigaevo.programs.stages.insights_lineage import (
 from gigaevo.programs.stages.json_processing import MergeDictStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
+from gigaevo.programs.stages.optimization.cma import CMANumericalOptimizationStage
+from gigaevo.programs.stages.optimization.optuna import OptunaOptimizationStage
 from gigaevo.programs.stages.python_executors.execution import (
     CallFileFunction,
     CallProgramFunction,
@@ -380,13 +381,18 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
     Override ``_cma_stage_kwargs`` in a subclass to tweak hyper-parameters.
     """
 
-    # Sensible defaults for quick experiments – override in subclasses.
+    # Sensible defaults – override in subclasses.
+    #
+    # Time budget: each eval can take up to EVAL_TIMEOUT seconds.
+    # The overall stage timeout is computed automatically:
+    #   stage_timeout = ceil(max_generations * population_size / max_parallel)
+    #                   * eval_timeout  +  buffer
     CMA_SCORE_KEY: str = "fitness"
     CMA_SIGMA0: float = 0.2
     CMA_MAX_GENERATIONS: int = 20
     CMA_POPULATION_SIZE: int = 10
     CMA_MAX_PARALLEL: int = 10
-    CMA_EVAL_TIMEOUT: int = 30
+    CMA_EVAL_TIMEOUT: int = DEFAULT_STAGE_TIMEOUT
     # Current experiment policy: CMA tunes float literals only.
     # Integer literals are left to mutation/structural evolution.
     CMA_TUNE_FLOATS_ONLY: bool = True
@@ -426,6 +432,16 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
 
         extra = self._cma_stage_kwargs()
 
+        max_gen = extra.pop("max_generations", self.CMA_MAX_GENERATIONS)
+        pop_size = extra.pop("population_size", self.CMA_POPULATION_SIZE)
+        max_par = extra.pop("max_parallel", self.CMA_MAX_PARALLEL)
+        eval_to = extra.pop("eval_timeout", self.CMA_EVAL_TIMEOUT)
+
+        # Stage timeout: enough for all sequential rounds + a buffer for
+        # overhead (baseline eval, result collection, etc.).
+        n_rounds = -(-max_gen * pop_size // max_par)  # ceil division
+        stage_timeout = (n_rounds + 1) * eval_to
+
         self.add_stage(
             "CMAOptStage",
             lambda: CMANumericalOptimizationStage(
@@ -436,13 +452,13 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
                 python_path=[problem_ctx.problem_dir.resolve()],
                 minimize=False,
                 sigma0=extra.pop("sigma0", self.CMA_SIGMA0),
-                max_generations=extra.pop("max_generations", self.CMA_MAX_GENERATIONS),
-                population_size=extra.pop("population_size", self.CMA_POPULATION_SIZE),
-                max_parallel=extra.pop("max_parallel", self.CMA_MAX_PARALLEL),
-                eval_timeout=extra.pop("eval_timeout", self.CMA_EVAL_TIMEOUT),
+                max_generations=max_gen,
+                population_size=pop_size,
+                max_parallel=max_par,
+                eval_timeout=eval_to,
                 skip_integers=extra.pop("skip_integers", self.CMA_TUNE_FLOATS_ONLY),
                 update_program_code=True,
-                timeout=4 * DEFAULT_STAGE_TIMEOUT,
+                timeout=stage_timeout,
                 max_memory_mb=MAX_MEMORY_MB,
                 **extra,
             ),
@@ -466,6 +482,132 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         self.add_exec_dep(
             "CallProgramFunction",
             ExecutionOrderDependency.always_after("CMAOptStage"),
+        )
+
+
+class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
+    """Default pipeline + LLM-guided Optuna hyperparameter optimisation.
+
+    Inherits :class:`DefaultPipelineBuilder` and inserts an
+    :class:`OptunaOptimizationStage` between ``ValidateCodeStage``
+    and ``CallProgramFunction``.  If the problem provides a ``context.py``
+    the ``AddContext`` stage is wired automatically.
+
+    Execution order::
+
+        ValidateCodeStage ─(success)─► OptunaOptStage ─(always)─► CallProgramFunction
+        AddContext* ───────(always)──►                 ─(data)──►
+        (* only when context.py exists)
+
+    If Optuna fails, the program still runs with the original code.
+
+    Override ``_optuna_stage_kwargs`` in a subclass to tweak hyper-parameters.
+    """
+
+    # Sensible defaults – override in subclasses.
+    #
+    # Time budget: each eval can take up to EVAL_TIMEOUT seconds.
+    # The overall stage timeout is computed automatically:
+    #   stage_timeout = (ceil(n_trials / max_parallel) + 3) * eval_timeout
+    # The +3 accounts for the baseline eval and the LLM analysis call overhead.
+    OPTUNA_SCORE_KEY: str | None = None  # None -> auto-detect from problem_ctx
+    OPTUNA_N_TRIALS: int = 60
+    OPTUNA_MAX_PARALLEL: int = 10
+    OPTUNA_EVAL_TIMEOUT: int = DEFAULT_STAGE_TIMEOUT
+
+    def __init__(self, ctx: EvolutionContext):
+        super().__init__(ctx)
+        has_context = ctx.problem_ctx.is_contextual
+        if has_context:
+            self._add_context_stage_and_edges()
+        self._add_optuna_optimization(has_context=has_context)
+
+    def _add_context_stage_and_edges(self) -> None:
+        """Add the AddContext stage (same as ContextPipelineBuilder)."""
+        problem_ctx = self.ctx.problem_ctx
+        self.add_stage(
+            "AddContext",
+            lambda: CallFileFunction(
+                path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
+                function_name="build_context",
+                timeout=DEFAULT_STAGE_TIMEOUT,
+            ),
+        )
+        self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
+        self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+
+    def _optuna_stage_kwargs(self) -> dict:
+        """Return extra kwargs forwarded to :class:`OptunaOptimizationStage`.
+
+        Override in a subclass to customise Optuna hyper-parameters without
+        rewriting the whole pipeline.
+        """
+        return {}
+
+    def _add_optuna_optimization(self, *, has_context: bool) -> None:
+        problem_ctx = self.ctx.problem_ctx
+        llm_wrapper = self.ctx.llm_wrapper
+        metrics_ctx = problem_ctx.metrics_context
+        primary_spec = metrics_ctx.get_primary_spec()
+
+        validator_path = problem_ctx.problem_dir / "validate.py"
+        task_description = problem_ctx.task_description
+
+        extra = self._optuna_stage_kwargs()
+
+        n_trials = extra.pop("n_trials", self.OPTUNA_N_TRIALS)
+        max_par = extra.pop("max_parallel", self.OPTUNA_MAX_PARALLEL)
+        eval_to = extra.pop("eval_timeout", self.OPTUNA_EVAL_TIMEOUT)
+        score_key = extra.pop(
+            "score_key", self.OPTUNA_SCORE_KEY or metrics_ctx.get_primary_key()
+        )
+        minimize = extra.pop("minimize", not primary_spec.higher_is_better)
+
+        # Stage timeout: enough for all sequential rounds + overhead
+        # for baseline eval and LLM analysis.
+        n_rounds = -(-n_trials // max_par)  # ceil division
+        # Adding +3 rounds worth of buffer to be safe.
+        stage_timeout = min((n_rounds + 3) * eval_to, int(DEFAULT_DAG_TIMEOUT * 0.9))
+
+        self.add_stage(
+            "OptunaOptStage",
+            lambda: OptunaOptimizationStage(
+                llm=llm_wrapper,
+                validator_path=validator_path,
+                score_key=score_key,
+                function_name="entrypoint",
+                validator_fn="validate",
+                python_path=[problem_ctx.problem_dir.resolve()],
+                minimize=minimize,
+                n_trials=n_trials,
+                max_parallel=max_par,
+                eval_timeout=eval_to,
+                update_program_code=True,
+                task_description=task_description,
+                timeout=stage_timeout,
+                max_memory_mb=MAX_MEMORY_MB,
+                **extra,
+            ),
+        )
+
+        # Optuna runs after validation succeeds
+        self.add_exec_dep(
+            "OptunaOptStage",
+            ExecutionOrderDependency.on_success("ValidateCodeStage"),
+        )
+
+        # If context exists, wire it into Optuna and wait for it
+        if has_context:
+            self.add_data_flow_edge("AddContext", "OptunaOptStage", "context")
+            self.add_exec_dep(
+                "OptunaOptStage",
+                ExecutionOrderDependency.always_after("AddContext"),
+            )
+
+        # Program execution waits for Optuna (but runs even if Optuna fails)
+        self.add_exec_dep(
+            "CallProgramFunction",
+            ExecutionOrderDependency.always_after("OptunaOptStage"),
         )
 
 
