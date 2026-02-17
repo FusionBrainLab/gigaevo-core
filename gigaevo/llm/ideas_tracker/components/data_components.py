@@ -121,7 +121,7 @@ class RecordCardExtended:
                     new_alias_key: {
                         "description": current_description,
                         "programs": current_programs,
-                        "change_motivation": current_explanations,
+                        "explanations": current_explanations,
                     }
                 }
             )
