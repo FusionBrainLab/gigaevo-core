@@ -31,10 +31,8 @@ class IdeaAnalyzer:
 
         Args:
             model: Name of the LLM model to use for classification.
-            reasoning: Optional OpenRouter reasoning settings, for example
-                {"effort": "low"}.
+            reasoning: Optional OpenRouter reasoning settings, e.g. {"effort": "low"}.
         """
-        # LLM model name can be overridden via external configuration
         self.model = model
         self.reasoning = reasoning or {}
         self._is_openrouter = False
@@ -76,7 +74,6 @@ class IdeaAnalyzer:
         self.prompt_manager = PromptManager()
 
         if self.logger is not None:
-            # Log analyzer initialization as part of IdeaTracker lifecycle
             self.logger.log_init(
                 component="IdeaAnalyzer",
                 model_name=self.model,
@@ -148,28 +145,18 @@ class IdeaAnalyzer:
                     break
         return classified_ideas
 
-    def _ideas_to_text(self, changes: list[str]) -> str:
-        """
-        Convert a list of idea descriptions to formatted text.
-
-        Args:
-            changes: List of idea description strings.
-
-        Returns:
-            Formatted text with numbered list of ideas.
-        """
-        text = ""
-        c = 1
-        for change in changes:
-            text += f"{c}) {change} \n"
-            c += 1
-        return text
-
     def short_id_to_full_id(
         self, short_id: str, ideas_list: list[dict[str, str]]
     ) -> str:
         """
-        Convert a short id to a full id.
+        Convert a short UUID identifier to its full UUID.
+
+        Args:
+            short_id: Short UUID identifier (first part of full UUID).
+            ideas_list: List of idea dictionaries with "short_id" and "id" keys.
+
+        Returns:
+            Full UUID string if found, empty string otherwise.
         """
         for idea in ideas_list:
             if idea["short_id"] == short_id:
@@ -223,19 +210,16 @@ class IdeaAnalyzer:
         """
         Process ideas from a program against active and inactive idea banks.
 
-        Checks all idea lists in both banks to determine which ideas are new
-        and which already exist. Checks active bank first, then inactive bank
-        for any remaining new ideas.
+        Checks active bank first, then inactive bank for remaining new ideas
+        to classify which ideas are new and which already exist.
 
         Args:
-            program_chages: List of idea descriptions from the program.
+            program_changes: IncomingIdeas object containing idea descriptions from the program.
             ideas_active_bank: Dictionary mapping list indices to active bank data.
             inactive_ideas_bank: Dictionary mapping list indices to inactive bank data.
 
         Returns:
-            Tuple of (new_ideas, known_ideas_ids):
-            - new_ideas: List of idea descriptions not found in any bank
-            - known_ideas_ids: List of short_ids of ideas found in either bank
+            IncomingIdeas object with updated classification status for each idea.
         """
         classified_ideas = copy(program_changes)
         classified_ideas = self._extract_ideas_v2(classified_ideas, ideas_active_bank)
