@@ -11,7 +11,10 @@ import yaml
 
 sys.path.append("../gigaevo-core-internal")
 from gigaevo.llm.ideas_tracker.components.analyzer import IdeaAnalyzer
-from gigaevo.llm.ideas_tracker.components.data_components import ProgramRecord
+from gigaevo.llm.ideas_tracker.components.data_components import (
+    IncomingIdeas,
+    ProgramRecord,
+)
 from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
 from gigaevo.llm.ideas_tracker.utils.ideas_impact_ml import run_impact_pipeline
 from gigaevo.llm.ideas_tracker.utils.ideas_stats import (
@@ -275,30 +278,52 @@ class IdeaTracker:
         """
         active_ideas = self.ideas_manager.ideas_groups_texts()
         inactive_ideas = self.ideas_manager.ideas_groups_texts(use_inactive=True)
-        program_ideas = [pg_idea["description"] for pg_idea in program.improvements]
-        new_ideas, ideas_rewrite, existing_ideas_ids = self.analyzer.process_ideas(
+        program_ideas = IncomingIdeas(program.improvements)
+        classified_ideas = self.analyzer.process_ideas(
             program_ideas, active_ideas, inactive_ideas
         )
 
         # Add all truly new ideas into the main (active) ideas bank.
-        for n_idea in new_ideas:
+        for n_idea in [
+            idea for idea in classified_ideas.ideas if not idea["classified"]
+        ]:
+            idea_description = n_idea["description"]
+            change_motivation = n_idea["change_motivation"]
             self.ideas_manager.add_new_idea(
-                n_idea,
+                idea_description,
                 program.id,
                 program.generation,
                 program.category,
                 program.strategy,
                 program.task_description,
+                change_motivation,
             )
 
-        # For ideas that are already known, resolve their full UUID and update them.
-        for idea in ideas_rewrite:
+        for idea_r in [
+            idea
+            for idea in classified_ideas.ideas
+            if idea["classified"] and idea["rewrite"]
+        ]:
             self.ideas_manager.modify_idea(
-                idea["id"], [program.id], program.generation, idea["text"]
+                idea_r["target_idea_id"],
+                [program.id],
+                program.generation,
+                idea_r["description"],
+                idea_r["change_motivation"],
             )
 
-        for idea in existing_ideas_ids:
-            self.ideas_manager.modify_idea(idea, [program.id], program.generation)
+        for idea_u in [
+            idea
+            for idea in classified_ideas.ideas
+            if idea["classified"] and not idea["rewrite"]
+        ]:
+            self.ideas_manager.modify_idea(
+                idea_u["target_idea_id"],
+                [program.id],
+                program.generation,
+                None,
+                idea_u["change_motivation"],
+            )
 
     def refresh_main_bank(self, current_generation: int) -> None:
         """

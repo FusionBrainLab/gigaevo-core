@@ -71,7 +71,10 @@ class RecordCardExtended:
             if arg in names:
                 setattr(self, arg, value)
 
-        self.explanation = {"explanations": [], "summary": ""}
+        self.explanation = {
+            "explanations": [kwargs["change_motivation"]],
+            "summary": "",
+        }
         self.aliases = []
 
     def update_idea(
@@ -80,6 +83,7 @@ class RecordCardExtended:
         program_id: str | list[str],
         generation: int,
         new_description: str | None = None,
+        change_motivation: str | None = None,
     ) -> None:
         if isinstance(program_id, str):
             program_id = [program_id]
@@ -88,12 +92,14 @@ class RecordCardExtended:
             current_description = new_description
             current_programs = copy(self.programs)
             current_description = copy(self.description)
+            current_explanations = copy(self.explanation["explanations"])
             new_alias_key = f"{experiment_id}-{program_id[0]}"
             self.aliases.append(
                 {
                     new_alias_key: {
                         "description": current_description,
                         "programs": current_programs,
+                        "change_motivation": current_explanations,
                     }
                 }
             )
@@ -101,6 +107,8 @@ class RecordCardExtended:
         if generation is not None and generation > self.last_generation:
             self.last_generation = generation
         self.programs.extend(program_id)
+        if change_motivation is not None:
+            self.explanation["explanations"].append(change_motivation)
 
     def add_explanation(self, explanation: str) -> None:
         self.explanation["explanations"].append(explanation)
@@ -159,6 +167,7 @@ class RecordListV2:
         new_programs: list[str] | None = None,
         new_generation: int | None = None,
         new_description: str | None = None,
+        change_motivation: str | None = None,
     ) -> bool:
         """Update last_generation and/or description (if greater). Returns True if found."""
         idea_index = self.find_idea_index(idea_id)
@@ -170,6 +179,7 @@ class RecordListV2:
             program_id=new_programs,
             generation=new_generation,
             new_description=new_description,
+            change_motivation=change_motivation,
         )
         return True
 
@@ -459,6 +469,7 @@ class RecordBank:
         category: str = "",
         strategy: str = "",
         task_description: str = "",
+        change_motivation: str = "",
     ) -> None:
         """Create a new idea with a unique id and append it to a list in the bank."""
         idea_id = self._unique_id_pair()
@@ -472,6 +483,7 @@ class RecordBank:
             "strategy": strategy,
             "task_description": task_description,
             "last_generation": generation,
+            "change_motivation": change_motivation,
         }
         self._append_record_list(idea_dict)
 
@@ -481,6 +493,7 @@ class RecordBank:
         new_programs: list[str] | None = None,
         new_generation: int | None = None,
         new_description: str | None = None,
+        change_motivation: str | None = None,
     ) -> None:
         """Update the RecordCard's linked_programs (extend) and/or last_generation (if greater)."""
         if idea_id not in self.uuids:
@@ -488,7 +501,11 @@ class RecordBank:
         for index, record_list in enumerate(self.ideas_lists):
             if record_list.find_idea_index(idea_id) is not None:
                 self.ideas_lists[index].modify_idea(
-                    idea_id, new_programs, new_generation, new_description
+                    idea_id,
+                    new_programs,
+                    new_generation,
+                    new_description,
+                    change_motivation,
                 )
                 return
 
@@ -575,3 +592,57 @@ class RecordBank:
                 idea_dict["an_fitness"] = []
                 ideas_rankings.append(idea_dict)
         return ideas_rankings
+
+
+@dataclass
+class IncomingIdeas:
+    ideas: list[dict[str, str]] = field(default_factory=list)
+    mapping: dict[str, str] = field(default_factory=dict)
+
+    def __init__(self, ideas: list[dict[str, str]]) -> None:
+        self.ideas = []
+        for idea in ideas:
+            idea_dict = {
+                "description": idea["description"],
+                "change_motivation": idea["explanation"],
+                "target_idea_id": "",
+                "rewrite": False,
+                "classified": False,
+            }
+            self.ideas.append(idea_dict)
+        self.update_mapping()
+
+    def update_mapping(self) -> None:
+        mapping = {}
+        c = 1
+        for idea in self.ideas:
+            if not idea["classified"]:
+                mapping[c] = idea["description"]
+                c += 1
+        self.mapping = mapping
+
+    def get_list_of_ideas(self) -> str:
+        text = ""
+        c = 1
+        for idea in self.ideas:
+            if not idea["classified"]:
+                text += f"{c}) {idea['description']} \n"
+                c += 1
+        return text
+
+    def update_idea(self, idea_number: int, target_idea_id: str, rewrite: bool) -> None:
+        idea_description = self.mapping[idea_number]
+        for index, idea in enumerate(self.ideas):
+            if idea["description"] == idea_description:
+                self.ideas[index]["target_idea_id"] = target_idea_id
+                self.ideas[index]["rewrite"] = rewrite
+                self.ideas[index]["classified"] = True
+                break
+
+    @property
+    def new_ideas_count(self) -> int:
+        return len([idea for idea in self.ideas if not idea["classified"]])
+
+    @property
+    def present_ideas_count(self) -> int:
+        return len([idea for idea in self.ideas if idea["classified"]])

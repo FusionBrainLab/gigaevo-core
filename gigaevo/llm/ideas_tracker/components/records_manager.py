@@ -23,6 +23,7 @@ class RecordManager:
         category: str = "",
         strategy: str = "",
         task_description: str = "",
+        change_motivation: str = "",
     ) -> None:
         """Add a new idea to the main (active) ideas bank."""
         self.record_bank.add_idea(
@@ -32,6 +33,7 @@ class RecordManager:
             category,
             strategy,
             task_description,
+            change_motivation,
         )
 
         if self.logger is not None:
@@ -41,7 +43,6 @@ class RecordManager:
                 linked_program=linked_program,
                 category=category,
                 strategy=strategy,
-                task_description=task_description,
             )
 
     def modify_idea(
@@ -50,6 +51,7 @@ class RecordManager:
         new_programs: list[str] | None,
         generation: int | None,
         new_description: str | None = None,
+        change_motivation: str | None = None,
     ) -> None:
         """Update a RecordCard's linked_programs and/or last_generation; move from inactive to active if in inactive bank."""
         idea_bank = None
@@ -57,13 +59,13 @@ class RecordManager:
         if idea_id in self.record_bank.uuids:
             old_description = self.record_bank.get_idea(idea_id).description
             self.record_bank.modify_idea(
-                idea_id, new_programs, generation, new_description
+                idea_id, new_programs, generation, new_description, change_motivation
             )
             idea_bank = self.record_bank
         elif idea_id in self.inactive_record_bank.uuids:
             old_description = self.inactive_record_bank.get_idea(idea_id).description
             self.inactive_record_bank.modify_idea(
-                idea_id, new_programs, generation, new_description
+                idea_id, new_programs, generation, new_description, change_motivation
             )
             self.move_to_active(idea_id)
             idea_bank = self.record_bank

@@ -41,11 +41,11 @@ Return a single strictly valid JSON object:
     "string (text of the unique incoming idea)"
   ],
   "present_ideas": [
-    "string (ID of the matching existing idea where the incoming description was NOT better)"
+    "[string (ID of the matching existing idea where the incoming description was NOT better)]:[string (sequence number of idea from list of incoming ideas)]"
   ],
   "updated_ideas": [
     {
-      "id": "string (ID of the matching existing idea)",
+      "id": "[string (ID of the matching existing idea)]:[string (sequence number of idea from list of incoming ideas)]",
       "text": "string (The superior description from the incoming idea)"
     }
   ]
@@ -81,12 +81,12 @@ Incoming Ideas:
     "Use Nelder-Mead optimization for local search instead of Powell"
   ],
   "present_ideas": [
-    "g14u43jo",
-    "k96s25pq"
+    "[g14u43jo]:[2]",
+    "[k96s25pq]:[4]"
   ],
   "updated_ideas": [
     {
-      "id": "a51e61bf",
+      "id": "[a51e61bf]:[1]",
       "text": "Use barycentric coordinates via sqrt_s transformation (lines 13-17) to ensure all points stay within the unit triangle boundary"
     }
   ]
@@ -114,11 +114,11 @@ Incoming Ideas:
     "Initialize grid with jitter 0.15 for wider coverage"
   ],
   "present_ideas": [
-    "a48z35vm"
+    "[a48z35vm]:[2]"
   ],
   "updated_ideas": [
     {
-      "id": "o27e03bq",
+      "id": "[o27e03bq]:[3]",
       "text": "Initialize grid with jitter 0.05 (lines 10-12) to break symmetry"
     }
   ]
