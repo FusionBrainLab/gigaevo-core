@@ -9,6 +9,16 @@ from gigaevo.llm.ideas_tracker.components.data_components import (
 
 
 def load_data(progs_path, banks_path):
+    """
+    Load programs and ideas from JSON snapshot files.
+
+    Args:
+        progs_path: Path to programs.json file.
+        banks_path: Path to banks.json file.
+
+    Returns:
+        Tuple of (programs, ideas) as lists of ProgramRecord and RecordCard instances.
+    """
     with open(progs_path, "r") as f:
         programs = json.load(f)[0]["programs"]
     with open(banks_path, "r") as f:
@@ -19,6 +29,16 @@ def load_data(progs_path, banks_path):
 
 
 def get_parents(parent_ids: list[str], all_programs: list[ProgramRecord]):
+    """
+    Find ProgramRecord instances matching given parent IDs.
+
+    Args:
+        parent_ids: List of parent program IDs to find.
+        all_programs: List of all available ProgramRecord instances.
+
+    Returns:
+        List of ProgramRecord instances matching parent_ids.
+    """
     parent_cards: list[ProgramRecord] = []
     for parent_id in parent_ids:
         for program in all_programs:
@@ -29,6 +49,16 @@ def get_parents(parent_ids: list[str], all_programs: list[ProgramRecord]):
 
 
 def avg_fitness(idea_card: RecordCard, programs: list[ProgramRecord]):
+    """
+    Calculate average fitness of programs linked to an idea.
+
+    Args:
+        idea_card: RecordCard containing linked program IDs.
+        programs: List of all ProgramRecord instances.
+
+    Returns:
+        Average fitness value across all linked programs.
+    """
     c = 0
     fitness_c = 0
     for prog in programs:
@@ -41,6 +71,20 @@ def avg_fitness(idea_card: RecordCard, programs: list[ProgramRecord]):
 def top_delta_ideas(
     programs: list[ProgramRecord], ideas: list[RecordCard], top_k: int = 5
 ):
+    """
+    Find ideas associated with programs having the largest fitness improvements.
+
+    Calculates fitness delta as max improvement over parents, ranks programs by delta,
+    and returns ideas from the top_k programs.
+
+    Args:
+        programs: List of all ProgramRecord instances.
+        ideas: List of all RecordCard instances.
+        top_k: Number of top programs by delta to consider.
+
+    Returns:
+        Dictionary mapping idea UUIDs to dicts with keys: description, programs, avg_fitness.
+    """
     parent_placeholder = ProgramRecord()
     programs_with_deltas = {}
     for program in programs:
@@ -82,6 +126,19 @@ def top_delta_ideas(
 def top_fitness_ideas(
     programs: list[ProgramRecord], ideas: list[RecordCard], top_k: int = 5
 ):
+    """
+    Find ideas associated with the highest-fitness programs.
+
+    Ranks programs by absolute fitness and returns ideas from the top_k programs.
+
+    Args:
+        programs: List of all ProgramRecord instances.
+        ideas: List of all RecordCard instances.
+        top_k: Number of top programs by fitness to consider.
+
+    Returns:
+        Dictionary mapping idea UUIDs to dicts with keys: description, programs, avg_fitness.
+    """
     top_progs = [
         prog for prog in sorted(programs, reverse=True, key=lambda pr: pr.fitness)
     ][0:top_k]

@@ -7,7 +7,10 @@ from uuid import uuid4
 @dataclass
 class ProgramRecord:
     """
-    Storage for individual program data (fitness, generation, parents, insights).
+    Represents a single program in the evolutionary system.
+
+    Stores program metadata including fitness metrics, generation, lineage (parents),
+    insights used, improvements made, and contextual information.
     """
 
     id: str = ""
@@ -24,8 +27,10 @@ class ProgramRecord:
 @dataclass
 class RecordCard:
     """
-    Holds information about a single record (idea or program insight).
-    Mutable after init: linked_programs, last_generation, description.
+    Represents a tracked idea with basic metadata.
+
+    Stores idea description, linked programs, and last generation seen.
+    Fields are mutable to support updates as programs evolve.
     """
 
     id: str = ""
@@ -36,6 +41,13 @@ class RecordCard:
 
 @dataclass
 class RecordCardExtended:
+    """
+    Extended idea record with comprehensive metadata and evolution tracking.
+
+    Includes categorization, task context, strategy, aliases (historical versions),
+    keywords, statistics, explanations, related ideas, and usage information.
+    """
+
     id: str = ""
     category: str = ""
     description: str = ""
@@ -46,9 +58,7 @@ class RecordCardExtended:
     programs: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     evolution_statistics: dict[str, Any] = field(default_factory=dict)
-    explanation: dict[str, list[str] | str] = field(
-        default_factory=dict
-    )  # explanations from mutations
+    explanation: dict[str, list[str] | str] = field(default_factory=dict)
     works_with: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     usage: dict[str, str] = field(default_factory=dict)
@@ -85,6 +95,18 @@ class RecordCardExtended:
         new_description: str | None = None,
         change_motivation: str | None = None,
     ) -> None:
+        """
+        Update idea with new programs, generation, and optionally new description.
+
+        When description changes, archives current version to aliases before updating.
+
+        Args:
+            experiment_id: Experiment identifier for alias key.
+            program_id: Single program ID or list of program IDs to add.
+            generation: Generation number to update if greater than current.
+            new_description: Optional new description (archives old version if provided).
+            change_motivation: Optional explanation to add to explanation history.
+        """
         if isinstance(program_id, str):
             program_id = [program_id]
 
@@ -111,6 +133,7 @@ class RecordCardExtended:
             self.explanation["explanations"].append(change_motivation)
 
     def add_explanation(self, explanation: str) -> None:
+        """Add an explanation to the idea's explanation history."""
         self.explanation["explanations"].append(explanation)
 
     def update_metadata(
@@ -121,6 +144,16 @@ class RecordCardExtended:
         links: list[str] | None = None,
         usage: dict[str, str] | None = None,
     ) -> None:
+        """
+        Update optional metadata fields for the idea.
+
+        Args:
+            keywords: List of keyword tags for the idea.
+            evolution_statistics: Statistical data about idea evolution.
+            works_with: List of related idea IDs that work well together.
+            links: List of reference links or resources.
+            usage: Dictionary of usage patterns or examples.
+        """
         if keywords is not None:
             self.keywords = keywords
         if evolution_statistics is not None:
@@ -135,6 +168,13 @@ class RecordCardExtended:
 
 @dataclass
 class RecordListV2:
+    """
+    Bounded list holding RecordCardExtended instances with capacity management.
+
+    Provides operations for adding, finding, modifying, removing ideas,
+    and identifying inactive ideas based on generation thresholds.
+    """
+
     ideas: list[RecordCardExtended] = field(default_factory=list)
     num_ideas: int = 0
     max_ideas: int = 5
@@ -255,15 +295,19 @@ class RecordListV2:
         return ideas
 
     def all_ideas_short(self) -> list[dict[str, str]]:
-        """Return a short representation of each idea: [{"id","short_id", "description"}, ...]."""
+        """
+        Return short representation of all ideas.
+
+        Returns:
+            List of dicts with keys: id (full UUID), short_id (first UUID segment),
+            and description.
+        """
         ideas = []
         for idea in self.ideas:
             ideas.append(
                 {
                     "id": idea.id,
-                    "short_id": idea.id.split("-")[
-                        0
-                    ],  # first part of the id is the short id
+                    "short_id": idea.id.split("-")[0],
                     "description": idea.description,
                 }
             )
@@ -290,7 +334,10 @@ class RecordListV2:
 @dataclass
 class RecordList:
     """
-    Holds a bounded number of RecordCard instances (ideas), up to max_ideas.
+    Bounded list holding RecordCard instances with capacity management.
+
+    Provides operations for adding, finding, modifying, removing ideas,
+    and identifying inactive ideas based on generation thresholds.
     """
 
     ideas: list[RecordCard] = field(default_factory=list)
@@ -345,9 +392,7 @@ class RecordList:
         if idea_index is None:
             return False
         self.ideas.pop(idea_index)
-        self.num_ideas = len(
-            self.ideas
-        )  # keep in sync in case list was mutated elsewhere
+        self.num_ideas = len(self.ideas)
         return True
 
     def import_idea(self, new_idea: RecordCard) -> None:
@@ -373,15 +418,19 @@ class RecordList:
         return excluded_ideas
 
     def all_ideas_short(self) -> list[dict[str, str]]:
-        """Return a short representation of each idea: [{"id","short_id", "description"}, ...]."""
+        """
+        Return short representation of all ideas.
+
+        Returns:
+            List of dicts with keys: id (full UUID), short_id (first UUID segment),
+            and description.
+        """
         ideas = []
         for idea in self.ideas:
             ideas.append(
                 {
                     "id": idea.id,
-                    "short_id": idea.id.split("-")[
-                        0
-                    ],  # first part of the id is the short id
+                    "short_id": idea.id.split("-")[0],
                     "description": idea.description,
                 }
             )
@@ -422,7 +471,11 @@ class RecordList:
 @dataclass
 class RecordBank:
     """
-    Holds multiple RecordList instances; manages unique ids and idea add/remove/import.
+    Container for multiple RecordList instances with UUID management.
+
+    Manages idea distribution across multiple bounded lists, ensures unique UUIDs,
+    and provides operations for adding, modifying, removing, and importing ideas.
+    Supports identifying inactive ideas based on generation thresholds.
     """
 
     ideas_lists: list[RecordListV2] = field(default_factory=list)
@@ -596,10 +649,23 @@ class RecordBank:
 
 @dataclass
 class IncomingIdeas:
+    """
+    Container for processing and classifying incoming program ideas.
+
+    Tracks classification status, target idea mappings, and rewrite flags
+    for each incoming idea during the classification workflow.
+    """
+
     ideas: list[dict[str, str]] = field(default_factory=list)
     mapping: dict[str, str] = field(default_factory=dict)
 
     def __init__(self, ideas: list[dict[str, str]]) -> None:
+        """
+        Initialize with list of incoming ideas.
+
+        Args:
+            ideas: List of dicts with keys "description" and "explanation".
+        """
         self.ideas = []
         for idea in ideas:
             idea_dict = {
@@ -613,6 +679,7 @@ class IncomingIdeas:
         self.update_mapping()
 
     def update_mapping(self) -> None:
+        """Rebuild mapping from sequence numbers to unclassified idea descriptions."""
         mapping = {}
         c = 1
         for idea in self.ideas:
@@ -622,6 +689,12 @@ class IncomingIdeas:
         self.mapping = mapping
 
     def get_list_of_ideas(self) -> str:
+        """
+        Format unclassified ideas as numbered text list.
+
+        Returns:
+            String with format "1) description\\n2) description\\n..." for unclassified ideas.
+        """
         text = ""
         c = 1
         for idea in self.ideas:
@@ -631,6 +704,14 @@ class IncomingIdeas:
         return text
 
     def update_idea(self, idea_number: int, target_idea_id: str, rewrite: bool) -> None:
+        """
+        Mark idea as classified with target ID and rewrite flag.
+
+        Args:
+            idea_number: Sequence number from mapping (1-indexed).
+            target_idea_id: UUID of matching existing idea.
+            rewrite: Whether this idea rewrites the target idea's description.
+        """
         idea_description = self.mapping[idea_number]
         for index, idea in enumerate(self.ideas):
             if idea["description"] == idea_description:
@@ -641,8 +722,10 @@ class IncomingIdeas:
 
     @property
     def new_ideas_count(self) -> int:
+        """Count of unclassified (new) ideas."""
         return len([idea for idea in self.ideas if not idea["classified"]])
 
     @property
     def present_ideas_count(self) -> int:
+        """Count of classified (already known) ideas."""
         return len([idea for idea in self.ideas if idea["classified"]])

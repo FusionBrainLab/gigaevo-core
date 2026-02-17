@@ -14,16 +14,19 @@ if TYPE_CHECKING:
 
 class IdeasTrackerLogger:
     """
-    Custom logger for ideas_tracker.py components.
-    Records init parameters, idea additions, modifications, movements, and final state.
+    Structured logger for ideas_tracker.py components.
+
+    Records initialization parameters, idea additions/modifications/movements,
+    rankings, bank states, programs, and statistics. Each session creates a
+    timestamped directory with log.txt and JSON snapshot files.
     """
 
     def __init__(self, ideas_tracker_path: str | Path):
         """
-        Initialize the logger.
+        Initialize logger with timestamped session directory.
 
         Args:
-            ideas_tracker_path: Path to ideas_tracker.py file
+            ideas_tracker_path: Path to ideas_tracker.py file (parent becomes logs root).
         """
         self.ideas_tracker_path = Path(ideas_tracker_path)
         self.logs_dir = self.ideas_tracker_path.parent / "logs"
@@ -34,26 +37,26 @@ class IdeasTrackerLogger:
         self.programs_file: Optional[Path] = None
         self.best_ideas_file: Optional[Path] = None
 
-        # Create logs directory if it doesn't exist
         os.makedirs(self.logs_dir, exist_ok=True)
-
-        # Create session directory with timestamp
         self._create_session_dir()
 
     def _create_session_dir(self) -> None:
-        """Create a new session directory with timestamp format: year-month-date_hours_minutes_seconds"""
+        """
+        Create timestamped session directory and initialize log files.
+
+        Format: YYYY-MM-DD_HH-MM-SS. Initializes log.txt and empty JSON arrays
+        for rankings, banks, programs, and best_ideas.
+        """
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.session_dir = self.logs_dir / timestamp
         os.makedirs(self.session_dir, exist_ok=True)
 
-        # Initialize log files
         self.log_file = self.session_dir / "log.txt"
         self.rankings_file = self.session_dir / "rankings.json"
         self.banks_file = self.session_dir / "banks.json"
         self.programs_file = self.session_dir / "programs.json"
         self.best_ideas_file = self.session_dir / "best_ideas.json"
 
-        # Initialize JSON files as empty arrays if they don't exist
         if not self.rankings_file.exists():
             with open(self.rankings_file, "w", encoding="utf-8") as f:
                 json.dump([], f)
@@ -68,16 +71,27 @@ class IdeasTrackerLogger:
                 json.dump([], f)
 
     def _get_timestamp(self) -> str:
-        """Get current timestamp in the format [time]"""
+        """
+        Get current timestamp string.
+
+        Returns:
+            Timestamp in format "YYYY-MM-DD HH:MM:SS".
+        """
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def _idea_to_dict(self, idea: "RecordCard | RecordCardExtended") -> dict[str, Any]:
         """
-        Serialize a single idea to a JSON-serializable dict.
+        Serialize idea to JSON-serializable dict.
+
         Supports both RecordCard (linked_programs) and RecordCardExtended (programs, etc.).
+
+        Args:
+            idea: RecordCard or RecordCardExtended instance.
+
+        Returns:
+            Dictionary with all idea fields.
         """
         if hasattr(idea, "programs"):
-            # RecordCardExtended
             return {
                 "id": idea.id,
                 "category": getattr(idea, "category", ""),
@@ -94,7 +108,6 @@ class IdeasTrackerLogger:
                 "links": getattr(idea, "links", []),
                 "usage": getattr(idea, "usage", {}),
             }
-        # RecordCard
         return {
             "id": idea.id,
             "description": idea.description,
@@ -106,21 +119,19 @@ class IdeasTrackerLogger:
         self, program_id: str, destination: str, action: str, parameters: dict[str, Any]
     ) -> None:
         """
-        Write a log entry to log.txt in the specified format.
+        Write structured log entry to log.txt.
 
-        Format:
-        [time]: "[program_id]" -> "[destination]/["action"]"
-        parameters:
-        param1: ...
-        param2: ...
-        ...
+        Args:
+            program_id: Identifier for the program/component.
+            destination: Target bank or component.
+            action: Action being performed.
+            parameters: Dictionary of action parameters to log.
         """
         timestamp = self._get_timestamp()
         log_entry = f'[{timestamp}]: "{program_id}" -> "{destination}"/"{action}"\n'
         log_entry += "parameters:\n"
 
         for key, value in parameters.items():
-            # Format list values nicely
             if isinstance(value, list):
                 value_str = ", ".join(str(v) for v in value)
                 log_entry += f"{key}: [{value_str}]\n"
@@ -156,14 +167,14 @@ class IdeasTrackerLogger:
         strategy: str = "",
     ) -> None:
         """
-        Log addition of a new idea.
-        Supports both RecordCard (base fields) and RecordCardExtended (category, strategy).
+        Log addition of a new idea to active bank.
 
         Args:
-            generation: Generation number
-            linked_program: Program ID linked to this idea
-            category: Optional; used for RecordCardExtended
-            strategy: Optional; used for RecordCardExtended
+            description: Idea description (not logged separately, context only).
+            generation: Generation number when idea appeared.
+            linked_program: Program ID where idea was first seen.
+            category: Optional category for RecordCardExtended.
+            strategy: Optional strategy for RecordCardExtended.
         """
         parameters: dict[str, Any] = {
             "generation": generation,
@@ -194,16 +205,15 @@ class IdeasTrackerLogger:
     ) -> None:
         """
         Log modification of an existing idea.
-        Supports both RecordCard (linked_programs) and RecordCardExtended (programs, category, strategy).
 
         Args:
-            idea_id: ID of the modified idea
-            old_description: Previous idea description (if available)
-            new_description: Updated idea description
-            new_linked_programs: List of newly linked program IDs (RecordCard) or current batch
-            category: Optional; for RecordCardExtended
-            strategy: Optional; for RecordCardExtended
-            programs: Optional; full programs list for RecordCardExtended (logged if provided)
+            idea_id: UUID of modified idea.
+            old_description: Previous description (if available).
+            new_description: Updated description.
+            new_linked_programs: Newly added program IDs.
+            category: Optional category for RecordCardExtended.
+            strategy: Optional strategy for RecordCardExtended.
+            programs: Optional full programs list for RecordCardExtended.
         """
         program_id = new_linked_programs[0] if new_linked_programs else idea_id
         parameters: dict[str, Any] = {
@@ -236,12 +246,11 @@ class IdeasTrackerLogger:
         Log movement of an idea between banks.
 
         Args:
-            idea_id: ID of the moved idea
-            description: Idea description
-            linked_programs: List of linked program IDs
-            destination: Destination bank ("inactive_bank" or "active_bank")
+            idea_id: UUID of moved idea.
+            description: Idea description.
+            linked_programs: List of linked program IDs.
+            destination: Destination bank ("inactive_bank" or "active_bank").
         """
-        # Use the first program ID if available, otherwise use idea_id
         program_id = linked_programs[0] if linked_programs else idea_id
 
         self._write_log(
@@ -283,12 +292,11 @@ class IdeasTrackerLogger:
         inactive_bank: list[dict[str, Any]] | dict[str, Any],
     ) -> None:
         """
-        Append banks state to banks.json.
-        Each bank can be a list of idea dicts (from _idea_to_dict) or a dict.
+        Append timestamped snapshot of both banks to banks.json.
 
         Args:
-            active_bank: Active bank state (list of idea dicts or dict)
-            inactive_bank: Inactive bank state (list of idea dicts or dict)
+            active_bank: Active bank state as list of idea dicts or dict.
+            inactive_bank: Inactive bank state as list of idea dicts or dict.
         """
         banks_state = {
             "active_bank": active_bank,
@@ -374,20 +382,20 @@ class IdeasTrackerLogger:
 
     def dump_final_state(self, record_manager: "RecordManager") -> None:
         """
-        Dump final state of idea banks.
-        Supports both RecordCard and RecordCardExtended in bank lists.
+        Extract and log final state of both idea banks.
+
+        Serializes all ideas from active and inactive banks and writes to banks.json
+        and log.txt.
 
         Args:
-            record_manager: RecordManager instance to extract bank states from
+            record_manager: RecordManager instance containing both banks.
         """
-        # Extract active bank state (RecordCard or RecordCardExtended)
         active_bank_data = []
         for list_idx in range(record_manager.record_bank.num_lists):
             record_list = record_manager.record_bank.get_record_list(list_idx)
             for idea in record_list.ideas:
                 active_bank_data.append(self._idea_to_dict(idea))
 
-        # Extract inactive bank state (RecordCard or RecordCardExtended)
         inactive_bank_data = []
         for list_idx in range(record_manager.inactive_record_bank.num_lists):
             record_list = record_manager.inactive_record_bank.get_record_list(list_idx)
@@ -401,7 +409,6 @@ class IdeasTrackerLogger:
 
         self.log_banks(banks_state["active_bank"], banks_state["inactive_bank"])
 
-        # Also log this as a final state dump action
         self._write_log(
             program_id="final_state",
             destination="both_banks",
