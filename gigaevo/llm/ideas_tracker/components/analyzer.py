@@ -177,7 +177,7 @@ class IdeaAnalyzer:
         ideas_data = copy(program_changes)
         for idea_block in bank_data.values():
             block_text = idea_block["text"]
-            new_ideas_text = program_changes.get_list_of_ideas()
+            new_ideas_text = ideas_data.get_list_of_ideas()
             parsed_ideas = self.classify_ideas(new_ideas_text, block_text)
             for idea in parsed_ideas.get("present_ideas", []):
                 idea_short_id, idea_sequence_number = self._split_id(idea)

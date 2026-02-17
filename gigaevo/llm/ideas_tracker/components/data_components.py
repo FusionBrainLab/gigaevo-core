@@ -712,7 +712,11 @@ class IncomingIdeas:
             target_idea_id: UUID of matching existing idea.
             rewrite: Whether this idea rewrites the target idea's description.
         """
-        idea_description = self.mapping[idea_number]
+
+        idea_description = self.mapping.get(idea_number, -1)
+        if idea_description == -1:
+            print(f"No idea with number {idea_number} found")
+            return
         for index, idea in enumerate(self.ideas):
             if idea["description"] == idea_description:
                 self.ideas[index]["target_idea_id"] = target_idea_id
