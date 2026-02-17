@@ -154,22 +154,18 @@ class IdeasTrackerLogger:
         *,
         category: str = "",
         strategy: str = "",
-        task_description: str = "",
     ) -> None:
         """
         Log addition of a new idea.
-        Supports both RecordCard (base fields) and RecordCardExtended (category, strategy, task_description).
+        Supports both RecordCard (base fields) and RecordCardExtended (category, strategy).
 
         Args:
-            description: Idea description
             generation: Generation number
             linked_program: Program ID linked to this idea
             category: Optional; used for RecordCardExtended
             strategy: Optional; used for RecordCardExtended
-            task_description: Optional; used for RecordCardExtended
         """
         parameters: dict[str, Any] = {
-            "description": description,
             "generation": generation,
             "linked_program": linked_program,
         }
@@ -177,8 +173,7 @@ class IdeasTrackerLogger:
             parameters["category"] = category
         if strategy:
             parameters["strategy"] = strategy
-        if task_description:
-            parameters["task_description"] = task_description
+
         self._write_log(
             program_id=linked_program,
             destination="active_bank",
