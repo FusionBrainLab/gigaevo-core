@@ -62,6 +62,35 @@ _OPTUNA_PARAMS_NAME = "_optuna_params"
 #: Default float precision for display and suggestion rounding.
 _DEFAULT_PRECISION = 6
 
+#: String that looks like an integer (for categoricals like ["4","5","6"] used in range()).
+_INT_LIKE_STR_RE = re.compile(r"^-?\d+$")
+
+
+def _format_value_for_source(
+    value: Any, param_name: str, param_types: dict[str, str]
+) -> str:
+    """Format *value* as it would appear in Python source (for comment placement)."""
+    if value is None:
+        return "None"
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, str):
+        # Emit as int literal when string looks like an integer (e.g. categorical
+        # choices ["4","5","6"]) so range(num_points) and similar work.
+        if _INT_LIKE_STR_RE.match(value.strip()):
+            return repr(int(value))
+        return repr(value)
+    ptype = param_types.get(param_name, "float")
+    if ptype == "int":
+        v = int(round(value)) if isinstance(value, float) else int(value)
+        return repr(v)
+    v = float(value) if not isinstance(value, float) else value
+    if isinstance(v, float) and v != 0 and math.isfinite(v):
+        v = float(f"{v:.{_DEFAULT_PRECISION}g}")
+    if v < 0:
+        return f"-{_format_value_for_source(-v, param_name, param_types)}"
+    return repr(v)
+
 
 class ParamSpec(BaseModel):
     """One independent tuneable parameter proposed by the LLM.
@@ -187,9 +216,18 @@ class _ParamDesubstitutor(ast.NodeTransformer):
     and negative values emit ``UnaryOp(USub, Constant(abs_val))``.
     """
 
-    def __init__(self, values: dict[str, Any], param_types: dict[str, str]):
+    def __init__(
+        self,
+        values: dict[str, Any],
+        param_types: dict[str, str],
+        line_offsets: list[int] | None = None,
+    ):
         self._values = values
         self._param_types = param_types
+        self._line_offsets = line_offsets
+        self._tuned_linenos: set[int] = set()
+        # (start_char, end_char, value_str) for comment-accurate replacement in source
+        self._tuned_spans: list[tuple[int, int, str]] = []
 
     def _is_param_subscript(self, node: ast.AST) -> Optional[str]:
         """Return the param name if *node* is ``_optuna_params["key"]``."""
@@ -211,9 +249,16 @@ class _ParamDesubstitutor(ast.NodeTransformer):
         - ``int`` param type → coerced to ``int``
         - ``float`` param type → kept as ``float``
         - Negative numerics → ``UnaryOp(USub, Constant(abs))``
+        - ``str`` that looks like an integer (e.g. categorical "5") → ``int`` so range() works
         """
-        # Non-numeric types: emit directly.
-        if value is None or isinstance(value, (str, bool)):
+        # Non-numeric types: emit directly, except int-like strings.
+        if value is None or isinstance(value, bool):
+            node = ast.Constant(value=value)
+            return ast.copy_location(node, src_node)
+        if isinstance(value, str):
+            if _INT_LIKE_STR_RE.match(value.strip()):
+                node = ast.Constant(value=int(value))
+                return ast.copy_location(node, src_node)
             node = ast.Constant(value=value)
             return ast.copy_location(node, src_node)
 
@@ -239,6 +284,19 @@ class _ParamDesubstitutor(ast.NodeTransformer):
         """Process subscript nodes, replacing param references."""
         name = self._is_param_subscript(node)
         if name is not None and name in self._values:
+            self._tuned_linenos.add(node.lineno)
+            if (
+                self._line_offsets is not None
+                and hasattr(node, "end_lineno")
+                and node.end_lineno is not None
+                and node.end_col_offset is not None
+            ):
+                start = self._line_offsets[node.lineno - 1] + node.col_offset
+                end = self._line_offsets[node.end_lineno - 1] + node.end_col_offset
+                value_str = _format_value_for_source(
+                    self._values[name], name, self._param_types
+                )
+                self._tuned_spans.append((start, end, value_str))
             return self._make_const(self._values[name], node, name)
         self.generic_visit(node)
         return node
@@ -246,6 +304,25 @@ class _ParamDesubstitutor(ast.NodeTransformer):
 
 #: Pattern matching a valid Python dotted name (e.g. ``scipy.optimize.minimize``).
 _DOTTED_NAME_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
+
+#: Matches eval('dotted.name') or eval("dotted.name") for source-level cleanup.
+_EVAL_STRING_RE = re.compile(
+    r"\beval\s*\(\s*([\"'])([^\"']+)\1\s*\)",
+)
+
+
+def _clean_eval_in_source(code: str) -> str:
+    """Replace ``eval('dotted.name')`` / ``eval(\"dotted.name\")`` with the dotted name in source.
+
+    Only replaces when the string content matches _DOTTED_NAME_RE, so comments and
+    line structure are preserved (unlike parse → _EvalCleaner → unparse).
+    """
+
+    def repl(m: re.Match[str]) -> str:
+        inner = m.group(2)
+        return inner if _DOTTED_NAME_RE.match(inner) else m.group(0)
+
+    return _EVAL_STRING_RE.sub(repl, code)
 
 
 def _dotted_name_to_ast(name: str, src_node: ast.AST) -> ast.AST:
@@ -286,32 +363,65 @@ class _EvalCleaner(ast.NodeTransformer):
         return node
 
 
+def _build_line_offsets(source: str) -> list[int]:
+    """Return list of character offsets of the start of each line (1-based index)."""
+    offsets = [0]
+    for line in source.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    return offsets
+
+
 def desubstitute_params(
     parameterized_code: str,
     values: dict[str, Any],
     param_types: dict[str, str] | None = None,
+    add_tuned_comment: bool = True,
 ) -> str:
     """Replace ``_optuna_params["key"]`` references with concrete *values*.
 
     Also cleans up ``eval('dotted.name')`` patterns left behind when a
     categorical parameter selects a callable (e.g. a solver function).
-
-    Parameters
-    ----------
-    parameterized_code : str
-        Code containing ``_optuna_params["key"]`` references.
-    values : dict[str, Any]
-        Mapping of parameter name to concrete value.
-    param_types : dict[str, str] | None
-        Mapping of parameter name to type string (``"int"``, ``"float"``,
-        etc.).  Used to coerce values.  If ``None``, all values are kept
-        as-is.
+    If *add_tuned_comment* is True, appends ``# tuned (Optuna)`` at the end of
+    each line where a parameter was substituted (using original source spans
+    so the comment stays on the correct line).
     """
+    param_types = param_types or {}
+    line_offsets = (
+        _build_line_offsets(parameterized_code) if add_tuned_comment else None
+    )
     tree = ast.parse(parameterized_code)
-    new_tree = _ParamDesubstitutor(values, param_types or {}).visit(copy.deepcopy(tree))
+    desub = _ParamDesubstitutor(values, param_types, line_offsets=line_offsets)
+    new_tree = desub.visit(copy.deepcopy(tree))
     # Clean up eval('dotted.name') → dotted.name
     new_tree = _EvalCleaner().visit(new_tree)
     ast.fix_missing_locations(new_tree)
+
+    if add_tuned_comment and desub._tuned_spans:
+        # Replace in original source by span so values land on the correct lines;
+        # then add comment at end of each affected line (not inline, to avoid
+        # breaking e.g. eval(_optuna_params["x"]) with a comment inside the call).
+        code = parameterized_code
+        for start, end, value_str in sorted(desub._tuned_spans, key=lambda x: -x[0]):
+            code = code[:start] + value_str + code[end:]
+        # Which lines (1-based) had a substitution
+        tuned_linenos = set()
+        for start, _end, _ in desub._tuned_spans:
+            for i in range(len(line_offsets) - 1):
+                if line_offsets[i] <= start < line_offsets[i + 1]:
+                    tuned_linenos.add(i + 1)
+                    break
+        lines = code.splitlines(keepends=True)
+        for i in range(len(lines)):
+            if (i + 1) in tuned_linenos and " # tuned" not in lines[i].rstrip():
+                stripped = lines[i].rstrip("\n")
+                lines[i] = (
+                    stripped.rstrip()
+                    + "  # tuned (Optuna)"
+                    + ("\n" if lines[i].endswith("\n") else "")
+                )
+        code = "".join(lines)
+        # Eval cleanup on source so line numbers (and comments) stay correct.
+        return _clean_eval_in_source(code)
     return ast.unparse(new_tree)
 
 
@@ -320,154 +430,37 @@ def desubstitute_params(
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
-You are a world-class optimization engineer. Your goal is to improve \
-Python programs by identifying existing tuneable values and replacing them \
-with parameters.
+Your goal is to **parametrize** the given Python code: replace existing tuneable \
+values (literals, method args) with references to ``_optuna_params["name"]``. \
+An optimizer will then sample those parameters and run the code with different \
+values. You return a structured response: a list of **parameters** (name, type, \
+bounds/choices, initial value) and a list of **modifications** (patches). Each \
+patch replaces one contiguous block of source with the same block where literals \
+are replaced by ``_optuna_params["name"]``. Every name used in patches must appear \
+in the parameters list.
 
-**CRITICAL RULES:**
-1.  **NO NEW LOGIC**: Parameterize ONLY values that already exist (literals, \
-    method args). Do NOT add new logic, variables, or control flow.
-2.  **PRESERVE STRUCTURE**: The parameterized code must match the original \
-    structure. **DO NOT** break string literals or multi-line statements in \
-    ways that create syntax errors. **Ensure parentheses and brackets are balanced.**
-3.  **USE PATCHES**: Do NOT return the full file. Return only specific \
-    code blocks that change.
-    - ``original_snippet``: Must be a faithful copy of the source lines to change. \
-      **Include surrounding context lines** (e.g., comments or unique neighbor lines) \
-      to ensure the snippet matches **ONLY ONE** location in the file. \
-      **KEEP CONTEXT MINIMAL** (1-2 lines) to avoid hitting token limits, unless more is needed for uniqueness.
-    - ``parameterized_snippet``: The replacement lines using \
-      ``_optuna_params["name"]``. Must be syntactically valid Python. \
-      **Ensure indentation matches the original snippet exactly.**
-4.  **IMPORTS**: If new parameters require imports (e.g. for ``eval()``), \
-    list them in ``new_imports``. Do NOT add them to the snippets.
-5.  **NO PLACEHOLDERS**: Do NOT use `...` or comments like `# ...` in \
-    ``original_snippet`` unless they explicitly exist in the source code.
+**Rules**
+- **No new logic**: Only replace values that already exist. Do not add branches, variables, or control flow.
+- **Non-overlapping patches**: No two ``original_snippet``s may share any line. If two parameters are in the same block (e.g. two assignments under one comment), use one modification with one ``original_snippet`` (the whole block) and one ``parameterized_snippet`` (both values as ``_optuna_params["..."]``). Overlapping or adjacent separate patches are rejected.
+- **original_snippet**: Byte-for-byte copy of the source: same comments (e.g. ``# 1. Jitter`` not ``# Jitter``), same numbers (``0.01`` not ``1e-2``), same variable names. Include 1–2 context lines so the snippet matches exactly one location. Do not skip lines or use ``...``.
+- **parameterized_snippet**: Same lines and indentation as ``original_snippet``; only replace literals with ``_optuna_params["name"]``. Write every ``_optuna_params["name"]`` in full (including ``"]``). Do not drop the next line (e.g. keep ``x = res.x`` after ``minimize(...)``) or remove closing ``)``/commas from calls.
+- **Imports**: If needed for ``eval()`` etc., list in ``new_imports`` only.
+- **Seeds**: Do not parameterize seeds (e.g. ``random.seed(42)``).
 
-**Common Pitfalls to AVOID:**
-- **Unbalanced Parentheses**: When parameterizing inside a function call, ensure you don't accidentally remove a closing parenthesis or comma.
-- **Indentation Errors**: The ``parameterized_snippet`` must fit perfectly into the surrounding code's indentation.
-- **String Literals**: Do not leave string literals unterminated.
+**Search space**: Use ``float``, ``int``, ``log_float`` (positive bounds), or ``categorical``. For ``int`` use integer ``low``/``high``; for ``categorical`` include the current value. Each parameter needs an ``initial_value`` (the value currently in the code).
 
-**Process:**
-1.  Identify tuneable constants (floats, ints, method strings, booleans).
-    - **Note**: Avoid parameterizing seeds (e.g., ``random.seed(42)``) as they \
-      should remain fixed for reproducible evaluations.
-2.  Propose a search space (``float``, ``int``, ``log_float``, ``categorical``).
-3.  Create a patch for each location:
-    - Copy the original lines (plus unique context).
-    - **Deduplication**: If a line like ``threshold = 0.5`` appears multiple times, \
-      you **MUST** include the surrounding function name or a unique comment \
-      to ensure the patch hits the correct spot.
-    - Create the replacement lines with ``_optuna_params["param_name"]``.
-    - **Verify Uniqueness**: If the snippet appears multiple times (e.g., inside a loop \
-      or repeated function calls), expand it to include more context lines until it is unique.
+**Examples**
+1) Single numeric: copy the exact lines (e.g. comment + ``lr = 0.01``); replace the value with ``_optuna_params["learning_rate"]``. Add a parameter with name ``learning_rate``, type ``float``, and ``initial_value`` 0.01. Add a comment or context so the snippet matches only one place.
+2) Two parameters in one block → one modification: one ``original_snippet`` with the full block, one ``parameterized_snippet`` with both ``_optuna_params["margin"]`` and ``_optuna_params["w_overlap"]``. Include both in the parameters list.
+3) Swapping callables: ``ret = eval(_optuna_params["integrator"])(func, 0, 1)``; set ``new_imports`` if needed; add a ``categorical`` parameter for the integrator.
 
-**Example 1 -- Numeric Parameter:**
-Original code:
-```python
-    # Training configuration
-    lr = 0.01
-    optimizer = Adam(lr=lr)
-```
+**Avoid**: Overlapping or adjacent separate patches; changing variable names or shortening comments in ``original_snippet``; missing ``"]`` or closing ``)`` in ``parameterized_snippet``; extra indentation; patching a repeated line (e.g. ``x = 10``) without context; using a name in a patch that is not in the parameters list. Prefer fewer, high-impact parameters.
 
-Modification:
-- original_snippet:
-```python
-    # Training configuration
-    lr = 0.01
-```
-- parameterized_snippet:
-```python
-    # Training configuration
-    lr = _optuna_params["learning_rate"]
-```
-
-**Example 2 -- Method String (with context for uniqueness):**
-Original code:
-```python
-    # First minimization call
-    res = minimize(fun, x0, method="L-BFGS-B")
-
-    # ... later in code ...
-    # Second minimization call (we only want to tune the first one)
-    res2 = minimize(fun2, x0, method="L-BFGS-B")
-```
-
-Modification (tuning ONLY the first call):
-- original_snippet:
-```python
-    # First minimization call
-    res = minimize(fun, x0, method="L-BFGS-B")
-```
-- parameterized_snippet:
-```python
-    # First minimization call
-    res = minimize(fun, x0, method=_optuna_params["method"])
-```
-
-**Example 3 -- Callable Sweep (using eval):**
-Original code:
-```python
-    ret = scipy.integrate.quad(func, 0, 1)
-```
-
-Modification:
-- original_snippet:
-```python
-    ret = scipy.integrate.quad(func, 0, 1)
-```
-- parameterized_snippet:
-```python
-    ret = eval(_optuna_params["integrator"])(func, 0, 1)
-```
-- new_imports: ["import scipy.integrate"]
-
-Use this ``eval(_optuna_params["..."])`` pattern whenever different functions with \
-compatible signatures could be swapped. Common examples:
-- Optimizers: ``scipy.optimize.minimize`` vs ``scipy.optimize.differential_evolution``
-- Solvers: ``np.linalg.solve`` vs ``scipy.linalg.solve``
-- Distance metrics, interpolation functions, etc.
-
-**What NOT to do (forbidden):**
-- BAD: Original has ``points.append(center)``. Do NOT add a parameter \
-  ``include_center`` and rewrite as ``if _optuna_params["include_center"]: \
-  points.append(center) else: ...``. That adds new logic.
-- BAD: Introducing any new variable or branch that does not exist in the \
-  original. Only REPLACE existing values in place.
-- BAD: Patching a common line like ``x = 10`` without context if it appears \
-  multiple times in the file. This will cause an ambiguous match error.
-- GOOD: Include unique anchors (like function names or comments) to ensure a \
-  single match. For example:
-  ```python
-    # Training configuration
-    threshold = _optuna_params["threshold"]
-  ```
-- BAD: Using ``...`` as a placeholder in ``original_snippet``. It MUST be \
-  exact code content.
-
-**Guidelines:**
-- Prefer FEWER, high-impact parameters over many marginal ones.
-- Algorithm/method strings already in the code are often high-impact.
-- Set ranges grounded in domain knowledge. For ``int`` types, **ALWAYS** ensure \
-  ``low`` and ``high`` are integers to avoid type errors in the program.
-- For ``log_float``, both ``low`` and ``high`` must be positive.
-- For ``categorical``, include the current value in the choices list.
-- **Uniqueness**: If you are patching a common value (e.g., `n=10`), you **MUST** \
-  include the function signature or surrounding comments in the snippet to avoid \
-  ambiguity.
+**Output length**: Keep reasoning to 3–4 sentences and use at most a few parameters (e.g. <= 10). Short snippets only; do not repeat full file contents.
 """
 
 _USER_PROMPT_TEMPLATE = """\
-Analyze this code and propose tuneable parameters. Return a list of \
-modifications (patches) to inject ``_optuna_params`` references.
-
-**IMPORTANT**:
-- Ensure ``original_snippet`` matches **EXACTLY ONE** location in the file. \
-  Use surrounding lines or comments as anchors to ensure uniqueness.
-- The ``parameterized_snippet`` must replace the ``original_snippet`` and \
-  contain the ``_optuna_params["name"]`` reference.
-- **Keep reasoning concise** and **snippets minimal** to avoid output length limits.
+Parametrize the code below: (1) list **parameters** (name, type, bounds/choices, initial_value) and (2) list **modifications** (patches). Each patch: ``original_snippet`` = exact copy of a block that appears only once in the file; ``parameterized_snippet`` = same block with tuneable values replaced by ``_optuna_params["name"]``. Every name in patches must have a matching entry in parameters. Keep reasoning and snippets minimal.
 
 Code:
 ```python
@@ -530,6 +523,9 @@ class OptunaOptimizationStage(Stage):
         Function to call inside the validator (default ``"validate"``).
     update_program_code : bool
         If ``True`` (default), overwrite ``program.code`` in-place.
+    add_tuned_comment : bool
+        If ``True`` (default), append ``# tuned (Optuna)`` on lines where a
+        parameter was substituted, so future LLM mutations know it was hyperparameter-tuned.
     task_description : str | None
         Optional task description forwarded to the LLM.
     python_path : list[Path] | None
@@ -554,6 +550,7 @@ class OptunaOptimizationStage(Stage):
         function_name: str = "run_code",
         validator_fn: str = "validate",
         update_program_code: bool = True,
+        add_tuned_comment: bool = True,
         task_description: str | None = None,
         python_path: list[Path] | None = None,
         max_memory_mb: int | None = None,
@@ -572,6 +569,7 @@ class OptunaOptimizationStage(Stage):
         self.function_name = function_name
         self.validator_fn = validator_fn
         self.update_program_code = update_program_code
+        self.add_tuned_comment = add_tuned_comment
         self.task_description = task_description
         self.python_path = python_path or []
         self.max_memory_mb = max_memory_mb
@@ -586,7 +584,9 @@ class OptunaOptimizationStage(Stage):
         """Apply the LLM's suggested patches to the original code.
 
         Uses exact matching first, then falls back to a whitespace-flexible
-        fuzzy match.
+        fuzzy match. Patches are applied from bottom to top so that earlier
+        replacements do not invalidate positions of later ones (and duplicate
+        snippets are only applied once).
 
         Parameters
         ----------
@@ -605,7 +605,20 @@ class OptunaOptimizationStage(Stage):
         ValueError
             If the resulting parameterized code has syntax errors.
         """
-        code = original_code
+        # Pass 1: find all (start, end, replacement) in original_code; dedupe by span
+        replacements: list[tuple[int, int, str]] = []
+        seen_spans: set[tuple[int, int]] = set()
+        snippet_not_found = False
+
+        def _ensure_trailing_newline(text: str, span_end: int) -> str:
+            """If source has newline at span end, ensure replacement ends with newline."""
+            if (
+                span_end > 0
+                and span_end <= len(original_code)
+                and original_code[span_end - 1] == "\n"
+            ):
+                return text if text.endswith("\n") else text + "\n"
+            return text
 
         for mod in search_space.modifications:
             original = mod.original_snippet
@@ -614,10 +627,30 @@ class OptunaOptimizationStage(Stage):
             if not original.strip():
                 continue
 
-            # 1. Try exact string match
-            count = code.count(original)
+            # 1. Try exact string match (search in original_code)
+            count = original_code.count(original)
             if count == 1:
-                code = code.replace(original, parameterized)
+                start = original_code.index(original)
+                end = start + len(original)
+                if (start, end) not in seen_spans:
+                    seen_spans.add((start, end))
+                    # Normalize indentation to match original span (avoid "unexpected indent")
+                    span_text = original_code[start:end]
+                    span_lines = span_text.splitlines()
+                    base_indent = ""
+                    min_indent_len = float("inf")
+                    for line in span_lines:
+                        if line.strip():
+                            indent_match = re.match(r"^[ \t]*", line)
+                            if indent_match:
+                                ind = indent_match.group(0)
+                                if len(ind) < min_indent_len:
+                                    min_indent_len = len(ind)
+                                    base_indent = ind
+                    clean_snippet = textwrap.dedent(parameterized).strip("\n")
+                    repl = textwrap.indent(clean_snippet, base_indent)
+                    repl = _ensure_trailing_newline(repl, end)
+                    replacements.append((start, end, repl))
                 continue
 
             if count > 1:
@@ -626,74 +659,122 @@ class OptunaOptimizationStage(Stage):
                     count,
                     original,
                 )
+                snippet_not_found = True
                 continue
 
             # 2. Try fuzzy match (whitespace flexible)
-            # We normalize the snippet by stripping leading/trailing blank lines
-            # and matching with a regex that is flexible about internal whitespace.
-            lines = [line for line in original.splitlines() if line.strip()]
+            lines = [line.strip() for line in original.splitlines() if line.strip()]
             if not lines:
                 continue
 
             pattern_parts = []
             for line in lines:
-                # Escape the content of the line
-                content = re.escape(line.strip())
-                # Replace escaped spaces with \s+ to be flexible about internal spacing
-                content = content.replace(r"\ ", r"\s+")
-                # Match line with flexible indentation
-                pattern_parts.append(r"^[ \t]*" + content + r"[ \t]*$")
+                # 1. Build regex manually: all non-alphanumeric chars are flexible
+                content = line.strip()
+                res = ""
+                for char in content:
+                    if char.isalnum() or char == "_":
+                        res += char
+                    elif char.isspace():
+                        # Use \s* instead of \s+ to be flexible with source formatting
+                        res += r"\s*"
+                    else:
+                        # Escape the character for regex and add optional whitespace
+                        res += r"\s*" + re.escape(char) + r"\s*"
 
-            # Join with flexible newline matching
-            pattern_str = r"(?m)" + r"\n[ \t\r\n]*".join(pattern_parts)
+                # 2. Collapse redundant \s* or \s+ (match literal \s and \s* in res)
+                res = re.sub(r"(\\\\s[*+])+", r"\\s*", res)
+
+                # 3. Allow for anything before/after the content on the same line
+                # (trailing space, optional comma/semicolon, optional comment)
+                pattern_parts.append(
+                    r"[ \t]*" + res + r"[ \t\r]*(?:[,;])?[ \t\r]*(?:#.*)?"
+                )
+
+            # Join lines with a pattern that allows for:
+            # 1. Direct transitions (newline + whitespace)
+            # 2. Intervening blank lines or comment-only lines that the LLM might have skipped.
+            intervening_gap = r"(?:\s*(?:\#[^\n]*)?\r?\n)*\s*"
+            pattern_str = r"(?m)" + intervening_gap.join(pattern_parts)
 
             try:
                 pattern = re.compile(pattern_str)
-                matches = list(pattern.finditer(code))
+                matches = list(pattern.finditer(original_code))
             except re.error as e:
                 logger.warning("[Optuna] Failed to compile regex for snippet: {}", e)
                 matches = []
 
             if len(matches) == 1:
-                # Found unique fuzzy match!
                 m = matches[0]
+                start, end = m.start(), m.end()
+                if (start, end) in seen_spans:
+                    continue
+                seen_spans.add((start, end))
 
-                # Detect indentation of the matched block in the source code
                 match_text = m.group(0)
-                first_line = match_text.splitlines()[0]
-                first_line_indent_match = re.match(r"^[ \t]*", first_line)
-                base_indent = (
-                    first_line_indent_match.group(0) if first_line_indent_match else ""
-                )
+                match_lines = match_text.splitlines()
+                # Use minimum indent in the match so replacement aligns with block top
+                base_indent = ""
+                min_indent_len = float("inf")
+                for line in match_lines:
+                    if line.strip():
+                        indent_match = re.match(r"^[ \t]*", line)
+                        if indent_match:
+                            ind = indent_match.group(0)
+                            if len(ind) < min_indent_len:
+                                min_indent_len = len(ind)
+                                base_indent = ind
 
-                # Normalize the parameterized snippet:
-                # 1. Dedent it to remove common indentation.
-                # 2. Indent it with the detected base_indent.
                 clean_snippet = textwrap.dedent(parameterized).strip("\n")
                 indented_snippet = textwrap.indent(clean_snippet, base_indent)
-
-                # Ensure string literals are not broken by dedent/indent if they span multiple lines
-                # This is a heuristic: if the snippet contains triple quotes, we should be careful.
-                # But typically, parameterized snippets are short.
-
-                code = code[: m.start()] + indented_snippet + code[m.end() :]
+                indented_snippet = _ensure_trailing_newline(indented_snippet, end)
+                replacements.append((start, end, indented_snippet))
                 continue
 
-            elif len(matches) > 1:
+            if len(matches) > 1:
                 logger.warning(
                     "[Optuna] Fuzzy match found {} times (ambiguous), skipping:\n{}",
                     len(matches),
                     original,
                 )
+                snippet_not_found = True
                 continue
 
-            # If we reached here, neither exact nor fuzzy match worked
+            snippet_not_found = True
             logger.warning(
                 "[Optuna] Snippet not found in code (tried exact & fuzzy):\n{}\n"
                 "--- Regex pattern used ---\n{}",
                 original,
                 pattern_str,
             )
+
+        if snippet_not_found:
+            raise ValueError(
+                "One or more snippets were not found or were ambiguous; "
+                "refusing to apply partial patches."
+            )
+
+        # Reject overlapping spans; do not apply partial patches.
+        sorted_by_start = sorted(replacements, key=lambda x: x[0])
+        for i in range(len(sorted_by_start) - 1):
+            _, e1 = sorted_by_start[i][:2]
+            s2, _ = sorted_by_start[i + 1][:2]
+            if e1 > s2:
+                raise ValueError(
+                    "Overlapping replacement spans detected (e.g. {} > {}); "
+                    "refusing to apply. Each modification's original_snippet must not "
+                    "overlap any other (use separate, non-overlapping code blocks).".format(
+                        e1, s2
+                    )
+                )
+
+        # Pass 2: apply from bottom to top so indices remain valid
+        code = original_code
+        for start, end, text in sorted(replacements, key=lambda x: -x[1]):
+            next_ch = code[end : end + 1] if end < len(code) else ""
+            if not text.endswith("\n") and next_ch and next_ch != "\n":
+                text = text + "\n"
+            code = code[:start] + text + code[end:]
 
         # Prepend new imports
         if search_space.new_imports:
@@ -711,7 +792,6 @@ class OptunaOptimizationStage(Stage):
                 if e.lineno
                 else "Unknown location",
             )
-            # Log the full code to debug file if needed, but here we just raise
             raise ValueError(f"Parameterized code syntax error: {e}")
 
         return code
@@ -875,7 +955,18 @@ class OptunaOptimizationStage(Stage):
                 elif p.param_type == "categorical":
                     values[p.name] = trial.suggest_categorical(p.name, p.choices)
 
+            logger.trace(
+                "[Optuna][{}][trial {}] Evaluating: {}", pid, trial.number, values
+            )
+
             async with sem:
+                # Log when evaluation actually starts (semaphore acquired), not when trial was asked
+                logger.debug(
+                    "[Optuna][{}] Trial {}/{} started (evaluating)",
+                    pid,
+                    trial.number + 1,
+                    self.n_trials,
+                )
                 scores, error = await self._evaluate_single(
                     parameterized_code, values, context
                 )
@@ -893,29 +984,61 @@ class OptunaOptimizationStage(Stage):
             return score
 
         failure_reasons: list[str] = []
+        n_completed = 0
+        _completed_lock = asyncio.Lock()
+
+        async def _log_progress() -> None:
+            nonlocal n_completed
+            async with _completed_lock:
+                n_completed += 1
+                if n_completed % 10 == 0 or n_completed == self.n_trials:
+                    logger.info(
+                        "[Optuna][{}] Progress: {}/{} trials run, best {}={:.{prec}g}",
+                        pid,
+                        n_completed,
+                        self.n_trials,
+                        self.score_key,
+                        best_value if best_value is not None else float("nan"),
+                        prec=_DEFAULT_PRECISION,
+                    )
 
         async def _run_trial(trial_number: int) -> None:
             trial = study.ask()
+            k = trial_number + 1
             try:
                 value = await _objective(trial)
                 study.tell(trial, value)
+                logger.debug(
+                    "[Optuna][{}] Trial {}/{} completed, {}={:.{prec}g}",
+                    pid,
+                    k,
+                    self.n_trials,
+                    self.score_key,
+                    value,
+                    prec=_DEFAULT_PRECISION,
+                )
+                await _log_progress()
             except optuna.TrialPruned as e:
                 # Capture the prune reason (error message)
                 reason = str(e)
                 if reason not in failure_reasons:
                     failure_reasons.append(reason)
                 study.tell(trial, state=optuna.trial.TrialState.PRUNED)
+                logger.debug("[Optuna][{}] Trial {}/{} pruned", pid, k, self.n_trials)
+                await _log_progress()
             except Exception as exc:
                 reason = f"{type(exc).__name__}: {exc}"
                 if reason not in failure_reasons:
                     failure_reasons.append(reason)
-                logger.warning(
-                    "[Optuna][{}] trial {} failed: {}",
-                    pid,
-                    trial_number,
-                    exc,
-                )
                 study.tell(trial, state=optuna.trial.TrialState.FAIL)
+                logger.debug(
+                    "[Optuna][{}] Trial {}/{} failed: {}",
+                    pid,
+                    k,
+                    self.n_trials,
+                    reason,
+                )
+                await _log_progress()
 
         # Evaluate baseline (parameterized code with initial values).
         baseline_values = {p.name: p.initial_value for p in param_specs}
@@ -958,6 +1081,12 @@ class OptunaOptimizationStage(Stage):
             )
 
         # Run trials.
+        logger.info(
+            "[Optuna][{}] Running {} trials (up to {} in parallel)...",
+            pid,
+            self.n_trials,
+            self.max_parallel,
+        )
         tasks = [asyncio.create_task(_run_trial(i)) for i in range(self.n_trials)]
         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -985,7 +1114,7 @@ class OptunaOptimizationStage(Stage):
         if final_scores is not None:
             best_scores = final_scores
 
-        logger.info(
+        logger.debug(
             "[Optuna][{}] Best trial: {} {}={}",
             pid,
             best_params,
@@ -1016,7 +1145,7 @@ class OptunaOptimizationStage(Stage):
         pid = program.id[:8]
 
         # 1. LLM analysis
-        logger.info("[Optuna][{}] Analysing code with LLM...", pid)
+        logger.debug("[Optuna][{}] Analysing code with LLM...", pid)
         try:
             search_space = await self._analyze_code(code)
             parameterized_code = self._apply_modifications(code, search_space)
@@ -1054,7 +1183,7 @@ class OptunaOptimizationStage(Stage):
         # parameterized_code is already computed in try-block above
         n = len(param_specs)
 
-        logger.info(
+        logger.debug(
             "[Optuna][{}] LLM proposed {} parameters: {}",
             pid,
             n,
@@ -1073,7 +1202,10 @@ class OptunaOptimizationStage(Stage):
         # 4. Build optimised code (desubstitute params into clean code)
         param_types = {p.name: p.param_type for p in param_specs}
         optimized_code = desubstitute_params(
-            parameterized_code, best_params, param_types
+            parameterized_code,
+            best_params,
+            param_types,
+            add_tuned_comment=self.add_tuned_comment,
         )
 
         # 5. Optionally update program in-place
@@ -1100,9 +1232,10 @@ class OptunaOptimizationStage(Stage):
             else None
         )
         logger.info(
-            "[Optuna][{}] == Done ==  trials={} params={} {}={}  updated={}",
+            "[Optuna][{}] == Done ==  trials={}/{} params={} {}={}  updated={}",
             pid,
             n_complete,
+            self.n_trials,
             n,
             self.score_key,
             f"{display_score:.{_DEFAULT_PRECISION}f}"
