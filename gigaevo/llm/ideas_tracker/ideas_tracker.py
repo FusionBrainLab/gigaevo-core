@@ -190,11 +190,17 @@ class IdeaTracker:
             mutation_metadata = program["metadata_mutation_output"]
             if isinstance(mutation_metadata, str):
                 mutation_metadata = json.loads(mutation_metadata)
+            parent_ids = program["parent_ids"]
+            if isinstance(parent_ids, str):
+                try:
+                    parent_ids = json.loads(parent_ids)
+                except (json.JSONDecodeError, TypeError):
+                    parent_ids = []
             new_program = ProgramRecord(
                 id=program["program_id"],
                 fitness=program["metric_fitness"],
                 generation=program["generation"],
-                parents=program["parent_ids"],
+                parents=parent_ids,
                 insights=mutation_metadata["insights_used"],
                 improvements=mutation_metadata["changes"],
                 category="",
