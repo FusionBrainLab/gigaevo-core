@@ -198,6 +198,8 @@ class IdeaAnalyzer:
                 ideas_data.update_idea(idea_sequence_number, idea_full_id, True)
 
             ideas_data.update_mapping()
+            if ideas_data.new_ideas_count == 0:
+                break
 
         return ideas_data
 
