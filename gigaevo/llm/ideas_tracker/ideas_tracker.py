@@ -16,13 +16,14 @@ from gigaevo.llm.ideas_tracker.components.data_components import (
     ProgramRecord,
 )
 from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
-from gigaevo.llm.ideas_tracker.utils.ideas_impact_ml import run_impact_pipeline
+from gigaevo.llm.ideas_tracker.utils.selected_ideas_6 import compute_origin_analysis
 from gigaevo.llm.ideas_tracker.utils.ideas_stats import (
     top_delta_ideas,
     top_fitness_ideas,
 )
 from gigaevo.llm.ideas_tracker.utils.impact_metrics import avg_score, delta_impact
 from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
+from gigaevo.llm.ideas_tracker.utils.selected_ideas_6 import compute_origin_analysis
 from tools.utils import RedisRunConfig, fetch_evolution_dataframe
 
 
@@ -38,29 +39,27 @@ class IdeaTracker:
         """
         Initialize IdeaTracker with configuration from YAML file.
 
+        Sets up idea management, LLM analyzer, Redis connection, logging, and
+        statistics tracking. Initializes both active and inactive idea banks.
+
         Args:
             config_path: Optional path to configuration YAML file. If None, uses
                 default config/ideas_tracker.yaml from project root.
         """
-        # Load configuration from YAML
         self.config = self._load_config(config_path)
-
-        # Initialize logger (logs directory next to this file)
         self.logger = IdeasTrackerLogger(Path(__file__).resolve())
 
         list_max_ideas = int(self.config.get("list_max_ideas", 5))
         self.ideas_manager = RecordManager(list_max_ideas=list_max_ideas)
-        # Initialize analyzer with model from config (fallback to default)
+
         model_name = self.config.get("model") or "deepseek/deepseek-v3.2"
         reasoning_cfg = self.config.get("reasoning", {}) or {}
         self.analyzer = IdeaAnalyzer(model_name, reasoning=reasoning_cfg)
         self.programs_card: list[ProgramRecord] = []
         self.programs_ids: set[str] = set()
 
-        # Generation delta for moving inactive ideas
         self.gen_delta: int = int(self.config.get("gen_delta", 100000))
 
-        # Redis connection configuration
         redis_cfg = self.config.get("redis", {}) or {}
         self.redis_config = RedisRunConfig(
             redis_host=redis_cfg.get("redis_host", "localhost"),
@@ -70,7 +69,6 @@ class IdeaTracker:
             label=redis_cfg.get("label", ""),
         )
 
-        # Load optional task description text based on redis_prefix / problems folder
         self.task_description: str = self._load_task_description()
 
         self.description_rewriting = self.config.get("description_rewriting", False)
@@ -82,28 +80,9 @@ class IdeaTracker:
         self.statistics_enabled = statistics_config.get("enabled", True)
         self.statistics_mode = statistics_config.get("mode", "top_k")
 
-        # Experimental: ML impact pipeline settings
-        exp_cfg = self.config.get("experimental_features", {}) or {}
-        ml_cfg = exp_cfg.get("ml_impact_pipeline", {}) or {}
-        self.ml_impact_enabled: bool = bool(ml_cfg.get("enabled", False))
-        self.ml_impact_n_iterations: int = int(ml_cfg.get("n_iterations", 200))
-        self.ml_impact_include_interactions: bool = bool(
-            ml_cfg.get("include_interactions", True)
-        )
-        self.ml_impact_max_interaction_pairs: int = int(
-            ml_cfg.get("max_interaction_pairs", 10)
-        )
-        self.ml_impact_min_idea_programs: int = int(ml_cfg.get("min_idea_programs", 2))
-        self.ml_impact_confidence_level: float = float(
-            ml_cfg.get("confidence_level", 0.95)
-        )
-        self.ml_impact_random_state: int = int(ml_cfg.get("random_state", 42))
-
-        # Attach logger to components
         self.ideas_manager.logger = self.logger
         self.analyzer.logger = self.logger  # type: ignore[assignment]
 
-        # Log init parameters
         self.logger.log_init(
             component="IdeaTracker",
             model_name=model_name,
@@ -122,7 +101,10 @@ class IdeaTracker:
 
     def _load_config(self, config_path: Optional[str | Path]) -> dict[str, Any]:
         """
-        Load IdeaTracker configuration from YAML file located in the root config folder.
+        Load IdeaTracker configuration from YAML file.
+
+        Resolves project root (3 levels up from this file) to find default config
+        at config/ideas_tracker.yaml when no path is provided.
 
         Args:
             config_path: Path to configuration file, or None to use default location.
@@ -160,15 +142,13 @@ class IdeaTracker:
 
     def _load_task_description(self) -> str:
         """
-        Try to load a human-readable task description for the current experiment.
+        Load human-readable task description for the current experiment.
 
-        Logic:
-        - Take `redis_prefix` from the configured Redis settings.
-        - Walk the `problems/` tree and collect all *leaf* directories.
-        - For each leaf directory, compare its name to `redis_prefix`.
-        - For the first leaf directory whose name matches `redis_prefix`,
-          try to load `task_description.txt` from it.
-        - If nothing matches or the file is missing, return a default placeholder.
+        Searches problems/ directory tree for a leaf directory matching redis_prefix
+        and loads task_description.txt from it. Returns placeholder if not found.
+
+        Returns:
+            Task description text from matching directory, or "No description available".
         """
         prefix_value = getattr(self.redis_config, "redis_prefix", "") or ""
         if not prefix_value:
@@ -371,7 +351,6 @@ class IdeaTracker:
                 idea["fitness"], idea["an_fitness"]
             )
 
-        # Persist rankings snapshot via logger
         self.logger.log_rankings(programs_rk_stats)
         return programs_rk_stats
 
@@ -393,7 +372,13 @@ class IdeaTracker:
         ]
 
     def top_ideas(self) -> dict[str, Any]:
-        """ """
+        """
+        Calculate top ideas based on configured statistics mode.
+
+        Returns:
+            Dictionary containing top ideas according to statistics_mode
+            (top_k, top_fitness, or delta_fitness). Empty dict if statistics disabled.
+        """
         if not self.statistics_enabled:
             return {}
         active_ideas_card = [
@@ -428,6 +413,66 @@ class IdeaTracker:
             raise ValueError(f"Invalid statistics mode: {self.statistics_mode}")
         return statistics
 
+    def compute_evolutionary_statistics(self) -> None:
+        """
+        Run origin-based evolutionary statistics on saved banks/programs JSONs
+        and inject per-idea metrics into banks.json under 'evolution_statistics'.
+
+        Requires that dump_final_state and log_programs have already been called
+        so that banks.json and programs.json exist in the session directory.
+        """
+        banks_path = self.logger.banks_file
+        programs_path = self.logger.programs_file
+
+        if banks_path is None or programs_path is None:
+            return
+        if not banks_path.exists() or not programs_path.exists():
+            return
+
+        df_summary, df_best_ideas = compute_origin_analysis(
+            banks_path=str(banks_path),
+            programs_path=str(programs_path),
+        )
+
+        if df_summary.empty:
+            return
+
+        best_ideas_records = df_best_ideas.to_dict(orient="records")
+        sanitized: list[dict[str, Any]] = []
+        for rec in best_ideas_records:
+            sanitized.append({k: (v if pd.notna(v) else None) for k, v in rec.items()})
+        self.logger.log_best_ideas({"best_ideas": sanitized})
+
+        stats_by_idea: dict[str, dict[str, Any]] = {}
+        for _, row in df_summary.iterrows():
+            idea_id = row["idea_id"]
+            quartile = row["quartile"]
+            metrics = row.drop(["idea_id", "quartile", "description"]).to_dict()
+            metrics = {k: (v if pd.notna(v) else None) for k, v in metrics.items()}
+            if idea_id not in stats_by_idea:
+                stats_by_idea[idea_id] = {}
+            stats_by_idea[idea_id][quartile] = metrics
+
+        with open(banks_path, "r", encoding="utf-8") as f:
+            banks_data = json.load(f)
+
+        for snapshot in banks_data:
+            if not isinstance(snapshot, dict):
+                continue
+            for bank_key in ("active_bank", "inactive_bank"):
+                bank = snapshot.get(bank_key, [])
+                if not isinstance(bank, list):
+                    continue
+                for idea in bank:
+                    if not isinstance(idea, dict):
+                        continue
+                    idea_id = idea.get("id", "")
+                    if idea_id in stats_by_idea:
+                        idea["evolution_statistics"] = stats_by_idea[idea_id]
+
+        with open(banks_path, "w", encoding="utf-8") as f:
+            json.dump(banks_data, f, indent=4)
+
     def run(self, path_to_database: Optional[str | Path] = None) -> None:
         """
         Main execution method: load database, process new programs, and update banks.
@@ -455,38 +500,14 @@ class IdeaTracker:
         pbar.close()
         self.refresh_main_bank(last_gen)
 
-        # After processing and refreshing banks, dump final state of banks
         self.logger.dump_final_state(self.ideas_manager)
-
-        # Dump programs data as JSON snapshot similar to banks
         self.logger.log_programs(self._programs_to_dicts())
 
         self.get_rankings()
-        self.logger.log_best_ideas(self.top_ideas())
+        # self.logger.log_best_ideas(self.top_ideas())  # deprecated: handled by compute_evolutionary_statistics
 
-        # --- ML impact analysis (experimental) ---
-        if self.ml_impact_enabled:
-            all_ideas = (
-                self.ideas_manager.record_bank.all_ideas_cards()
-                + self.ideas_manager.inactive_record_bank.all_ideas_cards()
-            )
-            if self.programs_card and all_ideas:
-                impact_result = run_impact_pipeline(
-                    self.programs_card,
-                    all_ideas,
-                    n_iterations=self.ml_impact_n_iterations,
-                    include_interactions=self.ml_impact_include_interactions,
-                    max_interaction_pairs=self.ml_impact_max_interaction_pairs,
-                    min_idea_programs=self.ml_impact_min_idea_programs,
-                    confidence_level=self.ml_impact_confidence_level,
-                    random_state=self.ml_impact_random_state,
-                )
-                output_dir = Path(__file__).resolve().parent
-                impact_result.summary.to_csv(output_dir / "impact_summary.csv")
-                if impact_result.interactions is not None:
-                    impact_result.interactions.to_csv(
-                        output_dir / "impact_interactions.csv"
-                    )
+        # --- Evolutionary statistics (origin analysis) ---
+        self.compute_evolutionary_statistics()
 
 
 if __name__ == "__main__":
