@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from pathlib import Path
+import struct
 import sys
 from typing import Any, Sequence
 
@@ -20,11 +22,9 @@ class ExecRunnerError(Exception):
         self.stdout_bytes = stdout_bytes
 
 
-def _find_runner_in_repo() -> Path:
-    """Build path for tools/exec_runner.py."""
-    cur = Path(__file__).resolve()
-    parent = cur.parent.parent.parent.parent.parent
-    return parent / "tools" / "exec_runner.py"
+def _find_runner_script() -> Path:
+    """Path to exec_runner.py in this package (same directory as this module)."""
+    return Path(__file__).resolve().parent / "exec_runner.py"
 
 
 def _prepend_sys_path(paths: Sequence[Path | str] | None) -> None:
@@ -88,6 +88,143 @@ async def _monitor_rss_limit(
         await asyncio.sleep(interval_s)
 
 
+async def _start_worker_process(
+    script: str,
+    env: dict[str, str],
+    cwd: str | None,
+) -> asyncio.subprocess.Process:
+    """Start exec_runner in persistent worker mode (--worker)."""
+    return await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-u",
+        script,
+        "--worker",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+    )
+
+
+class WorkerPool:
+    """
+    Pool of persistent exec_runner subprocesses so multiple executor stages can run in parallel.
+    Pass to run_exec_runner(pool=...) or use the default from default_exec_runner_pool().
+    """
+
+    __slots__ = ("max_workers", "_queue", "_count", "_lock")
+
+    def __init__(self, max_workers: int | None = None):
+        if max_workers is None:
+            n = (os.cpu_count() or 4) * 2
+            max_workers = max(1, min(32, n))
+        self.max_workers = max_workers
+        self._queue: asyncio.Queue[asyncio.subprocess.Process] = asyncio.Queue()
+        self._count = 0
+        self._lock = asyncio.Lock()
+
+    async def get_worker(
+        self,
+        script: str,
+        env: dict[str, str],
+        cwd: str | None,
+    ) -> asyncio.subprocess.Process:
+        """Get an available worker, or create one if under limit, or wait for one to be returned."""
+        async with self._lock:
+            try:
+                proc = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                proc = None
+            if proc is None and self._count < self.max_workers:
+                proc = await _start_worker_process(script, env, cwd)
+                self._count += 1
+        if proc is not None:
+            return proc
+        return await self._queue.get()
+
+    async def return_worker(self, proc: asyncio.subprocess.Process) -> None:
+        """Return a healthy worker to the pool; if already dead, decrement count and kill."""
+        if proc.returncode is not None:
+            async with self._lock:
+                self._count -= 1
+            await _kill_process_tree(proc)
+            return
+        self._queue.put_nowait(proc)
+
+    async def discard_worker(self, proc: asyncio.subprocess.Process) -> None:
+        """Remove a dead worker from the pool and kill it."""
+        async with self._lock:
+            self._count -= 1
+        await _kill_process_tree(proc)
+
+
+@functools.lru_cache(maxsize=1)
+def default_exec_runner_pool() -> WorkerPool:
+    """Return the default worker pool (one per process, created on first use)."""
+    return WorkerPool()
+
+
+async def _run_via_worker(
+    proc: asyncio.subprocess.Process,
+    data: bytes,
+    timeout: int,
+    max_memory_mb: int | None,
+    max_output_size: int | None,
+) -> tuple[Any, bytes, str]:
+    """
+    Send one length-prefixed payload to the worker and read length-prefixed response.
+    Returns (value, raw_stdout_bytes, stderr_text). Raises ExecRunnerError on worker-reported error.
+    """
+    monitor_task: asyncio.Task | None = None
+    if max_memory_mb is not None and proc.returncode is None:
+        limit_bytes = max_memory_mb * 1024 * 1024
+        monitor_task = asyncio.create_task(
+            _monitor_rss_limit(proc, max_bytes=limit_bytes)
+        )
+
+    try:
+        # Write length (4-byte big-endian) + payload
+        proc.stdin.write(struct.pack(">I", len(data)) + data)
+        await proc.stdin.drain()
+
+        # Read response length then body
+        len_buf = await asyncio.wait_for(proc.stdout.readexactly(4), timeout=timeout)
+        (n,) = struct.unpack(">I", len_buf)
+        if max_output_size is not None and n > max_output_size:
+            raise ExecRunnerError(
+                returncode=0,
+                stderr=f"OutputTooLarge: {n} bytes exceeds limit of {max_output_size} bytes",
+                stdout_bytes=b"",
+            )
+        stdout = await asyncio.wait_for(proc.stdout.readexactly(n), timeout=timeout)
+    except (
+        asyncio.TimeoutError,
+        asyncio.IncompleteReadError,
+        BrokenPipeError,
+        ConnectionResetError,
+    ):
+        if monitor_task is not None and not monitor_task.done():
+            monitor_task.cancel()
+        await _kill_process_tree(proc)
+        raise
+    finally:
+        if monitor_task is not None and not monitor_task.done():
+            monitor_task.cancel()
+
+    value = cloudpickle.loads(stdout)
+    if isinstance(value, dict) and value.get("_error"):
+        stderr_text = value.get("stderr", "")
+        returncode = value.get("returncode", 1)
+        raise ExecRunnerError(
+            returncode=returncode,
+            stderr=stderr_text,
+            stdout_bytes=b"",
+        )
+    return value, b"", ""
+
+
 async def run_exec_runner(
     *,
     code: str,
@@ -100,6 +237,7 @@ async def run_exec_runner(
     max_output_size: int | None = None,
     cwd: Path | None = None,
     runner_path: Path | None = None,
+    pool: WorkerPool | None = None,
 ) -> tuple[Any, bytes, str]:
     """
     Run user code in an isolated subprocess with resource limits.
@@ -115,6 +253,7 @@ async def run_exec_runner(
         max_output_size: Maximum output size in bytes (None = unlimited)
         cwd: Working directory for subprocess
         runner_path: Path to exec_runner.py script
+        pool: Worker pool for parallel runs; if None, uses default_exec_runner_pool().
 
     Returns:
         (result_object, raw_stdout_bytes, stderr_text)
@@ -125,8 +264,8 @@ async def run_exec_runner(
         ExecRunnerError: On non-zero exit, output too large, or execution failure
         asyncio.TimeoutError: On timeout
     """
-    script = str(runner_path or _find_runner_in_repo())
-
+    script = str(runner_path or _find_runner_script())
+    cwd_str = str(cwd) if cwd else None
     env = os.environ.copy()
     env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -137,18 +276,6 @@ async def run_exec_runner(
             python_path_entries + ([existing_pythonpath] if existing_pythonpath else [])
         )
 
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-u",
-        script,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=str(cwd) if cwd else None,
-        env=env,
-        start_new_session=True,
-    )
-
     payload = {
         "code": code,
         "function_name": function_name,
@@ -157,6 +284,42 @@ async def run_exec_runner(
         "kwargs": dict(kwargs or {}),
     }
     data = cloudpickle.dumps(payload, protocol=cloudpickle.DEFAULT_PROTOCOL)
+
+    worker_pool = pool if pool is not None else default_exec_runner_pool()
+    worker = await worker_pool.get_worker(script, env, cwd_str)
+    try:
+        result = await _run_via_worker(
+            worker,
+            data,
+            timeout=timeout,
+            max_memory_mb=max_memory_mb,
+            max_output_size=max_output_size,
+        )
+        await worker_pool.return_worker(worker)
+        return result
+    except ExecRunnerError:
+        await worker_pool.return_worker(worker)
+        raise
+    except (
+        asyncio.TimeoutError,
+        asyncio.IncompleteReadError,
+        BrokenPipeError,
+        ConnectionResetError,
+    ):
+        await worker_pool.discard_worker(worker)
+
+    # One-shot: spawn subprocess for this call only.
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-u",
+        script,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd_str,
+        env=env,
+        start_new_session=True,
+    )
 
     monitor_task: asyncio.Task | None = None
     if max_memory_mb is not None:

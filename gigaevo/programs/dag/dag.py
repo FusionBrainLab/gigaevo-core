@@ -111,21 +111,6 @@ class DAG:
         while True:
             tick += 1
 
-            tuple_to_hash = tuple(
-                sorted(list(running))
-                + sorted(list(launched_this_run))
-                + sorted(list(finished_this_run))
-            )
-            if tuple_to_hash != self._previous_launched_hash:
-                self._previous_launched_hash = tuple_to_hash
-                logger.debug(
-                    "[DAG][{}] Running={} Launched={} Finished={}",
-                    pid,
-                    sorted(list(running)),
-                    sorted(list(launched_this_run)),
-                    sorted(list(finished_this_run)),
-                )
-
             # 1) Auto-skips
             to_skip = self.automata.get_stages_to_skip(
                 program, running, launched_this_run, finished_this_run
@@ -182,6 +167,30 @@ class DAG:
                     "[DAG][{}] Stages CACHED (skipped execution): {}",
                     pid,
                     sorted(list(newly_cached)),
+                )
+
+            # Progress log: four disjoint sets (every stage in exactly one)
+            #   Running = in-flight (active tasks)
+            #   Ready   = can start now (deps met, not yet launched)
+            #   Blocked = deps not yet met (waiting on others)
+            #   Done    = completed this run (finished, skipped, or cached)
+            all_stages = set(self.automata.topology.nodes.keys())
+            blocked = all_stages - running - ready - finished_this_run
+            tuple_to_hash = (
+                tuple(sorted(running)),
+                tuple(sorted(ready)),
+                tuple(sorted(blocked)),
+                tuple(sorted(finished_this_run)),
+            )
+            if tuple_to_hash != self._previous_launched_hash:
+                self._previous_launched_hash = tuple_to_hash
+                logger.debug(
+                    "[DAG][{}] Running={} Ready={} Blocked={} Done={}",
+                    pid,
+                    sorted(running),
+                    sorted(ready),
+                    sorted(blocked),
+                    sorted(finished_this_run),
                 )
 
             # 3) Launch ready
