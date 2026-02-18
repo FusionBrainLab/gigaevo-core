@@ -290,7 +290,6 @@ def validate(Improver_class):
         import traceback
         traceback.print_exc()
         return {
-            "fitness": -float('inf'),
+            "fitness": -1000,
             "is_valid": False,
-            
         }
