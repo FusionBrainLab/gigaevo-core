@@ -152,6 +152,11 @@ def build_parents(programs: Dict[str, dict]) -> Dict[str, List[str]]:
     parents_of: Dict[str, List[str]] = {}
     for pid, p in programs.items():
         parents = p.get("parents", []) or []
+        if isinstance(parents, str):
+            try:
+                parents = json.loads(parents)
+            except (json.JSONDecodeError, TypeError):
+                parents = []
         parents = [str(x) for x in parents if str(x) in programs]
         parents_of[str(pid)] = parents
     return parents_of
