@@ -79,7 +79,7 @@ class IdeaAnalyzer:
                 model_name=self.model,
             )
 
-    def _call_llm(self, step_name: str, prompt_content: str) -> str:
+    def call_llm(self, step_name: str, prompt_content: str) -> str:
         """
         Call LLM with system and user prompts for a given step.
 
@@ -136,7 +136,7 @@ class IdeaAnalyzer:
         prompt_name = "classify_ext" if self.description_rewriting else "classify"
         while not generated:
             try:
-                response = self._call_llm(prompt_name, prompt_content)
+                response = self.call_llm(prompt_name, prompt_content)
                 classified_ideas = json.loads(response)
                 generated = True
             except Exception:

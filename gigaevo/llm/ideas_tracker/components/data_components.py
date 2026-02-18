@@ -143,6 +143,7 @@ class RecordCardExtended:
         works_with: list[str] | None = None,
         links: list[str] | None = None,
         usage: dict[str, str] | None = None,
+        summary: str | None = None,
     ) -> None:
         """
         Update optional metadata fields for the idea.
@@ -153,6 +154,7 @@ class RecordCardExtended:
             works_with: List of related idea IDs that work well together.
             links: List of reference links or resources.
             usage: Dictionary of usage patterns or examples.
+            summary: Explanation summary text.
         """
         if keywords is not None:
             self.keywords = keywords
@@ -164,6 +166,8 @@ class RecordCardExtended:
             self.links = links
         if usage is not None:
             self.usage = usage
+        if summary is not None:
+            self.explanation["summary"] = summary
 
 
 @dataclass
@@ -231,22 +235,21 @@ class RecordListV2:
         new_works_with: list[str] | None = None,
         new_links: list[str] | None = None,
         new_usage: dict[str, str] | None = None,
+        new_summary: str | None = None,
     ) -> bool:
-        """Update keywords, evolution_statistics, works_with, links, usage (if greater). Returns True if found."""
+        """Update metadata fields via RecordCardExtended.update_metadata. Returns True if found."""
         idea_index = self.find_idea_index(idea_id)
         if idea_index is None:
             return False
         idea = self.ideas[idea_index]
-        if new_keywords is not None:
-            idea.keywords = new_keywords
-        if new_evolution_statistics is not None:
-            idea.evolution_statistics = new_evolution_statistics
-        if new_works_with is not None:
-            idea.works_with = new_works_with
-        if new_links is not None:
-            idea.links = new_links
-        if new_usage is not None:
-            idea.usage = new_usage
+        idea.update_metadata(
+            keywords=new_keywords,
+            evolution_statistics=new_evolution_statistics,
+            works_with=new_works_with,
+            links=new_links,
+            usage=new_usage,
+            summary=new_summary,
+        )
         return True
 
     def remove_idea(self, idea_id: str) -> bool:
@@ -559,6 +562,24 @@ class RecordBank:
                     new_generation,
                     new_description,
                     change_motivation,
+                )
+                return
+
+    def modify_idea_metadata(
+        self,
+        idea_id: str,
+        new_keywords: list[str] | None = None,
+        new_summary: str | None = None,
+    ) -> None:
+        """Update keywords and/or explanation summary on a RecordCardExtended in the bank."""
+        if idea_id not in self.uuids:
+            raise ValueError(f"No idea with id {idea_id} found")
+        for record_list in self.ideas_lists:
+            if record_list.find_idea_index(idea_id) is not None:
+                record_list.modify_idea_metadata(
+                    idea_id,
+                    new_keywords=new_keywords,
+                    new_summary=new_summary,
                 )
                 return
 
