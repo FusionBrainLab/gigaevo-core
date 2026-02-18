@@ -16,7 +16,6 @@ from gigaevo.llm.ideas_tracker.components.data_components import (
     ProgramRecord,
 )
 from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
-from gigaevo.llm.ideas_tracker.utils.selected_ideas_6 import compute_origin_analysis
 from gigaevo.llm.ideas_tracker.utils.ideas_stats import (
     top_delta_ideas,
     top_fitness_ideas,
@@ -114,15 +113,12 @@ class IdeaTracker:
             Returns default configuration if file is missing.
         """
         if config_path is None:
-            # Resolve project root from this file's location:
-            # .../gigaevo-core-internal/gigaevo/llm/ideas_tracker/ideas_tracker.py
             project_root = Path(__file__).resolve().parents[3]
             path_obj = project_root / "config" / "ideas_tracker.yaml"
         else:
             path_obj = Path(config_path)
 
         if not path_obj.is_file():
-            # Fallback to defaults if config file is missing
             return {
                 "gen_delta": 100000,
                 "list_max_ideas": 5,
@@ -155,8 +151,6 @@ class IdeaTracker:
             return "No description available"
         prefix_value = prefix_value.replace("/", "_")
 
-        # Resolve project root from this file's location:
-        # .../gigaevo-core-internal/gigaevo/llm/ideas_tracker/ideas_tracker.py
         project_root = Path(__file__).resolve().parents[3]
         problems_root = project_root / "problems"
 
@@ -167,7 +161,6 @@ class IdeaTracker:
                 if "initial_programs" in dirs:
                     leaf_dirs.append(Path(root))
 
-            # Find the first leaf directory whose *name* matches redis_prefix.
             for leaf in leaf_dirs:
                 split_index = leaf.parts.index("problems") + 1
                 true_name = "_".join(leaf.parts[split_index:])
@@ -176,7 +169,6 @@ class IdeaTracker:
                     if candidate_file.is_file():
                         return candidate_file.read_text(encoding="utf-8").strip()
         except Exception:
-            # Best-effort: if anything goes wrong, fall back to default text.
             return "No description available"
 
         return "No description available"
@@ -263,7 +255,6 @@ class IdeaTracker:
             program_ideas, active_ideas, inactive_ideas
         )
 
-        # Add all truly new ideas into the main (active) ideas bank.
         for n_idea in [
             idea for idea in classified_ideas.ideas if not idea["classified"]
         ]:
@@ -511,5 +502,6 @@ class IdeaTracker:
 
 
 if __name__ == "__main__":
+    p = Path(__file__).resolve().parent / "heilbron_gemini_flash.csv"
     itd = IdeaTracker()
     itd.run()
