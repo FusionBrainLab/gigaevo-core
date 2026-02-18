@@ -404,6 +404,56 @@ class IdeaTracker:
             raise ValueError(f"Invalid statistics mode: {self.statistics_mode}")
         return statistics
 
+    def enrich_ideas(self) -> None:
+        """
+        Enrich every idea in both banks with LLM-generated keywords and explanation summary.
+
+        For each idea:
+        1. Sends its description to the "keywords" prompt and stores the result.
+        2. Sends its explanations list to the "usage_summary" prompt and stores the summary.
+        """
+        all_uuids = list(self.ideas_manager.record_bank.uuids) + list(
+            self.ideas_manager.inactive_record_bank.uuids
+        )
+        pbar = tqdm.tqdm(total=len(all_uuids), desc="Enriching ideas", leave=False)
+        for idea_id in all_uuids:
+            if idea_id in self.ideas_manager.record_bank.uuids:
+                idea = self.ideas_manager.record_bank.get_idea(idea_id)
+            else:
+                idea = self.ideas_manager.inactive_record_bank.get_idea(idea_id)
+
+            # --- Keywords ---
+            keywords: list[str] = []
+            try:
+                kw_response = self.analyzer.call_llm("keywords", idea.description)
+                kw_parsed = json.loads(kw_response)
+                keywords = kw_parsed.get("keywords", [])
+            except Exception:
+                pass
+
+            # --- Explanation summary ---
+            summary = ""
+            explanations = getattr(idea, "explanation", {}).get("explanations", [])
+            valid_explanations = [e for e in explanations if isinstance(e, str)]
+            if len(valid_explanations) == 1:
+                summary = valid_explanations[0]
+            elif len(valid_explanations) > 1:
+                explanations_text = "\n".join(f"- {e}" for e in valid_explanations)
+                try:
+                    sum_response = self.analyzer.call_llm(
+                        "usage_summary", explanations_text
+                    )
+                    sum_parsed = json.loads(sum_response)
+                    summary = sum_parsed.get("summary", "")
+                except Exception:
+                    pass
+
+            self.ideas_manager.enrich_idea_metadata(
+                idea_id, keywords=keywords, summary=summary
+            )
+            pbar.update(1)
+        pbar.close()
+
     def compute_evolutionary_statistics(self) -> None:
         """
         Run origin-based evolutionary statistics on saved banks/programs JSONs
@@ -490,6 +540,8 @@ class IdeaTracker:
             pbar.update(1)
         pbar.close()
         self.refresh_main_bank(last_gen)
+
+        self.enrich_ideas()
 
         self.logger.dump_final_state(self.ideas_manager)
         self.logger.log_programs(self._programs_to_dicts())

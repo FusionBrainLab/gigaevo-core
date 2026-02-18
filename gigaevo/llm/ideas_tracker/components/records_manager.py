@@ -239,6 +239,30 @@ class RecordManager:
         else:
             return self.inactive_record_bank.rankings()
 
+    def enrich_idea_metadata(
+        self,
+        idea_id: str,
+        keywords: list[str] | None = None,
+        summary: str | None = None,
+    ) -> None:
+        """
+        Update keywords and/or explanation summary on an idea in the active or inactive bank.
+
+        Args:
+            idea_id: UUID of the idea to update.
+            keywords: Optional keyword list to set.
+            summary: Optional explanation summary to set.
+
+        Raises:
+            ValueError: If idea_id not found in either bank.
+        """
+        if idea_id in self.record_bank.uuids:
+            self.record_bank.modify_idea_metadata(idea_id, keywords, summary)
+        elif idea_id in self.inactive_record_bank.uuids:
+            self.inactive_record_bank.modify_idea_metadata(idea_id, keywords, summary)
+        else:
+            raise ValueError(f"No idea with id {idea_id} found!")
+
     @staticmethod
     def get_full_id(
         short_id: str,
