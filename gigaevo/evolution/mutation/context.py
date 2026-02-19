@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel
@@ -205,6 +206,42 @@ class EvolutionaryStatisticsMutationContext(MutationContext):
             )
 
         return "\n".join(lines)
+
+
+class ArtifactMutationContext(MutationContext):
+    """Context with an execution artifact from the validator.
+
+    The artifact is assumed to be data produced by the validator (e.g. arrays,
+    images, structured data). The default :meth:`format`
+    simply prints a string representation of the artifact for the mutation
+    prompt. You can subclass this class and override :meth:`format` to implement
+    your own logic for processing or formatting the artifact (e.g. image
+    descriptions, array summaries, or extracting specific fields) before it is
+    shown to the LLM.
+    """
+
+    artifact: Any
+
+    def format(self) -> str:
+        """Format the artifact for the mutation prompt.
+
+        Default: use a string representation of the artifact (e.g. repr for
+        arrays/dicts). Override in a subclass to implement custom processing
+        (e.g. array summaries, image descriptions, or structured output).
+        """
+        body = self.artifact if self.artifact is not None else "<no artifact>"
+        if not isinstance(body, str):
+            body = repr(body)
+        return f"## Execution Artifact\n\n{body}"
+
+
+class PreformattedMutationContext(MutationContext):
+    """Preformatted string block (e.g. from FormatterStage) included as-is in the mutation prompt."""
+
+    content: str
+
+    def format(self) -> str:
+        return self.content
 
 
 class CompositeMutationContext(MutationContext):

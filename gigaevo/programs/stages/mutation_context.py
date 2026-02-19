@@ -12,6 +12,7 @@ from gigaevo.evolution.mutation.context import (
     FamilyTreeMutationContext,
     InsightsMutationContext,
     MetricsMutationContext,
+    PreformattedMutationContext,
 )
 from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.programs.metrics.context import MetricsContext
@@ -34,6 +35,7 @@ class MutationContextInputs(StageIO):
       - lineage_ancestors: TransitionAnalysisList (from collector+lineage stages on ancestors)
       - lineage_descendants: TransitionAnalysisList (from collector+lineage stages on descendants)
       - evolutionary_statistics: EvolutionaryStatistics (from EvolutionaryStatisticsCollector)
+      - formatted: preformatted string (e.g. from FormatterStage) for mutation prompt
     """
 
     metrics: Optional[FloatDictContainer]
@@ -41,6 +43,7 @@ class MutationContextInputs(StageIO):
     lineage_ancestors: Optional[TransitionAnalysisList]
     lineage_descendants: Optional[TransitionAnalysisList]
     evolutionary_statistics: Optional[EvolutionaryStatistics]
+    formatted: Optional[StringContainer]
 
 
 @StageRegistry.register(
@@ -105,6 +108,9 @@ class MutationContextStage(Stage):
                     metrics_context=self.metrics_context,
                 )
             )
+
+        if params.formatted is not None:
+            contexts.append(PreformattedMutationContext(content=params.formatted.data))
 
         if not contexts:
             logger.info(

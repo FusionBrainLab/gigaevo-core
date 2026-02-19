@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Generic, Optional, Sequence, Tuple, TypeVar, cast
 
 from loguru import logger
 
@@ -22,8 +22,10 @@ from gigaevo.programs.stages.python_executors.wrapper import (
 from gigaevo.programs.stages.stage_registry import StageRegistry
 from gigaevo.programs.utils import dedent_code
 
+T = TypeVar("T")
 
-class PythonCodeExecutor(Stage):
+
+class PythonCodeExecutor(Stage, Generic[T]):
     """
     Execute a user function from dynamic code in an isolated subprocess.
 
@@ -45,7 +47,7 @@ class PythonCodeExecutor(Stage):
     """
 
     InputsModel = VoidInput
-    OutputModel = Box[Any]
+    OutputModel = Box[T]
 
     def __init__(
         self,
@@ -67,6 +69,10 @@ class PythonCodeExecutor(Stage):
 
     def _build_call(self, program: Program) -> tuple[Sequence[Any], dict[str, Any]]:
         return (), {}
+
+    def parse_output(self, x: Any) -> T:
+        """Parse raw subprocess return value; override in subclasses."""
+        return cast(T, x)
 
     async def compute(self, program: Program) -> ProgramStageResult | Box[Any]:
         stage_name = self.__class__.__name__
@@ -93,10 +99,12 @@ class PythonCodeExecutor(Stage):
                 max_output_size=self.max_output_size,
             )
 
+            value_parsed = self.parse_output(value)
+
             del stdout_bytes
             del stderr_text
 
-            return self.__class__.OutputModel(data=value)
+            return self.__class__.OutputModel(data=value_parsed)
 
         except ExecRunnerError as e:
             # Detect memory limit errors
@@ -140,8 +148,8 @@ class CallProgramFunction(PythonCodeExecutor):
     InputsModel = ContextInputModel
     OutputModel = Box[Any]
 
-    def _build_call(self, program: Program):
-        params: ContextInputModel = self.params
+    def _build_call(self, program: Program) -> tuple[Sequence[Any], dict[str, Any]]:
+        params = cast(ContextInputModel, self.params)
         args: list[Any] = []
         context: AnyContainer | None = params.context
         if context is not None:
@@ -206,6 +214,9 @@ class ValidatorInput(StageIO):
     context: Optional[AnyContainer]
 
 
+ValidatorOutput = Box[Tuple[dict[str, float], Any]]
+
+
 @StageRegistry.register(
     description="Call a validator function from a Python file on program output (+ optional context)."
 )
@@ -213,7 +224,7 @@ class CallValidatorFunction(PythonCodeExecutor):
     """Loads validator file and calls function `validate(context?, program_output)`."""
 
     InputsModel = ValidatorInput
-    OutputModel = Box[dict[str, float]]
+    OutputModel = ValidatorOutput  # metrics dict and execution artifact
 
     def __init__(self, *, path: Path, function_name: str = "validate", **kwargs: Any):
         super().__init__(
@@ -230,11 +241,42 @@ class CallValidatorFunction(PythonCodeExecutor):
     def _code_str(self, program: Program) -> str:
         return self._validator_code
 
-    def _build_call(self, program: Program):
-        params: ValidatorInput = self.params
+    def parse_output(self, x: Any) -> Tuple[dict[str, float], Any]:
+        return x if isinstance(x, tuple) else (x, None)
+
+    def _build_call(self, program: Program) -> tuple[Sequence[Any], dict[str, Any]]:
+        params = cast(ValidatorInput, self.params)
         payload = params.payload.data
         if params.context is not None:
             context = params.context.data
         else:
             context = None
         return ([context, payload] if context is not None else [payload]), {}
+
+
+class ValidationResult(StageIO):
+    validation_result: ValidatorOutput
+
+
+@StageRegistry.register(
+    description="Extract metrics dict from a validation result (ValidatorOutput)."
+)
+class FetchMetrics(Stage):
+    InputsModel = ValidationResult
+    OutputModel = Box[dict[str, float]]
+
+    async def compute(self, program: Program) -> Box[dict[str, float]]:
+        params = cast(ValidationResult, self.params)
+        return Box[dict[str, float]](data=params.validation_result.data[0])
+
+
+@StageRegistry.register(
+    description="Extract execution artifact from a validation result (ValidatorOutput)."
+)
+class FetchArtifact(Stage):
+    InputsModel = ValidationResult
+    OutputModel = Box[Any]
+
+    async def compute(self, program: Program) -> Box[Any]:
+        params = cast(ValidationResult, self.params)
+        return Box[Any](data=params.validation_result.data[1])

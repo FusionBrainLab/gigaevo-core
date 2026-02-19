@@ -22,6 +22,7 @@ from gigaevo.programs.stages.collector import (
     EvolutionaryStatisticsCollector,
 )
 from gigaevo.programs.stages.complexity import ComputeComplexityStage
+from gigaevo.programs.stages.formatter import FormatterStage
 from gigaevo.programs.stages.insights import InsightsStage
 from gigaevo.programs.stages.insights_lineage import (
     LineagesFromAncestors,
@@ -37,6 +38,8 @@ from gigaevo.programs.stages.python_executors.execution import (
     CallFileFunction,
     CallProgramFunction,
     CallValidatorFunction,
+    FetchArtifact,
+    FetchMetrics,
 )
 from gigaevo.programs.stages.validation import ValidateCodeStage
 from gigaevo.runner.dag_blueprint import DAGBlueprint
@@ -182,6 +185,20 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ),
         )
 
+        # Extract metrics and artifact from validation result (artifact output unused for now)
+        self.add_stage(
+            "FetchMetrics",
+            lambda: FetchMetrics(timeout=DEFAULT_STAGE_TIMEOUT),
+        )
+        self.add_stage(
+            "FetchArtifact",
+            lambda: FetchArtifact(timeout=DEFAULT_STAGE_TIMEOUT),
+        )
+        self.add_stage(
+            "FormatterStage",
+            lambda: FormatterStage(timeout=DEFAULT_STAGE_TIMEOUT),
+        )
+
         # Insights stages
         self.add_stage(
             "InsightsStage",
@@ -291,7 +308,13 @@ class DefaultPipelineBuilder(PipelineBuilder):
         self.add_data_flow_edge(
             "CallProgramFunction", "CallValidatorFunction", "payload"
         )
-        self.add_data_flow_edge("CallValidatorFunction", "MergeMetricsStage", "first")
+        self.add_data_flow_edge(
+            "CallValidatorFunction", "FetchMetrics", "validation_result"
+        )
+        self.add_data_flow_edge(
+            "CallValidatorFunction", "FetchArtifact", "validation_result"
+        )
+        self.add_data_flow_edge("FetchMetrics", "MergeMetricsStage", "first")
         self.add_data_flow_edge("ComputeComplexityStage", "MergeMetricsStage", "second")
         self.add_data_flow_edge("MergeMetricsStage", "EnsureMetricsStage", "candidate")
         self.add_data_flow_edge("EnsureMetricsStage", "MutationContextStage", "metrics")
@@ -313,11 +336,22 @@ class DefaultPipelineBuilder(PipelineBuilder):
             "MutationContextStage",
             "evolutionary_statistics",
         )
+        self.add_data_flow_edge("FetchArtifact", "FormatterStage", "data")
+        self.add_data_flow_edge("FormatterStage", "MutationContextStage", "formatted")
 
     def _contribute_default_deps(self) -> None:
         self._deps = {
             "CallProgramFunction": [
                 ExecutionOrderDependency.on_success("ValidateCodeStage")
+            ],
+            "FetchMetrics": [
+                ExecutionOrderDependency.always_after("CallValidatorFunction"),
+            ],
+            "FetchArtifact": [
+                ExecutionOrderDependency.always_after("CallValidatorFunction"),
+            ],
+            "FormatterStage": [
+                ExecutionOrderDependency.always_after("FetchArtifact"),
             ],
             "InsightsStage": [
                 ExecutionOrderDependency.always_after("EnsureMetricsStage"),

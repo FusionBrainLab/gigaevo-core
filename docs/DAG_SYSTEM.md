@@ -622,6 +622,15 @@ Time →
 165s: Insights        (uses MergeMetrics output)
 ```
 
+### Validator output: metrics and optional artifact
+
+The problem's `validate.py` is invoked by **CallValidatorFunction**. The validator can return either:
+
+- **Metrics only**: a `dict[str, float]` (e.g. `fitness`, `is_valid`, and problem-specific keys). This is merged into the pipeline as the validator output.
+- **Metrics and artifact**: a tuple `(metrics_dict, artifact)`. The **artifact** is any Python value (e.g. arrays, structured data, or a short summary) that is passed to **MutationContextStage** when the pipeline wires **FetchArtifact** → **MutationContextStage**. The artifact is then included in the mutation prompt (see **ArtifactMutationContext**), so the LLM can use it when suggesting edits (e.g. “bottleneck points 2, 5, 7” or a small array summary).
+
+The default pipeline includes **FetchMetrics** (validator output → metrics dict) and **FetchArtifact** (validator output → artifact). If your `validate()` returns only a dict, the artifact is treated as `None`. If it returns `(metrics_dict, artifact)`, both are available downstream. See `problems/heilbron_with_artifact/validate.py` for an example that returns a bottleneck artifact.
+
 ---
 
 ## Advanced Features

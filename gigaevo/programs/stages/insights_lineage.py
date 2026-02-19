@@ -10,9 +10,7 @@ from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.llm.models import ChatOpenAI, MultiModelRouter
 from gigaevo.programs.core_types import (
     ProgramStageResult,
-    StageError,
     StageIO,
-    StageState,
     VoidInput,
 )
 from gigaevo.programs.metrics.context import MetricsContext
@@ -99,13 +97,9 @@ class LineagesToDescendants(Stage):
     ) -> TransitionAnalysisList | ProgramStageResult:
         child_ids = list(self.params.descendant_ids.items)
         if not child_ids:
-            return ProgramStageResult(
-                status=StageState.SKIPPED,
-                error=StageError(
-                    type="Skip",
-                    message="No descendant IDs provided for lineage analysis",
-                    stage=self.stage_name,
-                ),
+            return ProgramStageResult.skipped(
+                message="No descendant IDs provided for lineage analysis",
+                stage=self.stage_name,
             )
 
         children: list[Program] = await self.storage.mget(child_ids)
@@ -159,23 +153,15 @@ class LineagesFromAncestors(Stage):
     ) -> TransitionAnalysisList | ProgramStageResult:
         parent_ids: list[str] = list(self.params.ancestor_ids.items)
         if not parent_ids:
-            return ProgramStageResult(
-                status=StageState.SKIPPED,
-                error=StageError(
-                    type="Skip",
-                    message="No ancestor IDs provided for lineage analysis",
-                    stage=self.stage_name,
-                ),
+            return ProgramStageResult.skipped(
+                message="No ancestor IDs provided for lineage analysis",
+                stage=self.stage_name,
             )
         res: ProgramStageResult = program.stage_results.get(self.source_stage_name)
         if not res or res.output is None:
-            return ProgramStageResult(
-                status=StageState.SKIPPED,
-                error=StageError(
-                    type="Skip",
-                    message="No transitions computed for this program",
-                    stage=self.stage_name,
-                ),
+            return ProgramStageResult.skipped(
+                message="No transitions computed for this program",
+                stage=self.stage_name,
             )
         analyses: list[TransitionAnalysis] = res.output.analyses
         want_child = program.id

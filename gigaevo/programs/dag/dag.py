@@ -129,16 +129,10 @@ class DAG:
                     )
                     continue
 
-                now_ts = datetime.now(timezone.utc)
-                skip_result = ProgramStageResult(
-                    status=StageState.SKIPPED,
-                    error=StageError(
-                        type="AutoSkip",
-                        message="Automata decided to skip stage due to contradictions or policy.",
-                        stage=self._canonical_stage_name(stage_name),
-                    ),
-                    started_at=now_ts,
-                    finished_at=now_ts,
+                skip_result = ProgramStageResult.skipped(
+                    message="Automata decided to skip stage due to contradictions or policy.",
+                    stage=self._canonical_stage_name(stage_name),
+                    error_type="AutoSkip",
                 )
                 await self._persist_stage_result(program, stage_name, skip_result)
                 finished_this_run.add(stage_name)

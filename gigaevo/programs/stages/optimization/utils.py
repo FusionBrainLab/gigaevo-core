@@ -172,6 +172,9 @@ async def evaluate_single(
             timeout=timeout,
             max_memory_mb=max_memory_mb,
         )
+        if isinstance(result, tuple):  # with artifact
+            result = result[0]
+
         if isinstance(result, dict) and score_key in result:
             return result, None
 

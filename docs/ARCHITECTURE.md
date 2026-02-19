@@ -156,7 +156,8 @@ Stages execute in parallel (respecting dependencies)
     │
     ├─→ ValidateOutput (depends on ExecuteProgram)
     │   ├─→ Runs validate() from problem
-    │   └─→ Returns metrics (fitness, etc.)
+    │   ├─→ Returns metrics (fitness, etc.)
+    │   └─→ May return an optional artifact (e.g. bottleneck data, arrays) for mutation context
     │
     ├─→ ComputeComplexity (independent, cacheable)
     │   └─→ Analyzes code structure

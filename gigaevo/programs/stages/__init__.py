@@ -2,6 +2,7 @@ from gigaevo.programs.stages import (
     base,
     collector,
     complexity,
+    formatter,
     insights,
     insights_lineage,
     json_processing,
@@ -18,6 +19,7 @@ from gigaevo.programs.stages.complexity import (
     ComputeComplexityStage,
     GetCodeLengthStage,
 )
+from gigaevo.programs.stages.formatter import FormatterStage
 from gigaevo.programs.stages.insights import InsightsStage
 from gigaevo.programs.stages.insights_lineage import (
     LineagesFromAncestors,

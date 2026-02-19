@@ -39,6 +39,24 @@ dag_blueprint:
       function_name: validate
       timeout: ${stage_timeout}
 
+    # Extract metrics dict from validation result (ValidatorOutput)
+    FetchMetrics:
+      _target_: gigaevo.programs.stages.python_executors.execution.FetchMetrics
+      _partial_: true
+      timeout: ${stage_timeout}
+
+    # Extract execution artifact from validation result
+    FetchArtifact:
+      _target_: gigaevo.programs.stages.python_executors.execution.FetchArtifact
+      _partial_: true
+      timeout: ${stage_timeout}
+
+    # General-purpose formatter: any value → string (subclass to customize)
+    FormatterStage:
+      _target_: gigaevo.programs.stages.formatter.FormatterStage
+      _partial_: true
+      timeout: ${stage_timeout}
+
     # Complexity analysis (measures the length of the code)
     ComputeComplexityStage:
       _target_: gigaevo.programs.stages.complexity.ComputeComplexityStage
@@ -133,8 +151,17 @@ dag_blueprint:
       destination_stage: CallValidatorFunction
       input_name: payload
 
-    # Metrics merging
+    # Validation result -> fetch metrics and artifact (artifact output unused for now)
     - source_stage: CallValidatorFunction
+      destination_stage: FetchMetrics
+      input_name: validation_result
+
+    - source_stage: CallValidatorFunction
+      destination_stage: FetchArtifact
+      input_name: validation_result
+
+    # Metrics merging
+    - source_stage: FetchMetrics
       destination_stage: MergeMetricsStage
       input_name: first
 
@@ -171,6 +198,14 @@ dag_blueprint:
     - source_stage: LineagesFromAncestors
       destination_stage: MutationContextStage
       input_name: lineage_ancestors
+
+    - source_stage: FetchArtifact
+      destination_stage: FormatterStage
+      input_name: data
+
+    - source_stage: FormatterStage
+      destination_stage: MutationContextStage
+      input_name: formatted
 
   # Execution order dependencies
   exec_order_deps:

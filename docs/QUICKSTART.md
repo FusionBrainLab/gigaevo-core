@@ -159,7 +159,7 @@ python tools/inspect.py --program <program-id>
 cp -r problems/heilbron problems/my_problem
 
 # Edit the key files:
-# - problems/my_problem/validate.py      (your fitness function)
+# - problems/my_problem/validate.py      (fitness function; can return (metrics_dict, artifact) for mutation context)
 # - problems/my_problem/metrics.yaml     (metric definitions)
 # - problems/my_problem/initial_programs/ (seed programs)
 # - problems/my_problem/task_description.txt (LLM instructions)

@@ -128,6 +128,23 @@ class ProgramStageResult(BaseModel):
         res.mark_failed(error=error)
         return res
 
+    @classmethod
+    def skipped(
+        cls,
+        *,
+        message: str = "Stage skipped",
+        stage: Optional[str] = None,
+        error_type: str = "Skip",
+    ) -> "ProgramStageResult":
+        """Create a result indicating the stage was skipped (e.g. no input data)."""
+        now = datetime.now(timezone.utc)
+        return cls(
+            status=StageState.SKIPPED,
+            error=StageError(type=error_type, message=message, stage=stage),
+            started_at=now,
+            finished_at=now,
+        )
+
     @field_serializer("output", when_used="json")
     def _ser_output(self, value: Any | None) -> str | None:
         return pickle_b64_serialize(value) if value is not None else None

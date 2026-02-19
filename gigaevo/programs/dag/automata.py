@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Type
 import networkx as nx
 from pydantic import BaseModel, ConfigDict, Field
 
-from gigaevo.programs.core_types import FINAL_STATES, StageError, StageIO
+from gigaevo.programs.core_types import FINAL_STATES, StageIO
 from gigaevo.programs.dag.compatibility import (
     _covariant_type_compatible,
     _normalize_annotation,
@@ -629,13 +629,9 @@ class DAGAutomata(BaseModel):
     def create_skip_result(
         self, stage_name: str, program: Program
     ) -> ProgramStageResult:
-        return ProgramStageResult(
-            status=StageState.SKIPPED,
-            error=StageError(
-                type="Skip",
-                message="Stage skipped due to dependency issue",
-                stage=stage_name,
-            ),
+        return ProgramStageResult.skipped(
+            message="Stage skipped due to dependency issue",
+            stage=stage_name,
         )
 
     def build_named_inputs(self, program: Program, stage_name: str) -> dict[str, Any]:
