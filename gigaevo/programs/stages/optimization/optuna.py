@@ -65,6 +65,30 @@ _DEFAULT_PRECISION = 6
 _INT_LIKE_STR_RE = re.compile(r"^-?\d+$")
 
 
+def _coerce_params(values: dict[str, Any]) -> dict[str, Any]:
+    """Recursively coerce int-like strings to int in param values.
+
+    Categorical choices like ["4","5","6"] or list params with string elements
+    can cause TypeError when used in range(k) or similar. This ensures
+    int-like strings become actual ints throughout nested structures.
+    """
+    result: dict[str, Any] = {}
+    for k, v in values.items():
+        result[k] = _coerce_param_value(v)
+    return result
+
+
+def _coerce_param_value(value: Any) -> Any:
+    """Coerce int-like strings to int; recurse into lists and tuples."""
+    if isinstance(value, str):
+        if _INT_LIKE_STR_RE.match(value.strip()):
+            return int(value)
+        return value
+    if isinstance(value, (list, tuple)):
+        return type(value)(_coerce_param_value(x) for x in value)
+    return value
+
+
 def _format_value_for_source(
     value: Any, param_name: str, param_types: dict[str, str]
 ) -> str:
@@ -285,6 +309,7 @@ class _ParamDesubstitutor(ast.NodeTransformer):
 
         - ``str`` / ``bool`` / ``None`` → ``ast.Constant`` directly
           (check ``bool`` before ``int`` since ``bool`` is a subclass!)
+        - ``list`` / ``tuple`` → recurse to coerce elements, then ``ast.Constant``
         - ``int`` param type → coerced to ``int``
         - ``float`` param type → kept as ``float``
         - Negative numerics → ``UnaryOp(USub, Constant(abs))``
@@ -299,6 +324,10 @@ class _ParamDesubstitutor(ast.NodeTransformer):
                 node = ast.Constant(value=int(value))
                 return ast.copy_location(node, src_node)
             node = ast.Constant(value=value)
+            return ast.copy_location(node, src_node)
+        if isinstance(value, (list, tuple)):
+            coerced = type(value)(_coerce_param_value(x) for x in value)
+            node = ast.Constant(value=coerced)
             return ast.copy_location(node, src_node)
 
         # Numeric: coerce based on declared param type.
@@ -474,6 +503,7 @@ def desubstitute_params(
     so the comment stays on the correct line).
     """
     param_types = param_types or {}
+    values = _coerce_params(values)
     line_offsets = (
         _build_line_offsets(parameterized_code) if add_tuned_comment else None
     )
@@ -799,6 +829,8 @@ class OptunaOptimizationStage(Stage):
         str
             A complete Python script ready for execution.
         """
+        # Coerce int-like strings so range(k) etc. work when k comes from categorical/initial_value
+        params = _coerce_params(params)
         return build_eval_code(
             validator_code=self._validator_code,
             program_code=parameterized_code,
