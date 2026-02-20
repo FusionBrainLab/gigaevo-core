@@ -1,16 +1,21 @@
+"""Test the best evolved prompt on the test dataset."""
+
+import argparse
+
 import pandas as pd
 
 from problems.prompts.client import LLMClient
 from problems.prompts.utils import run_prompts, RedisRunConfig, get_best_program
-from problems.prompts.gsm8k.config import LLM_CONFIG, DATASET_CONFIG
+from problems.prompts.gsm8k.config import LLM_CONFIG, DATASET_CONFIG, load_baseline
 from problems.prompts.gsm8k.validate import extract_answer, calculate_fitness
 
 
-def load_test_context(n_samples: int = 300) -> dict:
+def load_test_context(n_samples: int | None = None) -> dict:
     """Load test dataset context."""
     test_dataset = pd.read_csv(DATASET_CONFIG["test_path"])
 
-    test_dataset = test_dataset[:n_samples]
+    if n_samples is not None and n_samples < len(test_dataset):
+        test_dataset = test_dataset[:n_samples]
 
     return {
         "test_dataset": test_dataset,
@@ -18,11 +23,45 @@ def load_test_context(n_samples: int = 300) -> dict:
     }
 
 
+def test_baseline(n_samples: int = 3):
+    """Quick baseline test: validate and run on a few samples."""
+    prompt_template = load_baseline()
+
+    print(f"Baseline prompt:\n{prompt_template}\n")
+
+    context = load_test_context(n_samples=n_samples)
+    dataset = context["test_dataset"]
+
+    client = LLMClient(**LLM_CONFIG)
+    results = run_prompts(prompt_template, client, context, dataset_key="test_dataset")
+
+    raw_responses = results["predictions"]
+    predictions = [extract_answer(r) for r in raw_responses]
+    targets = dataset[context["target_field"]].tolist()
+
+    print(f"\n=== Baseline Results ({len(dataset)} samples) ===")
+    for i, (pred, target) in enumerate(zip(predictions, targets)):
+        print(f"  Sample {i+1}: pred={pred!r}, target={target!r}")
+
+    accuracy = calculate_fitness(dataset, predictions, context["target_field"])
+    extraction_failures = (
+        sum(1 for p in predictions if p is None) / len(predictions)
+        if predictions
+        else 0.0
+    )
+
+    print(f"\nAccuracy: {accuracy:.4f}")
+    print(f"Extraction failures: {extraction_failures:.4f}")
+
+    return {"accuracy": accuracy, "extraction_failures": extraction_failures}
+
+
 def test_best_prompt(
     redis_db: int,
     redis_prefix: str,
     redis_host: str = "localhost",
     redis_port: int = 6379,
+    n_samples: int | None = None,
 ):
     """Extract best prompt and evaluate on test dataset."""
     config = RedisRunConfig(
@@ -46,7 +85,7 @@ def test_best_prompt(
     exec(best["code"], exec_globals)
     prompt_template = exec_globals["entrypoint"]()
 
-    context = load_test_context()
+    context = load_test_context(n_samples=n_samples)
 
     client = LLMClient(**LLM_CONFIG)
     results = run_prompts(prompt_template, client, context, dataset_key="test_dataset")
@@ -55,10 +94,8 @@ def test_best_prompt(
     predictions = [extract_answer(r) for r in raw_responses]
 
     dataset = context["test_dataset"]
-    target_field = context["target_field"]
 
-    accuracy = calculate_fitness(dataset, predictions, target_field)
-
+    accuracy = calculate_fitness(dataset, predictions, context["target_field"])
     extraction_failures = (
         sum(1 for p in predictions if p is None) / len(predictions)
         if predictions
@@ -69,25 +106,32 @@ def test_best_prompt(
     print(f"Accuracy: {accuracy:.4f}")
     print(f"Extraction failures: {extraction_failures:.4f}")
 
-    return {
-        "accuracy": accuracy,
-        "extraction_failures": extraction_failures,
-    }
+    return {"accuracy": accuracy, "extraction_failures": extraction_failures}
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Test best prompt on test dataset")
-    parser.add_argument("--redis-db", type=int, required=True)
-    parser.add_argument("--redis-prefix", type=str, required=True)
+    parser = argparse.ArgumentParser(description="Test prompt on test dataset")
+    parser.add_argument(
+        "--mode",
+        choices=["baseline", "redis"],
+        default="baseline",
+        help="Test mode: 'baseline' runs baseline on a few samples, "
+        "'redis' tests best evolved prompt from Redis",
+    )
+    parser.add_argument("--n-samples", type=int, default=3)
+    parser.add_argument("--redis-db", type=int, default=0)
+    parser.add_argument("--redis-prefix", type=str, default="")
     parser.add_argument("--redis-host", default="localhost")
     parser.add_argument("--redis-port", type=int, default=6379)
     args = parser.parse_args()
 
-    test_best_prompt(
-        redis_db=args.redis_db,
-        redis_prefix=args.redis_prefix,
-        redis_host=args.redis_host,
-        redis_port=args.redis_port,
-    )
+    if args.mode == "baseline":
+        test_baseline(n_samples=args.n_samples)
+    elif args.mode == "redis":
+        test_best_prompt(
+            redis_db=args.redis_db,
+            redis_prefix=args.redis_prefix,
+            redis_host=args.redis_host,
+            redis_port=args.redis_port,
+            n_samples=args.n_samples,
+        )

@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pandas as pd
 
+_BASE_DIR = Path(__file__).parent
 
 LLM_CONFIG = {
     "model": "Qwen/Qwen3-8B",
@@ -23,8 +26,8 @@ LLM_CONFIG = {
 }
 
 DATASET_CONFIG = {
-    "train_path": "problems/prompts/gsm8k/dataset/GSM8K_train.csv",
-    "test_path": "problems/prompts/gsm8k/dataset/GSM8K_test.csv",
+    "train_path": str(_BASE_DIR / "dataset" / "GSM8K_train.csv"),
+    "test_path": str(_BASE_DIR / "dataset" / "GSM8K_test.csv"),
     "required_placeholders": ["question"],
     "target_field": "answer",
 }
@@ -42,3 +45,11 @@ def load_context(n_samples: int = 300) -> dict:
         "required_placeholders": DATASET_CONFIG["required_placeholders"],
         "target_field": DATASET_CONFIG["target_field"],
     }
+
+
+def load_baseline() -> str:
+    """Load baseline prompt template from initial_programs/baseline.py."""
+    baseline_path = _BASE_DIR / "initial_programs" / "baseline.py"
+    baseline_globals = {}
+    exec(baseline_path.read_text(), baseline_globals)
+    return baseline_globals["entrypoint"]()

@@ -1,63 +1,78 @@
-"""Test the best evolved prompt on the test dataset."""
+"""Test the best evolved chain on the test dataset."""
 
 import argparse
-import random
 
-import pandas as pd
-
-from problems.prompts.client import LLMClient
-from problems.prompts.utils import run_prompts, RedisRunConfig, get_best_program
-from problems.prompts.hotpotqa.config import (
-    LLM_CONFIG,
+from problems.chains.utils import get_best_program
+from problems.chains.chain_validation import validate_chain_spec
+from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.client import LLMClient
+from problems.chains.hotpotqa.config import (
+    STATIC_CHAIN_TOPOLOGY,
     DATASET_CONFIG,
+    LLM_CONFIG,
     load_jsonl,
     load_baseline,
     preprocess_sample,
+    outer_context_builder,
+    CORPUS_PATH,
+    BM25S_INDEX_DIR,
 )
-from problems.prompts.hotpotqa.validate import extract_answer, calculate_fitness
+from problems.chains.hotpotqa.utils.retrieval import make_retrieve_fn
+from problems.chains.hotpotqa.validate import extract_answer, calculate_exact_match
 
 
-def load_test_context(n_samples: int | None = None, seed: int = 42) -> dict:
+def load_test_context(n_samples: int | None = None) -> dict:
     """Load test dataset context."""
     raw_samples = load_jsonl(DATASET_CONFIG["test_path"])
 
     if n_samples is not None and n_samples < len(raw_samples):
         raw_samples = raw_samples[:n_samples]
 
-    rng = random.Random(seed)
-
-    processed = [
-        preprocess_sample(s, k=DATASET_CONFIG["k_passages"], rng=rng)
-        for s in raw_samples
-    ]
+    processed = [preprocess_sample(s) for s in raw_samples]
 
     return {
-        "test_dataset": pd.DataFrame(processed),
+        "test_dataset": processed,
         "target_field": DATASET_CONFIG["target_field"],
+        "bm25s_index_dir": BM25S_INDEX_DIR,
+        "corpus_path": CORPUS_PATH,
     }
 
 
 def test_baseline(n_samples: int = 3):
     """Quick baseline test: validate and run on a few samples."""
-    prompt_template = load_baseline()
+    baseline = load_baseline()
+    chain = validate_chain_spec(
+        baseline,
+        mode="static",
+        topology=STATIC_CHAIN_TOPOLOGY,
+        frozen_baseline=baseline,
+    )
 
-    print(f"Baseline prompt:\n{prompt_template}\n")
+    print(f"Baseline validated: {len(chain.steps)} steps")
+    print(f"System prompt: {chain.system_prompt[:80]}...")
 
     context = load_test_context(n_samples=n_samples)
     dataset = context["test_dataset"]
+    targets = [s[context["target_field"]] for s in dataset]
 
     client = LLMClient(**LLM_CONFIG)
-    results = run_prompts(prompt_template, client, context, dataset_key="test_dataset")
+    tool_registry = {
+        "retrieve": make_retrieve_fn(
+            context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]
+        )
+    }
 
-    raw_responses = results["predictions"]
-    predictions = [extract_answer(r) for r in raw_responses]
-    targets = dataset[context["target_field"]].tolist()
+    results = run_chain_on_dataset(
+        chain, client, dataset, outer_context_builder, tool_registry
+    )
+
+    predictions = [extract_answer(r.final_output) for r in results]
 
     print(f"\n=== Baseline Results ({n_samples} samples) ===")
     for i, (pred, target) in enumerate(zip(predictions, targets)):
         print(f"  Sample {i+1}: pred={pred!r}, target={target!r}")
 
-    exact_match = calculate_fitness(dataset, predictions, context["target_field"])
+    exact_match = calculate_exact_match(targets, predictions)
     extraction_failures = (
         sum(1 for p in predictions if p is None) / len(predictions)
         if predictions
@@ -70,21 +85,22 @@ def test_baseline(n_samples: int = 3):
     return {"exact_match": exact_match, "extraction_failures": extraction_failures}
 
 
-def test_best_prompt(
+def test_best_chain(
     redis_db: int,
     redis_prefix: str,
     redis_host: str = "localhost",
     redis_port: int = 6379,
     n_samples: int | None = None,
 ):
-    """Extract best prompt and evaluate on test dataset."""
+    """Extract best chain and evaluate on test dataset."""
+    from tools.utils import RedisRunConfig
+
     config = RedisRunConfig(
         redis_host=redis_host,
         redis_port=redis_port,
         redis_db=redis_db,
         redis_prefix=redis_prefix,
     )
-
     best = get_best_program(config, fitness_col="metric_fitness", minimize=False)
 
     if best is None:
@@ -97,20 +113,34 @@ def test_best_prompt(
 
     exec_globals = {}
     exec(best["code"], exec_globals)
-    prompt_template = exec_globals["entrypoint"]()
+    chain_spec = exec_globals["entrypoint"]()
 
-    context = load_test_context(n_samples=n_samples)
-
-    client = LLMClient(**LLM_CONFIG)
-    results = run_prompts(prompt_template, client, context, dataset_key="test_dataset")
-
-    raw_responses = results["predictions"]
-    predictions = [extract_answer(r) for r in raw_responses]
-
-    exact_match = calculate_fitness(
-        context["test_dataset"], predictions, context["target_field"]
+    baseline = load_baseline()
+    chain = validate_chain_spec(
+        chain_spec,
+        mode="static",
+        topology=STATIC_CHAIN_TOPOLOGY,
+        frozen_baseline=baseline,
     )
 
+    context = load_test_context(n_samples=n_samples)
+    dataset = context["test_dataset"]
+    targets = [s[context["target_field"]] for s in dataset]
+
+    client = LLMClient(**LLM_CONFIG)
+    tool_registry = {
+        "retrieve": make_retrieve_fn(
+            context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]
+        )
+    }
+
+    results = run_chain_on_dataset(
+        chain, client, dataset, outer_context_builder, tool_registry
+    )
+
+    predictions = [extract_answer(r.final_output) for r in results]
+
+    exact_match = calculate_exact_match(targets, predictions)
     extraction_failures = (
         sum(1 for p in predictions if p is None) / len(predictions)
         if predictions
@@ -125,13 +155,13 @@ def test_best_prompt(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test prompt on test dataset")
+    parser = argparse.ArgumentParser(description="Test chain on test dataset")
     parser.add_argument(
         "--mode",
         choices=["baseline", "redis"],
         default="baseline",
         help="Test mode: 'baseline' runs baseline on a few samples, "
-        "'redis' tests best evolved prompt from Redis",
+        "'redis' tests best evolved chain from Redis",
     )
     parser.add_argument("--n-samples", type=int, default=3)
     parser.add_argument("--redis-db", type=int, default=0)
@@ -143,7 +173,7 @@ if __name__ == "__main__":
     if args.mode == "baseline":
         test_baseline(n_samples=args.n_samples)
     elif args.mode == "redis":
-        test_best_prompt(
+        test_best_chain(
             redis_db=args.redis_db,
             redis_prefix=args.redis_prefix,
             redis_host=args.redis_host,

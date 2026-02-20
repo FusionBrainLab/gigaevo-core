@@ -2,9 +2,11 @@
 
 import json
 import random
+from pathlib import Path
 
 import pandas as pd
 
+_BASE_DIR = Path(__file__).parent
 
 LLM_CONFIG = {
     "model": "Qwen/Qwen3-8B",
@@ -28,8 +30,8 @@ LLM_CONFIG = {
 }
 
 DATASET_CONFIG = {
-    "train_path": "problems/prompts/hotpotqa/dataset/HotpotQA_train.jsonl",
-    "test_path": "problems/prompts/hotpotqa/dataset/HotpotQA_test.jsonl",
+    "train_path": str(_BASE_DIR / "dataset" / "HotpotQA_train.jsonl"),
+    "test_path": str(_BASE_DIR / "dataset" / "HotpotQA_test.jsonl"),
     "required_placeholders": ["question", "passages"],
     "target_field": "answer",
     "k_passages": 7,
@@ -124,3 +126,15 @@ def load_context(n_samples: int = 300, seed: int = 42) -> dict:
         "required_placeholders": DATASET_CONFIG["required_placeholders"],
         "target_field": DATASET_CONFIG["target_field"],
     }
+
+
+def load_baseline() -> str:
+    """Load baseline prompt template from initial_programs/baseline.py.
+
+    Returns:
+        Prompt template string.
+    """
+    baseline_path = _BASE_DIR / "initial_programs" / "baseline.py"
+    baseline_globals = {}
+    exec(baseline_path.read_text(), baseline_globals)
+    return baseline_globals["entrypoint"]()

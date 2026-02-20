@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pandas as pd
 
+_BASE_DIR = Path(__file__).parent
 
 LLM_CONFIG = {
     "model": "Qwen/Qwen3-8B",
@@ -24,7 +27,7 @@ LLM_CONFIG = {
 
 # Dataset configuration
 DATASET_CONFIG = {
-    "path": "problems/prompts/jigsaw_community_rules/dataset/data.csv",
+    "path": str(_BASE_DIR / "dataset" / "data.csv"),
     "required_placeholders": ["body", "rule"],
     "target_field": "rule_violation",
 }

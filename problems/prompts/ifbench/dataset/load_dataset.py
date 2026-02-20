@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from datasets import load_dataset
 import json
 import ast
@@ -9,6 +11,8 @@ from problems.prompts.ifbench.utils.instructions_registry_ifeval import INSTRUCT
 
 MAX_CHARS = 2048 * 4  # Max tokens * chars per token
 SEED = 42
+
+_DIR = Path(__file__).parent
 
 
 def is_ifeval_only(instruction_id_list):
@@ -48,11 +52,11 @@ def main():
 
     sampled_examples = random.sample(all_examples, min(len(ifeval_only_examples), len(all_examples)))
 
-    with open("IFEval_train.jsonl", "w", encoding="utf-8") as f:
+    with open(str(_DIR / "IFEval_train.jsonl"), "w", encoding="utf-8") as f:
         for example in ifeval_only_examples:
             f.write(json.dumps(example, ensure_ascii=False) + "\n")
 
-    with open("IFBench_train.jsonl", "w", encoding="utf-8") as f:
+    with open(str(_DIR / "IFBench_train.jsonl"), "w", encoding="utf-8") as f:
         for example in sampled_examples:
             f.write(json.dumps(example, ensure_ascii=False) + "\n")
 
@@ -61,8 +65,8 @@ def main():
 
     # Download IFBench_test.jsonl from GitHub
     test_url = "https://raw.githubusercontent.com/allenai/IFBench/main/data/IFBench_test.jsonl"
-    urllib.request.urlretrieve(test_url, "IFBench_test.jsonl")
-    with open("IFBench_test.jsonl", "r") as f:
+    urllib.request.urlretrieve(test_url, str(_DIR / "IFBench_test.jsonl"))
+    with open(str(_DIR / "IFBench_test.jsonl"), "r") as f:
         test_count = sum(1 for _ in f)
     print(f"Downloaded: IFBench_test.jsonl ({test_count:,} samples)")
 

@@ -1,7 +1,11 @@
+from pathlib import Path
+
 from datasets import load_dataset
 
 
 SEED = 42
+
+_DIR = Path(__file__).parent
 
 
 def main():
@@ -13,8 +17,8 @@ def main():
     train = pupa_new.shuffle(seed=SEED).select_columns(columns)
     test = pupa_tnb.select_columns(columns)
 
-    train.to_csv("PUPA_train.csv")
-    test.to_csv("PUPA_test.csv")
+    train.to_csv(str(_DIR / "PUPA_train.csv"))
+    test.to_csv(str(_DIR / "PUPA_test.csv"))
 
     print(f"Dataset ready: PUPA_train.csv ({len(train):,} samples), PUPA_test.csv ({len(test):,} samples)")
 

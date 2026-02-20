@@ -1,8 +1,12 @@
+from pathlib import Path
+
 from datasets import load_dataset
 
 
 SEED = 42
 NUM_SAMPLES = 1000
+
+_DIR = Path(__file__).parent
 
 
 def extract_answer(example):
@@ -15,8 +19,8 @@ def main():
     train = data["train"].shuffle(seed=SEED).select(range(NUM_SAMPLES)).map(extract_answer)
     test = data["test"].shuffle(seed=SEED).select(range(NUM_SAMPLES)).map(extract_answer)
 
-    train.to_csv("GSM8K_train.csv")
-    test.to_csv("GSM8K_test.csv")
+    train.to_csv(str(_DIR / "GSM8K_train.csv"))
+    test.to_csv(str(_DIR / "GSM8K_test.csv"))
 
     print(f"Dataset ready: GSM8K_train.csv ({len(train):,} samples), GSM8K_test.csv ({len(test):,} samples)")
 
