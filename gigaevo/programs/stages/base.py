@@ -240,7 +240,7 @@ class Stage:
     async def execute(self, program: "Program") -> ProgramStageResult:
         started_at = datetime.now(timezone.utc)
         t0 = time.monotonic()
-        logger.info(f"[{self.stage_name}] Executing for {program.id[:8]}")
+        logger.info("[{}] Executing for {}", self.stage_name, program.id[:8])
 
         # Compute inputs hash before execution (for cache handler)
         self._current_inputs_hash = self.compute_inputs_hash()

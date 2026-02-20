@@ -1,7 +1,7 @@
 # gigaevo/programs/stages/mutation_context.py
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -63,13 +63,13 @@ class MutationContextStage(Stage):
     OutputModel = StringContainer
     cache_handler = NO_CACHE
 
-    def __init__(self, *, metrics_context: MetricsContext, **kwargs):
+    def __init__(self, *, metrics_context: MetricsContext, **kwargs: Any):
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
         self.metadata_key = MUTATION_CONTEXT_METADATA_KEY
 
     async def compute(self, program: Program) -> StageIO:
-        contexts: list = []
+        contexts: list[CompositeMutationContext] = []
         params: MutationContextInputs = self.params
 
         if params.metrics is not None:

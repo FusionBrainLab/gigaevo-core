@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, List, TypeVar
+from typing import Any, TypeVar
 
 from loguru import logger
 from pydantic import Field
@@ -58,7 +58,7 @@ class RelatedCollectorBase(Stage):
 class ProgramIdsCollector(RelatedCollectorBase):
     OutputModel = StringList
 
-    async def _process(self, program: Program, programs: List[Program]) -> StringList:
+    async def _process(self, program: Program, programs: list[Program]) -> StringList:
         return StringList(items=[p.id for p in programs])
 
 
@@ -75,7 +75,10 @@ class DescendantProgramIds(ProgramIdsCollector):
             await self.storage.mget(program.lineage.children)
         )
         logger.info(
-            f"[DescendantProgramIds] Selected {len(selected)} programs for {program.id} with children {program.lineage.children}"
+            "[DescendantProgramIds] Selected {} programs for {} with children {}",
+            len(selected),
+            program.id,
+            program.lineage.children,
         )
         return selected
 
@@ -93,7 +96,10 @@ class AncestorProgramIds(ProgramIdsCollector):
             await self.storage.mget(program.lineage.parents)
         )
         logger.info(
-            f"[AncestorProgramIds] Selected {len(selected)} programs for {program.id} with parents {program.lineage.parents}"
+            "[AncestorProgramIds] Selected {} programs for {} with parents {}",
+            len(selected),
+            program.id,
+            program.lineage.parents,
         )
         return selected
 

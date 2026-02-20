@@ -161,7 +161,7 @@ class StringifyJSONStage(Stage):
     InputsModel = AnyContainer
     OutputModel = StringContainer
 
-    def __init__(self, *, indent: int | None = None, **kwargs):
+    def __init__(self, *, indent: int | None = None, **kwargs: Any):
         super().__init__(**kwargs)
         self.indent = indent
 

@@ -108,6 +108,9 @@ async def _start_worker_process(
     )
 
 
+_MAX_POOL_WORKERS = 32
+
+
 class WorkerPool:
     """
     Pool of persistent exec_runner subprocesses so multiple executor stages can run in parallel.
@@ -119,7 +122,7 @@ class WorkerPool:
     def __init__(self, max_workers: int | None = None):
         if max_workers is None:
             n = (os.cpu_count() or 4) * 2
-            max_workers = max(1, min(32, n))
+            max_workers = max(1, min(_MAX_POOL_WORKERS, n))
         self.max_workers = max_workers
         self._queue: asyncio.Queue[asyncio.subprocess.Process] = asyncio.Queue()
         self._count = 0

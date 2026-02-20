@@ -117,7 +117,9 @@ class LineagesToDescendants(Stage):
                 if a.from_id == want_parent:
                     out.append(a)
                     logger.info(
-                        f"[LineagesToDescendants] Added transition analysis for {a.from_id} -> {a.to_id}"
+                        "[LineagesToDescendants] Added transition for {} -> {}",
+                        a.from_id,
+                        a.to_id,
                     )
                     break
 
@@ -168,7 +170,9 @@ class LineagesFromAncestors(Stage):
         out = [a for a in analyses if a.to_id == want_child and a.from_id in parent_ids]
         for a in out:
             logger.info(
-                f"[LineagesFromAncestors] Added transition analysis for {a.from_id} -> {a.to_id}"
+                "[LineagesFromAncestors] Added transition for {} -> {}",
+                a.from_id,
+                a.to_id,
             )
 
         return TransitionAnalysisList(items=out)
