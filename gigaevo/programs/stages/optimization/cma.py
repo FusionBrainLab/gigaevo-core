@@ -34,6 +34,7 @@ from gigaevo.programs.stages.optimization.utils import (
     OptimizationInput,
     build_eval_code,
     evaluate_single,
+    make_numeric_const_node,
     read_validator,
 )
 from gigaevo.programs.stages.stage_registry import StageRegistry
@@ -208,13 +209,7 @@ class _ConstantSubstitutor(ast.NodeTransformer):
 
     def _make_const(self, value: float, src_node: ast.AST, *, was_int: bool) -> ast.AST:
         """Return an AST node for *value*, using ``-abs(value)`` when negative."""
-        v = self._coerce(value, was_int)
-        if v < 0:
-            inner = ast.Constant(value=-v)
-            node = ast.UnaryOp(op=ast.USub(), operand=inner)
-        else:
-            node = ast.Constant(value=v)
-        return ast.copy_location(node, src_node)
+        return make_numeric_const_node(value, was_int, src_node)
 
     def visit_UnaryOp(self, node: ast.UnaryOp) -> ast.AST:
         key = (node.lineno, node.col_offset)

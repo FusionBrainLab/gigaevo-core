@@ -9,9 +9,12 @@ Contains common functionality:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
+import math
 from pathlib import Path
+import re
 from typing import Any, Optional, Sequence
 
 from loguru import logger
@@ -23,6 +26,88 @@ from gigaevo.programs.stages.python_executors.wrapper import (
     ExecRunnerError,
     run_exec_runner,
 )
+
+# ---------------------------------------------------------------------------
+# Shared numeric / AST helpers
+# ---------------------------------------------------------------------------
+
+#: Matches a string that looks like an integer (e.g. "5", "-42").
+INT_LIKE_STR_RE = re.compile(r"^-?\d+$")
+
+
+def coerce_int_like_string(value: str) -> str | int:
+    """Coerce a string to ``int`` if it looks like an integer, else return as-is.
+
+    Examples::
+
+        >>> coerce_int_like_string("5")
+        5
+        >>> coerce_int_like_string("hello")
+        'hello'
+    """
+    if INT_LIKE_STR_RE.match(value.strip()):
+        return int(value)
+    return value
+
+
+def format_value_for_source(
+    value: Any,
+    param_name: str,
+    param_types: dict[str, str],
+    precision: int = 6,
+) -> str:
+    """Format *value* as it would appear in Python source (for comment placement).
+
+    Handles ``None``, ``bool``, ``str`` (with int-like coercion),
+    ``int`` parameters, and ``float`` parameters (with precision formatting).
+    """
+    if value is None:
+        return "None"
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, str):
+        if INT_LIKE_STR_RE.match(value.strip()):
+            return repr(int(value))
+        return repr(value)
+    if isinstance(value, (list, tuple)):
+        return repr(value)
+    ptype = param_types.get(param_name, "float")
+    if ptype == "int":
+        v = int(round(value)) if isinstance(value, float) else int(value)
+        return repr(v)
+    v = float(value) if not isinstance(value, float) else value
+    if isinstance(v, float) and v != 0 and math.isfinite(v):
+        v = float(f"{v:.{precision}g}")
+    if v < 0:
+        return f"-{format_value_for_source(-v, param_name, param_types, precision)}"
+    return repr(v)
+
+
+def make_numeric_const_node(
+    value: int | float,
+    is_int: bool,
+    src_node: ast.AST,
+    precision: int = 6,
+) -> ast.AST:
+    """Create an AST Constant (or UnaryOp(USub, Constant)) for a numeric value.
+
+    Handles negative values, int coercion, and float precision formatting.
+    Used by both CMA and Optuna desubstitution.
+    """
+    if is_int:
+        v: int | float = round(value) if isinstance(value, float) else int(value)
+    else:
+        v = float(value) if not isinstance(value, float) else value
+        if v != 0 and math.isfinite(v):
+            v = float(f"{v:.{precision}g}")
+
+    if v < 0:
+        inner = ast.Constant(value=-v)
+        node: ast.AST = ast.UnaryOp(op=ast.USub(), operand=inner)
+    else:
+        node = ast.Constant(value=v)
+    return ast.copy_location(node, src_node)
+
 
 # ---------------------------------------------------------------------------
 # Shared stage input model
