@@ -99,6 +99,21 @@ class FitnessProportionalEliteSelector(EliteSelector):
             if not remaining_programs:
                 break
 
+            total_weight = sum(remaining_fitnesses)
+            if total_weight == 0:
+                logger.warning(
+                    "FitnessProportionalEliteSelector: all remaining weights are zero; "
+                    "falling back to uniform sampling for the rest "
+                    "(remaining={}, already_selected={}, requested_total={})",
+                    len(remaining_programs),
+                    len(selected),
+                    total,
+                )
+                selected.extend(
+                    random.sample(remaining_programs, total - len(selected))
+                )
+                break
+
             # Select one program based on fitness weights
             chosen = random.choices(
                 remaining_programs, weights=remaining_fitnesses, k=1
