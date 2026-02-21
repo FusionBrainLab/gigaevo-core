@@ -41,7 +41,7 @@ class MetricsTracker:
       - Runs as a task on the engine's event loop.
       - Polls every `interval` seconds.
       - Processes each program exactly once (by id).
-      - Skips running DAGs (FRESH / DAG_PROCESSING_STARTED) or without metrics/validity.
+      - Skips running DAGs (QUEUED / RUNNING) or without metrics/validity.
       - Writes:
           * "is_valid" (for all)
           * per-program metrics for valid programs: "valid/program/<metric>"

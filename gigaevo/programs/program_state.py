@@ -2,21 +2,19 @@ from enum import Enum
 
 
 class ProgramState(str, Enum):
-    FRESH = "fresh"
-    DAG_PROCESSING_STARTED = "dag_processing_started"
-    DAG_PROCESSING_COMPLETED = "dag_processing_completed"
-    EVOLVING = "evolving"
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
     DISCARDED = "discarded"
 
 
 INCOMPLETE_STATES = {
-    ProgramState.FRESH,
-    ProgramState.DAG_PROCESSING_STARTED,
+    ProgramState.QUEUED,
+    ProgramState.RUNNING,
 }
 
 COMPLETE_STATES = {
-    ProgramState.DAG_PROCESSING_COMPLETED,
-    ProgramState.EVOLVING,
+    ProgramState.DONE,
 }
 
 TERMINAL_STATES = {
@@ -24,25 +22,20 @@ TERMINAL_STATES = {
 }
 
 STATES_WITH_METRICS = {
-    ProgramState.DAG_PROCESSING_COMPLETED,
-    ProgramState.EVOLVING,
+    ProgramState.DONE,
 }
 
 VALID_TRANSITIONS: dict[ProgramState, set[ProgramState]] = {
-    ProgramState.FRESH: {
-        ProgramState.DAG_PROCESSING_STARTED,
+    ProgramState.QUEUED: {
+        ProgramState.RUNNING,
         ProgramState.DISCARDED,
     },
-    ProgramState.DAG_PROCESSING_STARTED: {
-        ProgramState.DAG_PROCESSING_COMPLETED,
+    ProgramState.RUNNING: {
+        ProgramState.DONE,
         ProgramState.DISCARDED,
     },
-    ProgramState.DAG_PROCESSING_COMPLETED: {
-        ProgramState.EVOLVING,
-        ProgramState.DISCARDED,
-    },
-    ProgramState.EVOLVING: {
-        ProgramState.FRESH,
+    ProgramState.DONE: {
+        ProgramState.QUEUED,
         ProgramState.DISCARDED,
     },
     ProgramState.DISCARDED: set(),

@@ -29,7 +29,7 @@ class EvolutionEngine:
       2) Select elites & create mutants
       3) Wait for mutants' DAGs to finish (idle again)
       4) Ingest completed mutants
-      5) Refresh all evolving programs (EVOLVING -> FRESH)
+      5) Refresh all archive programs (DONE -> QUEUED)
       6) Wait for refresh DAGs to finish (idle)
     All state writes go through ProgramStateManager; storage is read-oriented here.
     """
@@ -158,7 +158,7 @@ class EvolutionEngine:
                     # Don’t crash the engine on a single bad step; just log and continue.
                     logger.exception("[EvolutionEngine] step() failed: {}", e)
 
-                await asyncio.sleep(self.config.loop_interval)
+                await asyncio.sleep(0)
         except asyncio.CancelledError:
             # Task is being cancelled during shutdown.
             logger.debug("[EvolutionEngine] run() cancelled")
@@ -169,7 +169,7 @@ class EvolutionEngine:
 
     async def step(self) -> None:
         """One generation step (idle → mutate → idle → ingest → refresh → idle)."""
-        # Phase 1: wait until engine is idle (no FRESH/PROCESSING programs)
+        # Phase 1: wait until engine is idle (no QUEUED/RUNNING programs)
         await self._await_idle()
         logger.debug("[EvolutionEngine] Phase 1: Idle confirmed")
 
@@ -186,8 +186,8 @@ class EvolutionEngine:
         await self._ingest_completed_programs()
         logger.debug("[EvolutionEngine] Phase 4: Ingestion done")
 
-        # Phase 5: refresh all evolving programs (to re-run lineage/descendant-aware stages)
-        refreshed = await self._refresh_evolving_programs()
+        # Phase 5: refresh all archive programs (to re-run lineage/descendant-aware stages)
+        refreshed = await self._refresh_archive_programs()
         logger.debug("[EvolutionEngine] Phase 5: Refreshed {} program(s)", refreshed)
 
         # Phase 6: wait for refresh DAGs to finish
@@ -198,7 +198,7 @@ class EvolutionEngine:
         self.metrics.total_generations += 1
 
     async def _await_idle(self) -> None:
-        """Block until there are no programs in FRESH or DAG_PROCESSING_STARTED."""
+        """Block until there are no programs in QUEUED or RUNNING."""
         while await self._has_active_dags():
             await asyncio.sleep(self.config.loop_interval)
 
@@ -226,12 +226,11 @@ class EvolutionEngine:
 
     async def _ingest_completed_programs(self) -> None:
         """
-        Validate and hand over any DAG_PROCESSING_COMPLETED programs to the strategy.
-        Restores already-known programs to EVOLVING; adds new ones if accepted; otherwise discards.
+        Validate and hand over any DONE programs to the strategy.
+        Programs already in the archive stay DONE (they arrived from a refresh DAG).
+        New programs are added if accepted, otherwise discarded.
         """
-        completed = await self.storage.get_all_by_status(
-            ProgramState.DAG_PROCESSING_COMPLETED.value
-        )
+        completed = await self.storage.get_all_by_status(ProgramState.DONE.value)
         if not completed:
             logger.debug("[EvolutionEngine] No completed programs to ingest")
             return
@@ -239,24 +238,20 @@ class EvolutionEngine:
         logger.info("[EvolutionEngine] Ingest {} program(s)", len(completed))
         logger.debug(
             "[EvolutionEngine] Program IDs: {}",
-            [p.id for p in completed[:8]] + (["..."] if len(completed) > 10 else []),
+            [p.id for p in completed[:8]] + (["..."] if len(completed) > 8 else []),
         )
 
         added = 0
-        restored = 0
         rej_valid = 0
         rej_strategy = 0
 
         state_tasks: list[asyncio.Task] = []
-        evolving_program_ids = set(await self.strategy.get_program_ids())
+        archive_program_ids = set(await self.strategy.get_program_ids())
 
         for prog in completed:
-            if prog.id in evolving_program_ids:
-                # for evolving programs, we just restore them to the evolving state
-                restored += 1
-                state_tasks.append(
-                    asyncio.create_task(self._set_state(prog, ProgramState.EVOLVING))
-                )
+            if prog.id in archive_program_ids:
+                # already in archive (arrived from a refresh DAG) — stays DONE
+                continue
             elif not self.config.program_acceptor.is_accepted(prog):
                 # rejected by basic checks
                 rej_valid += 1
@@ -268,14 +263,11 @@ class EvolutionEngine:
                     asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
                 )
             elif await self.strategy.add(prog):
-                # accepted by strategy (i.e, routed to an island)
+                # accepted by strategy — stays DONE until next refresh
                 added += 1
                 logger.debug(
                     "[EvolutionEngine] Program {} added to strategy",
                     prog.id,
-                )
-                state_tasks.append(
-                    asyncio.create_task(self._set_state(prog, ProgramState.EVOLVING))
                 )
             else:
                 # rejected by strategy / validation
@@ -292,17 +284,16 @@ class EvolutionEngine:
             await asyncio.gather(*state_tasks, return_exceptions=True)
 
         self.metrics.programs_processed += added
-        self.metrics.record_ingestion_metrics(added, restored, rej_valid, rej_strategy)
+        self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
         logger.info(
-            "[EvolutionEngine] Ingest done | added={}, restored={}, rejected_validation={}, rejected_strategy={}",
+            "[EvolutionEngine] Ingest done | added={}, rejected_validation={}, rejected_strategy={}",
             added,
-            restored,
             rej_valid,
             rej_strategy,
         )
 
-    async def _refresh_evolving_programs(self) -> int:
-        """Flip all EVOLVING programs to FRESH so lineage/descendant-aware stages re-run."""
+    async def _refresh_archive_programs(self) -> int:
+        """Flip all archive programs from DONE to QUEUED so lineage/descendant-aware stages re-run."""
         program_ids_to_refresh = await self.strategy.get_program_ids()
 
         if not program_ids_to_refresh:
@@ -312,9 +303,10 @@ class EvolutionEngine:
 
         tasks: list[asyncio.Task] = []
         for program in programs_to_refresh:
-            tasks.append(
-                asyncio.create_task(self._set_state(program, ProgramState.FRESH))
-            )
+            if program.state == ProgramState.DONE:
+                tasks.append(
+                    asyncio.create_task(self._set_state(program, ProgramState.QUEUED))
+                )
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -326,19 +318,19 @@ class EvolutionEngine:
         return count
 
     async def _has_active_dags(self) -> bool:
-        """True if any programs are FRESH or DAG_PROCESSING_STARTED (i.e., engine not idle)."""
-        fresh = await self.storage.count_by_status(ProgramState.FRESH.value)
-        proc = await self.storage.count_by_status(
-            ProgramState.DAG_PROCESSING_STARTED.value
+        """True if any programs are QUEUED or RUNNING (i.e., engine not idle)."""
+        queued, running = await asyncio.gather(
+            self.storage.count_by_status(ProgramState.QUEUED.value),
+            self.storage.count_by_status(ProgramState.RUNNING.value),
         )
 
-        if fresh or proc:
-            current_counts = (fresh, proc)
+        if queued or running:
+            current_counts = (queued, running)
             if self._last_pending_dags_counts != current_counts:
                 logger.debug(
-                    "[EvolutionEngine] Pending DAGs: fresh={}, processing={}",
-                    fresh,
-                    proc,
+                    "[EvolutionEngine] Pending DAGs: queued={}, running={}",
+                    queued,
+                    running,
                 )
                 self._last_pending_dags_counts = current_counts
             return True

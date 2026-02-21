@@ -76,7 +76,7 @@ class Program(BaseModel):
     )
 
     state: ProgramState = Field(
-        default=ProgramState.FRESH, description="Lifecycle state."
+        default=ProgramState.QUEUED, description="Lifecycle state."
     )
     lineage: Lineage = Field(
         default_factory=Lineage, description="Evolutionary lineage."

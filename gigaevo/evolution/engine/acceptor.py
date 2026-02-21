@@ -50,10 +50,10 @@ class StateAcceptor(ProgramEvolutionAcceptor):
             )
             return False
 
-        if program.state != ProgramState.DAG_PROCESSING_COMPLETED:
+        if program.state != ProgramState.DONE:
             logger.debug(
                 f"[StateAcceptor] Program {program.id} rejected: "
-                f"not completed (state: {program.state}, expected: {ProgramState.DAG_PROCESSING_COMPLETED})"
+                f"not completed (state: {program.state}, expected: {ProgramState.DONE})"
             )
             return False
         return True

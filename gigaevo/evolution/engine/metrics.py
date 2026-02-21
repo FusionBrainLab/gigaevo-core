@@ -19,7 +19,6 @@ class EngineMetrics(BaseModel):
         default=0, description="Total number of errors encountered"
     )
     added: int = Field(default=0, description="Total programs added to evolution")
-    restored: int = Field(default=0, description="Total programs restored to evolution")
     rejected_validation: int = Field(
         default=0, description="Total programs rejected by validation"
     )
@@ -42,13 +41,11 @@ class EngineMetrics(BaseModel):
     def record_ingestion_metrics(
         self,
         added: int,
-        restored: int,
         rejected_validation: int,
         rejected_strategy: int,
     ) -> None:
         """Record metrics from program ingestion."""
         self.added += added
-        self.restored += restored
         self.rejected_validation += rejected_validation
         self.rejected_strategy += rejected_strategy
 
