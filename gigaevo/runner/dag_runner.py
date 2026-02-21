@@ -148,6 +148,7 @@ class DagRunner:
 
         self._task: asyncio.Task | None = None
         self._stopping = False
+        self._last_gc_time: float = 0.0
 
         # async metrics collector task (no threads)
         self._metrics_collector_task: asyncio.Task | None = None
@@ -277,48 +278,71 @@ class DagRunner:
                 del info
 
         if finished or timed_out:
-            gc.collect()
-            try:
-                ctypes.CDLL("libc.so.6").malloc_trim(0)
-            except Exception:
-                pass
+            now = time.monotonic()
+            if now - self._last_gc_time > 30.0:
+                gc.collect()
+                try:
+                    ctypes.CDLL("libc.so.6").malloc_trim(0)
+                except Exception:
+                    pass
+                self._last_gc_time = now
 
             logger.debug(
-                "[DagScheduler] Cleaned up {} finished + {} timed out tasks, forced GC",
+                "[DagScheduler] Cleaned up {} finished + {} timed out tasks",
                 len(finished),
                 len(timed_out),
             )
 
     async def _launch(self) -> None:
+        # Phase 1: fetch IDs only (2 x SMEMBERS, no MGET)
         try:
-            fresh = await self._storage.get_all_by_status(ProgramState.FRESH.value)
-            processing = await self._storage.get_all_by_status(
-                ProgramState.DAG_PROCESSING_STARTED.value
+            queued_ids, running_ids = await asyncio.gather(
+                self._storage.get_ids_by_status(ProgramState.QUEUED.value),
+                self._storage.get_ids_by_status(ProgramState.RUNNING.value),
             )
         except Exception as e:
             logger.error("[DagScheduler] fetch-by-status failed: {}", e)
             return
 
-        # clean up orphaned PROCESSING programs (no task tracked)
-        for p in processing:
-            if p.id not in self._active:
-                try:
-                    await self._state_manager.set_program_state(
-                        p, ProgramState.DISCARDED
-                    )
-                    self._metrics.record_orphaned()
-                    logger.warning("[DagScheduler] orphaned program {} discarded", p.id)
-                except Exception as se:
-                    logger.error(
-                        "[DagScheduler] orphan discard failed for {}: {}", p.id, se
-                    )
+        # Phase 2: handle orphaned RUNNING programs (fetch full data only for these)
+        orphaned_ids = [pid for pid in running_ids if pid not in self._active]
+        if orphaned_ids:
+            try:
+                orphaned = await self._storage.mget(orphaned_ids)
+                for p in [p for p in orphaned if p is not None]:
+                    try:
+                        await self._state_manager.set_program_state(
+                            p, ProgramState.DISCARDED
+                        )
+                        self._metrics.record_orphaned()
+                        logger.warning(
+                            "[DagScheduler] orphaned program {} discarded", p.id
+                        )
+                    except Exception as se:
+                        logger.error(
+                            "[DagScheduler] orphan discard failed for {}: {}", p.id, se
+                        )
+            except Exception as e:
+                logger.error("[DagScheduler] orphan fetch failed: {}", e)
 
+        # Phase 3: launch fresh programs up to capacity (fetch only what we need)
         capacity = self._config.max_concurrent_dags - len(self._active)
         if capacity <= 0:
             return
 
-        # start DAGs for fresh programs up to capacity
-        for program in fresh:
+        to_launch_ids = [pid for pid in queued_ids if pid not in self._active][
+            :capacity
+        ]
+        if not to_launch_ids:
+            return
+
+        try:
+            fresh = await self._storage.mget(to_launch_ids)
+        except Exception as e:
+            logger.error("[DagScheduler] mget for launch failed: {}", e)
+            return
+
+        for program in [p for p in fresh if p is not None]:
             if capacity <= 0:
                 break
             if program.id in self._active:
@@ -357,7 +381,7 @@ class DagRunner:
 
             try:
                 await self._state_manager.set_program_state(
-                    program, ProgramState.DAG_PROCESSING_STARTED
+                    program, ProgramState.RUNNING
                 )
                 self._metrics.increment_dag_runs_started()
                 logger.info("[DagScheduler] launched {}", program.id)
@@ -384,9 +408,7 @@ class DagRunner:
             dag._stage_sema = None
 
         try:
-            new_state = (
-                ProgramState.DAG_PROCESSING_COMPLETED if ok else ProgramState.DISCARDED
-            )
+            new_state = ProgramState.DONE if ok else ProgramState.DISCARDED
             await self._state_manager.set_program_state(program, new_state)
 
             # Log completion immediately when state is updated

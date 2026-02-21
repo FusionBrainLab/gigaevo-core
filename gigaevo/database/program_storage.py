@@ -16,6 +16,14 @@ class ProgramStorage(ABC):
     @abstractmethod
     async def update(self, program: Program) -> None: ...
 
+    async def write_exclusive(self, program: Program) -> None:
+        """Fast write without WATCH/MERGE. Default falls back to update().
+
+        Safe only in exclusive-ownership contexts (during DAG execution).
+        Implementations may override with a 2 RT path (INCR + SET).
+        """
+        await self.update(program)
+
     @abstractmethod
     async def get(self, program_id: str) -> Program | None: ...
 
@@ -38,6 +46,11 @@ class ProgramStorage(ABC):
 
     @abstractmethod
     async def get_all_by_status(self, status: str) -> list[Program]: ...
+
+    @abstractmethod
+    async def get_ids_by_status(self, status: str) -> list[str]:
+        """Return IDs of programs with the given status (no full fetch)."""
+        ...
 
     @abstractmethod
     async def count_by_status(self, status: str) -> int:

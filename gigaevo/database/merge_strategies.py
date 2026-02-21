@@ -71,7 +71,7 @@ def merge_programs(current: Program | None, incoming: Program) -> Program:
       - name                          -> keep current; fill name if current is None
     """
     if current is None:
-        return incoming.model_copy(deep=True)
+        return incoming.model_copy(deep=False)
 
     if current.id != incoming.id:
         raise ValueError(f"id mismatch: current={current.id} incoming={incoming.id}")
@@ -120,7 +120,7 @@ def merge_programs(current: Program | None, incoming: Program) -> Program:
     # Will be updated by storage
     updates["atomic_counter"] = current.atomic_counter
 
-    return current.model_copy(update=updates, deep=True)
+    return current.model_copy(update=updates, deep=False)
 
 
 def resolve_merge_strategy(strategy: str):

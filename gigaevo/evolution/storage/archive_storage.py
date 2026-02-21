@@ -41,6 +41,11 @@ class ArchiveStorage(ABC):
     async def remove_elite_by_id(self, program_id: str) -> bool: ...
 
     @abstractmethod
+    async def bulk_remove_elites_by_id(self, program_ids: list[str]) -> int:
+        """Remove multiple elites atomically. Returns number actually removed."""
+        ...
+
+    @abstractmethod
     async def clear_all_elites(self) -> int: ...
 
     # Returns number of cells cleared.
@@ -214,6 +219,35 @@ class RedisArchiveStorage(ArchiveStorage):
         if removed:
             logger.debug("[Archive] removed id {}", program_id)
         return bool(removed)
+
+    async def bulk_remove_elites_by_id(self, program_ids: list[str]) -> int:
+        """Remove multiple elites using two Redis pipelines. Returns number actually removed."""
+        if not program_ids:
+            return 0
+
+        async def _op(r):
+            # Pipeline 1: HGET all reverse-index lookups
+            pipe = r.pipeline(transaction=False)
+            for pid in program_ids:
+                pipe.hget(self._reverse_key, pid)
+            cells = await pipe.execute()
+
+            # Pipeline 2: HDEL both keys for each found entry
+            pipe2 = r.pipeline(transaction=False)
+            removed = 0
+            for pid, cell in zip(program_ids, cells):
+                if cell:
+                    pipe2.hdel(self._hash_key, cell)
+                    pipe2.hdel(self._reverse_key, pid)
+                    removed += 1
+            if removed:
+                await pipe2.execute()
+            return removed
+
+        count = await self._storage.with_redis("archive:bulk_remove_elites_by_id", _op)
+        if count:
+            logger.debug("[Archive] bulk removed {} ids", count)
+        return int(count)
 
     async def clear_all_elites(self) -> int:
         """Clear all elites and reverse index."""

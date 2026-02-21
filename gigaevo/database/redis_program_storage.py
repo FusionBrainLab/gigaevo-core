@@ -135,12 +135,11 @@ class RedisProgramStorage(ProgramStorage):
                     old_status = existing.state.value
 
             counter = await r.incr(self._keys.timestamp())
-            new_program = program.model_copy(
-                update={"atomic_counter": counter}, deep=True
-            )
+            data = program.to_dict()
+            data["atomic_counter"] = int(counter)
 
             pipe = r.pipeline(transaction=False)
-            pipe.set(key, _dumps(new_program.to_dict()))
+            pipe.set(key, _dumps(data))
 
             # Clean up old status set if different
             if old_status and old_status != new_status:
@@ -169,6 +168,7 @@ class RedisProgramStorage(ProgramStorage):
 
         async def _update(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
+            retries = 0
             while True:
                 try:
                     async with r.pipeline(transaction=True) as pipe:
@@ -180,17 +180,38 @@ class RedisProgramStorage(ProgramStorage):
                             else None
                         )
                         counter = await r.incr(self._keys.timestamp())
-                        merged = self._merge(existing, program).model_copy(
-                            update={"atomic_counter": int(counter)}
-                        )
+                        merged = self._merge(existing, program)
+                        data = merged.to_dict()
+                        data["atomic_counter"] = int(counter)
                         pipe.multi()
-                        pipe.set(key, _dumps(merged.to_dict()))
+                        pipe.set(key, _dumps(data))
                         await pipe.execute()
                         break
                 except WatchError:
+                    retries += 1
+                    if retries > 1:
+                        await asyncio.sleep(min(0.001 * (2 ** (retries - 2)), 0.032))
                     continue
 
         await self._conn.execute("update", _update)
+
+    async def write_exclusive(self, program: Program) -> None:
+        """Fast write: 2 RT (INCR + SET) instead of 4 RT (WATCH + GET + INCR + MULTI/SET/EXEC).
+
+        Safe only when the caller holds exclusive ownership of this program
+        (i.e., during DAG execution where asyncio.Lock + RedisInstanceLock
+        prevent concurrent writes).
+        """
+        self._check_write_allowed("write_exclusive")
+
+        async def _write(r: aioredis.Redis) -> None:
+            key = self._keys.program(program.id)
+            counter = await r.incr(self._keys.timestamp())
+            data = program.to_dict()
+            data["atomic_counter"] = int(counter)
+            await r.set(key, _dumps(data))
+
+        await self._conn.execute("write_exclusive", _write)
 
     async def remove(self, program_id: str) -> None:
         """Remove a program and clean up its status set entry."""
@@ -337,6 +358,10 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("count_by_status", _count)
 
+    async def get_ids_by_status(self, status: str) -> list[str]:
+        """Return IDs of programs with the given status (no full fetch)."""
+        return await self._ids_for_status(status)
+
     async def _ids_for_status(self, status: str) -> list[str]:
         async def _members(r: aioredis.Redis) -> list[str]:
             return list(await r.smembers(self._keys.status_set(status)))
@@ -350,6 +375,7 @@ class RedisProgramStorage(ProgramStorage):
 
         async def _atomic(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
+            retries = 0
 
             while True:
                 try:
@@ -364,17 +390,13 @@ class RedisProgramStorage(ProgramStorage):
                         )
 
                         counter = await r.incr(self._keys.timestamp())
-                        updated = program.model_copy(
-                            update={"atomic_counter": int(counter)}, deep=True
-                        )
 
-                        if existing:
-                            updated = self._merge(existing, updated).model_copy(
-                                update={"atomic_counter": int(counter)}, deep=False
-                            )
+                        base = self._merge(existing, program) if existing else program
+                        data = base.to_dict()
+                        data["atomic_counter"] = int(counter)
 
                         pipe.multi()
-                        pipe.set(key, _dumps(updated.to_dict()))
+                        pipe.set(key, _dumps(data))
 
                         if old_state:
                             pipe.srem(self._keys.status_set(old_state), program.id)
@@ -395,9 +417,13 @@ class RedisProgramStorage(ProgramStorage):
                         break
 
                 except WatchError:
+                    retries += 1
+                    if retries > 1:
+                        await asyncio.sleep(min(0.001 * (2 ** (retries - 2)), 0.032))
                     logger.debug(
-                        "[RedisProgramStorage] Concurrent modification for {}, retrying",
+                        "[RedisProgramStorage] Concurrent modification for {}, retrying (attempt {})",
                         program.id,
+                        retries,
                     )
                     continue
 

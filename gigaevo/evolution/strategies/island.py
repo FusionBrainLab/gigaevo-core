@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Union
 
 from loguru import logger
@@ -219,7 +220,7 @@ class MapElitesIsland:
 
     async def __len__(self) -> int:
         """Number of elites in this island."""
-        return len(await self.get_elite_ids())
+        return await self.archive_storage._hlen()
 
     async def _enforce_size_limit(self) -> None:
         """If `max_size` is set, remove excess programs using the configured remover."""
@@ -264,14 +265,20 @@ class MapElitesIsland:
             [p.id for p in to_remove[:5]] + (["..."] if len(to_remove) > 5 else []),
         )
 
-        removed = 0
-        for prog in to_remove:
-            await self.archive_storage.remove_elite_by_id(prog.id)
+        # Batch-remove from archive (2 Redis pipelines regardless of count)
+        await self.archive_storage.bulk_remove_elites_by_id([p.id for p in to_remove])
+
+        # Per-program state work — run in parallel (each targets a different program/lock)
+        async def _discard_one(prog: Program) -> None:
             if prog.metadata.get(METADATA_KEY_CURRENT_ISLAND):
                 prog.metadata[METADATA_KEY_CURRENT_ISLAND] = None
                 await self.state_manager.update_program(prog)
             await self.state_manager.set_program_state(prog, ProgramState.DISCARDED)
-            removed += 1
+
+        await asyncio.gather(
+            *[_discard_one(p) for p in to_remove], return_exceptions=True
+        )
+        removed = len(to_remove)
 
         final_count = await self.__len__()
         logger.info(
