@@ -93,11 +93,12 @@ class DAG:
                 name, ProgramStageResult(status=StageState.PENDING)
             )
 
-        # Persist initial state (PENDING stages) for monitoring/crash recovery
-        # Note: Further snapshots are NOT needed because update_stage_result()
+        # Persist initial state (PENDING stages) for monitoring/crash recovery.
+        # Uses write_exclusive (2 RT) — the DAG holds exclusive ownership here.
+        # Further snapshots are NOT needed because update_stage_result()
         # persists the ENTIRE program object after each stage completes,
         # including any changes to metrics, metadata, etc.
-        await self.state_manager.update_program(program)
+        await self.state_manager.write_exclusive(program)
 
         running: set[str] = set()
         launched_this_run: set[str] = set()
@@ -119,10 +120,18 @@ class DAG:
             for stage_name in to_skip:
                 res = program.stage_results.get(stage_name)
 
-                # don't re-skip RUNNING or FINAL; allow overwrite if None or PENDING
-                if res is not None and res.status not in (StageState.PENDING,):
+                # Don't re-skip stages already finalized *in this run* — their
+                # result is authoritative. However, a non-PENDING status from a
+                # *previous* run (not in finished_this_run) is stale and must be
+                # overwritten: the mandatory dep failed this run, so the cached
+                # COMPLETED result can no longer be used.
+                if (
+                    res is not None
+                    and res.status not in (StageState.PENDING,)
+                    and stage_name in finished_this_run
+                ):
                     logger.debug(
-                        "[DAG][{}] '{}' already finalized/running as {}; not re-skipping",
+                        "[DAG][{}] '{}' already finalized this run as {}; not re-skipping",
                         pid,
                         stage_name,
                         res.status.name,
@@ -151,8 +160,8 @@ class DAG:
                 logger.error(msg)
                 raise RuntimeError(msg)
 
-            # 2) Ready set
-            ready, newly_cached = self.automata.get_ready_stages(
+            # 2) Ready set (with pre-computed inputs to avoid double traversal)
+            ready_with_inputs, newly_cached = self.automata.get_ready_stages(
                 program, running, launched_this_run, finished_this_run
             )
             finished_this_run.update(newly_cached)
@@ -168,6 +177,7 @@ class DAG:
             #   Ready   = can start now (deps met, not yet launched)
             #   Blocked = deps not yet met (waiting on others)
             #   Done    = completed this run (finished, skipped, or cached)
+            ready = set(ready_with_inputs.keys())
             all_stages = set(self.automata.topology.nodes.keys())
             blocked = all_stages - running - ready - finished_this_run
             tuple_to_hash = (
@@ -187,8 +197,8 @@ class DAG:
                     sorted(finished_this_run),
                 )
 
-            # 3) Launch ready
-            new_tasks_map = await self._launch_ready(program, ready)
+            # 3) Launch ready (pass pre-computed inputs)
+            new_tasks_map = await self._launch_ready(program, ready_with_inputs)
             if new_tasks_map:
                 running.update(new_tasks_map.keys())
                 launched_this_run.update(new_tasks_map.keys())
@@ -289,25 +299,26 @@ class DAG:
                 await asyncio.sleep(0.005)
 
     async def _launch_ready(
-        self, program: Program, ready: set[str]
+        self, program: Program, ready_with_inputs: dict[str, dict]
     ) -> dict[str, asyncio.Task]:
         pid = self._pid(program)
         tasks: dict[str, asyncio.Task] = {}
-        if not ready:
+        if not ready_with_inputs:
             return tasks
 
         now_ts = datetime.now(timezone.utc)
-        for name in sorted(list(ready)):
+        for name in sorted(ready_with_inputs.keys()):
             await self.state_manager.mark_stage_running(
                 program, name, started_at=now_ts
             )
             logger.info("[DAG][{}] Stage '{}' STARTED.", pid, name)
 
-            async def _run_stage(stage_name=name):
+            async def _run_stage(
+                stage_name=name, precomputed_inputs=ready_with_inputs[name]
+            ):
                 async with self._stage_sema:
-                    named_inputs = self.automata.build_named_inputs(program, stage_name)
                     stage: Stage = self.automata.topology.nodes[stage_name]
-                    stage.attach_inputs(named_inputs)
+                    stage.attach_inputs(precomputed_inputs)
                     return await stage.execute(program)
 
             tasks[name] = asyncio.create_task(_run_stage(), name=f"stage-{name[:16]}")
@@ -345,7 +356,7 @@ class DAG:
         started_at = program.stage_results[stage_name].started_at or now
 
         result: ProgramStageResult
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
             if isinstance(outcome, CancelledError):
                 result = ProgramStageResult(
                     status=StageState.CANCELLED,

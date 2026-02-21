@@ -93,6 +93,9 @@ class DAGTopology:
     incoming_by_dest: Dict[str, List[DataFlowEdge]]
     preds_by_dest: Dict[str, List[str]]
     exec_rules: Dict[str, StageTransitionRule]
+    incoming_by_input: Dict[str, Dict[str, List[DataFlowEdge]]]
+    sorted_required_names: Dict[str, List[str]]
+    sorted_optional_names: Dict[str, List[str]]
 
     def declared_inputs(self, stage_name: str) -> Tuple[Set[str], Set[str]]:
         st = self.nodes[stage_name].__class__
@@ -334,6 +337,21 @@ class DAGAutomata(BaseModel):
             for dst, edges in incoming_by_dest.items()
         }
 
+        incoming_by_input: dict[str, dict[str, list[DataFlowEdge]]] = {}
+        for dest, edges in incoming_by_dest.items():
+            by_inp: dict[str, list[DataFlowEdge]] = {}
+            for e in edges:
+                by_inp.setdefault(e.input_name, []).append(e)
+            incoming_by_input[dest] = by_inp
+
+        # Pre-sort required/optional input names per stage (static, class-level)
+        sorted_required_names: dict[str, list[str]] = {}
+        sorted_optional_names: dict[str, list[str]] = {}
+        for stage_name, stage in nodes.items():
+            st_cls = type(stage)
+            sorted_required_names[stage_name] = sorted(st_cls._required_names)
+            sorted_optional_names[stage_name] = sorted(st_cls._optional_names)
+
         # Build the automata with validated topology
         automata = cls(transition_rules=rules)
         automata.topology = DAGTopology(
@@ -342,6 +360,9 @@ class DAGAutomata(BaseModel):
             incoming_by_dest=incoming_by_dest,
             preds_by_dest=preds_by_dest,
             exec_rules=rules,
+            incoming_by_input=incoming_by_input,
+            sorted_required_names=sorted_required_names,
+            sorted_optional_names=sorted_optional_names,
         )
         return automata
 
@@ -363,11 +384,7 @@ class DAGAutomata(BaseModel):
 
     def _edges_by_input(self, stage_name: str) -> dict[str, list[DataFlowEdge]]:
         assert self.topology is not None
-        edges = self.topology.get_incoming_edges(stage_name)
-        by_input: dict[str, list[DataFlowEdge]] = {}
-        for e in edges:
-            by_input.setdefault(e.input_name, []).append(e)
-        return by_input
+        return self.topology.incoming_by_input.get(stage_name, {})
 
     def _check_dependency_gate(
         self,
@@ -414,12 +431,11 @@ class DAGAutomata(BaseModel):
         assert self.topology is not None
         reasons: list[str] = []
         edges_by_input = self._edges_by_input(stage_name)
-        st_cls = self.topology.get_stage_class(stage_name)
-        mandatory = set(st_cls._required_names)
-        optional = set(st_cls._optional_names)
+        required_sorted = self.topology.sorted_required_names.get(stage_name, [])
+        optional_sorted = self.topology.sorted_optional_names.get(stage_name, [])
 
         # Mandatory inputs
-        for inp in sorted(mandatory):
+        for inp in required_sorted:
             edges = edges_by_input.get(inp, [])
             if not edges:
                 return (
@@ -449,7 +465,7 @@ class DAGAutomata(BaseModel):
             )
 
         # Optional inputs
-        for inp in sorted(optional):
+        for inp in optional_sorted:
             edges = edges_by_input.get(inp, [])
             if not edges:
                 continue
@@ -521,18 +537,21 @@ class DAGAutomata(BaseModel):
         running: set[str],
         launched_this_run: set[str],
         finished_this_run: set[str],
-    ) -> tuple[set[str], set[str]]:
-        """Return (ready_stages, newly_cached_stages).
+    ) -> tuple[dict[str, dict[str, Any]], set[str]]:
+        """Return (ready_with_inputs, newly_cached_stages).
 
-        ready_stages: Stages that are ready to launch now.
+        ready_with_inputs: Maps stage_name -> pre-computed named_inputs for
+                          stages that are ready to launch now.
         newly_cached_stages: Stages that can use cached results and should be
                             added to finished_this_run by the caller.
+
+        Pre-computing named_inputs here avoids a second traversal in _launch_ready.
         """
         assert self.topology is not None
         all_names = set(self.topology.nodes.keys())
         done, skipped = self._compute_done_sets(program, finished_this_run)
 
-        ready: set[str] = set()
+        ready_with_inputs: dict[str, dict[str, Any]] = {}
         newly_cached: set[str] = set()
 
         for stage_name in sorted(
@@ -543,17 +562,22 @@ class DAGAutomata(BaseModel):
             if state is not self.GateState.READY:
                 continue
 
-            # 2. If ready, check if we can skip execution using cache
+            # 2. Build named inputs once (used for both cache check and execution).
+            # Do not catch exceptions here — an error means the topology or stage
+            # results are in an inconsistent state, which should surface as a failure
+            # rather than silently proceeding with empty inputs (which would cause a
+            # validation error inside stage.execute for any non-void stage).
+            named_inputs = self.build_named_inputs(program, stage_name)
+
+            # 3. If ready, check if we can skip execution using cache
             st = self.topology.nodes[stage_name]
             res = program.stage_results.get(stage_name)
             cache_handler = st.get_cache_handler()
 
             is_cached = False
             if res and res.status in FINAL_STATES:
-                # Build inputs to compute hash for cache check
                 inputs_hash = None
                 try:
-                    named_inputs = self.build_named_inputs(program, stage_name)
                     st_cls = self.topology.get_stage_class(stage_name)
                     inputs_hash = st_cls.compute_hash_from_inputs(named_inputs)
                 except Exception:
@@ -565,9 +589,9 @@ class DAGAutomata(BaseModel):
             if is_cached:
                 newly_cached.add(stage_name)
             else:
-                ready.add(stage_name)
+                ready_with_inputs[stage_name] = named_inputs
 
-        return ready, newly_cached
+        return ready_with_inputs, newly_cached
 
     def explain_blockers(
         self,
@@ -614,13 +638,20 @@ class DAGAutomata(BaseModel):
         launched_this_run: set[str],
         finished_this_run: set[str],
     ) -> set[str]:
-        """Stages to auto-skip when deps are IMPOSSIBLE this run."""
+        """Stages to auto-skip when deps are IMPOSSIBLE this run.
+
+        Excludes stages already finalized this run (done) — they are either
+        already handled or have a stale result that will be overwritten by the
+        skip guard in dag.py only when appropriate.  Using `done` (not just
+        `skipped`) mirrors the exclusion set used by get_ready_stages, keeping
+        the two methods consistent.
+        """
         assert self.topology is not None
         all_names = set(self.topology.nodes.keys())
-        _, skipped = self._compute_done_sets(program, finished_this_run)
+        done, _ = self._compute_done_sets(program, finished_this_run)
 
         to_skip: set[str] = set()
-        for stage_name in sorted(all_names - running - launched_this_run - skipped):
+        for stage_name in sorted(all_names - running - launched_this_run - done):
             state, _ = self._diagnose_stage(program, stage_name, finished_this_run)
             if state is self.GateState.IMPOSSIBLE:
                 to_skip.add(stage_name)
