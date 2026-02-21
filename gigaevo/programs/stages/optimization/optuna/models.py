@@ -160,10 +160,7 @@ class OptunaSearchSpace(BaseModel):
         ),
     )
     reasoning: str = Field(
-        description=(
-            "Very brief (1-2 sentences) overall strategy: why these parameters matter and "
-            "what trade-offs tuning them explores."
-        ),
+        description="Brief strategy: overall tuning approach.",
     )
 
 
