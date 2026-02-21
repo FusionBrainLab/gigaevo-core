@@ -17,6 +17,7 @@ from typing import Any, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from loguru import logger
 import optuna
+from optuna.importance import PedAnovaImportanceEvaluator
 
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.program import Program
@@ -105,6 +106,10 @@ class OptunaOptimizationStage(Stage):
         Extra ``sys.path`` entries for evaluation sub-processes.
     max_memory_mb : int | None
         Per-evaluation RSS memory cap in MB.
+    llm_max_tokens : int
+        Maximum tokens (thinking + output) for the LLM analysis call (default
+        ``8192``).  Prevents runaway extended-thinking budget usage which can
+        consume tens of thousands of tokens on a task that needs ~1000.
     """
 
     InputsModel = OptimizationInput
@@ -452,7 +457,10 @@ class OptunaOptimizationStage(Stage):
                             len(completed_trials)
                             >= self.config.min_trials_for_importance
                         ):
-                            importances = optuna.importance.get_param_importances(study)
+                            importances = optuna.importance.get_param_importances(
+                                study,
+                                evaluator=PedAnovaImportanceEvaluator(),
+                            )
                             # Only freeze if the parameter is statistically insignificant
                             # (i.e., its importance is a tiny fraction of the average expected importance)
                             avg_importance = 1.0 / len(importances)

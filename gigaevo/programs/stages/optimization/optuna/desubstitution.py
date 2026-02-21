@@ -29,9 +29,24 @@ from gigaevo.programs.stages.optimization.utils import (
 
 
 def _coerce_param_value(value: Any) -> Any:
-    """Coerce int-like strings to int; recurse into lists and tuples."""
+    """Coerce int-like strings to int; recurse into lists and tuples.
+
+    Handles both ``"3"`` (pure integer string) and ``"3.0"`` (float-as-string
+    integer) so that categorical choices used in ``range()`` or indexing stay
+    as Python ``int`` after desubstitution.
+    """
     if isinstance(value, str):
-        return coerce_int_like_string(value)
+        coerced = coerce_int_like_string(value)
+        if not isinstance(coerced, str):
+            return coerced
+        # Also catch float-as-string integers like "3.0" / "-4.0"
+        try:
+            f = float(value)
+            if f == int(f):
+                return int(f)
+        except ValueError:
+            pass
+        return value
     if isinstance(value, (list, tuple)):
         return type(value)(_coerce_param_value(x) for x in value)
     return value
@@ -112,9 +127,13 @@ class _ParamDesubstitutor(ast.NodeTransformer):
             return ast.copy_location(node, src_node)
 
         # Numeric: delegate to shared helper.
+        # Preserve integer values as int regardless of declared ptype (e.g.
+        # categorical params whose choices are integers must not become 3.0
+        # because range() / indexing requires int, not float).
         ptype = self._param_types.get(param_name, "float")
+        is_int = (ptype == "int") or isinstance(value, int)
         return make_numeric_const_node(
-            value, ptype == "int", src_node, precision=_DEFAULT_PRECISION
+            value, is_int, src_node, precision=_DEFAULT_PRECISION
         )
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:

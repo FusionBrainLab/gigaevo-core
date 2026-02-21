@@ -176,7 +176,7 @@ async def run_redis_benchmarks(
 
         # 4. Count by status (uses SCARD)
         async def count_status():
-            return await storage.count_by_status("fresh")
+            return await storage.count_by_status("queued")
 
         result = await benchmark(
             "Redis: count_by_status (SCARD)", count_status, iterations
@@ -185,7 +185,7 @@ async def run_redis_benchmarks(
 
         # 5. Get all by status
         async def get_all_status():
-            return await storage.get_all_by_status("fresh")
+            return await storage.get_all_by_status("queued")
 
         result = await benchmark("Redis: get_all_by_status", get_all_status, iterations)
         results.append(result)
@@ -603,6 +603,141 @@ async def run_dag_benchmarks(
     return results
 
 
+def _make_heavy_program() -> "Program":
+    """Create a program with realistic heavy payload (large metadata, many stage results)."""
+    from gigaevo.programs.core_types import ProgramStageResult, StageState
+    from gigaevo.programs.program import Program
+
+    # ~50KB metadata string (realistic LLM mutation context)
+    big_context = "mutation context with lots of LLM reasoning " * 1200  # ~50KB
+    # Nested lineage dict (realistic lineage chain)
+    lineage = {
+        f"gen_{i}": {"parent": f"prog_{i - 1}", "score": float(i) / 100}
+        for i in range(50)
+    }
+
+    p = Program(
+        code="def run_code():\n    return [i**2 for i in range(1000)]",
+        metrics={f"metric_{i}": float(i) for i in range(30)},
+        metadata={
+            "mutation_context": big_context,
+            "lineage_summary": lineage,
+            "extra": list(range(500)),
+        },
+    )
+    # 8 stage results with non-trivial outputs
+    for stage_name in [
+        "validate",
+        "execute",
+        "complexity",
+        "optuna_1",
+        "optuna_2",
+        "metrics_a",
+        "metrics_b",
+        "cache_check",
+    ]:
+        p.stage_results[stage_name] = ProgramStageResult(
+            status=StageState.COMPLETED,
+            output={"values": list(range(200)), "label": stage_name * 10},
+        )
+    return p
+
+
+async def run_heavy_program_benchmarks(
+    redis_url: str, iterations: int = 200
+) -> list[BenchmarkResult]:
+    """Benchmark storage operations on programs with large payloads.
+
+    These benchmarks specifically target the deep copy and dict-patch optimizations
+    (Change 3) which are invisible on lightweight toy programs.
+    """
+    from gigaevo.database.merge_strategies import merge_programs
+
+    results: list[BenchmarkResult] = []
+
+    config = RedisProgramStorageConfig(
+        redis_url=redis_url,
+        key_prefix=f"profiler_heavy_{uuid.uuid4().hex[:8]}",
+        read_only=False,
+    )
+    storage = RedisProgramStorage(config)
+    await storage._conn.get()
+
+    heavy = _make_heavy_program()
+    await storage.add(heavy)
+
+    try:
+        # 1. model_copy deep=True  (old merge path)
+        async def deep_copy_true():
+            return heavy.model_copy(deep=True)
+
+        result = await benchmark(
+            "heavy: model_copy(deep=True)", deep_copy_true, iterations
+        )
+        results.append(result)
+
+        # 2. model_copy deep=False  (new merge path)
+        async def deep_copy_false():
+            return heavy.model_copy(deep=False)
+
+        result = await benchmark(
+            "heavy: model_copy(deep=False)", deep_copy_false, iterations
+        )
+        results.append(result)
+
+        # 3. to_dict + dict patch  (new counter-stamp path, replaces model_copy+counter)
+        async def dict_patch():
+            data = heavy.to_dict()
+            data["atomic_counter"] = 999
+            return data
+
+        result = await benchmark(
+            "heavy: to_dict() + dict patch", dict_patch, iterations
+        )
+        results.append(result)
+
+        # 4. merge_programs (exercises model_copy(deep=False) in merge path)
+        async def merge():
+            return merge_programs(heavy, heavy)
+
+        result = await benchmark("heavy: merge_programs", merge, iterations)
+        results.append(result)
+
+        # 5. storage.update (full WATCH/GET/MERGE/SET path with heavy program)
+        async def update_heavy():
+            heavy.metrics["ts"] = time.time()
+            await storage.update(heavy)
+
+        result = await benchmark(
+            "heavy: storage.update (4 RT + merge)", update_heavy, iterations // 2
+        )
+        results.append(result)
+
+        # 6. storage.write_exclusive (2 RT path, no merge)
+        async def write_exclusive_heavy():
+            heavy.metrics["ts"] = time.time()
+            await storage.write_exclusive(heavy)
+
+        result = await benchmark(
+            "heavy: storage.write_exclusive (2 RT)",
+            write_exclusive_heavy,
+            iterations // 2,
+        )
+        results.append(result)
+
+    finally:
+
+        async def cleanup(r):
+            keys = [k async for k in r.scan_iter(f"{config.key_prefix}:*")]
+            if keys:
+                await r.delete(*keys)
+
+        await storage._conn.execute("cleanup", cleanup)
+        await storage.close()
+
+    return results
+
+
 async def run_throughput_simulation(
     redis_url: str, duration_seconds: float = 5.0
 ) -> dict[str, Any]:
@@ -646,7 +781,7 @@ async def run_throughput_simulation(
                 results["programs_read"] += 5
 
             # Check counts (simulates _has_active_dags)
-            await storage.count_by_status("fresh")
+            await storage.count_by_status("queued")
 
     except Exception as e:
         results["errors"] += 1
@@ -713,6 +848,15 @@ async def main(redis_url: str, skip_redis: bool = False) -> None:
                 redis_url, concurrency=10
             )
             print_results("Concurrency Benchmarks", concurrent_results)
+
+            # Heavy program benchmarks (isolates deep copy / dict patch impact)
+            print("\nRunning heavy program benchmarks...")
+            heavy_results = await run_heavy_program_benchmarks(
+                redis_url, iterations=200
+            )
+            print_results(
+                "Heavy Program Benchmarks (deep copy / dict patch)", heavy_results
+            )
 
             # DAG benchmarks
             print("\nRunning DAG benchmarks...")

@@ -72,7 +72,9 @@ def format_value_for_source(
     if isinstance(value, (list, tuple)):
         return repr(value)
     ptype = param_types.get(param_name, "float")
-    if ptype == "int":
+    # Preserve integer values as int regardless of declared ptype (e.g. categorical
+    # params whose choices are integers must stay int so range() / indexing works).
+    if ptype == "int" or isinstance(value, int):
         v = int(round(value)) if isinstance(value, float) else int(value)
         return repr(v)
     v = float(value) if not isinstance(value, float) else value

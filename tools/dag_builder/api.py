@@ -290,7 +290,7 @@ async def get_stages():
             input_types=info.input_types,
             output_fields=info.output_fields,
             output_model_name=info.output_model_name,
-            cacheable=info.cacheable,
+            cacheable=False,
         )
         for info in stages.values()
     ]
@@ -313,7 +313,7 @@ async def get_stage(stage_name: str):
         input_types=stage_info.input_types,
         output_fields=stage_info.output_fields,
         output_model_name=stage_info.output_model_name,
-        cacheable=stage_info.cacheable,
+        cacheable=False,
     )
 
 
