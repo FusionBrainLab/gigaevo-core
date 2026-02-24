@@ -8,6 +8,7 @@ helpers for line-number stripping and re-indentation.
 from __future__ import annotations
 
 import ast
+import bisect
 import copy
 import re
 from typing import Any, Optional
@@ -17,8 +18,6 @@ from gigaevo.programs.stages.optimization.optuna.models import (
     _OPTUNA_PARAMS_NAME,
 )
 from gigaevo.programs.stages.optimization.utils import (
-    INT_LIKE_STR_RE,
-    coerce_int_like_string,
     format_value_for_source,
     make_numeric_const_node,
 )
@@ -29,30 +28,34 @@ from gigaevo.programs.stages.optimization.utils import (
 
 
 def _coerce_param_value(value: Any) -> Any:
-    """Coerce int-like strings to int; recurse into lists and tuples.
+    """Coerce string parameter values to their Python-native types.
 
-    Handles both ``"3"`` (pure integer string) and ``"3.0"`` (float-as-string
-    integer) so that categorical choices used in ``range()`` or indexing stay
-    as Python ``int`` after desubstitution.
+    Uses ``ast.literal_eval`` as a universal parser, which handles:
+    - ``"3"`` → ``3`` (int)
+    - ``"3.0"`` → ``3`` (float-as-int, coerced so ``range()`` works)
+    - ``"[2, 3]"`` → ``[2, 3]`` (containers)
+    - ``"(1, 2)"`` → ``(1, 2)`` (tuples)
+    - ``"True"`` → ``True`` (booleans)
+    - ``"hello"`` → ``"hello"`` (plain strings stay as-is)
     """
     if isinstance(value, str):
-        coerced = coerce_int_like_string(value)
-        if not isinstance(coerced, str):
-            return coerced
-        # Also catch float-as-string integers like "3.0" / "-4.0"
         try:
-            f = float(value)
-            if f == int(f):
-                return int(f)
-        except ValueError:
-            pass
-        return value
+            parsed = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            return value
+        # Coerce whole-number floats to int so range()/indexing works
+        if isinstance(parsed, float) and parsed == int(parsed):
+            return int(parsed)
+        # Recurse into containers to coerce elements (e.g. "3" inside a list)
+        if isinstance(parsed, (list, tuple)):
+            return type(parsed)(_coerce_param_value(x) for x in parsed)
+        return parsed
     if isinstance(value, (list, tuple)):
         return type(value)(_coerce_param_value(x) for x in value)
     return value
 
 
-def _coerce_params(values: dict[str, Any]) -> dict[str, Any]:
+def coerce_params(values: dict[str, Any]) -> dict[str, Any]:
     """Recursively coerce int-like strings to int in param values.
 
     Categorical choices like ["4","5","6"] or list params with string elements
@@ -103,27 +106,15 @@ class _ParamDesubstitutor(ast.NodeTransformer):
     def _make_const(self, value: Any, src_node: ast.AST, param_name: str) -> ast.AST:
         """Create an AST literal node for *value*.
 
-        - ``str`` / ``bool`` / ``None`` → ``ast.Constant`` directly
-          (check ``bool`` before ``int`` since ``bool`` is a subclass!)
-        - ``list`` / ``tuple`` → recurse to coerce elements, then ``ast.Constant``
-        - ``int`` param type → coerced to ``int``
-        - ``float`` param type → kept as ``float``
-        - Negative numerics → ``UnaryOp(USub, Constant(abs))``
-        - ``str`` that looks like an integer (e.g. categorical "5") → ``int`` so range() works
+        Values are already coerced by ``_coerce_params`` before this method
+        is called, so strings are plain strings and containers already hold
+        native Python types.
+
+        - ``str`` / ``bool`` / ``None`` / ``list`` / ``tuple`` → ``ast.Constant``
+        - Numeric → delegated to :func:`make_numeric_const_node`
         """
-        # Non-numeric types: emit directly, except int-like strings.
-        if value is None or isinstance(value, bool):
+        if value is None or isinstance(value, (bool, str, list, tuple)):
             node = ast.Constant(value=value)
-            return ast.copy_location(node, src_node)
-        if isinstance(value, str):
-            if INT_LIKE_STR_RE.match(value.strip()):
-                node = ast.Constant(value=int(value))
-                return ast.copy_location(node, src_node)
-            node = ast.Constant(value=value)
-            return ast.copy_location(node, src_node)
-        if isinstance(value, (list, tuple)):
-            coerced = type(value)(_coerce_param_value(x) for x in value)
-            node = ast.Constant(value=coerced)
             return ast.copy_location(node, src_node)
 
         # Numeric: delegate to shared helper.
@@ -160,66 +151,133 @@ class _ParamDesubstitutor(ast.NodeTransformer):
 
 # ---------------------------------------------------------------------------
 # eval() cleanup
+#
+# Two implementations exist because each desubstitution path needs one:
+#   - Source-level (_clean_eval_in_source): used when add_tuned_comment=True,
+#     operates on the raw source string so that LLM-authored comments and
+#     line numbers are preserved (ast.parse strips comments).
+#   - AST-level (_EvalCleaner): used when add_tuned_comment=False, operates
+#     on the AST that gets fed to ast.unparse.
+#
+# After coerce_params(), values are already native Python types (lists, ints,
+# etc.), so the only eval() patterns that remain post-desubstitution are:
+#   - eval('dotted.name')  → dotted.name   (callable categorical)
+#   - eval(<literal>)      → <literal>      (coerced container/numeric)
+#   - eval('non-identifier') stays as-is    (e.g. eval('Nelder-Mead'))
 # ---------------------------------------------------------------------------
 
 #: Pattern matching a valid Python dotted name (e.g. ``scipy.optimize.minimize``).
 _DOTTED_NAME_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
 
-#: Matches eval('dotted.name') or eval("dotted.name") for source-level cleanup.
-_EVAL_STRING_RE = re.compile(
-    r"\beval\s*\(\s*([\"'])([^\"']+)\1\s*\)",
-)
+
+def _find_matching_close_paren(code: str, open_pos: int) -> int | None:
+    """Find the closing ``)``, handling nesting and string literals."""
+    depth = 1
+    i = open_pos + 1
+    while i < len(code):
+        c = code[i]
+        if c in ('"', "'"):
+            i += 1
+            while i < len(code) and code[i] != c:
+                if code[i] == "\\":
+                    i += 1
+                i += 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+#: Matches the start of an ``eval(`` call.
+_EVAL_CALL_RE = re.compile(r"\beval\s*\(")
 
 
 def _clean_eval_in_source(code: str) -> str:
-    """Replace ``eval('dotted.name')`` / ``eval("dotted.name")`` with the dotted name in source.
+    """Remove unnecessary ``eval()`` wrappers from desubstituted source.
 
-    Only replaces when the string content matches _DOTTED_NAME_RE, so comments and
-    line structure are preserved (unlike parse → _EvalCleaner → unparse).
+    After coercion, only two patterns appear:
+
+    - ``eval('dotted.name')`` → ``dotted.name``  (callable categorical)
+    - ``eval(<literal>)``     → ``<literal>``     (coerced container/numeric)
     """
+    parts: list[str] = []
+    last_end = 0
+    for m in _EVAL_CALL_RE.finditer(code):
+        open_paren = m.end() - 1
+        close_paren = _find_matching_close_paren(code, open_paren)
+        if close_paren is None:
+            continue
+        inner = code[open_paren + 1 : close_paren].strip()
+        if not inner:
+            continue
 
-    def repl(m: re.Match[str]) -> str:
-        inner = m.group(2)
-        return inner if _DOTTED_NAME_RE.match(inner) else m.group(0)
+        replacement = None
+        if inner[0] in ('"', "'"):
+            # Quoted string: eval('math.sqrt') — only strip if dotted name
+            try:
+                string_val = ast.literal_eval(inner)
+            except (ValueError, SyntaxError):
+                continue
+            if isinstance(string_val, str) and _DOTTED_NAME_RE.match(string_val):
+                replacement = string_val
+        else:
+            # Unquoted: eval([2, 3]), eval((1, 2)), eval(42), etc.
+            try:
+                ast.literal_eval(inner)
+                replacement = inner
+            except (ValueError, SyntaxError):
+                pass
 
-    return _EVAL_STRING_RE.sub(repl, code)
-
-
-def _dotted_name_to_ast(name: str, src_node: ast.AST) -> ast.AST:
-    """Convert a dotted name string like ``a.b.c`` to an AST ``Attribute`` chain."""
-    parts = name.split(".")
-    result: ast.AST = ast.Name(id=parts[0], ctx=ast.Load())
-    for part in parts[1:]:
-        result = ast.Attribute(value=result, attr=part, ctx=ast.Load())
-    return ast.copy_location(result, src_node)
+        if replacement is not None:
+            parts.append(code[last_end : m.start()])
+            parts.append(replacement)
+            last_end = close_paren + 1
+    if parts:
+        parts.append(code[last_end:])
+        return "".join(parts)
+    return code
 
 
 class _EvalCleaner(ast.NodeTransformer):
-    """Clean up ``eval('dotted.name')`` → ``dotted.name`` after desubstitution.
+    """Remove unnecessary ``eval()`` wrappers in the AST.
 
-    When a categorical parameter holds a callable reference like
-    ``"scipy.optimize.minimize"``, the parameterized code uses
-    ``eval(_optuna_params["solver"])``.  After desubstitution this
-    becomes ``eval('scipy.optimize.minimize')``, which is functional
-    but ugly.  This pass replaces it with the direct name reference.
+    Used only when ``add_tuned_comment=False`` (the ``ast.unparse`` path).
+    After coercion, handles:
 
-    Only applies when the ``eval`` argument is a string constant that
-    matches a valid Python dotted identifier.
+    - ``eval(Constant('dotted.name'))`` → ``Attribute`` chain
+    - ``eval(<literal_node>)``          → the literal node directly
     """
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
-        """Process call nodes, cleaning up ``eval('dotted.name')``."""
         self.generic_visit(node)
-        if (
+        if not (
             isinstance(node.func, ast.Name)
             and node.func.id == "eval"
             and len(node.args) == 1
             and not node.keywords
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-            and _DOTTED_NAME_RE.match(node.args[0].value)
         ):
-            return _dotted_name_to_ast(node.args[0].value, node)
+            return node
+
+        arg = node.args[0]
+
+        # eval('dotted.name') → Attribute chain
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            if _DOTTED_NAME_RE.match(arg.value):
+                # Build a.b.c → Attribute(Attribute(Name("a"), "b"), "c")
+                parts = arg.value.split(".")
+                result: ast.AST = ast.Name(id=parts[0], ctx=ast.Load())
+                for part in parts[1:]:
+                    result = ast.Attribute(value=result, attr=part, ctx=ast.Load())
+                return ast.copy_location(result, node)
+            return node
+
+        # eval(<literal>) — already a valid AST node, just strip eval()
+        if isinstance(arg, (ast.Constant, ast.List, ast.Tuple, ast.Set, ast.Dict)):
+            return ast.copy_location(arg, node)
         return node
 
 
@@ -240,7 +298,7 @@ def _build_line_offsets(source: str) -> list[int]:
 _LINE_NUMBER_PREFIX_RE = re.compile(r"^\s*\d+\s*\|\s*")
 
 
-def _strip_line_number_prefix(lines: list[str]) -> list[str]:
+def strip_line_number_prefix(lines: list[str]) -> list[str]:
     """Remove a leading ``N | ``-style prefix from each line if present.
 
     If the LLM copies the numbered format into parameterized_snippet, this
@@ -249,7 +307,7 @@ def _strip_line_number_prefix(lines: list[str]) -> list[str]:
     return [_LINE_NUMBER_PREFIX_RE.sub("", line) for line in lines]
 
 
-def _reindent_to_match_block(
+def reindent_to_match_block(
     replacement_lines: list[str], original_lines: list[str]
 ) -> list[str]:
     """Re-indent replacement lines so the block has the same base indent as the original.
@@ -305,31 +363,29 @@ def desubstitute_params(
     so the comment stays on the correct line).
     """
     param_types = param_types or {}
-    values = _coerce_params(values)
-    line_offsets = (
-        _build_line_offsets(parameterized_code) if add_tuned_comment else None
-    )
+    values = coerce_params(values)
+
     tree = ast.parse(parameterized_code)
-    desub = _ParamDesubstitutor(values, param_types, line_offsets=line_offsets)
+    desub = _ParamDesubstitutor(
+        values,
+        param_types,
+        line_offsets=_build_line_offsets(parameterized_code)
+        if add_tuned_comment
+        else None,
+    )
     new_tree = desub.visit(copy.deepcopy(tree))
-    # Clean up eval('dotted.name') → dotted.name
-    new_tree = _EvalCleaner().visit(new_tree)
-    ast.fix_missing_locations(new_tree)
 
     if add_tuned_comment and desub._tuned_spans:
-        # Replace in original source by span so values land on the correct lines;
-        # then add comment at end of each affected line (not inline, to avoid
-        # breaking e.g. eval(_optuna_params["x"]) with a comment inside the call).
+        # Source-level path: preserves comments and line numbers.
+        # Replace _optuna_params spans with concrete values in the original source.
         code = parameterized_code
         for start, end, value_str in sorted(desub._tuned_spans, key=lambda x: -x[0]):
             code = code[:start] + value_str + code[end:]
-        # Which lines (1-based) had a substitution
-        tuned_linenos = set()
-        for start, _end, _ in desub._tuned_spans:
-            for i in range(len(line_offsets) - 1):
-                if line_offsets[i] <= start < line_offsets[i + 1]:
-                    tuned_linenos.add(i + 1)
-                    break
+        # Append "# tuned (Optuna)" on each affected line.
+        tuned_linenos = {
+            bisect.bisect_right(desub._line_offsets, start)
+            for start, _end, _ in desub._tuned_spans
+        }
         lines = code.splitlines(keepends=True)
         for i in range(len(lines)):
             if (i + 1) in tuned_linenos and " # tuned" not in lines[i].rstrip():
@@ -339,7 +395,9 @@ def desubstitute_params(
                     + "  # tuned (Optuna)"
                     + ("\n" if lines[i].endswith("\n") else "")
                 )
-        code = "".join(lines)
-        # Eval cleanup on source so line numbers (and comments) stay correct.
-        return _clean_eval_in_source(code)
+        return _clean_eval_in_source("".join(lines))
+
+    # AST path: used when add_tuned_comment=False or no spans were substituted.
+    new_tree = _EvalCleaner().visit(new_tree)
+    ast.fix_missing_locations(new_tree)
     return ast.unparse(new_tree)

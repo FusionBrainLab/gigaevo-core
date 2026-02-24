@@ -34,6 +34,9 @@ from gigaevo.programs.stages.metrics import EnsureMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
 from gigaevo.programs.stages.optimization.cma import CMANumericalOptimizationStage
 from gigaevo.programs.stages.optimization.optuna import OptunaOptimizationStage
+from gigaevo.programs.stages.optimization.optuna.models import (
+    default_n_startup_trials,
+)
 from gigaevo.programs.stages.python_executors.execution import (
     CallFileFunction,
     CallProgramFunction,
@@ -599,8 +602,11 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
 
         # Stage timeout: enough for all sequential rounds + overhead
         # for baseline eval and LLM analysis.
-        n_rounds = -(-n_trials // max_par)  # ceil division
-        # Adding +3 rounds worth of buffer to be safe.
+        # Total trials = n_startup (random) + n_trials (TPE).
+        n_startup = extra.get("n_startup_trials", default_n_startup_trials(n_trials))
+        total_trials = (n_startup if n_startup is not None else 25) + n_trials
+        n_rounds = -(-total_trials // max_par)  # ceil division
+        # Adding +3 rounds worth of buffer for baseline eval + LLM analysis.
         stage_timeout = min((n_rounds + 3) * eval_to, int(DEFAULT_DAG_TIMEOUT * 0.9))
 
         self.add_stage(

@@ -25,7 +25,7 @@ def _make_engine() -> EvolutionEngine:
     engine = EvolutionEngine(
         storage=storage,
         strategy=strategy,
-        mutation_operator=MagicMock(),
+        mutation_operator=AsyncMock(),
         config=EngineConfig(),
         writer=writer,
         metrics_tracker=metrics_tracker,

@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import ast
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
@@ -12,6 +14,10 @@ from gigaevo.llm.agents.mutation import MUTATION_OUTPUT_METADATA_KEY
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.program import Program
+
+if TYPE_CHECKING:
+    from gigaevo.database.program_storage import ProgramStorage
+    from gigaevo.llm.bandit import MutationOutcome
 
 MutationMode = Literal["rewrite", "diff"]
 
@@ -106,6 +112,9 @@ class LLMMutationOperator(MutationOperator):
                 input=selected_parents, mutation_mode=self.mutation_mode
             )
 
+            # Capture model name (works for both standard and bandit routers)
+            model_name = self.llm_wrapper.get_last_model()
+
             final_code: str = result["code"].strip()
             if not final_code:
                 raise MutationError(
@@ -121,11 +130,13 @@ class LLMMutationOperator(MutationOperator):
 
             # Extract structured mutation metadata
             structured_output = result.get("structured_output")
-            mutation_metadata = {}
+            mutation_metadata: dict[str, object] = {}
             if structured_output:
                 mutation_metadata[MUTATION_OUTPUT_METADATA_KEY] = structured_output
                 archetype = result.get("archetype", "unknown")
                 logger.debug(f"[LLMMutationOperator] Mutation archetype: {archetype}.")
+            if model_name:
+                mutation_metadata["mutation_model"] = model_name
 
             mutation_spec = MutationSpec(
                 code=final_code,
@@ -136,3 +147,18 @@ class LLMMutationOperator(MutationOperator):
             return mutation_spec
         except Exception as e:
             raise MutationError(f"Failed to mutate: {e}") from e
+
+    async def on_program_ingested(
+        self,
+        program: Program,
+        storage: ProgramStorage,
+        outcome: MutationOutcome | None = None,
+    ) -> None:
+        """Fetch parents and forward to the router's mutation outcome callback."""
+        parent_ids = program.lineage.parents
+        if not parent_ids:
+            return
+        parents = await storage.mget(parent_ids)
+        self.llm_wrapper.on_mutation_outcome(
+            program, [p for p in parents if p], outcome=outcome
+        )

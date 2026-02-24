@@ -1,12 +1,16 @@
 from abc import ABC, abstractmethod
-import math
 import random
-import statistics
 from typing import Callable, List, Optional, Protocol
 
 from loguru import logger
+import numpy as np
+from scipy.special import expit, softmax
 
-from gigaevo.evolution.strategies.utils import dominates, extract_fitness_values
+from gigaevo.evolution.strategies.utils import (
+    dominates,
+    extract_fitness_values,
+    weighted_sample_without_replacement,
+)
 from gigaevo.programs.program import Program
 
 
@@ -46,21 +50,21 @@ class RandomEliteSelector(EliteSelector):
 
 
 class FitnessProportionalEliteSelector(EliteSelector):
-    """Fitness-proportional sampling with optional Boltzmann temperature control.
+    """Softmax (Boltzmann) fitness-proportional sampling.
 
-    When ``temperature`` is ``None`` (default), weights are the raw fitness
-    values (shifted to be non-negative). This is the classic roulette-wheel
-    behaviour where selection probability is directly proportional to fitness.
+    Fitnesses are always normalized to [0, 1] before applying softmax,
+    making the selector fully scale- and shift-invariant regardless of
+    the problem's fitness range.
 
-    When ``temperature`` is set, a Boltzmann (softmax) transform is applied:
-        w_i = exp(f_i / temperature)
+    When ``temperature`` is ``None`` (default), it is auto-computed as
+    ``max(std(normalized_fitnesses), 0.01)``.  This means a 1-sigma
+    advantage in normalized fitness yields roughly an ``e ≈ 2.7×``
+    higher unnormalized weight — moderate exploration that adapts to
+    the current fitness landscape.
 
-    * **High temperature** → flattens fitness differences, approaching uniform
-      sampling. Useful for exploration: minor fitness shifts that might indicate
-      radical new ideas still have a fair chance of being selected.
-    * **Low temperature** → amplifies fitness differences, approaching greedy
-      selection. Useful for exploitation.
-    * ``temperature`` is a single float easily tunable by an optimization agent.
+    When ``temperature`` is set explicitly, it operates in normalized
+    [0, 1] space: high temperature (e.g. 10.0) → near-uniform,
+    low temperature (e.g. 0.001) → near-greedy.
     """
 
     def __init__(
@@ -74,26 +78,35 @@ class FitnessProportionalEliteSelector(EliteSelector):
         self.temperature = temperature
 
     def _compute_weights(self, fitnesses: list[float]) -> list[float]:
-        """Convert raw fitnesses into sampling weights."""
-        if self.temperature is not None:
-            # Boltzmann / softmax weighting
-            # Subtract max for numerical stability (doesn't change the distribution)
-            max_f = max(fitnesses)
-            weights = []
-            for f in fitnesses:
-                exp_arg = (f - max_f) / self.temperature
-                clamped = max(-500.0, min(500.0, exp_arg))
-                weights.append(math.exp(clamped))
-            return weights
+        """Convert raw fitnesses into softmax sampling weights.
 
-        # Default: linear proportional (shift to non-negative)
-        min_f = min(fitnesses)
-        if min_f < 0:
-            logger.debug(
-                "FitnessProportionalEliteSelector: shifted fitnesses to positive space"
-            )
-            return [f - min_f + 1e-6 for f in fitnesses]
-        return list(fitnesses)
+        Fitnesses are normalized to [0, 1] so that the temperature is
+        problem-independent.  Temperature is then either the user-supplied
+        value or auto-computed from the spread of normalized fitnesses.
+        """
+        arr = np.asarray(fitnesses, dtype=np.float64)
+
+        # --- Normalize to [0, 1] -----------------------------------------
+        fitness_range = float(np.ptp(arr))
+        if fitness_range < 1e-10:
+            # Fully converged — no fitness signal, select uniformly.
+            n = len(arr)
+            return [1.0 / n] * n
+        arr = (arr - arr.min()) / fitness_range
+
+        # --- Determine temperature ----------------------------------------
+        temp = self.temperature
+        if temp is None:
+            # Auto-temperature: use the sample std of the normalized
+            # fitnesses, floored at 0.01.  Because fitnesses live in
+            # [0, 1], std is always in (0, ~0.5], so the floor only
+            # matters when nearly all programs have identical fitness.
+            # A floor of 0.01 gives mild differentiation (best/worst
+            # ratio ≈ e^(1/0.01) in the extreme 2-program case).
+            std = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
+            temp = max(std, 0.01)
+
+        return softmax(arr / temp).tolist()
 
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         logger.debug(
@@ -123,6 +136,13 @@ class FitnessProportionalEliteSelector(EliteSelector):
             val = p.metrics[self.fitness_key]
             fitnesses.append(val if self.higher_is_better else -val)
 
+        if not all(np.isfinite(f) for f in fitnesses):
+            logger.warning(
+                "FitnessProportionalEliteSelector: non-finite fitnesses detected; "
+                "falling back to uniform sampling"
+            )
+            return random.sample(programs, min(total, len(programs)))
+
         min_fitness = min(fitnesses)
         max_fitness = max(fitnesses)
         logger.debug(
@@ -133,41 +153,7 @@ class FitnessProportionalEliteSelector(EliteSelector):
 
         weights = self._compute_weights(fitnesses)
 
-        # Sampling without replacement
-        selected = []
-        remaining_programs = list(programs)
-        remaining_weights = list(weights)
-
-        for _ in range(min(total, len(programs))):
-            if not remaining_programs:
-                break
-
-            total_weight = sum(remaining_weights)
-            if total_weight == 0:
-                logger.warning(
-                    "FitnessProportionalEliteSelector: all remaining weights are zero; "
-                    "falling back to uniform sampling for the rest "
-                    "(remaining={}, already_selected={}, requested_total={})",
-                    len(remaining_programs),
-                    len(selected),
-                    total,
-                )
-                selected.extend(
-                    random.sample(remaining_programs, total - len(selected))
-                )
-                break
-
-            # Select one program based on fitness weights
-            chosen = random.choices(remaining_programs, weights=remaining_weights, k=1)[
-                0
-            ]
-            selected.append(chosen)
-
-            # Remove selected program and its fitness from remaining pools
-            idx = remaining_programs.index(chosen)
-            remaining_programs.pop(idx)
-            remaining_weights.pop(idx)
-
+        selected = weighted_sample_without_replacement(programs, weights, total)
         logger.debug(
             "FitnessProportionalEliteSelector: selected {} programs",
             len(selected),
@@ -197,10 +183,6 @@ class WeightedEliteSelector(EliteSelector):
         self.lambda_ = lambda_
         self.epsilon = epsilon
 
-    def _sigmoid(self, x: float) -> float:
-        clamped = max(-500.0, min(500.0, x))
-        return 1.0 / (1.0 + math.exp(-clamped))
-
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         logger.debug(
             "WeightedEliteSelector: selecting {} from {} programs (key='{}', higher_is_better={}, lambda={}, epsilon={})",
@@ -229,48 +211,17 @@ class WeightedEliteSelector(EliteSelector):
             val = p.metrics[self.fitness_key]
             fitnesses.append(val if self.higher_is_better else -val)
 
-        median_f = statistics.median(fitnesses)
+        arr = np.asarray(fitnesses, dtype=np.float64)
+        median_f = float(np.median(arr))
+        child_counts = np.array(
+            [p.lineage.child_count for p in programs], dtype=np.float64
+        )
 
-        weights = []
-        for p, f in zip(programs, fitnesses):
-            s_i = self._sigmoid(self.lambda_ * (f - median_f))
-            h_i = 1.0 / (1.0 + p.lineage.child_count)
-            w_i = max(s_i * h_i, self.epsilon)
-            weights.append(w_i)
+        s = expit(self.lambda_ * (arr - median_f))
+        h = 1.0 / (1.0 + child_counts)
+        weights = np.maximum(s * h, self.epsilon).tolist()
 
-        # Sample without replacement
-        selected: list[Program] = []
-        remaining_programs = list(programs)
-        remaining_weights = list(weights)
-
-        for _ in range(min(total, len(programs))):
-            if not remaining_programs:
-                break
-
-            total_weight = sum(remaining_weights)
-            if total_weight == 0:
-                logger.warning(
-                    "WeightedEliteSelector: all remaining weights are zero; "
-                    "falling back to uniform sampling "
-                    "(remaining={}, already_selected={}, requested_total={})",
-                    len(remaining_programs),
-                    len(selected),
-                    total,
-                )
-                selected.extend(
-                    random.sample(remaining_programs, total - len(selected))
-                )
-                break
-
-            chosen = random.choices(remaining_programs, weights=remaining_weights, k=1)[
-                0
-            ]
-            selected.append(chosen)
-
-            idx = remaining_programs.index(chosen)
-            remaining_programs.pop(idx)
-            remaining_weights.pop(idx)
-
+        selected = weighted_sample_without_replacement(programs, weights, total)
         logger.debug(
             "WeightedEliteSelector: selected {} programs",
             len(selected),

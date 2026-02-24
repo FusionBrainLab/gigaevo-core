@@ -16,6 +16,51 @@ from gigaevo.programs.core_types import StageIO
 # Constants & type aliases
 # ---------------------------------------------------------------------------
 
+#: Minimum random startup trials before TPE begins.
+_MIN_STARTUP_TRIALS: int = 10
+
+#: Maximum random startup trials before TPE begins.
+_MAX_STARTUP_TRIALS: int = 25
+
+#: Hard floor: minimum completed trials before any importance check fires.
+#: PED-ANOVA needs >=5 trials in its top quantile bucket; with target_quantile=0.25
+#: that requires ceil(5/0.25)=20 trials. Matches Optuna team guidance.
+_IMPORTANCE_CHECK_MIN_TRIALS: int = 20
+
+#: Minimum post-startup (TPE-phase) trials before any importance check.
+#: TPE needs several observations beyond startup to build a useful model.
+_MIN_POST_STARTUP_TRIALS: int = 15
+
+#: Minimum number of parameters required to run importance freezing.
+_MIN_PARAMS_FOR_IMPORTANCE: int = 3
+
+#: Log progress every N completed trials.
+_PROGRESS_LOG_INTERVAL: int = 10
+
+#: Maximum number of failure reasons shown when all trials fail.
+_MAX_FAILURE_REASONS: int = 5
+
+#: Minimum gap between early and late importance checks.
+_MIN_IMPORTANCE_CHECK_GAP: int = 5
+
+
+def default_n_startup_trials(n_trials: int) -> int:
+    """Compute the default number of random startup trials for TPE.
+
+    Formula: ``min(_MAX_STARTUP_TRIALS, max(_MIN_STARTUP_TRIALS, n_trials // 2))``.
+    """
+    return min(_MAX_STARTUP_TRIALS, max(_MIN_STARTUP_TRIALS, n_trials // 2))
+
+
+def default_max_params(n_trials: int) -> int:
+    """Auto-compute max parameters from trial budget.
+
+    Formula: ``min(5, max(3, n_trials // 15))``.
+    At 60 trials (85 total) → 4 params (~21 trials each).
+    """
+    return min(5, max(3, n_trials // 15))
+
+
 _PARAM_TYPES = Literal["float", "int", "log_float", "categorical"]
 
 #: Union of all value types a parameter can hold.
@@ -26,6 +71,9 @@ _OPTUNA_PARAMS_NAME = "_optuna_params"
 
 #: Default float precision for display and suggestion rounding.
 _DEFAULT_PRECISION = 6
+
+#: Floor for log_float low bound — log scale requires low > 0.
+_LOG_FLOAT_EPSILON: float = 1e-10
 
 # ---------------------------------------------------------------------------
 # LLM structured output models
@@ -77,7 +125,10 @@ class ParamSpec(BaseModel):
         ),
     )
     reason: str = Field(
-        description="One-sentence explanation of why this parameter is tuneable.",
+        description=(
+            "One sentence: why this parameter will have high impact on the "
+            "score, and why it was selected over alternatives."
+        ),
     )
 
     @model_validator(mode="after")
@@ -93,10 +144,8 @@ class ParamSpec(BaseModel):
                 # Swap rather than reject — common LLM mistake.
                 self.low, self.high = self.high, self.low
             if self.param_type == "log_float" and self.low <= 0:
-                raise ValueError(
-                    f"ParamSpec '{self.name}': log_float requires low > 0, "
-                    f"got low={self.low}"
-                )
+                # Clamp rather than reject — common LLM mistake.
+                self.low = _LOG_FLOAT_EPSILON
             if isinstance(self.initial_value, (int, float)):
                 iv = float(self.initial_value)
                 if self.param_type == "log_float" and iv <= 0:
@@ -115,6 +164,11 @@ class ParamSpec(BaseModel):
                     f"ParamSpec '{self.name}': choices must be non-empty "
                     "for param_type='categorical'"
                 )
+            # Coerce int-like strings ("3" → 3) so Optuna returns ints directly
+            self.choices = [
+                int(c) if isinstance(c, str) and c.strip().lstrip("-").isdigit() else c
+                for c in self.choices
+            ]
             if self.initial_value not in self.choices:
                 # Fall back to first choice rather than hard-fail.
                 self.initial_value = self.choices[0]
@@ -160,7 +214,10 @@ class OptunaSearchSpace(BaseModel):
         ),
     )
     reasoning: str = Field(
-        description="Brief strategy: overall tuning approach.",
+        description=(
+            "Selection rationale: which candidates you considered, why the "
+            "chosen ones rank highest for score impact, and what you excluded."
+        ),
     )
 
 
@@ -181,23 +238,79 @@ class OptunaOptimizationConfig(BaseModel):
     # TPE sampler
     n_startup_trials: Optional[int] = Field(
         default=None,
-        description="Number of random trials run before TPE (in addition to n_trials). Total runs = n_startup_trials + n_trials. If None, uses min(25, max(10, n_trials // 2)).",
+        description=(
+            "Number of random trials run before TPE (in addition to n_trials). "
+            "Total runs = n_startup_trials + n_trials. If None, uses "
+            "default_n_startup_trials(n_trials)."
+        ),
     )
     multivariate: bool = Field(
         default=True,
         description="Use multivariate TPE to model parameter correlations.",
     )
 
-    # Dynamic Feature Importance
+    # Dynamic Feature Importance (two-phase)
     importance_freezing: bool = Field(
         default=True, description="Enable freezing of low-impact parameters."
     )
+    early_tpe_fraction: float = Field(
+        default=1 / 3,
+        description=(
+            "Fraction of TPE trials at which the early importance check fires "
+            "(~33% into TPE by default)."
+        ),
+    )
+    late_tpe_fraction: float = Field(
+        default=3 / 4,
+        description=(
+            "Fraction of TPE trials at which the late importance check fires "
+            "(~75% into TPE by default)."
+        ),
+    )
+    early_threshold_multiplier: float = Field(
+        default=0.5,
+        description=(
+            "Multiplier applied to importance_threshold_ratio for the early check. "
+            "Early check is conservative: 0.5x the standard threshold."
+        ),
+    )
+    ped_anova_early_quantile: float = Field(
+        default=0.25,
+        description="PED-ANOVA target_quantile for the early check (more inclusive for stability).",
+    )
+    ped_anova_late_quantile: float = Field(
+        default=0.10,
+        description="PED-ANOVA target_quantile for the late check (standard selectivity).",
+    )
+    max_params: Optional[int] = Field(
+        default=None,
+        description=(
+            "Maximum parameters the LLM should propose. "
+            "If None, auto-computed as min(5, max(3, n_trials // 15))."
+        ),
+    )
     importance_check_at: Optional[int] = Field(
         default=None,
-        description="Number of trials after which to check importance (always enforced to be after TPE phase, i.e. >= n_startup_trials + 1). If None, uses total_trials // 3.",
+        description=(
+            "Trial count for the EARLY importance check. If None, auto-computed "
+            "as n_startup + max(_MIN_POST_STARTUP_TRIALS, n_tpe // 3). "
+            "Uses a conservative threshold (0.5x standard)."
+        ),
+    )
+    importance_check_late_at: Optional[int] = Field(
+        default=None,
+        description=(
+            "Trial count for the LATE importance check. If None, auto-computed "
+            "as n_startup + max(_MIN_POST_STARTUP_TRIALS + 5, n_tpe * 3 // 4). "
+            "Uses the standard threshold."
+        ),
     )
     min_trials_for_importance: int = Field(
-        default=10, description="Minimum trials before importance check."
+        default=20,
+        description=(
+            "Minimum completed trials in the study before importance is evaluated. "
+            "PED-ANOVA needs sufficient top-quantile observations for reliability."
+        ),
     )
     importance_threshold_ratio: float = Field(
         default=0.1,
@@ -211,7 +324,10 @@ class OptunaOptimizationConfig(BaseModel):
     # Early stopping
     early_stopping_patience: Optional[int] = Field(
         default=None,
-        description="Stop optimization after this many consecutive trials without improvement. If None, no early stopping.",
+        description=(
+            "Stop optimization after this many consecutive trials without "
+            "improvement. If None, no early stopping."
+        ),
     )
 
 

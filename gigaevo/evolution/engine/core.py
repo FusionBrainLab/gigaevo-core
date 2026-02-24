@@ -12,7 +12,11 @@ from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.metrics import EngineMetrics
 from gigaevo.evolution.engine.mutation import generate_mutations
 from gigaevo.evolution.mutation.base import MutationOperator
+from gigaevo.evolution.mutation.mutation_operator import (
+    LLMMutationOperator,
+)
 from gigaevo.evolution.strategies.base import EvolutionStrategy
+from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
@@ -81,6 +85,10 @@ class EvolutionEngine:
             strategy_metrics = await self.strategy.get_metrics()
             if strategy_metrics:
                 out.update(strategy_metrics.to_dict())
+            if isinstance(self.mutation_operator, LLMMutationOperator) and isinstance(
+                self.mutation_operator.llm_wrapper, BanditModelRouter
+            ):
+                out["bandit"] = self.mutation_operator.llm_wrapper.get_bandit_stats()
             return out
 
         self._metrics_collector_task = start_metrics_collector(
@@ -259,12 +267,18 @@ class EvolutionEngine:
                     "[EvolutionEngine] Program {} rejected by acceptor",
                     prog.id,
                 )
+                await self.mutation_operator.on_program_ingested(
+                    prog, self.storage, outcome=MutationOutcome.REJECTED_ACCEPTOR
+                )
                 state_tasks.append(
                     asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
                 )
             elif await self.strategy.add(prog):
                 # accepted by strategy — stays DONE until next refresh
                 added += 1
+                await self.mutation_operator.on_program_ingested(
+                    prog, self.storage, outcome=MutationOutcome.ACCEPTED
+                )
                 logger.debug(
                     "[EvolutionEngine] Program {} added to strategy",
                     prog.id,
@@ -275,6 +289,9 @@ class EvolutionEngine:
                 logger.debug(
                     "[EvolutionEngine] Program {} rejected by strategy",
                     prog.id,
+                )
+                await self.mutation_operator.on_program_ingested(
+                    prog, self.storage, outcome=MutationOutcome.REJECTED_STRATEGY
                 )
                 state_tasks.append(
                     asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))

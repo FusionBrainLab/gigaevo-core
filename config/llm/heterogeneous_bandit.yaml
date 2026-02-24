@@ -1,0 +1,26 @@
+# @package _global_
+
+# Heterogeneous LLM ensemble with UCB1 bandit-based adaptive selection.
+# The bandit learns which model produces the best fitness improvements.
+
+llm:
+  _target_: gigaevo.llm.bandit.BanditModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: ${oc.env:LLM_MODEL_1,meta-llama/Llama-3.3-70B-Instruct}
+      base_url: ${llm_base_url}
+      temperature: 0.8
+      max_tokens: 16384
+
+    - _target_: langchain_openai.ChatOpenAI
+      model: ${oc.env:LLM_MODEL_2,Qwen/Qwen2.5-72B-Instruct}
+      base_url: ${llm_base_url}
+      temperature: 0.8
+      max_tokens: 16384
+
+  probabilities: [0.5, 0.5]
+  exploration_constant: 1.41
+  window_size: 100
+  fitness_key: ${primary_key}
+  higher_is_better: ${higher_is_better}

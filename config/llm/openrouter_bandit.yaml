@@ -1,0 +1,53 @@
+# @package _global_
+
+# Bandit-adaptive ensemble of 4 cheap OpenRouter models.
+# UCB1 learns which model produces the best fitness improvements.
+# Same models as openrouter_ensemble.yaml but with BanditModelRouter.
+#
+# Pricing per 1M tokens (input / output):
+#   google/gemini-2.5-flash          $0.15 / $0.60
+#   google/gemini-3-flash-preview    $0.50 / $3.00
+#   deepseek/deepseek-v3.2        $0.25 / $0.38
+#   openai/gpt-4.1-mini              $0.40 / $1.60
+
+llm:
+  _target_: gigaevo.llm.bandit.BanditModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: google/gemini-2.5-flash
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+    - _target_: langchain_openai.ChatOpenAI
+      model: google/gemini-3-flash-preview
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+    - _target_: langchain_openai.ChatOpenAI
+      model: deepseek/deepseek-v3.2
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+    - _target_: langchain_openai.ChatOpenAI
+      model: openai/gpt-4.1-mini
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+  probabilities: [0.25, 0.25, 0.25, 0.25]
+  exploration_constant: 1.41
+  window_size: 100
+  fitness_key: ${primary_key}
+  higher_is_better: ${higher_is_better}

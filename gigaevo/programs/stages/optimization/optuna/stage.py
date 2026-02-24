@@ -23,18 +23,26 @@ from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.optimization.optuna.desubstitution import (
-    _coerce_params,
-    _reindent_to_match_block,
-    _strip_line_number_prefix,
+    coerce_params,
     desubstitute_params,
+    reindent_to_match_block,
+    strip_line_number_prefix,
 )
 from gigaevo.programs.stages.optimization.optuna.models import (
     _DEFAULT_PRECISION,
+    _IMPORTANCE_CHECK_MIN_TRIALS,
+    _MAX_FAILURE_REASONS,
+    _MIN_IMPORTANCE_CHECK_GAP,
+    _MIN_PARAMS_FOR_IMPORTANCE,
+    _MIN_POST_STARTUP_TRIALS,
     _OPTUNA_PARAMS_NAME,
+    _PROGRESS_LOG_INTERVAL,
     OptunaOptimizationConfig,
     OptunaOptimizationOutput,
     OptunaSearchSpace,
     ParamSpec,
+    default_max_params,
+    default_n_startup_trials,
 )
 from gigaevo.programs.stages.optimization.optuna.prompts import (
     _SYSTEM_PROMPT,
@@ -206,10 +214,10 @@ class OptunaOptimizationStage(Stage):
             end_idx = mod.end_line
             replacement_lines = mod.parameterized_snippet.splitlines()
             # Defensive: strip any "N | " prefix if the LLM copied the numbered format
-            replacement_lines = _strip_line_number_prefix(replacement_lines)
+            replacement_lines = strip_line_number_prefix(replacement_lines)
             # Re-indent to match the original block so we never get "unexpected indent"
             original_block = lines[start_idx:end_idx]
-            replacement_lines = _reindent_to_match_block(
+            replacement_lines = reindent_to_match_block(
                 replacement_lines, original_block
             )
             new_lines[start_idx:end_idx] = replacement_lines
@@ -257,19 +265,45 @@ class OptunaOptimizationStage(Stage):
 
         task_section = ""
         if self.task_description:
-            task_section = (
-                f"\n**Task description** (the metric to optimize is `{self.score_key}`):\n"
-                f"{self.task_description}\n"
-            )
+            task_section = f"\n**Task context:**\n{self.task_description}\n"
+
+        direction = "minimize" if self.minimize else "maximize"
+        n_startup = (
+            self.config.n_startup_trials
+            if self.config.n_startup_trials is not None
+            else default_n_startup_trials(self.n_trials)
+        )
+        total_trials = n_startup + self.n_trials
+
+        max_params = (
+            self.config.max_params
+            if self.config.max_params is not None
+            else default_max_params(self.n_trials)
+        )
+        trials_per_param = total_trials // max(max_params, 1)
 
         user_msg = _USER_PROMPT_TEMPLATE.format(
             numbered_code=numbered_code,
             task_description_section=task_section,
+            eval_timeout=self.eval_timeout,
+            n_trials=self.n_trials,
+            total_trials=total_trials,
+            score_key=self.score_key,
+            direction=direction,
+            max_params=max_params,
         )
 
         structured_llm = self.llm.with_structured_output(OptunaSearchSpace)
         messages = [
-            SystemMessage(content=_SYSTEM_PROMPT.format(score_key=self.score_key)),
+            SystemMessage(
+                content=_SYSTEM_PROMPT.format(
+                    score_key=self.score_key,
+                    eval_timeout=self.eval_timeout,
+                    direction=direction,
+                    max_params=max_params,
+                    trials_per_param=trials_per_param,
+                )
+            ),
             HumanMessage(content=user_msg),
         ]
         result = await structured_llm.ainvoke(messages)
@@ -295,7 +329,7 @@ class OptunaOptimizationStage(Stage):
             A complete Python script ready for execution.
         """
         # Coerce int-like strings so range(k) etc. work when k comes from categorical/initial_value
-        params = _coerce_params(params)
+        params = coerce_params(params)
         return build_eval_code(
             validator_code=self._validator_code,
             program_code=parameterized_code,
@@ -373,7 +407,7 @@ class OptunaOptimizationStage(Stage):
         n_startup = (
             self.config.n_startup_trials
             if from_config
-            else min(25, max(10, self.n_trials // 2))
+            else default_n_startup_trials(self.n_trials)
         )
         # Total trials = startup (random) + n_trials (TPE); startup trials are extra, not counted in n_trials.
         total_trials = n_startup + self.n_trials
@@ -381,7 +415,7 @@ class OptunaOptimizationStage(Stage):
             "[Optuna][{}] TPE sampler: n_startup_trials={} ({}), total_trials={} ({} + {} TPE)",
             pid,
             n_startup,
-            "from config" if from_config else "default min(25, max(10, n_trials//2))",
+            "from config" if from_config else "default",
             total_trials,
             n_startup,
             self.n_trials,
@@ -412,14 +446,92 @@ class OptunaOptimizationStage(Stage):
                 return score < best_value
             return score > best_value
 
-        # Run importance only after TPE phase has produced at least one completed trial.
-        importance_check_at = (
-            self.config.importance_check_at
-            if self.config.importance_check_at is not None
-            else max(10, total_trials // 3)
+        # -- Two-phase importance schedule ------------------------------------
+        # Early check (~33% into TPE) with conservative threshold to catch
+        # clearly unimportant params; late check (~75% into TPE) with standard
+        # threshold for final cleanup.  Both anchored to TPE phase, not total.
+        n_tpe = self.n_trials
+
+        config = self.config
+
+        def _compute_check_point(override: int | None, fraction: float) -> int:
+            raw = (
+                override
+                if override is not None
+                else n_startup + max(_MIN_POST_STARTUP_TRIALS, int(n_tpe * fraction))
+            )
+            clamped = max(
+                raw, n_startup + _MIN_POST_STARTUP_TRIALS, _IMPORTANCE_CHECK_MIN_TRIALS
+            )
+            if override is not None and clamped != override:
+                logger.warning(
+                    "[Optuna][{}] importance_check_at={} clamped to {} "
+                    "(below minimum floor)",
+                    pid,
+                    override,
+                    clamped,
+                )
+            return clamped
+
+        importance_check_early = _compute_check_point(
+            config.importance_check_at,
+            config.early_tpe_fraction,
         )
-        importance_check_at = max(importance_check_at, n_startup + 1)
+        importance_check_late = _compute_check_point(
+            config.importance_check_late_at,
+            config.late_tpe_fraction,
+        )
+        importance_check_late = max(
+            importance_check_late, importance_check_early + _MIN_IMPORTANCE_CHECK_GAP
+        )
+
+        logger.debug(
+            "[Optuna][{}] Importance checks scheduled at trials {} (early) and {} (late) "
+            "(n_startup={}, n_tpe={}, total={})",
+            pid,
+            importance_check_early,
+            importance_check_late,
+            n_startup,
+            n_tpe,
+            total_trials,
+        )
+
+        # Schedule: (check_at, threshold_multiplier, ped_anova_quantile, label)
+        # Filter out checkpoints that exceed total_trials (can happen for small budgets
+        # where _MIN_POST_STARTUP_TRIALS pushes the checkpoint beyond the run).
+        _importance_schedule: list[tuple[int, float, float, str]] = []
+        for _ck, _tm, _pq, _lb in [
+            (
+                importance_check_early,
+                config.early_threshold_multiplier,
+                config.ped_anova_early_quantile,
+                "early",
+            ),
+            (importance_check_late, 1.0, config.ped_anova_late_quantile, "late"),
+        ]:
+            if _ck < total_trials:
+                _importance_schedule.append((_ck, _tm, _pq, _lb))
+
+        if self.config.importance_freezing and self.n_trials < 30:
+            logger.warning(
+                "[Optuna][{}] n_trials={} is small — importance freezing may be "
+                "unreliable (PED-ANOVA needs sufficient completed trials)",
+                pid,
+                self.n_trials,
+            )
+
+        if self.config.importance_freezing and not _importance_schedule:
+            logger.debug(
+                "[Optuna][{}] Importance checks disabled — both checkpoints ({}, {}) "
+                "exceed total_trials ({})",
+                pid,
+                importance_check_early,
+                importance_check_late,
+                total_trials,
+            )
+
         frozen_params: dict[str, Any] = {}
+        _fired_phases: set[str] = set()
         _importance_lock = asyncio.Lock()
         _ask_lock = asyncio.Lock()
 
@@ -441,61 +553,120 @@ class OptunaOptimizationStage(Stage):
             async with _completed_lock:
                 n_completed += 1
 
-                # Dynamic Feature Importance: freeze unimportant parameters
-                if (
-                    self.config.importance_freezing
-                    and n_completed == importance_check_at
-                    and len(param_specs) > 3
-                ):
+                # Dynamic Feature Importance: two-phase check
+                # Uses >= (not ==) so a burst of failures cannot permanently
+                # skip a checkpoint.  _fired_phases prevents double-firing.
+                for check_at, thresh_mult, ped_quantile, phase in _importance_schedule:
+                    if not (
+                        self.config.importance_freezing
+                        and phase not in _fired_phases
+                        and n_completed >= check_at
+                        and len(param_specs) >= _MIN_PARAMS_FOR_IMPORTANCE
+                    ):
+                        continue
+                    _fired_phases.add(phase)
                     try:
                         completed_trials = [
                             t
                             for t in study.trials
                             if t.state == optuna.trial.TrialState.COMPLETE
                         ]
-                        if (
-                            len(completed_trials)
-                            >= self.config.min_trials_for_importance
-                        ):
-                            importances = optuna.importance.get_param_importances(
-                                study,
-                                evaluator=PedAnovaImportanceEvaluator(),
+                        # PED-ANOVA needs ≥5 trials in the top quantile
+                        # bucket.  Compute the per-phase floor dynamically.
+                        min_required = max(
+                            self.config.min_trials_for_importance,
+                            math.ceil(5.0 / ped_quantile),
+                        )
+                        if len(completed_trials) < min_required:
+                            logger.debug(
+                                "[Optuna][{}][{}] Skipping importance — only {} "
+                                "completed trials (need {} for quantile={})",
+                                pid,
+                                phase,
+                                len(completed_trials),
+                                min_required,
+                                ped_quantile,
                             )
-                            # Only freeze if the parameter is statistically insignificant
-                            # (i.e., its importance is a tiny fraction of the average expected importance)
-                            avg_importance = 1.0 / len(importances)
-                            threshold = (
-                                avg_importance * self.config.importance_threshold_ratio
-                            )
+                            continue
+                        importances = optuna.importance.get_param_importances(
+                            study,
+                            evaluator=PedAnovaImportanceEvaluator(
+                                target_quantile=ped_quantile
+                            ),
+                        )
+                        avg_importance = 1.0 / max(len(importances), 1)
+                        effective_ratio = (
+                            self.config.importance_threshold_ratio * thresh_mult
+                        )
+                        threshold = avg_importance * effective_ratio
 
-                            async with _importance_lock:
-                                for name, imp in importances.items():
-                                    if (
-                                        imp < threshold
-                                        or imp
-                                        < self.config.importance_absolute_threshold
-                                    ):
-                                        # Freeze at best-so-far value
-                                        frozen_val = best_params.get(
-                                            name,
-                                            next(
-                                                p.initial_value
-                                                for p in param_specs
-                                                if p.name == name
-                                            ),
-                                        )
-                                        frozen_params[name] = frozen_val
-                                        logger.info(
-                                            "[Optuna][{}] Freezing low-impact parameter '{}' (importance={:.3f}, thresh={:.3f}) at best-so-far",
-                                            pid,
-                                            name,
-                                            imp,
-                                            threshold,
-                                        )
+                        # Params missing from PED-ANOVA output have zero
+                        # discriminative power — freeze them too.
+                        all_param_names = {p.name for p in param_specs}
+                        reported_names = set(importances.keys())
+                        silent_zero = all_param_names - reported_names
+
+                        async with _importance_lock:
+                            for name in silent_zero:
+                                if name not in frozen_params:
+                                    frozen_val = best_params.get(name)
+                                    frozen_params[name] = frozen_val
+                                    logger.info(
+                                        "[Optuna][{}][{}] Freezing '{}' "
+                                        "(absent from PED-ANOVA — zero discriminative power)",
+                                        pid,
+                                        phase,
+                                        name,
+                                    )
+                            abs_thresh = self.config.importance_absolute_threshold
+                            for name, imp in importances.items():
+                                if name not in frozen_params and (
+                                    imp < threshold or imp < abs_thresh
+                                ):
+                                    frozen_val = best_params.get(name)
+                                    frozen_params[name] = frozen_val
+                                    reason = (
+                                        f"< abs_thresh={abs_thresh:.4f}"
+                                        if imp >= threshold
+                                        else f"< rel_thresh={threshold:.4f}"
+                                    )
+                                    logger.info(
+                                        "[Optuna][{}][{}] Freezing '{}' "
+                                        "(importance={:.4f}, {})",
+                                        pid,
+                                        phase,
+                                        name,
+                                        imp,
+                                        reason,
+                                    )
+                        logger.debug(
+                            "[Optuna][{}][{}] Importance done — {} frozen: {}",
+                            pid,
+                            phase,
+                            len(frozen_params),
+                            list(frozen_params.keys()),
+                        )
+                        # If all params are frozen, no search space left —
+                        # stop early to avoid wasting budget on pruned duplicates.
+                        if len(frozen_params) >= len(param_specs):
+                            _stop_event.set()
+                            logger.info(
+                                "[Optuna][{}] All {} parameters frozen — stopping early",
+                                pid,
+                                len(param_specs),
+                            )
                     except Exception as e:
-                        logger.debug("[Optuna][{}] Importance check failed: {}", pid, e)
+                        logger.debug(
+                            "[Optuna][{}][{}] Importance check failed: {}",
+                            pid,
+                            phase,
+                            e,
+                        )
 
-                if n_completed % 10 == 0 or n_completed == total_trials:
+                if (
+                    n_completed % _PROGRESS_LOG_INTERVAL == 0
+                    or n_completed == total_trials
+                ):
                     logger.info(
                         "[Optuna][{}] Progress: {}/{} trials run, best {}={:.{prec}g}",
                         pid,
@@ -713,9 +884,13 @@ class OptunaOptimizationStage(Stage):
         )
 
         if n_complete == 0:
-            reasons_str = "\n".join(f"- {r}" for r in failure_reasons[:5])
-            if len(failure_reasons) > 5:
-                reasons_str += f"\n- ... and {len(failure_reasons) - 5} more"
+            reasons_str = "\n".join(
+                f"- {r}" for r in failure_reasons[:_MAX_FAILURE_REASONS]
+            )
+            if len(failure_reasons) > _MAX_FAILURE_REASONS:
+                reasons_str += (
+                    f"\n- ... and {len(failure_reasons) - _MAX_FAILURE_REASONS} more"
+                )
 
             logger.warning(
                 "[Optuna][{}] No trials completed successfully; "

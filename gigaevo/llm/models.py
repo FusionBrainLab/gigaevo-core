@@ -1,7 +1,10 @@
-from collections.abc import AsyncIterator, Iterator
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Callable, Iterator
 import os
 import random
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
@@ -12,6 +15,9 @@ from loguru import logger
 
 from gigaevo.llm.token_tracking import TokenTracker
 from gigaevo.utils.trackers.base import LogWriter
+
+if TYPE_CHECKING:
+    from gigaevo.programs.program import Program
 
 
 def _create_langfuse_handler() -> CallbackHandler | None:
@@ -77,6 +83,7 @@ class MultiModelRouter(Runnable):
         self.models = models
         self.model_names = [m.model_name for m in models]
         self.probabilities = [p / sum(probabilities) for p in probabilities]
+        self._task_model_map: dict[int, str] = {}
 
         self._tracker = TokenTracker(
             name=name,
@@ -88,10 +95,38 @@ class MultiModelRouter(Runnable):
             "[MultiModelRouter:{}] Initialized with {} models", name, len(models)
         )
 
+    @staticmethod
+    def _current_task_id() -> int | None:
+        """Return ``id(asyncio.current_task())`` or *None* outside an event loop."""
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            return None
+        return id(task) if task is not None else None
+
     def _select(self) -> tuple[ChatOpenAI, str]:
         """Select a model based on probabilities."""
         idx = random.choices(range(len(self.models)), weights=self.probabilities)[0]
-        return self.models[idx], self.model_names[idx]
+        model, name = self.models[idx], self.model_names[idx]
+        tid = self._current_task_id()
+        if tid is not None:
+            self._task_model_map[tid] = name
+        return model, name
+
+    def get_last_model(self) -> str | None:
+        """Return the model name selected in the most recent ``_select()`` call for the current async task."""
+        tid = self._current_task_id()
+        if tid is not None:
+            return self._task_model_map.pop(tid, None)
+        return None
+
+    def on_mutation_outcome(
+        self,
+        program: Program,
+        parents: list[Program],
+        outcome: Any = None,
+    ) -> None:
+        """Callback when a mutated program completes evaluation. Override for feedback."""
 
     def _config(self, config: RunnableConfig | None, model_name: str) -> RunnableConfig:
         return _with_langfuse(config, self._langfuse, model_name)
@@ -143,7 +178,12 @@ class MultiModelRouter(Runnable):
             for m in self.models
         ]
         return _StructuredOutputRouter(
-            wrapped, self.model_names, self.probabilities, self._langfuse, self._tracker
+            wrapped,
+            self.model_names,
+            self.probabilities,
+            self._langfuse,
+            self._tracker,
+            task_model_map=self._task_model_map,
         )
 
 
@@ -157,16 +197,27 @@ class _StructuredOutputRouter(Runnable):
         probabilities: list[float],
         langfuse: CallbackHandler | None,
         tracker: TokenTracker,
+        task_model_map: dict[int, str] | None = None,
+        select_override: Callable[[], tuple[Any, str]] | None = None,
     ):
         self._models = models
         self._names = model_names
         self._probs = probabilities
         self._langfuse = langfuse
         self._tracker = tracker
+        self._task_model_map = task_model_map
+        self._select_override = select_override
 
     def _select(self) -> tuple[Any, str]:
+        if self._select_override is not None:
+            return self._select_override()
         idx = random.choices(range(len(self._models)), weights=self._probs)[0]
-        return self._models[idx], self._names[idx]
+        model, name = self._models[idx], self._names[idx]
+        if self._task_model_map is not None:
+            tid = MultiModelRouter._current_task_id()
+            if tid is not None:
+                self._task_model_map[tid] = name
+        return model, name
 
     def _config(self, config: RunnableConfig | None, model_name: str) -> RunnableConfig:
         return _with_langfuse(config, self._langfuse, model_name)

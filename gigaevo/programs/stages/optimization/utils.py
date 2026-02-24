@@ -14,7 +14,6 @@ import asyncio
 import base64
 import math
 from pathlib import Path
-import re
 from typing import Any, Optional, Sequence
 
 from loguru import logger
@@ -31,24 +30,6 @@ from gigaevo.programs.stages.python_executors.wrapper import (
 # Shared numeric / AST helpers
 # ---------------------------------------------------------------------------
 
-#: Matches a string that looks like an integer (e.g. "5", "-42").
-INT_LIKE_STR_RE = re.compile(r"^-?\d+$")
-
-
-def coerce_int_like_string(value: str) -> str | int:
-    """Coerce a string to ``int`` if it looks like an integer, else return as-is.
-
-    Examples::
-
-        >>> coerce_int_like_string("5")
-        5
-        >>> coerce_int_like_string("hello")
-        'hello'
-    """
-    if INT_LIKE_STR_RE.match(value.strip()):
-        return int(value)
-    return value
-
 
 def format_value_for_source(
     value: Any,
@@ -58,30 +39,17 @@ def format_value_for_source(
 ) -> str:
     """Format *value* as it would appear in Python source (for comment placement).
 
-    Handles ``None``, ``bool``, ``str`` (with int-like coercion),
-    ``int`` parameters, and ``float`` parameters (with precision formatting).
+    ``repr()`` already handles None, bool, str, list, tuple correctly.
+    Only numeric values need special treatment: int coercion and float precision.
     """
-    if value is None:
-        return "None"
-    if isinstance(value, bool):
-        return "True" if value else "False"
-    if isinstance(value, str):
-        if INT_LIKE_STR_RE.match(value.strip()):
-            return repr(int(value))
-        return repr(value)
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return repr(value)
     ptype = param_types.get(param_name, "float")
-    # Preserve integer values as int regardless of declared ptype (e.g. categorical
-    # params whose choices are integers must stay int so range() / indexing works).
     if ptype == "int" or isinstance(value, int):
-        v = int(round(value)) if isinstance(value, float) else int(value)
-        return repr(v)
-    v = float(value) if not isinstance(value, float) else value
-    if isinstance(v, float) and v != 0 and math.isfinite(v):
+        return repr(int(round(value)) if isinstance(value, float) else int(value))
+    v = float(value)
+    if v != 0 and math.isfinite(v):
         v = float(f"{v:.{precision}g}")
-    if v < 0:
-        return f"-{format_value_for_source(-v, param_name, param_types, precision)}"
     return repr(v)
 
 

@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.programs.program import Program
+
+if TYPE_CHECKING:
+    from gigaevo.database.program_storage import ProgramStorage
+    from gigaevo.llm.bandit import MutationOutcome
 
 
 class MutationSpec(BaseModel):
@@ -37,4 +43,17 @@ class MutationOperator(ABC):
 
         Returns:
             MutationSpec if successful, None if no mutation could be generated
+        """
+
+    async def on_program_ingested(
+        self,
+        program: Program,
+        storage: ProgramStorage,
+        outcome: MutationOutcome | None = None,
+    ) -> None:
+        """Hook called after a mutated program completes evaluation.
+
+        Called for **every** outcome (accepted, rejected by strategy, rejected
+        by acceptor) so the mutation operator can provide feedback (e.g. bandit
+        reward).  Default is a no-op.
         """
