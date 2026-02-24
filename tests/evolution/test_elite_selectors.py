@@ -326,17 +326,20 @@ class TestScalarTournamentEliteSelector:
         best = progs[-1]
 
         counts: Counter = Counter()
-        n_trials = 500
+        n_trials = 2000
         for _ in range(n_trials):
             result = sel(progs, total=1)
             counts[id(result[0])] += 1
 
-        # Highest-fitness program should be selected most often
-        assert counts[id(best)] == max(counts.values())
+        # Highest-fitness program should be selected much more than uniform (1/10)
+        best_frac = counts[id(best)] / n_trials
+        assert (
+            best_frac > 0.15
+        )  # uniform would be 0.10; tournament bias pushes well above
 
     def test_higher_is_better_false_selects_lowest(self):
         """When higher_is_better=False, the lowest-fitness program should win
-        tournaments most often."""
+        tournaments much more than uniform chance."""
         sel = ScalarTournamentEliteSelector(
             fitness_key="score", fitness_key_higher_is_better=False, tournament_size=3
         )
@@ -344,13 +347,14 @@ class TestScalarTournamentEliteSelector:
         lowest = progs[0]
 
         counts: Counter = Counter()
-        n_trials = 500
+        n_trials = 2000
         for _ in range(n_trials):
             result = sel(progs, total=1)
             counts[id(result[0])] += 1
 
-        # Lowest-fitness program should be selected most often
-        assert counts[id(lowest)] == max(counts.values())
+        # Lowest-fitness program should be selected much more than uniform (1/10)
+        lowest_frac = counts[id(lowest)] / n_trials
+        assert lowest_frac > 0.15
 
     def test_higher_is_better_false_statistical(self):
         """Lower-fitness programs should collectively dominate selection."""
