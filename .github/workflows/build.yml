@@ -25,6 +25,8 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,6 +42,33 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
+      - name: Extract coverage percentage
+        if: always()
+        id: coverage
+        run: |
+          TOTAL=$(python -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('coverage.xml')
+          print(round(float(tree.getroot().attrib['line-rate']) * 100))
+          ")
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "Coverage: $TOTAL%"
+      - name: Update coverage badge in README
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          TOTAL=${{ steps.coverage.outputs.total }}
+          if [ "$TOTAL" -ge 80 ]; then COLOR="brightgreen"
+          elif [ "$TOTAL" -ge 60 ]; then COLOR="yellow"
+          elif [ "$TOTAL" -ge 40 ]; then COLOR="orange"
+          else COLOR="red"; fi
+          ENCODED_PCT="${TOTAL}%25"
+          sed -i "s|!\[Coverage\](https://img.shields.io/badge/coverage-[^)]*)|![Coverage](https://img.shields.io/badge/coverage-${ENCODED_PCT}-${COLOR})|" README.md
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: update coverage badge to ${TOTAL}% [skip ci]"
+          git push origin HEAD:main
 
   release:
     needs: [build, test]

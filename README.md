@@ -3,6 +3,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Coverage](https://img.shields.io/badge/coverage-73%25-yellow)](https://github.com/KhrulkovV/gigaevo-core-internal/actions)
 
 Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
 
