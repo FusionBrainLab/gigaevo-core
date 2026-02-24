@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from gigaevo.llm.agents.insights import ProgramInsights
 from gigaevo.llm.agents.lineage import TransitionAnalysis
@@ -25,11 +25,10 @@ class MutationContext(BaseModel, ABC):
 class MetricsMutationContext(MutationContext):
     """Context with program metrics."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     metrics: dict[str, float]
     metrics_formatter: MetricsFormatter
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def format(self) -> str:
         lines = ["## Program Metrics", ""]
@@ -63,12 +62,11 @@ class FamilyTreeMutationContext(MutationContext):
     and formats them into a comprehensive family tree view.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     ancestors: list[TransitionAnalysis]
     descendants: list[TransitionAnalysis]
     metrics_formatter: MetricsFormatter
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def format(self) -> str:
         """Format family tree with ancestors and descendants."""
@@ -129,11 +127,10 @@ class FamilyTreeMutationContext(MutationContext):
 class EvolutionaryStatisticsMutationContext(MutationContext):
     """Context with evolutionary statistics."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     evolutionary_statistics: EvolutionaryStatistics
     metrics_context: MetricsContext
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def format(self) -> str:
         """Format evolutionary statistics into readable string for mutation prompt."""

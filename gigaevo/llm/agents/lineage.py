@@ -9,7 +9,7 @@ from typing import TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
@@ -43,11 +43,10 @@ class TransitionAnalysis(BaseModel):
     to_id: str = Field(alias="to")
     parent_metrics: dict[str, float]
     child_metrics: dict[str, float]
+    model_config = ConfigDict(populate_by_name=True)
+
     diff_blocks: list[str]
     insights: TransitionInsights
-
-    class Config:
-        populate_by_name = True
 
 
 class LineageState(TypedDict):
