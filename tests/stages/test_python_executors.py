@@ -151,6 +151,7 @@ class TestWorkerPool:
 
         assert result1 == 1
         assert result2 == 1
+        await pool.shutdown()
 
     async def test_parallel_execution_with_pool(self) -> None:
         """Multiple tasks run concurrently with a pool."""
@@ -174,6 +175,7 @@ def run_code(n):
         results = await asyncio.gather(*tasks)
         values = sorted([r[0] for r in results])
         assert values == [0, 2, 4, 6]
+        await pool.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +201,7 @@ class TestWorkerRecovery:
             code=good_code, function_name="run_code", timeout=10, pool=pool
         )
         assert result == "ok"
+        await pool.shutdown()
 
     async def test_exec_runner_error_attributes(self) -> None:
         code = "def run_code(): raise RuntimeError('boom')"

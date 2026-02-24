@@ -179,7 +179,7 @@ class NeverCachedStage(Stage):
 
 
 @pytest.fixture(autouse=True)
-def _clear_exec_runner_pool():
+async def _clear_exec_runner_pool():
     """Clear the cached WorkerPool between tests to avoid stale event-loop refs.
 
     The default_exec_runner_pool() is an @lru_cache singleton whose asyncio
@@ -187,6 +187,9 @@ def _clear_exec_runner_pool():
     running when they were created.  pytest-asyncio creates a fresh loop per
     test function, so the cached pool must be reset to prevent
     "Future attached to a different loop" errors.
+
+    On teardown, shutdown() kills idle subprocess workers *before* the loop
+    closes, preventing "Event loop is closed" warnings from transport __del__.
     """
     from gigaevo.programs.stages.python_executors.wrapper import (
         default_exec_runner_pool,
@@ -194,6 +197,12 @@ def _clear_exec_runner_pool():
 
     default_exec_runner_pool.cache_clear()
     yield
+    # Kill idle subprocess workers while the event loop is still open.
+    try:
+        pool = default_exec_runner_pool()
+        await pool.shutdown()
+    except Exception:
+        pass
     default_exec_runner_pool.cache_clear()
 
 

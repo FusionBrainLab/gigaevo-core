@@ -61,6 +61,15 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
             except Exception:
                 pass
 
+    # Close the subprocess transport to prevent "Event loop is closed"
+    # warnings from BaseSubprocessTransport.__del__ during GC.
+    transport = getattr(proc, "_transport", None)
+    if transport is not None:
+        try:
+            transport.close()
+        except Exception:
+            pass
+
 
 async def _monitor_rss_limit(
     proc: asyncio.subprocess.Process, *, max_bytes: int, interval_s: float = 0.2
@@ -161,6 +170,21 @@ class WorkerPool:
         async with self._lock:
             self._count -= 1
         await _kill_process_tree(proc)
+
+    async def shutdown(self) -> None:
+        """Kill all idle workers in the pool.
+
+        Call before the event loop closes to avoid
+        'RuntimeError: Event loop is closed' warnings from
+        subprocess transport ``__del__`` methods.
+        """
+        while not self._queue.empty():
+            try:
+                proc = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._count -= 1
+            await _kill_process_tree(proc)
 
 
 @functools.lru_cache(maxsize=1)
