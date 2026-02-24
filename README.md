@@ -309,38 +309,82 @@ GigaEvo uses [pytest](https://docs.pytest.org/) with [pytest-asyncio](https://py
 ### Running Tests
 
 ```bash
+# Install test dependencies
+pip install -e ".[test]"
+
 # Run the full test suite
 python -m pytest
 
+# Run a specific subdirectory
+python -m pytest tests/stages/
+python -m pytest tests/evolution/
+
 # Run a single test file
-python -m pytest tests/test_elite_selectors.py
+python -m pytest tests/evolution/test_elite_selectors.py
 
 # Run a specific test by name
-python -m pytest tests/test_elite_selectors.py::TestFitnessProportionalTemperature::test_auto_temperature_converged_population_not_greedy -v
+python -m pytest tests/evolution/test_elite_selectors.py::TestFitnessProportionalTemperature -v
 
 # Run with verbose output
 python -m pytest -v
 
 # Run only tests matching a keyword
 python -m pytest -k "optuna" -v
+
+# Run with coverage
+python -m pytest --cov=gigaevo --cov-report=term-missing
 ```
 
-### Test Modules
+### Test Structure
 
-| Module | What it covers |
-|--------|---------------|
-| `test_elite_selectors.py` | Fitness-proportional, weighted, scalar tournament, and Pareto tournament elite selectors |
-| `test_evolution_engine.py` | Generation loop, elite selection, mutation orchestration |
-| `test_optuna_optimization.py` | Optuna search-space proposal, desubstitution, trial execution, parameter preservation |
-| `test_cma_optimization.py` | CMA-ES numerical optimization stage |
-| `test_dag_automata.py` | DAG stage state machine transitions |
-| `test_dag_execution.py` | Individual stage execution, timeouts, caching |
-| `test_dag_integration.py` | End-to-end DAG pipeline runs with chained stages |
-| `test_dag_complex_integration.py` | Complex DAG topologies, failure propagation, optional inputs |
-| `test_dag_internals.py` | DAG dependency resolution, topological ordering |
-| `test_redis_storage.py` | Redis-backed program CRUD, locking, merge strategies |
-| `test_state_manager.py` | Program state transitions, concurrent state updates |
-| `test_bandit.py` | Multi-armed bandit LLM model selector |
+Tests are organized into subdirectories that mirror the source layout:
+
+```
+tests/
+├── conftest.py              # Shared fixtures (fakeredis, mock stages, factories)
+├── stages/                  # Pipeline stage unit tests
+│   ├── test_stage_execute.py        # Stage.execute() return dispatch, timeout, cleanup
+│   ├── test_metrics_stages.py       # EnsureMetricsStage, NormalizeMetricsStage
+│   ├── test_complexity.py           # AST complexity analysis, code length
+│   ├── test_json_processing.py      # MergeDictStage, ParseJSON, StringifyJSON
+│   ├── test_formatter.py            # FormatterStage (None, string, repr paths)
+│   ├── test_langgraph_stage.py      # LangGraphStage postprocess, preprocess, errors
+│   ├── test_collector.py            # ProgramIds, descendants, ancestors, stats
+│   ├── test_mutation_context.py     # MutationContextStage optional input combos
+│   ├── test_lineage_stages.py       # LineagesToDescendants, LineagesFromAncestors
+│   ├── test_validation_stage.py     # Code validation and syntax checking
+│   ├── test_python_executors.py     # Exec runner, worker pool, timeouts
+│   ├── test_optuna_optimization.py  # Optuna search-space, trials, parameter freezing
+│   └── test_cma_optimization.py     # CMA-ES numerical optimization
+├── dag/                     # DAG runner and scheduling
+│   ├── test_dag_automata.py             # Stage state machine transitions
+│   ├── test_dag_execution.py            # Individual stage execution, timeouts, caching
+│   ├── test_dag_integration.py          # End-to-end DAG pipeline runs
+│   ├── test_dag_complex_integration.py  # Complex topologies, failure propagation
+│   ├── test_dag_internals.py            # Dependency resolution, topological ordering
+│   ├── test_dag_caching.py              # Stage result caching strategies
+│   └── test_dag_runner.py               # DagRunner cleanup, crash paths, scheduling
+├── evolution/               # Evolution engine and strategies
+│   ├── test_evolution_engine.py     # Generation loop, ingestion, exception handling
+│   ├── test_island.py               # MapElitesIsland add, size limit, reindex, elites
+│   ├── test_mutation_operator.py    # LLMMutationOperator with mocked LLM agent
+│   ├── test_elite_selectors.py      # Fitness-proportional, tournament, Pareto selectors
+│   ├── test_selectors.py            # Parent selection strategies
+│   ├── test_acceptors.py            # Program acceptance criteria
+│   ├── test_removers.py             # Archive removal strategies
+│   ├── test_merge_strategies.py     # Program merge conflict resolution
+│   ├── test_bandit.py               # Multi-armed bandit LLM model selector
+│   ├── test_behavior_space.py       # Behavior space binning and dynamics
+│   └── test_archive_storage.py      # Redis-backed archive operations
+├── database/                # Storage and state management
+│   ├── test_redis_storage.py        # Redis CRUD, locking, merge strategies
+│   ├── test_redis_connection.py     # Connection pooling, retries, reconnection
+│   ├── test_state_manager.py        # Program state transitions, concurrent updates
+│   ├── test_state_consistency.py    # Cross-component state invariants
+│   └── test_program_state.py        # Program state machine validation
+└── llm/                     # LLM integration
+    └── test_llm_routing.py          # MultiModelRouter, token tracking
+```
 
 ### Shared Fixtures
 
@@ -350,6 +394,7 @@ python -m pytest -k "optuna" -v
 - `state_manager` — `ProgramStateManager` wrapping the fake storage
 - `make_program` — factory for creating `Program` objects with configurable state, metrics, and stage results
 - `null_writer` — no-op `LogWriter` for tests that need a metrics sink
+- Mock stages — `FastStage`, `FailingStage`, `SlowStage`, `VoidStage`, `SideEffectStage`, etc.
 
 ### Linting
 
