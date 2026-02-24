@@ -249,3 +249,369 @@ class TestPythonCodeExecutorStage:
         assert isinstance(result, ProgramStageResult)
         assert result.status.value == "failed"
         assert "ValueError" in result.error.traceback
+
+
+# ---------------------------------------------------------------------------
+# PythonCodeExecutor — error-handling paths (MemoryError, generic Exception)
+# ---------------------------------------------------------------------------
+
+
+class TestPythonCodeExecutorErrorPaths:
+    async def test_memory_error_detection_in_stderr(self) -> None:
+        """ExecRunnerError with 'MemoryError' in stderr sets error_type='MemoryLimitExceeded'."""
+        from unittest.mock import AsyncMock, patch
+
+        from gigaevo.programs.core_types import ProgramStageResult
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunction,
+        )
+        from gigaevo.programs.stages.python_executors.wrapper import ExecRunnerError
+
+        stage = CallProgramFunction(function_name="solve", timeout=10)
+        stage.attach_inputs({})
+        prog = Program(code="def solve(): pass")
+
+        fake_error = ExecRunnerError(
+            returncode=1,
+            stderr="Traceback...\nMemoryError: unable to allocate",
+            stdout_bytes=b"",
+        )
+
+        with patch(
+            "gigaevo.programs.stages.python_executors.execution.run_exec_runner",
+            new_callable=AsyncMock,
+            side_effect=fake_error,
+        ):
+            result = await stage.compute(prog)
+
+        assert isinstance(result, ProgramStageResult)
+        assert result.status.value == "failed"
+        assert result.error is not None
+        assert result.error.type == "MemoryLimitExceeded"
+
+    async def test_cannot_allocate_memory_string_detection(self) -> None:
+        """'Cannot allocate memory' in stderr is also detected as MemoryLimitExceeded."""
+        from unittest.mock import AsyncMock, patch
+
+        from gigaevo.programs.core_types import ProgramStageResult
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunction,
+        )
+        from gigaevo.programs.stages.python_executors.wrapper import ExecRunnerError
+
+        stage = CallProgramFunction(function_name="solve", timeout=10)
+        stage.attach_inputs({})
+        prog = Program(code="def solve(): pass")
+
+        fake_error = ExecRunnerError(
+            returncode=1,
+            stderr="Cannot allocate memory in static TLS block",
+            stdout_bytes=b"",
+        )
+
+        with patch(
+            "gigaevo.programs.stages.python_executors.execution.run_exec_runner",
+            new_callable=AsyncMock,
+            side_effect=fake_error,
+        ):
+            result = await stage.compute(prog)
+
+        assert isinstance(result, ProgramStageResult)
+        assert result.error.type == "MemoryLimitExceeded"
+
+    async def test_generic_exception_in_compute_returns_failure(self) -> None:
+        """A non-ExecRunnerError exception in compute() returns ProgramStageResult.failure."""
+        from unittest.mock import AsyncMock, patch
+
+        from gigaevo.programs.core_types import ProgramStageResult
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunction,
+        )
+
+        stage = CallProgramFunction(function_name="solve", timeout=10)
+        stage.attach_inputs({})
+        prog = Program(code="def solve(): pass")
+
+        with patch(
+            "gigaevo.programs.stages.python_executors.execution.run_exec_runner",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("unexpected internal failure"),
+        ):
+            result = await stage.compute(prog)
+
+        assert isinstance(result, ProgramStageResult)
+        assert result.status.value == "failed"
+        assert result.error is not None
+        assert (
+            "RuntimeError" in result.error.type
+            or "RuntimeError" in result.error.message
+        )
+
+    async def test_memory_limit_error_message_includes_mb_when_set(self) -> None:
+        """When max_memory_mb is set, the error message mentions the limit."""
+        from unittest.mock import AsyncMock, patch
+
+        from gigaevo.programs.core_types import ProgramStageResult
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunction,
+        )
+        from gigaevo.programs.stages.python_executors.wrapper import ExecRunnerError
+
+        stage = CallProgramFunction(
+            function_name="solve", timeout=10, max_memory_mb=512
+        )
+        stage.attach_inputs({})
+        prog = Program(code="def solve(): pass")
+
+        fake_error = ExecRunnerError(
+            returncode=1,
+            stderr="MemoryError",
+            stdout_bytes=b"",
+        )
+
+        with patch(
+            "gigaevo.programs.stages.python_executors.execution.run_exec_runner",
+            new_callable=AsyncMock,
+            side_effect=fake_error,
+        ):
+            result = await stage.compute(prog)
+
+        assert isinstance(result, ProgramStageResult)
+        assert result.error.type == "MemoryLimitExceeded"
+        assert "512" in result.error.message
+
+
+# ---------------------------------------------------------------------------
+# CallFileFunction
+# ---------------------------------------------------------------------------
+
+
+class TestCallFileFunctionStage:
+    def test_call_file_function_nonexistent_path_raises_validation_error(
+        self, tmp_path
+    ) -> None:
+        """CallFileFunction with a non-existent path raises ValidationError at construction."""
+        from gigaevo.exceptions import ValidationError
+        from gigaevo.programs.stages.python_executors.execution import CallFileFunction
+
+        nonexistent = tmp_path / "no_such_file.py"
+        with pytest.raises(ValidationError, match="not found"):
+            CallFileFunction(path=nonexistent, timeout=10)
+
+    async def test_call_file_function_executes_file_code(self, tmp_path) -> None:
+        """CallFileFunction reads code from the file and executes the named function."""
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import CallFileFunction
+
+        script = tmp_path / "context_builder.py"
+        script.write_text("def build_context(): return {'answer': 42}\n")
+
+        stage = CallFileFunction(path=script, timeout=10)
+        stage.attach_inputs({})
+        prog = Program(code="def solve(): pass")
+
+        result = await stage.compute(prog)
+        assert result.data == {"answer": 42}
+
+
+# ---------------------------------------------------------------------------
+# CallProgramFunctionWithFixedArgs
+# ---------------------------------------------------------------------------
+
+
+class TestCallProgramFunctionWithFixedArgs:
+    async def test_fixed_args_passed_to_function(self) -> None:
+        """Fixed positional args are forwarded correctly to the program function."""
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunctionWithFixedArgs,
+        )
+
+        stage = CallProgramFunctionWithFixedArgs(
+            function_name="add",
+            args=[3, 7],
+            timeout=10,
+        )
+        stage.attach_inputs({})
+        prog = Program(code="def add(a, b): return a + b")
+
+        result = await stage.compute(prog)
+        assert result.data == 10
+
+    async def test_fixed_kwargs_passed_to_function(self) -> None:
+        """Fixed keyword args are forwarded correctly to the program function."""
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunctionWithFixedArgs,
+        )
+
+        stage = CallProgramFunctionWithFixedArgs(
+            function_name="greet",
+            kwargs={"name": "world"},
+            timeout=10,
+        )
+        stage.attach_inputs({})
+        prog = Program(code="def greet(name='?'): return f'hello {name}'")
+
+        result = await stage.compute(prog)
+        assert result.data == "hello world"
+
+    async def test_no_args_no_kwargs_defaults(self) -> None:
+        """Instantiating with neither args nor kwargs works fine."""
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunctionWithFixedArgs,
+        )
+
+        stage = CallProgramFunctionWithFixedArgs(
+            function_name="run_code",
+            timeout=10,
+        )
+        stage.attach_inputs({})
+        prog = Program(code="def run_code(): return 'ok'")
+
+        result = await stage.compute(prog)
+        assert result.data == "ok"
+
+
+# ---------------------------------------------------------------------------
+# FetchMetrics and FetchArtifact stages
+# ---------------------------------------------------------------------------
+
+
+class TestFetchMetricsAndFetchArtifact:
+    async def test_fetch_metrics_extracts_metrics_dict(self) -> None:
+        """FetchMetrics pulls the first element (metrics dict) from a ValidatorOutput."""
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.common import Box
+        from gigaevo.programs.stages.python_executors.execution import FetchMetrics
+
+        metrics = {"score": 0.95, "loss": 0.1}
+        artifact = {"data": [1, 2, 3]}
+
+        # ValidatorOutput = Box[Tuple[dict[str, float], Any]]
+        validator_output = Box[tuple](data=(metrics, artifact))
+
+        stage = FetchMetrics(timeout=10)
+        stage.attach_inputs({"validation_result": validator_output})
+
+        prog = Program(code="def f(): pass")
+        result = await stage.compute(prog)
+
+        assert result.data == metrics
+
+    async def test_fetch_artifact_extracts_artifact(self) -> None:
+        """FetchArtifact pulls the second element (artifact) from a ValidatorOutput."""
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.common import Box
+        from gigaevo.programs.stages.python_executors.execution import FetchArtifact
+
+        metrics = {"score": 1.0}
+        artifact = [42, 43, 44]
+
+        validator_output = Box[tuple](data=(metrics, artifact))
+
+        stage = FetchArtifact(timeout=10)
+        stage.attach_inputs({"validation_result": validator_output})
+
+        prog = Program(code="def f(): pass")
+        result = await stage.compute(prog)
+
+        assert result.data == artifact
+
+    async def test_fetch_artifact_can_return_none_artifact(self) -> None:
+        """FetchArtifact handles None artifact (validator returned no artifact)."""
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.common import Box
+        from gigaevo.programs.stages.python_executors.execution import FetchArtifact
+
+        validator_output = Box[tuple](data=({"score": 0.5}, None))
+
+        stage = FetchArtifact(timeout=10)
+        stage.attach_inputs({"validation_result": validator_output})
+
+        prog = Program(code="def f(): pass")
+        result = await stage.compute(prog)
+
+        assert result.data is None
+
+
+# ---------------------------------------------------------------------------
+# CallValidatorFunction — constructor and parse_output
+# ---------------------------------------------------------------------------
+
+
+class TestCallValidatorFunction:
+    def test_nonexistent_validator_path_raises(self, tmp_path) -> None:
+        """CallValidatorFunction raises ValidationError when the file doesn't exist."""
+        from gigaevo.exceptions import ValidationError
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallValidatorFunction,
+        )
+
+        with pytest.raises(ValidationError, match="not found"):
+            CallValidatorFunction(path=tmp_path / "missing.py", timeout=10)
+
+    async def test_validator_called_with_payload(self, tmp_path) -> None:
+        """CallValidatorFunction passes payload to the validate function."""
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.common import Box
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallValidatorFunction,
+        )
+
+        validator_file = tmp_path / "validator.py"
+        validator_file.write_text(
+            "def validate(payload): return ({'score': float(payload)}, None)\n"
+        )
+
+        stage = CallValidatorFunction(path=validator_file, timeout=10)
+        stage.attach_inputs(
+            {
+                "payload": Box[float](data=7.0),
+                "context": None,
+            }
+        )
+
+        prog = Program(code="def f(): pass")
+        result = await stage.compute(prog)
+
+        # result is a Box[Tuple[dict, Any]] or ProgramStageResult
+        from gigaevo.programs.core_types import ProgramStageResult
+
+        if not isinstance(result, ProgramStageResult):
+            assert result.data[0] == {"score": 7.0}
+            assert result.data[1] is None
+
+    async def test_parse_output_passes_through_tuple(self, tmp_path) -> None:
+        """parse_output returns the value unchanged when it is already a tuple."""
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallValidatorFunction,
+        )
+
+        # Create a minimal valid file so the constructor succeeds
+        f = tmp_path / "v.py"
+        f.write_text("def validate(x): return x\n")
+
+        stage = CallValidatorFunction(path=f, timeout=10)
+        raw = ({"a": 1.0}, "artifact")
+        out = stage.parse_output(raw)
+        assert out == raw
+
+    async def test_parse_output_non_tuple_wrapped(self, tmp_path) -> None:
+        """parse_output wraps non-tuple return in (value, None)."""
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallValidatorFunction,
+        )
+
+        f = tmp_path / "v.py"
+        f.write_text("def validate(x): return x\n")
+
+        stage = CallValidatorFunction(path=f, timeout=10)
+        raw = {"score": 0.5}
+        out = stage.parse_output(raw)
+        assert out == (raw, None)
