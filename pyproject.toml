@@ -44,12 +44,13 @@ dependencies = [
     "langchain>=0.3.0",
     "langfuse>=2.0.0",
     "scikit-learn",
-    "optuna"
+    "optuna",
+    "cma"
 ]
 
 [project.optional-dependencies]
 dev = ["pre-commit", "python-semantic-release"]
-opt = ["jax", "optax", "cma"]
+opt = ["jax", "optax"]
 prompt = ["nltk", "emoji", "syllapy", "langdetect", "immutabledict"]
 test = [
     "pytest>=8.0",
