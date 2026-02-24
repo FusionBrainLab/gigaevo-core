@@ -302,6 +302,66 @@ GigaEvo includes utilities for analysis and visualization:
 
 See `tools/README.md` for detailed documentation.
 
+## Testing
+
+GigaEvo uses [pytest](https://docs.pytest.org/) with [pytest-asyncio](https://pytest-asyncio.readthedocs.io/) for async test support. Tests use `fakeredis` to avoid needing a running Redis server.
+
+### Running Tests
+
+```bash
+# Run the full test suite
+python -m pytest
+
+# Run a single test file
+python -m pytest tests/test_elite_selectors.py
+
+# Run a specific test by name
+python -m pytest tests/test_elite_selectors.py::TestFitnessProportionalTemperature::test_auto_temperature_converged_population_not_greedy -v
+
+# Run with verbose output
+python -m pytest -v
+
+# Run only tests matching a keyword
+python -m pytest -k "optuna" -v
+```
+
+### Test Modules
+
+| Module | What it covers |
+|--------|---------------|
+| `test_elite_selectors.py` | Fitness-proportional, weighted, scalar tournament, and Pareto tournament elite selectors |
+| `test_evolution_engine.py` | Generation loop, elite selection, mutation orchestration |
+| `test_optuna_optimization.py` | Optuna search-space proposal, desubstitution, trial execution, parameter preservation |
+| `test_cma_optimization.py` | CMA-ES numerical optimization stage |
+| `test_dag_automata.py` | DAG stage state machine transitions |
+| `test_dag_execution.py` | Individual stage execution, timeouts, caching |
+| `test_dag_integration.py` | End-to-end DAG pipeline runs with chained stages |
+| `test_dag_complex_integration.py` | Complex DAG topologies, failure propagation, optional inputs |
+| `test_dag_internals.py` | DAG dependency resolution, topological ordering |
+| `test_redis_storage.py` | Redis-backed program CRUD, locking, merge strategies |
+| `test_state_manager.py` | Program state transitions, concurrent state updates |
+| `test_bandit.py` | Multi-armed bandit LLM model selector |
+
+### Shared Fixtures
+
+`tests/conftest.py` provides reusable fixtures:
+
+- `fakeredis_storage` — `RedisProgramStorage` backed by in-memory `fakeredis` (no Redis server needed)
+- `state_manager` — `ProgramStateManager` wrapping the fake storage
+- `make_program` — factory for creating `Program` objects with configurable state, metrics, and stage results
+- `null_writer` — no-op `LogWriter` for tests that need a metrics sink
+
+### Linting
+
+```bash
+# Run all pre-commit hooks (ruff format + lint, trailing whitespace, YAML check)
+pre-commit run --all-files
+
+# Or run individually
+ruff check .       # lint
+ruff format .      # format
+```
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
