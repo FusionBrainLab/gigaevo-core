@@ -23,8 +23,26 @@ jobs:
       - name: build
         run: pip wheel --no-deps -w dist .
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[test]"
+      - name: Run tests with coverage
+        run: python -m pytest --cov=gigaevo --cov-report=term-missing --cov-report=xml:coverage.xml tests/
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
   release:
-    needs: build
+    needs: [build, test]
     permissions:
       contents: write
       id-token: write

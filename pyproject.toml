@@ -51,6 +51,12 @@ dependencies = [
 dev = ["pre-commit", "python-semantic-release"]
 opt = ["jax", "optax", "cma"]
 prompt = ["nltk", "emoji", "syllapy", "langdetect", "immutabledict"]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "fakeredis[lua]>=2.19.0",
+]
 
 [project.urls]
 Repository = "https://github.com/gigaevo/gigaevo"
@@ -144,3 +150,28 @@ type = "github"
 [tool.semantic_release.publish]
 dist_glob_patterns = ["dist/*"]
 upload_to_vcs_release = true
+
+[tool.coverage.run]
+source = ["gigaevo"]
+branch = true
+omit = [
+    "tests/*",
+    "gigaevo/*/__pycache__/*",
+    "*/conftest.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+fail_under = 0
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+    "raise NotImplementedError",
+    "@abstractmethod",
+    "\\.\\.\\.",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"

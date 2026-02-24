@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import numpy as np
+
 from gigaevo.programs.core_types import (
     ProgramStageResult,
+    StageError,
     StageState,
 )
 from gigaevo.programs.program_state import ProgramState
+from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
 from tests.conftest import MockOutput
 
 # ===================================================================
@@ -334,3 +340,147 @@ class TestEdgeCases:
         prog = make_program()
         await fakeredis_storage.add(prog)
         assert await fakeredis_storage.has_data() is True
+
+
+# ===================================================================
+# Category H: Serialization Edge Cases (pickle_b64 roundtrips)
+# ===================================================================
+
+
+class TestPickleB64EdgeCases:
+    """Test pickle_b64_serialize/deserialize with edge cases."""
+
+    def test_none_roundtrip(self):
+        s = pickle_b64_serialize(None)
+        assert pickle_b64_deserialize(s) is None
+
+    def test_empty_dict_roundtrip(self):
+        s = pickle_b64_serialize({})
+        assert pickle_b64_deserialize(s) == {}
+
+    def test_empty_list_roundtrip(self):
+        s = pickle_b64_serialize([])
+        assert pickle_b64_deserialize(s) == []
+
+    def test_nested_complex_structure(self):
+        value = {
+            "a": [1, 2.5, None, True, False],
+            "b": {"nested": {"deep": [{"key": "val"}]}},
+            "c": (1, 2, 3),
+            "d": set(),
+        }
+        s = pickle_b64_serialize(value)
+        result = pickle_b64_deserialize(s)
+        assert result["a"] == [1, 2.5, None, True, False]
+        assert result["b"]["nested"]["deep"] == [{"key": "val"}]
+        assert result["c"] == (1, 2, 3)
+        assert result["d"] == set()
+
+    def test_lambda_roundtrip(self):
+        """cloudpickle can serialize lambdas."""
+        fn = lambda x: x * 2  # noqa: E731
+        s = pickle_b64_serialize(fn)
+        restored = pickle_b64_deserialize(s)
+        assert restored(5) == 10
+
+    def test_numpy_array_roundtrip(self):
+        arr = np.array([1.0, 2.0, 3.0])
+        s = pickle_b64_serialize(arr)
+        restored = pickle_b64_deserialize(s)
+        assert np.array_equal(restored, arr)
+
+    def test_datetime_roundtrip(self):
+        dt = datetime(2024, 1, 15, 12, 30, 0, tzinfo=timezone.utc)
+        s = pickle_b64_serialize(dt)
+        assert pickle_b64_deserialize(s) == dt
+
+    def test_corrupt_base64_raises(self):
+        import pytest
+
+        with pytest.raises(Exception):
+            pickle_b64_deserialize("not-valid-base64!!!")
+
+    def test_corrupt_pickle_raises(self):
+        import base64
+
+        import pytest
+
+        bad = base64.b64encode(b"not a pickle").decode("utf-8")
+        with pytest.raises(Exception):
+            pickle_b64_deserialize(bad)
+
+
+class TestSerializationRoundTripEdgeCases:
+    """Advanced roundtrip tests through full Redis storage pipeline."""
+
+    async def test_empty_metadata_roundtrip(self, fakeredis_storage, make_program):
+        """Empty metadata dict survives storage roundtrip."""
+        prog = make_program(metadata={})
+        await fakeredis_storage.add(prog)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.metadata == {}
+
+    async def test_metadata_with_none_values(self, fakeredis_storage, make_program):
+        prog = make_program(metadata={"key": None, "nested": {"inner": None}})
+        await fakeredis_storage.add(prog)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.metadata["key"] is None
+        assert fetched.metadata["nested"]["inner"] is None
+
+    async def test_stage_result_with_error_roundtrip(
+        self, fakeredis_storage, make_program
+    ):
+        """StageError in ProgramStageResult survives roundtrip."""
+        error = StageError(
+            type="RuntimeError",
+            message="something broke",
+            stage="TestStage",
+            traceback="Traceback...\n  line 42",
+        )
+        result = ProgramStageResult(status=StageState.FAILED, error=error)
+        prog = make_program(stage_results={"broken_stage": result})
+        await fakeredis_storage.add(prog)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        fetched_res = fetched.stage_results["broken_stage"]
+        assert fetched_res.status == StageState.FAILED
+        assert fetched_res.error.type == "RuntimeError"
+        assert fetched_res.error.message == "something broke"
+        assert "line 42" in fetched_res.error.traceback
+
+    async def test_multiple_stage_results_roundtrip(
+        self, fakeredis_storage, make_program
+    ):
+        """Multiple stage results with different statuses survive."""
+        results = {
+            "stage_a": ProgramStageResult.success(output=MockOutput(value=1)),
+            "stage_b": ProgramStageResult(status=StageState.FAILED),
+            "stage_c": ProgramStageResult(status=StageState.PENDING),
+        }
+        prog = make_program(stage_results=results)
+        await fakeredis_storage.add(prog)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.stage_results["stage_a"].status == StageState.COMPLETED
+        assert fetched.stage_results["stage_a"].output.value == 1
+        assert fetched.stage_results["stage_b"].status == StageState.FAILED
+        assert fetched.stage_results["stage_c"].status == StageState.PENDING
+
+    async def test_safe_deserialize_returns_none_on_corrupt(self, fakeredis_storage):
+        """_safe_deserialize returns None for corrupt data instead of crashing."""
+        from gigaevo.database.redis_program_storage import RedisProgramStorage
+
+        result = RedisProgramStorage._safe_deserialize("not json at all{{{", "test")
+        assert result is None
+
+    async def test_large_metrics_dict_roundtrip(self, fakeredis_storage, make_program):
+        """A large metrics dict (100 keys) survives roundtrip."""
+        metrics = {f"metric_{i}": float(i) for i in range(100)}
+        prog = make_program(metrics=metrics)
+        await fakeredis_storage.add(prog)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        for i in range(100):
+            assert fetched.metrics[f"metric_{i}"] == float(i)

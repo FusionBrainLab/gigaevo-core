@@ -426,5 +426,13 @@ class DagRunner:
         if info.task.done():
             return
         info.task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+        try:
             await asyncio.wait_for(info.task, timeout=2.0)
+        except asyncio.CancelledError:
+            pass
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[DagScheduler] task for {} did not terminate within 2s after cancel; "
+                "atomic_state_transition merge will resolve any concurrent state race",
+                info.program_id,
+            )

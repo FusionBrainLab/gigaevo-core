@@ -8,7 +8,11 @@ from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState, validate_transition
 
-_TERMINAL_STATES = frozenset({ProgramState.DISCARDED})
+# States after which the DagRunner never accesses the program again.
+# Evict per-program locks for these states to prevent unbounded memory growth.
+# DONE programs are picked up by EvolutionEngine (different ProgramStateManager),
+# so the DagRunner's lock is no longer needed.
+_TERMINAL_STATES = frozenset({ProgramState.DISCARDED, ProgramState.DONE})
 
 
 class ProgramStateManager:

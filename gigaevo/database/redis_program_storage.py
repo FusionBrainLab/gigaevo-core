@@ -395,18 +395,34 @@ class RedisProgramStorage(ProgramStorage):
                         data = base.to_dict()
                         data["atomic_counter"] = int(counter)
 
+                        # Use the MERGED state for status set operations, not
+                        # the caller's new_state. This prevents dual-set
+                        # membership when a concurrent transition (e.g. DISCARD
+                        # by _maintain) wins the merge over the caller's
+                        # requested state (e.g. DONE by _execute_dag).
+                        actual_state = base.state.value
+
+                        # Collect stale status sets to clean up
+                        sets_to_remove: set[str] = set()
+                        if old_state:
+                            sets_to_remove.add(old_state)
+                        if existing:
+                            sets_to_remove.add(existing.state.value)
+                        # Don't remove from the target set
+                        sets_to_remove.discard(actual_state)
+
                         pipe.multi()
                         pipe.set(key, _dumps(data))
 
-                        if old_state:
-                            pipe.srem(self._keys.status_set(old_state), program.id)
-                        pipe.sadd(self._keys.status_set(new_state), program.id)
+                        for s in sets_to_remove:
+                            pipe.srem(self._keys.status_set(s), program.id)
+                        pipe.sadd(self._keys.status_set(actual_state), program.id)
 
                         pipe.xadd(
                             self._keys.status_stream(),
                             {
                                 "id": program.id,
-                                "status": new_state,
+                                "status": actual_state,
                                 "event": "transition",
                             },
                             maxlen=STREAM_MAX_LEN,
