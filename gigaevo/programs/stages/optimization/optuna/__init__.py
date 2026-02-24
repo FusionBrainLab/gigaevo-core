@@ -16,6 +16,10 @@ from gigaevo.programs.stages.optimization.optuna.models import (
     OptunaSearchSpace,
     ParamSpec,
 )
+from gigaevo.programs.stages.optimization.optuna.routing import (
+    OptunaPayloadBridge,
+    PayloadResolver,
+)
 from gigaevo.programs.stages.optimization.optuna.stage import OptunaOptimizationStage
 
 __all__ = [
@@ -23,8 +27,10 @@ __all__ = [
     "OptunaOptimizationConfig",
     "OptunaOptimizationOutput",
     "OptunaOptimizationStage",
+    "OptunaPayloadBridge",
     "OptunaSearchSpace",
     "ParamSpec",
+    "PayloadResolver",
     "_OPTUNA_PARAMS_NAME",
     "desubstitute_params",
 ]

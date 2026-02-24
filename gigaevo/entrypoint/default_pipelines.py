@@ -33,7 +33,11 @@ from gigaevo.programs.stages.json_processing import MergeDictStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
 from gigaevo.programs.stages.optimization.cma import CMANumericalOptimizationStage
-from gigaevo.programs.stages.optimization.optuna import OptunaOptimizationStage
+from gigaevo.programs.stages.optimization.optuna import (
+    OptunaOptimizationStage,
+    OptunaPayloadBridge,
+    PayloadResolver,
+)
 from gigaevo.programs.stages.optimization.optuna.models import (
     default_n_startup_trials,
 )
@@ -644,10 +648,40 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
                 ExecutionOrderDependency.always_after("AddContext"),
             )
 
-        # Program execution waits for Optuna (but runs even if Optuna fails)
+        # -- Bypass: skip CallProgramFunction when Optuna succeeds --------
+        #
+        # OptunaPayloadBridge extracts best_program_output from Optuna.
+        # PayloadResolver picks whichever payload source completed.
+        # CallValidatorFunction always runs (single source of truth).
+        self.add_stage(
+            "OptunaPayloadBridge",
+            lambda: OptunaPayloadBridge(timeout=DEFAULT_STAGE_TIMEOUT),
+        )
+        self.add_stage(
+            "PayloadResolver",
+            lambda: PayloadResolver(timeout=DEFAULT_STAGE_TIMEOUT),
+        )
+
+        # Data flow: Optuna → bridge → resolver → validator
+        self.add_data_flow_edge(
+            "OptunaOptStage", "OptunaPayloadBridge", "optuna_output"
+        )
+        self.add_data_flow_edge(
+            "OptunaPayloadBridge", "PayloadResolver", "optuna_payload"
+        )
+        self.add_data_flow_edge(
+            "CallProgramFunction", "PayloadResolver", "program_payload"
+        )
+
+        # Replace the default CallProgramFunction → CallValidatorFunction edge
+        # with PayloadResolver → CallValidatorFunction.
+        self.remove_data_flow_edge("CallProgramFunction", "CallValidatorFunction")
+        self.add_data_flow_edge("PayloadResolver", "CallValidatorFunction", "payload")
+
+        # CallProgramFunction only runs when Optuna fails (fallback path).
         self.add_exec_dep(
             "CallProgramFunction",
-            ExecutionOrderDependency.always_after("OptunaOptStage"),
+            ExecutionOrderDependency.on_failure("OptunaOptStage"),
         )
 
 

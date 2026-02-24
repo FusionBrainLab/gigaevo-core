@@ -127,6 +127,7 @@ def build_eval_code(
     validator_fn: str,
     eval_fn_name: str,
     preamble_lines: list[str] | None = None,
+    capture_program_output: bool = False,
 ) -> str:
     """Compose a self-contained script that runs *program -> validator*.
 
@@ -146,6 +147,10 @@ def build_eval_code(
     preamble_lines : list[str] | None
         Extra lines to insert before the program code (e.g.
         ``["_cma_params = [1.0, 2.0]"]``).
+    capture_program_output : bool
+        If ``True``, the eval function returns a ``(val_result, prog_result)``
+        tuple so the caller can capture the raw program output alongside the
+        validation score.  Default ``False`` preserves the original behaviour.
     """
     validator_b64 = base64.b64encode(validator_code.encode("utf-8")).decode("ascii")
 
@@ -169,10 +174,15 @@ def build_eval_code(
             f"    _prog_result = {function_name}(*_args)",
             f"    _val_fn = _val_ns['{validator_fn}']",
             "    if _args:",
-            "        return _val_fn(_args[0], _prog_result)",
-            "    return _val_fn(_prog_result)",
+            "        _val_result = _val_fn(_args[0], _prog_result)",
+            "    else:",
+            "        _val_result = _val_fn(_prog_result)",
         ]
     )
+    if capture_program_output:
+        lines.append("    return (_val_result, _prog_result)")
+    else:
+        lines.append("    return _val_result")
     return "\n".join(lines)
 
 

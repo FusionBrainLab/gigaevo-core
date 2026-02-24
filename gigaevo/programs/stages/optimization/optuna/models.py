@@ -345,3 +345,4 @@ class OptunaOptimizationOutput(StageIO):
     n_params: int
     n_trials: int
     search_space_summary: list[dict[str, Any]]
+    best_program_output: Any | None = None

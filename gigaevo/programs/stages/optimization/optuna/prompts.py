@@ -38,7 +38,8 @@ Different methods can have very different runtimes — ensure all choices run \
 within {eval_timeout}s.
 3. Iteration counts — only if fewer than {max_params} quality parameters exist. \
 Set a tight ``high`` so no trial exceeds \
-{eval_timeout}s. If ``n_steps=1000`` takes ~1s, ``high=2000`` is fine; \
+{eval_timeout}s. Use the baseline runtime info (when provided) to judge how much \
+headroom remains. If ``n_steps=1000`` takes ~1s, ``high=2000`` is fine; \
 ``high=1000000`` is not.
 
 **Avoid**: random seeds, file paths, print/log-only constants.
@@ -128,7 +129,7 @@ _USER_PROMPT_TEMPLATE = """\
 Parametrize the code below for Optuna hyperparameter optimization. \
 Each trial has a hard timeout of {eval_timeout}s; {total_trials} trials will run \
 ({n_trials} TPE + startup). Optimization direction: {direction} ``{score_key}``.
-{task_description_section}
+{task_description_section}{runtime_section}
 Return:
 - ``parameters``: list of ParamSpec — name, param_type, bounds/choices, \
 initial_value (the literal currently in the code), reason (required, one sentence \

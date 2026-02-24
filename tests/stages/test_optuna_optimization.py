@@ -951,11 +951,12 @@ class TestEvaluateSingle:
             score_key="score",
             timeout=60,
         )
-        scores, err = await stage._evaluate_single(
+        scores, prog_output, err = await stage._evaluate_single(
             parameterized_code, {"x": 5.0}, context=None
         )
         assert scores is not None
         assert abs(scores["score"] - 15.0) < 1e-12
+        assert prog_output == 15.0
 
     @pytest.mark.asyncio
     async def test_evaluate_bad_code_returns_none(self, validator_file):
@@ -966,8 +967,11 @@ class TestEvaluateSingle:
             score_key="score",
             timeout=60,
         )
-        scores, err = await stage._evaluate_single(bad_code, {}, context=None)
+        scores, prog_output, err = await stage._evaluate_single(
+            bad_code, {}, context=None
+        )
         assert scores is None
+        assert prog_output is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1057,7 +1061,7 @@ class TestEndToEnd:
         assert "_optuna_params" not in result.optimized_code
 
     @pytest.mark.asyncio
-    async def test_no_params_returns_original(self, quadratic_validator):
+    async def test_no_params_raises(self, quadratic_validator):
         original_code = "def run_code(): return (1, 1)"
         search_space = OptunaSearchSpace(
             parameters=[],
@@ -1073,11 +1077,8 @@ class TestEndToEnd:
             timeout=60,
         )
         stage.attach_inputs({})
-        result = await stage.compute(program)
-
-        assert result.optimized_code == original_code
-        assert result.n_params == 0
-        assert result.n_trials == 0
+        with pytest.raises(ValueError, match="no tuneable parameters"):
+            await stage.compute(program)
 
     @pytest.mark.asyncio
     async def test_update_program_code_false(self, quadratic_validator):
@@ -2191,6 +2192,7 @@ class TestPromptFormatting:
         result = _USER_PROMPT_TEMPLATE.format(
             numbered_code="   1 | x = 1",
             task_description_section="",
+            runtime_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2206,6 +2208,7 @@ class TestPromptFormatting:
         result = _USER_PROMPT_TEMPLATE.format(
             numbered_code="1 | x = 1",
             task_description_section="",
+            runtime_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2220,6 +2223,7 @@ class TestPromptFormatting:
         result = _USER_PROMPT_TEMPLATE.format(
             numbered_code="1 | x = 1",
             task_description_section="",
+            runtime_section="",
             eval_timeout=30,
             n_trials=777,
             total_trials=802,
@@ -2234,6 +2238,7 @@ class TestPromptFormatting:
         result = _USER_PROMPT_TEMPLATE.format(
             numbered_code="1 | x = 1",
             task_description_section="",
+            runtime_section="",
             eval_timeout=42,
             n_trials=50,
             total_trials=75,
@@ -2248,6 +2253,7 @@ class TestPromptFormatting:
         result = _USER_PROMPT_TEMPLATE.format(
             numbered_code="1 | x = 1",
             task_description_section="",
+            runtime_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2263,6 +2269,7 @@ class TestPromptFormatting:
         result = _USER_PROMPT_TEMPLATE.format(
             numbered_code="1 | x = 1",
             task_description_section=section,
+            runtime_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2277,6 +2284,7 @@ class TestPromptFormatting:
         result = _USER_PROMPT_TEMPLATE.format(
             numbered_code="1 | x = 1",
             task_description_section="",
+            runtime_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2304,6 +2312,7 @@ class TestPromptFormatting:
             _USER_PROMPT_TEMPLATE.format(
                 numbered_code="1 | x = 1",
                 task_description_section="",
+                runtime_section="",
                 eval_timeout=30,
                 # n_trials missing
                 score_key="score",
@@ -2311,6 +2320,44 @@ class TestPromptFormatting:
                 total_trials=75,
                 max_params=4,
             )
+
+    def test_user_prompt_includes_runtime_section(self) -> None:
+        """A non-empty runtime_section must appear in the formatted prompt."""
+        section = (
+            "\n**Runtime info:** The program currently runs in ~1.23s "
+            "with a timeout of 30s (~28.8s headroom). Keep this in mind "
+            "when proposing parameters that affect runtime (e.g. iteration "
+            "counts, grid sizes): ensure no trial exceeds the timeout.\n"
+        )
+        result = _USER_PROMPT_TEMPLATE.format(
+            numbered_code="1 | x = 1",
+            task_description_section="",
+            runtime_section=section,
+            eval_timeout=30,
+            n_trials=50,
+            total_trials=75,
+            score_key="score",
+            direction="maximize",
+            max_params=4,
+        )
+        assert "Runtime info" in result
+        assert "1.23s" in result
+
+    def test_user_prompt_omits_empty_runtime_section(self) -> None:
+        """An empty runtime_section must not inject 'Runtime info' text."""
+        result = _USER_PROMPT_TEMPLATE.format(
+            numbered_code="1 | x = 1",
+            task_description_section="",
+            runtime_section="",
+            eval_timeout=30,
+            n_trials=50,
+            total_trials=75,
+            score_key="score",
+            direction="maximize",
+            max_params=4,
+        )
+        assert "{runtime_section}" not in result
+        assert "Runtime info" not in result
 
     def test_system_prompt_eval_pattern_example_present(self) -> None:
         """The eval() categorical pattern example must be present in the system prompt.
@@ -3066,11 +3113,11 @@ class TestTrialDeduplication:
 
 
 class TestLLMFailureHandling:
-    """Test graceful degradation when the LLM or patching step fails."""
+    """Test that LLM or patching failures propagate (stage -> FAILED for fallback)."""
 
     @pytest.mark.asyncio
-    async def test_llm_raises_returns_original_code(self, tmp_path: Path) -> None:
-        """If _analyze_code raises, compute() must return original code with n_params=0."""
+    async def test_llm_raises_propagates(self, tmp_path: Path) -> None:
+        """If _analyze_code raises, compute() must re-raise (stage -> FAILED)."""
         vpath = tmp_path / "validator.py"
         vpath.write_text("def validate(output): return {'score': float(output)}")
 
@@ -3088,16 +3135,12 @@ class TestLLMFailureHandling:
         original_code = "def run_code(): return 42.0"
         program = Program(code=original_code)
         stage.attach_inputs({})
-        result = await asyncio.wait_for(stage.compute(program), timeout=30)
-
-        assert result.optimized_code == original_code
-        assert result.n_params == 0
-        assert result.n_trials == 0
-        assert result.best_params == {}
+        with pytest.raises(RuntimeError, match="LLM analysis or patching failed"):
+            await asyncio.wait_for(stage.compute(program), timeout=30)
 
     @pytest.mark.asyncio
-    async def test_patching_raises_returns_original_code(self, tmp_path: Path) -> None:
-        """If _apply_modifications raises ValueError, compute() must return original code."""
+    async def test_patching_raises_propagates(self, tmp_path: Path) -> None:
+        """If _apply_modifications raises ValueError, compute() must re-raise."""
         vpath = tmp_path / "validator.py"
         vpath.write_text("def validate(output): return {'score': float(output)}")
 
@@ -3129,11 +3172,8 @@ class TestLLMFailureHandling:
         original_code = "def run_code(): return 42.0"
         program = Program(code=original_code)
         stage.attach_inputs({})
-        result = await asyncio.wait_for(stage.compute(program), timeout=30)
-
-        assert result.optimized_code == original_code
-        assert result.n_params == 0
-        assert result.n_trials == 0
+        with pytest.raises(RuntimeError, match="LLM analysis or patching failed"):
+            await asyncio.wait_for(stage.compute(program), timeout=30)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

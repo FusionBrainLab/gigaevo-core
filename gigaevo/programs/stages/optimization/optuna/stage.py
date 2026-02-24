@@ -12,6 +12,7 @@ import ast
 import asyncio
 import math
 from pathlib import Path
+import time
 from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -53,6 +54,10 @@ from gigaevo.programs.stages.optimization.utils import (
     build_eval_code,
     evaluate_single,
     read_validator,
+)
+from gigaevo.programs.stages.python_executors.wrapper import (
+    ExecRunnerError,
+    run_exec_runner,
 )
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
@@ -244,13 +249,65 @@ class OptunaOptimizationStage(Stage):
 
         return code
 
-    async def _analyze_code(self, code: str) -> OptunaSearchSpace:
+    async def _measure_baseline_runtime(
+        self,
+        code: str,
+        context: dict[str, Any] | None,
+        pid: str,
+    ) -> float | None:
+        """Run the original code once and return wall-clock seconds, or *None* on failure.
+
+        Uses the existing ``build_eval_code`` / ``evaluate_single`` helpers with
+        no ``_optuna_params`` preamble so the program runs with its hardcoded
+        constants — i.e. the true baseline.
+        """
+        eval_code = build_eval_code(
+            validator_code=self._validator_code,
+            program_code=code,
+            function_name=self.function_name,
+            validator_fn=self.validator_fn,
+            eval_fn_name="_optuna_eval",
+            preamble_lines=None,
+        )
+        t0 = time.monotonic()
+        result, err = await evaluate_single(
+            eval_code=eval_code,
+            eval_fn_name="_optuna_eval",
+            context=context,
+            score_key=self.score_key,
+            python_path=self.python_path,
+            timeout=self.eval_timeout,
+            max_memory_mb=self.max_memory_mb,
+            log_tag="Optuna-baseline",
+        )
+        elapsed = time.monotonic() - t0
+        if result is None:
+            logger.debug(
+                "[Optuna][{}] Baseline runtime measurement failed: {}",
+                pid,
+                err,
+            )
+            return None
+        logger.debug(
+            "[Optuna][{}] Baseline runtime: {:.2f}s (timeout={}s)",
+            pid,
+            elapsed,
+            self.eval_timeout,
+        )
+        return elapsed
+
+    async def _analyze_code(
+        self, code: str, baseline_runtime_s: float | None = None
+    ) -> OptunaSearchSpace:
         """Call the LLM to propose a search space for *code*.
 
         Parameters
         ----------
         code : str
             The source code to analyze.
+        baseline_runtime_s : float | None
+            Wall-clock seconds for one baseline run, forwarded to the LLM
+            prompt so it can judge runtime headroom.
 
         Returns
         -------
@@ -266,6 +323,18 @@ class OptunaOptimizationStage(Stage):
         task_section = ""
         if self.task_description:
             task_section = f"\n**Task context:**\n{self.task_description}\n"
+
+        runtime_section = ""
+        if baseline_runtime_s is not None:
+            headroom = self.eval_timeout - baseline_runtime_s
+            runtime_section = (
+                f"\n**Runtime info:** The program currently runs in "
+                f"~{baseline_runtime_s:.2f}s with a timeout of "
+                f"{self.eval_timeout}s (~{headroom:.1f}s headroom). "
+                f"Keep this in mind when proposing parameters that affect "
+                f"runtime (e.g. iteration counts, grid sizes): ensure no "
+                f"trial exceeds the timeout.\n"
+            )
 
         direction = "minimize" if self.minimize else "maximize"
         n_startup = (
@@ -285,6 +354,7 @@ class OptunaOptimizationStage(Stage):
         user_msg = _USER_PROMPT_TEMPLATE.format(
             numbered_code=numbered_code,
             task_description_section=task_section,
+            runtime_section=runtime_section,
             eval_timeout=self.eval_timeout,
             n_trials=self.n_trials,
             total_trials=total_trials,
@@ -313,7 +383,13 @@ class OptunaOptimizationStage(Stage):
     # Phase 2: Optuna evaluation
     # ------------------------------------------------------------------
 
-    def _build_eval_code(self, parameterized_code: str, params: dict[str, Any]) -> str:
+    def _build_eval_code(
+        self,
+        parameterized_code: str,
+        params: dict[str, Any],
+        *,
+        capture_program_output: bool = False,
+    ) -> str:
         """Compose a self-contained script: params dict + program + validator.
 
         Parameters
@@ -322,6 +398,10 @@ class OptunaOptimizationStage(Stage):
             The code containing ``_optuna_params`` references.
         params : dict[str, Any]
             The specific parameter values to inject for this evaluation.
+        capture_program_output : bool
+            If ``True``, the generated eval function returns
+            ``(val_result, prog_result)`` so the caller can capture the raw
+            program output alongside the validation score.
 
         Returns
         -------
@@ -337,6 +417,7 @@ class OptunaOptimizationStage(Stage):
             validator_fn=self.validator_fn,
             eval_fn_name="_optuna_eval",
             preamble_lines=[f"{_OPTUNA_PARAMS_NAME} = {params!r}"],
+            capture_program_output=capture_program_output,
         )
 
     async def _evaluate_single(
@@ -344,8 +425,8 @@ class OptunaOptimizationStage(Stage):
         parameterized_code: str,
         params: dict[str, Any],
         context: Optional[dict[str, Any]],
-    ) -> tuple[Optional[dict[str, float]], Optional[str]]:
-        """Run one trial and return (score_dict, error_message).
+    ) -> tuple[dict[str, float] | None, Any, str | None]:
+        """Run one trial capturing both scores and raw program output.
 
         Parameters
         ----------
@@ -358,20 +439,35 @@ class OptunaOptimizationStage(Stage):
 
         Returns
         -------
-        tuple[Optional[dict[str, float]], Optional[str]]
-            A tuple of (scores, error_message).
+        tuple[dict[str, float] | None, Any, str | None]
+            ``(scores, program_output, error_message)``.
         """
-        eval_code = self._build_eval_code(parameterized_code, params)
-        return await evaluate_single(
-            eval_code=eval_code,
-            eval_fn_name="_optuna_eval",
-            context=context,
-            score_key=self.score_key,
-            python_path=self.python_path,
-            timeout=self.eval_timeout,
-            max_memory_mb=self.max_memory_mb,
-            log_tag="Optuna",
+        eval_code = self._build_eval_code(
+            parameterized_code, params, capture_program_output=True
         )
+        args = [context] if context is not None else []
+        try:
+            result, _, _ = await run_exec_runner(
+                code=eval_code,
+                function_name="_optuna_eval",
+                args=args,
+                kwargs={},
+                python_path=list(self.python_path),
+                timeout=self.eval_timeout,
+                max_memory_mb=self.max_memory_mb,
+            )
+            val_result, prog_output = result
+            # Validator may return (metrics_dict, artifact) — unwrap.
+            if isinstance(val_result, tuple):
+                val_result = val_result[0]
+            if isinstance(val_result, dict) and self.score_key in val_result:
+                return val_result, prog_output, None
+            return None, None, f"Unexpected result type: {type(val_result).__name__}"
+        except asyncio.TimeoutError:
+            return None, None, "Timeout"
+        except ExecRunnerError as exc:
+            last_line = (exc.stderr or "").strip().rsplit("\n", 1)[-1]
+            return None, None, f"{exc} | {last_line}"
 
     async def _run_optuna(
         self,
@@ -379,7 +475,7 @@ class OptunaOptimizationStage(Stage):
         param_specs: list[ParamSpec],
         context: Optional[dict[str, Any]],
         pid: str,
-    ) -> tuple[dict[str, Any], dict[str, float], int, int]:
+    ) -> tuple[dict[str, Any], dict[str, float], int, int, Any]:
         """Run Optuna optimization.
 
         Parameters
@@ -395,8 +491,9 @@ class OptunaOptimizationStage(Stage):
 
         Returns
         -------
-        tuple[dict[str, Any], dict[str, float], int, int]
-            Best parameters, best scores, number of successful trials, and total trials run.
+        tuple[dict[str, Any], dict[str, float], int, int, Any]
+            Best parameters, best scores, number of successful trials,
+            total trials run, and the raw program output from the best trial.
         """
         direction = "minimize" if self.minimize else "maximize"
 
@@ -438,6 +535,7 @@ class OptunaOptimizationStage(Stage):
         best_scores: dict[str, float] = {}
         best_value: float | None = None
         best_params: dict[str, Any] = {p.name: p.initial_value for p in param_specs}
+        best_prog_output: Any = None
 
         def _is_better(score: float) -> bool:
             if best_value is None:
@@ -678,7 +776,12 @@ class OptunaOptimizationStage(Stage):
                     )
 
         async def _run_trial(trial_number: int) -> None:
-            nonlocal best_scores, best_value, best_params, _trials_since_improvement
+            nonlocal \
+                best_scores, \
+                best_value, \
+                best_params, \
+                best_prog_output, \
+                _trials_since_improvement
             trial = None
             k = trial_number + 1
             try:
@@ -749,7 +852,7 @@ class OptunaOptimizationStage(Stage):
                         total_trials,
                         status,
                     )
-                    scores, error = await self._evaluate_single(
+                    scores, prog_output, error = await self._evaluate_single(
                         parameterized_code, values, context
                     )
 
@@ -771,6 +874,7 @@ class OptunaOptimizationStage(Stage):
                             best_value = score
                             best_scores = scores
                             best_params = dict(values)
+                            best_prog_output = prog_output
                             _trials_since_improvement = 0
                         else:
                             _trials_since_improvement += 1
@@ -812,16 +916,8 @@ class OptunaOptimizationStage(Stage):
         # 1. Evaluate baseline (parameterized code with initial values).
         baseline_values = {p.name: p.initial_value for p in param_specs}
 
-        baseline_eval_code = self._build_eval_code(parameterized_code, baseline_values)
-        baseline_result, baseline_err = await evaluate_single(
-            eval_code=baseline_eval_code,
-            eval_fn_name="_optuna_eval",
-            context=context,
-            score_key=self.score_key,
-            python_path=self.python_path,
-            timeout=self.eval_timeout,
-            max_memory_mb=self.max_memory_mb,
-            log_tag="Optuna",
+        baseline_result, baseline_prog, baseline_err = await self._evaluate_single(
+            parameterized_code, baseline_values, context
         )
 
         if baseline_result is not None:
@@ -830,6 +926,7 @@ class OptunaOptimizationStage(Stage):
                 best_value = baseline_score
                 best_scores = baseline_result
                 best_params = dict(baseline_values)
+                best_prog_output = baseline_prog
             # Tell the study about the baseline so TPE can learn from it.
             try:
                 study.enqueue_trial(baseline_values)
@@ -898,7 +995,7 @@ class OptunaOptimizationStage(Stage):
                 pid,
                 reasons_str,
             )
-            return best_params, best_scores, 0, total_trials
+            return best_params, best_scores, 0, total_trials, best_prog_output
 
         logger.debug(
             "[Optuna][{}] Best trial: {} {}={}",
@@ -908,7 +1005,7 @@ class OptunaOptimizationStage(Stage):
             best_value,
         )
 
-        return best_params, best_scores, n_complete, total_trials
+        return best_params, best_scores, n_complete, total_trials, best_prog_output
 
     # ------------------------------------------------------------------
     # Main compute
@@ -930,40 +1027,24 @@ class OptunaOptimizationStage(Stage):
         code = program.code
         pid = program.id[:8]
 
-        # 1. LLM analysis
+        # 0. Resolve context early (needed for baseline runtime measurement)
+        ctx = self.params.context.data if self.params.context is not None else None
+
+        # 1. Measure baseline runtime for the LLM prompt
+        baseline_runtime_s = await self._measure_baseline_runtime(code, ctx, pid)
+
+        # 2. LLM analysis
         logger.debug("[Optuna][{}] Analysing code with LLM...", pid)
         try:
-            search_space = await self._analyze_code(code)
+            search_space = await self._analyze_code(code, baseline_runtime_s)
             parameterized_code = self._apply_modifications(code, search_space)
         except Exception as exc:
-            logger.warning(
-                "[Optuna][{}] LLM analysis or patching failed: {}; returning original code",
-                pid,
-                exc,
-            )
-            return OptunaOptimizationOutput(
-                optimized_code=code,
-                best_scores={},
-                best_params={},
-                n_params=0,
-                n_trials=0,
-                search_space_summary=[],
-            )
+            raise RuntimeError(
+                f"[Optuna][{pid}] LLM analysis or patching failed: {exc}"
+            ) from exc
 
         if not search_space.parameters:
-            logger.info(
-                "[Optuna][{}] LLM found no tuneable parameters; "
-                "returning original code.",
-                pid,
-            )
-            return OptunaOptimizationOutput(
-                optimized_code=code,
-                best_scores={},
-                best_params={},
-                n_params=0,
-                n_trials=0,
-                search_space_summary=[],
-            )
+            raise ValueError(f"[Optuna][{pid}] LLM found no tuneable parameters")
 
         param_specs = search_space.parameters
         # parameterized_code is already computed in try-block above
@@ -977,13 +1058,17 @@ class OptunaOptimizationStage(Stage):
         )
         logger.debug("[Optuna][{}] LLM reasoning: {}", pid, search_space.reasoning)
 
-        # 2. Resolve context
-        ctx = self.params.context.data if self.params.context is not None else None
-
         # 3. Run Optuna
-        best_params, best_scores, n_complete, total_trials = await self._run_optuna(
-            parameterized_code, param_specs, ctx, pid
-        )
+        (
+            best_params,
+            best_scores,
+            n_complete,
+            total_trials,
+            best_prog_output,
+        ) = await self._run_optuna(parameterized_code, param_specs, ctx, pid)
+
+        if not best_scores:
+            raise ValueError(f"[Optuna][{pid}] Optuna produced no usable scores")
 
         # 4. Build optimised code (desubstitute params into clean code)
         param_types = {p.name: p.param_type for p in param_specs}
@@ -1037,4 +1122,5 @@ class OptunaOptimizationStage(Stage):
             n_params=n,
             n_trials=n_complete,
             search_space_summary=search_summary,
+            best_program_output=best_prog_output,
         )
