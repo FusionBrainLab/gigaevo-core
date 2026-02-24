@@ -1,6 +1,7 @@
 # CHANGELOG
 
 <!-- version list -->
+<!-- Cleaned up orphaned v1.12.0 tag to unblock semantic-release -->
 
 ## v1.11.1 (2025-11-18)
 
