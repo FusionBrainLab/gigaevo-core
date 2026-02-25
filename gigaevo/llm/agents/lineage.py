@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.formatter import MetricsFormatter
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
 
 
 class TransitionInsight(BaseModel):
@@ -198,8 +198,12 @@ class LineageAgent(LangGraphAgent):
             else ""
         )
 
-        parent_errors = parent.format_errors(include_traceback=True)
-        child_errors = child.format_errors(include_traceback=True)
+        parent_errors = parent.format_errors(
+            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+        )
+        child_errors = child.format_errors(
+            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+        )
 
         metric_name = self.metrics_formatter.context.get_primary_key()
         metric_description = self.metrics_formatter.context.get_description(metric_name)

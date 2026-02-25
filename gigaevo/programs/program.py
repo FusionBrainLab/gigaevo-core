@@ -22,6 +22,15 @@ GENESIS_GENERATION: int = 1
 NO_STAGE_ERRORS_MSG: str = "<No stage errors found>"
 NO_ERROR_DETAILS_MSG: str = "<Failed stages found but no error details available>"
 
+OPTIMIZATION_STAGES: frozenset[str] = frozenset(
+    {
+        "OptunaOptStage",
+        "CMAOptStage",
+        "OptunaPayloadBridge",
+        "PayloadResolver",
+    }
+)
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -182,9 +191,16 @@ class Program(BaseModel):
             return None
         return result.error.pretty(include_traceback=include_traceback)
 
-    def format_errors(self, *, include_traceback: bool = False) -> str:
+    def format_errors(
+        self,
+        *,
+        include_traceback: bool = False,
+        exclude_stages: set[str] | None = None,
+    ) -> str:
         """Aggregate LLM-friendly error summaries across all failed stages."""
         failed = self.failed_stages
+        if exclude_stages:
+            failed = [s for s in failed if s not in exclude_stages]
         if not failed:
             return NO_STAGE_ERRORS_MSG
         summaries: list[str] = []

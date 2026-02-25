@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.formatter import MetricsFormatter
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
 
 
 class ProgramInsight(BaseModel):
@@ -111,7 +111,9 @@ class InsightsAgent(LangGraphAgent):
             else "No metrics available"
         )
 
-        errors = program.format_errors(include_traceback=True)
+        errors = program.format_errors(
+            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+        )
         error_section = (
             f"**Error Analysis**: Focus on fixing or avoiding failure modes from stages:\n{errors}"
             if errors
