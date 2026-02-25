@@ -11,7 +11,8 @@ problem:
 # Optional post-run ideas analysis from Redis.
 ideas_tracker: false
 
-# Optional override for memory write checkpoint directory.
-# Used only when ideas_tracker.memory_write_pipeline.enabled=true.
+# Optional override for memory checkpoint directory.
+# Used by memory GAM agent when memory_enabled=true, and by ideas tracker
+# final memory write when ideas_tracker.memory_write_pipeline.enabled=true.
 # Example: checkpoint_dir=outputs/custom_memory_checkpoint
 checkpoint_dir: null
