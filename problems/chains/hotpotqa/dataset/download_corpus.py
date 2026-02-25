@@ -10,9 +10,6 @@ License: CC BY-SA 4.0
 Usage:
     python -m problems.prompt_free_chains.hotpotqa.dataset.download_corpus
 """
-
-from __future__ import annotations
-
 import bz2
 import gzip
 import json
@@ -121,7 +118,7 @@ def build_index():
         print(f"Corpus not found at {OUTPUT_PATH}. Run download and process first.")
         return
 
-    from problems.prompt_free_chains.hotpotqa.utils.retrieval import build_bm25s_index
+    from problems.chains.hotpotqa.utils.retrieval import build_bm25s_index
 
     build_bm25s_index(OUTPUT_PATH, BM25S_INDEX_DIR)
 
