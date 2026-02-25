@@ -25,6 +25,7 @@ class IdeaAnalyzer:
         self,
         model: str = "deepseek/deepseek-v3.2",
         reasoning: dict[str, Any] | None = None,
+        base_url: str | None = None,
     ) -> None:
         """
         Initialize IdeaAnalyzer with LLM model.
@@ -32,9 +33,11 @@ class IdeaAnalyzer:
         Args:
             model: Name of the LLM model to use for classification.
             reasoning: Optional OpenRouter reasoning settings, e.g. {"effort": "low"}.
+            base_url: Optional OpenAI-compatible base URL from config.
         """
         self.model = model
         self.reasoning = reasoning or {}
+        self.base_url = str(base_url).strip() if base_url is not None else None
         self._is_openrouter = False
         self.logger: IdeasTrackerLogger | None = None
         self.description_rewriting: bool = False
@@ -53,12 +56,13 @@ class IdeaAnalyzer:
                 "OPENAI_API_KEY is not set. Set it in your environment or .env file."
             )
 
-        # Accept multiple base-url env names for compatibility with existing setups.
-        base_url = (
+        # Priority: env overrides config, then configured base_url.
+        env_base_url = (
             os.getenv("OPENAI_BASE_URL")
             or os.getenv("BASE_URL")
             or os.getenv("LLM_BASE_URL")
         )
+        base_url = env_base_url or self.base_url
 
         # OpenRouter keys typically start with "sk-or-"; infer base URL when missing.
         if not base_url and api_key.startswith("sk-or-"):

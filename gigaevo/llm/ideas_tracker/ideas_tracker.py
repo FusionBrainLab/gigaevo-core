@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import json
 import os
 from pathlib import Path
@@ -43,7 +44,7 @@ class IdeaTracker:
 
         Args:
             config_path: Optional path to configuration YAML file. If None, uses
-                default config/ideas_tracker.yaml from project root.
+                default config/memory.yaml from project root (ideas_tracker section).
         """
         self.config = self._load_config(config_path)
         self.logger = IdeasTrackerLogger(Path(__file__).resolve())
@@ -52,8 +53,13 @@ class IdeaTracker:
         self.ideas_manager = RecordManager(list_max_ideas=list_max_ideas)
 
         model_name = self.config.get("model") or "deepseek/deepseek-v3.2"
+        base_url = self.config.get("base_url")
         reasoning_cfg = self.config.get("reasoning", {}) or {}
-        self.analyzer = IdeaAnalyzer(model_name, reasoning=reasoning_cfg)
+        self.analyzer = IdeaAnalyzer(
+            model_name,
+            reasoning=reasoning_cfg,
+            base_url=base_url,
+        )
         self.programs_card: list[ProgramRecord] = []
         self.programs_ids: set[str] = set()
 
@@ -79,6 +85,14 @@ class IdeaTracker:
         self.statistics_enabled = statistics_config.get("enabled", True)
         self.statistics_mode = statistics_config.get("mode", "top_k")
 
+        memory_write_cfg = self.config.get("memory_write_pipeline", False)
+        if isinstance(memory_write_cfg, dict):
+            self.memory_write_pipeline_enabled = bool(
+                memory_write_cfg.get("enabled", False)
+            )
+        else:
+            self.memory_write_pipeline_enabled = bool(memory_write_cfg)
+
         self.ideas_manager.logger = self.logger
         self.analyzer.logger = self.logger  # type: ignore[assignment]
 
@@ -96,6 +110,7 @@ class IdeaTracker:
             top_k_delta_fitness=self.top_k_delta_fitness,
             top_k_fitness=self.top_k_fitness,
             list_max_ideas=list_max_ideas,
+            memory_write_pipeline_enabled=self.memory_write_pipeline_enabled,
         )
 
     def _load_config(self, config_path: Optional[str | Path]) -> dict[str, Any]:
@@ -103,7 +118,9 @@ class IdeaTracker:
         Load IdeaTracker configuration from YAML file.
 
         Resolves project root (3 levels up from this file) to find default config
-        at config/ideas_tracker.yaml when no path is provided.
+        at config/memory.yaml when no path is provided.
+        If the loaded file contains an ``ideas_tracker`` section, that section is used.
+        Otherwise, the full file payload is treated as legacy IdeaTracker config.
 
         Args:
             config_path: Path to configuration file, or None to use default location.
@@ -112,29 +129,43 @@ class IdeaTracker:
             Dictionary containing configuration values with keys: gen_delta, model, redis.
             Returns default configuration if file is missing.
         """
+        default_config: dict[str, Any] = {
+            "gen_delta": 100000,
+            "list_max_ideas": 5,
+            "model": "deepseek/deepseek-v3.2",
+            "base_url": "https://openrouter.ai/api/v1",
+            "redis": {
+                "redis_host": "localhost",
+                "redis_port": 6379,
+                "redis_db": 0,
+                "redis_prefix": "heilbron",
+                "label": "",
+            },
+            "memory_write_pipeline": {"enabled": False},
+        }
+
         if config_path is None:
             project_root = Path(__file__).resolve().parents[3]
-            path_obj = project_root / "config" / "ideas_tracker.yaml"
+            path_obj = project_root / "config" / "memory.yaml"
         else:
             path_obj = Path(config_path)
 
         if not path_obj.is_file():
-            return {
-                "gen_delta": 100000,
-                "list_max_ideas": 5,
-                "model": "deepseek/deepseek-v3.2",
-                "redis": {
-                    "redis_host": "localhost",
-                    "redis_port": 6379,
-                    "redis_db": 0,
-                    "redis_prefix": "heilbron",
-                    "label": "",
-                },
-            }
+            return default_config
 
         with path_obj.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        return data
+            payload = yaml.safe_load(f) or {}
+
+        if not isinstance(payload, dict):
+            return default_config
+
+        # Unified config format stores tracker settings under ideas_tracker.
+        ideas_tracker_cfg = payload.get("ideas_tracker")
+        if isinstance(ideas_tracker_cfg, dict):
+            return ideas_tracker_cfg
+
+        # Backward-compatible fallback: treat the whole payload as tracker config.
+        return payload
 
     def _load_task_description(self) -> str:
         """
@@ -520,6 +551,68 @@ class IdeaTracker:
         with open(banks_path, "w", encoding="utf-8") as f:
             json.dump(banks_data, f, indent=4)
 
+    def _has_best_ideas_snapshot(self, best_ideas_path: Path) -> bool:
+        """
+        Check that best_ideas.json contains at least one snapshot with 'best_ideas'.
+        """
+        try:
+            with best_ideas_path.open("r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        if isinstance(payload, dict):
+            return "best_ideas" in payload
+        if isinstance(payload, list):
+            return any(
+                isinstance(item, dict) and "best_ideas" in item for item in payload
+            )
+        return False
+
+    def run_memory_write_pipeline(self) -> None:
+        """
+        Optionally run memory_write_example.py using current run's banks/best ideas logs.
+        """
+        if not self.memory_write_pipeline_enabled:
+            return
+
+        banks_path = self.logger.banks_file
+        best_ideas_path = self.logger.best_ideas_file
+
+        if banks_path is None or best_ideas_path is None:
+            print("Memory write pipeline skipped: logger output paths are unavailable.")
+            return
+        if not banks_path.exists():
+            print(f"Memory write pipeline skipped: missing banks file at {banks_path}.")
+            return
+        if not best_ideas_path.exists() or not self._has_best_ideas_snapshot(
+            best_ideas_path
+        ):
+            print(
+                "Memory write pipeline skipped: best_ideas snapshot was not generated for this run."
+            )
+            return
+
+        env_overrides = {
+            "MEMORY_BANKS_PATH": str(banks_path),
+            "MEMORY_BEST_IDEAS_PATH": str(best_ideas_path),
+        }
+        previous_env = {key: os.environ.get(key) for key in env_overrides}
+
+        try:
+            os.environ.update(env_overrides)
+            memory_write_module = importlib.import_module(
+                "evo_memory_agent_api.memory_write_example"
+            )
+            memory_write_module = importlib.reload(memory_write_module)
+            memory_write_module.main()
+        finally:
+            for key, value in previous_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def run(self, path_to_database: Optional[str | Path] = None) -> None:
         """
         Main execution method: load database, process new programs, and update banks.
@@ -557,6 +650,9 @@ class IdeaTracker:
 
         # --- Evolutionary statistics (origin analysis) ---
         self.compute_evolutionary_statistics()
+
+        # --- Optional memory DB write for best ideas ---
+        self.run_memory_write_pipeline()
 
 
 if __name__ == "__main__":

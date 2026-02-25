@@ -1,0 +1,109 @@
+# Unified configuration for memory backend and ideas tracker.
+#
+# Top-level sections are used by evo_memory_agent_api and MemorySelectorAgent.
+# The ideas_tracker section is used by gigaevo.llm.ideas_tracker.IdeaTracker.
+
+paths:
+  checkpoint_dir: memory_usage_store/api_exp4
+  banks_dir: ../gigaevo/llm/ideas_tracker/logs/2026-02-19_19-51-02
+
+api:
+  base_url: http://localhost:8000
+  namespace: exp9
+  use_api: false
+  channel: latest
+  author: null
+
+runtime:
+  # Synthesize search responses with LLM when needed.
+  enable_llm_synthesis: false
+
+  # Run A-MEM evolution flow during writes.
+  should_evolve: false
+
+  # Auto-fill missing card metadata using LLM.
+  fill_missing_fields_with_llm: false
+
+  search_limit: 5
+  rebuild_interval: 30
+  sync_batch_size: 100
+  sync_on_init: true
+
+gam:
+  enable_bm25: false
+
+  # default | experimental
+  pipeline_mode: experimental
+
+  # Supported tools:
+  # page_index, keyword, vector,
+  # vector_description, vector_task_description, vector_explanation_summary
+  allowed_tools:
+    - page_index
+    - vector
+
+  # Maximum retrieval hits (top_k) per tool.
+  top_k_by_tool:
+    keyword: 5
+    vector: 3
+    vector_description: 3
+    vector_task_description: 0
+    vector_explanation_summary: 3
+    page_index: 5
+
+# OpenRouter reasoning controls for evo_memory_agent_api/config.py.
+reasoning:
+  effort: "minimal"
+
+models:
+  openai_base_url: https://openrouter.ai/api/v1
+  openrouter_service: openrouter_openai
+  openrouter_model_name: google/gemini-3-flash-preview
+  amem_embedding_model_name: all-MiniLM-L6-v2
+  gam_dense_retriever_model_name: BAAI/bge-m3
+
+ideas_tracker:
+  gen_delta: 100000
+
+  # Number of known ideas bundled into one RecordList.
+  list_max_ideas: 20
+
+  # LLM model used by IdeaAnalyzer.
+  model: "google/gemini-3-flash-preview"
+  base_url: "https://openrouter.ai/api/v1"
+
+  reasoning:
+    effort: "minimal"
+
+  # Description rewriting settings.
+  description_rewriting: true
+
+  # Connection settings for RedisRunConfig.
+  redis:
+    redis_host: "localhost"
+    redis_port: 6379
+    redis_db: 1
+    redis_prefix: "heilbron"
+    label: ""
+
+  statistics:
+    enabled: false
+    # available modes: top_k, top_fitness, delta_fitness
+    mode: "top_k"
+    top_k_delta_fitness: 5
+    top_k_fitness: 5
+
+  # Optional: write current run's best ideas into memory DB pipeline.
+  memory_write_pipeline:
+    enabled: false
+
+  experimental_features:
+    # ML-based impact analysis pipeline (Bootstrap ElasticNet).
+    ml_impact_pipeline:
+      enabled: false
+      n_iterations: 200
+      include_interactions: true
+      max_interaction_pairs: 10
+      min_idea_programs: 2
+      confidence_level: 0.95
+      random_state: 42
