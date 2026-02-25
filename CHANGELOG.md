@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.14.1 (2026-02-25)
+
+### Bug Fixes
+
+- **prompts**: Remove single-step exp.; add full chains evolution
+  ([#63](https://github.com/KhrulkovV/gigaevo-core-internal/pull/63),
+  [`8a9ec44`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8a9ec44c6c9cd0cc35c0d34c3ff8a5a7d83527a9))
+
+- **prompts**: Removed wrong directories
+  ([#63](https://github.com/KhrulkovV/gigaevo-core-internal/pull/63),
+  [`8a9ec44`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8a9ec44c6c9cd0cc35c0d34c3ff8a5a7d83527a9))
+
+
 ## v1.14.0 (2026-02-25)
 
 ### Bug Fixes
