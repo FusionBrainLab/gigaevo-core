@@ -236,6 +236,8 @@ def _build_runtime_memory_config(
     cfg: DictConfig,
     output_dir: Path,
     requested_checkpoint_dir: Path | None,
+    *,
+    checkpoint_override_policy: str,
 ) -> tuple[Path, bool, Path | None]:
     project_root = Path(__file__).resolve().parent
     default_memory_config_path = project_root / "config" / "memory.yaml"
@@ -257,7 +259,17 @@ def _build_runtime_memory_config(
     redis_cfg["redis_prefix"] = str(cfg.problem.name)
 
     applied_checkpoint_dir: Path | None = None
-    if memory_write_enabled and requested_checkpoint_dir is not None:
+    should_apply_checkpoint_override = (
+        requested_checkpoint_dir is not None
+        and (
+            checkpoint_override_policy == "always"
+            or (
+                checkpoint_override_policy == "memory_write_only"
+                and memory_write_enabled
+            )
+        )
+    )
+    if should_apply_checkpoint_override and requested_checkpoint_dir is not None:
         requested_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         paths_cfg = _ensure_mapping(payload, "paths")
         paths_cfg["checkpoint_dir"] = str(requested_checkpoint_dir)
@@ -274,6 +286,7 @@ def run_ideas_tracker(cfg: DictConfig, output_dir: Path, runtime_cwd: Path) -> N
             cfg,
             output_dir,
             requested_checkpoint_dir,
+            checkpoint_override_policy="memory_write_only",
         )
     )
     previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
@@ -292,7 +305,7 @@ def run_ideas_tracker(cfg: DictConfig, output_dir: Path, runtime_cwd: Path) -> N
     elif requested_checkpoint_dir is not None:
         logger.info(
             "checkpoint_dir was provided but ignored because "
-            "ideas_tracker.memory_write_pipeline.enabled=false."
+            "ideas_tracker.memory_write_pipeline.enabled=false for ideas tracker final write."
         )
 
     try:
@@ -326,7 +339,35 @@ def main(cfg: DictConfig) -> None:
         hydra_output_dir,
     )
     logger.info(f"Log file: {log_file_path}")
-    asyncio.run(run_experiment(cfg))
+
+    requested_checkpoint_dir = _resolve_checkpoint_dir_arg(cfg, hydra_runtime_cwd)
+    memory_enabled = _to_bool(cfg.get("memory_enabled", False))
+
+    previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
+    configured_memory_env = False
+    if memory_enabled and requested_checkpoint_dir is not None:
+        runtime_memory_config_path, _, applied_checkpoint_dir = _build_runtime_memory_config(
+            cfg,
+            hydra_output_dir,
+            requested_checkpoint_dir,
+            checkpoint_override_policy="always",
+        )
+        os.environ["EVO_MEMORY_CONFIG_PATH"] = str(runtime_memory_config_path)
+        configured_memory_env = True
+        if applied_checkpoint_dir is not None:
+            logger.info(
+                "Memory GAM checkpoint directory override: {}",
+                applied_checkpoint_dir,
+            )
+
+    try:
+        asyncio.run(run_experiment(cfg))
+    finally:
+        if configured_memory_env:
+            if previous_config_path is None:
+                os.environ.pop("EVO_MEMORY_CONFIG_PATH", None)
+            else:
+                os.environ["EVO_MEMORY_CONFIG_PATH"] = previous_config_path
 
     if bool(cfg.get("ideas_tracker", False)):
         run_ideas_tracker(cfg, hydra_output_dir, hydra_runtime_cwd)
