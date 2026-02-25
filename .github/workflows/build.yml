@@ -81,11 +81,17 @@ jobs:
     steps:
       # Checkout on the actual branch (not detached HEAD) so that
       # python-semantic-release can push the version commit back to main.
+      # Fetch the latest origin/main (which may include the coverage badge
+      # commit pushed by the test job) so semantic-release doesn't fail
+      # with an "upstream has changed" error.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
-      - run: git reset --hard ${{ github.sha }}
+      - name: Sync with latest origin/main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
