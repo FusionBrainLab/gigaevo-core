@@ -57,7 +57,6 @@ reasoning:
 
 models:
   openai_base_url: https://openrouter.ai/api/v1
-  openrouter_service: openrouter_openai
   openrouter_model_name: google/gemini-3-flash-preview
   amem_embedding_model_name: all-MiniLM-L6-v2
   gam_dense_retriever_model_name: BAAI/bge-m3
