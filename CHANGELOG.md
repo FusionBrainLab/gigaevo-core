@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.13.0 (2026-02-25)
+
+### Bug Fixes
+
+- **ci**: Sync release job with latest origin/main before semantic-release
+  ([`34efe54`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/34efe5499262c2e6716d561290fcd6d6f91da2b2))
+
+### Chores
+
+- Update coverage badge to 77% [skip ci]
+  ([`8824566`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8824566e3fde3e840ee964e62e24dccd7907a14d))
+
+### Features
+
+- Filter optimization stage errors from mutation/LLM prompts
+  ([`6107559`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6107559ec55c895e63c5b558438458b26b574d28))
+
+- **ci**: Add self-updating coverage badge to README
+  ([`61a9ef1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/61a9ef11f67563e1303ea58b34c88cc2cff83b37))
+
+
 ## v1.12.0 (2026-02-24)
 
 ### Bug Fixes
