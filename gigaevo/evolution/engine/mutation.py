@@ -6,6 +6,7 @@ from loguru import logger
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
+from gigaevo.evolution.mutation.context import MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.programs.program import Program
@@ -88,6 +89,14 @@ async def generate_mutations(
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
                 program.set_metadata("memory_used", bool(memory_used))
+                selected_ids = program.get_metadata(
+                    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY
+                )
+                if not isinstance(selected_ids, list):
+                    selected_ids = []
+                program.set_metadata(
+                    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, selected_ids
+                )
 
                 await storage.add(program)
                 persisted_id = program.id  # Point of no return — ID must be returned
