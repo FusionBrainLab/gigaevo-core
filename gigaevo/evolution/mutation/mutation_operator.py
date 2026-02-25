@@ -10,6 +10,7 @@ from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.context import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_METADATA_KEY,
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.utils import _DocstringRemover
 from gigaevo.exceptions import MutationError
@@ -125,9 +126,10 @@ class LLMMutationOperator(MutationOperator):
         try:
             parents_for_mutation = selected_parents
             memory_text = (memory_instructions or "").strip()
+            memory_selected_ids: list[str] = []
             use_memory_selector = memory_instructions is not None
             if use_memory_selector:
-                selected_cards = await self.memory_selector.arun(
+                memory_selection = await self.memory_selector.select(
                     input=selected_parents,
                     mutation_mode=self.mutation_mode,
                     task_description=self.problem_context.task_description,
@@ -135,12 +137,17 @@ class LLMMutationOperator(MutationOperator):
                     memory_text=memory_text,
                     max_cards=3,
                 )
+                selected_cards = memory_selection.cards
+                memory_selected_ids = memory_selection.card_ids
                 if selected_cards:
                     memory_block = "\n\n".join(selected_cards)
                     parents_for_mutation = []
                     for parent in selected_parents:
                         clone = parent.model_copy(deep=True)
                         clone.metadata[MUTATION_MEMORY_METADATA_KEY] = memory_block
+                        clone.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] = (
+                            memory_selected_ids
+                        )
                         parents_for_mutation.append(clone)
                 else:
                     logger.warning(
@@ -191,10 +198,12 @@ class LLMMutationOperator(MutationOperator):
                 )
             if model_name:
                 mutation_metadata[MutationSpec.META_MODEL] = model_name
-            # Stamp prompt tracking ID if present
             prompt_id = result.get("prompt_id")
             if prompt_id is not None:
                 mutation_metadata[MutationSpec.META_PROMPT_ID] = prompt_id
+            mutation_metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] = (
+                memory_selected_ids
+            )
 
             mutation_spec = MutationSpec(
                 code=final_code,
