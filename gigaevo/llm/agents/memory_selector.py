@@ -63,7 +63,7 @@ class MemorySelectorAgent:
         try:
             repo_root = Path(__file__).resolve().parents[3]
             memory_api_root = repo_root / "evo_memory_agent_api"
-            load_dotenv(dotenv_path=memory_api_root / ".env", override=True)
+            load_dotenv(dotenv_path=repo_root / ".env", override=True)
 
             settings_path = resolve_settings_path()
             settings = load_settings(settings_path)

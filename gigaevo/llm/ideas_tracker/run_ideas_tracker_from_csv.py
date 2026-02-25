@@ -64,7 +64,7 @@ def main() -> None:
     parser.add_argument(
         "--config-path",
         default=None,
-        help="Optional path to ideas_tracker YAML config (defaults to config/ideas_tracker.yaml)",
+        help="Optional path to unified YAML config (defaults to config/memory.yaml, ideas_tracker section)",
     )
     args = parser.parse_args()
 

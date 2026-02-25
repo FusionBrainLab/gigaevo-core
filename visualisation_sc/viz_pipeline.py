@@ -12,7 +12,7 @@ import matplotlib.colors as mcolors
 # =========================
 # CONFIG: ONLY SET THIS
 # =========================
-INPUT_CSV = "outputs/heilbron_mem_new_gemini.csv"
+INPUT_CSV = "outputs/heilbron_mem_new_gemini1.csv"
 
 # Optional: if you still want the JSON written to disk for debugging / reuse
 WRITE_JSON_TO_DISK = False
