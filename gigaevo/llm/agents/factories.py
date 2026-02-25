@@ -27,7 +27,6 @@ from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.prompts import (
     InsightsPrompts,
     LineagePrompts,
-    MemorySelectorPrompts,
     ScoringPrompts,
 )
 
@@ -258,11 +257,6 @@ def create_scoring_agent(
 def create_memory_selector_agent(
     llm: ChatOpenAI | MultiModelRouter,
 ) -> MemorySelectorAgent:
-    """Create a memory selector agent for filtering memory cards."""
-    system_prompt = MemorySelectorPrompts.system()
-    user_template = MemorySelectorPrompts.user()
-    return MemorySelectorAgent(
-        llm=llm,
-        system_prompt=system_prompt,
-        user_prompt_template=user_template,
-    )
+    """Create a red-agent-backed memory selector for filtering memory ideas."""
+    _ = llm  # kept for API compatibility with existing call sites
+    return MemorySelectorAgent()

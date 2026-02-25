@@ -17,8 +17,8 @@ description_rewriting: true
 redis:
   redis_host: "localhost"
   redis_port: 6379
-  redis_db: 0
-  redis_prefix: "alphaevolve/packing_circles/n_26"
+  redis_db: 1
+  redis_prefix: "heilbron"
   label: ""
 
 # Statistics settings
@@ -32,7 +32,7 @@ statistics:
 experimental_features:
   # ML-based impact analysis pipeline (Bootstrap ElasticNet)
   ml_impact_pipeline:
-    enabled: true
+    enabled: false
     n_iterations: 200            # bootstrap repetitions (more = tighter CIs, slower)
     include_interactions: true   # detect pairwise idea interaction effects
     max_interaction_pairs: 10    # cap on interaction terms added

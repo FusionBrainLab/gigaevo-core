@@ -19,6 +19,7 @@ from gigaevo.llm.agents.factories import (
 )
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
+from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import Program
 
 if TYPE_CHECKING:
@@ -57,6 +58,7 @@ class LLMMutationOperator(MutationOperator):
         self.fallback_to_rewrite = fallback_to_rewrite
         self.context_key = context_key
         self.metrics_context = problem_context.metrics_context
+        self.metrics_formatter = MetricsFormatter(self.metrics_context)
         self.strip_comments_and_docstrings = strip_comments_and_docstrings
         self._prompt_fetcher = prompt_fetcher
 
@@ -123,18 +125,15 @@ class LLMMutationOperator(MutationOperator):
         try:
             parents_for_mutation = selected_parents
             memory_text = (memory_instructions or "").strip()
-            if memory_text:
-                mutation_user_prompt = self.agent.build_user_prompt(selected_parents)
-                mutation_prompt = (
-                    "SYSTEM PROMPT:\n"
-                    f"{self.agent.system_prompt}\n\n"
-                    "USER PROMPT:\n"
-                    f"{mutation_user_prompt}"
-                )
+            use_memory_selector = memory_instructions is not None
+            if use_memory_selector:
                 selected_cards = await self.memory_selector.arun(
-                    mutation_prompt=mutation_prompt,
+                    input=selected_parents,
+                    mutation_mode=self.mutation_mode,
+                    task_description=self.problem_context.task_description,
+                    metrics_description=self.metrics_formatter.format_metrics_description(),
                     memory_text=memory_text,
-                    max_cards=1,
+                    max_cards=3,
                 )
                 if selected_cards:
                     memory_block = "\n\n".join(selected_cards)
@@ -145,7 +144,7 @@ class LLMMutationOperator(MutationOperator):
                         parents_for_mutation.append(clone)
                 else:
                     logger.warning(
-                        "[LLMMutationOperator] Memory selection returned no cards; continuing without memory"
+                        "[LLMMutationOperator] Red memory search returned no ideas; continuing without memory"
                     )
 
             if self.mutation_mode == "diff" and len(selected_parents) != 1:
