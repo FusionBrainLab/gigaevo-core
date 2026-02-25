@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.14.0 (2026-02-25)
+
+### Bug Fixes
+
+- Timeout polish for optuna stage
+  ([`b9d914a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b9d914a783791b202f815d53d2578ebce5a664c0))
+
+### Features
+
+- Add time-budget deadline to Optuna trial loop
+  ([`6c98665`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6c98665a959edc9fc99c8a85c9c90b9bfe649f15))
+
+
 ## v1.13.0 (2026-02-25)
 
 ### Bug Fixes
