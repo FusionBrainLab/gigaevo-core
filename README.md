@@ -344,32 +344,49 @@ Tests are organized into subdirectories that mirror the source layout:
 tests/
 ├── conftest.py              # Shared fixtures (fakeredis, mock stages, factories)
 ├── stages/                  # Pipeline stage unit tests
-│   ├── test_stage_execute.py        # Stage.execute() return dispatch, timeout, cleanup
-│   ├── test_metrics_stages.py       # EnsureMetricsStage, NormalizeMetricsStage
-│   ├── test_complexity.py           # AST complexity analysis, code length
-│   ├── test_json_processing.py      # MergeDictStage, ParseJSON, StringifyJSON
-│   ├── test_formatter.py            # FormatterStage (None, string, repr paths)
-│   ├── test_langgraph_stage.py      # LangGraphStage postprocess, preprocess, errors
-│   ├── test_collector.py            # ProgramIds, descendants, ancestors, stats
-│   ├── test_mutation_context.py     # MutationContextStage optional input combos
-│   ├── test_lineage_stages.py       # LineagesToDescendants, LineagesFromAncestors
-│   ├── test_validation_stage.py     # Code validation and syntax checking
-│   ├── test_python_executors.py     # Exec runner, worker pool, timeouts
-│   ├── test_optuna_optimization.py  # Optuna search-space, trials, parameter freezing, time-budget deadline
-│   └── test_cma_optimization.py     # CMA-ES numerical optimization
+│   ├── test_stage_execute.py            # Stage.execute() return dispatch, timeout, cleanup
+│   ├── test_stage_base_extended.py      # __init_subclass__ validation, _is_optional_type,
+│   │                                    #   VoidOutput, compute_hash_from_inputs exceptions
+│   ├── test_metrics_stages.py           # EnsureMetricsStage, NormalizeMetricsStage
+│   ├── test_complexity.py               # AST complexity analysis, code length
+│   ├── test_json_processing.py          # MergeDictStage, ParseJSON, StringifyJSON
+│   ├── test_formatter.py                # FormatterStage (None, string, repr paths)
+│   ├── test_langgraph_stage.py          # LangGraphStage postprocess, preprocess, errors
+│   ├── test_collector.py                # ProgramIds, descendants, ancestors, stats
+│   ├── test_mutation_context.py         # MutationContextStage optional input combos
+│   ├── test_lineage_stages.py           # LineagesToDescendants, LineagesFromAncestors
+│   ├── test_validation_stage.py         # Code validation and syntax checking
+│   ├── test_validation_extended.py      # Invalid regex, AST file ops, import edge cases
+│   ├── test_python_executors.py         # Exec runner, worker pool, timeouts
+│   ├── test_optuna_optimization.py      # Optuna search-space, trials, parameter freezing,
+│   │                                    #   time-budget deadline
+│   ├── test_cma_optimization.py         # CMA-ES numerical optimization
+│   ├── test_cma_optimization_extended.py  # _should_extract, _extract_constants, _substitute,
+│   │                                    #   adaptive penalty via _evaluate_population, sign convention
+│   ├── test_optimization_utils.py       # format_value_for_source, make_numeric_const_node,
+│   │                                    #   read_validator, build_eval_code
+│   └── test_desubstitution_extended.py  # _coerce_param_value, _find_matching_close_paren,
+│                                        #   _clean_eval_in_source, desubstitute_params
 ├── dag/                     # DAG runner and scheduling
 │   ├── test_dag_automata.py             # Stage state machine transitions
+│   ├── test_dag_automata_extended.py    # is_satisfied_historically, non-Stage validation,
+│   │                                    #   duplicate input_name, _check_dataflow_gate, explain_blockers
 │   ├── test_dag_execution.py            # Individual stage execution, timeouts, caching
 │   ├── test_dag_integration.py          # End-to-end DAG pipeline runs
 │   ├── test_dag_complex_integration.py  # Complex topologies, failure propagation
 │   ├── test_dag_internals.py            # Dependency resolution, topological ordering
 │   ├── test_dag_caching.py              # Stage result caching strategies
-│   └── test_dag_runner.py               # DagRunner cleanup, crash paths, scheduling
+│   ├── test_dag_runner.py               # DagRunner cleanup, crash paths, scheduling
+│   └── test_dag_compatibility_extended.py  # _normalize_annotation, _covariant_type_compatible
 ├── evolution/               # Evolution engine and strategies
 │   ├── test_evolution_engine.py     # Generation loop, ingestion, exception handling
 │   ├── test_island.py               # MapElitesIsland add, size limit, reindex, elites
 │   ├── test_mutation_operator.py    # LLMMutationOperator with mocked LLM agent
 │   ├── test_elite_selectors.py      # Fitness-proportional, tournament, Pareto selectors
+│   ├── test_elite_selectors_extended.py  # RandomEliteSelector, inf/nan fallback, Pareto
+│   │                                    #   constructor guards, custom tie-breaker
+│   ├── test_strategy_utils.py       # weighted_sample_without_replacement, extract_fitness_values,
+│   │                                #   dominates
 │   ├── test_selectors.py            # Parent selection strategies
 │   ├── test_acceptors.py            # Program acceptance criteria
 │   ├── test_removers.py             # Archive removal strategies
