@@ -4,9 +4,8 @@ Structural validation (field presence, types, constraints, unknown fields) is
 handled by Pydantic models in types.py. This module adds semantic validation:
 DAG acyclicity, topology matching, frozen-step equality, mode-specific rules.
 
-Supports three evolution modes:
+Supports two evolution modes:
 - static: fixed topology, evolve structured fields of non-frozen LLM steps
-- single_step: fixed topology, only a subset of steps are mutable
 - full_chain: everything evolved (step count, types, deps, content)
 """
 
@@ -143,28 +142,6 @@ def _validate_static(
             _check_frozen_steps(steps, frozen_baseline, frozen_numbers)
 
 
-def _validate_single_step(
-    steps: list[LLMStep | ToolStep],
-    topology: dict | None,
-    frozen_baseline: dict | None,
-) -> None:
-    """Single-step mode: only a subset of steps are mutable."""
-    if topology is None:
-        raise ValueError("Single-step mode requires 'topology' parameter")
-
-    _validate_static(steps, topology, frozen_baseline)
-
-    mutable_steps = set(topology.get("mutable_steps", []))
-    if not mutable_steps:
-        raise ValueError(
-            "Single-step mode requires 'mutable_steps' in topology"
-        )
-
-    if frozen_baseline is not None:
-        non_mutable = {s.number for s in steps} - mutable_steps
-        if non_mutable:
-            _check_frozen_steps(steps, frozen_baseline, non_mutable)
-
 
 def _validate_full_chain(
     steps: list[LLMStep | ToolStep],
@@ -222,9 +199,9 @@ def validate_chain_spec(
 
     Args:
         raw: Dict from entrypoint() with system_prompt and steps
-        mode: "static", "single_step", or "full_chain"
-        topology: For static/single_step — STATIC_CHAIN_TOPOLOGY dict with
-            num_steps, steps (list of step descriptors), and optionally mutable_steps
+        mode: "static" or "full_chain"
+        topology: For static — STATIC_CHAIN_TOPOLOGY dict with
+            num_steps and steps (list of step descriptors)
         frozen_baseline: Complete chain spec dict for frozen step validation
         full_chain_config: For full_chain mode — {max_steps, allowed_step_types,
             available_tools, require_final_llm}
@@ -257,8 +234,6 @@ def validate_chain_spec(
     # 4. Mode-specific validation
     if mode == "static":
         _validate_static(steps, topology, frozen_baseline)
-    elif mode == "single_step":
-        _validate_single_step(steps, topology, frozen_baseline)
     elif mode == "full_chain":
         _validate_full_chain(steps, full_chain_config)
     else:

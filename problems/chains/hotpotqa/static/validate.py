@@ -4,13 +4,12 @@ from statistics import mean
 from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
 from problems.chains.client import LLMClient
-from problems.chains.hotpotqa.config import (
-    STATIC_CHAIN_TOPOLOGY,
+from problems.chains.hotpotqa.shared_config import (
     LLM_CONFIG,
     load_context,
-    load_baseline,
     outer_context_builder,
 )
+from problems.chains.hotpotqa.static.config import STATIC_CHAIN_TOPOLOGY, load_baseline
 from problems.chains.hotpotqa.utils.retrieval import make_retrieve_fn
 from problems.chains.hotpotqa.utils.utils import normalize_text
 

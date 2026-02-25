@@ -2,7 +2,7 @@ CHAIN EVOLUTION
 You are evolving a multi-step reasoning chain defined with structured fields.
 Each LLM step is specified by semantic fields (aim, stage_action, etc.) that are
 automatically assembled into prompts — you do not write raw prompt text. You control
-the structured-field content of non-frozen steps and the chain-level system_prompt.
+the structured-field content and the chain-level system_prompt.
 
 Consider the next guidelines:
 1) Chain optimization is a high-dimensional, experimental design problem. Each LLM step's
@@ -49,32 +49,45 @@ Consider the next guidelines:
    - Dependencies list controls which prior step outputs are visible
 3) Implementation details:
    - entrypoint() returns a dict with "system_prompt" (str, may be empty) and "steps" (list of dicts)
-   - Each step dict has metadata fields: number, title, step_type, dependencies, frozen
+   - Each step dict has metadata fields: number, title, step_type, dependencies
    - LLM steps carry the four structured fields above; tool steps carry step_config
    - Tool steps use $-reference syntax in input_mapping:
        $outer_context — the original sample context string
        $history[-1] — output of the immediately preceding step
        $history[N] — output of step at index N (0-based)
-   - The chain topology (step count, types, dependencies) may be fixed — only structured
-     field content and system_prompt are evolvable
-   - Frozen steps must match the baseline exactly and cannot be modified
+
+STEP TYPES
+The chain supports two step types:
+- "llm": LLM reasoning step with structured fields (aim, stage_action, reasoning_questions,
+  example_reasoning). The LLM receives the assembled prompt and produces a text response.
+- "tool": Tool execution step with step_config. Currently available tool:
+    "retrieve" — BM25 retrieval over Wikipedia abstracts. Returns top-k passages
+    formatted as "[i] Title | sentence1 sentence2 ...".
+    Usage in step_config: {"tool_name": "retrieve", "input_mapping": {"query": "$reference"}}
+    Where $reference is one of: $outer_context, $history[-1], $history[N]
+
+EVOLUTION MODE — STATIC
+The chain topology (step count, types, dependencies) is fixed. Only the structured field
+content of non-frozen LLM steps and the chain-level system_prompt are evolvable.
+Frozen steps must match the baseline exactly and cannot be modified.
+Each step dict additionally includes a "frozen" metadata field (True/False).
 
 TASK DEFINITION — MULTI-HOP QUESTION ANSWERING
 
-Challenge: Design chain that maximizes exact match accuracy on multi-hop reasoning questions.
+Challenge: Design a chain that maximizes exact match accuracy on multi-hop reasoning questions.
 
 OBJECTIVE
 Return a chain specification guiding the downstream LLM such that:
- 1) All chain steps are valid and defined
- 2) The chain guides the LLM through multi-hop reasoning across retrieval and synthesis steps
+ 1) All chain steps are valid and well-defined
+ 2) The chain guides the LLM through multi-hop reasoning using retrieval and synthesis
  3) The final step returns a clear, extractable answer in "Answer: <answer>" format
  4) Maximizes exact match accuracy after text normalization
 
 Output: 'Answer: <answer>' (extractable by regex) | Goal: Exact Match > 0.7
 
 PIPELINE COMPONENTS
-- LLM: Model with basic multi-hop reasoning capabilities — reasoning steps (2, 3, 5, 6)
-- Retrieval: BM25 over Wikipedia abstracts — tool steps (1, 4); returns top-k passages
+- LLM: Model with basic multi-hop reasoning capabilities
+- Retrieval: BM25 over Wikipedia abstracts via the "retrieve" tool; returns top-k passages
   formatted as "[i] Title | sentence1 sentence2 ..."
 
 CHAIN STRUCTURE — FIXED 6-STEP TOPOLOGY
@@ -137,25 +150,29 @@ entrypoint() must return a dict:
 }
 
 CONSTRAINTS
+- LLM steps require non-empty "aim" and "stage_action" fields
+- Dependencies must reference only earlier steps (by number)
+- No dependency cycles
+- The final LLM step must guide the LLM to output "Answer: <answer>"
 - Steps list must have exactly 6 entries
-- Each step must be a dict with number, title, step_type, dependencies, frozen keys
 - Step types and dependencies must match the fixed topology
 - Frozen steps (1 and 4) must match the baseline exactly
-- Step 6 must guide the LLM to output "Answer: <answer>"
 
 FAILURE MODES
-- Missing or empty required fields (aim, stage_action)
+- Missing or empty required fields (aim, stage_action for LLM steps)
+- Dependency cycles or references to non-existent/later steps
+- Final step not producing extractable "Answer: ..." output
 - Wrong number of steps or type/deps mismatch with fixed topology
 - Frozen step content differs from baseline
-- Step 6 not producing extractable "Answer: ..." output
 
 OUTPUT FORMAT
 Implement `def entrypoint()` that returns:
-- A dict with "system_prompt" (str) and "steps" (list of 6 step dicts)
-- Each step dict has metadata fields (number, title, step_type, dependencies, frozen)
+- A dict with "system_prompt" (str) and "steps" (list of step dicts)
+- Each step dict has metadata fields (number, title, step_type, dependencies)
 - LLM steps have structured fields (aim, stage_action, reasoning_questions, example_reasoning)
-- LLM return format for step 6: 'Answer: <answer>' (extractable by regex)
+- LLM return format for final step: 'Answer: <answer>' (extractable by regex)
+- Each step dict includes "frozen" field (True/False)
 
 TASK HINTS
 - Keep prompts focused on each step's specific role
-- Query generation steps (2) should instruct the LLM to output only the search query, avoiding extraneous text that confuses the retriever
+- Query generation steps should instruct the LLM to output only the search query, avoiding extraneous text that confuses the retriever

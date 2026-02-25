@@ -1,0 +1,158 @@
+CHAIN EVOLUTION
+You are evolving a multi-step reasoning chain defined with structured fields.
+Each LLM step is specified by semantic fields (aim, stage_action, etc.) that are
+automatically assembled into prompts — you do not write raw prompt text. You control
+the structured-field content and the chain-level system_prompt.
+
+Consider the next guidelines:
+1) Chain optimization is a high-dimensional, experimental design problem. Each LLM step's
+   structured fields may combine:
+   - Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition
+   - Role & context framing: role definition, domain setup, goal specification, success criteria
+   - Instruction precision: task boundaries, structural directives
+   - In-context exemplars: input-output examples, pattern demonstrations
+   - Constraints: output schema, formatting rules
+   Additionally, multi-step chains require attention to:
+   - Step coordination: each step should produce output shaped for its downstream consumers
+   - Information flow: pass only relevant information forward to avoid context dilution
+   - Role specialization: each step should have a clear, focused responsibility
+2) Structured fields of LLM steps:
+   - "aim" (REQUIRED, non-empty): Primary objective of this step
+   - "stage_action" (REQUIRED, non-empty): Specific action to perform
+   - "reasoning_questions" (optional): Key questions to answer
+   - "example_reasoning" (optional): Example of expert reasoning
+   These fields are assembled into a full LLM prompt for each step. The assembly
+   order (top to bottom):
+
+     [If system_prompt is non-empty]
+     System Instructions:
+     {system_prompt}
+
+     Data:
+     {outer_context}              ← initial user input
+
+     [If step has dependencies]
+     Previous steps:
+     Step N. Title
+     Result: <output>
+     ...
+     Based on the results of previous steps, perform the following task:
+     Step {number}. {title}
+     Objective: {aim}
+     Task: {stage_action}
+     Questions: {reasoning_questions}
+     Example reasoning: {example_reasoning}
+
+   Key points:
+   - system_prompt is shared — prepended to every LLM step
+   - outer_context wraps every LLM step as "Data:\n{outer_context}"
+   - Dependencies list controls which prior step outputs are visible
+3) Implementation details:
+   - entrypoint() returns a dict with "system_prompt" (str, may be empty) and "steps" (list of dicts)
+   - Each step dict has metadata fields: number, title, step_type, dependencies
+   - LLM steps carry the four structured fields above; tool steps carry step_config
+   - Tool steps use $-reference syntax in input_mapping:
+       $outer_context — the original sample context string
+       $history[-1] — output of the immediately preceding step
+       $history[N] — output of step at index N (0-based)
+
+STEP TYPES
+The chain supports two step types:
+- "llm": LLM reasoning step with structured fields (aim, stage_action, reasoning_questions,
+  example_reasoning). The LLM receives the assembled prompt and produces a text response.
+- "tool": Tool execution step with step_config. Currently available tool:
+    "retrieve" — BM25 retrieval over Wikipedia abstracts. Returns top-k passages
+    formatted as "[i] Title | sentence1 sentence2 ...".
+    Usage in step_config: {"tool_name": "retrieve", "input_mapping": {"query": "$reference"}}
+    Where $reference is one of: $outer_context, $history[-1], $history[N]
+
+EVOLUTION MODE — FULL CHAIN
+You can freely design the chain: change step count, types, dependencies, and all
+structured field content. There are NO frozen steps — every step can be modified.
+
+TASK DEFINITION — MULTI-HOP QUESTION ANSWERING
+
+Challenge: Design a chain that maximizes exact match accuracy on multi-hop reasoning questions.
+
+OBJECTIVE
+Return a chain specification guiding the downstream LLM such that:
+ 1) All chain steps are valid and well-defined
+ 2) The chain guides the LLM through multi-hop reasoning using retrieval and synthesis
+ 3) The final step returns a clear, extractable answer in "Answer: <answer>" format
+ 4) Maximizes exact match accuracy after text normalization
+
+Output: 'Answer: <answer>' (extractable by regex) | Goal: Exact Match > 0.7
+
+PIPELINE COMPONENTS
+- LLM: Model with basic multi-hop reasoning capabilities
+- Retrieval: BM25 over Wikipedia abstracts via the "retrieve" tool; returns top-k passages
+  formatted as "[i] Title | sentence1 sentence2 ..."
+
+CHAIN STRUCTURE — FULLY EVOLVABLE
+
+You may design any chain with up to 6 steps. The chain must:
+- Use only "llm" and "tool" step types
+- Use only the "retrieve" tool for tool steps
+- End with an LLM step (the last step by number must be step_type="llm")
+- Have valid forward-only dependencies (no cycles, no references to later steps)
+
+GENOME FORMAT
+entrypoint() must return a dict:
+{
+    "system_prompt": "string — shared instruction prepended to every LLM step",
+    "steps": [
+        {   # Tool step example
+            "number": 1,
+            "title": "Retrieve passages",
+            "step_type": "tool",
+            "step_config": {
+                "tool_name": "retrieve",
+                "input_mapping": {"query": "$outer_context"},
+            },
+            "dependencies": [],
+        },
+        {   # LLM step example
+            "number": 2,
+            "title": "Analyze passages",
+            "step_type": "llm",
+            "aim": "required — step objective",
+            "stage_action": "required — what the LLM should do",
+            "reasoning_questions": "optional — guiding questions",
+            "example_reasoning": "optional — example thought process",
+            "dependencies": [1],
+        },
+        ...
+    ],
+}
+
+CONSTRAINTS
+- LLM steps require non-empty "aim" and "stage_action" fields
+- Dependencies must reference only earlier steps (by number)
+- No dependency cycles
+- The final LLM step must guide the LLM to output "Answer: <answer>"
+- Maximum 6 steps
+- Step types must be "llm" or "tool"
+- Tool steps must use the "retrieve" tool
+- Last step (highest number) must be "llm" type
+
+FAILURE MODES
+- Missing or empty required fields (aim, stage_action for LLM steps)
+- Dependency cycles or references to non-existent/later steps
+- Final step not producing extractable "Answer: ..." output
+- Tool step referencing unknown tool (only "retrieve" is available)
+- Last step is not "llm" type
+- More than 6 steps
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A dict with "system_prompt" (str) and "steps" (list of step dicts)
+- Each step dict has metadata fields (number, title, step_type, dependencies)
+- LLM steps have structured fields (aim, stage_action, reasoning_questions, example_reasoning)
+- LLM return format for final step: 'Answer: <answer>' (extractable by regex)
+- Tool steps have step_config with tool_name and input_mapping
+
+TASK HINTS
+- A 2-hop retrieval pattern (retrieve → summarize → generate query → retrieve → combine → answer) is a reasonable starting architecture
+- Consider whether more retrieval hops could help (3-hop reasoning)
+- Experiment with different dependency patterns
+- Query generation steps should instruct the LLM to output only the search query

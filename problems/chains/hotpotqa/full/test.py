@@ -1,4 +1,4 @@
-"""Test the best evolved chain on the test dataset."""
+"""Test the best evolved chain on the test dataset (full_chain mode)."""
 
 import argparse
 
@@ -6,19 +6,18 @@ from problems.chains.utils import get_best_program
 from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
 from problems.chains.client import LLMClient
-from problems.chains.hotpotqa.config import (
-    STATIC_CHAIN_TOPOLOGY,
+from problems.chains.hotpotqa.shared_config import (
     DATASET_CONFIG,
     LLM_CONFIG,
     load_jsonl,
-    load_baseline,
     preprocess_sample,
     outer_context_builder,
     CORPUS_PATH,
     BM25S_INDEX_DIR,
 )
+from problems.chains.hotpotqa.full.config import FULL_CHAIN_CONFIG, load_baseline
+from problems.chains.hotpotqa.full.validate import extract_answer, calculate_exact_match
 from problems.chains.hotpotqa.utils.retrieval import make_retrieve_fn
-from problems.chains.hotpotqa.validate import extract_answer, calculate_exact_match
 
 
 def load_test_context(n_samples: int | None = None) -> dict:
@@ -43,9 +42,8 @@ def test_baseline(n_samples: int = 3):
     baseline = load_baseline()
     chain = validate_chain_spec(
         baseline,
-        mode="static",
-        topology=STATIC_CHAIN_TOPOLOGY,
-        frozen_baseline=baseline,
+        mode="full_chain",
+        full_chain_config=FULL_CHAIN_CONFIG,
     )
 
     print(f"Baseline validated: {len(chain.steps)} steps")
@@ -115,12 +113,10 @@ def test_best_chain(
     exec(best["code"], exec_globals)
     chain_spec = exec_globals["entrypoint"]()
 
-    baseline = load_baseline()
     chain = validate_chain_spec(
         chain_spec,
-        mode="static",
-        topology=STATIC_CHAIN_TOPOLOGY,
-        frozen_baseline=baseline,
+        mode="full_chain",
+        full_chain_config=FULL_CHAIN_CONFIG,
     )
 
     context = load_test_context(n_samples=n_samples)
@@ -155,7 +151,7 @@ def test_best_chain(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test chain on test dataset")
+    parser = argparse.ArgumentParser(description="Test chain on test dataset (full_chain)")
     parser.add_argument(
         "--mode",
         choices=["baseline", "redis"],
