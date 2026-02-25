@@ -39,6 +39,8 @@ from gigaevo.programs.stages.optimization.optuna.models import (
     _MIN_POST_STARTUP_TRIALS,
     _MIN_STARTUP_TRIALS,
     OptunaOptimizationConfig,
+    compute_eval_timeout,
+    compute_n_trials,
     default_max_params,
     default_n_startup_trials,
 )
@@ -2193,6 +2195,7 @@ class TestPromptFormatting:
             numbered_code="   1 | x = 1",
             task_description_section="",
             runtime_section="",
+            total_budget_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2209,6 +2212,7 @@ class TestPromptFormatting:
             numbered_code="1 | x = 1",
             task_description_section="",
             runtime_section="",
+            total_budget_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2224,6 +2228,7 @@ class TestPromptFormatting:
             numbered_code="1 | x = 1",
             task_description_section="",
             runtime_section="",
+            total_budget_section="",
             eval_timeout=30,
             n_trials=777,
             total_trials=802,
@@ -2239,6 +2244,7 @@ class TestPromptFormatting:
             numbered_code="1 | x = 1",
             task_description_section="",
             runtime_section="",
+            total_budget_section="",
             eval_timeout=42,
             n_trials=50,
             total_trials=75,
@@ -2254,6 +2260,7 @@ class TestPromptFormatting:
             numbered_code="1 | x = 1",
             task_description_section="",
             runtime_section="",
+            total_budget_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2270,6 +2277,7 @@ class TestPromptFormatting:
             numbered_code="1 | x = 1",
             task_description_section=section,
             runtime_section="",
+            total_budget_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2285,6 +2293,7 @@ class TestPromptFormatting:
             numbered_code="1 | x = 1",
             task_description_section="",
             runtime_section="",
+            total_budget_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2313,6 +2322,7 @@ class TestPromptFormatting:
                 numbered_code="1 | x = 1",
                 task_description_section="",
                 runtime_section="",
+                total_budget_section="",
                 eval_timeout=30,
                 # n_trials missing
                 score_key="score",
@@ -2333,6 +2343,7 @@ class TestPromptFormatting:
             numbered_code="1 | x = 1",
             task_description_section="",
             runtime_section=section,
+            total_budget_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -2349,6 +2360,7 @@ class TestPromptFormatting:
             numbered_code="1 | x = 1",
             task_description_section="",
             runtime_section="",
+            total_budget_section="",
             eval_timeout=30,
             n_trials=50,
             total_trials=75,
@@ -3238,3 +3250,301 @@ class TestConfigNStartupTrials:
             f"n_trials={result.n_trials} exceeds 14 (3 startup + 10 TPE + 1 baseline); "
             "n_startup_trials config override may not be respected"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Adaptive Budget Computation
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestComputeEvalTimeout:
+    """Tests for compute_eval_timeout() — derives per-trial timeout from baseline."""
+
+    def test_fast_baseline_gets_minimum(self) -> None:
+        """baseline=0.1s * 3 = 0.3s, clamped up to min_timeout=30."""
+        result = compute_eval_timeout(0.1, budget=3240)
+        assert result == 30.0
+
+    def test_moderate_baseline(self) -> None:
+        """baseline=37s * 3 = 111s, within [30, budget/2]."""
+        result = compute_eval_timeout(37.0, budget=3240)
+        assert result == 111.0
+
+    def test_slow_baseline_capped_to_half_budget(self) -> None:
+        """baseline=1000s * 3 = 3000s, capped to budget/2=1620."""
+        result = compute_eval_timeout(1000.0, budget=3240)
+        assert result == 3240 / 2
+
+    def test_none_baseline_uses_fallback(self) -> None:
+        """When baseline is None, use 5% of budget clamped to [30, budget/2]."""
+        result = compute_eval_timeout(None, budget=3240)
+        # 3240 * 0.05 = 162.0
+        assert result == 162.0
+
+    def test_zero_baseline_uses_fallback(self) -> None:
+        """Zero baseline treated same as None."""
+        result = compute_eval_timeout(0.0, budget=3240)
+        assert result == 162.0
+
+    def test_negative_baseline_uses_fallback(self) -> None:
+        """Negative baseline treated same as None."""
+        result = compute_eval_timeout(-1.0, budget=3240)
+        assert result == 162.0
+
+    def test_custom_safety_mult(self) -> None:
+        """safety_mult=5.0 → 10 * 5 = 50."""
+        result = compute_eval_timeout(10.0, budget=3240, safety_mult=5.0)
+        assert result == 50.0
+
+    def test_custom_min_timeout(self) -> None:
+        """min_timeout=60 → 0.1 * 3 = 0.3, clamped up to 60."""
+        result = compute_eval_timeout(0.1, budget=3240, min_timeout=60)
+        assert result == 60.0
+
+    def test_small_budget(self) -> None:
+        """budget=100, baseline=None → 100*0.05=5 → clamped to min=30."""
+        result = compute_eval_timeout(None, budget=100)
+        assert result == 30.0
+
+    def test_result_always_at_least_min_timeout(self) -> None:
+        """For any input, result >= min_timeout."""
+        for baseline in [None, 0.01, 0.1, 1.0, 10.0]:
+            for budget in [60, 200, 3240]:
+                result = compute_eval_timeout(baseline, budget=budget)
+                assert result >= 30.0, (
+                    f"baseline={baseline}, budget={budget} → {result} < 30"
+                )
+
+
+class TestComputeNTrials:
+    """Tests for compute_n_trials() — derives TPE trial count from budget."""
+
+    def test_large_budget_caps_at_max(self) -> None:
+        """budget=3240, eval_timeout=30, parallel=10 → many rounds → capped at 100."""
+        result = compute_n_trials(3240, 30, 10)
+        assert result == 100
+
+    def test_tight_budget_hits_minimum(self) -> None:
+        """budget=100, eval_timeout=30, parallel=1 → 1 round → clamped to 20."""
+        result = compute_n_trials(100, 30, 1)
+        assert result == 20
+
+    def test_moderate_budget(self) -> None:
+        """budget=3240, eval_timeout=162, parallel=10."""
+        # usable = 3240 - 60 = 3180
+        # rounds = floor(3180 / 162) = 19
+        # raw = 19 * 10 = 190 → capped at 100
+        result = compute_n_trials(3240, 162, 10)
+        assert result == 100
+
+    def test_zero_eval_timeout_returns_minimum(self) -> None:
+        """eval_timeout=0 → degenerate, return min_trials."""
+        result = compute_n_trials(3240, 0, 10)
+        assert result == 20
+
+    def test_negative_eval_timeout_returns_minimum(self) -> None:
+        result = compute_n_trials(3240, -5, 10)
+        assert result == 20
+
+    def test_custom_min_max_trials(self) -> None:
+        result = compute_n_trials(3240, 30, 10, min_trials=50, max_trials=80)
+        assert 50 <= result <= 80
+
+    def test_budget_smaller_than_overhead(self) -> None:
+        """budget < llm_overhead → usable=0 → 0 rounds → clamped to min."""
+        result = compute_n_trials(30, 30, 10, llm_overhead=60)
+        assert result == 20
+
+    def test_result_always_in_range(self) -> None:
+        """For any positive input, result is in [min_trials, max_trials]."""
+        for budget in [60, 200, 3240]:
+            for et in [30, 100, 500]:
+                for par in [1, 5, 10]:
+                    result = compute_n_trials(budget, et, par)
+                    assert 20 <= result <= 100, (
+                        f"budget={budget}, et={et}, par={par} → {result}"
+                    )
+
+
+class TestOptunaStageAdaptiveBudget:
+    """Tests for OptunaOptimizationStage with None eval_timeout/n_trials."""
+
+    def test_none_eval_timeout_stored_as_cfg(self) -> None:
+        """eval_timeout=None stores None in _eval_timeout_cfg, default in eval_timeout."""
+        stage = OptunaOptimizationStage(
+            llm=MagicMock(),
+            validator_path=Path("/dev/null"),
+            score_key="fitness",
+            eval_timeout=None,
+            n_trials=None,
+            timeout=3240,
+        )
+        assert stage._eval_timeout_cfg is None
+        assert stage.eval_timeout == 30  # initial default
+        assert stage._n_trials_cfg is None
+        assert stage.n_trials == 50  # initial default
+
+    def test_explicit_eval_timeout_stored(self) -> None:
+        """eval_timeout=42 stores 42 in both _eval_timeout_cfg and eval_timeout."""
+        stage = OptunaOptimizationStage(
+            llm=MagicMock(),
+            validator_path=Path("/dev/null"),
+            score_key="fitness",
+            eval_timeout=42,
+            n_trials=60,
+            timeout=3240,
+        )
+        assert stage._eval_timeout_cfg == 42
+        assert stage.eval_timeout == 42
+        assert stage._n_trials_cfg == 60
+        assert stage.n_trials == 60
+
+    def test_optimization_time_budget_from_timeout(self) -> None:
+        """When optimization_time_budget is None, _budget falls back to timeout."""
+        stage = OptunaOptimizationStage(
+            llm=MagicMock(),
+            validator_path=Path("/dev/null"),
+            score_key="fitness",
+            timeout=1800,
+        )
+        assert stage._budget == 1800
+
+    def test_optimization_time_budget_explicit(self) -> None:
+        """Explicit optimization_time_budget overrides timeout."""
+        stage = OptunaOptimizationStage(
+            llm=MagicMock(),
+            validator_path=Path("/dev/null"),
+            score_key="fitness",
+            optimization_time_budget=2500,
+            timeout=3240,
+        )
+        assert stage._budget == 2500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 18. Time-budget deadline
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestDeadlineStop:
+    """Test that the time-budget deadline stops the trial loop gracefully
+    before the hard stage timeout fires, preserving completed results.
+
+    The deadline is: compute_start + timeout - eval_timeout - _DEADLINE_GRACE_S.
+    """
+
+    @pytest.mark.asyncio
+    async def test_deadline_stops_before_hard_timeout(self, tmp_path: Path) -> None:
+        """With a tight timeout the deadline fires early, but results are preserved.
+
+        timeout=20, eval_timeout=5  →  deadline at 20-5-10 = 5s elapsed.
+        The validator sleeps 0.5s per call, so only a few trials complete
+        before the deadline.  The key assertion: compute() returns a valid
+        OptunaOptimizationOutput (not a TimeoutError).
+        """
+
+        vpath = tmp_path / "validator.py"
+        vpath.write_text(
+            textwrap.dedent("""\
+            import time
+            def validate(output):
+                time.sleep(0.5)
+                return {"score": float(output)}
+        """)
+        )
+        parameterized_code = 'def run_code(): return _optuna_params["x"]'
+        search_space = OptunaSearchSpace(
+            parameters=[
+                ParamSpec(
+                    name="x",
+                    initial_value=5.0,
+                    param_type="float",
+                    low=0.0,
+                    high=10.0,
+                    reason="x",
+                ),
+            ],
+            modifications=[],
+            reasoning="deadline test",
+        )
+        cfg = OptunaOptimizationConfig(
+            importance_freezing=False,
+            n_startup_trials=5,
+            random_state=0,
+        )
+        stage = OptunaOptimizationStage(
+            llm=_mock_llm(search_space),
+            validator_path=vpath,
+            score_key="score",
+            minimize=False,
+            n_trials=50,
+            max_parallel=2,
+            eval_timeout=5,
+            timeout=20,
+            config=cfg,
+        )
+        stage._apply_modifications = MagicMock(return_value=parameterized_code)
+        stage.attach_inputs({})
+
+        # Safety net: if the deadline doesn't work, the hard timeout at 20s
+        # would kill compute(); the 30s wait_for catches that as TimeoutError.
+        result = await asyncio.wait_for(
+            stage.compute(Program(code="def run_code(): pass")), timeout=30
+        )
+        assert isinstance(result, OptunaOptimizationOutput)
+        assert result.n_trials >= 1
+
+    @pytest.mark.asyncio
+    async def test_all_trials_complete_within_deadline(self, tmp_path: Path) -> None:
+        """With a generous timeout and few fast trials, all trials complete
+        and the deadline never fires.
+        """
+        vpath = tmp_path / "validator.py"
+        vpath.write_text(
+            textwrap.dedent("""\
+            def validate(output):
+                return {"score": float(output)}
+        """)
+        )
+        parameterized_code = 'def run_code(): return _optuna_params["x"]'
+        search_space = OptunaSearchSpace(
+            parameters=[
+                ParamSpec(
+                    name="x",
+                    initial_value=5.0,
+                    param_type="float",
+                    low=0.0,
+                    high=10.0,
+                    reason="x",
+                ),
+            ],
+            modifications=[],
+            reasoning="deadline no-fire test",
+        )
+        n_tpe = 5
+        n_startup = 5
+        cfg = OptunaOptimizationConfig(
+            importance_freezing=False,
+            n_startup_trials=n_startup,
+            random_state=0,
+        )
+        stage = OptunaOptimizationStage(
+            llm=_mock_llm(search_space),
+            validator_path=vpath,
+            score_key="score",
+            minimize=False,
+            n_trials=n_tpe,
+            max_parallel=5,
+            eval_timeout=30,
+            timeout=120,
+            config=cfg,
+        )
+        stage._apply_modifications = MagicMock(return_value=parameterized_code)
+        stage.attach_inputs({})
+        result = await asyncio.wait_for(
+            stage.compute(Program(code="def run_code(): pass")), timeout=120
+        )
+        assert isinstance(result, OptunaOptimizationOutput)
+        # All trials should complete (baseline + startup + TPE).
+        # n_trials in output counts COMPLETE study trials.
+        assert result.n_trials >= n_tpe

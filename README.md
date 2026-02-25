@@ -355,7 +355,7 @@ tests/
 │   ├── test_lineage_stages.py       # LineagesToDescendants, LineagesFromAncestors
 │   ├── test_validation_stage.py     # Code validation and syntax checking
 │   ├── test_python_executors.py     # Exec runner, worker pool, timeouts
-│   ├── test_optuna_optimization.py  # Optuna search-space, trials, parameter freezing
+│   ├── test_optuna_optimization.py  # Optuna search-space, trials, parameter freezing, time-budget deadline
 │   └── test_cma_optimization.py     # CMA-ES numerical optimization
 ├── dag/                     # DAG runner and scheduling
 │   ├── test_dag_automata.py             # Stage state machine transitions

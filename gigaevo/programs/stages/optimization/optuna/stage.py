@@ -42,6 +42,8 @@ from gigaevo.programs.stages.optimization.optuna.models import (
     OptunaOptimizationOutput,
     OptunaSearchSpace,
     ParamSpec,
+    compute_eval_timeout,
+    compute_n_trials,
     default_max_params,
     default_n_startup_trials,
 )
@@ -60,6 +62,8 @@ from gigaevo.programs.stages.python_executors.wrapper import (
     run_exec_runner,
 )
 from gigaevo.programs.stages.stage_registry import StageRegistry
+
+_DEADLINE_GRACE_S: int = 10  # post-eval margin before hard stage timeout
 
 
 @StageRegistry.register(
@@ -135,9 +139,9 @@ class OptunaOptimizationStage(Stage):
         validator_path: Path,
         score_key: str,
         minimize: bool = False,
-        n_trials: int = 50,
+        n_trials: int | None = None,
         max_parallel: int = 8,
-        eval_timeout: int = 30,
+        eval_timeout: int | None = None,
         function_name: str = "run_code",
         validator_fn: str = "validate",
         update_program_code: bool = True,
@@ -145,6 +149,7 @@ class OptunaOptimizationStage(Stage):
         task_description: str | None = None,
         python_path: list[Path] | None = None,
         max_memory_mb: int | None = None,
+        optimization_time_budget: float | None = None,
         config: Optional[OptunaOptimizationConfig] = None,
         **kwargs: Any,
     ):
@@ -155,9 +160,7 @@ class OptunaOptimizationStage(Stage):
         self.llm = llm
         self.score_key = score_key
         self.minimize = minimize
-        self.n_trials = n_trials
         self.max_parallel = max_parallel
-        self.eval_timeout = eval_timeout
         self.function_name = function_name
         self.validator_fn = validator_fn
         self.update_program_code = update_program_code
@@ -166,6 +169,15 @@ class OptunaOptimizationStage(Stage):
         self.python_path = python_path or []
         self.max_memory_mb = max_memory_mb
         self.config = config or OptunaOptimizationConfig()
+
+        # Store user-supplied config values (None = auto-compute at runtime)
+        self._eval_timeout_cfg = eval_timeout
+        self._n_trials_cfg = n_trials
+        self._budget = optimization_time_budget or self.timeout
+
+        # Set initial values — will be overridden in compute() when None
+        self.eval_timeout: int = eval_timeout if eval_timeout is not None else 30
+        self.n_trials: int = n_trials if n_trials is not None else 50
 
     # ------------------------------------------------------------------
     # Phase 1: LLM analysis
@@ -261,6 +273,13 @@ class OptunaOptimizationStage(Stage):
         no ``_optuna_params`` preamble so the program runs with its hardcoded
         constants — i.e. the true baseline.
         """
+        # Use explicit eval_timeout if provided, otherwise a conservative cap
+        # for baseline measurement (before adaptive eval_timeout is resolved).
+        baseline_timeout = (
+            self._eval_timeout_cfg
+            if self._eval_timeout_cfg is not None
+            else min(120, self._budget * 0.05)
+        )
         eval_code = build_eval_code(
             validator_code=self._validator_code,
             program_code=code,
@@ -276,7 +295,7 @@ class OptunaOptimizationStage(Stage):
             context=context,
             score_key=self.score_key,
             python_path=self.python_path,
-            timeout=self.eval_timeout,
+            timeout=baseline_timeout,
             max_memory_mb=self.max_memory_mb,
             log_tag="Optuna-baseline",
         )
@@ -289,10 +308,10 @@ class OptunaOptimizationStage(Stage):
             )
             return None
         logger.debug(
-            "[Optuna][{}] Baseline runtime: {:.2f}s (timeout={}s)",
+            "[Optuna][{}] Baseline runtime: {:.2f}s (baseline_timeout={}s)",
             pid,
             elapsed,
-            self.eval_timeout,
+            baseline_timeout,
         )
         return elapsed
 
@@ -351,10 +370,16 @@ class OptunaOptimizationStage(Stage):
         )
         trials_per_param = total_trials // max(max_params, 1)
 
+        total_budget_section = (
+            f"\n**Total optimization budget:** ~{self._budget:.0f}s for "
+            f"{total_trials} trials at up to {self.max_parallel} in parallel.\n"
+        )
+
         user_msg = _USER_PROMPT_TEMPLATE.format(
             numbered_code=numbered_code,
             task_description_section=task_section,
             runtime_section=runtime_section,
+            total_budget_section=total_budget_section,
             eval_timeout=self.eval_timeout,
             n_trials=self.n_trials,
             total_trials=total_trials,
@@ -475,6 +500,7 @@ class OptunaOptimizationStage(Stage):
         param_specs: list[ParamSpec],
         context: Optional[dict[str, Any]],
         pid: str,
+        compute_start: float,
     ) -> tuple[dict[str, Any], dict[str, float], int, int, Any]:
         """Run Optuna optimization.
 
@@ -488,6 +514,10 @@ class OptunaOptimizationStage(Stage):
             Optional evaluation context.
         pid : str
             Short program ID for logging.
+        compute_start : float
+            Monotonic clock timestamp when ``compute()`` started, used to
+            derive a wall-clock deadline so the trial loop stops gracefully
+            before the hard stage timeout.
 
         Returns
         -------
@@ -643,6 +673,11 @@ class OptunaOptimizationStage(Stage):
         _trials_since_improvement = 0
         _stop_event = asyncio.Event()
 
+        # Time-budget deadline: stop launching new trials eval_timeout + grace
+        # seconds before the hard stage timeout so in-flight trials can finish
+        # and post-loop bookkeeping runs.
+        _deadline = compute_start + self.timeout - self.eval_timeout - _DEADLINE_GRACE_S
+
         # Trial deduplication: skip re-evaluation of identical param combos
         _seen_params: set[frozenset] = set()
 
@@ -787,7 +822,27 @@ class OptunaOptimizationStage(Stage):
             try:
                 if _stop_event.is_set():
                     return
+                if time.monotonic() > _deadline:
+                    _stop_event.set()
+                    logger.info(
+                        "[Optuna][{}] Time budget deadline reached — stopping "
+                        "({:.0f}s elapsed, reserving {}s for in-flight trials)",
+                        pid,
+                        time.monotonic() - compute_start,
+                        self.eval_timeout + _DEADLINE_GRACE_S,
+                    )
+                    return
                 async with sem:
+                    if _stop_event.is_set() or time.monotonic() > _deadline:
+                        if not _stop_event.is_set():
+                            _stop_event.set()
+                            logger.info(
+                                "[Optuna][{}] Time budget deadline reached after "
+                                "semaphore wait — stopping ({:.0f}s elapsed)",
+                                pid,
+                                time.monotonic() - compute_start,
+                            )
+                        return
                     async with _importance_lock:
                         current_frozen = dict(frozen_params)
 
@@ -1024,6 +1079,7 @@ class OptunaOptimizationStage(Stage):
         OptunaOptimizationOutput
             Results including optimized code, best parameters, and trial stats.
         """
+        _compute_start = time.monotonic()
         code = program.code
         pid = program.id[:8]
 
@@ -1032,6 +1088,32 @@ class OptunaOptimizationStage(Stage):
 
         # 1. Measure baseline runtime for the LLM prompt
         baseline_runtime_s = await self._measure_baseline_runtime(code, ctx, pid)
+
+        # 1b. Resolve adaptive eval_timeout and n_trials from baseline + budget
+        if self._eval_timeout_cfg is None:
+            self.eval_timeout = int(
+                compute_eval_timeout(baseline_runtime_s, budget=self._budget)
+            )
+            logger.debug(
+                "[Optuna][{}] Auto eval_timeout={}s (baseline={}, budget={})",
+                pid,
+                self.eval_timeout,
+                f"{baseline_runtime_s:.2f}s" if baseline_runtime_s else "N/A",
+                f"{self._budget:.0f}s",
+            )
+
+        if self._n_trials_cfg is None:
+            self.n_trials = compute_n_trials(
+                self._budget, self.eval_timeout, self.max_parallel
+            )
+            logger.debug(
+                "[Optuna][{}] Auto n_trials={} (budget={}, eval_timeout={}, parallel={})",
+                pid,
+                self.n_trials,
+                f"{self._budget:.0f}s",
+                self.eval_timeout,
+                self.max_parallel,
+            )
 
         # 2. LLM analysis
         logger.debug("[Optuna][{}] Analysing code with LLM...", pid)
@@ -1065,7 +1147,9 @@ class OptunaOptimizationStage(Stage):
             n_complete,
             total_trials,
             best_prog_output,
-        ) = await self._run_optuna(parameterized_code, param_specs, ctx, pid)
+        ) = await self._run_optuna(
+            parameterized_code, param_specs, ctx, pid, _compute_start
+        )
 
         if not best_scores:
             raise ValueError(f"[Optuna][{pid}] Optuna produced no usable scores")
