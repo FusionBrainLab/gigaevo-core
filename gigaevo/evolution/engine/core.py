@@ -397,38 +397,38 @@ class EvolutionEngine:
             memory_used=False,
         )
         if self.config.memory_enabled:
-            memory_instructions = self._read_memory_instructions()
-            if memory_instructions:
-                fitness_key = self.config.fitness_key
-                if not fitness_key:
-                    logger.warning(
-                        "[EvolutionEngine] Memory enabled but fitness_key is not configured"
-                    )
-                    memory_parents = elites[: self.config.memory_top_n]
-                else:
-                    memory_parents = await self._select_top_programs_by_fitness(
-                        self.config.memory_top_n
-                    )
-                if memory_parents:
-                    memory_ids = await generate_mutations(
-                        memory_parents,
-                        mutator=self.mutation_operator,
-                        storage=self.storage,
-                        state_manager=self.state,
-                        parent_selector=self.config.parent_selector,
-                        limit=self.config.memory_top_n,
-                        iteration=self.metrics.total_generations,
-                        memory_instructions=memory_instructions,
-                        memory_used=True,
-                    )
-                    mutation_ids.extend(memory_ids)
-                else:
+            fitness_key = self.config.fitness_key
+            if not fitness_key:
+                logger.warning(
+                    "[EvolutionEngine] Memory enabled but fitness_key is not configured"
+                )
+                memory_parents = elites[: self.config.memory_top_n]
+            else:
+                memory_parents = await self._select_top_programs_by_fitness(
+                    self.config.memory_top_n
+                )
+
+            if memory_parents:
+                memory_instructions = self._read_memory_instructions() or ""
+                if not memory_instructions:
                     logger.debug(
-                        "[EvolutionEngine] No eligible programs for memory mutations"
+                        "[EvolutionEngine] No local memory file loaded; using backend memory search only"
                     )
+                memory_ids = await generate_mutations(
+                    memory_parents,
+                    mutator=self.mutation_operator,
+                    storage=self.storage,
+                    state_manager=self.state,
+                    parent_selector=self.config.parent_selector,
+                    limit=self.config.memory_top_n,
+                    iteration=self.metrics.total_generations,
+                    memory_instructions=memory_instructions,
+                    memory_used=True,
+                )
+                mutation_ids.extend(memory_ids)
             else:
                 logger.debug(
-                    "[EvolutionEngine] Memory enabled but no instructions loaded"
+                    "[EvolutionEngine] No eligible programs for memory mutations"
                 )
 
         self.metrics.record_mutation_metrics(len(mutation_ids), 0)
