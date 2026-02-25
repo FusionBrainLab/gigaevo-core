@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.14.2 (2026-02-25)
+
+### Bug Fixes
+
+- **prompts**: Download bug
+  ([`9e6da70`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9e6da700c8d1d5990d2875ea1af540ac039d1f5a))
+
+- **prompts**: Fix broken import
+  ([`0c7e63f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0c7e63f37e562b6582a8d2e0bd5319335aafd953))
+
+### Chores
+
+- Update coverage badge to 78% [skip ci]
+  ([`82b4f00`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/82b4f00dc19b329bed7a6b250cb2747c1e377fbc))
+
+### Testing
+
+- Add extended test suites for coverage-gap modules
+  ([`c2bf999`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c2bf999c14c1d7e81df32dde8f85101dd45667c0))
+
+
 ## v1.14.1 (2026-02-25)
 
 ### Bug Fixes
