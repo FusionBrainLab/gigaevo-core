@@ -46,7 +46,7 @@ class DAG:
         state_manager: ProgramStateManager,
         *,
         max_parallel_stages: int = 8,
-        dag_timeout: float | None = 2400.0,
+        dag_timeout: float | None = 3600.0,
         writer: LogWriter,
     ) -> None:
         self.automata = DAGAutomata.build(nodes, data_flow_edges, execution_order_deps)

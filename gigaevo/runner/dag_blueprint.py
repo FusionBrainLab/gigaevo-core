@@ -25,7 +25,7 @@ class DAGBlueprint(BaseModel):
         None, description="Execution order dependencies by stage name"
     )
     max_parallel_stages: int = Field(8, description="Maximum parallel stages allowed")
-    dag_timeout: float = Field(2400.0, description="Timeout for DAG execution")
+    dag_timeout: float = Field(3600.0, description="Timeout for DAG execution")
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

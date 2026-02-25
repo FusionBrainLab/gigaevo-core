@@ -129,7 +129,7 @@ _USER_PROMPT_TEMPLATE = """\
 Parametrize the code below for Optuna hyperparameter optimization. \
 Each trial has a hard timeout of {eval_timeout}s; {total_trials} trials will run \
 ({n_trials} TPE + startup). Optimization direction: {direction} ``{score_key}``.
-{task_description_section}{runtime_section}
+{task_description_section}{runtime_section}{total_budget_section}
 Return:
 - ``parameters``: list of ParamSpec — name, param_type, bounds/choices, \
 initial_value (the literal currently in the code), reason (required, one sentence \

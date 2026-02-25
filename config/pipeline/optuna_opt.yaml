@@ -9,6 +9,8 @@ evolution_context:
 pipeline_builder:
   _target_: gigaevo.entrypoint.default_pipelines.OptunaOptPipelineBuilder
   ctx: ${evolution_context}
+  dag_timeout: ${dag_timeout}
+  optimization_time_budget: ${optimization_time_budget}
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

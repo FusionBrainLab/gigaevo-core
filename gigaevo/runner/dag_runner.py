@@ -107,7 +107,7 @@ class DagRunnerConfig(BaseModel):
         default=1.0, gt=0, description="Interval in seconds for metrics collection"
     )
     dag_timeout: float = Field(
-        default=3600, gt=0, le=3600.0, description="Timeout for DAG execution"
+        default=3600, gt=0, description="Timeout for DAG execution"
     )
 
     @field_validator("poll_interval")

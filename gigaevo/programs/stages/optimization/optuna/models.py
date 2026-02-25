@@ -6,6 +6,7 @@ parameter specs, search-space proposals, stage config, and stage output.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -59,6 +60,50 @@ def default_max_params(n_trials: int) -> int:
     At 60 trials (85 total) → 4 params (~21 trials each).
     """
     return min(5, max(3, n_trials // 15))
+
+
+def compute_eval_timeout(
+    baseline_s: float | None,
+    *,
+    budget: float,
+    min_timeout: float = 30.0,
+    safety_mult: float = 3.0,
+) -> float:
+    """Derive per-trial eval timeout from measured baseline runtime.
+
+    When *baseline_s* is known, the timeout is ``baseline_s * safety_mult``
+    clamped to ``[min_timeout, budget / 2]``.  When unknown, falls back to
+    ``budget * 0.05`` (5 % of total budget) clamped to the same range.
+    """
+    if baseline_s is not None and baseline_s > 0:
+        raw = baseline_s * safety_mult
+    else:
+        raw = budget * 0.05
+    return max(min_timeout, min(raw, budget / 2))
+
+
+def compute_n_trials(
+    budget: float,
+    eval_timeout: float,
+    max_parallel: int,
+    *,
+    llm_overhead: float = 60.0,
+    min_trials: int = 20,
+    max_trials: int = 100,
+) -> int:
+    """Derive number of TPE trials from remaining budget.
+
+    Estimates how many sequential rounds fit into
+    ``budget - llm_overhead``, multiplied by ``max_parallel``, then subtracts
+    the startup trials (which are additional).  Result is clamped to
+    ``[min_trials, max_trials]``.
+    """
+    usable = max(0.0, budget - llm_overhead)
+    if eval_timeout <= 0:
+        return min_trials
+    n_rounds = math.floor(usable / eval_timeout)
+    raw = n_rounds * max_parallel
+    return max(min_trials, min(raw, max_trials))
 
 
 _PARAM_TYPES = Literal["float", "int", "log_float", "categorical"]
