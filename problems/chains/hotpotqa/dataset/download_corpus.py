@@ -125,7 +125,7 @@ def build_index():
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    # download_archive()
+    download_archive()
     process_archive()
     build_index()
 
