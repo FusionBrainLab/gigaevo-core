@@ -1,6 +1,9 @@
 import asyncio
 from datetime import UTC, datetime
+import os
+from pathlib import Path
 import time
+from typing import Any
 
 # Ensure NO_PROXY covers all internal LLM servers before any imports
 # or subprocess spawns. The system Squid proxy intercepts traffic to
@@ -13,7 +16,7 @@ from dotenv import load_dotenv
 import hydra
 from hydra.utils import instantiate
 from loguru import logger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from gigaevo.config.resolvers import register_resolvers
 from gigaevo.database.redis_program_storage import RedisProgramStorage
@@ -184,10 +187,133 @@ Or set resume=true to continue with existing data:
         logger.info("=" * 80)
 
 
+def _load_memory_config(memory_config_path: Path) -> dict[str, Any]:
+    if not memory_config_path.is_file():
+        return {}
+    payload = OmegaConf.to_container(OmegaConf.load(memory_config_path), resolve=False)
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def _ensure_mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if isinstance(value, dict):
+        return value
+    payload[key] = {}
+    return payload[key]
+
+
+def _write_memory_config(memory_config_path: Path, payload: dict[str, Any]) -> None:
+    OmegaConf.save(config=OmegaConf.create(payload), f=memory_config_path)
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "on"}
+
+
+def _resolve_checkpoint_dir_arg(cfg: DictConfig, runtime_cwd: Path) -> Path | None:
+    raw_checkpoint_dir = cfg.get("checkpoint_dir")
+    if raw_checkpoint_dir is None:
+        return None
+    text = str(raw_checkpoint_dir).strip()
+    if not text:
+        return None
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        candidate = runtime_cwd / candidate
+    return candidate.resolve()
+
+
+def _build_runtime_memory_config(
+    cfg: DictConfig,
+    output_dir: Path,
+    requested_checkpoint_dir: Path | None,
+) -> tuple[Path, bool, Path | None]:
+    project_root = Path(__file__).resolve().parent
+    default_memory_config_path = project_root / "config" / "memory.yaml"
+    runtime_memory_config_path = output_dir / "memory.runtime.yaml"
+
+    payload = _load_memory_config(default_memory_config_path)
+
+    ideas_tracker_cfg = _ensure_mapping(payload, "ideas_tracker")
+    memory_write_cfg = ideas_tracker_cfg.get("memory_write_pipeline", False)
+    if isinstance(memory_write_cfg, dict):
+        memory_write_enabled = _to_bool(memory_write_cfg.get("enabled"))
+    else:
+        memory_write_enabled = _to_bool(memory_write_cfg)
+
+    redis_cfg = _ensure_mapping(ideas_tracker_cfg, "redis")
+    redis_cfg["redis_host"] = str(cfg.redis.host)
+    redis_cfg["redis_port"] = int(cfg.redis.port)
+    redis_cfg["redis_db"] = int(cfg.redis.db)
+    redis_cfg["redis_prefix"] = str(cfg.problem.name)
+
+    applied_checkpoint_dir: Path | None = None
+    if memory_write_enabled and requested_checkpoint_dir is not None:
+        requested_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        paths_cfg = _ensure_mapping(payload, "paths")
+        paths_cfg["checkpoint_dir"] = str(requested_checkpoint_dir)
+        applied_checkpoint_dir = requested_checkpoint_dir
+
+    _write_memory_config(runtime_memory_config_path, payload)
+    return runtime_memory_config_path, memory_write_enabled, applied_checkpoint_dir
+
+
+def run_ideas_tracker(cfg: DictConfig, output_dir: Path, runtime_cwd: Path) -> None:
+    requested_checkpoint_dir = _resolve_checkpoint_dir_arg(cfg, runtime_cwd)
+    runtime_memory_config_path, memory_write_enabled, applied_checkpoint_dir = (
+        _build_runtime_memory_config(
+            cfg,
+            output_dir,
+            requested_checkpoint_dir,
+        )
+    )
+    previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
+    os.environ["EVO_MEMORY_CONFIG_PATH"] = str(runtime_memory_config_path)
+
+    logger.info("Ideas tracker enabled. Config: {}", runtime_memory_config_path)
+    if memory_write_enabled and applied_checkpoint_dir is not None:
+        logger.info(
+            "Memory write checkpoint directory override: {}",
+            applied_checkpoint_dir,
+        )
+    elif memory_write_enabled:
+        logger.info(
+            "Memory write is enabled. Checkpoint directory is taken from config/memory.yaml."
+        )
+    elif requested_checkpoint_dir is not None:
+        logger.info(
+            "checkpoint_dir was provided but ignored because "
+            "ideas_tracker.memory_write_pipeline.enabled=false."
+        )
+
+    try:
+        from gigaevo.llm.ideas_tracker.ideas_tracker import IdeaTracker
+
+        tracker = IdeaTracker(config_path=runtime_memory_config_path)
+        tracker.run()
+    finally:
+        if previous_config_path is None:
+            os.environ.pop("EVO_MEMORY_CONFIG_PATH", None)
+        else:
+            os.environ["EVO_MEMORY_CONFIG_PATH"] = previous_config_path
+
+
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Main entrypoint with Hydra configuration management."""
     load_dotenv()
+    hydra_config = hydra.core.hydra_config.HydraConfig.get().runtime
+    hydra_output_dir = Path(hydra_config.output_dir)
+    hydra_runtime_cwd = Path(getattr(hydra_config, "cwd", os.getcwd()))
 
     log_file_path = setup_logger(
         log_dir=cfg.logging.log_dir,
@@ -197,10 +323,13 @@ def main(cfg: DictConfig) -> None:
     )
     logger.info(
         "Experiment working directory: {}.",
-        hydra.core.hydra_config.HydraConfig.get().runtime.output_dir,
+        hydra_output_dir,
     )
     logger.info(f"Log file: {log_file_path}")
     asyncio.run(run_experiment(cfg))
+
+    if bool(cfg.get("ideas_tracker", False)):
+        run_ideas_tracker(cfg, hydra_output_dir, hydra_runtime_cwd)
 
 
 if __name__ == "__main__":

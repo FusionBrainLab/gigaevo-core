@@ -95,7 +95,7 @@ ideas_tracker:
 
   # Optional: write current run's best ideas into memory DB pipeline.
   memory_write_pipeline:
-    enabled: false
+    enabled: true
 
   experimental_features:
     # ML-based impact analysis pipeline (Bootstrap ElasticNet).
