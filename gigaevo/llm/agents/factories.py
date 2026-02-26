@@ -9,6 +9,8 @@ These factories encapsulate all the complexity of agent creation:
 Stages just call these factories and use the agents - no LLM logic in stages!
 """
 
+from pathlib import Path
+
 from langchain_openai import ChatOpenAI
 
 from gigaevo.llm.agents.insights import InsightsAgent
@@ -31,6 +33,7 @@ def create_mutation_agent(
     task_description: str,
     metrics_context: MetricsContext,
     mutation_mode: str = "rewrite",
+    prompts_dir: str | Path | None = None,
 ) -> MutationAgent:
     """Create a fully configured mutation agent.
 
@@ -44,6 +47,7 @@ def create_mutation_agent(
         task_description: Description of the optimization task
         metrics_context: Metrics context for formatting
         mutation_mode: "rewrite" or "diff"
+        prompts_dir: Optional prompts directory (e.g. config.prompts.dir). If None, package defaults are used.
 
     Returns:
         Ready-to-use MutationAgent
@@ -58,8 +62,8 @@ def create_mutation_agent(
         >>> result = await agent.arun(parents, mutation_mode)
     """
     # Load prompts from files
-    system_template = MutationPrompts.system()
-    user_template = MutationPrompts.user()
+    system_template = MutationPrompts.system(prompts_dir=prompts_dir)
+    user_template = MutationPrompts.user(prompts_dir=prompts_dir)
 
     # Create metrics formatter
     metrics_formatter = MetricsFormatter(metrics_context)
@@ -84,6 +88,7 @@ def create_insights_agent(
     task_description: str,
     metrics_context: MetricsContext,
     max_insights: int = 7,
+    prompts_dir: str | Path | None = None,
 ) -> InsightsAgent:
     """Create a fully configured insights agent.
 
@@ -98,6 +103,7 @@ def create_insights_agent(
         task_description: Description of the evolutionary task
         metrics_context: Metrics context for formatting
         max_insights: Maximum number of insights to generate
+        prompts_dir: Optional prompts directory (e.g. config.prompts.dir). If None, package defaults are used.
 
     Returns:
         Ready-to-use InsightsAgent
@@ -111,8 +117,8 @@ def create_insights_agent(
         >>> insights = await agent.arun(program)
     """
     # Load prompts from files
-    system_template = InsightsPrompts.system()
-    user_template = InsightsPrompts.user()
+    system_template = InsightsPrompts.system(prompts_dir=prompts_dir)
+    user_template = InsightsPrompts.user(prompts_dir=prompts_dir)
     metrics_formatter = MetricsFormatter(metrics_context)
 
     # Format system prompt with task description
@@ -136,6 +142,7 @@ def create_lineage_agent(
     llm: ChatOpenAI | MultiModelRouter,
     task_description: str,
     metrics_context: MetricsContext,
+    prompts_dir: str | Path | None = None,
 ) -> LineageAgent:
     """Create a fully configured lineage agent.
 
@@ -148,6 +155,7 @@ def create_lineage_agent(
         llm: LangChain chat model or multi-model router
         task_description: Description of the optimization task
         metrics_context: Metrics context for formatting
+        prompts_dir: Optional prompts directory (e.g. config.prompts.dir). If None, package defaults are used.
 
     Returns:
         Ready-to-use LineageAgent
@@ -161,8 +169,8 @@ def create_lineage_agent(
         >>> insights = await agent.arun(parent, child)
     """
     # Load prompts from files
-    system_prompt = LineagePrompts.system()
-    user_template = LineagePrompts.user()
+    system_prompt = LineagePrompts.system(prompts_dir=prompts_dir)
+    user_template = LineagePrompts.user(prompts_dir=prompts_dir)
 
     # Create metrics formatter
     metrics_formatter = MetricsFormatter(metrics_context)
@@ -181,6 +189,7 @@ def create_scoring_agent(
     llm: ChatOpenAI | MultiModelRouter,
     trait_description: str,
     max_score: float,
+    prompts_dir: str | Path | None = None,
 ) -> ScoringAgent:
     """Create a fully configured scoring agent.
 
@@ -190,6 +199,7 @@ def create_scoring_agent(
 
     Args:
         llm: LangChain chat model or multi-model router
+        prompts_dir: Optional prompts directory (e.g. config.prompts.dir). If None, package defaults are used.
 
     Returns:
         Ready-to-use ScoringAgent
@@ -203,8 +213,8 @@ def create_scoring_agent(
         >>> score = await agent.arun(program)
     """
     # Load prompts from files
-    system_prompt = ScoringPrompts.system()
-    user_template = ScoringPrompts.user()
+    system_prompt = ScoringPrompts.system(prompts_dir=prompts_dir)
+    user_template = ScoringPrompts.user(prompts_dir=prompts_dir)
 
     # Return configured agent
     return ScoringAgent(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Union
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
@@ -36,7 +35,7 @@ class IslandConfig(BaseModel):
         ge=1,
         description="Max programs in the archive; excess entries are removed.",
     )
-    behavior_space: Union[DynamicBehaviorSpace, BehaviorSpace]
+    behavior_space: DynamicBehaviorSpace | BehaviorSpace
     archive_selector: ArchiveSelector = Field(
         description="Comparator used by archive to decide if newcomer is better"
     )

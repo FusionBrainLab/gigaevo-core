@@ -153,6 +153,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
         llm_wrapper = self.ctx.llm_wrapper
         storage = self.ctx.storage
         task_description = self.ctx.problem_ctx.task_description
+        prompts_dir = self.ctx.prompts_dir
 
         # ValidateCompiles
         self.add_stage(
@@ -212,6 +213,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 metrics_context=metrics_context,
                 max_insights=DEFAULT_MAX_INSIGHTS,
                 timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                prompts_dir=prompts_dir,
             ),
         )
 
@@ -248,6 +250,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 metrics_context=metrics_context,
                 storage=storage,
                 timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                prompts_dir=prompts_dir,
             ),
         )
 

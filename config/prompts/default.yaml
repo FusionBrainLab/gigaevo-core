@@ -1,0 +1,5 @@
+# @package _global_
+# Optional override directory for agent prompt templates.
+# Same layout as gigaevo/prompts: subdirs per agent (insights, mutation, lineage, scoring)
+# If null or omitted, package defaults are used.
+dir: null

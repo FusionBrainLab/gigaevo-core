@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -51,11 +52,17 @@ class LineageStage(LangGraphStage):
         task_description: str,
         metrics_context: MetricsContext,
         storage: ProgramStorage,
+        prompts_dir: str | Path | None = None,
         **kwargs: Any,
     ):
         # Inject live Program instance as `program` kwarg for the agent
         super().__init__(
-            agent=create_lineage_agent(llm, task_description, metrics_context),
+            agent=create_lineage_agent(
+                llm,
+                task_description,
+                metrics_context,
+                prompts_dir=prompts_dir,
+            ),
             program_kwarg="program",
             **kwargs,
         )

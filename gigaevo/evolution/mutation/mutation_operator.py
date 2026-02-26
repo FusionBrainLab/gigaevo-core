@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from typing import TYPE_CHECKING, Literal
+from pathlib import Path
 
 from loguru import logger
 
@@ -38,6 +39,7 @@ class LLMMutationOperator(MutationOperator):
         context_key: str = MUTATION_CONTEXT_METADATA_KEY,
         problem_context: ProblemContext,
         strip_comments_and_docstrings: bool = False,
+        prompts_dir: str | Path | None = None,
     ):
         self.problem_context = problem_context
         self.llm_wrapper = llm_wrapper
@@ -52,6 +54,7 @@ class LLMMutationOperator(MutationOperator):
             task_description=problem_context.task_description,
             metrics_context=self.metrics_context,
             mutation_mode=mutation_mode,
+            prompts_dir=prompts_dir,
         )
 
         logger.info(
