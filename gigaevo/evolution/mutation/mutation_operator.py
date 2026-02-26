@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import _ast
+import ast
 from typing import TYPE_CHECKING, Literal
 from pathlib import Path
 
