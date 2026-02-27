@@ -14,14 +14,20 @@ Can we improve the HotpotQA Exact Match (EM) score on the held-out test set beyo
 
 ### Current State
 
-| Method | Model | EM (val/test) | Notes |
-|--------|-------|---------------|-------|
-| GigaEvo (gen 7) | Qwen3-8B | 62.7 / ? | Best program ddce37b4 |
-| GEPA | Qwen3-8B | 62.3 / ? | ICLR 2026 Oral |
-| MIPROv2 | Qwen3-8B | 55.3 | DSPy baseline |
-| Baseline | Qwen3-8B | 42.3 | No optimization |
+**⚠️ IMPORTANT**: All results must use **non-thinking Qwen3-8B** to match GEPA's evaluation protocol. Previous GigaEvo results (db=5, program ddce37b4, 62.7% val EM) were collected with thinking **enabled** — those numbers are invalid for comparison with GEPA.
 
-**Critical gap**: We do not know our test EM. The comparison to GEPA is on different evaluation sets — we report validation EM on our 300 train-subset; GEPA may report on a different split. A fair comparison requires measuring both on the same held-out set.
+| Method | Model | Val EM | Test EM | Thinking | Notes |
+|--------|-------|--------|---------|----------|-------|
+| GEPA | Qwen3-8B | ? | 62.3% | ❌ disabled | ICLR 2026 Oral |
+| MIPROv2 | Qwen3-8B | ? | 55.3% | ❌ disabled | DSPy |
+| GRPO | Qwen3-8B | ? | 43.3% | ❌ disabled | RL |
+| Baseline | Qwen3-8B | ? | 42.3% | ❌ disabled | Unoptimized |
+| GigaEvo (db=5, ddce37b4) | Qwen3-8B | ~~62.7%~~ | ~~55.3%~~ | ✅ enabled | **INVALID** — thinking on |
+| GigaEvo ddce37b4 (non-think eval) | Qwen3-8B | 53.3% | **52.3%** | ❌ disabled | Thinking-optimized program, ~10pp gap to GEPA |
+
+**Non-thinking server commands** (see memory/experiments.md for full commands):
+- Port 8001: `--chat-template ./qwen3_nonthinking.jinja --max-model-len 16384`
+- Port 8000: same template, `--max-model-len 40960`
 
 ### Compute Budget
 - 3 parallel evolution slots (one Qwen3-235B mutation server each)
@@ -55,6 +61,29 @@ Before running any evolutionary experiments, establish the definitive baseline:
 ### 2.0 Deliverables
 - Baseline table: {program, val_EM, test_EM, val_EM_std (3 runs), wall_clock_time}
 - Decision: is 62.7% val EM reproducible? What is the test gap?
+
+**⚠️ Results collected 2026-02-27 (INVALID — port 8001 was running with thinking ENABLED)**:
+- ~~Test EM: 55.33%, Val runs: 61.67% / 63.00%, Evolution score: 62.67%~~
+- These are inflated by Qwen3 chain-of-thought reasoning; GEPA uses non-thinking
+- Port 8001 restarted with `qwen3_nonthinking.jinja` — all results below are fresh
+
+**Fresh baseline (non-thinking, ddce37b4 — was optimized with thinking, expect lower EM)**:
+| Run | Split | EM | Extraction failures | Wall-clock | Server |
+|-----|-------|------------|---------------------|------------|--------|
+| 1 | test | **52.33%** | 0.00% | 2.1 min | 8001 |
+| 1 | val | **53.33%** | 0.00% | 2.1 min | 8000 |
+| 2 | val | **51.00%** | 0.00% | 2.0 min | 8001 |
+| 3 | val | **52.33%** | 0.00% | 2.1 min | 8000 |
+
+**Key findings**:
+- Val EM mean=**52.22%**, std=**1.37pp → PASS** (< 3pp threshold)
+- Val ≈ Test (52.22% vs 52.33%, Δ≈0pp) — zero overfitting with non-thinking model
+- 0% extraction failures across all runs — cleaner outputs, no thinking-token truncation
+- ddce37b4 at ~52% is 10pp below GEPA (62.3%) — expected, prompts tuned for thinking mode
+- **Efficiency: ~2.1 min / 300 samples** (3× faster than thinking, ~10× faster than pre-optimization estimate)
+- Both servers (8000, 8001) give consistent results in non-thinking mode
+
+**Next**: fresh evolution run on new Redis DB with non-thinking servers. Target: close the 10pp gap to GEPA (62.3%).
 
 ### 2.0 Pass/Fail
 - PASS if variance across 3 runs is < 3 percentage points. If higher, all subsequent experiments need more seeds.
@@ -357,7 +386,7 @@ Given 3 parallel slots and ~7 days, prioritize as follows:
 - Write up results
 
 ### Decision Points
-- **After Experiment 0**: If test EM is much lower than val EM, investigate overfitting before proceeding.
+- **After Experiment 0 (DONE)**: Test EM (55.3%) is 7.4pp below val EM (62.7%). Overfitting confirmed. Priority shifts: all experiments must use test EM as the primary metric, not val EM. Experiment 1 (test logging) becomes even more critical.
 - **After Experiment 1**: If fast validation has low correlation with full validation, abandon it and revert.
 - **After Experiment 2**: Pick the best archive configuration for all subsequent experiments.
 - **After Experiment 3**: Decide whether reflective mutation is worth the implementation complexity.
@@ -437,7 +466,7 @@ If all experiments fail to improve beyond 62.7% val EM, the most valuable output
 |------|--------|------------|
 | LLM endpoint instability | Crashed runs, wasted time | Monitor, auto-resume where possible |
 | Validation stochasticity | False positives/negatives in fitness | Measure variance (Exp 0), average over repeats |
-| Overfitting to 300 train samples | High val EM, low test EM | Test EM logging (Exp 1) |
+| Overfitting to 300 train samples | High val EM, low test EM | **MATERIALIZED**: 62.7% val → 55.3% test (−7.4pp). Test EM logging (Exp 1) is now critical. |
 | Efficiency changes alter behavior | Confound all comparisons | Validate that step-batched execution produces identical results (test on baseline program) |
 | Mutation LLM non-determinism | High variance across seeds | Fixed seeds where possible; sample size |
 | Redis state pollution | Cross-contamination | Fresh Redis DB per run, document DB assignments |
