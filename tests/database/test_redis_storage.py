@@ -18,6 +18,7 @@ from gigaevo.programs.core_types import (
     StageError,
     StageState,
 )
+from gigaevo.programs.program import Lineage, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
 from tests.conftest import MockOutput
@@ -768,3 +769,388 @@ class TestStreamOperations:
 
         # Restore original
         r.xread = original_xread
+
+
+# ===================================================================
+# Category M: Audit Finding 1 — Full Program round-trip (all fields)
+# ===================================================================
+
+
+class TestFullProgramRoundTrip:
+    """Audit finding 1: round-trip test must check ALL Program fields, not just id and code."""
+
+    async def test_all_fields_survive_redis_roundtrip(
+        self, fakeredis_storage, make_program
+    ):
+        """Create a Program with every field populated, store it, retrieve it,
+        and verify every single field matches."""
+        # Build a fully-populated program
+        stage_result_ok = ProgramStageResult.success(output=MockOutput(value=77))
+        error = StageError(
+            type="ValueError",
+            message="some error",
+            stage="ErrStage",
+            traceback="Traceback...\n  line 99",
+        )
+        stage_result_fail = ProgramStageResult(status=StageState.FAILED, error=error)
+
+        lineage = Lineage(
+            parents=["00000000-0000-0000-0000-000000000001"],
+            children=["00000000-0000-0000-0000-000000000002"],
+            mutation="test_mutation_op",
+            generation=5,
+        )
+        metadata = {
+            "experiment": "full-roundtrip",
+            "config": {"lr": 0.001, "epochs": 100},
+            "tags": ["alpha", "beta"],
+        }
+        metrics = {"accuracy": 0.97, "loss": 0.03, "f1": 0.95}
+
+        prog = Program(
+            code="def solve(x): return x * 2",
+            state=ProgramState.DONE,
+            name="roundtrip-test-prog",
+            lineage=lineage,
+            metrics=metrics,
+            metadata=metadata,
+            stage_results={
+                "validation": stage_result_ok,
+                "optimization": stage_result_fail,
+            },
+            atomic_counter=999_999_999,
+        )
+
+        await fakeredis_storage.add(prog)
+        fetched = await fakeredis_storage.get(prog.id)
+
+        assert fetched is not None
+
+        # 1. id
+        assert fetched.id == prog.id
+        # 2. code
+        assert fetched.code == prog.code
+        # 3. name
+        assert fetched.name == prog.name
+        # 4. state
+        assert fetched.state == prog.state
+        # 5. metrics (all keys and values)
+        assert fetched.metrics == prog.metrics
+        # 6. metadata (nested structure)
+        assert fetched.metadata["experiment"] == "full-roundtrip"
+        assert fetched.metadata["config"]["lr"] == 0.001
+        assert fetched.metadata["config"]["epochs"] == 100
+        assert fetched.metadata["tags"] == ["alpha", "beta"]
+        # 7. lineage (parents, children, mutation, generation)
+        assert fetched.lineage.parents == lineage.parents
+        assert fetched.lineage.children == lineage.children
+        assert fetched.lineage.mutation == lineage.mutation
+        assert fetched.lineage.generation == lineage.generation
+        # 8. stage_results (success + failure)
+        assert "validation" in fetched.stage_results
+        assert fetched.stage_results["validation"].status == StageState.COMPLETED
+        assert fetched.stage_results["validation"].output.value == 77
+        assert "optimization" in fetched.stage_results
+        assert fetched.stage_results["optimization"].status == StageState.FAILED
+        assert fetched.stage_results["optimization"].error.type == "ValueError"
+        assert fetched.stage_results["optimization"].error.message == "some error"
+        assert "line 99" in fetched.stage_results["optimization"].error.traceback
+        # 9. created_at preserved
+        assert fetched.created_at == prog.created_at
+        # 10. generation property delegates to lineage
+        assert fetched.generation == 5
+
+
+# ===================================================================
+# Category N: Audit Finding 2 — Concurrent writers on SAME stage key
+# ===================================================================
+
+
+class TestConcurrentSameKeyUpdate:
+    """Audit finding 2: concurrent updates to the SAME stage_result key."""
+
+    async def test_concurrent_writers_same_stage_key_consistent(
+        self, fakeredis_storage, make_program
+    ):
+        """Multiple concurrent writers updating the SAME stage_result key.
+        After all writes complete, the final state must be one of the written values
+        (not corrupted), and the program must be retrievable."""
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+
+        async def write_stage_result(value: int):
+            """Update the same stage key with a specific value."""
+            result = ProgramStageResult.success(output=MockOutput(value=value))
+            prog.stage_results["shared_stage"] = result
+            await fakeredis_storage.update(prog)
+
+        # Run 5 concurrent writers all targeting "shared_stage"
+        values = list(range(5))
+        await asyncio.gather(*(write_stage_result(v) for v in values))
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        # The final value must be one of the values we wrote (not corrupted)
+        assert "shared_stage" in fetched.stage_results
+        assert fetched.stage_results["shared_stage"].status == StageState.COMPLETED
+        final_value = fetched.stage_results["shared_stage"].output.value
+        assert final_value in values, (
+            f"Final value {final_value} is not one of the expected values {values}"
+        )
+
+
+# ===================================================================
+# Category O: Audit Finding 3 — State transitions persisted to Redis
+# ===================================================================
+
+
+class TestStateTransitionPersistence:
+    """Audit finding 3: state transitions must be readable after re-fetch from Redis."""
+
+    async def test_transition_status_persisted_and_refetched(
+        self, fakeredis_storage, make_program
+    ):
+        """transition_status moves program between status sets;
+        after re-fetch, the status set counts are correct."""
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        # Transition QUEUED -> RUNNING at the status-set level
+        await fakeredis_storage.transition_status(
+            prog.id, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+
+        # Re-fetch from Redis and verify status set membership
+        queued_ids = await fakeredis_storage.get_ids_by_status(
+            ProgramState.QUEUED.value
+        )
+        running_ids = await fakeredis_storage.get_ids_by_status(
+            ProgramState.RUNNING.value
+        )
+        assert prog.id not in queued_ids
+        assert prog.id in running_ids
+
+    async def test_atomic_state_transition_persisted_and_refetched(
+        self, fakeredis_storage, make_program
+    ):
+        """atomic_state_transition updates both the program data and status sets;
+        after re-fetch, the program has the new state."""
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        prog.state = ProgramState.RUNNING
+        await fakeredis_storage.atomic_state_transition(
+            prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+
+        # Re-fetch the actual program from Redis
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        assert fetched.state == ProgramState.RUNNING
+
+        # Also verify status set membership via get_all_by_status
+        running_progs = await fakeredis_storage.get_all_by_status(
+            ProgramState.RUNNING.value
+        )
+        assert any(p.id == prog.id for p in running_progs)
+
+        queued_progs = await fakeredis_storage.get_all_by_status(
+            ProgramState.QUEUED.value
+        )
+        assert not any(p.id == prog.id for p in queued_progs)
+
+    async def test_full_lifecycle_state_persisted_each_step(
+        self, fakeredis_storage, make_program
+    ):
+        """QUEUED -> RUNNING -> DONE: each step is persisted and re-fetchable."""
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        # Step 1: QUEUED -> RUNNING
+        prog.state = ProgramState.RUNNING
+        await fakeredis_storage.atomic_state_transition(
+            prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.state == ProgramState.RUNNING
+
+        # Step 2: RUNNING -> DONE
+        prog.state = ProgramState.DONE
+        await fakeredis_storage.atomic_state_transition(
+            prog, ProgramState.RUNNING.value, ProgramState.DONE.value
+        )
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.state == ProgramState.DONE
+
+        # Verify status set cleanup across the lifecycle
+        queued_count = await fakeredis_storage.count_by_status(
+            ProgramState.QUEUED.value
+        )
+        running_count = await fakeredis_storage.count_by_status(
+            ProgramState.RUNNING.value
+        )
+        done_count = await fakeredis_storage.count_by_status(ProgramState.DONE.value)
+        assert queued_count == 0
+        assert running_count == 0
+        assert done_count == 1
+
+
+# ===================================================================
+# Category P: Audit Finding 4 — remove() cleans up status sets
+# ===================================================================
+
+
+class TestRemoveStatusSetCleanup:
+    """Audit finding 4: remove() must clean up status set membership."""
+
+    async def test_remove_cleans_up_queued_status_set(
+        self, fakeredis_storage, make_program
+    ):
+        """After remove(), get_all_by_status should NOT return the removed program."""
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        # Verify it's in the QUEUED set
+        queued_before = await fakeredis_storage.get_all_by_status(
+            ProgramState.QUEUED.value
+        )
+        assert any(p.id == prog.id for p in queued_before)
+
+        # Remove the program
+        await fakeredis_storage.remove(prog.id)
+
+        # Verify status set is cleaned up
+        queued_after = await fakeredis_storage.get_all_by_status(
+            ProgramState.QUEUED.value
+        )
+        assert not any(p.id == prog.id for p in queued_after)
+
+        # count_by_status should also reflect the removal
+        count = await fakeredis_storage.count_by_status(ProgramState.QUEUED.value)
+        assert count == 0
+
+    async def test_remove_cleans_up_running_status_set(
+        self, fakeredis_storage, make_program
+    ):
+        """Remove a RUNNING program; status set membership cleaned up."""
+        prog = make_program(state=ProgramState.RUNNING)
+        await fakeredis_storage.add(prog)
+
+        count_before = await fakeredis_storage.count_by_status(
+            ProgramState.RUNNING.value
+        )
+        assert count_before == 1
+
+        await fakeredis_storage.remove(prog.id)
+
+        count_after = await fakeredis_storage.count_by_status(
+            ProgramState.RUNNING.value
+        )
+        assert count_after == 0
+
+        # Also verify get_ids_by_status
+        running_ids = await fakeredis_storage.get_ids_by_status(
+            ProgramState.RUNNING.value
+        )
+        assert prog.id not in running_ids
+
+    async def test_remove_cleans_up_done_status_set(
+        self, fakeredis_storage, make_program
+    ):
+        """Remove a DONE program; status set is cleaned up."""
+        prog = make_program(state=ProgramState.DONE)
+        await fakeredis_storage.add(prog)
+
+        await fakeredis_storage.remove(prog.id)
+
+        done_ids = await fakeredis_storage.get_ids_by_status(ProgramState.DONE.value)
+        assert prog.id not in done_ids
+        assert await fakeredis_storage.count_by_status(ProgramState.DONE.value) == 0
+
+    async def test_remove_nonexistent_does_not_corrupt_status_sets(
+        self, fakeredis_storage, make_program
+    ):
+        """Removing a non-existent program doesn't affect other programs' status sets."""
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        await fakeredis_storage.remove("nonexistent-program-id")
+
+        # Original program should still be in QUEUED set
+        count = await fakeredis_storage.count_by_status(ProgramState.QUEUED.value)
+        assert count == 1
+
+
+# ===================================================================
+# Category Q: Audit Finding 5 — Key isolation between prefixes
+# ===================================================================
+
+
+class TestKeyIsolationBetweenPrefixes:
+    """Audit finding 5: two storage instances with different prefixes must be isolated."""
+
+    async def test_different_prefixes_are_isolated(self, make_program):
+        """Programs stored in one prefix are invisible to another prefix."""
+        server = fakeredis.FakeServer()
+
+        config_a = RedisProgramStorageConfig(
+            redis_url="redis://fake:6379/0",
+            key_prefix="prefix_alpha",
+        )
+        config_b = RedisProgramStorageConfig(
+            redis_url="redis://fake:6379/0",
+            key_prefix="prefix_beta",
+        )
+
+        storage_a = RedisProgramStorage(config_a)
+        storage_b = RedisProgramStorage(config_b)
+
+        # Both share the same fakeredis server
+        fake_redis = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+        storage_a._conn._redis = fake_redis
+        storage_a._conn._closing = False
+        storage_b._conn._redis = fake_redis
+        storage_b._conn._closing = False
+
+        try:
+            prog_a = make_program(code="def alpha(): return 1")
+            prog_b = make_program(code="def beta(): return 2")
+
+            await storage_a.add(prog_a)
+            await storage_b.add(prog_b)
+
+            # storage_a can see prog_a but not prog_b
+            fetched_a = await storage_a.get(prog_a.id)
+            assert fetched_a is not None
+            assert fetched_a.code == "def alpha(): return 1"
+            assert await storage_a.get(prog_b.id) is None
+
+            # storage_b can see prog_b but not prog_a
+            fetched_b = await storage_b.get(prog_b.id)
+            assert fetched_b is not None
+            assert fetched_b.code == "def beta(): return 2"
+            assert await storage_b.get(prog_a.id) is None
+
+            # size() is prefix-scoped
+            assert await storage_a.size() == 1
+            assert await storage_b.size() == 1
+
+            # get_all() is prefix-scoped
+            all_a = await storage_a.get_all()
+            all_b = await storage_b.get_all()
+            assert len(all_a) == 1
+            assert len(all_b) == 1
+            assert all_a[0].id == prog_a.id
+            assert all_b[0].id == prog_b.id
+
+            # Status sets are prefix-scoped
+            a_by_status = await storage_a.get_all_by_status(ProgramState.RUNNING.value)
+            b_by_status = await storage_b.get_all_by_status(ProgramState.RUNNING.value)
+            assert len(a_by_status) == 1
+            assert len(b_by_status) == 1
+            assert a_by_status[0].id == prog_a.id
+            assert b_by_status[0].id == prog_b.id
+
+        finally:
+            await storage_a.close()
+            await storage_b.close()

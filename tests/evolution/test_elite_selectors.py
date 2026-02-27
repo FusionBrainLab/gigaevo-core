@@ -1,16 +1,25 @@
 """Tests for elite selectors including lower-is-better fitness."""
 
 from collections import Counter
+import random
 
+import numpy as np
 import pytest
 
 from gigaevo.evolution.strategies.elite_selectors import (
     FitnessProportionalEliteSelector,
     ParetoTournamentEliteSelector,
+    RandomEliteSelector,
     ScalarTournamentEliteSelector,
     WeightedEliteSelector,
 )
+from gigaevo.evolution.strategies.selectors import ParetoFrontSelector
+from gigaevo.evolution.strategies.utils import (
+    dominates,
+    weighted_sample_without_replacement,
+)
 from gigaevo.programs.program import Lineage, Program
+from gigaevo.programs.program_state import ProgramState
 
 
 def _make_program(
@@ -479,3 +488,489 @@ class TestParetoTournamentEliteSelector:
         ]
         result = sel(progs, total=5)
         assert len(set(id(p) for p in result)) == 5
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 1: ParetoFrontSelector — missing reverse direction
+# ---------------------------------------------------------------------------
+
+
+class TestParetoFrontSelectorReverseDirection:
+    """Verify that a strictly worse new point is rejected by ParetoFrontSelector."""
+
+    def test_worse_point_not_added_to_front(self):
+        """When new is strictly worse on ALL objectives, it must NOT dominate current."""
+        sel = ParetoFrontSelector(fitness_keys=["a", "b"])
+        worse_new = Program(
+            code="x=1", state=ProgramState.DONE, metrics={"a": 1.0, "b": 1.0}
+        )
+        better_current = Program(
+            code="x=2", state=ProgramState.DONE, metrics={"a": 10.0, "b": 10.0}
+        )
+        # new is strictly worse => should NOT dominate current
+        assert sel(worse_new, better_current) is False
+
+    def test_current_dominates_new_reverse_check(self):
+        """The reverse direction: current dominates new. Verify new does NOT replace."""
+        sel = ParetoFrontSelector(fitness_keys=["score", "speed"])
+        new = Program(
+            code="x=1", state=ProgramState.DONE, metrics={"score": 2.0, "speed": 3.0}
+        )
+        current = Program(
+            code="x=2",
+            state=ProgramState.DONE,
+            metrics={"score": 10.0, "speed": 10.0},
+        )
+        assert sel(new, current) is False
+        # And confirm the reverse IS a domination
+        assert sel(current, new) is True
+
+    def test_worse_on_all_with_lower_is_better(self):
+        """With higher_is_better=False, a new point with HIGHER values on all
+        objectives is strictly worse and should be rejected."""
+        sel = ParetoFrontSelector(
+            fitness_keys=["error", "latency"],
+            fitness_key_higher_is_better=[False, False],
+        )
+        # For lower-is-better: lower is better; new has higher values = worse
+        worse_new = Program(
+            code="x=1",
+            state=ProgramState.DONE,
+            metrics={"error": 10.0, "latency": 100.0},
+        )
+        better_current = Program(
+            code="x=2",
+            state=ProgramState.DONE,
+            metrics={"error": 1.0, "latency": 10.0},
+        )
+        assert sel(worse_new, better_current) is False
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 2: Tournament size never varied
+# ---------------------------------------------------------------------------
+
+
+class TestTournamentSizeVariation:
+    """Test tournament selectors with different tournament sizes."""
+
+    def test_scalar_tournament_size_2(self):
+        """With tournament_size=2, best should still be selected more than uniform."""
+        random.seed(42)
+        np.random.seed(42)
+        sel = ScalarTournamentEliteSelector(fitness_key="score", tournament_size=2)
+        progs = [_make_program(float(i)) for i in range(10)]
+        best = progs[-1]
+
+        counts: Counter = Counter()
+        for _ in range(2000):
+            result = sel(progs, total=1)
+            counts[id(result[0])] += 1
+
+        # With size 2, best still wins more than uniform (10%)
+        assert counts[id(best)] / 2000 > 0.10
+
+    def test_scalar_tournament_size_5(self):
+        """With tournament_size=5, best should be selected more often than with size 2."""
+        random.seed(42)
+        np.random.seed(42)
+        sel_2 = ScalarTournamentEliteSelector(fitness_key="score", tournament_size=2)
+        sel_5 = ScalarTournamentEliteSelector(fitness_key="score", tournament_size=5)
+        progs = [_make_program(float(i)) for i in range(10)]
+        best = progs[-1]
+
+        counts_2: Counter = Counter()
+        counts_5: Counter = Counter()
+        n_trials = 3000
+        for _ in range(n_trials):
+            random.seed(_ + 1000)
+            r2 = sel_2(progs, total=1)
+            counts_2[id(r2[0])] += 1
+            random.seed(_ + 2000)
+            r5 = sel_5(progs, total=1)
+            counts_5[id(r5[0])] += 1
+
+        # Larger tournament -> more selection pressure on best
+        assert counts_5[id(best)] > counts_2[id(best)]
+
+    def test_scalar_tournament_size_equals_population(self):
+        """With tournament_size == population_size, the best program ALWAYS wins."""
+        random.seed(42)
+        sel = ScalarTournamentEliteSelector(fitness_key="score", tournament_size=10)
+        progs = [_make_program(float(i)) for i in range(10)]
+        best = progs[-1]
+
+        for _ in range(100):
+            result = sel(progs, total=1)
+            assert result[0] is best, (
+                "With tournament_size == population_size, best must always win"
+            )
+
+    def test_pareto_tournament_size_varies(self):
+        """ParetoTournament with tournament_size == population: dominant always wins."""
+        random.seed(42)
+        sel = ParetoTournamentEliteSelector(
+            fitness_keys=["a", "b"],
+            fitness_key_higher_is_better={"a": True, "b": True},
+            tournament_size=3,  # == population size
+        )
+        dominant = Program(code="x=1", metrics={"a": 10.0, "b": 10.0})
+        weak = Program(code="x=2", metrics={"a": 1.0, "b": 1.0})
+        mid = Program(code="x=3", metrics={"a": 5.0, "b": 5.0})
+        progs = [weak, mid, dominant]
+
+        for _ in range(50):
+            result = sel(progs, total=1)
+            assert result[0] is dominant
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 3: dominates() asymmetry
+# ---------------------------------------------------------------------------
+
+
+class TestDominatesAsymmetry:
+    """Verify that dominates(a, b) and dominates(b, a) are NOT both True."""
+
+    def test_dominates_forward_not_reverse(self):
+        """If a dominates b, then b must NOT dominate a."""
+        a = [10.0, 10.0]
+        b = [5.0, 5.0]
+        assert dominates(a, b) is True
+        assert dominates(b, a) is False
+
+    def test_dominates_reverse_not_forward(self):
+        """If b dominates a, then a must NOT dominate b."""
+        a = [1.0, 1.0]
+        b = [5.0, 5.0]
+        assert dominates(a, b) is False
+        assert dominates(b, a) is True
+
+    def test_neither_dominates_tradeoff(self):
+        """With a trade-off, neither should dominate the other."""
+        a = [10.0, 1.0]
+        b = [1.0, 10.0]
+        assert dominates(a, b) is False
+        assert dominates(b, a) is False
+
+    def test_equal_vectors_no_domination(self):
+        """Equal vectors: domination requires at least one strict inequality."""
+        a = [5.0, 5.0, 5.0]
+        b = [5.0, 5.0, 5.0]
+        assert dominates(a, b) is False
+        assert dominates(b, a) is False
+
+    def test_dominates_partial_equal_one_better(self):
+        """a is >= b on all and strictly > on one dimension."""
+        a = [5.0, 6.0]
+        b = [5.0, 5.0]
+        assert dominates(a, b) is True
+        assert dominates(b, a) is False
+
+    def test_dominates_three_dimensions(self):
+        """Asymmetry check in 3D."""
+        a = [10.0, 10.0, 10.0]
+        b = [5.0, 5.0, 5.0]
+        assert dominates(a, b) is True
+        assert dominates(b, a) is False
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 4: weighted_sample multi-draw distribution
+# ---------------------------------------------------------------------------
+
+
+class TestWeightedSampleMultiDraw:
+    """Test weighted_sample_without_replacement with multiple draws."""
+
+    def test_no_duplicates_in_multi_draw(self):
+        """Multiple draws should never return duplicates (sampling w/o replacement)."""
+        random.seed(42)
+        items = list(range(10))
+        weights = [1.0] * 10
+        result = weighted_sample_without_replacement(items, weights, k=5)
+        assert len(result) == 5
+        assert len(set(result)) == 5, "Duplicates found in without-replacement sample"
+
+    def test_higher_weight_items_appear_more(self):
+        """Over many trials, items with higher weights should appear more often."""
+        items = ["A", "B", "C", "D"]
+        # A has 10x the weight of others
+        weights = [10.0, 1.0, 1.0, 1.0]
+
+        counts: Counter = Counter()
+        n_trials = 2000
+        for i in range(n_trials):
+            random.seed(i)
+            result = weighted_sample_without_replacement(items, weights, k=1)
+            counts[result[0]] += 1
+
+        # A should appear much more frequently than any other single item
+        assert counts["A"] > counts["B"]
+        assert counts["A"] > counts["C"]
+        assert counts["A"] > counts["D"]
+        # A should get majority of selections
+        assert counts["A"] > n_trials * 0.5
+
+    def test_draw_all_items(self):
+        """Drawing k == len(items) should return all items (no duplicates)."""
+        random.seed(42)
+        items = ["X", "Y", "Z"]
+        weights = [1.0, 2.0, 3.0]
+        result = weighted_sample_without_replacement(items, weights, k=3)
+        assert len(result) == 3
+        assert set(result) == {"X", "Y", "Z"}
+
+    def test_k_larger_than_population(self):
+        """k > len(items) is clamped to len(items)."""
+        random.seed(42)
+        items = [1, 2, 3]
+        weights = [1.0, 1.0, 1.0]
+        result = weighted_sample_without_replacement(items, weights, k=100)
+        assert len(result) == 3
+        assert set(result) == {1, 2, 3}
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 5: Fixed random seeds for determinism
+# ---------------------------------------------------------------------------
+
+
+class TestFixedRandomSeeds:
+    """Tests that use explicit random seeds for deterministic, non-flaky behavior."""
+
+    def test_scalar_tournament_deterministic_with_seed(self):
+        """Same seed produces same selection result."""
+        sel = ScalarTournamentEliteSelector(fitness_key="score", tournament_size=3)
+        progs = [_make_program(float(i)) for i in range(10)]
+
+        random.seed(12345)
+        result1 = sel(progs, total=3)
+        ids1 = [id(p) for p in result1]
+
+        random.seed(12345)
+        result2 = sel(progs, total=3)
+        ids2 = [id(p) for p in result2]
+
+        assert ids1 == ids2
+
+    def test_weighted_elite_deterministic_with_seed(self):
+        """WeightedEliteSelector produces same results with same seed."""
+        sel = WeightedEliteSelector(fitness_key="score", lambda_=10.0)
+        progs = [_make_program(float(i)) for i in range(10)]
+
+        random.seed(99999)
+        result1 = sel(progs, total=3)
+        ids1 = [id(p) for p in result1]
+
+        random.seed(99999)
+        result2 = sel(progs, total=3)
+        ids2 = [id(p) for p in result2]
+
+        assert ids1 == ids2
+
+    def test_fitness_proportional_deterministic_with_seed(self):
+        """FitnessProportionalEliteSelector produces same results with same seed."""
+        sel = FitnessProportionalEliteSelector(fitness_key="score", temperature=0.5)
+        progs = [_make_program(float(i)) for i in range(10)]
+
+        random.seed(54321)
+        result1 = sel(progs, total=3)
+        ids1 = [id(p) for p in result1]
+
+        random.seed(54321)
+        result2 = sel(progs, total=3)
+        ids2 = [id(p) for p in result2]
+
+        assert ids1 == ids2
+
+    def test_random_elite_deterministic_with_seed(self):
+        """RandomEliteSelector produces same results with same seed."""
+        sel = RandomEliteSelector()
+        progs = [_make_program(float(i)) for i in range(10)]
+
+        random.seed(77777)
+        result1 = sel(progs, total=3)
+        ids1 = [id(p) for p in result1]
+
+        random.seed(77777)
+        result2 = sel(progs, total=3)
+        ids2 = [id(p) for p in result2]
+
+        assert ids1 == ids2
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 6: Negative fitness values
+# ---------------------------------------------------------------------------
+
+
+class TestNegativeFitnessValues:
+    """Selectors should handle negative fitness values correctly."""
+
+    def test_scalar_tournament_negative_fitness(self):
+        """Tournament selector works correctly with negative fitness values."""
+        random.seed(42)
+        sel = ScalarTournamentEliteSelector(
+            fitness_key="score",
+            tournament_size=10,  # full population
+        )
+        progs = [_make_program(f) for f in [-10.0, -5.0, 0.0, 5.0, 10.0]]
+        best = progs[-1]  # 10.0 is the highest
+
+        # With full population tournament, the best should always win
+        for _ in range(50):
+            result = sel(progs, total=1)
+            assert result[0] is best
+
+    def test_scalar_tournament_negative_lower_is_better(self):
+        """With higher_is_better=False and negative values, lowest value wins."""
+        random.seed(42)
+        sel = ScalarTournamentEliteSelector(
+            fitness_key="score",
+            fitness_key_higher_is_better=False,
+            tournament_size=5,  # full population
+        )
+        progs = [_make_program(f) for f in [-10.0, -5.0, 0.0, 5.0, 10.0]]
+        best = progs[0]  # -10.0 is the lowest
+
+        for _ in range(50):
+            result = sel(progs, total=1)
+            assert result[0] is best
+
+    def test_weighted_elite_negative_fitness(self):
+        """WeightedEliteSelector handles negative fitness values."""
+        random.seed(42)
+        sel = WeightedEliteSelector(fitness_key="score", lambda_=10.0)
+        progs = [_make_program(f) for f in [-10.0, -5.0, 0.0, 5.0, 10.0]]
+
+        # Should not crash and should return correct count
+        result = sel(progs, total=2)
+        assert len(result) == 2
+        assert len(set(id(p) for p in result)) == 2
+
+    def test_fitness_proportional_negative_fitness(self):
+        """FitnessProportionalEliteSelector handles negative fitness values."""
+        random.seed(42)
+        sel = FitnessProportionalEliteSelector(fitness_key="score", temperature=0.001)
+        progs = [_make_program(f) for f in [-10.0, -5.0, 0.0, 5.0, 10.0]]
+        best = progs[-1]  # 10.0
+
+        counts: Counter = Counter()
+        for _ in range(500):
+            result = sel(progs, total=1)
+            counts[id(result[0])] += 1
+
+        # With low temperature, best should dominate
+        assert counts[id(best)] > 400
+
+    def test_pareto_tournament_negative_fitness(self):
+        """ParetoTournament handles negative fitness on both dimensions."""
+        random.seed(42)
+        sel = ParetoTournamentEliteSelector(
+            fitness_keys=["a", "b"],
+            fitness_key_higher_is_better={"a": True, "b": True},
+            tournament_size=3,
+        )
+        # dominant has highest values even though all are negative or zero
+        dominant = Program(code="x=1", metrics={"a": 0.0, "b": 0.0})
+        weak = Program(code="x=2", metrics={"a": -10.0, "b": -10.0})
+        mid = Program(code="x=3", metrics={"a": -5.0, "b": -5.0})
+        progs = [weak, mid, dominant]
+
+        counts: Counter = Counter()
+        for _ in range(500):
+            result = sel(progs, total=1)
+            counts[id(result[0])] += 1
+
+        assert counts[id(dominant)] > counts[id(weak)]
+
+    def test_dominates_with_negative_values(self):
+        """dominates() handles negative values correctly."""
+        a = [-1.0, -1.0]
+        b = [-5.0, -5.0]
+        assert dominates(a, b) is True  # -1 > -5
+        assert dominates(b, a) is False
+
+    def test_pareto_front_selector_negative_fitness(self):
+        """ParetoFrontSelector handles negative fitness values."""
+        sel = ParetoFrontSelector(fitness_keys=["a", "b"])
+        new = Program(
+            code="x=1", state=ProgramState.DONE, metrics={"a": -1.0, "b": -1.0}
+        )
+        curr = Program(
+            code="x=2", state=ProgramState.DONE, metrics={"a": -5.0, "b": -5.0}
+        )
+        # -1 > -5, so new dominates current
+        assert sel(new, curr) is True
+        # Reverse: current does NOT dominate new
+        assert sel(curr, new) is False
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 7: Single-element population
+# ---------------------------------------------------------------------------
+
+
+class TestSingleElementPopulation:
+    """Selectors should handle a single-element population gracefully."""
+
+    def test_scalar_tournament_single_program(self):
+        """Single program: should return it when total >= 1."""
+        sel = ScalarTournamentEliteSelector(fitness_key="score", tournament_size=3)
+        progs = [_make_program(5.0)]
+        result = sel(progs, total=1)
+        assert result == progs
+        assert result[0] is progs[0]
+
+    def test_scalar_tournament_single_program_total_gt_1(self):
+        """Single program with total > 1: should return all (just 1)."""
+        sel = ScalarTournamentEliteSelector(fitness_key="score", tournament_size=3)
+        progs = [_make_program(5.0)]
+        result = sel(progs, total=5)
+        assert result == progs
+
+    def test_pareto_tournament_single_program(self):
+        """ParetoTournament with single program."""
+        sel = ParetoTournamentEliteSelector(
+            fitness_keys=["a", "b"],
+            tournament_size=3,
+        )
+        progs = [Program(code="x=1", metrics={"a": 1.0, "b": 2.0})]
+        result = sel(progs, total=1)
+        assert result == progs
+
+    def test_weighted_elite_single_program(self):
+        """WeightedEliteSelector with single program."""
+        sel = WeightedEliteSelector(fitness_key="score", lambda_=10.0)
+        progs = [_make_program(5.0)]
+        result = sel(progs, total=1)
+        assert result == progs
+
+    def test_weighted_elite_single_program_total_gt_1(self):
+        """WeightedEliteSelector with single program, total > 1."""
+        sel = WeightedEliteSelector(fitness_key="score", lambda_=10.0)
+        progs = [_make_program(5.0)]
+        result = sel(progs, total=3)
+        assert result == progs
+
+    def test_fitness_proportional_single_program(self):
+        """FitnessProportionalEliteSelector with single program."""
+        sel = FitnessProportionalEliteSelector(fitness_key="score")
+        progs = [_make_program(5.0)]
+        result = sel(progs, total=1)
+        assert result == progs
+
+    def test_random_elite_single_program(self):
+        """RandomEliteSelector with single program."""
+        sel = RandomEliteSelector()
+        progs = [_make_program(5.0)]
+        result = sel(progs, total=1)
+        assert result == progs
+
+    def test_random_elite_single_program_total_gt_1(self):
+        """RandomEliteSelector with single program, total > 1."""
+        sel = RandomEliteSelector()
+        progs = [_make_program(5.0)]
+        result = sel(progs, total=5)
+        assert result == progs

@@ -8,11 +8,15 @@ import pytest
 
 from gigaevo.programs.core_types import (
     ProgramStageResult,
+    StageIO,
     StageState,
+    VoidInput,
 )
 from gigaevo.programs.dag.automata import DataFlowEdge
 from gigaevo.programs.dag.dag import DAG
+from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
+from gigaevo.programs.stages.base import Stage
 from tests.conftest import (
     ChainedStage,
     FailingChainedStage,
@@ -462,3 +466,202 @@ class TestMultiRunEdgeCases:
         # Verify in Redis too
         fetched = await fakeredis_storage.get(prog.id)
         assert fetched.stage_results["nc"].started_at == second_started
+
+
+# ===================================================================
+# Category E: Metrics Verified in Redis (Audit Finding #1)
+# ===================================================================
+
+
+class _MetricOutput(StageIO):
+    accuracy: float = 0.0
+    loss: float = 0.0
+
+
+class MetricComputingStage(Stage):
+    """Stage that computes specific metrics and stores them on the program."""
+
+    InputsModel = VoidInput
+    OutputModel = _MetricOutput
+
+    async def compute(self, program: Program) -> _MetricOutput:
+        program.add_metrics({"accuracy": 0.95, "loss": 0.05})
+        return _MetricOutput(accuracy=0.95, loss=0.05)
+
+
+class TestMetricsVerifiedInRedis:
+    """Audit Finding #1: Integration tests run stages but never check that
+    computed metrics are actually stored in Redis."""
+
+    async def test_metric_computing_stage_metrics_persisted_to_redis(
+        self, state_manager, fakeredis_storage, make_program
+    ):
+        """Run a metric-computing stage and then read back the metrics from
+        Redis to verify correctness of both metric keys and values."""
+        dag = _make_dag(
+            {"metric_stage": MetricComputingStage(timeout=5.0)}, [], state_manager
+        )
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+        await dag.run(prog)
+
+        # Verify in-memory first
+        assert prog.metrics["accuracy"] == 0.95
+        assert prog.metrics["loss"] == 0.05
+
+        # Verify in Redis -- the critical check
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        assert "accuracy" in fetched.metrics, (
+            "accuracy metric not found in Redis-persisted program"
+        )
+        assert "loss" in fetched.metrics, (
+            "loss metric not found in Redis-persisted program"
+        )
+        assert fetched.metrics["accuracy"] == 0.95
+        assert fetched.metrics["loss"] == 0.05
+
+        # Also verify stage result output is persisted
+        res = fetched.stage_results["metric_stage"]
+        assert res.status == StageState.COMPLETED
+        assert res.output is not None
+
+    async def test_multiple_stages_accumulate_metrics_in_redis(
+        self, state_manager, fakeredis_storage, make_program
+    ):
+        """Multiple stages each writing different metrics; all must be present
+        in the Redis-persisted program."""
+        dag = _make_dag(
+            {
+                "metric": MetricComputingStage(timeout=5.0),
+                "side": SideEffectStage(timeout=5.0),
+            },
+            [],
+            state_manager,
+        )
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+        await dag.run(prog)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        # MetricComputingStage metrics
+        assert fetched.metrics["accuracy"] == 0.95
+        assert fetched.metrics["loss"] == 0.05
+        # SideEffectStage metric
+        assert fetched.metrics["side_effect_metric"] == 123.0
+
+
+# ===================================================================
+# Category F: Skip Results Verified Persisted (Audit Finding #2)
+# ===================================================================
+
+
+class TestSkipResultsPersistedInRedis:
+    """Audit Finding #2: When stages are skipped via caching, the test never
+    checks that the skip result is correctly stored in Redis."""
+
+    async def test_skipped_stage_result_persisted_to_redis(
+        self, state_manager, fakeredis_storage, make_program
+    ):
+        """When a mandatory dependency fails, the downstream stage is SKIPPED.
+        Verify that the SKIPPED result is persisted correctly in Redis."""
+        dag = _make_dag(
+            {
+                "fail": FailingStage(timeout=5.0),
+                "downstream": ChainedStage(timeout=5.0),
+            },
+            [DataFlowEdge.create("fail", "downstream", "data")],
+            state_manager,
+        )
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+        await dag.run(prog)
+
+        # Verify in Redis
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+
+        fail_res = fetched.stage_results["fail"]
+        assert fail_res.status == StageState.FAILED
+
+        skip_res = fetched.stage_results["downstream"]
+        assert skip_res.status == StageState.SKIPPED, (
+            f"Expected SKIPPED in Redis, got {skip_res.status}"
+        )
+        assert skip_res.error is not None, (
+            "SKIPPED stage result should have an error/reason recorded"
+        )
+        assert skip_res.started_at is not None
+        assert skip_res.finished_at is not None
+
+    async def test_cached_stage_result_persists_across_runs_in_redis(
+        self, state_manager, fakeredis_storage, make_program
+    ):
+        """Run DAG once (stage executes), then run again (stage cached).
+        Verify the cached result stays intact in Redis with the correct hash."""
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+
+        dag1 = _make_dag({"fast": FastStage(timeout=5.0)}, [], state_manager)
+        await dag1.run(prog)
+
+        # Capture what was stored after first run
+        fetched1 = await fakeredis_storage.get(prog.id)
+        assert fetched1 is not None
+        hash_after_first = fetched1.stage_results["fast"].input_hash
+        started_after_first = fetched1.stage_results["fast"].started_at
+
+        # Second run -- should be cached
+        dag2 = _make_dag({"fast": FastStage(timeout=5.0)}, [], state_manager)
+        await dag2.run(prog)
+
+        # Fetch from Redis again
+        fetched2 = await fakeredis_storage.get(prog.id)
+        assert fetched2 is not None
+        assert fetched2.stage_results["fast"].status == StageState.COMPLETED
+        # Hash and started_at should be unchanged (cached, not re-executed)
+        assert fetched2.stage_results["fast"].input_hash == hash_after_first
+        assert fetched2.stage_results["fast"].started_at == started_after_first
+
+
+# ===================================================================
+# Category G: Bare Expression Fix (Audit Finding #3)
+# ===================================================================
+# The bare expression `prog.stage_results["b"].output.value` on line 135
+# of the original file is addressed by adding a proper assertion test below.
+# The original code is left untouched per the "only ADD" rule, but this test
+# explicitly asserts the value that was previously an unchecked bare expression.
+
+
+class TestBareExpressionRegression:
+    """Audit Finding #3: Bare expression that should be an assertion."""
+
+    async def test_second_run_after_input_change_b_output_value_verified(
+        self, state_manager, fakeredis_storage, make_program
+    ):
+        """Replicate the scenario from test_second_run_after_input_change_reruns_affected_stages
+        but with an explicit assertion on the value that was a bare expression."""
+        edges = [
+            DataFlowEdge.create("a", "b", "data"),
+            DataFlowEdge.create("b", "c", "data"),
+        ]
+
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+
+        dag1 = _make_dag(
+            {
+                "a": FastStage(timeout=5.0),
+                "b": ChainedStage(timeout=5.0),
+                "c": ChainedStage(timeout=5.0),
+            },
+            edges,
+            state_manager,
+        )
+        await dag1.run(prog)
+
+        # This was a bare expression in the original test -- now properly asserted
+        assert prog.stage_results["b"].output.value == 43, (
+            "B should have value 43 (42+1) after first run"
+        )

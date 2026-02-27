@@ -946,3 +946,224 @@ class TestExplainBlockersDefaultMessage:
             f"Expected 'b' to appear as a blocker; got {blockers}"
         )
         assert not any("No blockers detected" in b for b in blockers)
+
+
+# ===================================================================
+# Section VI: build_named_inputs output verification (Audit #4)
+# ===================================================================
+
+
+class TestBuildNamedInputsOutputVerification:
+    """Tests for DAGAutomata.build_named_inputs asserting actual dict contents.
+
+    build_named_inputs collects output objects from COMPLETED producer stages
+    and returns them keyed by the edge's input_name. These tests verify:
+      - Correct key names in the returned dict
+      - Correct output values (the actual StageIO objects)
+      - Empty dict when no producers are completed
+      - Optional inputs from failed producers are omitted
+      - Multiple inputs from multiple producers are all present
+
+    This goes beyond "does it crash?" to verifying the contract that downstream
+    stages depend on for correct execution.
+    """
+
+    def test_single_mandatory_input_returns_correct_value(self):
+        """Single edge a->b with input_name='data': build_named_inputs returns {'data': <output>}."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        output_a = MockOutput(value=42)
+        prog = _make_program(
+            stage_results={"a": _make_result(StageState.COMPLETED, output=output_a)}
+        )
+
+        named = automata.build_named_inputs(prog, "b")
+        assert "data" in named, f"Expected 'data' key in named inputs; got {named}"
+        assert named["data"] is output_a, (
+            f"Expected the exact output object from 'a'; got {named['data']}"
+        )
+        assert named["data"].value == 42
+
+    def test_multiple_inputs_from_different_producers(self):
+        """Fan-in: two producers feeding different input fields to one stage."""
+        from tests.dag.test_dag_automata import FanInStage, ProducerB, SecondInput
+
+        automata = _build_automata(
+            {
+                "prod_data": FastStage(timeout=5.0),
+                "prod_score": ProducerB(timeout=5.0),
+                "fan_in": FanInStage(timeout=5.0),
+            },
+            edges=[
+                DataFlowEdge.create("prod_data", "fan_in", "data"),
+                DataFlowEdge.create("prod_score", "fan_in", "score"),
+            ],
+        )
+        data_output = MockOutput(value=10)
+        score_output = SecondInput(score=3.5)
+        prog = _make_program(
+            stage_results={
+                "prod_data": _make_result(StageState.COMPLETED, output=data_output),
+                "prod_score": _make_result(StageState.COMPLETED, output=score_output),
+            }
+        )
+
+        named = automata.build_named_inputs(prog, "fan_in")
+        assert set(named.keys()) == {"data", "score"}, (
+            f"Expected keys {{'data', 'score'}}; got {set(named.keys())}"
+        )
+        assert named["data"] is data_output
+        assert named["data"].value == 10
+        assert named["score"] is score_output
+        assert named["score"].score == 3.5
+
+    def test_empty_dict_when_no_producers_completed(self):
+        """Returns empty dict when no upstream stage has completed."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _make_program()  # No stage results at all
+
+        named = automata.build_named_inputs(prog, "b")
+        assert named == {}, (
+            f"Expected empty dict when no producers completed; got {named}"
+        )
+
+    def test_failed_producer_output_not_included(self):
+        """FAILED producer's output is not included in named inputs.
+
+        build_named_inputs only includes outputs from COMPLETED producers.
+        A FAILED producer (even if it somehow has an output) is excluded.
+        """
+        automata = _build_automata(
+            {"a": FailingStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        # FAILED with no output
+        prog = _make_program(stage_results={"a": _make_result(StageState.FAILED)})
+
+        named = automata.build_named_inputs(prog, "b")
+        assert "data" not in named, (
+            "FAILED producer's output must NOT appear in named inputs"
+        )
+
+    def test_skipped_producer_output_not_included(self):
+        """SKIPPED producer's output is not included in named inputs."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.SKIPPED)})
+
+        named = automata.build_named_inputs(prog, "b")
+        assert "data" not in named, (
+            "SKIPPED producer's output must NOT appear in named inputs"
+        )
+
+    def test_cancelled_producer_output_not_included(self):
+        """CANCELLED producer's output is not included in named inputs."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.CANCELLED)})
+
+        named = automata.build_named_inputs(prog, "b")
+        assert "data" not in named, (
+            "CANCELLED producer's output must NOT appear in named inputs"
+        )
+
+    def test_completed_with_none_output_not_included(self):
+        """COMPLETED producer with output=None is not included.
+
+        build_named_inputs checks `res.output is not None`, so a COMPLETED
+        result with no actual output object is excluded.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _make_program(
+            stage_results={"a": _make_result(StageState.COMPLETED, output=None)}
+        )
+
+        named = automata.build_named_inputs(prog, "b")
+        assert "data" not in named, (
+            "COMPLETED with None output must NOT appear in named inputs"
+        )
+
+    def test_stage_with_no_incoming_edges_returns_empty_dict(self):
+        """Root stage with no incoming edges returns empty dict."""
+        automata = _build_automata({"a": FastStage(timeout=5.0)})
+        prog = _make_program()
+
+        named = automata.build_named_inputs(prog, "a")
+        assert named == {}, (
+            f"Root stage with no edges must return empty dict; got {named}"
+        )
+
+    def test_optional_input_from_completed_producer_is_included(self):
+        """Optional input from a COMPLETED producer IS included in named inputs."""
+        from tests.conftest import OptionalInputStage
+
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "opt": OptionalInputStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "opt", "data")],
+        )
+        output_a = MockOutput(value=77)
+        prog = _make_program(
+            stage_results={"a": _make_result(StageState.COMPLETED, output=output_a)}
+        )
+
+        named = automata.build_named_inputs(prog, "opt")
+        assert "data" in named
+        assert named["data"].value == 77
+
+    def test_optional_input_from_failed_producer_is_excluded(self):
+        """Optional input from a FAILED producer is excluded (empty dict, not None value)."""
+        from tests.conftest import OptionalInputStage
+
+        automata = _build_automata(
+            {"a": FailingStage(timeout=5.0), "opt": OptionalInputStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "opt", "data")],
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.FAILED)})
+
+        named = automata.build_named_inputs(prog, "opt")
+        assert "data" not in named, (
+            "Optional input from FAILED producer must not be in named inputs"
+        )
+
+    def test_partial_completion_returns_only_completed_inputs(self):
+        """Only COMPLETED producers' outputs appear; others are omitted."""
+        from tests.dag.test_dag_automata import (
+            MultiOptionalStage,
+            ProducerB,
+        )
+
+        automata = _build_automata(
+            {
+                "a": FastStage(timeout=5.0),
+                "b": ProducerB(timeout=5.0),
+                "multi": MultiOptionalStage(timeout=5.0),
+            },
+            edges=[
+                DataFlowEdge.create("a", "multi", "data"),
+                DataFlowEdge.create("b", "multi", "score"),
+            ],
+        )
+        output_a = MockOutput(value=55)
+        prog = _make_program(
+            stage_results={
+                "a": _make_result(StageState.COMPLETED, output=output_a),
+                "b": _make_result(StageState.FAILED),  # b failed
+            }
+        )
+
+        named = automata.build_named_inputs(prog, "multi")
+        assert "data" in named, "COMPLETED 'a' should provide 'data'"
+        assert named["data"].value == 55
+        assert "score" not in named, "FAILED 'b' should not provide 'score'"

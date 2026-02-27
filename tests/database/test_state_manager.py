@@ -305,3 +305,138 @@ class TestMergeStates:
     def test_discarded_always_wins_as_current(self) -> None:
         for state in (ProgramState.QUEUED, ProgramState.RUNNING, ProgramState.DONE):
             assert merge_states(ProgramState.DISCARDED, state) == ProgramState.DISCARDED
+
+
+# ===================================================================
+# Category G: Audit Finding 3 — State transitions persist to Redis
+# ===================================================================
+
+
+class TestStateTransitionRedisRoundTrip:
+    """Audit finding 3: after set_program_state, re-fetch from Redis must show new state."""
+
+    async def test_queued_to_running_persisted(
+        self, state_manager, make_program, fakeredis_storage
+    ):
+        """QUEUED -> RUNNING is persisted and verified by re-fetch from Redis."""
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        await state_manager.set_program_state(prog, ProgramState.RUNNING)
+
+        # Re-fetch from Redis
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        assert fetched.state == ProgramState.RUNNING
+
+    async def test_running_to_done_persisted(
+        self, state_manager, make_program, fakeredis_storage
+    ):
+        """RUNNING -> DONE is persisted and verified by re-fetch from Redis."""
+        prog = make_program(state=ProgramState.RUNNING)
+        await fakeredis_storage.add(prog)
+
+        await state_manager.set_program_state(prog, ProgramState.DONE)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        assert fetched.state == ProgramState.DONE
+
+    async def test_done_to_queued_persisted(
+        self, state_manager, make_program, fakeredis_storage
+    ):
+        """DONE -> QUEUED (refresh cycle) is persisted and verified by re-fetch."""
+        prog = make_program(state=ProgramState.DONE)
+        await fakeredis_storage.add(prog)
+
+        await state_manager.set_program_state(prog, ProgramState.QUEUED)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        assert fetched.state == ProgramState.QUEUED
+
+    async def test_discard_persisted(
+        self, state_manager, make_program, fakeredis_storage
+    ):
+        """RUNNING -> DISCARDED is persisted and verified by re-fetch."""
+        prog = make_program(state=ProgramState.RUNNING)
+        await fakeredis_storage.add(prog)
+
+        await state_manager.set_program_state(prog, ProgramState.DISCARDED)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        assert fetched.state == ProgramState.DISCARDED
+
+    async def test_full_lifecycle_persisted_each_step(
+        self, state_manager, make_program, fakeredis_storage
+    ):
+        """QUEUED -> RUNNING -> DONE: each step is persisted and re-fetchable."""
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        await state_manager.set_program_state(prog, ProgramState.RUNNING)
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.state == ProgramState.RUNNING
+
+        await state_manager.set_program_state(prog, ProgramState.DONE)
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.state == ProgramState.DONE
+
+    async def test_status_sets_updated_after_transition(
+        self, state_manager, make_program, fakeredis_storage
+    ):
+        """After set_program_state, the status set reflects the new state (not old)."""
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        await state_manager.set_program_state(prog, ProgramState.RUNNING)
+
+        # Verify status set membership via the storage
+        queued_count = await fakeredis_storage.count_by_status(
+            ProgramState.QUEUED.value
+        )
+        running_count = await fakeredis_storage.count_by_status(
+            ProgramState.RUNNING.value
+        )
+        assert queued_count == 0
+        assert running_count == 1
+
+
+# ===================================================================
+# Category H: Audit Finding 2 — Concurrent writes to same stage key
+# ===================================================================
+
+
+class TestConcurrentSameStageKey:
+    """Audit finding 2: multiple concurrent writers on the SAME stage_result key."""
+
+    async def test_concurrent_update_stage_result_same_key(
+        self, state_manager, make_program, fakeredis_storage
+    ):
+        """Multiple concurrent update_stage_result calls targeting the same key.
+        The result must be consistent (one of the written values, not corrupted)."""
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+
+        async def write_stage(value: int):
+            result = ProgramStageResult.success(output=MockOutput(value=value))
+            await state_manager.update_stage_result(prog, "shared_stage", result)
+
+        # Fire 5 concurrent writes to the same key
+        values = list(range(10, 15))
+        await asyncio.gather(*(write_stage(v) for v in values))
+
+        # The in-memory program should have the last writer's value
+        assert "shared_stage" in prog.stage_results
+        assert prog.stage_results["shared_stage"].status == StageState.COMPLETED
+
+        # The Redis-persisted version should be consistent
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        assert "shared_stage" in fetched.stage_results
+        assert fetched.stage_results["shared_stage"].status == StageState.COMPLETED
+        final_value = fetched.stage_results["shared_stage"].output.value
+        assert final_value in values, (
+            f"Final value {final_value} is not one of the expected values {values}"
+        )

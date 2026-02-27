@@ -769,3 +769,293 @@ class TestGenerateMutations:
 
         # One succeeded, one failed
         assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# Audit finding 1: Phase ordering in step()
+# ---------------------------------------------------------------------------
+
+
+class TestStepPhaseOrdering:
+    async def test_step_executes_phases_in_correct_order(self) -> None:
+        """Instrument the engine's internal methods to record call order,
+        then assert the 6-phase sequence: await_idle, select+mutate,
+        await_idle, ingest, refresh, await_idle."""
+        engine = _make_engine()
+        engine.config.loop_interval = 0.01
+
+        call_log: list[str] = []
+
+        async def tracked_await_idle():
+            call_log.append("await_idle")
+            # Make it always idle
+            engine.storage.count_by_status.return_value = 0
+
+        async def tracked_select():
+            call_log.append("select_elites")
+            return []
+
+        async def tracked_create(elites):
+            call_log.append("create_mutants")
+            return 0
+
+        async def tracked_ingest():
+            call_log.append("ingest")
+
+        async def tracked_refresh():
+            call_log.append("refresh")
+            return 3  # non-zero to trigger phase 6
+
+        engine._await_idle = tracked_await_idle
+        engine._select_elites_for_mutation = tracked_select
+        engine._create_mutants = tracked_create
+        engine._ingest_completed_programs = tracked_ingest
+        engine._refresh_archive_programs = tracked_refresh
+
+        await engine.step()
+
+        # Expected phase order:
+        # Phase 1: await_idle
+        # Phase 2: select_elites (create_mutants skipped because elites=[])
+        # Phase 3: await_idle
+        # Phase 4: ingest
+        # Phase 5: refresh
+        # Phase 6: await_idle (because refresh returned > 0)
+        assert call_log == [
+            "await_idle",  # Phase 1
+            "select_elites",  # Phase 2
+            "await_idle",  # Phase 3
+            "ingest",  # Phase 4
+            "refresh",  # Phase 5
+            "await_idle",  # Phase 6
+        ]
+
+    async def test_step_skips_phase6_when_refresh_returns_zero(self) -> None:
+        """When refresh returns 0, the final await_idle (phase 6) is skipped."""
+        engine = _make_engine()
+        engine.config.loop_interval = 0.01
+
+        call_log: list[str] = []
+
+        async def tracked_await_idle():
+            call_log.append("await_idle")
+            engine.storage.count_by_status.return_value = 0
+
+        async def tracked_select():
+            call_log.append("select_elites")
+            return []
+
+        async def tracked_ingest():
+            call_log.append("ingest")
+
+        async def tracked_refresh():
+            call_log.append("refresh")
+            return 0  # No refreshed programs
+
+        engine._await_idle = tracked_await_idle
+        engine._select_elites_for_mutation = tracked_select
+        engine._ingest_completed_programs = tracked_ingest
+        engine._refresh_archive_programs = tracked_refresh
+
+        await engine.step()
+
+        # Phase 6 await_idle should NOT appear because refresh returned 0
+        assert call_log == [
+            "await_idle",  # Phase 1
+            "select_elites",  # Phase 2
+            "await_idle",  # Phase 3
+            "ingest",  # Phase 4
+            "refresh",  # Phase 5
+            # No Phase 6 await_idle
+        ]
+
+    async def test_step_includes_create_mutants_when_elites_exist(self) -> None:
+        """When select_elites returns non-empty, create_mutants is called in phase 2."""
+        engine = _make_engine()
+        engine.config.loop_interval = 0.01
+
+        call_log: list[str] = []
+        elites = [_prog() for _ in range(2)]
+
+        async def tracked_await_idle():
+            call_log.append("await_idle")
+            engine.storage.count_by_status.return_value = 0
+
+        async def tracked_select():
+            call_log.append("select_elites")
+            return elites
+
+        async def tracked_ingest():
+            call_log.append("ingest")
+
+        async def tracked_refresh():
+            call_log.append("refresh")
+            return 0
+
+        engine._await_idle = tracked_await_idle
+        engine._select_elites_for_mutation = tracked_select
+        engine._ingest_completed_programs = tracked_ingest
+        engine._refresh_archive_programs = tracked_refresh
+
+        with patch(
+            "gigaevo.evolution.engine.core.generate_mutations",
+            new_callable=AsyncMock,
+            return_value=2,
+        ) as mock_gen:
+            await engine.step()
+
+        # Phase 2 should now have generate_mutations called
+        assert call_log == [
+            "await_idle",  # Phase 1
+            "select_elites",  # Phase 2 (select)
+            "await_idle",  # Phase 3
+            "ingest",  # Phase 4
+            "refresh",  # Phase 5
+        ]
+        # generate_mutations was called (Phase 2 mutant creation)
+        mock_gen.assert_called_once()
+        assert engine.metrics.mutations_created == 2
+
+
+# ---------------------------------------------------------------------------
+# Audit finding 2: Child lineage verification
+# ---------------------------------------------------------------------------
+
+
+class TestChildLineageVerification:
+    async def test_child_program_has_parent_ids_in_lineage(self) -> None:
+        """When generate_mutations creates a child, its lineage.parents
+        should contain the parent program IDs."""
+        from gigaevo.evolution.engine.mutation import generate_mutations
+        from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+
+        storage = AsyncMock()
+        state_manager = AsyncMock()
+        mutator = AsyncMock()
+
+        parent = _prog(ProgramState.DONE)
+        storage.get.return_value = parent
+
+        mutator.mutate_single.return_value = MutationSpec(
+            code="def solve(): return 99",
+            parents=[parent],
+            name="test_mutation",
+            metadata={},
+        )
+
+        count = await generate_mutations(
+            [parent],
+            mutator=mutator,
+            storage=storage,
+            state_manager=state_manager,
+            parent_selector=RandomParentSelector(num_parents=1),
+            limit=1,
+            iteration=0,
+        )
+
+        assert count == 1
+        # Verify storage.add was called with a Program whose lineage references the parent
+        stored_program = storage.add.call_args[0][0]
+        assert parent.id in stored_program.lineage.parents
+
+    async def test_child_lineage_generation_increments(self) -> None:
+        """Child program's generation should be parent's generation + 1."""
+        from gigaevo.evolution.engine.mutation import generate_mutations
+        from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+
+        storage = AsyncMock()
+        state_manager = AsyncMock()
+        mutator = AsyncMock()
+
+        parent = _prog(ProgramState.DONE)
+        parent.lineage.generation = 3
+        storage.get.return_value = parent
+
+        mutator.mutate_single.return_value = MutationSpec(
+            code="def solve(): return 99",
+            parents=[parent],
+            name="test_mutation",
+            metadata={},
+        )
+
+        await generate_mutations(
+            [parent],
+            mutator=mutator,
+            storage=storage,
+            state_manager=state_manager,
+            parent_selector=RandomParentSelector(num_parents=1),
+            limit=1,
+            iteration=0,
+        )
+
+        stored_program = storage.add.call_args[0][0]
+        assert stored_program.lineage.generation == 4
+
+    async def test_child_lineage_mutation_name_recorded(self) -> None:
+        """Child program's lineage.mutation should match the MutationSpec name."""
+        from gigaevo.evolution.engine.mutation import generate_mutations
+        from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+
+        storage = AsyncMock()
+        state_manager = AsyncMock()
+        mutator = AsyncMock()
+
+        parent = _prog(ProgramState.DONE)
+        storage.get.return_value = parent
+
+        mutator.mutate_single.return_value = MutationSpec(
+            code="def solve(): return 99",
+            parents=[parent],
+            name="crossover_v2",
+            metadata={},
+        )
+
+        await generate_mutations(
+            [parent],
+            mutator=mutator,
+            storage=storage,
+            state_manager=state_manager,
+            parent_selector=RandomParentSelector(num_parents=1),
+            limit=1,
+            iteration=0,
+        )
+
+        stored_program = storage.add.call_args[0][0]
+        assert stored_program.lineage.mutation == "crossover_v2"
+
+    async def test_multi_parent_child_references_all_parents(self) -> None:
+        """When multiple parents are used, child's lineage.parents has all parent IDs."""
+        from gigaevo.evolution.engine.mutation import generate_mutations
+        from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+
+        storage = AsyncMock()
+        state_manager = AsyncMock()
+        mutator = AsyncMock()
+
+        parent_a = _prog(ProgramState.DONE)
+        parent_b = _prog(ProgramState.DONE)
+        storage.get.side_effect = lambda pid: (
+            parent_a if pid == parent_a.id else parent_b
+        )
+
+        mutator.mutate_single.return_value = MutationSpec(
+            code="def solve(): return 99",
+            parents=[parent_a, parent_b],
+            name="crossover",
+            metadata={},
+        )
+
+        await generate_mutations(
+            [parent_a, parent_b],
+            mutator=mutator,
+            storage=storage,
+            state_manager=state_manager,
+            parent_selector=RandomParentSelector(num_parents=2),
+            limit=1,
+            iteration=0,
+        )
+
+        stored_program = storage.add.call_args[0][0]
+        assert parent_a.id in stored_program.lineage.parents
+        assert parent_b.id in stored_program.lineage.parents
+        assert len(stored_program.lineage.parents) == 2

@@ -451,3 +451,92 @@ class TestIsCompleteProperty:
         """DISCARDED is a terminal state and therefore is_complete must be True."""
         prog = Program(code="def f(): pass", state=ProgramState.DISCARDED)
         assert prog.is_complete is True
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 1: Full round-trip serialization (all fields)
+# ---------------------------------------------------------------------------
+
+
+class TestFullFieldRoundTrip:
+    """Audit finding 1: to_dict -> from_dict must preserve ALL Program fields."""
+
+    def test_all_fields_roundtrip(self) -> None:
+        """Create a Program with every field populated, serialize, deserialize,
+        and verify every single field matches."""
+
+        lineage = Lineage(
+            parents=["00000000-0000-0000-0000-000000000001"],
+            children=["00000000-0000-0000-0000-000000000002"],
+            mutation="crossover_v2",
+            generation=7,
+        )
+        stage_ok = _success_result()
+        stage_fail = _failed_result("FailStage")
+        metadata = {
+            "experiment": "full-test",
+            "nested": {"a": 1, "b": [2, 3]},
+        }
+
+        prog = Program(
+            code="def solve(x): return x + 1",
+            state=ProgramState.DONE,
+            name="full-test-prog",
+            lineage=lineage,
+            metrics={"accuracy": 0.98, "f1": 0.95},
+            metadata=metadata,
+            stage_results={"validate": stage_ok, "optimize": stage_fail},
+        )
+
+        d = prog.to_dict()
+        restored = Program.from_dict(d)
+
+        # 1. id
+        assert restored.id == prog.id
+        # 2. code
+        assert restored.code == prog.code
+        # 3. name
+        assert restored.name == prog.name
+        # 4. state
+        assert restored.state == prog.state
+        # 5. metrics
+        assert restored.metrics == prog.metrics
+        # 6. metadata (nested)
+        assert restored.metadata["experiment"] == "full-test"
+        assert restored.metadata["nested"]["a"] == 1
+        assert restored.metadata["nested"]["b"] == [2, 3]
+        # 7. lineage
+        assert restored.lineage.parents == lineage.parents
+        assert restored.lineage.children == lineage.children
+        assert restored.lineage.mutation == lineage.mutation
+        assert restored.lineage.generation == lineage.generation
+        # 8. stage_results
+        assert restored.stage_results["validate"].status == StageState.COMPLETED
+        assert restored.stage_results["optimize"].status == StageState.FAILED
+        assert restored.stage_results["optimize"].error.type == "RuntimeError"
+        # 9. created_at
+        assert restored.created_at == prog.created_at
+        # 10. atomic_counter
+        assert restored.atomic_counter == prog.atomic_counter
+        # 11. generation property
+        assert restored.generation == 7
+
+    def test_empty_optional_fields_roundtrip(self) -> None:
+        """A Program with all optional fields at defaults round-trips correctly."""
+        prog = Program(code="def f(): pass")
+
+        d = prog.to_dict()
+        restored = Program.from_dict(d)
+
+        assert restored.id == prog.id
+        assert restored.code == prog.code
+        assert restored.name is None
+        assert restored.state == ProgramState.QUEUED
+        assert restored.metrics == {}
+        assert restored.metadata == {}
+        assert restored.stage_results == {}
+        assert restored.lineage.parents == []
+        assert restored.lineage.children == []
+        assert restored.lineage.mutation is None
+        assert restored.lineage.generation == 1
+        assert restored.created_at == prog.created_at

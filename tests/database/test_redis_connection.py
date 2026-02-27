@@ -225,3 +225,114 @@ class TestProperties:
     def test_is_closing_false_initially(self) -> None:
         conn = RedisConnection(_make_config())
         assert conn.is_closing is False
+
+
+# ---------------------------------------------------------------------------
+# Audit Finding 6: Exponential backoff boundary conditions
+# ---------------------------------------------------------------------------
+
+
+class TestExponentialBackoffBoundary:
+    """Audit finding 6: verify retries happen with increasing delays up to the max."""
+
+    async def test_delays_increase_exponentially(self) -> None:
+        """Each retry delay should be 2x the previous one, up to the cap of 1.0."""
+        conn = RedisConnection(_make_config(max_retries=5, retry_delay=0.01))
+        mock_redis = AsyncMock()
+        conn._redis = mock_redis
+
+        delays: list[float] = []
+        original_sleep = asyncio.sleep
+
+        async def tracking_sleep(d):
+            delays.append(d)
+            await original_sleep(0)
+
+        async def always_fail(r):
+            raise ConnectionError("fail")
+
+        with patch("gigaevo.database.redis.connection.asyncio.sleep", tracking_sleep):
+            with pytest.raises(StorageError):
+                await conn.execute("test_op", always_fail)
+
+        # max_retries=5: attempts 1-4 sleep, attempt 5 raises
+        assert len(delays) == 4
+        # Verify each delay is >= previous (exponential growth)
+        for i in range(1, len(delays)):
+            assert delays[i] >= delays[i - 1], (
+                f"Delay {i} ({delays[i]}) should be >= delay {i - 1} ({delays[i - 1]})"
+            )
+
+    async def test_delay_capped_at_one_second(self) -> None:
+        """Even with large retry_delay, the delay should be capped at 1.0 second."""
+        conn = RedisConnection(_make_config(max_retries=4, retry_delay=0.5))
+        mock_redis = AsyncMock()
+        conn._redis = mock_redis
+
+        delays: list[float] = []
+        original_sleep = asyncio.sleep
+
+        async def tracking_sleep(d):
+            delays.append(d)
+            await original_sleep(0)
+
+        async def always_fail(r):
+            raise ConnectionError("fail")
+
+        with patch("gigaevo.database.redis.connection.asyncio.sleep", tracking_sleep):
+            with pytest.raises(StorageError):
+                await conn.execute("test_op", always_fail)
+
+        # All delays must be <= 1.0 (the cap in the source code)
+        for d in delays:
+            assert d <= 1.0, f"Delay {d} exceeds the 1.0s cap"
+
+    async def test_delay_doubles_each_retry(self) -> None:
+        """Verify the delay exactly doubles each retry (before hitting the cap)."""
+        conn = RedisConnection(_make_config(max_retries=4, retry_delay=0.01))
+        mock_redis = AsyncMock()
+        conn._redis = mock_redis
+
+        delays: list[float] = []
+        original_sleep = asyncio.sleep
+
+        async def tracking_sleep(d):
+            delays.append(d)
+            await original_sleep(0)
+
+        async def always_fail(r):
+            raise ConnectionError("fail")
+
+        with patch("gigaevo.database.redis.connection.asyncio.sleep", tracking_sleep):
+            with pytest.raises(StorageError):
+                await conn.execute("test_op", always_fail)
+
+        # max_retries=4: 3 sleeps before final raise
+        assert len(delays) == 3
+        # Expected: 0.01, 0.02, 0.04
+        assert abs(delays[0] - 0.01) < 1e-9
+        assert abs(delays[1] - 0.02) < 1e-9
+        assert abs(delays[2] - 0.04) < 1e-9
+
+    async def test_single_retry_no_sleep(self) -> None:
+        """With max_retries=1, there should be no sleep at all (immediate raise)."""
+        conn = RedisConnection(_make_config(max_retries=1, retry_delay=0.01))
+        mock_redis = AsyncMock()
+        conn._redis = mock_redis
+
+        delays: list[float] = []
+        original_sleep = asyncio.sleep
+
+        async def tracking_sleep(d):
+            delays.append(d)
+            await original_sleep(0)
+
+        async def always_fail(r):
+            raise ConnectionError("fail")
+
+        with patch("gigaevo.database.redis.connection.asyncio.sleep", tracking_sleep):
+            with pytest.raises(StorageError):
+                await conn.execute("test_op", always_fail)
+
+        # max_retries=1: fails on first attempt, raises immediately, no sleep
+        assert len(delays) == 0

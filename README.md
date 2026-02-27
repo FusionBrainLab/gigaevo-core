@@ -345,9 +345,12 @@ tests/
 ├── conftest.py              # Shared fixtures (fakeredis, mock stages, factories)
 ├── test_metrics_tracker.py  # MetricsTracker: RunningStats, drain, frontier, lifecycle
 ├── stages/                  # Pipeline stage unit tests
-│   ├── test_stage_execute.py            # Stage.execute() return dispatch, timeout, cleanup
+│   ├── test_stage_execute.py            # Stage.execute() return dispatch, timeout, cleanup,
+│   │                                    #   on_complete all 4 call sites, failure error fields,
+│   │                                    #   hash-before-compute ordering, PSR timestamps
 │   ├── test_stage_base_extended.py      # __init_subclass__ validation, _is_optional_type,
-│   │                                    #   VoidOutput, compute_hash_from_inputs exceptions
+│   │                                    #   VoidOutput, compute_hash_from_inputs, on_complete
+│   │                                    #   with required inputs, error.stage, hash lifecycle
 │   ├── test_exec_runner.py              # exec_runner subprocess protocol: register_source,
 │   │                                    #   load_module, run_one, worker loop, format errors
 │   ├── test_wrapper_enhanced.py         # _kill_process_tree, _monitor_rss_limit,
@@ -373,12 +376,19 @@ tests/
 │   └── test_desubstitution_extended.py  # _coerce_param_value, _find_matching_close_paren,
 │                                        #   _clean_eval_in_source, desubstitute_params
 ├── dag/                     # DAG runner and scheduling
-│   ├── test_dag_automata.py             # Stage state machine transitions
+│   ├── test_dag_automata.py             # Stage state machine transitions, CANCELLED status
+│   │                                    #   in dependency gate, finalized_this_run compound
+│   │                                    #   flag, launched_this_run exclusion, RUNNING path
 │   ├── test_dag_automata_extended.py    # is_satisfied_historically, non-Stage validation,
-│   │                                    #   duplicate input_name, _check_dataflow_gate, explain_blockers
-│   ├── test_dag_execution.py            # Individual stage execution, timeouts, caching
-│   ├── test_dag_integration.py          # End-to-end DAG pipeline runs
-│   ├── test_dag_complex_integration.py  # Complex topologies, failure propagation
+│   │                                    #   duplicate input_name, _check_dataflow_gate,
+│   │                                    #   explain_blockers, build_named_inputs verification
+│   ├── test_dag_execution.py            # Individual stage execution, timeouts, caching,
+│   │                                    #   CancelledError cascading, semaphore concurrency
+│   │                                    #   tracking, input_hash correctness end-to-end
+│   ├── test_dag_integration.py          # End-to-end DAG pipeline runs, Redis metric
+│   │                                    #   persistence, skip result persistence
+│   ├── test_dag_complex_integration.py  # Complex topologies, failure propagation,
+│   │                                    #   cancelled diamond cascade, semaphore limits
 │   ├── test_dag_internals.py            # Dependency resolution, topological ordering
 │   ├── test_dag_caching.py              # Stage result caching: InputHashCache, NeverCached,
 │   │                                    #   ProbabilisticCache, failed-stage caching, long chains,
@@ -387,12 +397,19 @@ tests/
 │   │                                    #   GC timing, error recovery, maintain-before-launch
 │   └── test_dag_compatibility_extended.py  # _normalize_annotation, _covariant_type_compatible
 ├── evolution/               # Evolution engine and strategies
-│   ├── test_evolution_engine.py     # Generation loop, ingestion, exception handling
-│   ├── test_island.py               # MapElitesIsland add, size limit, reindex, elites
-│   ├── test_mutation_operator.py    # LLMMutationOperator with mocked LLM agent
-│   ├── test_elite_selectors.py      # Fitness-proportional, tournament, Pareto selectors
+│   ├── test_evolution_engine.py     # Generation loop, ingestion, exception handling,
+│   │                                #   phase ordering verification, child lineage
+│   ├── test_island.py               # MapElitesIsland add, size limit, reindex, elites,
+│   │                                #   displaced program verification, survivor identity,
+│   │                                #   migration integration
+│   ├── test_mutation_operator.py    # LLMMutationOperator with mocked LLM agent,
+│   │                                #   agent input verification (code, mode, metrics)
+│   ├── test_elite_selectors.py      # Fitness-proportional, tournament, Pareto selectors,
+│   │                                #   reverse domination, tournament size variation,
+│   │                                #   dominates() asymmetry, negative fitness, seeds
 │   ├── test_elite_selectors_extended.py  # RandomEliteSelector, inf/nan fallback, Pareto
-│   │                                    #   constructor guards, custom tie-breaker
+│   │                                    #   constructor guards, custom tie-breaker,
+│   │                                    #   weighted_sample distribution, single-element
 │   ├── test_strategy_utils.py       # weighted_sample_without_replacement, extract_fitness_values,
 │   │                                #   dominates
 │   ├── test_selectors.py            # Parent selection strategies
@@ -409,13 +426,17 @@ tests/
 │                                    #   required_files, utils imports
 ├── database/                # Storage and state management
 │   ├── test_redis_storage.py        # Redis CRUD, locking, merge strategies, read-only mode,
-│   │                                #   stream ops, WatchError retries
+│   │                                #   stream ops, WatchError retries, full-field round-trip,
+│   │                                #   concurrent same-key writes, state persistence read-back,
+│   │                                #   remove() status cleanup, prefix isolation
 │   ├── test_redis_locking.py        # RedisInstanceLock: acquire, release, renew,
 │   │                                #   periodic renewal, connection errors, TTL
 │   ├── test_redis_metrics_collector.py  # RedisMetricsCollector: start/stop, collect,
 │   │                                    #   flatten_numbers, double-start guard
-│   ├── test_redis_connection.py     # Connection pooling, retries, reconnection
-│   ├── test_state_manager.py        # Program state transitions, concurrent updates
+│   ├── test_redis_connection.py     # Connection pooling, retries, reconnection,
+│   │                                #   exponential backoff boundary and cap
+│   ├── test_state_manager.py        # Program state transitions, concurrent updates,
+│   │                                #   Redis persistence read-back, status set verification
 │   ├── test_state_consistency.py    # Cross-component state invariants
 │   └── test_program_state.py        # Program state machine validation
 └── llm/                     # LLM integration

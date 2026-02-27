@@ -267,3 +267,93 @@ class TestOnProgramIngested:
         call_args = llm.on_mutation_outcome.call_args
         # Should only have the non-None parent
         assert call_args[0][1] == [parent]
+
+
+# ---------------------------------------------------------------------------
+# Audit finding 3: LLM agent input verification
+# ---------------------------------------------------------------------------
+
+
+class TestAgentInputVerification:
+    async def test_agent_receives_parent_programs_as_input(self):
+        """Verify the agent.arun is called with the exact parent programs list."""
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 1"}
+        op = _make_operator(agent)
+
+        parent = _prog(code="def solve(): return 42")
+        await op.mutate_single([parent])
+
+        agent.arun.assert_called_once()
+        call_kwargs = agent.arun.call_args
+        # Check that input is the actual parent list with exact parent object
+        assert call_kwargs.kwargs["input"] == [parent]
+        assert call_kwargs.kwargs["input"][0].code == "def solve(): return 42"
+
+    async def test_agent_receives_correct_mutation_mode(self):
+        """Verify the agent.arun is called with the operator's mutation_mode."""
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 1"}
+        op = _make_operator(agent, mode="rewrite")
+
+        await op.mutate_single([_prog()])
+
+        call_kwargs = agent.arun.call_args
+        assert call_kwargs.kwargs["mutation_mode"] == "rewrite"
+
+    async def test_agent_receives_diff_mode_when_configured(self):
+        """Verify agent.arun is called with mutation_mode='diff' for diff operators."""
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 2"}
+        op = _make_operator(agent, mode="diff")
+
+        parent = _prog(code="def solve(): return 1")
+        await op.mutate_single([parent])
+
+        call_kwargs = agent.arun.call_args
+        assert call_kwargs.kwargs["mutation_mode"] == "diff"
+        assert call_kwargs.kwargs["input"] == [parent]
+
+    async def test_agent_receives_all_parents_for_crossover(self):
+        """When multiple parents are provided, agent.arun receives all of them."""
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 3"}
+        op = _make_operator(agent, mode="rewrite")
+
+        parent_a = _prog(code="def a(): return 1")
+        parent_b = _prog(code="def b(): return 2")
+        await op.mutate_single([parent_a, parent_b])
+
+        call_kwargs = agent.arun.call_args
+        input_parents = call_kwargs.kwargs["input"]
+        assert len(input_parents) == 2
+        assert input_parents[0].code == "def a(): return 1"
+        assert input_parents[1].code == "def b(): return 2"
+
+    async def test_agent_receives_parent_with_metrics(self):
+        """Parent programs with metrics are passed through to agent correctly."""
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 4"}
+        op = _make_operator(agent)
+
+        parent = _prog(code="def solve(): return 42", score=95.0, complexity=0.5)
+        await op.mutate_single([parent])
+
+        call_kwargs = agent.arun.call_args
+        received_parent = call_kwargs.kwargs["input"][0]
+        assert received_parent.metrics["score"] == 95.0
+        assert received_parent.metrics["complexity"] == 0.5
+
+    async def test_mutation_spec_parents_match_input_parents(self):
+        """The returned MutationSpec.parents should be the same objects as inputs."""
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 5"}
+        op = _make_operator(agent)
+
+        parent = _prog(code="def solve(): return 42")
+        result = await op.mutate_single([parent])
+
+        assert result is not None
+        assert result.parents is not None
+        assert len(result.parents) == 1
+        assert result.parents[0] is parent  # same object reference

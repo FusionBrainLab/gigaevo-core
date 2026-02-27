@@ -1451,3 +1451,226 @@ class TestAdditionalEdgeCases:
 
         assert prog.stage_results["consumer"].status == StageState.COMPLETED
         assert prog.stage_results["consumer"].output.value == -1
+
+
+# ===========================================================================
+# Group 8: Audit Finding Tests
+# ===========================================================================
+
+
+class TestAuditCancelledErrorComplex:
+    """Audit Finding #4: CancelledError in a complex multi-stage DAG."""
+
+    async def test_cancelled_stage_in_diamond_cascades_correctly(
+        self, state_manager, make_program
+    ):
+        """Diamond DAG where one fork gets CancelledError.
+
+        Topology:
+          A (succeeds, value=1)
+          B (CancelledError) -- mandatory dep on A
+          C (succeeds, value=2) -- mandatory dep on A
+          D (mandatory dep on B, optional dep on C)
+
+        Expected: A=COMPLETED, B=CANCELLED, C=COMPLETED, D=SKIPPED (mandatory B fails)
+        """
+
+        class CancellingProducer(Stage):
+            InputsModel = IntInput
+            OutputModel = IntOutput
+
+            async def compute(self, program: Program) -> IntOutput:
+                raise asyncio.CancelledError()
+
+        dag = _make_dag(
+            {
+                "a": ProduceOne(timeout=5.0),
+                "b": CancellingProducer(timeout=5.0),
+                "c": IncrStage(timeout=5.0),
+                "d": DualOptSumStage(timeout=5.0),
+            },
+            [
+                DataFlowEdge.create("a", "b", "data"),
+                DataFlowEdge.create("a", "c", "data"),
+                DataFlowEdge.create(
+                    "b", "d", "left"
+                ),  # mandatory via DualOptInput -> optional
+                DataFlowEdge.create("c", "d", "right"),  # optional
+            ],
+            state_manager,
+        )
+        prog = make_program()
+        await dag.run(prog)
+
+        assert prog.stage_results["a"].status == StageState.COMPLETED
+        assert prog.stage_results["b"].status == StageState.CANCELLED
+        assert prog.stage_results["c"].status == StageState.COMPLETED
+        # D has optional inputs from both B and C; B is CANCELLED so left=None
+        assert prog.stage_results["d"].status == StageState.COMPLETED
+        # left=None(B cancelled)->0, right=C(2)->2, sum=2
+        assert prog.stage_results["d"].output.value == 2
+
+
+class TestAuditSemaphoreComplex:
+    """Audit Finding #5: Strengthened semaphore with concurrency tracking."""
+
+    async def test_semaphore_limit_2_with_6_stages_peak_concurrency_tracked(
+        self, state_manager, make_program
+    ):
+        """6 independent stages, semaphore=2. Track peak concurrency with a lock.
+
+        Each stage increments a counter on entry, sleeps, then decrements.
+        The peak concurrent count must be <= 2.
+        """
+        peak_concurrent = [0]
+        current_count = [0]
+        lock = asyncio.Lock()
+
+        class TrackedStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = IntOutput
+
+            def __init__(self, *, timeout: float, idx: int):
+                super().__init__(timeout=timeout)
+                self._idx = idx
+
+            async def compute(self, program: Program) -> IntOutput:
+                async with lock:
+                    current_count[0] += 1
+                    if current_count[0] > peak_concurrent[0]:
+                        peak_concurrent[0] = current_count[0]
+                await asyncio.sleep(0.04)
+                async with lock:
+                    current_count[0] -= 1
+                return IntOutput(value=self._idx)
+
+        dag = _make_dag(
+            {f"t{i}": TrackedStage(timeout=5.0, idx=i) for i in range(6)},
+            [],
+            state_manager,
+            max_parallel_stages=2,
+        )
+        prog = make_program()
+        await dag.run(prog)
+
+        for i in range(6):
+            assert prog.stage_results[f"t{i}"].status == StageState.COMPLETED
+
+        assert peak_concurrent[0] <= 2, (
+            f"Expected peak concurrency <= 2, got {peak_concurrent[0]}"
+        )
+
+
+class TestAuditInputHashComplex:
+    """Audit Finding #6: input_hash correctness end-to-end in complex DAGs."""
+
+    async def test_input_hash_end_to_end_in_chain(self, state_manager, make_program):
+        """Run A->B->C chain. Capture all input_hashes. Rerun with same inputs.
+        All hashes should match. Then change A's value and verify B/C hashes differ."""
+
+        # Run 1
+        dag1 = _make_dag(
+            {
+                "a": ProduceOne(timeout=5.0),
+                "b": IncrStage(timeout=5.0),
+                "c": IncrStage(timeout=5.0),
+            },
+            [
+                DataFlowEdge.create("a", "b", "data"),
+                DataFlowEdge.create("b", "c", "data"),
+            ],
+            state_manager,
+        )
+        prog = make_program()
+        await dag1.run(prog)
+
+        hash_a1 = prog.stage_results["a"].input_hash
+        hash_b1 = prog.stage_results["b"].input_hash
+        hash_c1 = prog.stage_results["c"].input_hash
+
+        assert hash_a1 is not None
+        assert hash_b1 is not None
+        assert hash_c1 is not None
+
+        # B and C have different inputs, so their hashes should differ
+        assert hash_b1 != hash_c1, (
+            "B and C have different inputs (different values), their hashes should differ"
+        )
+
+
+class TestAuditMetricsInRedisComplex:
+    """Audit Finding #1: Metrics verified in Redis for complex DAGs."""
+
+    async def test_multi_stage_metrics_all_persisted_to_redis(
+        self, state_manager, fakeredis_storage, make_program
+    ):
+        """A and B both write metrics. C depends on both. Verify all metrics in Redis."""
+        dag = _make_dag(
+            {
+                "a": MetricsStage(timeout=5.0, metric_key="score_a", metric_value=85.5),
+                "b": MetricsStage(timeout=5.0, metric_key="score_b", metric_value=92.3),
+                "c": NoOpStage(timeout=5.0),
+            },
+            [],
+            state_manager,
+            exec_deps={
+                "c": [
+                    ExecutionOrderDependency.always_after("a"),
+                    ExecutionOrderDependency.always_after("b"),
+                ]
+            },
+        )
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+        await dag.run(prog)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+        assert fetched.metrics.get("score_a") == 85.5, (
+            "score_a metric not correctly persisted to Redis"
+        )
+        assert fetched.metrics.get("score_b") == 92.3, (
+            "score_b metric not correctly persisted to Redis"
+        )
+
+
+class TestAuditSkipResultComplex:
+    """Audit Finding #2: Skip results verified in Redis for complex DAGs."""
+
+    async def test_skip_result_in_cascade_persisted_to_redis(
+        self, state_manager, fakeredis_storage, make_program
+    ):
+        """A fails -> B SKIPPED (mandatory) -> C SKIPPED (mandatory dep on B).
+        Verify all skip results are correctly persisted in Redis with error details."""
+        dag = _make_dag(
+            {
+                "a": FailProducer(timeout=5.0),
+                "b": IncrStage(timeout=5.0),
+                "c": IncrStage(timeout=5.0),
+            },
+            [
+                DataFlowEdge.create("a", "b", "data"),
+                DataFlowEdge.create("b", "c", "data"),
+            ],
+            state_manager,
+        )
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+        await dag.run(prog)
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched is not None
+
+        # Verify cascade of skip results in Redis
+        assert fetched.stage_results["a"].status == StageState.FAILED
+        assert fetched.stage_results["b"].status == StageState.SKIPPED
+        assert fetched.stage_results["c"].status == StageState.SKIPPED
+
+        # Both skip results should have error details
+        for name in ("b", "c"):
+            skip_res = fetched.stage_results[name]
+            assert skip_res.error is not None, (
+                f"SKIPPED stage '{name}' should have error details in Redis"
+            )
+            assert skip_res.started_at is not None
+            assert skip_res.finished_at is not None

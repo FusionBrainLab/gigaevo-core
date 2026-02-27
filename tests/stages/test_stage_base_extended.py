@@ -8,16 +8,22 @@ Covers:
 5. _is_optional_type with Python 3.10+ `X | None` union syntax (types.UnionType)
 6. compute_hash_from_inputs exception path: returns None on bad inputs silently
 7. execute() VoidOutput returning None (success) vs non-VoidOutput returning None (failure)
+8. on_complete call sites across all execute() paths (audit findings)
+9. StageError.stage field correctness for all failure modes
+10. Hash-before-compute ordering verification
+11. ProgramStageResult timestamp correctness for success/failure
 """
 
 from __future__ import annotations
 
+import asyncio
 import types
 from typing import Optional, Union
 
 import pytest
 
 from gigaevo.programs.core_types import (
+    ProgramStageResult,
     StageIO,
     StageState,
     VoidInput,
@@ -26,7 +32,10 @@ from gigaevo.programs.core_types import (
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.base import Stage, _is_optional_type
-from gigaevo.programs.stages.cache_handler import NO_CACHE
+from gigaevo.programs.stages.cache_handler import (
+    NO_CACHE,
+    CacheHandler,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -886,3 +895,409 @@ class TestStateCleanupAfterValidationFailure:
         result2 = await stage.execute(_prog())
         assert result2.status == StageState.COMPLETED
         assert result2.output.message == "retry"
+
+
+# ---------------------------------------------------------------------------
+# Recording CacheHandler for on_complete verification
+# ---------------------------------------------------------------------------
+
+
+class RecordingCacheHandler(CacheHandler):
+    """CacheHandler that records on_complete calls with full arguments."""
+
+    def __init__(self):
+        self.on_complete_calls: list[dict] = []
+
+    def should_rerun(self, existing_result, inputs_hash, finished_this_run) -> bool:
+        return True
+
+    def on_complete(self, result, inputs_hash):
+        self.on_complete_calls.append(
+            {
+                "result": result,
+                "inputs_hash": inputs_hash,
+                "status": result.status,
+                "error": result.error,
+            }
+        )
+        return result
+
+
+# ---------------------------------------------------------------------------
+# TestOnCompleteCallSitesExtended — exercises all 4 on_complete sites
+# ---------------------------------------------------------------------------
+
+
+class TestOnCompleteCallSitesExtended:
+    """Audit finding #1 (extended): Verify on_complete at each call site
+    using stages with required inputs to test hash correctness."""
+
+    async def test_on_complete_normal_output_with_required_inputs(self):
+        """Call site ~294 with non-trivial inputs: hash reflects input values."""
+        recorder = RecordingCacheHandler()
+
+        class NormalStage(Stage):
+            InputsModel = RequiredInput
+            OutputModel = TextOutput
+            cache_handler = recorder
+
+            async def compute(self, program: Program) -> TextOutput:
+                return TextOutput(message=self.params.required_str)
+
+        stage = NormalStage(timeout=5.0)
+        stage.attach_inputs({"required_str": "test_val", "required_int": 42})
+        expected_hash = stage.compute_inputs_hash()
+
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.COMPLETED
+        assert len(recorder.on_complete_calls) == 1
+        assert recorder.on_complete_calls[0]["inputs_hash"] == expected_hash
+        assert recorder.on_complete_calls[0]["status"] == StageState.COMPLETED
+
+    async def test_on_complete_psr_passthrough_with_required_inputs(self):
+        """Call site ~259 with non-trivial inputs."""
+        recorder = RecordingCacheHandler()
+
+        class PSRStage(Stage):
+            InputsModel = RequiredInput
+            OutputModel = TextOutput
+            cache_handler = recorder
+
+            async def compute(self, program: Program) -> ProgramStageResult:
+                msg = self.params.required_str
+                return ProgramStageResult.success(output=TextOutput(message=msg))
+
+        stage = PSRStage(timeout=5.0)
+        stage.attach_inputs({"required_str": "psr_test", "required_int": 7})
+        expected_hash = stage.compute_inputs_hash()
+
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.COMPLETED
+        assert len(recorder.on_complete_calls) == 1
+        assert recorder.on_complete_calls[0]["inputs_hash"] == expected_hash
+
+    async def test_on_complete_failure_with_required_inputs(self):
+        """Call site ~315 with non-trivial inputs: hash still present on failure."""
+        recorder = RecordingCacheHandler()
+
+        class FailStage(Stage):
+            InputsModel = RequiredInput
+            OutputModel = TextOutput
+            cache_handler = recorder
+
+            async def compute(self, program: Program) -> TextOutput:
+                raise RuntimeError("fail with inputs")
+
+        stage = FailStage(timeout=5.0)
+        stage.attach_inputs({"required_str": "will_fail", "required_int": 13})
+        expected_hash = stage.compute_inputs_hash()
+
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.FAILED
+        assert len(recorder.on_complete_calls) == 1
+        assert recorder.on_complete_calls[0]["inputs_hash"] == expected_hash
+        assert recorder.on_complete_calls[0]["error"] is not None
+        assert recorder.on_complete_calls[0]["error"].stage == "FailStage"
+
+    async def test_on_complete_exactly_once_per_execute(self):
+        """on_complete must be called exactly once per execute() invocation,
+        regardless of the code path taken."""
+        recorder = RecordingCacheHandler()
+
+        class OnceStagePSR(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = recorder
+
+            async def compute(self, program: Program) -> ProgramStageResult:
+                return ProgramStageResult.success(output=TextOutput(message="x"))
+
+        stage = OnceStagePSR(timeout=5.0)
+        stage.attach_inputs({})
+        await stage.execute(_prog())
+        assert len(recorder.on_complete_calls) == 1
+
+        # Second execute: should add exactly one more call
+        stage.attach_inputs({})
+        await stage.execute(_prog())
+        assert len(recorder.on_complete_calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# TestErrorStageFieldExtended
+# ---------------------------------------------------------------------------
+
+
+class TestErrorStageFieldExtended:
+    """Audit finding #4 (extended): Verify error.stage across additional
+    exception types and with stages that have custom names."""
+
+    async def test_error_stage_on_key_error(self):
+        """KeyError in compute() correctly sets error.stage."""
+
+        class KeyErrorStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                d = {}
+                return d["nonexistent"]  # type: ignore
+
+        stage = KeyErrorStage(timeout=5.0)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.FAILED
+        assert result.error.stage == "KeyErrorStage"
+        assert result.error.type == "KeyError"
+
+    async def test_error_stage_on_attribute_error(self):
+        """AttributeError in compute() correctly sets error.stage."""
+
+        class AttrErrorStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                return None.nonexistent  # type: ignore
+
+        stage = AttrErrorStage(timeout=5.0)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.FAILED
+        assert result.error.stage == "AttrErrorStage"
+        assert result.error.type == "AttributeError"
+
+    async def test_error_stage_on_zero_division(self):
+        """ZeroDivisionError in compute() correctly sets error.stage."""
+
+        class DivZeroStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                _ = 1 / 0
+                return TextOutput()
+
+        stage = DivZeroStage(timeout=5.0)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.FAILED
+        assert result.error.stage == "DivZeroStage"
+        assert result.error.type == "ZeroDivisionError"
+
+    async def test_error_stage_matches_stage_name_property(self):
+        """error.stage must match the stage_name property exactly."""
+
+        class MyCustomNamedStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                raise RuntimeError("custom name test")
+
+        stage = MyCustomNamedStage(timeout=5.0)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.error.stage == stage.stage_name
+        assert result.error.stage == "MyCustomNamedStage"
+
+
+# ---------------------------------------------------------------------------
+# TestHashBeforeComputeExtended
+# ---------------------------------------------------------------------------
+
+
+class TestHashBeforeComputeExtended:
+    """Audit finding #5 (extended): Hash-before-compute ordering with
+    non-trivial inputs."""
+
+    async def test_hash_available_during_compute_with_required_inputs(self):
+        """With required inputs, the hash is available inside compute()."""
+        hash_during_compute = []
+
+        class HashCheckStage(Stage):
+            InputsModel = RequiredInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                hash_during_compute.append(self._current_inputs_hash)
+                return TextOutput(message=self.params.required_str)
+
+        stage = HashCheckStage(timeout=5.0)
+        stage.attach_inputs({"required_str": "hash_test", "required_int": 99})
+        expected = stage.compute_inputs_hash()
+
+        await stage.execute(_prog())
+
+        assert len(hash_during_compute) == 1
+        assert hash_during_compute[0] == expected
+
+    async def test_hash_cleared_in_finally_block(self):
+        """After execute(), _current_inputs_hash is None (cleaned by finally)."""
+
+        class CleanupStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                return TextOutput()
+
+        stage = CleanupStage(timeout=5.0)
+        stage.attach_inputs({})
+        await stage.execute(_prog())
+
+        assert stage._current_inputs_hash is None
+
+    async def test_hash_cleared_after_failure_too(self):
+        """After a failed execute(), _current_inputs_hash is also cleared."""
+
+        class FailCleanupStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                raise RuntimeError("fail cleanup")
+
+        stage = FailCleanupStage(timeout=5.0)
+        stage.attach_inputs({})
+        await stage.execute(_prog())
+
+        assert stage._current_inputs_hash is None
+
+    async def test_different_inputs_produce_different_hashes_in_on_complete(self):
+        """Two executions with different inputs produce different hashes
+        passed to on_complete."""
+        recorder = RecordingCacheHandler()
+
+        class DiffHashStage(Stage):
+            InputsModel = RequiredInput
+            OutputModel = TextOutput
+            cache_handler = recorder
+
+            async def compute(self, program: Program) -> TextOutput:
+                return TextOutput(message=self.params.required_str)
+
+        stage = DiffHashStage(timeout=5.0)
+
+        stage.attach_inputs({"required_str": "input_A", "required_int": 1})
+        await stage.execute(_prog())
+
+        stage.attach_inputs({"required_str": "input_B", "required_int": 2})
+        await stage.execute(_prog())
+
+        assert len(recorder.on_complete_calls) == 2
+        hash_a = recorder.on_complete_calls[0]["inputs_hash"]
+        hash_b = recorder.on_complete_calls[1]["inputs_hash"]
+        assert hash_a != hash_b
+
+
+# ---------------------------------------------------------------------------
+# TestTimestampBranchesExtended
+# ---------------------------------------------------------------------------
+
+
+class TestTimestampBranchesExtended:
+    """Audit finding #6 (extended): ProgramStageResult timestamps for
+    edge cases not covered in test_stage_execute.py."""
+
+    async def test_psr_passthrough_finished_at_filled_for_final_state(self):
+        """When compute() returns a PSR in a final state without finished_at,
+        execute() should fill it in."""
+
+        class PSRNoFinishedStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> ProgramStageResult:
+                from datetime import datetime, timezone
+
+                return ProgramStageResult(
+                    status=StageState.COMPLETED,
+                    output=TextOutput(message="no_finish"),
+                    started_at=datetime.now(timezone.utc),
+                    # finished_at intentionally omitted
+                )
+
+        stage = PSRNoFinishedStage(timeout=5.0)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.COMPLETED
+        # execute() should have set finished_at since status is COMPLETED (final)
+        assert result.finished_at is not None
+
+    async def test_failure_finished_at_is_after_started_at(self):
+        """Failed stages should have finished_at >= started_at."""
+
+        class FailTimestampStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                raise RuntimeError("timestamp fail test")
+
+        stage = FailTimestampStage(timeout=5.0)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.FAILED
+        assert result.started_at is not None
+        assert result.finished_at is not None
+        assert result.finished_at >= result.started_at
+
+    async def test_timeout_finished_at_is_after_started_at(self):
+        """Timed-out stages should have finished_at >= started_at."""
+
+        class TimeoutTimestampStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = TextOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> TextOutput:
+                await asyncio.sleep(3600)
+                return TextOutput()  # pragma: no cover
+
+        stage = TimeoutTimestampStage(timeout=0.01)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.FAILED
+        assert result.started_at is not None
+        assert result.finished_at is not None
+        assert result.finished_at >= result.started_at
+
+    async def test_duration_seconds_returns_none_without_timestamps(self):
+        """ProgramStageResult.duration_seconds() returns None when timestamps missing."""
+        result = ProgramStageResult(status=StageState.PENDING)
+        assert result.duration_seconds() is None
+
+    async def test_duration_seconds_with_both_timestamps(self):
+        """ProgramStageResult.duration_seconds() returns a float when both set."""
+        from datetime import datetime, timedelta, timezone
+
+        t0 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        t1 = t0 + timedelta(seconds=3.5)
+        result = ProgramStageResult(
+            status=StageState.COMPLETED,
+            started_at=t0,
+            finished_at=t1,
+        )
+        dur = result.duration_seconds()
+        assert dur is not None
+        assert abs(dur - 3.5) < 0.01

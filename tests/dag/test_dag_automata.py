@@ -1505,7 +1505,9 @@ class TestConcurrencyAndSemaphore:
     async def test_finished_this_run_tracks_all_finalized_stages(
         self, state_manager, make_program
     ):
-        """Every stage that finishes is tracked in finished_this_run (observable via results)."""
+        """Every stage that finishes is tracked in finished_this_run (observable via results).
+
+        NOTE: Do not add tests above this method -- append new test categories at the end of the file."""
         dag = _make_dag(
             {
                 "a": FastStage(timeout=5.0),
@@ -1529,3 +1531,619 @@ class TestConcurrencyAndSemaphore:
             )
         # opt has optional input from b (which fails) -> data=None -> value=-1
         assert prog.stage_results["opt"].output.value == -1
+
+
+# ===================================================================
+# Category I: CANCELLED status in _check_dependency_gate (Audit #1)
+# ===================================================================
+
+
+class TestCheckDependencyGateCancelledStatus:
+    """Tests for _check_dependency_gate when a dependency has CANCELLED status.
+
+    CANCELLED is in FINAL_STATES, so it counts as finalized. However, the gate
+    behavior differs depending on the dependency condition:
+      - always:  CANCELLED is a final state -> READY (any final state satisfies always)
+      - success: CANCELLED is not COMPLETED -> IMPOSSIBLE
+      - failure: CANCELLED is in (FAILED, CANCELLED, SKIPPED) -> READY
+
+    These tests confirm that CANCELLED is correctly handled in each branch
+    of _check_dependency_gate, preventing regressions if someone modifies
+    the condition logic.
+    """
+
+    def test_always_ready_when_dep_cancelled_this_run(self):
+        """always: READY when dep finalized as CANCELLED in this run.
+
+        CANCELLED is in FINAL_STATES, so the always condition (which requires
+        any final state) is satisfied.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.CANCELLED)})
+        dep = ExecutionOrderDependency.always_after("a")
+        state, reason = automata._check_dependency_gate(
+            prog, dep, finished_this_run={"a"}
+        )
+        assert state is DAGAutomata.GateState.READY, (
+            f"always condition should be READY for CANCELLED dep; got {state}, reason={reason!r}"
+        )
+
+    def test_success_impossible_when_dep_cancelled_this_run(self):
+        """success: IMPOSSIBLE when dep finalized as CANCELLED in this run.
+
+        CANCELLED is not COMPLETED, so an on_success dependency cannot be
+        satisfied. The gate should return IMPOSSIBLE (not WAIT or READY).
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.CANCELLED)})
+        dep = ExecutionOrderDependency.on_success("a")
+        state, reason = automata._check_dependency_gate(
+            prog, dep, finished_this_run={"a"}
+        )
+        assert state is DAGAutomata.GateState.IMPOSSIBLE, (
+            f"success condition should be IMPOSSIBLE for CANCELLED dep; got {state}, reason={reason!r}"
+        )
+
+    def test_failure_ready_when_dep_cancelled_this_run(self):
+        """failure: READY when dep finalized as CANCELLED in this run.
+
+        CANCELLED is in the failure set (FAILED, CANCELLED, SKIPPED), so
+        an on_failure dependency is satisfied.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_failure("a")]},
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.CANCELLED)})
+        dep = ExecutionOrderDependency.on_failure("a")
+        state, reason = automata._check_dependency_gate(
+            prog, dep, finished_this_run={"a"}
+        )
+        assert state is DAGAutomata.GateState.READY, (
+            f"failure condition should be READY for CANCELLED dep; got {state}, reason={reason!r}"
+        )
+
+    def test_cancelled_wait_when_not_in_finished_this_run(self):
+        """All conditions: WAIT when dep is CANCELLED but NOT in finished_this_run.
+
+        Even though CANCELLED is a final state, if it is from a prior run
+        (not in finished_this_run), the gate must return WAIT — same as any
+        stale result.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.CANCELLED)})
+
+        for condition, factory in [
+            ("always", ExecutionOrderDependency.always_after),
+            ("success", ExecutionOrderDependency.on_success),
+            ("failure", ExecutionOrderDependency.on_failure),
+        ]:
+            dep = factory("a")
+            state, reason = automata._check_dependency_gate(
+                prog, dep, finished_this_run=set()
+            )
+            assert state is DAGAutomata.GateState.WAIT, (
+                f"condition={condition}: CANCELLED not in finished_this_run must be WAIT; "
+                f"got {state}, reason={reason!r}"
+            )
+
+    def test_cancelled_dep_propagates_skip_via_get_stages_to_skip(self):
+        """CANCELLED dep with on_success condition causes downstream to be skipped.
+
+        End-to-end: if 'a' is CANCELLED this run and 'b' depends on_success of 'a',
+        then 'b' should appear in get_stages_to_skip (IMPOSSIBLE -> skip).
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.CANCELLED)})
+        to_skip = automata.get_stages_to_skip(
+            prog, running=set(), launched_this_run=set(), finished_this_run={"a"}
+        )
+        assert "b" in to_skip, (
+            "Stage 'b' (on_success dep on CANCELLED 'a') must be in to_skip"
+        )
+
+    def test_cancelled_dep_does_not_skip_on_failure_dependent(self):
+        """CANCELLED dep with on_failure condition does NOT cause downstream skip.
+
+        on_failure is satisfied by CANCELLED, so the downstream stage should be
+        READY (not IMPOSSIBLE, not in to_skip).
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_failure("a")]},
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.CANCELLED)})
+        to_skip = automata.get_stages_to_skip(
+            prog, running=set(), launched_this_run=set(), finished_this_run={"a"}
+        )
+        assert "b" not in to_skip, (
+            "Stage 'b' (on_failure dep on CANCELLED 'a') must NOT be in to_skip"
+        )
+
+    def test_mandatory_dataflow_impossible_when_producer_cancelled_this_run(self):
+        """Mandatory data-flow input: IMPOSSIBLE when producer CANCELLED in this run.
+
+        CANCELLED is in FINAL_STATES and is not COMPLETED, so a mandatory input
+        from a CANCELLED stage can never be provided -> IMPOSSIBLE.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.CANCELLED)})
+        state, reasons = automata._check_dataflow_gate(
+            prog, "b", finished_this_run={"a"}
+        )
+        assert state is DAGAutomata.GateState.IMPOSSIBLE, (
+            f"Mandatory input from CANCELLED producer should be IMPOSSIBLE; got {state}"
+        )
+
+
+# ===================================================================
+# Category J: finalized_this_run compound flag (Audit #2)
+# ===================================================================
+
+
+class TestFinalizedThisRunCompoundFlag:
+    """Tests for the compound finalized_this_run flag in _get_stage_status.
+
+    The automata computes: finalized_this_run = finished_now AND finalized.
+    This compound flag drives _check_dependency_gate and _check_dataflow_gate.
+
+    Three scenarios must be verified:
+      A) finished NOW and IS finalized -> finalized_this_run = True
+      B) finished PREVIOUSLY and IS finalized -> finalized_this_run = False
+      C) finished NOW but NOT finalized -> finalized_this_run = False
+    """
+
+    def test_finished_now_and_finalized_yields_true(self):
+        """Scenario A: stage is in finished_this_run AND has a final status.
+
+        This is the normal "completed in this run" case. finalized_this_run=True
+        means the dependency gate can proceed.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _make_program(
+            stage_results={
+                "a": _make_result(StageState.COMPLETED, output=MockOutput(value=1))
+            }
+        )
+        status = automata._get_stage_status(prog, "a", finished_this_run={"a"})
+        assert status.finalized_this_run is True, (
+            "finished NOW + finalized must set finalized_this_run=True"
+        )
+        assert status.finalized is True
+        assert status.completed is True
+
+        # Verify the gate uses this: should be READY
+        dep = ExecutionOrderDependency.on_success("a")
+        gate_state, _ = automata._check_dependency_gate(
+            prog, dep, finished_this_run={"a"}
+        )
+        assert gate_state is DAGAutomata.GateState.READY
+
+    def test_finished_previously_and_finalized_yields_false(self):
+        """Scenario B: stage has a final status but NOT in finished_this_run.
+
+        This represents a stale result from a prior run. finalized_this_run=False
+        means the dependency gate must return WAIT (not READY).
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _make_program(
+            stage_results={
+                "a": _make_result(StageState.COMPLETED, output=MockOutput(value=1))
+            }
+        )
+        status = automata._get_stage_status(prog, "a", finished_this_run=set())
+        assert status.finalized_this_run is False, (
+            "finished PREVIOUSLY (not in finished_this_run) must set finalized_this_run=False"
+        )
+        assert status.finalized is True, "The stage IS in a final state"
+        assert status.completed is True
+
+        # Verify the gate uses this: should be WAIT (stale result)
+        dep = ExecutionOrderDependency.on_success("a")
+        gate_state, _ = automata._check_dependency_gate(
+            prog, dep, finished_this_run=set()
+        )
+        assert gate_state is DAGAutomata.GateState.WAIT
+
+    def test_finished_now_but_not_finalized_yields_false(self):
+        """Scenario C: stage is in finished_this_run but has a non-final status (e.g. RUNNING).
+
+        This edge case can occur if finished_this_run is populated incorrectly
+        (e.g. a stage is added to finished_this_run while still RUNNING).
+        finalized_this_run=False because finalized requires a FINAL_STATE.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        # Stage "a" has RUNNING status (non-final)
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        # Artificially add "a" to finished_this_run despite RUNNING status
+        status = automata._get_stage_status(prog, "a", finished_this_run={"a"})
+        assert status.finalized_this_run is False, (
+            "finished NOW but NOT finalized (RUNNING) must set finalized_this_run=False"
+        )
+        assert status.finalized is False, "RUNNING is not a final state"
+
+        # Verify the gate: should be WAIT because finalized_this_run is False
+        dep = ExecutionOrderDependency.on_success("a")
+        gate_state, _ = automata._check_dependency_gate(
+            prog, dep, finished_this_run={"a"}
+        )
+        assert gate_state is DAGAutomata.GateState.WAIT
+
+    def test_finalized_this_run_for_failed_status(self):
+        """FAILED status in finished_this_run: finalized_this_run=True.
+
+        FAILED is in FINAL_STATES, so finished_now AND finalized is True.
+        """
+        automata = _build_automata(
+            {"a": FailingStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_failure("a")]},
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.FAILED)})
+
+        status = automata._get_stage_status(prog, "a", finished_this_run={"a"})
+        assert status.finalized_this_run is True
+        assert status.finalized is True
+        assert status.completed is False  # FAILED, not COMPLETED
+
+    def test_finalized_this_run_for_no_result(self):
+        """No stage result at all: finalized=False, finalized_this_run=False.
+
+        Even if the stage name is in finished_this_run, without a result
+        the status cannot be final.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _make_program()  # No stage results
+
+        status = automata._get_stage_status(prog, "a", finished_this_run={"a"})
+        assert status.finalized_this_run is False, (
+            "No result means finalized=False, so finalized_this_run must be False"
+        )
+        assert status.finalized is False
+        assert status.res is None
+
+    def test_finalized_this_run_for_pending_status(self):
+        """PENDING status: finalized=False, finalized_this_run=False.
+
+        PENDING is not in FINAL_STATES.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        pending_result = ProgramStageResult(
+            status=StageState.PENDING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": pending_result})
+
+        status = automata._get_stage_status(prog, "a", finished_this_run={"a"})
+        assert status.finalized_this_run is False
+        assert status.finalized is False
+
+
+# ===================================================================
+# Category K: launched_this_run exclusion (Audit #3)
+# ===================================================================
+
+
+class TestLaunchedThisRunExclusion:
+    """Tests verifying that launched_this_run excludes stages from the ready set.
+
+    When a stage has been launched in this run (added to launched_this_run),
+    it must NOT appear in get_ready_stages on the same tick, even if its
+    dependencies are satisfied. This prevents double-launching.
+    """
+
+    def test_launched_stage_excluded_from_ready_set(self):
+        """A stage in launched_this_run does not appear in ready_with_inputs."""
+        automata = _build_automata({"a": FastStage(timeout=5.0)})
+        prog = _make_program()
+        ready, cached = automata.get_ready_stages(
+            prog, running=set(), launched_this_run={"a"}, finished_this_run=set()
+        )
+        assert "a" not in ready, (
+            "Stage in launched_this_run must be excluded from ready set"
+        )
+        assert "a" not in cached
+
+    def test_launched_stage_excluded_even_with_satisfied_deps(self):
+        """A downstream stage in launched_this_run is excluded even when deps are met."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _make_program(
+            stage_results={
+                "a": _make_result(StageState.COMPLETED, output=MockOutput(value=42))
+            }
+        )
+        # "b"'s deps are satisfied (a is COMPLETED this run), but b is already launched
+        ready, cached = automata.get_ready_stages(
+            prog, running=set(), launched_this_run={"b"}, finished_this_run={"a"}
+        )
+        assert "b" not in ready, (
+            "launched_this_run must exclude 'b' even though deps are satisfied"
+        )
+
+    def test_non_launched_peer_still_ready(self):
+        """A peer stage NOT in launched_this_run is still eligible for ready set."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)}
+        )
+        prog = _make_program()
+        # "a" is launched, but "b" is not
+        ready, cached = automata.get_ready_stages(
+            prog, running=set(), launched_this_run={"a"}, finished_this_run=set()
+        )
+        assert "a" not in ready
+        assert "b" in ready, (
+            "Stage 'b' not in launched_this_run should still be in ready set"
+        )
+
+    def test_launched_and_running_both_excluded(self):
+        """Stages in both launched_this_run and running are excluded independently."""
+        automata = _build_automata(
+            {
+                "a": FastStage(timeout=5.0),
+                "b": FastStage(timeout=5.0),
+                "c": FastStage(timeout=5.0),
+            }
+        )
+        prog = _make_program()
+        # "a" is launched, "b" is running, "c" is neither
+        ready, cached = automata.get_ready_stages(
+            prog, running={"b"}, launched_this_run={"a"}, finished_this_run=set()
+        )
+        assert "a" not in ready
+        assert "b" not in ready
+        assert "c" in ready
+
+    def test_launched_stage_excluded_from_blocker_analysis(self):
+        """Stages in launched_this_run are also excluded from explain_blockers."""
+        automata = _build_automata({"a": FastStage(timeout=5.0)})
+        prog = _make_program()
+        blockers = automata.explain_blockers(
+            prog, running=set(), launched_this_run={"a"}, finished_this_run=set()
+        )
+        # "a" is launched, so it should not appear as a blocker
+        assert not any("'a'" in b for b in blockers), (
+            "Launched stage should not appear in blocker analysis"
+        )
+
+    def test_launched_stage_excluded_from_skip_candidates(self):
+        """Stages in launched_this_run are excluded from get_stages_to_skip."""
+        automata = _build_automata(
+            {"a": FailingStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _make_program(stage_results={"a": _make_result(StageState.FAILED)})
+        # "b" would normally be in to_skip (mandatory dep failed), but it's launched
+        to_skip = automata.get_stages_to_skip(
+            prog, running=set(), launched_this_run={"b"}, finished_this_run={"a"}
+        )
+        assert "b" not in to_skip, (
+            "launched_this_run must exclude 'b' from skip candidates"
+        )
+
+
+# ===================================================================
+# Category L: RUNNING status path in dependency gate (Audit #5)
+# ===================================================================
+
+
+class TestRunningStatusDependencyPath:
+    """Tests verifying that RUNNING status in a dependency causes WAIT in the gate.
+
+    RUNNING is not a final state (not in FINAL_STATES), so:
+      - finalized = False
+      - finalized_this_run = False (regardless of finished_this_run membership)
+      - All conditions (always/success/failure) must return WAIT
+    """
+
+    def test_running_dep_always_condition_returns_wait(self):
+        """always: WAIT when dep is RUNNING (not finalized)."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        dep = ExecutionOrderDependency.always_after("a")
+        state, reason = automata._check_dependency_gate(
+            prog, dep, finished_this_run=set()
+        )
+        assert state is DAGAutomata.GateState.WAIT, (
+            f"RUNNING dep with always condition must be WAIT; got {state}"
+        )
+
+    def test_running_dep_success_condition_returns_wait(self):
+        """success: WAIT when dep is RUNNING (not finalized)."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        dep = ExecutionOrderDependency.on_success("a")
+        state, reason = automata._check_dependency_gate(
+            prog, dep, finished_this_run=set()
+        )
+        assert state is DAGAutomata.GateState.WAIT, (
+            f"RUNNING dep with success condition must be WAIT; got {state}"
+        )
+
+    def test_running_dep_failure_condition_returns_wait(self):
+        """failure: WAIT when dep is RUNNING (not finalized)."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_failure("a")]},
+        )
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        dep = ExecutionOrderDependency.on_failure("a")
+        state, reason = automata._check_dependency_gate(
+            prog, dep, finished_this_run=set()
+        )
+        assert state is DAGAutomata.GateState.WAIT, (
+            f"RUNNING dep with failure condition must be WAIT; got {state}"
+        )
+
+    def test_running_dep_still_wait_even_if_in_finished_this_run(self):
+        """RUNNING status causes WAIT even if erroneously placed in finished_this_run.
+
+        If something incorrectly adds a RUNNING stage to finished_this_run,
+        the gate must still return WAIT because RUNNING is not a final state
+        and therefore finalized_this_run = finished_now AND finalized = True AND False = False.
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": FastStage(timeout=5.0)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        dep = ExecutionOrderDependency.on_success("a")
+        # Erroneously put "a" in finished_this_run while it's still RUNNING
+        state, reason = automata._check_dependency_gate(
+            prog, dep, finished_this_run={"a"}
+        )
+        assert state is DAGAutomata.GateState.WAIT, (
+            f"RUNNING dep in finished_this_run must still be WAIT; got {state}"
+        )
+
+    def test_running_dep_dataflow_wait_for_mandatory_input(self):
+        """Data-flow gate: WAIT when mandatory input's producer is RUNNING."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        state, reasons = automata._check_dataflow_gate(
+            prog, "b", finished_this_run=set()
+        )
+        assert state is DAGAutomata.GateState.WAIT, (
+            f"Mandatory input from RUNNING producer must be WAIT; got {state}"
+        )
+
+    def test_running_dep_dataflow_wait_for_optional_input(self):
+        """Data-flow gate: WAIT when optional input's producer is RUNNING."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "opt": OptionalInputStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "opt", "data")],
+        )
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        state, reasons = automata._check_dataflow_gate(
+            prog, "opt", finished_this_run=set()
+        )
+        assert state is DAGAutomata.GateState.WAIT, (
+            f"Optional input from RUNNING producer must be WAIT; got {state}"
+        )
+
+    def test_running_dep_not_in_get_ready_stages(self):
+        """get_ready_stages: downstream stage is NOT ready when dep is RUNNING."""
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        ready, cached = automata.get_ready_stages(
+            prog, running={"a"}, launched_this_run={"a"}, finished_this_run=set()
+        )
+        assert "b" not in ready, (
+            "Downstream 'b' must not be ready when its dep 'a' is RUNNING"
+        )
+
+    def test_running_dep_not_in_stages_to_skip(self):
+        """get_stages_to_skip: downstream stage is NOT skipped when dep is RUNNING.
+
+        RUNNING means the dep may still complete, so the downstream stage
+        should WAIT (not be skipped as IMPOSSIBLE).
+        """
+        automata = _build_automata(
+            {"a": FastStage(timeout=5.0), "b": ChainedStage(timeout=5.0)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        running_result = ProgramStageResult(
+            status=StageState.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            finished_at=None,
+        )
+        prog = _make_program(stage_results={"a": running_result})
+
+        to_skip = automata.get_stages_to_skip(
+            prog, running={"a"}, launched_this_run={"a"}, finished_this_run=set()
+        )
+        assert "b" not in to_skip, (
+            "Downstream 'b' must not be skipped when dep 'a' is still RUNNING"
+        )
