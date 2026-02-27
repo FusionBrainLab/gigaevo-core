@@ -1,7 +1,6 @@
-"""Extended tests for gigaevo/programs/stages/optimization/cma.py
+"""Edge-case and boundary tests for gigaevo/programs/stages/optimization/cma.py
 
-Targets bug-prone uncovered paths identified by code review:
-
+Covers:
 1. _should_extract filtering (skip_integers, min/max_abs_value, booleans).
 2. _extract_constants (float, negative, no constants, skip_zero_one).
 3. _substitute round-trip for int originals and negated values.

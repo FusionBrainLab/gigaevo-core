@@ -1,38 +1,47 @@
-"""Extended unit tests for DAGAutomata — targeting specifically uncovered paths.
+"""Edge-case and boundary tests for DAGAutomata.
 
 Covers:
-  I.   ExecutionOrderDependency.is_satisfied_historically — direct unit tests
-  II.  DAGValidator.validate_structure — non-Stage node detection
-  III. DAGValidator.validate_structure — duplicate input_name and missing required inputs
-  IV.  DAGAutomata._check_dataflow_gate — mandatory input with no provider (IMPOSSIBLE)
-  V.   DAGAutomata.explain_blockers — default diagnostic message (no blockers found)
-
-Each test section is designed to exercise a real bug scenario, not just line coverage.
-The core concern for each:
-
-  I.   is_satisfied_historically diverges from _check_dependency_gate: the former
-       ignores the `finalized_this_run` constraint while the latter enforces it.
-       If a caller uses is_satisfied_historically for scheduling decisions (rather
-       than going through _check_dependency_gate), stale cached results from a prior
-       run would be treated as satisfied — the scheduler would incorrectly mark a
-       stage READY before its dep has actually been re-executed in the current run.
-
-  II.  Non-Stage classes passed as node values are caught early and a clear error is
-       produced, before any edge or type validation is attempted.
-
-  III. Duplicate input edges and un-provided required inputs are caught by structural
-       validation so that they surface as clear errors rather than silent wrong
-       behavior at execution time.
-
-  IV.  At runtime the gate logic returns IMPOSSIBLE for a required input that has
-       no incoming edge — no deadlock, no hang, just an IMPOSSIBLE verdict. This path
-       is unreachable via the normal build() pathway (which validates structure up
-       front), but can be hit if someone constructs automata topology manually or if
-       the topology is mutated post-build.
-
-  V.   When all stages are already accounted for (done / running / launched), the
-       explain_blockers method returns a diagnostic message rather than an empty list,
-       so callers always get a non-empty response they can log.
+  I.    ExecutionOrderDependency.is_satisfied_historically — direct unit tests
+        for the run-agnostic satisfaction check, including divergence from
+        _check_dependency_gate for stale prior-run results.
+  II.   DAGValidator.validate_structure — non-Stage node detection.
+        Non-Stage classes passed as node values are caught early and a clear
+        error is produced, before any edge or type validation is attempted.
+  III.  DAGValidator.validate_structure — duplicate input_name and missing
+        required inputs. Duplicate input edges and un-provided required inputs
+        are caught by structural validation so that they surface as clear errors
+        rather than silent wrong behavior at execution time.
+  IV.   DAGAutomata._check_dataflow_gate — mandatory input with no provider
+        (IMPOSSIBLE). At runtime the gate logic returns IMPOSSIBLE for a required
+        input that has no incoming edge. This path is unreachable via the normal
+        build() pathway (which validates structure up front), but can be hit if
+        someone constructs automata topology manually or if the topology is
+        mutated post-build.
+  V.    DAGAutomata.explain_blockers — default diagnostic message (no blockers
+        found). When all stages are already accounted for (done / running /
+        launched), the explain_blockers method returns a diagnostic message
+        rather than an empty list, so callers always get a non-empty response
+        they can log.
+  VI.   build_named_inputs output verification — correct dict contents for
+        completed, failed, skipped, cancelled, and partial-completion scenarios.
+  VII.  _check_dependency_gate — "always" gate with previous-run FINAL results
+        not in finished_this_run (lines 398-404).
+  VIII. _check_dependency_gate — "success"/"failure" gate with
+        finalized_this_run=False (line 415).
+  IX.   finalized_this_run compound flag with RUNNING/PENDING status in
+        finished_this_run (line 381).
+  X.    Multiple exec deps — IMPOSSIBLE short-circuits, WAIT accumulates
+        (lines 496-506).
+  XI.   Exec-order IMPOSSIBLE preempts / interacts with dataflow check
+        (lines 501-502, 513-514).
+  XII.  Optional input with previously-failed source — WAIT vs READY
+        (lines 468-480).
+  XIII. build_named_inputs — only COMPLETED outputs, first edge wins
+        (lines 668-681).
+  XIV.  get_ready_stages — cache hash=None forces rerun (lines 577-587).
+  XV.   get_stages_to_skip vs get_ready_stages consistency (lines 558, 654).
+  XVI.  Pydantic rejects invalid ExecutionOrderDependency condition.
+  XVII. is_satisfied_historically — exhaustive status x condition combinations.
 """
 
 from __future__ import annotations
@@ -47,6 +56,7 @@ from gigaevo.programs.core_types import (
     ProgramStageResult,
     StageIO,
     StageState,
+    VoidInput,
 )
 from gigaevo.programs.dag.automata import (
     DAGAutomata,
@@ -58,16 +68,18 @@ from gigaevo.programs.dag.automata import (
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cache_handler import InputHashCache
 from tests.conftest import (
     ChainedStage,
     FailingStage,
     FastStage,
     MockOutput,
+    OptionalInputStage,
     VoidStage,
 )
 
 # ---------------------------------------------------------------------------
-# Helpers shared across all test sections
+# Helpers from extended tests
 # ---------------------------------------------------------------------------
 
 
@@ -115,7 +127,31 @@ def _build_automata(
 
 
 # ---------------------------------------------------------------------------
-# Additional stage mocks needed by these extended tests
+# Helpers from adversarial tests
+# ---------------------------------------------------------------------------
+
+
+def _prog(**stage_results) -> Program:
+    p = Program(code="x=1", state=ProgramState.RUNNING)
+    p.stage_results = {k: v for k, v in stage_results.items()}
+    return p
+
+
+def _result(status: StageState, output=None) -> ProgramStageResult:
+    return ProgramStageResult(
+        status=status,
+        output=output,
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+
+
+def _automata(nodes, edges=None, exec_deps=None) -> DAGAutomata:
+    return DAGAutomata.build(nodes, edges or [], exec_deps)
+
+
+# ---------------------------------------------------------------------------
+# Additional stage mocks needed by extended tests
 # ---------------------------------------------------------------------------
 
 
@@ -149,11 +185,6 @@ class TestIsSatisfiedHistorically:
         finished_this_run (i.e. stale prior-run results count as WAIT).
       - is_satisfied_historically returns True for a cached final result
         that has the correct status, regardless of which run produced it.
-
-    If this distinction is ignored and someone uses is_satisfied_historically
-    to make scheduling decisions, stale results from prior runs will be
-    treated as satisfied — creating incorrect READY decisions that bypass
-    the "must re-run in the current run" invariant.
     """
 
     # -- None result ----------------------------------------------------------
@@ -268,7 +299,7 @@ class TestIsSatisfiedHistorically:
     # -- The core divergence: is_satisfied_historically vs _check_dependency_gate --
 
     def test_divergence_from_check_dependency_gate_for_stale_failure_result(self):
-        """Critical: is_satisfied_historically diverges from _check_dependency_gate
+        """is_satisfied_historically diverges from _check_dependency_gate
         for stale results (results from prior runs NOT in finished_this_run).
 
         Scenario: dep stage 'a' has a FAILED result from a *prior* run.
@@ -277,10 +308,7 @@ class TestIsSatisfiedHistorically:
           - _check_dependency_gate: returns WAIT (not in finished_this_run)
 
         This divergence is intentional — _check_dependency_gate enforces the
-        "must re-execute in the current run" invariant. But if a caller were
-        to use is_satisfied_historically for scheduling, they would incorrectly
-        treat the stale result as satisfying the dep and schedule the dependent
-        stage prematurely.
+        "must re-execute in the current run" invariant.
         """
         automata = _build_automata(
             {"a": FailingStage(timeout=5.0), "b": FastStage(timeout=5.0)},
@@ -309,11 +337,6 @@ class TestIsSatisfiedHistorically:
 
         is_satisfied_historically returns True (COMPLETED satisfies on_success).
         _check_dependency_gate returns WAIT (not in finished_this_run).
-
-        This is the scenario that caused the historical deadlock bug: a stale
-        COMPLETED result from a prior run would be seen as satisfying on_success
-        by naive callers, allowing the scheduler to mark downstream stages READY
-        before the upstream re-ran in the current run.
         """
         dep = ExecutionOrderDependency.on_success("a")
         stale_completed_result = _make_result(
@@ -407,8 +430,6 @@ class TestDAGValidatorNonStageNodes:
 
         The early-return guard (line 136) means that edge-reference errors and
         type errors are NOT checked — only the non-Stage error is reported.
-        This prevents a confusing cascade of errors when the root problem is
-        a completely wrong node type.
         """
         errors = DAGValidator.validate_structure(
             stage_classes={"good": FastStage, "bad": dict},  # type: ignore[dict-item]
@@ -585,8 +606,6 @@ class TestDAGValidatorInputEdgeErrors:
 
     def test_optional_input_with_no_edge_is_not_a_validation_error(self):
         """A stage with only optional inputs and no edges passes validation."""
-        from tests.conftest import OptionalInputStage
-
         errors = DAGValidator.validate_structure(
             stage_classes={"opt": OptionalInputStage},
             data_flow_edges=[],
@@ -757,8 +776,6 @@ class TestCheckDataflowGateNoProvider:
 
         This ensures the IMPOSSIBLE path is specific to *required* inputs.
         """
-        from tests.conftest import OptionalInputStage
-
         opt_stage = OptionalInputStage(timeout=5.0)
         # Build normally — OptionalInputStage has no required fields so validation passes
         automata = _build_automata({"opt": opt_stage})
@@ -949,7 +966,7 @@ class TestExplainBlockersDefaultMessage:
 
 
 # ===================================================================
-# Section VI: build_named_inputs output verification (Audit #4)
+# Section VI: build_named_inputs output verification
 # ===================================================================
 
 
@@ -963,9 +980,6 @@ class TestBuildNamedInputsOutputVerification:
       - Empty dict when no producers are completed
       - Optional inputs from failed producers are omitted
       - Multiple inputs from multiple producers are all present
-
-    This goes beyond "does it crash?" to verifying the contract that downstream
-    stages depend on for correct execution.
     """
 
     def test_single_mandatory_input_returns_correct_value(self):
@@ -1107,8 +1121,6 @@ class TestBuildNamedInputsOutputVerification:
 
     def test_optional_input_from_completed_producer_is_included(self):
         """Optional input from a COMPLETED producer IS included in named inputs."""
-        from tests.conftest import OptionalInputStage
-
         automata = _build_automata(
             {"a": FastStage(timeout=5.0), "opt": OptionalInputStage(timeout=5.0)},
             edges=[DataFlowEdge.create("a", "opt", "data")],
@@ -1124,8 +1136,6 @@ class TestBuildNamedInputsOutputVerification:
 
     def test_optional_input_from_failed_producer_is_excluded(self):
         """Optional input from a FAILED producer is excluded (empty dict, not None value)."""
-        from tests.conftest import OptionalInputStage
-
         automata = _build_automata(
             {"a": FailingStage(timeout=5.0), "opt": OptionalInputStage(timeout=5.0)},
             edges=[DataFlowEdge.create("a", "opt", "data")],
@@ -1167,3 +1177,636 @@ class TestBuildNamedInputsOutputVerification:
         assert "data" in named, "COMPLETED 'a' should provide 'data'"
         assert named["data"].value == 55
         assert "score" not in named, "FAILED 'b' should not provide 'score'"
+
+
+# ===================================================================
+# Section VII: "always" gate — previous-run FINAL result NOT in finished_this_run
+# Target: automata.py lines 398-404
+# ===================================================================
+
+
+class TestAlwaysGatePreviousRun:
+    """The 'always' condition only checks finalized_this_run (line 399).
+    A stage that finished in a PREVIOUS run (FINAL status, but NOT in
+    finished_this_run) returns WAIT — not READY.
+    """
+
+    def test_completed_previous_run_not_in_finished_returns_wait(self):
+        """Stage COMPLETED previously but not this run -> WAIT."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _prog(a=_result(StageState.COMPLETED))
+        dep = ExecutionOrderDependency.always_after("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run=set())
+        assert state is DAGAutomata.GateState.WAIT
+
+    def test_completed_this_run_returns_ready(self):
+        """Same stage COMPLETED AND in finished_this_run -> READY."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _prog(a=_result(StageState.COMPLETED))
+        dep = ExecutionOrderDependency.always_after("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.READY
+
+    @pytest.mark.parametrize(
+        "final_status",
+        [
+            StageState.COMPLETED,
+            StageState.FAILED,
+            StageState.CANCELLED,
+            StageState.SKIPPED,
+        ],
+    )
+    def test_always_gate_ready_for_all_final_states_this_run(self, final_status):
+        """always_after is satisfied by ANY final state, as long as it's this run."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _prog(a=_result(final_status))
+        dep = ExecutionOrderDependency.always_after("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.READY
+
+    @pytest.mark.parametrize(
+        "final_status",
+        [
+            StageState.COMPLETED,
+            StageState.FAILED,
+            StageState.CANCELLED,
+            StageState.SKIPPED,
+        ],
+    )
+    def test_always_gate_wait_for_all_final_states_previous_run(self, final_status):
+        """always_after returns WAIT for any final state NOT in finished_this_run."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _prog(a=_result(final_status))
+        dep = ExecutionOrderDependency.always_after("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run=set())
+        assert state is DAGAutomata.GateState.WAIT
+
+
+# ===================================================================
+# Section VIII: "success"/"failure" gate — finalized_this_run=False means WAIT
+# Target: automata.py line 415
+# ===================================================================
+
+
+class TestSuccessFailureGatePreviousRun:
+    """For success/failure conditions, if finalized_this_run=False, the gate
+    returns WAIT regardless of actual status (line 415).
+    """
+
+    def test_on_success_completed_previous_run_returns_wait(self):
+        """on_success: stage COMPLETED previously but not this run -> WAIT."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _prog(a=_result(StageState.COMPLETED))
+        dep = ExecutionOrderDependency.on_success("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run=set())
+        assert state is DAGAutomata.GateState.WAIT
+
+    def test_on_failure_failed_previous_run_returns_wait(self):
+        """on_failure: stage FAILED previously but not this run -> WAIT."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.on_failure("a")]},
+        )
+        prog = _prog(a=_result(StageState.FAILED))
+        dep = ExecutionOrderDependency.on_failure("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run=set())
+        assert state is DAGAutomata.GateState.WAIT
+
+    def test_on_success_completed_this_run_returns_ready(self):
+        """on_success: stage COMPLETED this run -> READY."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _prog(a=_result(StageState.COMPLETED))
+        dep = ExecutionOrderDependency.on_success("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.READY
+
+    def test_on_success_failed_this_run_returns_impossible(self):
+        """on_success: stage FAILED this run -> IMPOSSIBLE."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _prog(a=_result(StageState.FAILED))
+        dep = ExecutionOrderDependency.on_success("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.IMPOSSIBLE
+
+    def test_on_success_cancelled_this_run_returns_impossible(self):
+        """on_success with CANCELLED dep -> IMPOSSIBLE (line 407: completed=False)."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _prog(a=_result(StageState.CANCELLED))
+        dep = ExecutionOrderDependency.on_success("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.IMPOSSIBLE
+
+    def test_on_failure_skipped_this_run_returns_ready(self):
+        """on_failure: SKIPPED counts as failure (line 54-58)."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.on_failure("a")]},
+        )
+        prog = _prog(a=_result(StageState.SKIPPED))
+        dep = ExecutionOrderDependency.on_failure("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.READY
+
+    def test_on_failure_completed_this_run_returns_impossible(self):
+        """on_failure: stage COMPLETED this run -> IMPOSSIBLE."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.on_failure("a")]},
+        )
+        prog = _prog(a=_result(StageState.COMPLETED))
+        dep = ExecutionOrderDependency.on_failure("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.IMPOSSIBLE
+
+
+# ===================================================================
+# Section IX: finalized_this_run with RUNNING status in finished_this_run
+# Target: automata.py line 381
+# ===================================================================
+
+
+class TestFinalizedThisRunWithNonFinalStatus:
+    """finalized_this_run = finished_now AND finalized (line 381).
+    If a stage is in finished_this_run but has RUNNING status,
+    finalized=False -> finalized_this_run=False -> gate returns WAIT.
+    """
+
+    def test_running_in_finished_this_run_yields_wait(self):
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _prog(
+            a=ProgramStageResult(
+                status=StageState.RUNNING,
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        dep = ExecutionOrderDependency.always_after("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.WAIT
+
+    def test_pending_in_finished_this_run_yields_wait(self):
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _prog(a=ProgramStageResult(status=StageState.PENDING))
+        dep = ExecutionOrderDependency.always_after("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.WAIT
+
+    def test_no_result_in_finished_this_run_yields_wait(self):
+        """Stage in finished_this_run but no result at all -> WAIT."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _prog()  # No result for 'a'
+        dep = ExecutionOrderDependency.always_after("a")
+        state, _ = aut._check_dependency_gate(prog, dep, finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.WAIT
+
+    def test_get_stage_status_fields_with_running(self):
+        """Verify all StageStatus fields for the RUNNING-in-finished edge case."""
+        aut = _automata({"a": FastStage(timeout=5)})
+        prog = _prog(
+            a=ProgramStageResult(
+                status=StageState.RUNNING,
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        status = aut._get_stage_status(prog, "a", finished_this_run={"a"})
+        assert status.finalized is False
+        assert status.completed is False
+        assert status.finalized_this_run is False
+        assert status.status_name == "RUNNING"
+
+
+# ===================================================================
+# Section X: Multiple exec deps — IMPOSSIBLE short-circuits, WAIT accumulates
+# Target: automata.py lines 496-506
+# ===================================================================
+
+
+class TestMultipleExecDepsOrdering:
+    """_diagnose_stage: IMPOSSIBLE > WAIT > READY priority."""
+
+    def test_impossible_overrides_wait(self):
+        """[READY, WAIT, IMPOSSIBLE] -> IMPOSSIBLE (short-circuit at line 502)."""
+        aut = _automata(
+            {
+                "d1": FastStage(timeout=5),
+                "d2": FastStage(timeout=5),
+                "d3": FastStage(timeout=5),
+                "t": FastStage(timeout=5),
+            },
+            exec_deps={
+                "t": [
+                    ExecutionOrderDependency.always_after("d1"),  # READY
+                    ExecutionOrderDependency.always_after("d2"),  # WAIT
+                    ExecutionOrderDependency.on_success("d3"),  # IMPOSSIBLE
+                ]
+            },
+        )
+        prog = _prog(
+            d1=_result(StageState.COMPLETED),
+            d3=_result(StageState.FAILED),
+        )
+        state, reasons = aut._diagnose_stage(prog, "t", finished_this_run={"d1", "d3"})
+        assert state is DAGAutomata.GateState.IMPOSSIBLE
+        # Only one reason (from IMPOSSIBLE dep), WAIT reason not included
+        assert len(reasons) == 1
+
+    def test_wait_when_no_impossible(self):
+        """[READY, WAIT, READY] -> WAIT."""
+        aut = _automata(
+            {
+                "d1": FastStage(timeout=5),
+                "d2": FastStage(timeout=5),
+                "d3": FastStage(timeout=5),
+                "t": FastStage(timeout=5),
+            },
+            exec_deps={
+                "t": [
+                    ExecutionOrderDependency.always_after("d1"),
+                    ExecutionOrderDependency.always_after("d2"),
+                    ExecutionOrderDependency.always_after("d3"),
+                ]
+            },
+        )
+        prog = _prog(
+            d1=_result(StageState.COMPLETED),
+            d3=_result(StageState.COMPLETED),
+        )
+        state, _ = aut._diagnose_stage(prog, "t", finished_this_run={"d1", "d3"})
+        assert state is DAGAutomata.GateState.WAIT
+
+    def test_all_ready(self):
+        """[READY, READY, READY] -> READY."""
+        aut = _automata(
+            {
+                "d1": FastStage(timeout=5),
+                "d2": FastStage(timeout=5),
+                "d3": FastStage(timeout=5),
+                "t": FastStage(timeout=5),
+            },
+            exec_deps={
+                "t": [
+                    ExecutionOrderDependency.always_after("d1"),
+                    ExecutionOrderDependency.always_after("d2"),
+                    ExecutionOrderDependency.always_after("d3"),
+                ]
+            },
+        )
+        prog = _prog(
+            d1=_result(StageState.COMPLETED),
+            d2=_result(StageState.FAILED),
+            d3=_result(StageState.SKIPPED),
+        )
+        state, reasons = aut._diagnose_stage(
+            prog,
+            "t",
+            finished_this_run={"d1", "d2", "d3"},
+        )
+        assert state is DAGAutomata.GateState.READY
+        assert reasons == []
+
+
+# ===================================================================
+# Section XI: Exec IMPOSSIBLE preempts dataflow check
+# Target: automata.py lines 501-502, 513-514
+# ===================================================================
+
+
+class TestExecImpossiblePreemptsDataflow:
+    """If exec-order returns IMPOSSIBLE, dataflow is still checked
+    (lines 508-510), but if dataflow is also IMPOSSIBLE it returns that.
+    Key: exec IMPOSSIBLE returns at line 502 BEFORE dataflow check."""
+
+    def test_exec_impossible_dataflow_ready_returns_impossible(self):
+        aut = _automata(
+            {
+                "a": FastStage(timeout=5),
+                "c": FastStage(timeout=5),
+                "b": ChainedStage(timeout=5),
+            },
+            edges=[DataFlowEdge.create("a", "b", "data")],
+            exec_deps={"b": [ExecutionOrderDependency.on_success("c")]},
+        )
+        prog = _prog(
+            a=_result(StageState.COMPLETED, output=MockOutput(value=1)),
+            c=_result(StageState.FAILED),
+        )
+        state, _ = aut._diagnose_stage(prog, "b", finished_this_run={"a", "c"})
+        assert state is DAGAutomata.GateState.IMPOSSIBLE
+
+    def test_exec_ready_dataflow_impossible_returns_impossible(self):
+        aut = _automata(
+            {
+                "a": FailingStage(timeout=5),
+                "c": FastStage(timeout=5),
+                "b": ChainedStage(timeout=5),
+            },
+            edges=[DataFlowEdge.create("a", "b", "data")],
+            exec_deps={"b": [ExecutionOrderDependency.always_after("c")]},
+        )
+        prog = _prog(
+            a=_result(StageState.FAILED),
+            c=_result(StageState.COMPLETED),
+        )
+        state, _ = aut._diagnose_stage(prog, "b", finished_this_run={"a", "c"})
+        assert state is DAGAutomata.GateState.IMPOSSIBLE
+
+    def test_exec_wait_dataflow_ready_returns_wait(self):
+        aut = _automata(
+            {
+                "a": FastStage(timeout=5),
+                "c": FastStage(timeout=5),
+                "b": ChainedStage(timeout=5),
+            },
+            edges=[DataFlowEdge.create("a", "b", "data")],
+            exec_deps={"b": [ExecutionOrderDependency.always_after("c")]},
+        )
+        prog = _prog(
+            a=_result(StageState.COMPLETED, output=MockOutput(value=1)),
+        )
+        state, _ = aut._diagnose_stage(prog, "b", finished_this_run={"a"})
+        assert state is DAGAutomata.GateState.WAIT
+
+
+# ===================================================================
+# Section XII: Optional input with previously-failed source -> WAIT
+# Target: automata.py lines 468-480
+# ===================================================================
+
+
+class TestOptionalInputPreviouslyFailed:
+    """For optional inputs, a source that FAILED in a previous run
+    (finalized=True but finalized_this_run=False) causes WAIT.
+    """
+
+    def test_optional_source_failed_previous_run_yields_wait(self):
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": OptionalInputStage(timeout=5)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _prog(a=_result(StageState.FAILED))
+        state, reasons = aut._check_dataflow_gate(
+            prog,
+            "b",
+            finished_this_run=set(),
+        )
+        assert state is DAGAutomata.GateState.WAIT
+        assert any("optional" in r for r in reasons)
+
+    def test_optional_source_failed_this_run_yields_ready(self):
+        """Failed this run -> finalized_this_run=True -> optional gate passes."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": OptionalInputStage(timeout=5)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _prog(a=_result(StageState.FAILED))
+        state, reasons = aut._check_dataflow_gate(
+            prog,
+            "b",
+            finished_this_run={"a"},
+        )
+        assert state is DAGAutomata.GateState.READY
+        assert reasons == []
+
+
+# ===================================================================
+# Section XIII: build_named_inputs — only COMPLETED outputs, first edge wins
+# Target: automata.py lines 668-681
+# ===================================================================
+
+
+class TestBuildNamedInputsOrdering:
+    """build_named_inputs only includes COMPLETED producers.
+    For duplicate input_name (prevented by build(), but guard at line 676),
+    the first edge wins.
+    """
+
+    def test_failed_producer_excluded(self):
+        aut = _automata(
+            {"a": FailingStage(timeout=5), "b": OptionalInputStage(timeout=5)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _prog(a=_result(StageState.FAILED))
+        named = aut.build_named_inputs(prog, "b")
+        assert "data" not in named
+
+    def test_completed_producer_included(self):
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": ChainedStage(timeout=5)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _prog(a=_result(StageState.COMPLETED, output=MockOutput(value=7)))
+        named = aut.build_named_inputs(prog, "b")
+        assert "data" in named
+        assert named["data"].value == 7
+
+    def test_completed_with_none_output_excluded(self):
+        """COMPLETED but output=None -> excluded (line 675: res.output is not None)."""
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": OptionalInputStage(timeout=5)},
+            edges=[DataFlowEdge.create("a", "b", "data")],
+        )
+        prog = _prog(
+            a=ProgramStageResult(
+                status=StageState.COMPLETED,
+                output=None,
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        named = aut.build_named_inputs(prog, "b")
+        assert "data" not in named
+
+
+# ===================================================================
+# Section XIV: get_ready_stages — cache hash=None forces rerun
+# Target: automata.py lines 577-587
+# ===================================================================
+
+
+class TestGetReadyStageCacheHashNone:
+    """When compute_hash_from_inputs raises (line 583), inputs_hash=None.
+    For InputHashCache, stored_hash=non-None vs inputs_hash=None -> rerun.
+    """
+
+    def test_hash_exception_forces_rerun(self):
+        """Stage with COMPLETED result + stored hash, but hash computation fails
+        -> stage appears in ready_with_inputs (not newly_cached)."""
+
+        class BadHashStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = MockOutput
+            cache_handler = InputHashCache()
+
+            @classmethod
+            def compute_hash_from_inputs(cls, inputs):  # noqa: ARG003
+                raise RuntimeError("hash broken")
+
+            async def compute(self, program):  # noqa: ARG002
+                return MockOutput(value=1)
+
+        aut = _automata({"s": BadHashStage(timeout=5)})
+        prog = _prog(
+            s=ProgramStageResult(
+                status=StageState.COMPLETED,
+                input_hash="stored_hash_abc",
+                started_at=datetime.now(timezone.utc),
+                finished_at=datetime.now(timezone.utc),
+            )
+        )
+        ready, cached = aut.get_ready_stages(
+            prog,
+            running=set(),
+            launched_this_run=set(),
+            finished_this_run=set(),
+        )
+        # Hash failure -> inputs_hash=None -> should_rerun=True -> in ready, not cached
+        assert "s" in ready
+        assert "s" not in cached
+
+
+# ===================================================================
+# Section XV: get_stages_to_skip vs get_ready_stages consistency
+# Target: automata.py lines 558, 654
+# ===================================================================
+
+
+class TestSkipAndReadyConsistency:
+    """get_stages_to_skip and get_ready_stages should never both claim
+    the same stage — a stage is either skippable or ready, never both.
+    """
+
+    def test_impossible_stage_in_skip_not_in_ready(self):
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.on_success("a")]},
+        )
+        prog = _prog(a=_result(StageState.FAILED))
+        finished = {"a"}
+
+        to_skip = aut.get_stages_to_skip(
+            prog,
+            running=set(),
+            launched_this_run=set(),
+            finished_this_run=finished,
+        )
+        ready, cached = aut.get_ready_stages(
+            prog,
+            running=set(),
+            launched_this_run=set(),
+            finished_this_run=finished,
+        )
+        # b should be in to_skip (IMPOSSIBLE), not in ready
+        assert "b" in to_skip
+        assert "b" not in ready
+        assert "b" not in cached
+
+    def test_ready_stage_not_in_skip(self):
+        aut = _automata(
+            {"a": FastStage(timeout=5), "b": FastStage(timeout=5)},
+            exec_deps={"b": [ExecutionOrderDependency.always_after("a")]},
+        )
+        prog = _prog(a=_result(StageState.COMPLETED))
+        finished = {"a"}
+
+        to_skip = aut.get_stages_to_skip(
+            prog,
+            running=set(),
+            launched_this_run=set(),
+            finished_this_run=finished,
+        )
+        ready, _ = aut.get_ready_stages(
+            prog,
+            running=set(),
+            launched_this_run=set(),
+            finished_this_run=finished,
+        )
+        assert "b" in ready
+        assert "b" not in to_skip
+
+
+# ===================================================================
+# Section XVI: Pydantic rejects invalid condition
+# Target: ExecutionOrderDependency.condition Literal validation
+# ===================================================================
+
+
+class TestInvalidConditionRejected:
+    def test_pydantic_rejects_unknown_condition(self):
+        with pytest.raises(Exception):  # ValidationError
+            ExecutionOrderDependency(stage_name="a", condition="unknown")
+
+
+# ===================================================================
+# Section XVII: is_satisfied_historically — exhaustive combinations
+# ===================================================================
+
+
+class TestIsSatisfiedHistoricallyCombinations:
+    """Exhaustive status x condition combinations for is_satisfied_historically."""
+
+    @pytest.mark.parametrize(
+        "status,condition,expected",
+        [
+            (StageState.COMPLETED, "success", True),
+            (StageState.COMPLETED, "failure", False),
+            (StageState.COMPLETED, "always", True),
+            (StageState.FAILED, "success", False),
+            (StageState.FAILED, "failure", True),
+            (StageState.FAILED, "always", True),
+            (StageState.CANCELLED, "success", False),
+            (StageState.CANCELLED, "failure", True),
+            (StageState.CANCELLED, "always", True),
+            (StageState.SKIPPED, "success", False),
+            (StageState.SKIPPED, "failure", True),
+            (StageState.SKIPPED, "always", True),
+            (StageState.PENDING, "success", False),
+            (StageState.PENDING, "failure", False),
+            (StageState.PENDING, "always", False),
+            (StageState.RUNNING, "success", False),
+            (StageState.RUNNING, "failure", False),
+            (StageState.RUNNING, "always", False),
+        ],
+    )
+    def test_all_status_condition_combos(self, status, condition, expected):
+        dep = ExecutionOrderDependency(stage_name="x", condition=condition)
+        result = ProgramStageResult(
+            status=status,
+            started_at=datetime.now(timezone.utc),
+        )
+        assert dep.is_satisfied_historically(result) is expected
+
+    def test_none_result_never_satisfied(self):
+        for cond in ("success", "failure", "always"):
+            dep = ExecutionOrderDependency(stage_name="x", condition=cond)
+            assert dep.is_satisfied_historically(None) is False

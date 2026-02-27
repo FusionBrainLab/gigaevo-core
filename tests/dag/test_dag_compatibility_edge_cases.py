@@ -1,6 +1,6 @@
-"""Extended tests for gigaevo/programs/dag/compatibility.py
+"""Edge-case and boundary tests for gigaevo/programs/dag/compatibility.py
 
-Targets uncovered branches:
+Covers:
   - _normalize_annotation with empty Union args after filtering None
   - _covariant_type_compatible with mismatched arg count (same origin, line 117)
   - _match_param inner recursion: typing generics with mismatched inner arg counts

@@ -1,6 +1,6 @@
-"""Extended tests for gigaevo/programs/stages/validation.py
+"""Edge-case and boundary tests for gigaevo/programs/stages/validation.py
 
-Targets uncovered branches:
+Covers:
   - Invalid regex pattern in custom_patterns (warning path, not crash)
   - AST detection of .remove() and .unlink() file operations
   - AST import checking with ImportFrom for non-forbidden modules (allowed)

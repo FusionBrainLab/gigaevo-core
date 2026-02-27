@@ -1,6 +1,6 @@
-"""Extended tests for gigaevo/programs/stages/optimization/optuna/desubstitution.py
+"""Edge-case and boundary tests for gigaevo/programs/stages/optimization/optuna/desubstitution.py
 
-Targets uncovered lines: reindent_to_match_block edge cases,
+Covers: reindent_to_match_block edge cases,
 _find_matching_close_paren no-match / string escapes, _clean_eval_in_source
 with nested parens, _coerce_param_value with containers/tuples, and
 desubstitute_params with the AST path (add_tuned_comment=False).

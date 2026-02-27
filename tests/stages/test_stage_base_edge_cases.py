@@ -1,4 +1,4 @@
-"""Extended tests for Stage base class — targeting uncovered bug-prone paths.
+"""Edge-case and boundary tests for Stage base class and CacheHandler logic.
 
 Covers:
 1. __init_subclass__ validation: all 4 error paths for malformed stage definitions
@@ -8,10 +8,19 @@ Covers:
 5. _is_optional_type with Python 3.10+ `X | None` union syntax (types.UnionType)
 6. compute_hash_from_inputs exception path: returns None on bad inputs silently
 7. execute() VoidOutput returning None (success) vs non-VoidOutput returning None (failure)
-8. on_complete call sites across all execute() paths (audit findings)
+8. on_complete call sites across all execute() paths
 9. StageError.stage field correctness for all failure modes
 10. Hash-before-compute ordering verification
 11. ProgramStageResult timestamp correctness for success/failure
+12. _raw_inputs mutation during compute() — hash from ORIGINAL inputs
+13. Timeout fires after hash is set — failure result has non-None hash
+14. InputHashCache edge cases: stored_hash=None, matching/mismatched hashes
+15. ProbabilisticCache truthiness: ProgramStageResult is always truthy
+16. Wrong output type detection and error reporting
+17. compute_hash_from_inputs with extra/missing keys
+18. InputHashCache.on_complete integration
+19. execute() finally block state cleanup
+20. ProbabilisticCache boundary validation (probability range)
 """
 
 from __future__ import annotations
@@ -23,6 +32,7 @@ from typing import Optional, Union
 import pytest
 
 from gigaevo.programs.core_types import (
+    FINAL_STATES,
     ProgramStageResult,
     StageIO,
     StageState,
@@ -35,6 +45,9 @@ from gigaevo.programs.stages.base import Stage, _is_optional_type
 from gigaevo.programs.stages.cache_handler import (
     NO_CACHE,
     CacheHandler,
+    InputHashCache,
+    NeverCached,
+    ProbabilisticCache,
 )
 
 # ---------------------------------------------------------------------------
@@ -45,6 +58,11 @@ from gigaevo.programs.stages.cache_handler import (
 def _prog() -> Program:
     """Create a minimal RUNNING Program for stage execution."""
     return Program(code="def solve(): return 42", state=ProgramState.RUNNING)
+
+
+def _prog_minimal() -> Program:
+    """Create a minimal RUNNING Program with short code."""
+    return Program(code="x=1", state=ProgramState.RUNNING)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +101,54 @@ class WrongTypeInput(StageIO):
     value: int  # must be an int — providing a non-coercible string will fail
 
 
+class SimpleInput(StageIO):
+    x: int
+
+
+class SimpleOutput(StageIO):
+    value: int = 0
+
+
+class WrongOutput(StageIO):
+    data: str = ""
+
+
+class InputWithOptional(StageIO):
+    required: str
+    opt: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Recording CacheHandler for on_complete verification
+# ---------------------------------------------------------------------------
+
+
+class RecordingCacheHandler(CacheHandler):
+    """CacheHandler that records on_complete calls with full arguments."""
+
+    def __init__(self):
+        self.on_complete_calls: list[dict] = []
+
+    def should_rerun(self, existing_result, inputs_hash, finished_this_run) -> bool:
+        return True
+
+    def on_complete(self, result, inputs_hash):
+        self.on_complete_calls.append(
+            {
+                "result": result,
+                "inputs_hash": inputs_hash,
+                "status": result.status,
+                "error": result.error,
+            }
+        )
+        return result
+
+
+# ===========================================================================
+# Tests from test_stage_base_extended.py
+# ===========================================================================
+
+
 # ---------------------------------------------------------------------------
 # TestInitSubclassValidation
 # ---------------------------------------------------------------------------
@@ -90,8 +156,8 @@ class WrongTypeInput(StageIO):
 
 class TestInitSubclassValidation:
     """Stage.__init_subclass__ must reject malformed stage definitions at class
-    definition time, not at instantiation or execution time. This is critical
-    because silent failures here mean broken stages deploy undetected."""
+    definition time, not at instantiation or execution time. Silent failures
+    here mean broken stages deploy undetected."""
 
     def test_missing_inputs_model_raises_type_error(self):
         """A stage with no InputsModel defined must raise TypeError immediately."""
@@ -302,22 +368,22 @@ class TestParamsPydanticValidationError:
 class TestEnsureRequiredPresent:
     """_ensure_required_present guards against missing required inputs.
 
-    Important: compute_inputs_hash() is called on line 246 of execute(), which
-    is BEFORE the try/except block (try starts at line 248). When _raw_inputs is
+    compute_inputs_hash() is called on line 246 of execute(), which is BEFORE
+    the try/except block (try starts at line 248). When _raw_inputs is
     completely empty and the InputsModel has required fields, params() raises
     KeyError during compute_inputs_hash(), which propagates unhandled to the
-    caller. This is a real production behavior difference worth documenting.
+    caller.
 
     When inputs are partially provided (enough for hash computation but missing
     some required fields), _ensure_required_present() inside the try block
     catches the gap and returns a FAILED ProgramStageResult."""
 
     async def test_execute_without_any_inputs_raises_key_error(self):
-        """Bug exposure: execute() with NO inputs at all raises KeyError from
+        """execute() with NO inputs at all raises KeyError from
         compute_inputs_hash() because that call happens outside the try block.
 
-        This is a real production bug: the caller gets an uncaught exception
-        instead of a graceful FAILED ProgramStageResult."""
+        The caller gets an uncaught exception instead of a graceful FAILED
+        ProgramStageResult."""
 
         class RequiredInputStage(Stage):
             InputsModel = RequiredInput
@@ -898,39 +964,13 @@ class TestStateCleanupAfterValidationFailure:
 
 
 # ---------------------------------------------------------------------------
-# Recording CacheHandler for on_complete verification
-# ---------------------------------------------------------------------------
-
-
-class RecordingCacheHandler(CacheHandler):
-    """CacheHandler that records on_complete calls with full arguments."""
-
-    def __init__(self):
-        self.on_complete_calls: list[dict] = []
-
-    def should_rerun(self, existing_result, inputs_hash, finished_this_run) -> bool:
-        return True
-
-    def on_complete(self, result, inputs_hash):
-        self.on_complete_calls.append(
-            {
-                "result": result,
-                "inputs_hash": inputs_hash,
-                "status": result.status,
-                "error": result.error,
-            }
-        )
-        return result
-
-
-# ---------------------------------------------------------------------------
 # TestOnCompleteCallSitesExtended — exercises all 4 on_complete sites
 # ---------------------------------------------------------------------------
 
 
 class TestOnCompleteCallSitesExtended:
-    """Audit finding #1 (extended): Verify on_complete at each call site
-    using stages with required inputs to test hash correctness."""
+    """Verify on_complete at each call site using stages with required inputs
+    to test hash correctness."""
 
     async def test_on_complete_normal_output_with_required_inputs(self):
         """Call site ~294 with non-trivial inputs: hash reflects input values."""
@@ -1032,8 +1072,8 @@ class TestOnCompleteCallSitesExtended:
 
 
 class TestErrorStageFieldExtended:
-    """Audit finding #4 (extended): Verify error.stage across additional
-    exception types and with stages that have custom names."""
+    """Verify error.stage across additional exception types and with stages
+    that have custom names."""
 
     async def test_error_stage_on_key_error(self):
         """KeyError in compute() correctly sets error.stage."""
@@ -1119,8 +1159,7 @@ class TestErrorStageFieldExtended:
 
 
 class TestHashBeforeComputeExtended:
-    """Audit finding #5 (extended): Hash-before-compute ordering with
-    non-trivial inputs."""
+    """Hash-before-compute ordering with non-trivial inputs."""
 
     async def test_hash_available_during_compute_with_required_inputs(self):
         """With required inputs, the hash is available inside compute()."""
@@ -1211,8 +1250,8 @@ class TestHashBeforeComputeExtended:
 
 
 class TestTimestampBranchesExtended:
-    """Audit finding #6 (extended): ProgramStageResult timestamps for
-    edge cases not covered in test_stage_execute.py."""
+    """ProgramStageResult timestamps for edge cases not covered in
+    test_stage_execute.py."""
 
     async def test_psr_passthrough_finished_at_filled_for_final_state(self):
         """When compute() returns a PSR in a final state without finished_at,
@@ -1301,3 +1340,519 @@ class TestTimestampBranchesExtended:
         dur = result.duration_seconds()
         assert dur is not None
         assert abs(dur - 3.5) < 0.01
+
+
+# ===========================================================================
+# Tests from test_stage_adversarial.py
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# TestRawInputsMutatedDuringCompute
+# Target: base.py line 246 (hash set before compute), line 319 (finally clears)
+# ---------------------------------------------------------------------------
+
+
+class TestRawInputsMutatedDuringCompute:
+    """If compute() modifies _raw_inputs, the hash should still be from
+    the ORIGINAL inputs (computed at line 246, before compute runs).
+    """
+
+    async def test_hash_from_original_not_mutated_inputs(self):
+        class MutatingStage(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+            cache_handler = InputHashCache()
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                self._raw_inputs["x"] = 99999  # Mutate during compute
+                return SimpleOutput(value=self._raw_inputs["x"])
+
+        stage = MutatingStage(timeout=5.0)
+        stage.attach_inputs({"x": 42})
+        original_hash = stage.compute_inputs_hash()
+
+        result = await stage.execute(_prog_minimal())
+        assert result.status == StageState.COMPLETED
+        assert result.input_hash == original_hash
+
+
+# ---------------------------------------------------------------------------
+# TestTimeoutAfterHashSet
+# Target: base.py line 246 (hash), line 250 (wait_for), line 302 (except)
+# ---------------------------------------------------------------------------
+
+
+class TestTimeoutAfterHashSet:
+    """Timeout fires AFTER hash is set -- failure result has non-None hash."""
+
+    async def test_timeout_result_has_input_hash(self):
+        class SlowHashStage(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+            cache_handler = InputHashCache()
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                await asyncio.sleep(3600)
+                return SimpleOutput()
+
+        stage = SlowHashStage(timeout=0.01)
+        stage.attach_inputs({"x": 42})
+        expected_hash = stage.compute_inputs_hash()
+        assert expected_hash is not None
+
+        result = await stage.execute(_prog_minimal())
+        assert result.status == StageState.FAILED
+        assert (
+            "TimeoutError" in result.error.type
+            or "timeout" in result.error.message.lower()
+        )
+        assert result.input_hash is not None
+        assert result.input_hash == expected_hash
+
+
+# ---------------------------------------------------------------------------
+# TestMissingRequiredInputProducesFailure
+# Target: base.py line 249 (_ensure_required_present), line 302 (except)
+# ---------------------------------------------------------------------------
+
+
+class TestMissingRequiredInputProducesFailure:
+    """Missing required input produces FAILED (not uncaught exception) when
+    the failure occurs inside the try block."""
+
+    async def test_missing_required_hash_fails_before_try(self):
+        """compute_inputs_hash() at line 246 is OUTSIDE the try block.
+        If _raw_inputs is empty, self.params raises KeyError which
+        propagates unhandled.
+        """
+
+        class ReqStage(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                return SimpleOutput(value=self.params.x)
+
+        stage = ReqStage(timeout=5.0)
+        stage._raw_inputs = {}  # Bypass attach_inputs to simulate missing input
+
+        with pytest.raises(KeyError, match="Input validation failed"):
+            await stage.execute(_prog_minimal())
+
+    async def test_ensure_required_present_catches_inside_try(self):
+        """_ensure_required_present (line 249) is inside the try.
+        If hash computation succeeds but a required input is missing,
+        the error IS caught.
+        """
+
+        class TwoInputStage(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                return SimpleOutput(value=self.params.x)
+
+        stage = TwoInputStage(timeout=5.0)
+        stage.attach_inputs({"x": 42})
+        # Now remove required key AFTER hash is computed by tampering
+
+        def failing_ensure():
+            raise KeyError(f"[{stage.stage_name}] Missing required inputs: ['x']")
+
+        stage._ensure_required_present = failing_ensure
+        result = await stage.execute(_prog_minimal())
+        assert result.status == StageState.FAILED
+        assert "Missing required inputs" in result.error.message
+
+    async def test_missing_required_propagates_before_on_complete(self):
+        """Hash computation failure (line 246, before try) means
+        on_complete is NEVER called — the exception propagates directly.
+        The finally block still cleans up.
+        """
+
+        class HashReqStage(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+            cache_handler = InputHashCache()
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                return SimpleOutput()
+
+        stage = HashReqStage(timeout=5.0)
+        stage._raw_inputs = {}  # Missing 'x'
+
+        with pytest.raises(KeyError):
+            await stage.execute(_prog_minimal())
+        # finally block still runs even with uncaught exception
+        assert stage._raw_inputs == {}
+        assert stage._params_obj is None
+        assert stage._current_inputs_hash is None
+
+
+# ---------------------------------------------------------------------------
+# TestInputHashCacheStoredHashNone
+# Target: cache_handler.py lines 130-131
+# ---------------------------------------------------------------------------
+
+
+class TestInputHashCacheStoredHashNone:
+    """InputHashCache: stored_hash=None always reruns."""
+
+    def test_stored_hash_none_always_reruns(self):
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.COMPLETED, input_hash=None)
+        assert cache.should_rerun(result, "current_hash", set()) is True
+
+    def test_stored_hash_none_reruns_even_with_none_current(self):
+        """stored_hash=None at line 131, before line 132 comparison."""
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.COMPLETED, input_hash=None)
+        # Both None: stored_hash is None -> line 131 returns True
+        assert cache.should_rerun(result, None, set()) is True
+
+    def test_stored_hash_present_current_none_reruns(self):
+        """stored_hash="abc", current=None -> None != "abc" -> True (line 132)."""
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.COMPLETED, input_hash="abc")
+        assert cache.should_rerun(result, None, set()) is True
+
+    def test_matching_hashes_no_rerun(self):
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.COMPLETED, input_hash="abc")
+        assert cache.should_rerun(result, "abc", set()) is False
+
+    def test_different_hashes_rerun(self):
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.COMPLETED, input_hash="abc")
+        assert cache.should_rerun(result, "def", set()) is True
+
+    def test_no_existing_result_reruns(self):
+        cache = InputHashCache()
+        assert cache.should_rerun(None, "hash", set()) is True
+
+    def test_non_final_status_reruns(self):
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.RUNNING)
+        assert cache.should_rerun(result, "hash", set()) is True
+
+
+# ---------------------------------------------------------------------------
+# TestProbabilisticCacheTruthiness
+# Target: cache_handler.py line 106: `not existing_result`
+# ---------------------------------------------------------------------------
+
+
+class TestProbabilisticCacheTruthiness:
+    """ProgramStageResult (Pydantic BaseModel) is always truthy.
+    So `not existing_result` is False for any PSR, even PENDING.
+    """
+
+    def test_psr_is_always_truthy(self):
+        psr = ProgramStageResult(status=StageState.PENDING)
+        assert bool(psr) is True
+
+    def test_pending_reruns_via_status_check_not_truthiness(self):
+        """PENDING: `not psr` is False, but `status not in FINAL_STATES` is True -> rerun."""
+        cache = ProbabilisticCache(rerun_probability=0.0)
+        assert (
+            cache.should_rerun(
+                ProgramStageResult(status=StageState.PENDING), None, set()
+            )
+            is True
+        )
+
+    def test_none_reruns_via_truthiness(self):
+        """None: `not None` is True -> rerun."""
+        cache = ProbabilisticCache(rerun_probability=0.0)
+        assert cache.should_rerun(None, None, set()) is True
+
+    def test_completed_with_zero_prob_no_rerun(self):
+        cache = ProbabilisticCache(rerun_probability=0.0)
+        assert (
+            cache.should_rerun(
+                ProgramStageResult(status=StageState.COMPLETED), None, set()
+            )
+            is False
+        )
+
+    def test_completed_with_full_prob_reruns(self):
+        cache = ProbabilisticCache(rerun_probability=1.0)
+        assert (
+            cache.should_rerun(
+                ProgramStageResult(status=StageState.COMPLETED), None, set()
+            )
+            is True
+        )
+
+    def test_failed_is_final_with_zero_prob_no_rerun(self):
+        cache = ProbabilisticCache(rerun_probability=0.0)
+        assert (
+            cache.should_rerun(
+                ProgramStageResult(status=StageState.FAILED), None, set()
+            )
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            StageState.COMPLETED,
+            StageState.FAILED,
+            StageState.CANCELLED,
+            StageState.SKIPPED,
+        ],
+    )
+    def test_all_final_states_are_final(self, status):
+        assert status in FINAL_STATES
+
+    def test_never_cached_ignores_everything(self):
+        cache = NeverCached()
+        assert cache.should_rerun(None, None, set()) is True
+        assert (
+            cache.should_rerun(
+                ProgramStageResult(status=StageState.COMPLETED, input_hash="h"),
+                "h",
+                set(),
+            )
+            is True
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestWrongOutputType
+# Target: base.py lines 287-292 (TypeError), line 302 (except), line 315
+# ---------------------------------------------------------------------------
+
+
+class TestWrongOutputType:
+    """Wrong output type produces FAILED with "must return" and input_hash set."""
+
+    async def test_wrong_type_failed_with_must_return(self):
+        class WrongRetStage(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+            cache_handler = InputHashCache()
+
+            async def compute(self, program: Program):
+                return WrongOutput(data="oops")
+
+        stage = WrongRetStage(timeout=5.0)
+        stage.attach_inputs({"x": 42})
+        result = await stage.execute(_prog_minimal())
+        assert result.status == StageState.FAILED
+        assert "must return" in result.error.message
+        assert result.error.stage == "WrongRetStage"
+
+    async def test_wrong_type_has_input_hash(self):
+        class WrongRetHash(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+            cache_handler = InputHashCache()
+
+            async def compute(self, program: Program):
+                return WrongOutput(data="wrong")
+
+        stage = WrongRetHash(timeout=5.0)
+        stage.attach_inputs({"x": 10})
+        expected = stage.compute_inputs_hash()
+        result = await stage.execute(_prog_minimal())
+        assert result.input_hash == expected
+
+    async def test_none_return_non_void_has_hash(self):
+        """None return when OutputModel is not VoidOutput -> TypeError (line 282)."""
+
+        class NoneNonVoid(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+            cache_handler = InputHashCache()
+
+            async def compute(self, program: Program):
+                return None
+
+        stage = NoneNonVoid(timeout=5.0)
+        stage.attach_inputs({"x": 5})
+        expected = stage.compute_inputs_hash()
+        result = await stage.execute(_prog_minimal())
+        assert result.status == StageState.FAILED
+        assert result.input_hash == expected
+
+
+# ---------------------------------------------------------------------------
+# TestComputeHashFromInputsExtraKeys
+# Target: base.py lines 188-194, StageIO extra="forbid"
+# ---------------------------------------------------------------------------
+
+
+class TestComputeHashFromInputsExtraKeys:
+    """compute_hash_from_inputs with extra keys returns None."""
+
+    def test_extra_keys_returns_none(self):
+        class XInput(StageIO):
+            x: int
+
+        class XStage(Stage):
+            InputsModel = XInput
+            OutputModel = SimpleOutput
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                return SimpleOutput()
+
+        result = XStage.compute_hash_from_inputs({"x": 1, "extra": "bad"})
+        assert result is None
+
+    def test_valid_keys_returns_hash(self):
+        class YInput(StageIO):
+            x: int
+
+        class YStage(Stage):
+            InputsModel = YInput
+            OutputModel = SimpleOutput
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                return SimpleOutput()
+
+        result = YStage.compute_hash_from_inputs({"x": 42})
+        assert result is not None
+        assert isinstance(result, str)
+
+    def test_missing_required_returns_none(self):
+        class MInput(StageIO):
+            x: int
+            y: str
+
+        class MStage(Stage):
+            InputsModel = MInput
+            OutputModel = SimpleOutput
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                return SimpleOutput()
+
+        result = MStage.compute_hash_from_inputs({"x": 1})
+        assert result is None
+
+    def test_normalize_inputs_keeps_extras(self):
+        """_normalize_inputs does NOT strip extras (only adds optionals)."""
+
+        class NInput(StageIO):
+            x: int
+            opt: Optional[str] = None
+
+        class NStage(Stage):
+            InputsModel = NInput
+            OutputModel = SimpleOutput
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                return SimpleOutput()
+
+        normalized = NStage._normalize_inputs({"x": 1, "extra": "bad"})
+        assert "extra" in normalized
+        assert "opt" in normalized
+        assert normalized["opt"] is None
+
+
+# ---------------------------------------------------------------------------
+# TestInputHashCacheOnComplete
+# ---------------------------------------------------------------------------
+
+
+class TestInputHashCacheOnComplete:
+    """InputHashCache.on_complete integration tests."""
+
+    def test_stores_hash(self):
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.COMPLETED)
+        modified = cache.on_complete(result, "hash123")
+        assert modified.input_hash == "hash123"
+        assert modified is result  # Mutated in place
+
+    def test_stores_none_hash(self):
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.COMPLETED)
+        modified = cache.on_complete(result, None)
+        assert modified.input_hash is None
+
+    def test_overwrites_existing_hash(self):
+        cache = InputHashCache()
+        result = ProgramStageResult(status=StageState.COMPLETED, input_hash="old")
+        modified = cache.on_complete(result, "new")
+        assert modified.input_hash == "new"
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            StageState.SKIPPED,
+            StageState.CANCELLED,
+        ],
+    )
+    def test_final_non_success_with_matching_hash_no_rerun(self, status):
+        """SKIPPED and CANCELLED are FINAL_STATES. Matching hash -> no rerun."""
+        cache = InputHashCache()
+        result = ProgramStageResult(status=status, input_hash="h")
+        assert cache.should_rerun(result, "h", set()) is False
+
+
+# ---------------------------------------------------------------------------
+# TestExecuteFinallyCleanup
+# Target: base.py lines 318-321
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteFinallyCleanup:
+    """execute() finally block clears state after both success and failure."""
+
+    async def test_raw_inputs_cleared_after_success(self):
+        class CleanStage(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                return SimpleOutput(value=self.params.x)
+
+        stage = CleanStage(timeout=5.0)
+        stage.attach_inputs({"x": 42})
+        assert stage._raw_inputs  # Non-empty before execute
+        await stage.execute(_prog_minimal())
+        assert stage._raw_inputs == {}  # Cleared by finally
+        assert stage._params_obj is None
+        assert stage._current_inputs_hash is None
+
+    async def test_raw_inputs_cleared_after_failure(self):
+        class FailClean(Stage):
+            InputsModel = SimpleInput
+            OutputModel = SimpleOutput
+
+            async def compute(self, program: Program) -> SimpleOutput:
+                raise RuntimeError("boom")
+
+        stage = FailClean(timeout=5.0)
+        stage.attach_inputs({"x": 42})
+        await stage.execute(_prog_minimal())
+        assert stage._raw_inputs == {}
+        assert stage._params_obj is None
+        assert stage._current_inputs_hash is None
+
+
+# ---------------------------------------------------------------------------
+# TestProbabilisticCacheBoundary
+# ---------------------------------------------------------------------------
+
+
+class TestProbabilisticCacheBoundary:
+    """ProbabilisticCache boundary validation for probability range."""
+
+    def test_rejects_negative_probability(self):
+        with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+            ProbabilisticCache(rerun_probability=-0.1)
+
+    def test_rejects_above_one(self):
+        with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+            ProbabilisticCache(rerun_probability=1.1)
+
+    def test_accepts_zero(self):
+        cache = ProbabilisticCache(rerun_probability=0.0)
+        assert cache.rerun_probability == 0.0
+
+    def test_accepts_one(self):
+        cache = ProbabilisticCache(rerun_probability=1.0)
+        assert cache.rerun_probability == 1.0

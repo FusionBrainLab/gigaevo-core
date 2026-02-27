@@ -1,12 +1,12 @@
-"""Extended tests for gigaevo/evolution/strategies/elite_selectors.py
+"""Edge-case and boundary tests for gigaevo/evolution/strategies/elite_selectors.py
 
-Tests ONLY paths not covered by test_elite_selectors.py:
-1. RandomEliteSelector: not tested at all in the existing file
+Covers:
+1. RandomEliteSelector: selection behavior
 2. FitnessProportionalEliteSelector: missing fitness key, inf/nan fallback,
    None temperature attribute
 3. ParetoTournamentEliteSelector: constructor validation (requires >=2 keys),
    custom tie_breaker, default/custom higher_is_better
-4. Audit findings: dominates asymmetry, weighted_sample, negative fitness,
+4. dominates asymmetry, weighted_sample, negative fitness,
    single-element, seed determinism, ParetoFront reverse direction
 """
 
