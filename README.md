@@ -22,7 +22,7 @@ Evolutionary algorithm that uses Large Language Models (LLMs) to automatically i
 - **[Evolution Strategies](docs/EVOLUTION_STRATEGIES.md)** - MAP-Elites and multi-island evolution system
 - **[Tools](tools/README.md)** - Helper utilities for analysis, debugging, and problem scaffolding
 - **[Usage Guide](docs/USAGE.md)** - Detailed usage instructions
-- **[Changelog](docs/CHANGELOG.md)** - Version history and changes
+- **[Changelog](CHANGELOG.md)** - Version history and changes
 - **[Contributing](docs/CONTRIBUTING.md)** - Guidelines for contributors
 
 ## Quick Start
