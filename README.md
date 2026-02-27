@@ -3,7 +3,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Coverage](https://img.shields.io/badge/coverage-78%25-yellow)](https://github.com/KhrulkovV/gigaevo-core-internal/actions)
+[![Coverage](https://img.shields.io/badge/coverage-85%25-brightgreen)](https://github.com/KhrulkovV/gigaevo-core-internal/actions)
 
 Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
 
@@ -343,10 +343,15 @@ Tests are organized into subdirectories that mirror the source layout:
 ```
 tests/
 ├── conftest.py              # Shared fixtures (fakeredis, mock stages, factories)
+├── test_metrics_tracker.py  # MetricsTracker: RunningStats, drain, frontier, lifecycle
 ├── stages/                  # Pipeline stage unit tests
 │   ├── test_stage_execute.py            # Stage.execute() return dispatch, timeout, cleanup
 │   ├── test_stage_base_extended.py      # __init_subclass__ validation, _is_optional_type,
 │   │                                    #   VoidOutput, compute_hash_from_inputs exceptions
+│   ├── test_exec_runner.py              # exec_runner subprocess protocol: register_source,
+│   │                                    #   load_module, run_one, worker loop, format errors
+│   ├── test_wrapper_enhanced.py         # _kill_process_tree, _monitor_rss_limit,
+│   │                                    #   WorkerPool return/discard/saturation/shutdown
 │   ├── test_metrics_stages.py           # EnsureMetricsStage, NormalizeMetricsStage
 │   ├── test_complexity.py               # AST complexity analysis, code length
 │   ├── test_json_processing.py          # MergeDictStage, ParseJSON, StringifyJSON
@@ -375,8 +380,11 @@ tests/
 │   ├── test_dag_integration.py          # End-to-end DAG pipeline runs
 │   ├── test_dag_complex_integration.py  # Complex topologies, failure propagation
 │   ├── test_dag_internals.py            # Dependency resolution, topological ordering
-│   ├── test_dag_caching.py              # Stage result caching strategies
-│   ├── test_dag_runner.py               # DagRunner cleanup, crash paths, scheduling
+│   ├── test_dag_caching.py              # Stage result caching: InputHashCache, NeverCached,
+│   │                                    #   ProbabilisticCache, failed-stage caching, long chains,
+│   │                                    #   on_complete in exception handler, mixed success/failure
+│   ├── test_dag_runner.py               # DagRunner cleanup, crash paths, scheduling,
+│   │                                    #   GC timing, error recovery, maintain-before-launch
 │   └── test_dag_compatibility_extended.py  # _normalize_annotation, _covariant_type_compatible
 ├── evolution/               # Evolution engine and strategies
 │   ├── test_evolution_engine.py     # Generation loop, ingestion, exception handling
@@ -394,14 +402,28 @@ tests/
 │   ├── test_bandit.py               # Multi-armed bandit LLM model selector
 │   ├── test_behavior_space.py       # Behavior space binning and dynamics
 │   └── test_archive_storage.py      # Redis-backed archive operations
+├── problems/                # Problem definition tests
+│   ├── test_context.py              # ProblemContext: load_text, metrics YAML validation,
+│   │                                #   caching, validate(), contextual flag
+│   └── test_layout.py              # ProblemLayout: scaffold, templates, Jinja filters,
+│                                    #   required_files, utils imports
 ├── database/                # Storage and state management
-│   ├── test_redis_storage.py        # Redis CRUD, locking, merge strategies
+│   ├── test_redis_storage.py        # Redis CRUD, locking, merge strategies, read-only mode,
+│   │                                #   stream ops, WatchError retries
+│   ├── test_redis_locking.py        # RedisInstanceLock: acquire, release, renew,
+│   │                                #   periodic renewal, connection errors, TTL
+│   ├── test_redis_metrics_collector.py  # RedisMetricsCollector: start/stop, collect,
+│   │                                    #   flatten_numbers, double-start guard
 │   ├── test_redis_connection.py     # Connection pooling, retries, reconnection
 │   ├── test_state_manager.py        # Program state transitions, concurrent updates
 │   ├── test_state_consistency.py    # Cross-component state invariants
 │   └── test_program_state.py        # Program state machine validation
 └── llm/                     # LLM integration
-    └── test_llm_routing.py          # MultiModelRouter, token tracking
+    ├── test_llm_routing.py          # MultiModelRouter, token tracking
+    ├── test_mutation_agent.py       # MutationAgent: extract_code_block, apply_diff,
+    │                                #   build_prompt, parse_response, acall_llm, arun
+    └── test_lineage_agent.py        # LineageAgent: compute_diff_blocks, build_prompt,
+                                     #   parse_response, transition analysis, edge cases
 ```
 
 ### Shared Fixtures
