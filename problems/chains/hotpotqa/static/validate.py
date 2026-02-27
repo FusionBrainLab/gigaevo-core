@@ -2,7 +2,7 @@ import re
 from statistics import mean
 
 from problems.chains.chain_validation import validate_chain_spec
-from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_runner import run_chain_on_dataset_stepwise
 from problems.chains.client import LLMClient
 from problems.chains.hotpotqa.shared_config import (
     LLM_CONFIG,
@@ -10,7 +10,7 @@ from problems.chains.hotpotqa.shared_config import (
     outer_context_builder,
 )
 from problems.chains.hotpotqa.static.config import STATIC_CHAIN_TOPOLOGY, load_baseline
-from problems.chains.hotpotqa.utils.retrieval import make_retrieve_fn
+from problems.chains.hotpotqa.utils.retrieval import batch_retrieve
 from problems.chains.hotpotqa.utils.utils import normalize_text
 
 
@@ -76,16 +76,29 @@ def validate(chain_spec: dict) -> dict:
     # 3. Create LLM client
     client = LLMClient(**LLM_CONFIG)
 
-    # 4. Build tool registry (index lazy-loaded from disk)
-    tool_registry = {
-        "retrieve": make_retrieve_fn(
-            context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]
-        )
-    }
+    # 4. Build batch tool registry for step-batched execution
+    bm25_dir = context["bm25s_index_dir"]
+    corpus_path = context["corpus_path"]
 
-    # 5. Run chain on dataset
-    results = run_chain_on_dataset(
-        chain, client, dataset, outer_context_builder, tool_registry
+    def _batch_retrieve(kwargs_list: list[dict]) -> list[str]:
+        queries = [kw["query"] for kw in kwargs_list]
+        return batch_retrieve(queries, bm25_dir, k=7, corpus_path=corpus_path)
+
+    batch_tool_registry = {"retrieve": _batch_retrieve}
+
+    # 5. Run chain on dataset (step-batched for optimal vLLM batching)
+    #    Per-step max_tokens: short limits for query/answer steps,
+    #    generous limits for reasoning steps.
+    step_max_tokens = {
+        2: 1024,   # summarize retrieved facts
+        3: 1024,   # generate search query (just a question)
+        5: 1024,   # combine evidence from both retrievals
+        6: 1024,   # final answer ("Answer: X")
+    }
+    results = run_chain_on_dataset_stepwise(
+        chain, client, dataset, outer_context_builder,
+        batch_tool_registry=batch_tool_registry,
+        step_max_tokens=step_max_tokens,
     )
 
     # 6. Extract answers from final step outputs

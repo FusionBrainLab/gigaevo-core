@@ -3,6 +3,7 @@
 import os
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -28,6 +29,13 @@ def get_async_client(
     return AsyncOpenAI(
         api_key=api_key or os.environ.get("OPENAI_API_KEY", "None"),
         base_url=base_url,
+        http_client=httpx.AsyncClient(
+            limits=httpx.Limits(
+                max_connections=300,
+                max_keepalive_connections=100,
+            ),
+            timeout=httpx.Timeout(timeout=120.0, connect=10.0),
+        ),
     )
 
 
@@ -94,14 +102,24 @@ class LLMClient:
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
+        wait=wait_exponential(multiplier=0.1, min=0.1, max=2),
     )
-    async def __call__(self, prompt: str) -> str:
-        kwargs = self.generation_kwargs
+    async def __call__(
+        self,
+        prompt: str,
+        system_message: str | None = None,
+        **overrides,
+    ) -> str:
+        kwargs = {**self.generation_kwargs, **overrides}
+
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
 
         response = await self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             **kwargs,
         )
 

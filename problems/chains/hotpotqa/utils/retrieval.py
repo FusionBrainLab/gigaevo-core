@@ -163,11 +163,40 @@ def retrieve(
         query, stopwords="en", stemmer=_stemmer, show_progress=False
     )
     # retrieve() returns doc indices, not strings
-    results, _scores = _retriever.retrieve(tokens, k=k, n_threads=1, show_progress=False)
+    results, _scores = _retriever.retrieve(tokens, k=k, n_threads=4, show_progress=False)
 
     # Map indices to formatted passages from corpus
     retrieved = [_corpus[int(doc_idx)] for doc_idx in results[0][:k]]
     return "\n".join(f"[{i + 1}] {p}" for i, p in enumerate(retrieved))
+
+
+def batch_retrieve(
+    queries: list[str],
+    index_dir: str | Path,
+    k: int = 7,
+    corpus_path: str | Path | None = None,
+) -> list[str]:
+    """Batch-retrieve top-k passages for multiple queries at once.
+
+    Much faster than individual retrieve() calls due to vectorized
+    tokenization and retrieval.
+    """
+    _ensure_initialized(index_dir, corpus_path)
+
+    tokens = bm25s.tokenize(
+        queries, stopwords="en", stemmer=_stemmer, show_progress=False
+    )
+    results, _scores = _retriever.retrieve(
+        tokens, k=k, n_threads=min(len(queries), 32), show_progress=False
+    )
+
+    batch_results = []
+    for i in range(len(queries)):
+        retrieved = [_corpus[int(doc_idx)] for doc_idx in results[i][:k]]
+        batch_results.append(
+            "\n".join(f"[{j + 1}] {p}" for j, p in enumerate(retrieved))
+        )
+    return batch_results
 
 
 def make_retrieve_fn(

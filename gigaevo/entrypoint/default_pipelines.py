@@ -562,7 +562,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         self,
         ctx: EvolutionContext,
         *,
-        dag_timeout: float = 3600.0,
+        dag_timeout: float = 7200.0,
         optimization_time_budget: float | None = None,
     ):
         super().__init__(ctx, dag_timeout=dag_timeout)
@@ -604,7 +604,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         metrics_ctx = problem_ctx.metrics_context
         primary_spec = metrics_ctx.get_primary_spec()
 
-        validator_path = problem_ctx.problem_dir / "validate.py"
+        validator_path = problem_ctx.problem_dir / "validate2.py"
         task_description = problem_ctx.task_description
 
         extra = self._optuna_stage_kwargs()
