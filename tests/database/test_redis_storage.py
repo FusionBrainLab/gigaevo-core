@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis.aioredis
 import numpy as np
+import pytest
 
+from gigaevo.database.redis import RedisProgramStorageConfig
+from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.exceptions import StorageError
 from gigaevo.programs.core_types import (
     ProgramStageResult,
     StageError,
@@ -484,3 +491,280 @@ class TestSerializationRoundTripEdgeCases:
         fetched = await fakeredis_storage.get(prog.id)
         for i in range(100):
             assert fetched.metrics[f"metric_{i}"] == float(i)
+
+
+# ===================================================================
+# Helper: create a read-only storage backed by fakeredis
+# ===================================================================
+
+
+def _make_read_only_storage() -> RedisProgramStorage:
+    """Create a RedisProgramStorage in read-only mode with a fakeredis backend."""
+    server = fakeredis.FakeServer()
+    config = RedisProgramStorageConfig(
+        redis_url="redis://fake:6379/0",
+        key_prefix="test_ro",
+        read_only=True,
+    )
+    storage = RedisProgramStorage(config)
+    fake_redis = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+    storage._conn._redis = fake_redis
+    storage._conn._closing = False
+    return storage
+
+
+# ===================================================================
+# Category I: Read-Only Mode
+# ===================================================================
+
+
+class TestReadOnlyMode:
+    """Verify write operations raise StorageError in read-only mode."""
+
+    async def test_add_raises_in_read_only(self, make_program):
+        """add() raises StorageError in read-only mode."""
+        storage = _make_read_only_storage()
+        try:
+            prog = make_program()
+            with pytest.raises(StorageError, match="read-only"):
+                await storage.add(prog)
+        finally:
+            await storage.close()
+
+    async def test_update_raises_in_read_only(self, make_program):
+        """update() raises StorageError in read-only mode."""
+        storage = _make_read_only_storage()
+        try:
+            prog = make_program()
+            with pytest.raises(StorageError, match="read-only"):
+                await storage.update(prog)
+        finally:
+            await storage.close()
+
+    async def test_remove_raises_in_read_only(self):
+        """remove() raises StorageError in read-only mode."""
+        storage = _make_read_only_storage()
+        try:
+            with pytest.raises(StorageError, match="read-only"):
+                await storage.remove("some-id")
+        finally:
+            await storage.close()
+
+    async def test_flushdb_raises_in_read_only(self):
+        """flushdb() raises StorageError in read-only mode."""
+        storage = _make_read_only_storage()
+        try:
+            with pytest.raises(StorageError, match="read-only"):
+                await storage.flushdb()
+        finally:
+            await storage.close()
+
+    async def test_get_works_in_read_only(self, make_program):
+        """get() succeeds in read-only mode (returns None for missing ID)."""
+        storage = _make_read_only_storage()
+        try:
+            result = await storage.get("nonexistent-id")
+            assert result is None
+        finally:
+            await storage.close()
+
+    async def test_write_exclusive_raises_in_read_only(self, make_program):
+        """write_exclusive() raises StorageError in read-only mode."""
+        storage = _make_read_only_storage()
+        try:
+            prog = make_program()
+            with pytest.raises(StorageError, match="read-only"):
+                await storage.write_exclusive(prog)
+        finally:
+            await storage.close()
+
+    async def test_transition_status_raises_in_read_only(self):
+        """transition_status() raises StorageError in read-only mode."""
+        storage = _make_read_only_storage()
+        try:
+            with pytest.raises(StorageError, match="read-only"):
+                await storage.transition_status("some-id", "QUEUED", "RUNNING")
+        finally:
+            await storage.close()
+
+
+# ===================================================================
+# Category J: Context Manager
+# ===================================================================
+
+
+class TestContextManager:
+    """Verify __aenter__/__aexit__ behavior."""
+
+    async def test_context_manager_acquires_lock_and_starts_metrics(self, make_program):
+        """Normal (non read-only) context manager acquires lock and starts metrics."""
+        server = fakeredis.FakeServer()
+        config = RedisProgramStorageConfig(
+            redis_url="redis://fake:6379/0",
+            key_prefix="test_ctx",
+            read_only=False,
+        )
+        storage = RedisProgramStorage(config)
+        fake_redis = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+        storage._conn._redis = fake_redis
+        storage._conn._closing = False
+
+        # Patch lock.acquire to avoid real locking; start() is synchronous
+        storage._lock.acquire = AsyncMock(return_value=True)
+        storage._metrics.start = MagicMock()
+
+        async with storage as s:
+            assert s is storage
+            storage._lock.acquire.assert_awaited_once()
+            storage._metrics.start.assert_called_once()
+
+    async def test_context_manager_read_only_skips_lock(self):
+        """Read-only context manager skips lock acquisition."""
+        storage = _make_read_only_storage()
+        storage._lock.acquire = AsyncMock(return_value=True)
+
+        async with storage as s:
+            assert s is storage
+            # Lock should NOT have been acquired in read-only mode
+            storage._lock.acquire.assert_not_awaited()
+
+
+# ===================================================================
+# Category K: WatchError Retries
+# ===================================================================
+
+
+class TestWatchErrorRetries:
+    """Verify update and atomic_state_transition retry on WatchError."""
+
+    async def test_update_retries_on_watch_error(self, fakeredis_storage, make_program):
+        """update() retries when WatchError is raised, then succeeds."""
+        from redis.exceptions import WatchError
+
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+        prog.add_metrics({"retried": 1.0})
+
+        call_count = 0
+        original_execute = fakeredis_storage._conn.execute
+
+        async def patched_execute(name, fn):
+            nonlocal call_count
+            if name == "update":
+                # Wrap fn so first call raises WatchError inside the pipeline
+                real_fn = fn
+
+                async def watch_error_fn(r):
+                    nonlocal call_count
+                    call_count += 1
+                    if call_count == 1:
+                        raise WatchError("simulated conflict")
+                    return await real_fn(r)
+
+                return await original_execute(name, watch_error_fn)
+            return await original_execute(name, fn)
+
+        fakeredis_storage._conn.execute = patched_execute
+
+        await fakeredis_storage.update(prog)
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.metrics["retried"] == 1.0
+        assert call_count >= 2
+
+    async def test_atomic_state_transition_retries_on_watch_error(
+        self, fakeredis_storage, make_program
+    ):
+        """atomic_state_transition() retries when WatchError is raised."""
+        from redis.exceptions import WatchError
+
+        prog = make_program(state=ProgramState.QUEUED)
+        await fakeredis_storage.add(prog)
+
+        prog.state = ProgramState.RUNNING
+        call_count = 0
+        original_execute = fakeredis_storage._conn.execute
+
+        async def patched_execute(name, fn):
+            nonlocal call_count
+            if name == "atomic_state_transition":
+                real_fn = fn
+
+                async def watch_error_fn(r):
+                    nonlocal call_count
+                    call_count += 1
+                    if call_count == 1:
+                        raise WatchError("simulated conflict")
+                    return await real_fn(r)
+
+                return await original_execute(name, watch_error_fn)
+            return await original_execute(name, fn)
+
+        fakeredis_storage._conn.execute = patched_execute
+
+        await fakeredis_storage.atomic_state_transition(
+            prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.state == ProgramState.RUNNING
+        assert call_count >= 2
+
+
+# ===================================================================
+# Category L: Stream Operations
+# ===================================================================
+
+
+class TestStreamOperations:
+    """Verify publish_status_event, wait_for_activity, and fallback."""
+
+    async def test_publish_status_event(self, fakeredis_storage, make_program):
+        """publish_status_event writes to the status stream with correct fields."""
+        prog = make_program()
+        await fakeredis_storage.add(prog)
+
+        await fakeredis_storage.publish_status_event(
+            status="DONE",
+            program_id=prog.id,
+            extra={"event": "completed"},
+        )
+
+        # Read back from the stream to verify
+        r = await fakeredis_storage._conn.get()
+        stream_key = fakeredis_storage._keys.status_stream()
+        entries = await r.xrange(stream_key)
+        # At least 2 entries: one from add(), one from publish_status_event()
+        assert len(entries) >= 2
+        last_entry = entries[-1]
+        assert last_entry[1]["id"] == prog.id
+        assert last_entry[1]["status"] == "DONE"
+        assert last_entry[1]["event"] == "completed"
+
+        # Verify earlier entries have the expected structure
+        first_entry = entries[0]
+        assert "id" in first_entry[1]
+        assert "status" in first_entry[1]
+
+    async def test_wait_for_activity_returns_on_timeout(self, fakeredis_storage):
+        """wait_for_activity returns after the timeout with no events."""
+        # Should not hang; returns after a short timeout
+        await fakeredis_storage.wait_for_activity(timeout=0.05)
+
+    async def test_wait_for_activity_fallback_on_error(self, fakeredis_storage):
+        """wait_for_activity falls back to asyncio.sleep on stream error."""
+        r = await fakeredis_storage._conn.get()
+
+        original_xread = r.xread
+
+        async def broken_xread(*args, **kwargs):
+            raise ConnectionError("simulated stream error")
+
+        r.xread = broken_xread
+
+        start = asyncio.get_event_loop().time()
+        await fakeredis_storage.wait_for_activity(timeout=0.05)
+        elapsed = asyncio.get_event_loop().time() - start
+        # Should have fallen back to asyncio.sleep(0.05)
+        assert elapsed >= 0.04
+
+        # Restore original
+        r.xread = original_xread

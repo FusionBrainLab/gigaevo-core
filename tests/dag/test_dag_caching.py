@@ -142,6 +142,31 @@ class ControllableStage(Stage):
         return CountedOutput(value=77)
 
 
+class ControllableChainedStage(Stage):
+    """CountedInput -> CountedOutput. Can be told to fail. Tracks calls.
+    Uses default InputHashCache."""
+
+    InputsModel = CountedInput
+    OutputModel = CountedOutput
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 30.0,
+        name: str = "controllable_chained",
+        should_fail: bool = False,
+    ):
+        super().__init__(timeout=timeout)
+        self._name = name
+        self.should_fail = should_fail
+
+    async def compute(self, program: Program) -> CountedOutput:
+        _tracker.record(self._name)
+        if self.should_fail:
+            raise RuntimeError(f"{self._name} failed on purpose")
+        return CountedOutput(value=self.params.data.value + 1)
+
+
 class ControllableVoidStage(Stage):
     """VoidInput -> VoidOutput. Can be told to fail. Tracks calls."""
 
@@ -212,6 +237,34 @@ def _make_dag(
 
 
 class TestInputHashCacheRerun:
+    async def test_failed_stage_cached_on_identical_rerun(
+        self, state_manager, null_writer
+    ):
+        """Run 1: A fails. Run 2: same inputs -> A should be CACHED (not re-executed).
+        Failed stages must call on_complete so input_hash is stored; otherwise
+        InputHashCache treats stored_hash=None as 'rerun' and Optuna would rerun
+        on every refresh cycle despite having already failed."""
+        stage_a = ControllableStage(name="A", should_fail=True)
+        nodes = {"A": stage_a}
+        edges: list[DataFlowEdge] = []
+
+        program = _make_program()
+
+        # Run 1: A fails
+        dag1 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag1.run(program)
+        assert program.stage_results["A"].status == StageState.FAILED
+        assert (
+            program.stage_results["A"].input_hash is not None
+        )  # on_complete was called
+        assert _tracker.counts.get("A") == 1
+
+        # Run 2: same program, same inputs -> A should be CACHED (no re-execution)
+        dag2 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag2.run(program)
+        assert program.stage_results["A"].status == StageState.FAILED
+        assert _tracker.counts.get("A") == 1  # not re-executed
+
     async def test_single_stage_cached_on_identical_rerun(
         self, state_manager, null_writer
     ):
@@ -640,6 +693,399 @@ class TestProbabilisticCache:
 # ---------------------------------------------------------------------------
 # Test: InputHashCache edge cases
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Test: Failed stages in long dependency chains
+# ---------------------------------------------------------------------------
+
+
+class TestFailedStagesInLongChains:
+    """Verify caching behavior when failures occur at various points in a chain."""
+
+    async def test_failed_middle_stage_cached_in_3_stage_chain(
+        self, state_manager, null_writer
+    ):
+        """A -> B -> C chain. B fails on run 1.
+        Run 2: A cached, B cached (failed), C skipped (no input from B).
+        No stage should re-execute."""
+        stage_a = CountedFastStage(name="A")
+        stage_b = ControllableChainedStage(name="B", should_fail=True)
+        stage_c = CountedChainedStage(name="C")
+        nodes = {"A": stage_a, "B": stage_b, "C": stage_c}
+        edges = [
+            DataFlowEdge.create("A", "B", "data"),
+            DataFlowEdge.create("B", "C", "data"),
+        ]
+
+        program = _make_program()
+
+        # Run 1: A succeeds, B fails, C skipped
+        dag1 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag1.run(program)
+
+        assert program.stage_results["A"].status == StageState.COMPLETED
+        assert program.stage_results["B"].status == StageState.FAILED
+        assert program.stage_results["C"].status == StageState.SKIPPED
+        assert _tracker.counts.get("A") == 1
+        assert _tracker.counts.get("B") == 1
+        assert _tracker.counts.get("C", 0) == 0
+
+        # Verify B stored its input_hash (the fix)
+        assert program.stage_results["B"].input_hash is not None
+
+        # Run 2: A cached, B cached (failed with matching hash), C still skipped
+        dag2 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag2.run(program)
+
+        assert _tracker.counts.get("A") == 1  # cached
+        assert _tracker.counts.get("B") == 1  # cached (failed but hash matches)
+        assert _tracker.counts.get("C", 0) == 0  # still skipped
+
+    async def test_failed_root_stage_cached_in_4_stage_chain(
+        self, state_manager, null_writer
+    ):
+        """A -> B -> C -> D. A fails on run 1.
+        Run 2: A cached (failed), B/C/D all skipped. Zero re-executions."""
+        stage_a = ControllableStage(name="A", should_fail=True)
+        stage_b = CountedChainedStage(name="B")
+        stage_c = CountedChainedStage(name="C")
+        stage_d = CountedChainedStage(name="D")
+        nodes = {"A": stage_a, "B": stage_b, "C": stage_c, "D": stage_d}
+        edges = [
+            DataFlowEdge.create("A", "B", "data"),
+            DataFlowEdge.create("B", "C", "data"),
+            DataFlowEdge.create("C", "D", "data"),
+        ]
+
+        program = _make_program()
+
+        # Run 1: A fails, B/C/D skipped
+        dag1 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag1.run(program)
+
+        assert program.stage_results["A"].status == StageState.FAILED
+        assert program.stage_results["A"].input_hash is not None
+        for name in ["B", "C", "D"]:
+            assert program.stage_results[name].status == StageState.SKIPPED
+        assert _tracker.counts.get("A") == 1
+
+        # Run 2: A cached (failed), B/C/D still skipped, zero new executions
+        dag2 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag2.run(program)
+
+        assert _tracker.counts.get("A") == 1  # still 1, cached
+        for name in ["B", "C", "D"]:
+            assert _tracker.counts.get(name, 0) == 0
+
+    async def test_recovery_after_cached_failure_in_chain(
+        self, state_manager, null_writer
+    ):
+        """A -> B -> C. Run 1: B fails. Run 2: B cached (failed).
+        Run 3: B fixed (NeverCached), succeeds -> C should now execute.
+
+        This tests that a chain can recover after a previously cached failure
+        when the failing stage switches to NeverCached or its inputs change."""
+        stage_a = CountedFastStage(name="A")
+        stage_b_fail = ControllableChainedStage(name="B", should_fail=True)
+        stage_c = CountedChainedStage(name="C")
+
+        nodes_fail = {"A": stage_a, "B": stage_b_fail, "C": stage_c}
+        edges = [
+            DataFlowEdge.create("A", "B", "data"),
+            DataFlowEdge.create("B", "C", "data"),
+        ]
+
+        program = _make_program()
+
+        # Run 1: B fails
+        dag1 = _make_dag(
+            nodes_fail, edges, state_manager=state_manager, writer=null_writer
+        )
+        await dag1.run(program)
+        assert program.stage_results["B"].status == StageState.FAILED
+        assert _tracker.counts.get("B") == 1
+
+        # Run 2: B cached (still failed)
+        dag2 = _make_dag(
+            nodes_fail, edges, state_manager=state_manager, writer=null_writer
+        )
+        await dag2.run(program)
+        assert _tracker.counts.get("B") == 1  # cached
+
+        # Run 3: Toggle B to succeed — same stage instance, so inputs hash unchanged
+        # but NeverCached would re-execute. Since ControllableChainedStage uses
+        # InputHashCache, the hash matches => still cached. Let's use NeverCached
+        # chained to force re-execution.
+        stage_b_ok = NeverCachedChainedStage(name="B")
+        nodes_ok = {"A": stage_a, "B": stage_b_ok, "C": stage_c}
+        # B is NeverCached, so it will re-execute regardless of cached result
+        dag3 = _make_dag(
+            nodes_ok, edges, state_manager=state_manager, writer=null_writer
+        )
+        await dag3.run(program)
+        assert program.stage_results["B"].status == StageState.COMPLETED
+        assert _tracker.counts.get("B") == 2  # re-executed
+
+
+# ---------------------------------------------------------------------------
+# Test: DAG terminates when ALL stages are failed-but-cached
+# ---------------------------------------------------------------------------
+
+
+class TestAllFailedCachedTermination:
+    """Verify the DAG terminates correctly when every stage is cached-as-failed."""
+
+    async def test_single_failed_cached_stage_terminates(
+        self, state_manager, null_writer
+    ):
+        """One stage, failed on run 1, cached on run 2. DAG must terminate."""
+        stage = ControllableStage(name="A", should_fail=True)
+        nodes = {"A": stage}
+        edges: list[DataFlowEdge] = []
+
+        program = _make_program()
+
+        # Run 1: A fails
+        dag1 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag1.run(program)
+        assert program.stage_results["A"].status == StageState.FAILED
+        assert _tracker.counts["A"] == 1
+
+        # Run 2: A cached (failed) — DAG must terminate, not loop
+        dag2 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag2.run(program)  # Would hang if newly_cached not counted as progress
+        assert _tracker.counts["A"] == 1  # not re-executed
+
+    async def test_two_independent_failed_cached_stages_terminate(
+        self, state_manager, null_writer
+    ):
+        """A and B both fail on run 1, both cached on run 2.
+        Tests the 'newly_cached' progress accounting in DAG termination."""
+        stage_a = ControllableStage(name="A", should_fail=True)
+        stage_b = ControllableStage(name="B", should_fail=True)
+        nodes = {"A": stage_a, "B": stage_b}
+        edges: list[DataFlowEdge] = []
+
+        program = _make_program()
+
+        # Run 1: both fail
+        dag1 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag1.run(program)
+        assert program.stage_results["A"].status == StageState.FAILED
+        assert program.stage_results["B"].status == StageState.FAILED
+        assert _tracker.counts["A"] == 1
+        assert _tracker.counts["B"] == 1
+
+        # Run 2: both cached (failed) — must terminate
+        dag2 = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag2.run(program)
+        assert _tracker.counts["A"] == 1
+        assert _tracker.counts["B"] == 1
+
+    async def test_diamond_all_failed_cached_terminates(
+        self, state_manager, null_writer
+    ):
+        """Diamond: A -> (B, C) with exec deps. A fails, B/C skipped.
+        Run 2: A cached (failed, InputHashCache), B/C skipped again.
+        DAG must terminate without infinite loop.
+
+        This is the pattern that caused the original production bug when
+        newly_cached was not included in the termination check."""
+        # Use ControllableStage (InputHashCache) so A is cached on run 2
+        stage_a = ControllableStage(name="A", should_fail=True)
+        stage_b = CountedFastStage(name="B")
+        stage_c = CountedFastStage(name="C")
+        nodes = {"A": stage_a, "B": stage_b, "C": stage_c}
+        exec_deps = {
+            "B": [ExecutionOrderDependency.on_success("A")],
+            "C": [ExecutionOrderDependency.on_success("A")],
+        }
+
+        program = _make_program()
+
+        # Run 1: A fails, B/C skipped
+        dag1 = _make_dag(
+            nodes, [], exec_deps, state_manager=state_manager, writer=null_writer
+        )
+        await dag1.run(program)
+        assert program.stage_results["A"].status == StageState.FAILED
+        assert program.stage_results["A"].input_hash is not None
+        assert program.stage_results["B"].status == StageState.SKIPPED
+        assert program.stage_results["C"].status == StageState.SKIPPED
+
+        # Run 2: A cached (failed), B/C skipped again. Must terminate.
+        dag2 = _make_dag(
+            nodes, [], exec_deps, state_manager=state_manager, writer=null_writer
+        )
+        await dag2.run(program)
+        assert _tracker.counts.get("A") == 1  # cached, not re-executed
+        assert _tracker.counts.get("B", 0) == 0
+        assert _tracker.counts.get("C", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test: on_complete called from exception handler (base.py)
+# ---------------------------------------------------------------------------
+
+
+class TestOnCompleteCalledOnFailure:
+    """Verify that Stage.execute() calls on_complete for FAILED stages,
+    not just successful ones. This is the core of the bug fix."""
+
+    async def test_failed_stage_has_input_hash_set(self, state_manager, null_writer):
+        """A single failing stage must have input_hash stored after execute().
+
+        This directly verifies the fix in base.py lines 312-317: the exception
+        handler calls cache_handler.on_complete(fail_result, inputs_hash)."""
+        stage = ControllableStage(name="A", should_fail=True)
+        nodes = {"A": stage}
+        edges: list[DataFlowEdge] = []
+
+        program = _make_program()
+        dag = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag.run(program)
+
+        result = program.stage_results["A"]
+        assert result.status == StageState.FAILED
+        assert result.input_hash is not None, (
+            "on_complete must be called for FAILED stages to store input_hash"
+        )
+
+    async def test_failed_stage_input_hash_matches_success_hash(
+        self, state_manager, null_writer
+    ):
+        """A stage that fails and one that succeeds with the same inputs
+        should produce the same input_hash. This ensures on_complete computes
+        the hash identically in both success and failure paths."""
+        # Stage that succeeds
+        stage_ok = ControllableStage(name="A_ok", should_fail=False)
+        nodes_ok = {"A_ok": stage_ok}
+        program_ok = _make_program()
+
+        dag_ok = _make_dag(
+            nodes_ok, [], state_manager=state_manager, writer=null_writer
+        )
+        await dag_ok.run(program_ok)
+        success_hash = program_ok.stage_results["A_ok"].input_hash
+
+        # Stage that fails (same VoidInput)
+        stage_fail = ControllableStage(name="A_fail", should_fail=True)
+        nodes_fail = {"A_fail": stage_fail}
+        program_fail = _make_program()
+
+        dag_fail = _make_dag(
+            nodes_fail, [], state_manager=state_manager, writer=null_writer
+        )
+        await dag_fail.run(program_fail)
+        fail_hash = program_fail.stage_results["A_fail"].input_hash
+
+        assert success_hash is not None
+        assert fail_hash is not None
+        assert success_hash == fail_hash, (
+            "Same inputs must produce same hash regardless of success/failure"
+        )
+
+    async def test_failed_chained_stage_input_hash_stored(
+        self, state_manager, null_writer
+    ):
+        """A -> B where B fails. B's input_hash must be set (computed from
+        A's output). This tests on_complete in the exception handler when
+        the stage has non-void inputs."""
+        stage_a = CountedFastStage(name="A")
+
+        class FailingChainedStage(Stage):
+            InputsModel = CountedInput
+            OutputModel = CountedOutput
+
+            def __init__(self):
+                super().__init__(timeout=30.0)
+
+            async def compute(self, program):
+                _tracker.record("B_fail")
+                raise RuntimeError("B fails after receiving input")
+
+        stage_b = FailingChainedStage()
+        nodes = {"A": stage_a, "B": stage_b}
+        edges = [DataFlowEdge.create("A", "B", "data")]
+
+        program = _make_program()
+        dag = _make_dag(nodes, edges, state_manager=state_manager, writer=null_writer)
+        await dag.run(program)
+
+        assert program.stage_results["A"].status == StageState.COMPLETED
+        assert program.stage_results["B"].status == StageState.FAILED
+        # B's input_hash must be set even though B failed
+        assert program.stage_results["B"].input_hash is not None
+        # And it should be different from A's hash (different inputs)
+        assert (
+            program.stage_results["B"].input_hash
+            != program.stage_results["A"].input_hash
+        )
+
+    async def test_no_cache_stage_failure_does_not_store_hash(
+        self, state_manager, null_writer
+    ):
+        """NeverCached stages should NOT store input_hash even on failure,
+        because NeverCached.on_complete uses the default (no-op) implementation."""
+        stage = ControllableVoidStage(name="A", should_fail=True)
+        nodes = {"A": stage}
+
+        program = _make_program()
+        dag = _make_dag(nodes, [], state_manager=state_manager, writer=null_writer)
+        await dag.run(program)
+
+        result = program.stage_results["A"]
+        assert result.status == StageState.FAILED
+        # NeverCached.on_complete is a no-op, so input_hash stays None
+        assert result.input_hash is None
+
+
+# ---------------------------------------------------------------------------
+# Test: Mixed success/failure caching in parallel branches
+# ---------------------------------------------------------------------------
+
+
+class TestMixedSuccessFailureCaching:
+    """Test caching when some branches succeed and others fail."""
+
+    async def test_diamond_one_branch_fails_other_succeeds(
+        self, state_manager, null_writer
+    ):
+        """A -> (B_fail, B_ok) via exec deps. Run 1: B_fail fails, B_ok succeeds.
+        Run 2: both cached. Verifies caching works for mixed outcomes."""
+        stage_a = CountedFastStage(name="A")
+        stage_b_fail = ControllableStage(name="B_fail", should_fail=True)
+        stage_b_ok = CountedFastStage(name="B_ok")
+        nodes = {"A": stage_a, "B_fail": stage_b_fail, "B_ok": stage_b_ok}
+        exec_deps = {
+            "B_fail": [ExecutionOrderDependency.on_success("A")],
+            "B_ok": [ExecutionOrderDependency.on_success("A")],
+        }
+
+        program = _make_program()
+
+        # Run 1: A succeeds, B_fail fails, B_ok succeeds
+        dag1 = _make_dag(
+            nodes, [], exec_deps, state_manager=state_manager, writer=null_writer
+        )
+        await dag1.run(program)
+
+        assert program.stage_results["A"].status == StageState.COMPLETED
+        assert program.stage_results["B_fail"].status == StageState.FAILED
+        assert program.stage_results["B_ok"].status == StageState.COMPLETED
+        assert _tracker.counts["A"] == 1
+        assert _tracker.counts["B_fail"] == 1
+        assert _tracker.counts["B_ok"] == 1
+
+        # Run 2: all three cached — DAG terminates
+        dag2 = _make_dag(
+            nodes, [], exec_deps, state_manager=state_manager, writer=null_writer
+        )
+        await dag2.run(program)
+        assert _tracker.counts["A"] == 1
+        assert _tracker.counts["B_fail"] == 1
+        assert _tracker.counts["B_ok"] == 1
 
 
 class TestInputHashCacheEdgeCases:

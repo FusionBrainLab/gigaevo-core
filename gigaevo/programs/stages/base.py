@@ -305,9 +305,15 @@ class Stage:
                 stage=self.stage_name,
                 dur=(time.monotonic() - t0),
             )
-            return ProgramStageResult.failure(
+            fail_result = ProgramStageResult.failure(
                 error=StageError.from_exception(exc, stage=self.stage_name),
                 started_at=started_at,
+            )
+            # Call on_complete so cache handlers (e.g. InputHashCache) store input_hash.
+            # Without this, failed stages would always rerun on refresh because
+            # stored_hash=None triggers should_rerun=True.
+            return self.get_cache_handler().on_complete(
+                fail_result, self._current_inputs_hash
             )
         finally:
             self._raw_inputs.clear()

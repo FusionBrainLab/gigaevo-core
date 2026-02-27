@@ -1,8 +1,9 @@
 """Tests for gigaevo/runner/dag_runner.py"""
 
 import asyncio
+import contextlib
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -266,9 +267,9 @@ class TestDagRunnerLaunch:
         progs = [_make_test_program() for _ in range(3)]
         storage = _make_mock_storage()
         storage.get_ids_by_status = AsyncMock(
-            side_effect=lambda s: [p.id for p in progs]
-            if s == ProgramState.QUEUED.value
-            else []
+            side_effect=lambda s: (
+                [p.id for p in progs] if s == ProgramState.QUEUED.value else []
+            )
         )
         storage.mget = AsyncMock(return_value=progs)
 
@@ -367,9 +368,9 @@ class TestDagRunnerLaunch:
         prog = _make_test_program(state=ProgramState.QUEUED)
         storage = _make_mock_storage()
         storage.get_ids_by_status = AsyncMock(
-            side_effect=lambda s: [prog.id, "deleted-id"]
-            if s == ProgramState.QUEUED.value
-            else []
+            side_effect=lambda s: (
+                [prog.id, "deleted-id"] if s == ProgramState.QUEUED.value else []
+            )
         )
         storage.mget = AsyncMock(return_value=[prog, None])
 
@@ -497,9 +498,9 @@ class TestDagRunnerMaintain:
         # New programs queued
         new_prog = _make_test_program()
         storage.get_ids_by_status = AsyncMock(
-            side_effect=lambda s: [new_prog.id]
-            if s == ProgramState.QUEUED.value
-            else []
+            side_effect=lambda s: (
+                [new_prog.id] if s == ProgramState.QUEUED.value else []
+            )
         )
         storage.mget = AsyncMock(return_value=[new_prog])
 
@@ -638,3 +639,264 @@ class TestDagRunnerExecuteDag:
 
         assert runner._metrics.state_update_failures == 1
         assert runner._metrics.dag_errors == 1
+
+
+# ---------------------------------------------------------------------------
+# TestDagRunnerRun
+# ---------------------------------------------------------------------------
+
+
+class TestDagRunnerRun:
+    """Tests for the main _run() loop: error recovery, cancellation, ordering."""
+
+    async def test_transient_error_does_not_kill_loop(self):
+        """An exception inside _launch() should be caught and the loop continues."""
+        storage = _make_mock_storage()
+        runner = _make_runner(storage=storage)
+
+        call_count = 0
+
+        async def failing_launch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("transient Redis failure")
+            # On second call, signal stop so the loop exits
+            runner._stopping = True
+
+        runner._launch = failing_launch
+        runner._maintain = AsyncMock()
+        storage.wait_for_activity = AsyncMock()
+
+        await runner._run()
+
+        # The loop ran at least twice (once with error, once to stop)
+        assert call_count >= 2
+        assert runner._metrics.loop_iterations >= 2
+
+    async def test_cancellation_propagates_from_run(self):
+        """CancelledError inside the _run loop should propagate upward."""
+        runner = _make_runner()
+
+        runner._maintain = AsyncMock(side_effect=asyncio.CancelledError())
+        runner._launch = AsyncMock()
+
+        with pytest.raises(asyncio.CancelledError):
+            await runner._run()
+
+    async def test_maintain_runs_before_launch(self):
+        """_maintain() is always called before _launch() in each iteration."""
+        runner = _make_runner()
+        call_order = []
+
+        async def record_maintain():
+            call_order.append("maintain")
+
+        async def record_launch():
+            call_order.append("launch")
+            runner._stopping = True  # stop after first iteration
+
+        runner._maintain = record_maintain
+        runner._launch = record_launch
+        runner._storage.wait_for_activity = AsyncMock()
+
+        await runner._run()
+
+        # Exactly maintain then launch in sequence
+        assert call_order == ["maintain", "launch"]
+
+
+# ---------------------------------------------------------------------------
+# TestGCTiming
+# ---------------------------------------------------------------------------
+
+
+class TestGCTiming:
+    """Tests for garbage collection timing logic in _maintain()."""
+
+    async def test_gc_triggered_after_30s(self):
+        """GC is triggered when more than 30s have passed since last GC."""
+        runner = _make_runner()
+        # Set last GC time far in the past
+        runner._last_gc_time = time.monotonic() - 60.0
+
+        # Create a finished task so the GC branch is entered
+        async def noop():
+            pass
+
+        task = asyncio.create_task(noop())
+        await task
+
+        runner._active["prog-gc"] = TaskInfo(
+            task=task, program_id="prog-gc", started_at=time.monotonic()
+        )
+
+        old_gc_time = runner._last_gc_time
+
+        with patch("gigaevo.runner.dag_runner.gc.collect") as mock_gc:
+            await runner._maintain()
+            mock_gc.assert_called_once()
+
+        # GC should have updated _last_gc_time
+        assert runner._last_gc_time > old_gc_time
+        assert "prog-gc" not in runner._active
+
+    async def test_no_gc_if_recent(self):
+        """GC is NOT triggered when less than 30s have passed since last GC."""
+        runner = _make_runner()
+        # Set last GC time to very recent
+        runner._last_gc_time = time.monotonic()
+
+        async def noop():
+            pass
+
+        task = asyncio.create_task(noop())
+        await task
+
+        runner._active["prog-nogc"] = TaskInfo(
+            task=task, program_id="prog-nogc", started_at=time.monotonic()
+        )
+
+        gc_time_before = runner._last_gc_time
+
+        with patch("gigaevo.runner.dag_runner.gc.collect") as mock_gc:
+            await runner._maintain()
+            mock_gc.assert_not_called()
+
+        # GC should NOT have updated _last_gc_time
+        assert runner._last_gc_time == gc_time_before
+        assert "prog-nogc" not in runner._active
+
+
+# ---------------------------------------------------------------------------
+# TestCancelTask
+# ---------------------------------------------------------------------------
+
+
+class TestCancelTask:
+    """Tests for the _cancel_task() helper."""
+
+    async def test_done_task_is_noop(self):
+        """Cancelling an already-done task does nothing (early return)."""
+        runner = _make_runner()
+
+        async def noop():
+            pass
+
+        task = asyncio.create_task(noop())
+        await task
+        assert task.done()
+
+        info = TaskInfo(task=task, program_id="done-prog", started_at=time.monotonic())
+
+        # Should not raise, should return immediately
+        await runner._cancel_task(info)
+        # Task is still done (not modified)
+        assert task.done()
+
+    async def test_timeout_on_stuck_task(self):
+        """Task that ignores cancellation triggers the TimeoutError branch."""
+        runner = _make_runner()
+
+        # A task that catches CancelledError and keeps running
+        async def stubborn():
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # Ignore cancellation and keep blocking
+                # (but with a short sleep so the test doesn't hang)
+                await asyncio.sleep(10)
+
+        task = asyncio.create_task(stubborn())
+        # Let the task start
+        await asyncio.sleep(0)
+
+        info = TaskInfo(task=task, program_id="stuck-prog", started_at=time.monotonic())
+
+        # _cancel_task has a 2s timeout; the stubborn task sleeps 10s after cancel
+        # This should log a warning about the task not terminating
+        await runner._cancel_task(info)
+
+        # After _cancel_task returns (via TimeoutError), task may still be running
+        # Clean up the task
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+# ---------------------------------------------------------------------------
+# TestMaintainEdgeCases
+# ---------------------------------------------------------------------------
+
+
+class TestMaintainEdgeCases:
+    """Edge cases in _maintain(): state update failures, storage fetch failures."""
+
+    async def test_timeout_state_update_failure_logged(self):
+        """When storage.get fails during timeout handling, error is logged not raised."""
+        storage = _make_mock_storage()
+        # Make storage.get raise during timeout handling
+        storage.get = AsyncMock(side_effect=RuntimeError("storage unavailable"))
+
+        config = DagRunnerConfig(dag_timeout=1.0)
+        runner = _make_runner(storage=storage, config=config)
+
+        # Create a running task that has timed out
+        task = asyncio.create_task(asyncio.sleep(3600))
+        runner._active["prog-fail"] = TaskInfo(
+            task=task, program_id="prog-fail", started_at=time.monotonic() - 100
+        )
+
+        # Should not raise despite storage failure
+        await runner._maintain()
+
+        # Task should be removed from active (cleanup still happens)
+        assert "prog-fail" not in runner._active
+
+    async def test_orphan_fetch_failure_does_not_crash(self):
+        """When mget fails for orphaned programs, _launch() continues."""
+        storage = _make_mock_storage()
+        storage.get_ids_by_status = AsyncMock(
+            side_effect=lambda s: (
+                ["orphan-id"] if s == ProgramState.RUNNING.value else []
+            )
+        )
+        # Make orphan mget fail
+        storage.mget = AsyncMock(side_effect=RuntimeError("mget failed"))
+
+        runner = _make_runner(storage=storage)
+        # Should not raise
+        await runner._launch()
+
+        # No orphans discarded since fetch failed
+        assert runner._metrics.orphaned_programs_discarded == 0
+
+
+# ---------------------------------------------------------------------------
+# TestMetricsComputed
+# ---------------------------------------------------------------------------
+
+
+class TestMetricsComputed:
+    """Tests for computed metric properties."""
+
+    def test_average_iterations_per_second_nonzero(self):
+        """average_iterations_per_second returns loop_iterations / uptime_seconds."""
+        m = DagRunnerMetrics()
+        # Simulate some iterations with known uptime
+        m.loop_iterations = 100
+        # Manually set started_at to 10 seconds ago
+        from datetime import datetime, timedelta, timezone
+
+        m.started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        result = m.average_iterations_per_second
+        # Should be approximately 10 iterations/second
+        assert result > 0.0
+        assert result == pytest.approx(10.0, rel=0.5)
+
+    def test_average_iterations_per_second_zero_uptime(self):
+        """average_iterations_per_second returns 0.0 when uptime is 0."""
+        m = DagRunnerMetrics()
+        m.loop_iterations = 50
+        # started_at is just now, so uptime_seconds == 0
+        assert m.average_iterations_per_second == 0.0
