@@ -9,10 +9,9 @@ Usage (Hydra config):
       _target_: problems.chains.hotpotqa.static.pipeline.ReflectivePipelineBuilder
 """
 
+from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT
 from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
-from gigaevo.evolution.engine.context import EvolutionContext
-from gigaevo.programs.stages.base import DEFAULT_SIMPLE_STAGE_TIMEOUT
-
+from gigaevo.entrypoint.evolution_context import EvolutionContext
 from problems.chains.hotpotqa.static.formatter import HotpotQAFailureFormatter
 
 
