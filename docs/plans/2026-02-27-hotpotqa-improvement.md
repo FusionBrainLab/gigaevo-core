@@ -292,31 +292,52 @@ The problem's pipeline builder replaces the default `FormatterStage` with `Hotpo
 ### 5.5 Experimental Conditions
 
 ```
-Condition A (baseline): Current mutation prompts
+Condition A (baseline): Current mutation prompts, num_parents=2
   python run.py problem.name=chains/hotpotqa/static redis.db=7
 
-Condition B (failure context): Mutation prompt includes 5 failure examples
+Condition B (failure context): Failure examples in prompt, num_parents=2
   python run.py problem.name=chains/hotpotqa/static redis.db=8 \
     pipeline=<reflective_pipeline>
+
+Condition C (failure context + reduced parents): Failure examples, num_parents=1
+  python run.py problem.name=chains/hotpotqa/static redis.db=9 \
+    pipeline=<reflective_pipeline> \
+    algorithm.evolution.num_parents=1
 ```
+
+**Rationale for Condition C**: Adding failure feedback significantly increases mutation prompt complexity (5 failure cases × ~200 tokens each ≈ +1000 tokens). With `num_parents=2`, the mutation LLM must reconcile two potentially divergent parent programs while also incorporating failure feedback — a more complex cognitive task. `num_parents=1` reduces this complexity, potentially allowing the LLM to focus more on the failure signal. Note: this tests **prompt complexity reduction**, not literal attention dilution — a 235B thinking model has ample capacity for both parents, but simpler prompts may still produce more targeted mutations. C vs B isolates the `num_parents` effect in the presence of failure context.
 
 ### 5.6 Metrics
 - Primary: Best validation EM after 10 generations
 - Secondary: Fraction of mutations that improve over parent fitness, average fitness delta of accepted mutations
 - Tertiary: Qualitative analysis — do the mutation LLM's justifications reference the failure examples?
+- Quaternary: Mutation prompt token count (track context bloat; C should be ~1000 tokens shorter than B)
 
 ### 5.7 Risks and Mitigations
 - Risk: Failure examples may be too noisy (stochastic LLM outputs) to provide useful signal
   - Mitigation: Only include failures where the prediction was clearly wrong (not close misses)
-- Risk: Longer mutation prompts may confuse the mutation LLM or exceed context window
-  - Mitigation: Limit to 5 examples, each summarized concisely
+- Risk: Longer mutation prompts (Condition B) may dilute the failure signal with two parent programs
+  - Mitigation: Condition C tests exactly this — if C > B, reduce to num_parents=1 in future runs
+- Risk: num_parents=1 reduces genetic recombination, potentially narrowing search
+  - Mitigation: Compare acceptance rates and archive diversity between B and C, not just best EM
 - Risk: Implementation complexity in modifying the pipeline
   - Mitigation: Start with the lighter-weight option (5.4c) if time is limited
 
 ### 5.8 Pass/Fail
-- PASS if mutation success rate (fraction improving over parent) increases by >5 percentage points
-- PASS if best EM after 10 generations is higher than control by >1 percentage point
+
+**Pairwise comparison priority** (most to least important):
+1. **A vs B** (primary): Does failure context help at all? This is the core research question.
+2. **B vs C** (secondary): Does reducing `num_parents` improve failure-context-driven mutation?
+3. **A vs C** (exploratory): Confounded (two simultaneous changes); do not draw strong conclusions.
+
+**Thresholds** (pilot study, N=1 per condition — conclusions are directional only):
+- PASS if mutation success rate (fraction improving over parent) increases by >5 pp (A vs B)
+- PASS if best EM after 10 generations is higher than control by **>3 pp** (raised from 1 pp given 1.4 pp intra-run variance at N=1)
 - Qualitative PASS if mutation justifications show evidence of using failure information
+
+**Planned follow-up** (not in this pilot): If Condition C beats B by >3 pp, run a Condition D (num_parents=1, **no** failure context) to disentangle the `num_parents` effect from the failure-context effect. This 2×2 factorial is the correct design but requires a 4th slot not available now.
+
+**Note**: Any conclusion from this 3-condition pilot at N=1 × 10 gens is directional only. Adoption of reflective mutation requires replication with N≥3 seeds.
 
 ---
 
@@ -402,7 +423,7 @@ Given 3 parallel slots and ~7 days, prioritize as follows:
 | BM25 retrieval | k=7, wiki17_abstracts | Frozen in topology |
 | Chain topology | 6-step static | Not varied |
 | Archive max_size | 75 | Per island config |
-| num_parents | 2 | Per mutation |
+| num_parents | 2 | Per mutation; **varied in Exp 3 Condition C (1)** |
 | Elite selector | FitnessProportionalEliteSelector | temp=auto |
 | Mutation mode | rewrite | Not diff |
 | Redis | resume=false (fresh) | Clean state per run |
@@ -481,7 +502,7 @@ If all experiments fail to improve beyond 62.7% val EM, the most valuable output
 | 0 | Baseline | None (measure) | Val/Test EM, variance | N/A | 1 | Prerequisite |
 | 1 | Fast Validation | 100-sample + early stop + test logging | Val-vs-full correlation, speed | 10 | 2 | Highest |
 | 2 | Archive Diversity | Coarser bins, optional 2D space | Best EM, acceptance rate | 10 | 3 | High |
-| 3 | Reflective Mutation | Failure examples in mutation prompt | Mutation success rate, best EM | 10 | 2 | Medium-High |
+| 3 | Reflective Mutation | Failure examples in prompt ± num_parents=1 | Mutation success rate, best EM | 10 | 3 | Medium-High |
 | 4 | Mutation Budget | 16-24 mutants/gen | Best EM per wall-clock hour | 10+ | 1-2 | Medium |
 
 Total: 4 experiments + 1 baseline, fitting within 3 slots over 7 days.
