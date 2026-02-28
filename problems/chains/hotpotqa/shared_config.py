@@ -19,7 +19,7 @@ LLM_CONFIG = {
         "extra_body": {
             "top_k": 20,
         },
-        "max_tokens": 4096,
+        "max_tokens": 8192,
     },
     "client_kwargs": {
         "api_key": "None",

@@ -90,10 +90,10 @@ def validate(chain_spec: dict) -> dict:
     #    Per-step max_tokens: short limits for query/answer steps,
     #    generous limits for reasoning steps.
     step_max_tokens = {
-        2: 1024,   # summarize retrieved facts
-        3: 1024,   # generate search query (just a question)
-        5: 1024,   # combine evidence from both retrievals
-        6: 1024,   # final answer ("Answer: X")
+        2: 4096,   # summarize retrieved facts (thinking + substantial text)
+        3: 2048,   # generate search query (thinking + short query)
+        5: 4096,   # combine evidence from both retrievals (thinking + substantial text)
+        6: 2048,   # final answer (thinking + "Answer: X")
     }
     results = run_chain_on_dataset_stepwise(
         chain, client, dataset, outer_context_builder,
