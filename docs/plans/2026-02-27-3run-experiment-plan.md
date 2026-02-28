@@ -7,6 +7,16 @@
 
 ---
 
+## Deviations from Pre-Registration
+
+| Item | Pre-registered | Actual | Reason |
+|------|---------------|--------|--------|
+| Run C warm-start seed | `ddce37b4` (52.3% non-thinking val EM) | `warmstart_56pct.py` (56.3% val EM, from Attempt 2 of this experiment) | Attempt 2 produced a stronger non-thinking seed before being aborted; using it for Run C is consistent with the spirit of the warm-start condition and strictly better. The pre-registration referenced ddce37b4 as the best available program at planning time. |
+| vLLM version on Run A server | Homogeneous (0.16.0rc2) | Run A server had 0.14.0rc1 at launch; upgraded before Run A was restarted | Discovered via `/version` endpoint check; statistically confirmed no bias (Mann-Whitney p>0.7 across 15 prompts × 3 servers) |
+| Run A PID | 1411630 | 1512530 (restarted 2026-02-28 08:18 UTC after vLLM upgrade) | See above; run_a.log covers the restarted run only |
+
+---
+
 ## 1. Research Question
 
 **Can GigaEvo's evolutionary prompt optimization for HotpotQA static chains, starting from the non-thinking baseline (42.3% EM), reach or exceed GEPA's 62.3% test EM within 7 days, and which of three candidate interventions (archive resolution, mutation budget, seed quality) contributes most to fitness improvement?**
@@ -323,8 +333,10 @@ export no_proxy='localhost,127.0.0.1,INTERNAL_IP'
 - **Infrastructure failure**: If a mutation LLM server or chain-execution server crashes and cannot be restarted within 1 hour, pause the affected run.
 - **Extreme slowness**: If generation time exceeds 60 min consistently (suggesting mutation LLM bottleneck), reduce `max_mutations_per_generation` or investigate.
 
-### 8.3 Extension
-- If a run reaches generation 30 with best EM > 55% AND the fitness curve is still rising (improvement in last 5 generations), extend to `max_generations=50` by restarting with `redis.resume=true`.
+### 8.3 Extension (REVISED 2026-02-27)
+- **CONSTRAINT**: `redis.resume=true` is broken for MAP-Elites archive reinitialization. The archive does not reconstruct correctly after restart, leading to undefined behavior. Extension via resume is NOT safe.
+- **Revised `max_generations`**: Increased from 30 to 50 for all runs, to reduce the need for extensions. At 12 min/gen (optimistic), 50 gens = ~10 hours; at 25 min/gen (pessimistic), 50 gens = ~21 hours. Both fit within 1 day.
+- **Continuation path**: If a run finishes gen 50 with best EM > 55% AND still rising, use the "leapfrog" protocol: extract top-3 programs, copy to initial_programs, start fresh run on new Redis DB. This loses archive diversity and lineage context but preserves best solutions.
 
 ---
 
