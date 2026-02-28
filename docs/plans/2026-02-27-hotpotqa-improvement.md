@@ -303,9 +303,22 @@ Condition C (failure context + reduced parents): Failure examples, num_parents=1
   python run.py problem.name=chains/hotpotqa/static redis.db=9 \
     pipeline=<reflective_pipeline> \
     algorithm.evolution.num_parents=1
+
+Condition D (reduced parents only): No failure examples, num_parents=1
+  python run.py problem.name=chains/hotpotqa/static redis.db=10 \
+    algorithm.evolution.num_parents=1
 ```
 
+This is a **full 2×2 factorial**:
+
+|                    | No failure context | With failure context |
+|--------------------|-------------------|---------------------|
+| **num_parents=2**  | A                 | B                   |
+| **num_parents=1**  | D                 | C                   |
+
 **Rationale for Condition C**: Adding failure feedback significantly increases mutation prompt complexity (5 failure cases × ~200 tokens each ≈ +1000 tokens). With `num_parents=2`, the mutation LLM must reconcile two potentially divergent parent programs while also incorporating failure feedback — a more complex cognitive task. `num_parents=1` reduces this complexity, potentially allowing the LLM to focus more on the failure signal. Note: this tests **prompt complexity reduction**, not literal attention dilution — a 235B thinking model has ample capacity for both parents, but simpler prompts may still produce more targeted mutations. C vs B isolates the `num_parents` effect in the presence of failure context.
+
+**Rationale for Condition D**: Isolates the `num_parents=1` effect without failure context. Required to disentangle: if C beats A, is it the failure feedback, the reduced parents, or their interaction? D vs A isolates `num_parents` alone; B vs A isolates failure context alone; C vs B isolates `num_parents` in the presence of failure context. The 4th inference server makes this full factorial feasible at no calendar cost.
 
 ### 5.6 Metrics
 - Primary: Best validation EM after 10 generations
@@ -325,19 +338,19 @@ Condition C (failure context + reduced parents): Failure examples, num_parents=1
 
 ### 5.8 Pass/Fail
 
-**Pairwise comparison priority** (most to least important):
-1. **A vs B** (primary): Does failure context help at all? This is the core research question.
-2. **B vs C** (secondary): Does reducing `num_parents` improve failure-context-driven mutation?
-3. **A vs C** (exploratory): Confounded (two simultaneous changes); do not draw strong conclusions.
+**Pairwise comparison priority** (2×2 factorial — all comparisons are clean):
+1. **A vs B** (primary): Does failure context help? (`num_parents` held constant at 2)
+2. **A vs D** (primary): Does `num_parents=1` help without failure context? (failure context held off)
+3. **B vs C** (secondary): Does `num_parents=1` amplify failure-context benefit?
+4. **D vs C** (secondary): Does failure context add value on top of `num_parents=1`?
+5. **Interaction** (A+C vs B+D): Is there a synergistic interaction between the two factors?
 
 **Thresholds** (pilot study, N=1 per condition — conclusions are directional only):
-- PASS if mutation success rate (fraction improving over parent) increases by >5 pp (A vs B)
-- PASS if best EM after 10 generations is higher than control by **>3 pp** (raised from 1 pp given 1.4 pp intra-run variance at N=1)
+- PASS if mutation success rate (fraction improving over parent) increases by >5 pp (A vs B or A vs D)
+- PASS if best EM after 10 generations is higher than control by **>3 pp** (appropriate for N=1 given 1.4 pp intra-run variance)
 - Qualitative PASS if mutation justifications show evidence of using failure information
 
-**Planned follow-up** (not in this pilot): If Condition C beats B by >3 pp, run a Condition D (num_parents=1, **no** failure context) to disentangle the `num_parents` effect from the failure-context effect. This 2×2 factorial is the correct design but requires a 4th slot not available now.
-
-**Note**: Any conclusion from this 3-condition pilot at N=1 × 10 gens is directional only. Adoption of reflective mutation requires replication with N≥3 seeds.
+**Note**: Any conclusion from this 4-condition pilot at N=1 × 10 gens is directional only. Adoption of any condition requires replication with N≥3 seeds.
 
 ---
 
@@ -396,9 +409,11 @@ Given 3 parallel slots and ~7 days, prioritize as follows:
 
 ### Days 4-5: Reflective Mutation (Experiment 3)
 - Implement failure context capture (code changes)
-- **Slot 1**: Run Experiment 3 Condition A (baseline mutation, 10 gens)
-- **Slot 2**: Run Experiment 3 Condition B (reflective mutation, 10 gens)
-- **Slot 3**: Run best config from Experiment 2 for extended run (20+ gens)
+- **Slot 1**: Run Experiment 3 Condition A (baseline, num_parents=2, no failure context)
+- **Slot 2**: Run Experiment 3 Condition B (num_parents=2, with failure context)
+- **Slot 3**: Run Experiment 3 Condition C (num_parents=1, with failure context)
+- **Slot 4**: Run Experiment 3 Condition D (num_parents=1, no failure context)
+- All 4 conditions run in parallel — full 2×2 factorial in one shot
 
 ### Days 6-7: Extended Runs + Mutation Budget (Experiment 4)
 - Run best configuration from all prior experiments for extended generation count
@@ -423,7 +438,7 @@ Given 3 parallel slots and ~7 days, prioritize as follows:
 | BM25 retrieval | k=7, wiki17_abstracts | Frozen in topology |
 | Chain topology | 6-step static | Not varied |
 | Archive max_size | 75 | Per island config |
-| num_parents | 2 | Per mutation; **varied in Exp 3 Condition C (1)** |
+| num_parents | 2 | Per mutation; **varied in Exp 3 Conditions C and D (1)** |
 | Elite selector | FitnessProportionalEliteSelector | temp=auto |
 | Mutation mode | rewrite | Not diff |
 | Redis | resume=false (fresh) | Clean state per run |
@@ -502,7 +517,7 @@ If all experiments fail to improve beyond 62.7% val EM, the most valuable output
 | 0 | Baseline | None (measure) | Val/Test EM, variance | N/A | 1 | Prerequisite |
 | 1 | Fast Validation | 100-sample + early stop + test logging | Val-vs-full correlation, speed | 10 | 2 | Highest |
 | 2 | Archive Diversity | Coarser bins, optional 2D space | Best EM, acceptance rate | 10 | 3 | High |
-| 3 | Reflective Mutation | Failure examples in prompt ± num_parents=1 | Mutation success rate, best EM | 10 | 3 | Medium-High |
+| 3 | Reflective Mutation | 2×2 factorial: failure context × num_parents (1 vs 2) | Mutation success rate, best EM | 10 | 4 | Medium-High |
 | 4 | Mutation Budget | 16-24 mutants/gen | Best EM per wall-clock hour | 10+ | 1-2 | Medium |
 
 Total: 4 experiments + 1 baseline, fitting within 3 slots over 7 days.
