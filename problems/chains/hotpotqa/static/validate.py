@@ -1,8 +1,8 @@
 import re
 from statistics import mean
 
-from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset_stepwise
+from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.hotpotqa.shared_config import (
     LLM_CONFIG,
@@ -14,9 +14,19 @@ from problems.chains.hotpotqa.utils.retrieval import batch_retrieve
 from problems.chains.hotpotqa.utils.utils import normalize_text
 
 
+def strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks from vLLM thinking-mode output."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 def extract_answer(response: str) -> str | None:
-    """Extract answer from LLM response looking for 'Answer:' pattern."""
-    match = re.search(r"Answer:\s*(.+?)(?:\n|$)", response, re.IGNORECASE)
+    """Extract answer from LLM response looking for 'Answer:' pattern.
+
+    Strips <think> blocks first so re.search does not match 'Answer:' occurrences
+    inside the model's internal reasoning trace.
+    """
+    cleaned = strip_thinking(response)
+    match = re.search(r"Answer:\s*(.+?)(?:\n|$)", cleaned, re.IGNORECASE)
     if match:
         answer = match.group(1).strip()
         return answer if answer else None
