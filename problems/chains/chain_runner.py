@@ -20,8 +20,15 @@ def _strip_thinking(text: str) -> str:
       reasoning traces
     - Subsequent LLM steps receive clean factual context rather than
       the model's internal monologue
+
+    Handles two cases:
+    - Well-formed: <think>...</think> — stripped by first sub.
+    - Truncated (max_tokens cutoff mid-block): <think>... (no closing tag)
+      — stripped by second sub, which removes from <think> to end-of-string.
     """
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
+    return text.strip()
 
 
 def _resolve_reference(
