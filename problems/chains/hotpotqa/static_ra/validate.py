@@ -112,11 +112,13 @@ def validate(chain_spec: dict) -> dict:
     batch_tool_registry = {"retrieve": _batch_retrieve}
 
     # 5. Run chain
+    # Per-step max_tokens: generous for all steps — thinking mode <think> blocks
+    # can consume 1000-2000 tokens. Steps 3/6 had 2048 which was insufficient.
     step_max_tokens = {
-        2: 4096,
-        3: 2048,
-        5: 4096,
-        6: 2048,
+        2: 8192,
+        3: 8192,
+        5: 8192,
+        6: 8192,
     }
     results = run_chain_on_dataset_stepwise(
         chain, client, dataset, outer_context_builder,

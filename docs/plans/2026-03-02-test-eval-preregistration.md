@@ -175,4 +175,58 @@ Do NOT compute z-tests on proportions (samples are paired across runs via shared
 
 ## 9. Amendment Log
 
-*No amendments as of initial commit.*
+### Amendment #1 — 2026-03-02 ~20:00 UTC
+
+**Three changes, all made before gen 50 and before any test EM observed:**
+
+#### A. Failed premature test eval attempt (administrative)
+
+Before this pre-registration document existed, a test eval for runs E/F/G/H was
+attempted at ~17:00 UTC on 2026-03-02 against the *first* (buggy) launch of the
+experiment. Those evals ran against programs evolved with the `<think>`-token
+leakage bug and were evaluated with incorrect proxy settings (Squid proxy
+intercepted LLM calls, returning HTML error responses). Results were:
+
+| Run | val EM (buggy) | test EM (fixed runner) | val-test gap |
+|-----|:---:|:---:|:---:|
+| E   | 67.0% | 57.67% | 9.33pp |
+| F   | 65.7% | 55.67% | 10.00pp |
+| G   | 67.3% | 61.00% | 6.33pp |
+| H   | 67.0% | 59.33% | 7.67pp |
+
+These results are **NOT** part of this pre-registration. The programs were evolved
+under a buggy runner (thinking-token leakage); the test evals are kept as
+exploratory reference only and will not be used in the final factorial analysis.
+The experiment was relaunched clean (Redis flushed, new PIDs) after fixing the bug.
+
+#### B. step_max_tokens raised to 8192 (methodology fix)
+
+**Finding**: All four `validate.py` files (static, static_a, static_r, static_ra)
+had `step_max_tokens = {2: 4096, 3: 2048, 5: 4096, 6: 2048}`. With Qwen3-8B
+thinking mode, `<think>...</think>` blocks routinely consume 1000–3000 tokens
+before the actual answer. At 2048 tokens, thinking could exhaust the entire budget
+for steps 3 (BM25 query generation) and 6 (final answer), leaving zero tokens for
+the actual output. The `_strip_thinking()` fix (commit 3a649da) then removes the
+entire output — producing empty queries and empty answers.
+
+**Fix** (commit applied before restart): All steps raised to `8192` in all four
+validate.py files. This matches `LLM_CONFIG["generation_kwargs"]["max_tokens"] = 8192`.
+
+**Impact**: The first 4 generations evolved under the wrong limit. Runs were
+restarted with flushed Redis DBs. All programs in the final analysis were evolved
+and evaluated with `step_max_tokens = 8192`.
+
+**Note on test eval vs. validation**: `gen10_test_eval.py` uses `run_chain_on_dataset`
+(not `_stepwise`) with a global `max_tokens=8192` (updated from 4096 in this same
+commit). This is a known minor inconsistency vs. validation which uses
+`run_chain_on_dataset_stepwise`. The effect is expected to be small (same token
+budget, different batching strategy). Documenting for transparency.
+
+#### C. `gen10_test_eval.py` updated to save per-sample arrays and results.json
+
+Added to `gen10_test_eval.py` (commit applied before test evals):
+- `per_sample_correct: list[int]` — binary 0/1 per sample (required for McNemar §7.5)
+- `write_results_entry()` — writes/appends each run's results to
+  `experiments/hotpotqa_p1p2/test_evals/results.json` per §6 schema
+- `--results-path` argument (default: above path)
+- Pre-registration commit hash auto-detected via `git log`
