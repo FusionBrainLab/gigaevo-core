@@ -2,6 +2,57 @@
 
 <!-- version list -->
 
+## v1.15.0 (2026-03-02)
+
+### Bug Fixes
+
+- **chains**: Address reviewer fixes
+  ([#68](https://github.com/KhrulkovV/gigaevo-core-internal/pull/68),
+  [`4c84ba5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4c84ba526eeb1630b7c2bd636cd5fdf820e63766))
+
+### Chores
+
+- Update coverage badge to 86% [skip ci]
+  ([`e2c0813`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e2c0813cda7627b2f2cd53dcb6ec2c5a38e37cac))
+
+- Update coverage badge to 87% [skip ci]
+  ([`cbe7155`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/cbe71559bda5c385902981044512d2fd126f87ff))
+
+- Update coverage badge to 87% [skip ci]
+  ([`1dd894d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1dd894d829cdc7217613d5dd7ce66b1c5b277333))
+
+### Documentation
+
+- Fix changelog link — point README to root CHANGELOG.md
+  ([`43964dc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/43964dc704ba657a79b0eea26575090f5be1f236))
+
+- Update README test structure and coverage badge to 85%
+  ([`ba5ad09`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ba5ad09340b144c6febabfdad1cddac77ac445f6))
+
+### Features
+
+- **chains**: Speed-up chain_runner, add aime,hotpotqa_full,hotpotqa_qa,hover,ifbench,papillon chain
+  problems. ([#68](https://github.com/KhrulkovV/gigaevo-core-internal/pull/68),
+  [`4c84ba5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4c84ba526eeb1630b7c2bd636cd5fdf820e63766))
+
+- **chains**: Speed-up chain_runner, add new chains problems
+  ([#68](https://github.com/KhrulkovV/gigaevo-core-internal/pull/68),
+  [`4c84ba5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4c84ba526eeb1630b7c2bd636cd5fdf820e63766))
+
+### Refactoring
+
+- Rename test files from _adversarial/_extended to _edge_cases
+  ([`60dc53b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/60dc53b9a3ff4de8855e1bb60ebd2b6ca2db3e2a))
+
+### Testing
+
+- Comprehensive test coverage expansion with audit hardening
+  ([`5fb12ac`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5fb12ac81c5f504f03da6ca143e93e38e2df0e67))
+
+- Deep audit hardening with 207 new mutation-analysis tests
+  ([`c101646`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c101646b20150de497db1c914a6bf61b0da85f46))
+
+
 ## v1.14.2 (2026-02-25)
 
 ### Bug Fixes
