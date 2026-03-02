@@ -1,6 +1,7 @@
 """Shared configuration for HotpotQA chain evolution experiments."""
 
 import json
+import random
 from pathlib import Path
 
 
@@ -19,11 +20,10 @@ LLM_CONFIG = {
         "extra_body": {
             "top_k": 20,
         },
-        "max_tokens": 8192,
     },
     "client_kwargs": {
         "api_key": "None",
-        "base_url": "http://localhost:8000/v1",
+        "base_url": "http://10.225.185.92:8000/v1",
     },
 }
 
@@ -72,19 +72,59 @@ def outer_context_builder(sample: dict) -> str:
     return sample["question"]
 
 
-def load_context(n_samples: int = 300) -> dict:
+def load_context(
+    n_samples: int | None = None,
+    n_train: int | None = None,
+    n_val: int | None = None,
+    n_pool: int | None = None,
+    n_held_out_val: int | None = None,
+    seed: int = 42,
+) -> dict:
     """Load dataset for validation.
+
+    Three modes:
+    - Legacy (n_samples or default): returns single train_dataset.
+    - Split (n_train + n_val): returns fixed train_dataset + val_dataset.
+    - Pool (n_pool + n_held_out_val): returns train_pool + val_dataset for
+      rotating random subset evaluation.
 
     BM25 index is not loaded here — the retrieval module lazy-loads it
     from disk inside the subprocess. Only paths are returned.
     """
     raw_samples = load_jsonl(DATASET_CONFIG["train_path"])
 
-    if n_samples is not None and n_samples < len(raw_samples):
-        raw_samples = raw_samples[:n_samples]
+    if n_pool is not None and n_held_out_val is not None:
+        total = raw_samples[: n_pool + n_held_out_val]
+        processed = [preprocess_sample(s) for s in total]
+        rng = random.Random(seed)
+        indices = list(range(len(processed)))
+        rng.shuffle(indices)
+        return {
+            "train_pool": [processed[i] for i in indices[:n_pool]],
+            "val_dataset": [processed[i] for i in indices[n_pool:]],
+            "target_field": DATASET_CONFIG["target_field"],
+            "bm25s_index_dir": BM25S_INDEX_DIR,
+            "corpus_path": CORPUS_PATH,
+        }
 
-    processed = [preprocess_sample(s) for s in raw_samples]
+    if n_train is not None and n_val is not None:
+        total = raw_samples[: n_train + n_val]
+        processed = [preprocess_sample(s) for s in total]
+        rng = random.Random(seed)
+        indices = list(range(len(processed)))
+        rng.shuffle(indices)
+        return {
+            "train_dataset": [processed[i] for i in indices[:n_train]],
+            "val_dataset": [processed[i] for i in indices[n_train:]],
+            "target_field": DATASET_CONFIG["target_field"],
+            "bm25s_index_dir": BM25S_INDEX_DIR,
+            "corpus_path": CORPUS_PATH,
+        }
 
+    # Legacy mode
+    n = n_samples if n_samples is not None else 300
+    total = raw_samples[:n]
+    processed = [preprocess_sample(s) for s in total]
     return {
         "train_dataset": processed,
         "target_field": DATASET_CONFIG["target_field"],

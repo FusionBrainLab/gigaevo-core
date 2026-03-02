@@ -1,6 +1,7 @@
 """LLM client with cost tracking for chain evolution."""
 
 import os
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -31,18 +32,21 @@ def get_async_client(
     )
 
 
+def remove_thinking(text: str) -> str:
+    """Strip <think>...</think> blocks from LLM thinking-mode output."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 class LLMClient:
     """LLM client with cost tracking."""
 
     DEFAULT_PRICING: dict[str, dict[str, float]] = {
         "openai/gpt-4o-mini": {"prompt": 0.15, "completion": 0.60},
-        "qwen/qwen3-8b": {"prompt": 0.028, "completion": 0.1104},
         "Qwen/Qwen3-8B": {"prompt": 0.028, "completion": 0.1104},
     }
 
     DEFAULT_GENERATION_KWARGS: dict[str, dict[str, Any]] = {
         "openai/gpt-4o-mini": {"max_tokens": 32768, "top_p": 1.0},
-        "qwen/qwen3-8b": {"max_tokens": 32768, "top_p": 1.0},
         "Qwen/Qwen3-8B": {"max_tokens": 32768, "top_p": 1.0},
     }
 
@@ -70,7 +74,7 @@ class LLMClient:
 
     @classmethod
     def _get_default_generation_kwargs(cls, model: str) -> dict[str, Any]:
-        return cls.DEFAULT_GENERATION_KWARGS.get(model, {"max_tokens": 1024})
+        return cls.DEFAULT_GENERATION_KWARGS.get(model, {"max_tokens": 32768})
 
     @property
     def call_logs(self) -> list[CallLog]:
@@ -120,7 +124,10 @@ class LLMClient:
             )
         )
 
-        return response.choices[0].message.content or ""
+        content = response.choices[0].message.content or ""
+        content = remove_thinking(content)
+
+        return content
 
     async def close(self) -> None:
         await self.client.close()

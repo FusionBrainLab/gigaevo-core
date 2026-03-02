@@ -1,7 +1,10 @@
-"""BM25 retrieval over Wikipedia 2017 abstracts for chain evolution.
+"""BM25 retrieval over Wikipedia 2017 abstracts for HoVer chain evolution.
 
 Uses bm25s with disk persistence. Index is built once and saved to disk.
 Subsequent loads (including from subprocesses) just load the saved index.
+
+Reimplemented from hotpotqa/utils/retrieval.py — not imported because
+module-level singletons would conflict across problems.
 """
 
 import gzip
@@ -21,9 +24,6 @@ _init_lock = threading.Lock()
 _initialized = False
 
 
-# --- Index Building (run once, typically from download_corpus.py) ---
-
-
 def build_bm25s_index(
     corpus_path: str | Path,
     index_dir: str | Path,
@@ -31,14 +31,7 @@ def build_bm25s_index(
     k1: float = 0.9,
     b: float = 0.4,
 ) -> None:
-    """Build bm25s index from corpus JSONL(.gz) and save to disk.
-
-    Args:
-        corpus_path: Path to wiki17_abstracts.jsonl.gz
-        index_dir: Directory where bm25s index will be saved
-        k1: BM25 k1 parameter
-        b: BM25 b parameter
-    """
+    """Build bm25s index from corpus JSONL(.gz) and save to disk."""
     corpus_path = Path(corpus_path)
     index_dir = Path(index_dir)
 
@@ -68,18 +61,13 @@ def build_bm25s_index(
     print(f"BM25s index saved: {index_dir} ({len(passages):,} passages)")
 
 
-# --- Lazy Initialization (called inside subprocesses) ---
-
-
 def _ensure_initialized(
     index_dir: str | Path,
     corpus_path: str | Path | None = None,
 ) -> None:
     """Lazy-load (or build-then-load) the bm25s index and corpus.
 
-    Thread-safe via double-checked locking. If index_dir does not exist,
-    builds the index from corpus_path first. On failure, resets all globals
-    so the next call can retry cleanly.
+    Thread-safe via double-checked locking.
     """
     global _retriever, _stemmer, _corpus, _initialized
 
@@ -93,24 +81,23 @@ def _ensure_initialized(
         try:
             index_dir = Path(index_dir)
 
-            # Auto-build if index directory does not exist
             if not index_dir.exists():
                 if corpus_path is None:
                     raise FileNotFoundError(
                         f"BM25s index not found at {index_dir} and no corpus_path "
                         f"provided for auto-build. Run download_corpus.py first."
                     )
-                print(f"BM25s index not found at {index_dir}, building from {corpus_path}...")
+                print(
+                    f"BM25s index not found at {index_dir}, building from {corpus_path}..."
+                )
                 build_bm25s_index(corpus_path, index_dir)
 
-            # Load index (without corpus)
             _retriever = bm25s.BM25.load(str(index_dir))
             _stemmer = Stemmer.Stemmer("english")
 
-            # Load corpus separately from JSONL file
             if corpus_path is None:
                 raise FileNotFoundError(
-                    f"corpus_path is required to load formatted passages"
+                    "corpus_path is required to load formatted passages"
                 )
             corpus_path = Path(corpus_path)
             passages: list[str] = []
@@ -127,15 +114,11 @@ def _ensure_initialized(
 
             _initialized = True
         except Exception:
-            # Reset to allow retry on next call
             _retriever = None
             _stemmer = None
             _corpus = None
             _initialized = False
             raise
-
-
-# --- Public API ---
 
 
 def retrieve(
@@ -146,26 +129,18 @@ def retrieve(
 ) -> str:
     """Retrieve top-k passages using BM25.
 
-    Lazy-loads the index on first call.
-
-    Args:
-        query: Search query string
-        index_dir: Path to saved bm25s index directory
-        k: Number of passages to retrieve
-        corpus_path: Path to corpus JSONL for loading formatted passages
-
-    Returns:
-        Formatted string with retrieved passages
+    Returns formatted string with retrieved passages:
+    "[1] Title | text\\n[2] Title | text\\n..."
     """
     _ensure_initialized(index_dir, corpus_path)
 
     tokens = bm25s.tokenize(
         query, stopwords="en", stemmer=_stemmer, show_progress=False
     )
-    # retrieve() returns doc indices, not strings
-    results, _scores = _retriever.retrieve(tokens, k=k, n_threads=1, show_progress=False)
+    results, _scores = _retriever.retrieve(
+        tokens, k=k, n_threads=1, show_progress=False
+    )
 
-    # Map indices to formatted passages from corpus
     retrieved = [_corpus[int(doc_idx)] for doc_idx in results[0][:k]]
     return "\n".join(f"[{i + 1}] {p}" for i, p in enumerate(retrieved))
 
@@ -180,15 +155,6 @@ def batch_retrieve(
 
     Vectorized tokenization + single retriever call — much faster than
     N individual retrieve() calls.
-
-    Args:
-        queries: List of search query strings
-        index_dir: Path to saved bm25s index directory
-        k: Number of passages to retrieve per query
-        corpus_path: Path to corpus JSONL for loading formatted passages
-
-    Returns:
-        List of formatted passage strings (one per query)
     """
     _ensure_initialized(index_dir, corpus_path)
 
@@ -211,11 +177,6 @@ def make_retrieve_fn(
     corpus_path: str | Path | None = None,
 ) -> Callable[[list[dict]], list[str]]:
     """Create a batched retrieve function for the tool registry.
-
-    Args:
-        index_dir: Path to saved bm25s index directory
-        k: Number of passages to retrieve
-        corpus_path: Path to corpus JSONL for auto-build (optional)
 
     Returns:
         Function with signature (items: list[dict]) -> list[str]
