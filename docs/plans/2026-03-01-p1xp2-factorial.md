@@ -316,6 +316,43 @@ HotpotQA train samples include:
 
 Gold documents: `supporting_facts["title"]` -- typically 2 titles for bridge questions.
 
+---
+
+## PROTOCOL AMENDMENT — 2026-03-02 (post-launch, pre-results)
+
+**Amendment author**: Dr. Elena Voss
+**Trigger**: Reviewer 2 audit identified discrepancy between pre-registered P1 mechanism and actual implementation.
+
+### Deviation from pre-registered P1 design
+
+**Pre-registered** (Section 6, line 80): Generation-based seeding — all programs in generation N share the same 300-sample subset, seeded by `random.Random(42 + gen)`.
+
+**Actually implemented** (`problems/chains/hotpotqa/static_r/validate.py`, `static_ra/validate.py`): Hash-based seeding — each unique chain_spec is permanently assigned a fixed 300-sample subset via `random.Random(SHA256(chain_spec)[:16] % 2**32).sample(all_1000, 300)`.
+
+**Pre-registered rejection of hash seeding** (Section 14, line 284): "Rejected because programs within the same generation would be evaluated on different samples, making within-generation comparison noisy."
+
+### Rationale for deviation
+
+The pre-registration rejection was based on a within-generation tournament selection mental model that does not apply to GigaEvo's MAP-Elites archive admission mechanism. Archive admission in GigaEvo compares a new mutant against the **cell incumbent** (not against other mutants in the same generation). Within-generation comparison is irrelevant to archive admission decisions. The rejection rationale was therefore incorrect for this system.
+
+Hash-based seeding was chosen because:
+1. **Refresh stability**: Archive incumbents are re-validated on refresh (DONE → QUEUED). Hash seeding ensures a program always sees the same subset on refresh (chain_spec is unchanged), keeping incumbent fitness stable. Generation seeding would change the incumbent's fitness each generation refresh, creating archive instability.
+2. **Training signal diversity**: Different archive programs have been evaluated on different 300-sample subsets, covering a broader range of failure modes and diversifying mutation LLM feedback across the archive.
+
+### Residual concern
+
+Hash-based seeding means cross-program fitness comparisons (mutant vs. incumbent) involve different 300-sample subsets. The associated cross-subset noise is ~2.0pp std. Combined with LLM retest noise (2.4pp), pairwise archive admission noise is ~3.1pp. This is a genuine trade-off, not eliminated by the hash-based approach.
+
+Cross-run val EM comparisons (e.g., E=67.0% vs. G=67.3%) are on different evaluation subsets for P1-ON runs and should not be treated as directly comparable without re-evaluation on a common set.
+
+### Impact on pre-registered hypotheses
+
+H1_1 (P1 reduces val-test gap to <3pp AND improves test EM) remains the primary hypothesis. The mechanism differs from pre-registration (hash-based subset diversification rather than generation-based rotation) but the anti-overfitting intent is the same. The val-test gap measurement at gen 50 remains the primary outcome measure and is unaffected by the seeding mechanism difference (test set is always the same fixed 300 samples).
+
+### Documentation failure acknowledgment
+
+This deviation should have been documented before launch. The plan was not updated to reflect the implementation decision. All future experiment plans require a code-vs-plan diff review before launch to prevent undocumented deviations.
+
 Retrieval step outputs (steps 1, 4): formatted as `"[1] Title | Text\n[2] Title | Text\n..."` with k=7 documents each.
 
 Title extraction from retrieval output: `re.findall(r"\[\d+\] (.+?) \|", step_output)`.
