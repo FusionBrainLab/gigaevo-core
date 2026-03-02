@@ -11,6 +11,19 @@ from collections.abc import Callable
 from problems.chains.types import ChainSpec, ChainResult, LLMStep, ToolStep
 
 
+def _strip_thinking(text: str) -> str:
+    """Strip <think>...</think> blocks from LLM thinking-mode output.
+
+    Must be applied to all LLM step outputs before they are stored in
+    step_outputs or formatted into history, so that:
+    - BM25 queries (resolved via $history[-1]) are not polluted with
+      reasoning traces
+    - Subsequent LLM steps receive clean factual context rather than
+      the model's internal monologue
+    """
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 def _resolve_reference(
     ref: str,
     outer_context: str,
@@ -119,7 +132,7 @@ async def run_chain_on_sample(
                 outer_context=outer_context,
                 system_prompt=chain.system_prompt,
             )
-            result = await client(prompt)
+            result = _strip_thinking(await client(prompt))
 
         elif isinstance(step, ToolStep):
             if tool_registry is None:
@@ -339,14 +352,15 @@ async def _run_chain_on_dataset_stepwise(
                 async with sem:
                     return await client.copy()(prompt, **kw)
 
-            results = list(
-                await asyncio.gather(
+            results = [
+                _strip_thinking(r)
+                for r in await asyncio.gather(
                     *[
                         _call_llm(p, semaphore, **overrides)
                         for p in prompts
                     ]
                 )
-            )
+            ]
 
             for i in range(n):
                 all_step_outputs[i].append(results[i])
