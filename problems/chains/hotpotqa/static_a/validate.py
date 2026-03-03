@@ -159,4 +159,4 @@ def validate(chain_spec: dict) -> dict:
                 "hop2_missing": hop2_missing,
             })
 
-    return (metrics, failures[:10])
+    return (metrics, failures)

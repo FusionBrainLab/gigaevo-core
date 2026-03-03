@@ -455,3 +455,73 @@ To:
 ---
 
 *Pre-registered before any treatment prompt files are written or any results are observed.*
+
+---
+
+## 18. Pre-Registration Amendments
+
+Amendments recorded in commit order. Each amends the original pre-registration above.
+
+### Amendment 1 — `pipeline=standard` → `pipeline=hotpotqa_asi` (commit 2413c22)
+
+**Filed**: 2026-03-03 (before first launch with valid config)
+
+**Original**: Sections 4.2, 6, and 13 specified `pipeline=standard` for all 4 runs.
+
+**Amended**: All 4 runs use `pipeline=hotpotqa_asi`.
+
+**Reason**: `validate.py` returns `tuple[dict, list[dict]]`. With `pipeline=standard`, the generic `FormatterStage.format_value()` calls `repr()` on the tuple, injecting raw Python repr noise (e.g., `({'exact_match': 0.58, ...}, [{'question': ..., 'gold': ...}])`) into every mutation prompt. This contaminates the insights/lineage/mutation context with irrelevant Python object syntax. `pipeline=hotpotqa_asi` uses `HotpotQAASIFormatter` which correctly renders the failure list as structured markdown. This was the root cause of the repr-contamination bug affecting runs E and G (P1×P2). The fix is required for the experiment to be interpretable.
+
+**Impact on design**: The pipeline change is orthogonal to the manipulated variables (prompts, val set). Both control (K) and all treatment runs (L/M/N) use `pipeline=hotpotqa_asi`, so the amendment does not introduce a confound. The amendment does make this experiment non-comparable to runs E/G (which used `pipeline=standard`) — those runs are now considered invalid for GEPA comparison.
+
+### Amendment 2 — `step_max_tokens` = 8192 for all LLM steps (commit 2413c22)
+
+**Filed**: 2026-03-03 (before first launch with valid config)
+
+**Original**: Section 6 specified `step_max_tokens: {2: 4096, 3: 2048, 5: 4096, 6: 2048}`.
+
+**Amended**: All LLM steps use `step_max_tokens=8192` (the value set in `hotpotqa_asi` pipeline config).
+
+**Reason**: The `hotpotqa_asi` pipeline config sets `step_max_tokens=8192` as a unified value. The original per-step mapping was from an earlier config iteration. Using `hotpotqa_asi` implicitly adopts this value. It allows longer reasoning traces for thinking-mode Qwen3-8B, which may improve per-hop retrieval quality.
+
+**Impact on design**: Applied uniformly to all 4 runs. Does not introduce a confound.
+
+### Amendment 3 — `prompts_dir` bug, third launch is first with all prompts active (commit 920c975)
+
+**Filed**: 2026-03-04
+
+**Original**: Assumed `prompts=hotpotqa` would activate NLP-specific prompts in all stages that accept `prompts_dir`.
+
+**Amended**: Two pipeline YAML files (`hotpotqa_asi.yaml`, `hotpotqa_reflective.yaml`) were missing `prompts_dir: ${prompts.dir}` in their `evolution_context` block. Without this field, `InsightsStage` and `LineageStage` used the default prompts regardless of the `prompts=hotpotqa` override. Only `mutation_operator.prompts_dir` was correctly wired (via `_base.yaml`). This means the first two launches (before commit 920c975) ran with NLP prompts only in the mutation system prompt — not in insights or lineage agents. The third launch (K=2564568 L=2564569 M=2564570 N=2564571, launched 2026-03-03 21:50 UTC) is the first with all prompts correctly active.
+
+**Impact on design**: The current live runs (K/L/M/N, third launch) are the valid experimental runs. All results should be attributed to these PIDs. The first and second launches are considered pilot runs and are excluded from analysis.
+
+**Lesson learned**: Always verify that custom pipeline YAMLs include `prompts_dir: ${prompts.dir}` in the `evolution_context` block when `prompts=<custom>` is used.
+
+### Open Item — GEPA test split unverified (flagged by methodological review)
+
+**Filed**: 2026-03-04
+
+**Status**: Unresolved — must check before formal comparison.
+
+**Issue**: The GEPA paper's reported 62.3 EM uses a specific HotpotQA test split. Our test set is `HotpotQA_test.jsonl` (300 samples, held-out). It is not confirmed that this is the same split GEPA used. If GEPA evaluated on a different set (e.g., the full dev set, or a different 300-sample subset), the 62.3 EM benchmark is not directly comparable to our test EM.
+
+**Required action**: Before reporting results relative to GEPA's 62.3 EM, verify that our `HotpotQA_test.jsonl` matches the GEPA evaluation split. If not, either (a) re-evaluate on GEPA's split, or (b) report only relative improvements over our concurrent control (Run K) and the seed (ddce37b4, 60.0% on our test set), without direct GEPA comparison.
+
+**Impact on success criteria**: Gates 1 and 2 (Sections 10) remain valid. The "STRONG POSITIVE" criterion (≥ 62.3 EM = GEPA) should be re-labeled as "matches our GEPA estimate" until the split is verified.
+
+### Amendment 4 — Random failure sampling in FormatterStage; fourth launch is first with this fix
+
+**Filed**: 2026-03-04
+
+**Original**: `validate.py` returned `failures[:10]` (the first 10 failures). `HotpotQAASIFormatter` and `HotpotQAFailureFormatter` used `enumerate(failures[:10], 1)`, always showing the mutation LLM the same 10 examples every generation. `FormatterStage` subclasses used `DEFAULT_CACHE` (InputHashCache), so as long as the failures list stayed the same the formatter output was cached — meaning the same 10 examples were shown on every refresh cycle.
+
+**Amended**:
+- All four `validate.py` files (`static`, `static_r`, `static_a`, `static_ra`) now return all failures (no `[:10]` cap).
+- Both formatter classes (`HotpotQAASIFormatter`, `HotpotQAFailureFormatter`) now use `random.sample(failures, min(10, len(failures)))` to draw a fresh random subset each call.
+- Both formatters declare `cache_handler = NO_CACHE` so a new sample is drawn on every DAG run, including generation refresh cycles.
+- The failure analysis header now reads "N of M failure(s) randomly sampled" to make the sampling visible in the mutation prompt.
+
+**Reason**: With a fixed 10-example window, the mutation LLM accumulates a strong prior toward whatever patterns those 10 cases expose. Across 50 generations the model has seen thousands of mutations conditioned on the same mini-batch — structural overfitting. Random sampling from the full failure pool (typically 100–180 failures at ~40% EM) exposes different examples each generation, reducing this bias.
+
+**Impact on design**: Applied uniformly to all 4 runs. Does not introduce a confound. The third launch (PIDs K=2564568 L=2564569 M=2564570 N=2564571) was stopped and Redis DBs 0-3 flushed. The fourth launch is the first with random failure sampling active.

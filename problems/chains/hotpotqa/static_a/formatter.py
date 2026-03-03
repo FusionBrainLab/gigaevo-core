@@ -1,7 +1,9 @@
 """HotpotQA ASI failure formatter for reflective mutation context."""
 
+import random
 from typing import Any
 
+from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.formatter import FormatterStage
 
 
@@ -10,21 +12,30 @@ class HotpotQAASIFormatter(FormatterStage):
     markdown for the mutation LLM.
 
     Input: list of dicts with keys: question, gold, predicted, hop1_retrieved,
-           hop2_retrieved, n_gold, hop1_missing, hop2_missing (up to 10 items).
+           hop2_retrieved, n_gold, hop1_missing, hop2_missing (all failures).
     Output: formatted markdown block appended to MutationContextStage.
+
+    Randomly samples 10 failures on each call (non-cacheable) to prevent the
+    mutation LLM from overfitting to a fixed set of examples across generations.
 
     The per-hop retrieval diagnostics surface which gold supporting documents were
     missed by BM25 at each retrieval step, giving the mutation LLM concrete signal
     about whether failures stem from retrieval gaps vs. reasoning gaps.
     """
 
+    cache_handler = NO_CACHE  # re-sample on every DAG run
+
     def format_value(self, data: Any) -> str:
         if not data:
             return ""
 
         failures = data if isinstance(data, list) else []
-        lines = [f"## Failure Analysis ({len(failures)} sample(s) where prediction was wrong)\n"]
-        for i, f in enumerate(failures[:10], 1):
+        sample = random.sample(failures, min(10, len(failures)))
+        lines = [
+            f"## Failure Analysis"
+            f" ({len(sample)} of {len(failures)} failure(s) randomly sampled)\n"
+        ]
+        for i, f in enumerate(sample, 1):
             q = f.get("question", "?")
             gold = f.get("gold", "?")
             pred = f.get("predicted") or "(extraction failure — no answer found)"
