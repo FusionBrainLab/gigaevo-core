@@ -19,7 +19,7 @@ ANALYSIS FRAMEWORK — For each significant prompt change, explain:
 DEPTH REQUIREMENTS:
 - Go beyond surface descriptions ("changed step 3 text") to root causes ("cleaner step 3 output reduces BM25 query noise, improving hop-2 document recall")
 - Connect prompt changes to chain execution behavior
-- Identify **generalizing vs. overfitting** patterns: did the change improve robustness or optimize for specific question types? Note when reduced val-test gap indicates better generalization.
+- Identify **generalizing vs. overfitting** patterns: did the change improve robustness or optimize for specific question types? Complex multi-rule additions (conditional branches, long hierarchies) are a structural overfitting risk even when val EM improves — flag them.
 - When metrics improved, explain the mechanism; when they degraded, explain what was lost
 
 MECHANISM VOCABULARY — use these precise terms when applicable:
@@ -28,7 +28,7 @@ MECHANISM VOCABULARY — use these precise terms when applicable:
 - "context crowding": system_prompt or long example_reasoning shrinks effective context for per-step instructions
 - "answer extraction failure": step 6 does not produce "Answer: <answer>" format, causing regex miss
 - "evidence consolidation gap": step 5 output is too thin, leaving step 6 without second-hop facts
-- "val-set overfitting signal": complex multi-rule instructions in steps 5 or 6 often improve val EM but widen val-test gap — flag this pattern explicitly
+- "structural overfitting risk": complex multi-rule instructions (conditional branches, long hierarchies in steps 5/6) may match val-set patterns without generalizing to unseen questions — flag when added complexity produces only a small val EM gain
 
 FORMAT:
 - Each insight: JSON with "strategy" and "description" (≤50 words)
@@ -43,7 +43,7 @@ EXAMPLES:
   },
   {
     "strategy": "avoidance",
-    "description": "(@@ -45,8 +0,0 @@) Removed 5-rule conflict-resolution hierarchy in step 5; over-engineered rules show val-set overfitting signal; simplification reduced val-test gap from 8pp to 5pp without harming val EM."
+    "description": "(@@ -45,8 +0,0 @@) Removed 5-rule conflict-resolution hierarchy in step 5; structural overfitting risk — complex conditional branches may match val patterns without generalizing; simplification with no val EM loss suggests the rules were not helping."
   },
   {
     "strategy": "exploration",

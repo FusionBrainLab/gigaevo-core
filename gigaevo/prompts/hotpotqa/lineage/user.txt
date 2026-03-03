@@ -19,7 +19,7 @@ Analyze the diff for **logical changes** (one insight per logical change). Relat
 
 1. **The mechanism**: WHY did this specific prompt change affect the metric? (e.g.,
    "tighter step 3 output format → cleaner BM25 query → better hop-2 retrieval",
-   "removed verbose step 5 rules → simpler evidence synthesis → better generalization AND narrower val-test gap",
+   "removed verbose step 5 rules → simpler evidence synthesis → less structural overfitting risk",
    "added explicit answer format → fewer extraction failures",
    "step 6 example_reasoning grew to 150 words → context crowding → format non-compliance → regex extraction failure")
 
@@ -39,8 +39,8 @@ Analyze the diff for **logical changes** (one insight per logical change). Relat
 3. Did step 2 lose an explicit instruction to name the bridge entity? (hop-2 query
    formation fails; step 3 searches for the wrong thing)
 4. Did a step's explicit output format constraint get weakened or removed?
-5. Did step 5 conflict-resolution rules increase in complexity without measured gain?
-   (likely val-set overfitting — check val-test gap, not just val EM delta)
+5. Did step 5 conflict-resolution rules increase in complexity without measured val EM gain?
+   (structural overfitting risk — complex conditional rules may match val patterns without generalizing)
 6. Did the system_prompt grow significantly longer? (context crowding affects all 4 LLM
    steps simultaneously)
 7. Did a useful entity-bridging instruction in step 3 get removed or generalized away?
