@@ -100,10 +100,10 @@ The control run uses the exact same config as Run E (standard pipeline, fixed 30
 
 | Run | Label | Prompts | Problem Dir | Val Set | DB | Mutation Server | Chain Server | Seed |
 |-----|-------|---------|-------------|---------|----|-----------------|--------------|----- |
-| K | Control | default | static | fixed-300 | 14 | INTERNAL_IP:8777 | INTERNAL_IP:8001 | ddce37b4 |
-| L | NLP-1 | hotpotqa | static_r | rotation-300 | 15 | INTERNAL_IP:8777 | INTERNAL_IP:8000 | ddce37b4 |
-| M | NLP-2 | hotpotqa | static_r | rotation-300 | 16 | INTERNAL_IP:8777 | 10.225.185.235:8001 | ddce37b4 |
-| N | NLP-3 | hotpotqa | static_r | rotation-300 | 17 | 10.225.51.251:8777 | 10.225.185.235:8000 | ddce37b4 |
+| K | Control | default | static | fixed-300 | 0 | INTERNAL_IP:8777 | INTERNAL_IP:8001 | ddce37b4 |
+| L | NLP-1 | hotpotqa | static_r | rotation-300 | 1 | INTERNAL_IP:8777 | INTERNAL_IP:8000 | ddce37b4 |
+| M | NLP-2 | hotpotqa | static_r | rotation-300 | 2 | INTERNAL_IP:8777 | 10.225.185.235:8001 | ddce37b4 |
+| N | NLP-3 | hotpotqa | static_r | rotation-300 | 3 | 10.225.51.251:8777 | 10.225.185.235:8000 | ddce37b4 |
 
 All runs use `pipeline=standard`, `num_parents=1`, `max_mutations_per_generation=8`, `max_elites_per_generation=8`, `max_generations=50`.
 
@@ -314,7 +314,7 @@ With alpha=0.05 and 80% power: MDE = 4.2pp (treatment mean must exceed control m
 ### Phase 3: Launch Infrastructure (30 min)
 
 1. Verify all 8 servers are reachable and in thinking mode
-2. Flush Redis DBs 14-17
+2. Flush Redis DBs 0-3
 3. Create `experiments/hotpotqa_nlp_prompts/` directory with launch.sh, watchdog, gen_stats
 4. Launch all 4 runs
 
@@ -340,28 +340,28 @@ COMMON_PARAMS=(
 python run.py ${COMMON_PARAMS[@]} \
     problem.name=chains/hotpotqa/static \
     prompts=default \
-    redis.db=14 \
+    redis.db=0 \
     llm_base_url="http://localhost:8000/v1"
 
 # Run L: NLP prompts + rotation
 python run.py ${COMMON_PARAMS[@]} \
     problem.name=chains/hotpotqa/static_r \
     prompts=hotpotqa \
-    redis.db=15 \
+    redis.db=1 \
     llm_base_url="http://localhost:8000/v1"
 
 # Run M: NLP prompts + rotation
 python run.py ${COMMON_PARAMS[@]} \
     problem.name=chains/hotpotqa/static_r \
     prompts=hotpotqa \
-    redis.db=16 \
+    redis.db=2 \
     llm_base_url="http://localhost:8000/v1"
 
 # Run N: NLP prompts + rotation
 python run.py ${COMMON_PARAMS[@]} \
     problem.name=chains/hotpotqa/static_r \
     prompts=hotpotqa \
-    redis.db=17 \
+    redis.db=3 \
     llm_base_url="http://10.225.51.251:8777/v1"
 ```
 
@@ -443,7 +443,7 @@ To:
 |------|--------|
 | 0-2 | Write NLP prompt files. Create Hydra config. |
 | 2-3 | Validate: dry run, JSON schema check, diff review. |
-| 3-3.5 | Preflight: verify servers, flush DBs 14-17, launch. |
+| 3-3.5 | Preflight: verify servers, flush DBs 0-3, launch. |
 | 3.5-5.5 | Gen 5 smoke check. |
 | 5.5-8 | Gen 10 checkpoint. Test evals. |
 | 8-17 | Gen 25 checkpoint. Test evals. |
