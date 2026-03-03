@@ -9,7 +9,7 @@ AVAILABLE METRICS:
 ---
 
 ANALYSIS FRAMEWORK — For each insight, identify:
-1. **OBSERVATION**: What pattern/value/structure exists in the code? (cite evidence)
+1. **OBSERVATION**: What pattern/value/structure exists in the code? (cite evidence: step number, quoted instruction text, metrics)
 2. **IMPACT**: How does this affect the metric? (causal mechanism for prompt-chain execution)
 3. **MUTATION HINT**: What should the mutation agent do? (preserve, remove, tune, replace)
 
@@ -24,7 +24,12 @@ Specific 1-2 word label in snake_case describing the insight type.
   - "evidence_synthesis": how step 5 combines multi-hop facts
   - "instruction_clarity": whether a step's instruction is precise or ambiguous
   - "entity_bridging": how step 3 identifies and names the hop-2 entity from step 2
+  - "hop2_entity_naming": whether step 2 explicitly names the bridge entity for step 3
   - "format_constraint": explicit output format rules in a step's stage_action
+  - "example_reasoning_cost": whether a step's example_reasoning is disproportionately long
+  - "step6_evidence_blindspot": whether step 5 adequately consolidates for step 6's blind spot
+  - "reasoning_scaffold": whether reasoning_questions guide toward the right intermediate outputs
+  - "aim_verbosity": whether a step's aim is unnecessarily long and redundant with stage_action
 
 TAGS (pick one):
 - **beneficial**: Pattern that HELPS the metric — mutation should PRESERVE or EXTEND it
@@ -34,6 +39,31 @@ TAGS (pick one):
 - **neutral**: Neither helps nor hurts — low priority for mutation
 
 SEVERITY: high (major metric impact), medium (moderate), low (minor refinement)
+
+---
+
+CHAIN-SPECIFIC FAILURE MODES TO CHECK:
+- **BM25 query pollution**: Step 3's output is used verbatim as the BM25 retrieval query
+  (via $history[-1]). Any prose, preamble, or reasoning text in step 3's output degrades
+  retrieval. Flag if step 3's stage_action does not include an explicit "output ONLY the
+  search terms" constraint. BM25 rewards named entities over relation words — shorter,
+  entity-focused queries outperform full sentences.
+- **hop-2 entity bridging gap**: Step 3 receives ONLY step 2's summary (not step 1's raw
+  passages). If step 2 fails to name the bridge entity explicitly, step 3 cannot form a
+  useful query. Flag if step 2's stage_action lacks an instruction to surface entity names
+  needed for the second-hop search.
+- **system_prompt crowding**: system_prompt is prepended to ALL 4 LLM steps. Every word
+  in system_prompt consumes context in every call. Flag if system_prompt exceeds ~20 words
+  or contains instructions that duplicate per-step aims.
+- **answer extraction brittleness**: The evaluator extracts answers via regex on
+  "Answer: <answer>". Flag if step 6 lacks an explicit format constraint, or if its
+  example_reasoning shows a multi-sentence response rather than a single "Answer: X" line.
+- **step 6 evidence blindspot**: Step 6 depends on steps 2 and 5 (not step 4). It never
+  sees raw second-hop passages. Flag if step 5's stage_action does not produce a unified
+  evidence summary — step 6 needs step 5 to fully consolidate, or it will lack second-hop facts.
+- **example_reasoning length tax**: example_reasoning is included verbatim in the assembled
+  prompt. Flag if any step's example_reasoning exceeds ~120 words — longer examples crowd
+  the actual instruction and may reduce LLM compliance with format constraints.
 
 ---
 

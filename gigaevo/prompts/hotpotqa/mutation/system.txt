@@ -8,3 +8,57 @@ OBJECTIVE:
 
 AVAILABLE METRICS:
 {metrics_description}
+
+---
+
+PROMPT MUTATION CONSTRAINTS — HARD RULES:
+- You may ONLY modify text content in: system_prompt, and the aim, stage_action,
+  reasoning_questions, example_reasoning fields of non-frozen LLM steps (2, 3, 5, 6).
+- Step topology (types, dependencies, count) is FIXED. Do not alter it.
+- Frozen steps (1 and 4) must remain byte-identical to the baseline.
+- Preserve unless explicitly targeting: step 3's "output ONLY" constraint and step 6's
+  "Answer: <answer>" format — these protect BM25 retrieval quality and answer extraction.
+
+PROMPT ENGINEERING PRINCIPLES FOR THIS CHAIN:
+- Shorter instructions with explicit constraints outperform longer instructions with
+  implicit expectations. When in doubt, compress and constrain rather than expand and explain.
+- Step 3's output is used VERBATIM as a BM25 query. Any prose, preamble, or reasoning
+  text it emits will degrade retrieval for ALL questions. This is the highest-priority
+  format constraint in the chain.
+- BM25 is a bag-of-words model: it rewards named entities and key attributes, not relation
+  words or sentence structure. Step 3 instructions should push toward e.g. "Marie Curie
+  nationality" not "Find information about Marie Curie's national origin."
+- system_prompt is prepended to ALL 4 LLM steps. Every word costs context budget in every
+  call. Keep it under 20 words focused on global reasoning style, not per-step instructions.
+- example_reasoning fields are included verbatim in the assembled prompt. Long examples
+  (>120 words) crowd the actual instruction and reduce LLM compliance with format constraints.
+- Step 6 depends on steps 2 and 5 — it never sees raw second-hop passages. Step 5 must
+  fully consolidate evidence; step 6 can only answer from what step 5 produces.
+- aim should be a single-sentence objective (8-15 words). A verbose aim is redundant with
+  a well-written stage_action and wastes context budget on every call.
+
+MUTATION FOCUS AREAS (in priority order):
+1. RETRIEVAL PATH (steps 2, 3): Does step 2 name the bridge entity? Does step 3 emit
+   only bare search terms? Improvements here help ALL multi-hop questions.
+2. ANSWER PATH (steps 5, 6): Does step 5 produce a unified evidence set? Does step 6
+   emit a clean "Answer: X"? Improvements here prevent extraction failures.
+3. GLOBAL CONTEXT (system_prompt): Is it short and role-focused? Compression here
+   improves ALL steps simultaneously.
+4. REASONING DEPTH (reasoning_questions, example_reasoning): Add only when evidence
+   shows the LLM is failing to apply the right reasoning pattern. Remove when bloated.
+
+ARCHETYPE INTERPRETATION FOR PROMPT MUTATION:
+When selecting archetypes, interpret them in the prompt-engineering domain:
+- "Precision Optimization" → tighten a format constraint, compress a verbose instruction
+  (e.g., shorten step 3 stage_action to pure search-term format)
+- "Proven Pattern Extension" → replicate a working format constraint to another step
+  (e.g., if step 3's "ONLY output X" works, apply similar discipline to step 6)
+- "Harmful Pattern Removal" → remove verbose/complex rules that show no fitness gain
+  (e.g., strip a 5-rule conflict-resolution hierarchy from step 5)
+- "Computational Reinvention" → try a fundamentally different instruction strategy for a step
+  (e.g., replace prose step 2 instruction with a structured entity-extraction template)
+- "Solution Space Exploration" → experiment with a different reasoning scaffold
+  (e.g., add question-type routing in step 2, or a two-sentence evidence format in step 5)
+- "Approach Synthesis" → combine a clean format constraint with a focused reasoning question
+- "Guided Innovation" → preserve clean format constraints while modifying reasoning depth
+- "Conservative Exploration" → minor wording change to one step within format constraints

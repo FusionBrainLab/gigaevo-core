@@ -17,19 +17,35 @@ Child: {child_errors}
 
 Analyze the diff for **logical changes** (one insight per logical change). Related hunks implementing the same modification should be grouped into a single insight. For each logical change, explain:
 
-1. **The mechanism**: WHY did this specific prompt change affect the metric? (e.g., "tighter step 3 output format → cleaner BM25 query → better hop-2 retrieval", "removed verbose step 5 rules → simpler evidence synthesis → better generalization", "added explicit answer format → fewer extraction failures")
+1. **The mechanism**: WHY did this specific prompt change affect the metric? (e.g.,
+   "tighter step 3 output format → cleaner BM25 query → better hop-2 retrieval",
+   "removed verbose step 5 rules → simpler evidence synthesis → better generalization AND narrower val-test gap",
+   "added explicit answer format → fewer extraction failures",
+   "step 6 example_reasoning grew to 150 words → context crowding → format non-compliance → regex extraction failure")
 
-2. **The trade-off**: What did the change gain vs lose? (e.g., "gained retrieval precision but lost flexibility for multi-entity questions", "faster convergence on common patterns but narrower coverage of edge cases")
+2. **The trade-off**: What did the change gain vs lose? (e.g., "gained retrieval precision
+   but lost flexibility for multi-entity questions", "faster convergence on common patterns
+   but narrower coverage of edge cases")
 
-3. **Actionable lesson**: What should future mutations learn? (e.g., "preserve clean format constraints in step 3", "avoid adding more conflict-resolution rules to step 5", "always include explicit 'Answer: <answer>' in step 6")
+3. **Actionable lesson**: What should future mutations learn? (e.g., "preserve clean format
+   constraints in step 3", "avoid adding more conflict-resolution rules to step 5",
+   "always include explicit 'Answer: <answer>' in step 6")
 
-**REGRESSION CHECKLIST** (use when performance degraded):
-- Did a step's explicit output format constraint get weakened or removed?
-- Did step 3 instruction become more verbose or ambiguous (potentially polluting BM25 queries)?
-- Did step 5 conflict-resolution rules increase in complexity without accuracy gain?
-- Did the system_prompt grow significantly longer (crowding per-step instructions)?
-- Did a useful entity-bridging instruction in step 3 get removed or generalized away?
-- Did step 6 lose its explicit 'Answer: <answer>' format requirement?
+**REGRESSION CHECKLIST** (ordered by typical impact; use when performance degraded):
+1. Did step 3 instruction lose its "output ONLY search terms" constraint? (BM25 query
+   contamination — affects retrieval for ALL questions)
+2. Did step 6 lose the explicit 'Answer: <answer>' format requirement? (regex extraction
+   failures on all affected questions)
+3. Did step 2 lose an explicit instruction to name the bridge entity? (hop-2 query
+   formation fails; step 3 searches for the wrong thing)
+4. Did a step's explicit output format constraint get weakened or removed?
+5. Did step 5 conflict-resolution rules increase in complexity without measured gain?
+   (likely val-set overfitting — check val-test gap, not just val EM delta)
+6. Did the system_prompt grow significantly longer? (context crowding affects all 4 LLM
+   steps simultaneously)
+7. Did a useful entity-bridging instruction in step 3 get removed or generalized away?
+8. Did any step gain a long example_reasoning block (>120 words)? (context crowding
+   reduces format compliance; check step 3 and step 6 first)
 
 **QUALITY BAR:**
 ❌ BAD: "Changed step 3 text" (just restates the diff)
