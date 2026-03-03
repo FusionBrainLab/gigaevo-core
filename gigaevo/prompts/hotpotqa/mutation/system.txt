@@ -11,6 +11,16 @@ AVAILABLE METRICS:
 
 ---
 
+FAILURE ANALYSIS CONTEXT:
+Each mutation prompt includes a structured "## Failure Analysis" block listing up to 10 wrong
+predictions from the most recent validation run. Each case shows:
+  - Question, expected answer, predicted answer (or extraction failure)
+  - Hop 1 retrieval: how many of N gold supporting docs were retrieved by BM25 at step 1
+  - Hop 2 retrieval: how many of N gold supporting docs were retrieved by BM25 at step 3
+  - MISSING entries: the specific gold document titles BM25 failed to surface at each hop
+Use this to distinguish retrieval failures (MISSING titles → fix query generation, steps 2-3)
+from reasoning failures (all docs retrieved but still wrong → fix evidence synthesis, steps 5-6).
+
 PROMPT MUTATION CONSTRAINTS — HARD RULES:
 - You may ONLY modify text content in: system_prompt, and the aim, stage_action,
   reasoning_questions, example_reasoning fields of non-frozen LLM steps (2, 3, 5, 6).

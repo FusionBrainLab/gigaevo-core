@@ -67,18 +67,33 @@ def calculate_exact_match(
     return mean(matches) if matches else 0.0
 
 
-def validate(chain_spec: dict) -> dict:
+def parse_retrieved_titles(step_output: str) -> list[str]:
+    """Parse document titles from BM25 retrieval output.
+
+    Input format: "[1] Title | passage text\n[2] Title | passage text..."
+    Returns list of title strings.
+    """
+    return re.findall(r"\[(?:\d+)\]\s+(.+?)\s+\|", step_output)
+
+
+def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     """Validate chain specification and compute fitness metrics.
 
     P1 (Rotation): Selects a chain_spec-hash-seeded random subset of 300 samples
     from the full 1000 training samples. Different chain specs get different subsets,
     reducing val-test overfitting from subset memorisation.
 
+    Also returns ASI-enhanced failure cases with per-hop BM25 retrieval diagnostics,
+    giving the mutation LLM concrete signal about retrieval gaps vs. reasoning gaps.
+
+    step_outputs[0] = hop-1 BM25 retrieved passages
+    step_outputs[3] = hop-2 BM25 retrieved passages
+
     Args:
         chain_spec: Dict from entrypoint() with system_prompt and steps
 
     Returns:
-        metrics dict with fitness, avg_extraction_failures, is_valid
+        (metrics, failures[:10]) — metrics dict + ASI-enhanced failure cases
     """
     # 1. Structural validation (catch ValueError → return sentinels)
     baseline = load_baseline()
@@ -146,4 +161,30 @@ def validate(chain_spec: dict) -> dict:
         "is_valid": 1,
     }
 
-    return metrics
+    # 8. Collect ASI-enhanced failure cases with per-hop retrieval diagnostics
+    failures = []
+    for raw_s, sample, result, pred, target in zip(
+        raw_300, dataset, results, predictions, targets
+    ):
+        if pred is None or normalize_text(pred) != normalize_text(str(target)):
+            gold_titles = set(
+                raw_s.get("supporting_facts", {}).get("title", [])
+            )
+            hop1_out = result.step_outputs[0] if len(result.step_outputs) > 0 else ""
+            hop2_out = result.step_outputs[3] if len(result.step_outputs) > 3 else ""
+            hop1_titles = set(parse_retrieved_titles(hop1_out))
+            hop2_titles = set(parse_retrieved_titles(hop2_out))
+            hop1_missing = sorted(gold_titles - hop1_titles)
+            hop2_missing = sorted(gold_titles - hop2_titles)
+            failures.append({
+                "question": sample["question"],
+                "gold": target,
+                "predicted": pred,
+                "hop1_retrieved": len(hop1_titles & gold_titles),
+                "hop2_retrieved": len(hop2_titles & gold_titles),
+                "n_gold": len(gold_titles),
+                "hop1_missing": hop1_missing,
+                "hop2_missing": hop2_missing,
+            })
+
+    return (metrics, failures[:10])
