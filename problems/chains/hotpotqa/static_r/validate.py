@@ -78,7 +78,7 @@ def validate(chain_spec: dict) -> dict:
         chain_spec: Dict from entrypoint() with system_prompt and steps
 
     Returns:
-        (metrics, failures[:10]) tuple — metrics dict + failure cases for formatter
+        metrics dict with fitness, avg_extraction_failures, is_valid
     """
     # 1. Structural validation (catch ValueError → return sentinels)
     baseline = load_baseline()
@@ -146,14 +146,4 @@ def validate(chain_spec: dict) -> dict:
         "is_valid": 1,
     }
 
-    # 8. Collect failure cases for reflective mutation context
-    failures = []
-    for sample, pred, target in zip(dataset, predictions, targets):
-        if pred is None or normalize_text(pred) != normalize_text(str(target)):
-            failures.append({
-                "question": sample["question"],
-                "gold": target,
-                "predicted": pred,
-            })
-    # Return (metrics, artifact) tuple — FetchArtifact extracts artifact for FormatterStage
-    return (metrics, failures[:10])
+    return metrics
