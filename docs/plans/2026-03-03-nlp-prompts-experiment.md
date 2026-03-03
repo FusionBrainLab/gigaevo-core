@@ -82,24 +82,30 @@ The `task_description.txt` already provides domain context about the chain archi
 
 All treatment runs use:
 - NLP-specific prompts (`prompts=hotpotqa` Hydra override)
-- Standard pipeline (NOT hotpotqa_asi) -- we do NOT include P2 (ASI) in the base treatment
-- Fixed 300-sample validation (NOT P1 rotation) -- we do NOT include P1 either
-- Rationale: P1 and P2 showed null-to-negative effects. Adding them would confound the prompt intervention. If NLP prompts show a positive signal, we can test P1+P2 combination in a follow-up.
+- Rotation val set (`problem.name=chains/hotpotqa/static_r`) — each program evaluated on a different hash-seeded 300/1000 subset
+- Standard pipeline (NOT hotpotqa_asi) -- we do NOT include P2 (ASI)
+- Rationale: P2 (ASI) showed null-to-negative effect alone (Run F: 53.7%). Rotation is included to reduce selection noise from the fixed-300 val set's ~5-10pp val-test gap.
 
-The control run uses the exact same config as Run E (standard pipeline, fixed 300 validation, default prompts).
+The control run uses the exact same config as Run E (standard pipeline, fixed 300 validation (`static`), default prompts).
 
-### 4.3 Val Set Decision: Fixed 300
+### 4.3 Val Set Decision: Rotation for Treatment, Fixed for Control
 
-**Rationale**: P1 (rotation) showed null effect on test EM and a *worse* val-test gap than Run E in some conditions. Fixed-300 matches the control condition (Run E), enabling clean comparison. The 5.7pp val-test gap in Run E is a known property of this setup; it does not prevent detecting mutation quality improvements (a better mutation engine should improve both val and test EM).
+**Treatment (L/M/N)**: Use `static_r` (rotation, 300/1000 samples, hash-seeded per chain spec). Rationale: the 5.7-9.7pp val-test gap in P1xP2 was partially caused by stable val-set overfitting. Rotation ensures val scores are unbiased estimators of generalisation; programs that truly improve will show consistent gains across different subsets.
+
+**Control (K)**: Uses `static` (fixed first-300 samples), matching Run E exactly. This preserves the historical comparison.
+
+**Tradeoff**: Two variables change between K and L/M/N (prompts + val set). This is a deliberate compound treatment: the research question is "does the NLP-prompts-with-rotation package improve test EM?" rather than isolating each variable. The pre-registered contrast is K vs. L/M/N mean.
 
 ## 5. Design Table
 
-| Run | Label | Prompts | Pipeline | Problem Dir | DB | Mutation Server | Chain Server | Seed |
-|-----|-------|---------|----------|-------------|----|-----------------|--------------|------|
-| K | Control | default | standard | static | 14 | INTERNAL_IP:8777 | INTERNAL_IP:8001 | ddce37b4 |
-| L | NLP-1 | hotpotqa | standard | static | 15 | INTERNAL_IP:8777 | INTERNAL_IP:8000 | ddce37b4 |
-| M | NLP-2 | hotpotqa | standard | static | 16 | INTERNAL_IP:8777 | 10.225.185.235:8001 | ddce37b4 |
-| N | NLP-3 | hotpotqa | standard | static | 17 | 10.225.51.251:8777 | 10.225.185.235:8000 | ddce37b4 |
+| Run | Label | Prompts | Problem Dir | Val Set | DB | Mutation Server | Chain Server | Seed |
+|-----|-------|---------|-------------|---------|----|-----------------|--------------|----- |
+| K | Control | default | static | fixed-300 | 14 | INTERNAL_IP:8777 | INTERNAL_IP:8001 | ddce37b4 |
+| L | NLP-1 | hotpotqa | static_r | rotation-300 | 15 | INTERNAL_IP:8777 | INTERNAL_IP:8000 | ddce37b4 |
+| M | NLP-2 | hotpotqa | static_r | rotation-300 | 16 | INTERNAL_IP:8777 | 10.225.185.235:8001 | ddce37b4 |
+| N | NLP-3 | hotpotqa | static_r | rotation-300 | 17 | 10.225.51.251:8777 | 10.225.185.235:8000 | ddce37b4 |
+
+All runs use `pipeline=standard`, `num_parents=1`, `max_mutations_per_generation=8`, `max_elites_per_generation=8`, `max_generations=50`.
 
 **Run labels**: K-N continue the alphabetical sequence (E-H used by P1xP2).
 
@@ -112,20 +118,20 @@ The control run uses the exact same config as Run E (standard pipeline, fixed 30
 Held constant across all 4 runs:
 - Seed program: ddce37b4
 - max_generations: 50
-- max_mutations_per_generation: 16 (effective 8 with AllCombinationsParentSelector + num_parents=1 + max_elites=8)
+- max_mutations_per_generation: 8 (AllCombinationsParentSelector + num_parents=1 + max_elites=8)
 - max_elites_per_generation: 8
 - num_parents: 1
 - primary_resolution: 50
 - Chain LLM: Qwen3-8B (thinking mode, temp=0.6, top_p=0.95, top_k=20)
 - Mutation LLM: Qwen3-235B-A22B-Thinking-2507
 - step_max_tokens: {2: 4096, 3: 2048, 5: 4096, 6: 2048}
-- Validation: fixed first 300 train samples
 - Test set: 300 held-out samples (HotpotQA_test.jsonl)
-- Problem directory: `problems/chains/hotpotqa/static` (same for all -- no P1 rotation, no P2 ASI)
 - Pipeline: `standard`
 - Redis: fresh DBs, no resume
 
-**Only difference between K (control) and L/M/N (treatment)**: `prompts.dir` (null vs. path to `gigaevo/prompts/hotpotqa/`).
+**Differences between K (control) and L/M/N (treatment)**:
+1. `prompts.dir`: null (K) vs. `gigaevo/prompts/hotpotqa/` (L/M/N)
+2. Problem directory: `static` fixed-300 val (K) vs. `static_r` rotation-300 val (L/M/N)
 
 ## 7. Intervention Specification: NLP-Specific Prompts
 
@@ -319,43 +325,41 @@ Per monitoring plan above.
 ## 13. Launch Script Specification
 
 ```bash
-# Common parameters (same as P1xP2)
+# Common parameters
 COMMON_PARAMS=(
+    pipeline=standard
     num_parents=1
     primary_resolution=50
-    max_mutations_per_generation=16
+    max_mutations_per_generation=8
     max_elites_per_generation=8
     max_generations=50
     program_loader.problem_dir="$SEED_DIR"
 )
 
-# Run K: control (default prompts)
+# Run K: control (default prompts, fixed-300)
 python run.py ${COMMON_PARAMS[@]} \
     problem.name=chains/hotpotqa/static \
-    pipeline=standard \
+    prompts=default \
     redis.db=14 \
     llm_base_url="http://localhost:8000/v1"
 
-# Run L: NLP prompts
+# Run L: NLP prompts + rotation
 python run.py ${COMMON_PARAMS[@]} \
-    problem.name=chains/hotpotqa/static \
-    pipeline=standard \
+    problem.name=chains/hotpotqa/static_r \
     prompts=hotpotqa \
     redis.db=15 \
     llm_base_url="http://localhost:8000/v1"
 
-# Run M: NLP prompts
+# Run M: NLP prompts + rotation
 python run.py ${COMMON_PARAMS[@]} \
-    problem.name=chains/hotpotqa/static \
-    pipeline=standard \
+    problem.name=chains/hotpotqa/static_r \
     prompts=hotpotqa \
     redis.db=16 \
     llm_base_url="http://localhost:8000/v1"
 
-# Run N: NLP prompts
+# Run N: NLP prompts + rotation
 python run.py ${COMMON_PARAMS[@]} \
-    problem.name=chains/hotpotqa/static \
-    pipeline=standard \
+    problem.name=chains/hotpotqa/static_r \
     prompts=hotpotqa \
     redis.db=17 \
     llm_base_url="http://10.225.51.251:8777/v1"
