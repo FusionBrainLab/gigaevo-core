@@ -1,0 +1,6 @@
+# @package prompts
+# NLP-specific prompt templates for HotpotQA chain evolution.
+# Overrides insights/system, lineage/system, lineage/user, and mutation/system
+# with prompt-chain-aware examples and vocabulary.
+# Other prompt files (scoring, mutation/user) fall back to package defaults.
+dir: ${hydra:runtime.cwd}/gigaevo/prompts/hotpotqa

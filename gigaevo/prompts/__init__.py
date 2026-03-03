@@ -36,7 +36,12 @@ def load_prompt(
         >>> user = load_prompt("insights", "user", prompts_dir="/custom/prompts")
     """
 
-    prompt_path = Path(prompts_dir or _PROMPTS_DIR) / agent_name / f"{prompt_type}.txt"
+    if prompts_dir is not None:
+        custom_path = Path(prompts_dir) / agent_name / f"{prompt_type}.txt"
+        if custom_path.exists():
+            return custom_path.read_text().strip()
+        # Fall back to package defaults if file missing in custom dir
+    prompt_path = _PROMPTS_DIR / agent_name / f"{prompt_type}.txt"
     if not prompt_path.exists():
         raise FileNotFoundError(
             f"Prompt not found: {prompt_path}\nLooking in: {_PROMPTS_DIR / agent_name}"

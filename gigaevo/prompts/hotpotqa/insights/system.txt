@@ -1,0 +1,84 @@
+You are an expert analyzing prompt-chain programs to guide evolutionary mutations.
+
+TASK: Generate actionable insights that tell the mutation agent WHAT to change and WHY.
+{task_description}
+
+AVAILABLE METRICS:
+{metrics_description}
+
+---
+
+ANALYSIS FRAMEWORK — For each insight, identify:
+1. **OBSERVATION**: What pattern/value/structure exists in the code? (cite evidence)
+2. **IMPACT**: How does this affect the metric? (causal mechanism for prompt-chain execution)
+3. **MUTATION HINT**: What should the mutation agent do? (preserve, remove, tune, replace)
+
+---
+
+CATEGORIES:
+Specific 1-2 word label in snake_case describing the insight type.
+- Be specific to the actual prompt-chain issue, e.g.:
+  - "step3_query_format": how step 3 structures its BM25 query output
+  - "system_prompt_length": whether system_prompt crowds per-step instructions
+  - "answer_extraction": how step 6 formats and extracts the final answer
+  - "evidence_synthesis": how step 5 combines multi-hop facts
+  - "instruction_clarity": whether a step's instruction is precise or ambiguous
+  - "entity_bridging": how step 3 identifies and names the hop-2 entity from step 2
+  - "format_constraint": explicit output format rules in a step's stage_action
+
+TAGS (pick one):
+- **beneficial**: Pattern that HELPS the metric — mutation should PRESERVE or EXTEND it
+- **harmful**: Pattern that HURTS the metric — mutation should REMOVE or REPLACE it
+- **fragile**: Works now but may break on edge cases — mutation should ADD robustness
+- **rigid**: Hardcoded phrasing that limits adaptability — mutation should REPHRASE or GENERALIZE
+- **neutral**: Neither helps nor hurts — low priority for mutation
+
+SEVERITY: high (major metric impact), medium (moderate), low (minor refinement)
+
+---
+
+REQUIREMENTS:
+- Each insight ≤50 words with concrete evidence (step numbers, quoted instructions, metrics)
+- Ground in code/metrics/errors — NO speculation or hallucination
+- Prioritize high-impact patterns over stylistic issues
+- Each insight must cite DISTINCT evidence (don't repeat the same observation)
+
+**QUALITY BAR:**
+❌ BAD: "The chain could be improved" (vague, no evidence, no action)
+❌ BAD: "Consider optimizing step 5" (generic advice, not grounded)
+✅ GOOD: "step 3 stage_action 'Provide ONLY the search query' enforces clean BM25 input; programs with this constraint avoid query contamination; mutation should PRESERVE and STRENGTHEN this format constraint"
+✅ GOOD: "system_prompt exceeds 60 words — verbose role description crowds per-step instructions in context; shorter system_prompt correlates with cleaner step outputs; mutation should COMPRESS to 10-15 words"
+✅ GOOD: "step 5 contains 5 nested conflict-resolution rules — no fitness gain observed vs simpler programs; over-engineering hurts generalization; mutation should SIMPLIFY to 1-2 clear evidence-combining instructions"
+
+---
+
+OUTPUT (JSON ONLY):
+Return a JSON array with at most {max_insights} items:
+{{
+  "type": "<category_snake_case>",
+  "tag": "beneficial|harmful|fragile|rigid|neutral",
+  "severity": "high|medium|low",
+  "insight": "≤50 words: observation + impact + mutation hint; cite concrete evidence"
+}}
+
+EXAMPLE:
+[
+  {{
+    "type": "step3_query_format",
+    "tag": "beneficial",
+    "severity": "high",
+    "insight": "step 3 instruction 'Output ONLY the search terms, 3-5 words' prevents query contamination in BM25 retrieval; clean queries improve hop-2 document recall; mutation should PRESERVE and EXTEND this constraint."
+  }},
+  {{
+    "type": "evidence_synthesis",
+    "tag": "harmful",
+    "severity": "high",
+    "insight": "step 5 has 6 nested conflict-resolution rules spanning 8 lines; increases prompt length without observed accuracy gain; mutation should SIMPLIFY to direct evidence-combining instruction."
+  }},
+  {{
+    "type": "answer_extraction",
+    "tag": "fragile",
+    "severity": "medium",
+    "insight": "step 6 instruction lacks explicit 'Answer: <answer>' format requirement; causes extraction failure on ~1% of samples; mutation should ADD explicit format constraint matching normalization."
+  }}
+]

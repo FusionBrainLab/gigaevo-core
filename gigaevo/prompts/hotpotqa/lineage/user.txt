@@ -1,0 +1,47 @@
+TASK: {task_description}
+
+METRIC: {metric_name} ({metric_description})
+Direction: {higher_is_better_text}
+Observed delta: {delta:+.5f} → {delta_interpretation}
+
+ADDITIONAL METRICS:
+{additional_metrics}
+
+ERRORS:
+Parent: {parent_errors}
+Child: {child_errors}
+
+---
+
+**ANALYSIS INSTRUCTIONS:**
+
+Analyze the diff for **logical changes** (one insight per logical change). Related hunks implementing the same modification should be grouped into a single insight. For each logical change, explain:
+
+1. **The mechanism**: WHY did this specific prompt change affect the metric? (e.g., "tighter step 3 output format → cleaner BM25 query → better hop-2 retrieval", "removed verbose step 5 rules → simpler evidence synthesis → better generalization", "added explicit answer format → fewer extraction failures")
+
+2. **The trade-off**: What did the change gain vs lose? (e.g., "gained retrieval precision but lost flexibility for multi-entity questions", "faster convergence on common patterns but narrower coverage of edge cases")
+
+3. **Actionable lesson**: What should future mutations learn? (e.g., "preserve clean format constraints in step 3", "avoid adding more conflict-resolution rules to step 5", "always include explicit 'Answer: <answer>' in step 6")
+
+**REGRESSION CHECKLIST** (use when performance degraded):
+- Did a step's explicit output format constraint get weakened or removed?
+- Did step 3 instruction become more verbose or ambiguous (potentially polluting BM25 queries)?
+- Did step 5 conflict-resolution rules increase in complexity without accuracy gain?
+- Did the system_prompt grow significantly longer (crowding per-step instructions)?
+- Did a useful entity-bridging instruction in step 3 get removed or generalized away?
+- Did step 6 lose its explicit 'Answer: <answer>' format requirement?
+
+**QUALITY BAR:**
+❌ BAD: "Changed step 3 text" (just restates the diff)
+✅ GOOD: "Tightened step 3 to emit entity+relation only (@@ -12 @@): cleaner BM25 query removes prose noise; correlates with +0.015 val EM; lesson: step 3 output should be minimal search terms, not a sentence"
+
+Reference hunks by their headers. Group related hunks when they implement one logical change.
+
+---
+
+{diff_blocks}
+
+PARENT CODE (reference):
+```python
+{parent_code}
+```
