@@ -35,7 +35,7 @@ fi
 
 # ── Phase 2: review doc with APPROVED verdict ──────────────────────────────
 if [[ -f "$EXP_DIR/02_review.md" ]]; then
-    if grep -qi "## Overall.*APPROVED\|verdict.*APPROVED\|APPROVED" "$EXP_DIR/02_review.md"; then
+    if grep -q '\[x\] APPROVED\|Verdict.*APPROVED\|Overall.*APPROVED\|## Overall.*APPROVED' "$EXP_DIR/02_review.md"; then
         ok "02_review.md exists and contains APPROVED"
     else
         fail "02_review.md exists but does not contain APPROVED verdict"

@@ -96,6 +96,23 @@ PYTHONPATH="$PROJ" "$PYTHON" "$PROJ/tools/top_programs.py" \
     > "$ARCHIVE_DIR/top50.json"
 echo "      → top50.json written"
 
+# ── Step 3b: Copy dry-run output (contains full resolved config) ─────────────
+DRY_RUN_OUT="$ARCHIVE_BASE/$LABEL/dry_run_output.txt"
+if [[ -f "$DRY_RUN_OUT" ]]; then
+    echo "[3b/5] dry_run_output.txt already present — skipping"
+else
+    # Best-effort: find the most recent Hydra config for this experiment
+    LATEST_HYDRA=$(find "$PROJ/outputs" -name "config.yaml" -path "*/.hydra/*" 2>/dev/null \
+        | xargs ls -t 2>/dev/null | head -1 || true)
+    if [[ -n "$LATEST_HYDRA" ]]; then
+        cp "$LATEST_HYDRA" "$ARCHIVE_DIR/resolved_hydra_config.yaml"
+        echo "[3b/5] Copied Hydra resolved config: $LATEST_HYDRA"
+    else
+        echo "[3b/5] WARN: No Hydra output found. Ensure dry_run_output.txt was saved at launch."
+        echo "       Run: PYTHONPATH=. python run.py <params> dry_run=true > $DRY_RUN_OUT"
+    fi
+fi
+
 # ── Step 4: Environment snapshot (once per experiment, not per run) ──────────
 ENV_FILE="$ARCHIVE_BASE/environment.txt"
 if [[ ! -f "$ENV_FILE" ]]; then

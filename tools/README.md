@@ -94,7 +94,28 @@ Also uploads `environment.txt` (pip freeze, OS, GPU) once per experiment.
 
 ---
 
-### `check_phase_order.sh` — Protocol phase gate
+### `check_experiment_complete.sh` — Full lifecycle gate (pre-merge)
+
+Verifies that ALL experiment phases are complete before the PR is merged.
+Complements `check_phase_order.sh` (which gates Phase 4 entry).
+
+```bash
+bash tools/check_experiment_complete.sh <experiment-name>
+```
+
+Checks:
+- All phase docs (01–05) exist and are committed
+- `02_review.md` contains a clear APPROVED verdict
+- GitHub Release `exp/<name>` exists and has uploaded assets
+- `environment_freeze.txt` committed
+- `05_results.md` has Deviations section and no unfilled placeholders
+- `experiments/INDEX.md` has an entry for this experiment
+
+Exit code 0 = safe to merge. Exit code 1 = do not merge.
+
+---
+
+### `check_phase_order.sh` — Protocol phase gate (pre-launch)
 
 Verifies that all required protocol documents exist, are committed, and are in the correct
 state before proceeding to launch. Run this as the first step of Phase 4.
@@ -481,12 +502,17 @@ redis-cli -n <db> KEYS "*:program:*" | head -1
 **Important:** The `--redis-prefix` argument for tools should be just the problem name (e.g., `heilbron`), NOT the full key pattern.
 
 ### Clearing Old Data
-```bash
-# Flush specific database (removes ALL data in that database)
-redis-cli -n 5 FLUSHDB
 
-# Or delete by pattern for specific problem (careful!)
-redis-cli -n 5 --scan --pattern "old_problem:*" | xargs redis-cli -n 5 DEL
+**Do NOT use `redis-cli FLUSHDB` directly** — it bypasses the exec_runner worker
+kill step (workers repopulate Redis immediately) and the archive existence warning.
+Use `tools/flush.py` instead:
+
+```bash
+# Preview (dry-run, default)
+PYTHONPATH=. python tools/flush.py --db 5
+
+# Execute (kills workers first, then flushes, warns if data not archived)
+PYTHONPATH=. python tools/flush.py --db 5 --confirm
 ```
 
 ### Large Datasets
