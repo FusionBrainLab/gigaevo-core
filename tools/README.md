@@ -65,6 +65,35 @@ a window where workers repopulate Redis. `flush.py` enforces the correct orderin
 
 ---
 
+### `archive_run.sh` — Archive and upload run data
+
+**Run this before flushing Redis or rebooting. Redis is ephemeral — data not exported is gone.**
+
+Exports all Redis data for a run to local files and uploads them as a GitHub Release asset.
+
+```bash
+# Dry run: export locally only (verify output)
+bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "chains/hotpotqa/static@0:K"
+
+# Export and upload to GitHub Release exp/hotpotqa_nlp_prompts
+bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "chains/hotpotqa/static@0:K" --upload
+
+# Archive all 4 runs
+for SPEC in "chains/hotpotqa/static@0:K" "chains/hotpotqa/static_r@1:L" \
+            "chains/hotpotqa/static_r@2:M" "chains/hotpotqa/static_r@3:N"; do
+  bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "$SPEC" --upload
+done
+```
+
+Each archive (uploaded as `<label>_archive.tar.gz` to the GitHub Release) contains:
+- `evolution_data.csv` — all programs, all generations, all metrics
+- `programs/*.py` — source code of every evaluated program
+- `top50.json` — top 50 programs with full metadata
+
+Also uploads `environment.txt` (pip freeze, OS, GPU) once per experiment.
+
+---
+
 ### `check_phase_order.sh` — Protocol phase gate
 
 Verifies that all required protocol documents exist, are committed, and are in the correct
