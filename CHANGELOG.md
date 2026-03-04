@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.15.1 (2026-03-04)
+
+### Bug Fixes
+
+- Correct @package directive in prompts/default.yaml
+  ([`40954d0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/40954d05ad2d0c8333d38f9374b61ff69a9b1755))
+
+
 ## v1.15.0 (2026-03-02)
 
 ### Bug Fixes
