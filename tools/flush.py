@@ -22,6 +22,7 @@ import argparse
 import subprocess
 import sys
 import textwrap
+import time
 
 import redis as redis_lib
 
@@ -74,6 +75,19 @@ def kill_workers(pids: list[int], dry_run: bool) -> None:
         print(f"[workers] Failed to kill (already dead?): {failed}")
 
 
+def warn_if_not_archived(db: int, before: int) -> None:
+    """Warn and pause if DB has data that may not have been archived yet."""
+    if before == 0:
+        return
+    print(f"[warn]  DB {db}: {before} keys present.")
+    print("[warn]  Have you run 'bash tools/archive_run.sh --upload' for this DB?")
+    print(
+        "[warn]  Flushing without archiving destroys all evolved programs permanently."
+    )
+    print("[warn]  Proceeding in 5 seconds — Ctrl+C to abort.")
+    time.sleep(5)
+
+
 def flush_db(db: int, host: str, port: int, dry_run: bool) -> bool:
     """Flush a single Redis DB. Returns True if successful (or dry-run)."""
     r = redis_lib.Redis(host=host, port=port, db=db)
@@ -82,6 +96,7 @@ def flush_db(db: int, host: str, port: int, dry_run: bool) -> bool:
         if dry_run:
             print(f"[flush] DRY-RUN — DB {db}: {before} keys would be flushed")
             return True
+        warn_if_not_archived(db, before)
         r.flushdb()
         after = r.dbsize()
         if after == 0:
