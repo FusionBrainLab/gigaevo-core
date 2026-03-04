@@ -65,6 +65,25 @@ a window where workers repopulate Redis. `flush.py` enforces the correct orderin
 
 ---
 
+### `check_phase_order.sh` — Protocol phase gate
+
+Verifies that all required protocol documents exist, are committed, and are in the correct
+state before proceeding to launch. Run this as the first step of Phase 4.
+
+```bash
+bash tools/check_phase_order.sh <experiment-name>
+```
+
+Checks:
+- `01_design.md` exists
+- `02_review.md` exists and contains APPROVED verdict
+- `03_plan.md` is committed to git (not just on disk)
+- `run_test_eval.sh` sha256 hash matches what is pinned in `03_plan.md` (if applicable)
+
+Exit code 0 = all passed. Exit code 1 = one or more failures (do not proceed to launch).
+
+---
+
 ## Analysis Tools
 
 ### `top_programs.py` — Inspect top programs
