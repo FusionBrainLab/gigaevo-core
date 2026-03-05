@@ -26,6 +26,7 @@
 set -euo pipefail
 
 PYTHON=~/envs/evo_fast/bin/python
+GH=~/envs/evo_fast/bin/gh
 PROJ="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
 # ── Argument parsing ────────────────────────────────────────────────────────
@@ -160,10 +161,10 @@ if [[ "$UPLOAD" == "true" ]]; then
 
     echo "=== Uploading to GitHub Release: $RELEASE_TAG ==="
 
-    # Create release if it doesn't exist yet
-    if ! gh release view "$RELEASE_TAG" &>/dev/null 2>&1; then
+    # Create release if it doesn't exist yet (idempotent — safe to run in parallel)
+    if ! "$GH" release view "$RELEASE_TAG" &>/dev/null 2>&1; then
         echo "  Creating release $RELEASE_TAG..."
-        gh release create "$RELEASE_TAG" \
+        "$GH" release create "$RELEASE_TAG" \
             --title "$RELEASE_TITLE" \
             --notes "Evolution run archives for experiment: $EXPERIMENT
 
@@ -172,20 +173,20 @@ Uploaded by tools/archive_run.sh. Each .tar.gz contains:
 - programs/*.py (source code of all evaluated programs)
 - top50.json (top 50 programs with full metadata)
 " \
-            --prerelease
+            --prerelease || echo "  Release already created by parallel run — continuing"
     else
         echo "  Release $RELEASE_TAG already exists — uploading asset to it"
     fi
 
     # Upload the run tarball
     echo "  Uploading ${LABEL}_archive.tar.gz..."
-    gh release upload "$RELEASE_TAG" "$TARBALL" --clobber
+    "$GH" release upload "$RELEASE_TAG" "$TARBALL" --clobber
 
     # Upload environment.txt (once — clobber is idempotent)
     echo "  Uploading environment.txt..."
-    gh release upload "$RELEASE_TAG" "$ENV_FILE" --clobber
+    "$GH" release upload "$RELEASE_TAG" "$ENV_FILE" --clobber
 
-    RELEASE_URL=$(gh release view "$RELEASE_TAG" --json url -q .url)
+    RELEASE_URL=$("$GH" release view "$RELEASE_TAG" --json url -q .url)
     echo
     echo "=== Upload complete ==="
     echo "  Release URL: $RELEASE_URL"
