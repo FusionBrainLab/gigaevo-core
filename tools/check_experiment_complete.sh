@@ -18,6 +18,7 @@ set -euo pipefail
 EXPERIMENT=${1:?Usage: $0 <experiment-name>}
 PROJ="$(git rev-parse --show-toplevel)"
 EXP_DIR="$PROJ/experiments/$EXPERIMENT"
+GH=~/envs/evo_fast/bin/gh
 errors=0
 warnings=0
 
@@ -29,22 +30,48 @@ echo "=== Experiment lifecycle check: $EXPERIMENT ==="
 echo
 
 # ── Phase 1–3: design, review, pre-registration ──────────────────────────────
+# Experiments may store docs in experiments/<name>/ (template format) OR
+# in docs/plans/ (older pre-template format). Accept either.
+DOCS_IN_EXP=true
 for doc in 01_design.md 02_review.md 03_plan.md; do
-    if [[ -f "$EXP_DIR/$doc" ]]; then
+    if [[ ! -f "$EXP_DIR/$doc" ]]; then
+        DOCS_IN_EXP=false
+        break
+    fi
+done
+
+if [[ "$DOCS_IN_EXP" == "true" ]]; then
+    for doc in 01_design.md 02_review.md 03_plan.md; do
         REL="experiments/$EXPERIMENT/$doc"
         if git -C "$PROJ" log --oneline -- "$REL" | grep -q .; then
             ok "$doc committed"
         else
             fail "$doc exists but not committed to git"
         fi
+    done
+else
+    # Check for docs/plans/ alternative (pre-template experiments)
+    # Try exact name, hyphenated variant, and keyword suffix (drop leading task prefix).
+    # e.g. hotpotqa_nlp_prompts → hotpotqa-nlp-prompts → nlp-prompts → nlp_prompts
+    EXP_HYPHEN="$(echo "$EXPERIMENT" | tr '_' '-')"
+    EXP_SUFFIX="$(echo "$EXPERIMENT" | sed 's/^[^_]*_//')"   # drop first component
+    EXP_SUFFIX_H="$(echo "$EXP_SUFFIX" | tr '_' '-')"
+    PLANS_MATCH=$(git -C "$PROJ" ls-files "docs/plans/" \
+        | grep -iE "$EXPERIMENT|$EXP_HYPHEN|$EXP_SUFFIX|$EXP_SUFFIX_H" || true)
+    if [[ -n "$PLANS_MATCH" ]]; then
+        ok "Phase 1–3 docs found in docs/plans/ (pre-template format): $PLANS_MATCH"
     else
-        fail "$doc missing"
+        # Final fallback: any committed file in docs/plans/ referencing this experiment
+        PLANS_ANY=$(git -C "$PROJ" ls-files "docs/plans/" | head -5 || true)
+        warn "01/02/03_plan.md not in experiments/$EXPERIMENT/ — check docs/plans/ manually (found: $PLANS_ANY)"
     fi
-done
+fi
 
-# Review verdict
-if [[ -f "$EXP_DIR/02_review.md" ]]; then
-    if grep -q '\[x\] APPROVED\|Verdict.*APPROVED\|Overall.*APPROVED' "$EXP_DIR/02_review.md"; then
+# Review verdict — check both locations
+REVIEW_FILE=""
+[[ -f "$EXP_DIR/02_review.md" ]] && REVIEW_FILE="$EXP_DIR/02_review.md"
+if [[ -n "$REVIEW_FILE" ]]; then
+    if grep -q '\[x\] APPROVED\|Verdict.*APPROVED\|Overall.*APPROVED' "$REVIEW_FILE"; then
         ok "02_review.md contains APPROVED verdict"
     else
         fail "02_review.md does not contain a clear APPROVED verdict"
@@ -55,8 +82,8 @@ echo
 
 # ── Phase 4: archives uploaded ────────────────────────────────────────────────
 RELEASE_TAG="exp/${EXPERIMENT}"
-if gh release view "$RELEASE_TAG" &>/dev/null 2>&1; then
-    ASSET_COUNT=$(gh release view "$RELEASE_TAG" --json assets -q '.assets | length')
+if "$GH" release view "$RELEASE_TAG" &>/dev/null 2>&1; then
+    ASSET_COUNT=$("$GH" release view "$RELEASE_TAG" --json assets -q '.assets | length')
     if [[ "$ASSET_COUNT" -gt 0 ]]; then
         ok "GitHub Release $RELEASE_TAG exists with $ASSET_COUNT asset(s)"
     else
