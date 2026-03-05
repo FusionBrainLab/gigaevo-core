@@ -1,0 +1,175 @@
+CHAIN EVOLUTION
+You are evolving a multi-step reasoning chain defined with structured fields.
+Each LLM step is specified by semantic fields (aim, stage_action, etc.) that are
+automatically assembled into prompts — you do not write raw prompt text. You control
+the structured-field content and the chain-level system_prompt.
+
+Consider the next guidelines:
+1) Chain optimization is a high-dimensional, experimental design problem. Each LLM step's
+   structured fields may combine:
+   - Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition
+   - Role & context framing: role definition, domain setup, goal specification, success criteria
+   - Instruction precision: task boundaries, structural directives
+   - In-context exemplars: input-output examples, pattern demonstrations
+   - Constraints: output schema, formatting rules
+   Additionally, multi-step chains require attention to:
+   - Step coordination: each step should produce output shaped for its downstream consumers
+   - Information flow: pass only relevant information forward to avoid context dilution
+   - Role specialization: each step should have a clear, focused responsibility
+2) Structured fields of LLM steps:
+   - "aim" (REQUIRED, non-empty): Primary objective of this step
+   - "stage_action" (REQUIRED, non-empty): Specific action to perform
+   - "reasoning_questions" (optional): Key questions to answer
+   - "example_reasoning" (optional): Example of expert reasoning
+   These fields are assembled into a full LLM prompt for each step. The assembly
+   order (top to bottom):
+
+     [If system_prompt is non-empty]
+     System Instructions:
+     {system_prompt}
+
+     Data:
+     {outer_context}              ← initial user input
+
+     [If step has dependencies]
+     Previous steps:
+     Step N. Title
+     Result: <output>
+     ...
+     Based on the results of previous steps, perform the following task:
+     Step {number}. {title}
+     Objective: {aim}
+     Task: {stage_action}
+     Questions: {reasoning_questions}
+     Example reasoning: {example_reasoning}
+
+   Key points:
+   - system_prompt is shared — prepended to every LLM step
+   - outer_context wraps every LLM step as "Data:\n{outer_context}"
+   - Dependencies list controls which prior step outputs are visible
+3) Implementation details:
+   - entrypoint() returns a dict with "system_prompt" (str, may be empty) and "steps" (list of dicts)
+   - Each step dict has metadata fields: number, title, step_type, dependencies
+   - LLM steps carry the four structured fields above; tool steps carry step_config
+   - Tool steps use $-reference syntax in input_mapping:
+       $outer_context — the original sample context string
+       $history[-1] — output of the immediately preceding step
+       $history[N] — output of step at index N (0-based)
+
+STEP TYPES
+The chain supports two step types:
+- "llm": LLM reasoning step with structured fields (aim, stage_action, reasoning_questions,
+  example_reasoning). The LLM receives the assembled prompt and produces a text response.
+- "tool": Tool execution step with step_config. Currently available tool:
+    "external_llm" — Sends a query to an external LLM and returns the response.
+    Usage in step_config: {"tool_name": "external_llm", "input_mapping": {"query": "$reference"}}
+    Where $reference is one of: $outer_context, $history[-1], $history[N]
+
+EVOLUTION MODE — STATIC
+The chain topology (step count, types, dependencies) is fixed. Only the structured field
+content of non-frozen LLM steps and the chain-level system_prompt are evolvable.
+Frozen steps must match the baseline exactly and cannot be modified.
+Each step dict additionally includes a "frozen" metadata field (True/False).
+
+TASK DEFINITION — PRIVACY-PRESERVING QUERY PIPELINE
+
+Challenge: Evolve a 3-step chain that rewrites user queries to remove PII, queries an
+external LLM with the sanitized version, and aggregates a final response. The fitness
+balances response quality against PII leakage.
+
+OBJECTIVE
+Return a chain specification guiding the downstream LLM such that:
+ 1) Step 1 removes all PII (names, addresses, emails, SSNs, phone numbers, etc.)
+    while preserving enough semantic content for the external LLM
+ 2) Step 2 (frozen tool) sends only the sanitized query to the external model
+ 3) Step 3 produces a high-quality response that addresses the user's original request
+ 4) No PII leaks into the sanitized query sent to the external model
+
+Output: Fitness = (quality + (1 - leakage)) / 2 | Goal: Fitness > 0.75
+
+PIPELINE COMPONENTS
+- LLM: Model for query sanitization (step 1) and response aggregation (step 3)
+- External LLM: Frozen tool step that receives the sanitized query and returns a response;
+  the external model sees ONLY the redacted query (isolated from PII via the tool step)
+
+CHAIN STRUCTURE — FIXED 3-STEP TOPOLOGY
+
+Step 1 (LLM) — "Redact PII from query"
+  Type: llm | Dependencies: [] | Frozen: No
+  Purpose: Rewrite the user query to remove all personally identifiable information
+  while preserving semantic meaning for the external LLM.
+
+Step 2 (TOOL) — "Query external LLM"
+  Type: tool | Dependencies: [1] | Frozen: Yes
+  Purpose: Send the sanitized query (step 1 output) to the external LLM.
+  Config: tool_name="external_llm", input_mapping={"query": "$history[-1]"}
+
+Step 3 (LLM) — "Aggregate final response"
+  Type: llm | Dependencies: [1, 2] | Frozen: No
+  Purpose: Combine the sanitized query (step 1) and the external response (step 2)
+  with access to the original query (via outer_context) to produce the final answer.
+
+GENOME FORMAT
+entrypoint() must return a dict:
+{
+    "system_prompt": "string — shared instruction prepended to every LLM step",
+    "steps": [
+        {   # Step 1 (LLM)
+            "number": 1,
+            "title": "Redact PII from query",
+            "step_type": "llm",
+            "aim": "required — step objective",
+            "stage_action": "required — what the LLM should do",
+            "reasoning_questions": "optional — guiding questions",
+            "example_reasoning": "optional — example thought process",
+            "dependencies": [],
+            "frozen": False,
+        },
+        {   # Step 2 (tool — frozen, must match exactly)
+            "number": 2,
+            "title": "Query external LLM",
+            "step_type": "tool",
+            "dependencies": [1],
+            "frozen": True,
+            "step_config": {
+                "tool_name": "external_llm",
+                "input_mapping": {"query": "$history[-1]"},
+            },
+        },
+        ...  # Step 3 follows the same LLM pattern
+    ],
+}
+
+CONSTRAINTS
+- LLM steps require non-empty "aim" and "stage_action" fields
+- Dependencies must reference only earlier steps (by number)
+- No dependency cycles
+- Steps list must have exactly 3 entries
+- Step types and dependencies must match the fixed topology
+- Frozen step (2) must match the baseline exactly
+
+FAILURE MODES
+- Missing or empty required fields (aim, stage_action for LLM steps)
+- Dependency cycles or references to non-existent/later steps
+- Wrong number of steps or type/deps mismatch with fixed topology
+- Frozen step content differs from baseline
+- Too aggressive redaction: loses semantic meaning, quality drops
+- Insufficient redaction: PII leaks through to external model
+- Poor aggregation: final response doesn't address the user's actual request
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A dict with "system_prompt" (str) and "steps" (list of step dicts)
+- Each step dict has metadata fields (number, title, step_type, dependencies)
+- LLM steps have structured fields (aim, stage_action, reasoning_questions, example_reasoning)
+- Tool steps have step_config with tool_name and input_mapping
+- Each step dict includes "frozen" field (True/False)
+
+TASK HINTS
+- Celebrity names and public figures do NOT count as PII
+- The sanitized query should remain a coherent, useful prompt for the external LLM
+- Step 3 has access to both the sanitized query (step 1) and the external response (step 2)
+  via its dependencies [1, 2], plus the original query via outer_context
+- Avoid re-introducing PII in the final response (step 3)
+- Step 2 is a tool step (not LLM) to ensure the external model receives ONLY the redacted
+  query — LLM steps always see outer_context (the original PII-containing query)

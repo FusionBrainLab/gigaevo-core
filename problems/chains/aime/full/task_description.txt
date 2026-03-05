@@ -1,0 +1,129 @@
+CHAIN EVOLUTION
+You are evolving a multi-step reasoning chain defined with structured fields.
+Each LLM step is specified by semantic fields (aim, stage_action, etc.) that are
+automatically assembled into prompts — you do not write raw prompt text. You control
+the structured-field content and the chain-level system_prompt.
+
+Consider the next guidelines:
+1) Chain optimization is a high-dimensional, experimental design problem. Each LLM step's
+   structured fields may combine:
+   - Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition
+   - Role & context framing: role definition, domain setup, goal specification, success criteria
+   - Instruction precision: task boundaries, structural directives
+   - In-context exemplars: input-output examples, pattern demonstrations
+   - Constraints: output schema, formatting rules
+   Additionally, multi-step chains require attention to:
+   - Step coordination: each step should produce output shaped for its downstream consumers
+   - Information flow: pass only relevant information forward to avoid context dilution
+   - Role specialization: each step should have a clear, focused responsibility
+2) Structured fields of LLM steps:
+   - "aim" (REQUIRED, non-empty): Primary objective of this step
+   - "stage_action" (REQUIRED, non-empty): Specific action to perform
+   - "reasoning_questions" (optional): Key questions to answer
+   - "example_reasoning" (optional): Example of expert reasoning
+   These fields are assembled into a full LLM prompt for each step. The assembly
+   order (top to bottom):
+
+     [If system_prompt is non-empty]
+     System Instructions:
+     {system_prompt}
+
+     Data:
+     {outer_context}              ← initial user input
+
+     [If step has dependencies]
+     Previous steps:
+     Step N. Title
+     Result: <output>
+     ...
+     Based on the results of previous steps, perform the following task:
+     Step {number}. {title}
+     Objective: {aim}
+     Task: {stage_action}
+     Questions: {reasoning_questions}
+     Example reasoning: {example_reasoning}
+
+   Key points:
+   - system_prompt is shared — prepended to every LLM step
+   - outer_context wraps every LLM step as "Data:\n{outer_context}"
+   - Dependencies list controls which prior step outputs are visible
+3) Implementation details:
+   - entrypoint() returns a dict with "system_prompt" (str, may be empty) and "steps" (list of dicts)
+   - Each step dict has metadata fields: number, title, step_type, dependencies
+   - LLM steps carry the four structured fields above
+
+STEP TYPES
+The chain supports one step type:
+- "llm": LLM reasoning step with structured fields (aim, stage_action, reasoning_questions,
+  example_reasoning). The LLM receives the assembled prompt and produces a text response.
+
+EVOLUTION MODE — FULL CHAIN
+You can freely design the chain: change step count, types, dependencies, and all
+structured field content. There are NO frozen steps — every step can be modified.
+You can add up to 3 steps total.
+
+TASK DEFINITION — MATH OLYMPIAD PROBLEM SOLVING
+
+Challenge: Design a chain (up to 3 LLM steps) that maximizes accuracy on math olympiad-level competition problems.
+
+OBJECTIVE
+Return a chain specification guiding the downstream LLM such that:
+ 1) The chain guides rigorous mathematical reasoning
+ 2) The final step produces a clear, parseable integer answer (0-999)
+ 3) The answer is enclosed in \boxed{...} format
+ 4) The chain maximizes accuracy on math competition problems
+
+Output: '\boxed{NNN}' (extractable by regex) | Goal: Accuracy > 0.3
+
+PIPELINE COMPONENTS
+- LLM: Model with basic mathematical reasoning capabilities
+
+CHAIN STRUCTURE — FULLY EVOLVABLE
+
+You may design any chain with up to 3 steps. The chain must:
+- Use only "llm" step types (no tools available)
+- End with an LLM step (the last step by number must be step_type="llm")
+- Have valid forward-only dependencies (no cycles, no references to later steps)
+
+GENOME FORMAT
+entrypoint() must return a dict:
+{
+    "system_prompt": "string — shared instruction prepended to every LLM step",
+    "steps": [
+        {   # LLM step example
+            "number": 1,
+            "title": "Step title",
+            "step_type": "llm",
+            "aim": "required — step objective",
+            "stage_action": "required — what the LLM should do",
+            "reasoning_questions": "optional — guiding questions",
+            "example_reasoning": "optional — example thought process",
+            "dependencies": [],
+        },
+        ...  # Up to 3 steps total
+    ],
+}
+
+CONSTRAINTS
+- LLM steps require non-empty "aim" and "stage_action" fields
+- Dependencies must reference only earlier steps (by number)
+- No dependency cycles
+- The final step must produce output with \boxed{NNN}
+- Maximum 3 steps
+- All steps must be "llm" type
+- Curly braces MUST be escaped by doubling them since the template uses Python format strings
+
+FAILURE MODES
+- Missing \boxed{...} in final output, causing extraction failures
+- Unescaped curly braces (e.g., '\\boxed{answer}' instead of '\\boxed{{answer}}')
+- Incorrect output format
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A dict with "system_prompt" (str) and "steps" (list of step dicts)
+- Each step dict has metadata fields (number, title, step_type, dependencies)
+- LLM steps have structured fields (aim, stage_action, reasoning_questions, example_reasoning)
+- LLM return format for final step: '\boxed{NNN}' (extractable by regex, integer 0-999)
+
+TASK HINTS
+- Problems span algebra, geometry, combinatorics, number theory, and probability

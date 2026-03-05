@@ -7,8 +7,8 @@ import pandas as pd
 
 from problems.prompts.client import LLMClient
 from problems.prompts.utils import validate_prompt_template, run_prompts
-from problems.prompts.hotpotqa.config import LLM_CONFIG, load_context
-from problems.prompts.hotpotqa.utils import normalize_text
+from problems.prompts.hotpotqa_qa.config import LLM_CONFIG, load_context
+from problems.prompts.hotpotqa_qa.utils import normalize_text
 
 
 def extract_answer(response: str) -> str | None:

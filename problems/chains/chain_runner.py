@@ -1,14 +1,15 @@
 """CARL-aligned chain execution engine.
 
-Sequential step execution with history-based context and tool dispatch via
-$-reference resolution.
+Step-batched execution with history-based context and tool dispatch via
+$-reference resolution. All samples process each step together, yielding
+homogeneous LLM request batches for efficient vLLM batching.
 """
 
 import asyncio
-import re
 from collections.abc import Callable
+import re
 
-from problems.chains.types import ChainSpec, ChainResult, LLMStep, ToolStep
+from problems.chains.types import ChainResult, ChainSpec, LLMStep, ToolStep
 
 
 def _strip_thinking(text: str) -> str:
@@ -102,97 +103,86 @@ def _resolve_dependencies(
     return visible_history, visible_outputs
 
 
-async def run_chain_on_sample(
-    chain: ChainSpec,
-    sample: dict,
+# --- Stepwise helpers ---
+
+
+async def _call_llm_with_semaphore(
     client,
-    outer_context_builder: Callable[[dict], str],
-    tool_registry: dict[str, Callable] | None = None,
-) -> ChainResult:
-    """Execute a chain on a single sample.
+    prompt: str,
+    semaphore: asyncio.Semaphore,
+) -> str:
+    """Call LLM with concurrency control."""
+    async with semaphore:
+        return await client(prompt)
 
-    Steps run sequentially. Each step sees only its declared dependencies.
 
-    Args:
-        chain: Validated ChainSpec with resolved steps
-        sample: Dataset sample dict
-        client: LLMClient instance (with __call__(prompt) -> str)
-        outer_context_builder: Builds data context string from sample
-        tool_registry: Dict mapping tool_name -> callable(**kwargs) -> str
+def _execute_tool_step_batch(
+    step: ToolStep,
+    n: int,
+    outer_contexts: list[str],
+    all_step_outputs: list[list[str]],
+    tool_registry: dict[str, Callable],
+) -> list[str]:
+    """Execute a tool step for all samples in one batch call.
 
-    Returns:
-        ChainResult with history, final_output, step_outputs
+    Resolves $-references for every sample, then calls the tool function
+    once with the full list of resolved kwargs dicts.
+
+    Always called via asyncio.to_thread() — runs in a thread pool, so tool
+    functions that need async (e.g. external_llm using asyncio.run()) work
+    cleanly.
     """
-    outer_context = outer_context_builder(sample)
-    history: list[str] = []
-    step_outputs: list[str] = []
-
-    for step in chain.steps:
-        visible_history, visible_outputs = _resolve_dependencies(
-            step.dependencies, history, step_outputs
+    tool_name = step.step_config.tool_name
+    if tool_name not in tool_registry:
+        raise ValueError(
+            f"Tool '{tool_name}' not found in registry. "
+            f"Available: {list(tool_registry.keys())}"
         )
 
-        if isinstance(step, LLMStep):
-            prompt = chain.prompt_builder.build_prompt(
+    all_resolved = []
+    for i in range(n):
+        resolved = {
+            param: _resolve_reference(ref, outer_contexts[i], all_step_outputs[i])
+            for param, ref in step.step_config.input_mapping.items()
+        }
+        all_resolved.append(resolved)
+
+    return tool_registry[tool_name](all_resolved)
+
+
+async def _execute_llm_step_batch(
+    step: LLMStep,
+    chain: ChainSpec,
+    n: int,
+    outer_contexts: list[str],
+    all_step_outputs: list[list[str]],
+    all_histories: list[list[str]],
+    client,
+    semaphore: asyncio.Semaphore,
+) -> list[str]:
+    """Execute an LLM step for all samples concurrently."""
+    prompts = []
+    for i in range(n):
+        visible_history, _ = _resolve_dependencies(
+            step.dependencies, all_histories[i], all_step_outputs[i]
+        )
+        prompts.append(
+            chain.prompt_builder.build_prompt(
                 step=step,
                 visible_history=visible_history,
-                outer_context=outer_context,
+                outer_context=outer_contexts[i],
                 system_prompt=chain.system_prompt,
             )
-            result = _strip_thinking(await client(prompt))
+        )
 
-        elif isinstance(step, ToolStep):
-            if tool_registry is None:
-                raise ValueError(
-                    f"Tool step {step.number} encountered but no tool_registry provided"
-                )
-
-            tool_name = step.step_config.tool_name
-            if tool_name not in tool_registry:
-                raise ValueError(
-                    f"Tool '{tool_name}' not found in registry. "
-                    f"Available: {list(tool_registry.keys())}"
-                )
-
-            # Resolve input_mapping $-references to concrete values
-            resolved_kwargs = {}
-            for param_name, ref in step.step_config.input_mapping.items():
-                resolved_kwargs[param_name] = _resolve_reference(
-                    ref, outer_context, step_outputs
-                )
-
-            result = await asyncio.to_thread(tool_registry[tool_name], **resolved_kwargs)
-
-        else:
-            raise ValueError(f"Unknown step type: {type(step).__name__}")
-
-        step_outputs.append(result)
-        history.append(chain.prompt_builder.format_history_entry(
-            number=step.number, title=step.title, result=result,
-        ))
-
-    return ChainResult(
-        history=history,
-        final_output=step_outputs[-1] if step_outputs else "",
-        step_outputs=step_outputs,
+    return list(
+        await asyncio.gather(
+            *(_call_llm_with_semaphore(client.copy(), p, semaphore) for p in prompts)
+        )
     )
 
 
-async def _process_sample(
-    chain: ChainSpec,
-    sample: dict,
-    client,
-    outer_context_builder: Callable[[dict], str],
-    tool_registry: dict[str, Callable] | None,
-    index: int,
-    semaphore: asyncio.Semaphore,
-) -> tuple[int, ChainResult]:
-    """Process a single sample with concurrency control."""
-    async with semaphore:
-        result = await run_chain_on_sample(
-            chain, sample, client, outer_context_builder, tool_registry
-        )
-        return index, result
+# --- Main execution ---
 
 
 async def _run_chain_on_dataset_async(
@@ -203,25 +193,79 @@ async def _run_chain_on_dataset_async(
     tool_registry: dict[str, Callable] | None = None,
     max_concurrent: int = 256,
 ) -> list[ChainResult]:
-    """Run chain on all samples with parallel execution across samples."""
+    """Step-batched execution: all samples process each step together.
+
+    Processes ALL samples through step 1, then ALL through step 2, etc.
+    This yields homogeneous LLM request batches (same prompt structure,
+    similar length) which vLLM can batch far more efficiently.
+
+    Tool functions receive a list of resolved kwargs dicts and return a list
+    of result strings (one per sample). Tools are called via asyncio.to_thread()
+    so they can use asyncio.run() internally if needed.
+
+    Args:
+        chain: Validated ChainSpec with resolved steps
+        client: LLMClient instance
+        dataset: List of sample dicts
+        outer_context_builder: Builds data context string from sample
+        tool_registry: Dict mapping tool_name -> callable(list[dict]) -> list[str]
+        max_concurrent: Max parallel LLM calls per step
+
+    Returns:
+        Ordered list of ChainResult (one per sample)
+    """
+    n = len(dataset)
+    outer_contexts = [outer_context_builder(s) for s in dataset]
+    all_step_outputs: list[list[str]] = [[] for _ in range(n)]
+    all_histories: list[list[str]] = [[] for _ in range(n)]
     semaphore = asyncio.Semaphore(max_concurrent)
 
-    tasks = [
-        _process_sample(
-            chain,
-            sample,
-            client.copy(),
-            outer_context_builder,
-            tool_registry,
-            i,
-            semaphore,
-        )
-        for i, sample in enumerate(dataset)
-    ]
+    for step in chain.steps:
+        if isinstance(step, ToolStep):
+            if tool_registry is None:
+                raise ValueError(
+                    f"Tool step {step.number} encountered but no tool_registry provided"
+                )
+            results = await asyncio.to_thread(
+                _execute_tool_step_batch,
+                step,
+                n,
+                outer_contexts,
+                all_step_outputs,
+                tool_registry,
+            )
+        elif isinstance(step, LLMStep):
+            results = await _execute_llm_step_batch(
+                step,
+                chain,
+                n,
+                outer_contexts,
+                all_step_outputs,
+                all_histories,
+                client,
+                semaphore,
+            )
+        else:
+            raise ValueError(f"Unknown step type: {type(step).__name__}")
 
-    results = await asyncio.gather(*tasks)
-    results = sorted(results, key=lambda x: x[0])
-    return [r[1] for r in results]
+        for i in range(n):
+            all_step_outputs[i].append(results[i])
+            all_histories[i].append(
+                chain.prompt_builder.format_history_entry(
+                    number=step.number,
+                    title=step.title,
+                    result=results[i],
+                )
+            )
+
+    return [
+        ChainResult(
+            history=all_histories[i],
+            final_output=all_step_outputs[i][-1] if all_step_outputs[i] else "",
+            step_outputs=all_step_outputs[i],
+        )
+        for i in range(n)
+    ]
 
 
 def run_chain_on_dataset(
@@ -232,22 +276,30 @@ def run_chain_on_dataset(
     tool_registry: dict[str, Callable] | None = None,
     max_concurrent: int = 256,
 ) -> list[ChainResult]:
-    """Run chain on dataset (sync wrapper).
+    """Run chain on dataset using step-batched execution (sync wrapper).
 
     Args:
         chain: Validated ChainSpec
         client: LLMClient instance
         dataset: List of sample dicts
         outer_context_builder: Builds data context string from sample
-        tool_registry: Dict mapping tool_name -> callable(**kwargs) -> str
-        max_concurrent: Max parallel samples
+        tool_registry: Dict mapping tool_name -> batched tool function.
+            Each function must accept a list of resolved-kwargs dicts
+            (one per sample) and return a list of result strings (one per
+            sample).  Signature: ``(items: list[dict]) -> list[str]``.
+        max_concurrent: Max parallel LLM calls per step
 
     Returns:
         Ordered list of ChainResult (one per sample)
     """
     return asyncio.run(
         _run_chain_on_dataset_async(
-            chain, client, dataset, outer_context_builder, tool_registry, max_concurrent
+            chain,
+            client,
+            dataset,
+            outer_context_builder,
+            tool_registry,
+            max_concurrent,
         )
     )
 
@@ -324,7 +376,9 @@ async def _run_chain_on_dataset_stepwise(
                 all_step_outputs[i].append(results[i])
                 all_histories[i].append(
                     chain.prompt_builder.format_history_entry(
-                        number=step.number, title=step.title, result=results[i],
+                        number=step.number,
+                        title=step.title,
+                        result=results[i],
                     )
                 )
 
@@ -362,10 +416,7 @@ async def _run_chain_on_dataset_stepwise(
             results = [
                 _strip_thinking(r)
                 for r in await asyncio.gather(
-                    *[
-                        _call_llm(p, semaphore, **overrides)
-                        for p in prompts
-                    ]
+                    *[_call_llm(p, semaphore, **overrides) for p in prompts]
                 )
             ]
 
@@ -373,7 +424,9 @@ async def _run_chain_on_dataset_stepwise(
                 all_step_outputs[i].append(results[i])
                 all_histories[i].append(
                     chain.prompt_builder.format_history_entry(
-                        number=step.number, title=step.title, result=results[i],
+                        number=step.number,
+                        title=step.title,
+                        result=results[i],
                     )
                 )
 
@@ -406,7 +459,13 @@ def run_chain_on_dataset_stepwise(
     """
     return asyncio.run(
         _run_chain_on_dataset_stepwise(
-            chain, client, dataset, outer_context_builder,
-            tool_registry, batch_tool_registry, step_max_tokens, max_concurrent,
+            chain,
+            client,
+            dataset,
+            outer_context_builder,
+            tool_registry,
+            batch_tool_registry,
+            step_max_tokens,
+            max_concurrent,
         )
     )

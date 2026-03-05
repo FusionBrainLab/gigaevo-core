@@ -4,12 +4,12 @@ Uses bm25s with disk persistence. Index is built once and saved to disk.
 Subsequent loads (including from subprocesses) just load the saved index.
 """
 
+from collections.abc import Callable
 import gzip
 import json
+from pathlib import Path
 import pickle
 import threading
-from collections.abc import Callable
-from pathlib import Path
 
 import bm25s
 import Stemmer
@@ -101,7 +101,9 @@ def _ensure_initialized(
                         f"BM25s index not found at {index_dir} and no corpus_path "
                         f"provided for auto-build. Run download_corpus.py first."
                     )
-                print(f"BM25s index not found at {index_dir}, building from {corpus_path}...")
+                print(
+                    f"BM25s index not found at {index_dir}, building from {corpus_path}..."
+                )
                 build_bm25s_index(corpus_path, index_dir)
 
             # Load index (without corpus)
@@ -111,7 +113,7 @@ def _ensure_initialized(
             # Load corpus separately — supports .pkl (list[str]) or .jsonl/.jsonl.gz
             if corpus_path is None:
                 raise FileNotFoundError(
-                    f"corpus_path is required to load formatted passages"
+                    "corpus_path is required to load formatted passages"
                 )
             corpus_path = Path(corpus_path)
             if corpus_path.suffix == ".pkl":
@@ -168,7 +170,9 @@ def retrieve(
         query, stopwords="en", stemmer=_stemmer, show_progress=False
     )
     # retrieve() returns doc indices, not strings
-    results, _scores = _retriever.retrieve(tokens, k=k, n_threads=4, show_progress=False)
+    results, _scores = _retriever.retrieve(
+        tokens, k=k, n_threads=4, show_progress=False
+    )
 
     # Map indices to formatted passages from corpus
     retrieved = [_corpus[int(doc_idx)] for doc_idx in results[0][:k]]
@@ -181,10 +185,19 @@ def batch_retrieve(
     k: int = 7,
     corpus_path: str | Path | None = None,
 ) -> list[str]:
-    """Batch-retrieve top-k passages for multiple queries at once.
+    """Batch-retrieve top-k passages for all queries at once.
 
-    Much faster than individual retrieve() calls due to vectorized
-    tokenization and retrieval.
+    Vectorized tokenization + single retriever call — much faster than
+    N individual retrieve() calls.
+
+    Args:
+        queries: List of search query strings
+        index_dir: Path to saved bm25s index directory
+        k: Number of passages to retrieve per query
+        corpus_path: Path to corpus JSONL or .pkl for loading formatted passages
+
+    Returns:
+        List of formatted passage strings (one per query)
     """
     _ensure_initialized(index_dir, corpus_path)
 
@@ -192,24 +205,21 @@ def batch_retrieve(
         queries, stopwords="en", stemmer=_stemmer, show_progress=False
     )
     results, _scores = _retriever.retrieve(
-        tokens, k=k, n_threads=min(len(queries), 32), show_progress=False
+        tokens, k=k, n_threads=4, show_progress=False
     )
 
-    batch_results = []
-    for i in range(len(queries)):
-        retrieved = [_corpus[int(doc_idx)] for doc_idx in results[i][:k]]
-        batch_results.append(
-            "\n".join(f"[{j + 1}] {p}" for j, p in enumerate(retrieved))
-        )
-    return batch_results
+    return [
+        "\n".join(f"[{j + 1}] {_corpus[int(idx)]}" for j, idx in enumerate(row[:k]))
+        for row in results
+    ]
 
 
 def make_retrieve_fn(
     index_dir: str | Path,
     k: int = 7,
     corpus_path: str | Path | None = None,
-) -> Callable[..., str]:
-    """Create a retrieve function for the tool registry.
+) -> Callable[[list[dict]], list[str]]:
+    """Create a batched retrieve function for the tool registry.
 
     Args:
         index_dir: Path to saved bm25s index directory
@@ -217,10 +227,12 @@ def make_retrieve_fn(
         corpus_path: Path to corpus JSONL for auto-build (optional)
 
     Returns:
-        Function with signature (query: str) -> str
+        Function with signature (items: list[dict]) -> list[str]
+        Each dict must have a "query" key.
     """
 
-    def retrieve_fn(query: str) -> str:
-        return retrieve(query, index_dir, k=k, corpus_path=corpus_path)
+    def retrieve_fn(items: list[dict]) -> list[str]:
+        queries = [item["query"] for item in items]
+        return batch_retrieve(queries, index_dir, k=k, corpus_path=corpus_path)
 
     return retrieve_fn

@@ -20,7 +20,7 @@ specs:
     significant_change: 0.01
     sentinel_value: 1.0
   is_valid:
-    description: "Whether the chain config is structurally valid"
+    description: "Whether the program is valid (1 valid, 0 invalid)"
     decimals: 0
     is_primary: false
     higher_is_better: true

@@ -7,14 +7,14 @@ import pandas as pd
 
 from problems.prompts.client import LLMClient
 from problems.prompts.utils import run_prompts, RedisRunConfig, get_best_program
-from problems.prompts.hotpotqa.config import (
+from problems.prompts.hotpotqa_qa.config import (
     LLM_CONFIG,
     DATASET_CONFIG,
     load_jsonl,
     load_baseline,
     preprocess_sample,
 )
-from problems.prompts.hotpotqa.validate import extract_answer, calculate_fitness
+from problems.prompts.hotpotqa_qa.validate import extract_answer, calculate_fitness
 
 
 def load_test_context(n_samples: int | None = None, seed: int = 42) -> dict:
