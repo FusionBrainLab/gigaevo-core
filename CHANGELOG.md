@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.16.1 (2026-03-05)
+
+### Bug Fixes
+
+- Remove hardcoded ~ paths from shared scripts
+  ([`407f8d3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/407f8d3bad585c066a9bacaa5846551596885180))
+
+- Replace hardcoded gh path with command -v gh in tools
+  ([`d30bf8a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d30bf8add16a56dbecc874740175df48dfbdeede))
+
+
 ## v1.16.0 (2026-03-05)
 
 
