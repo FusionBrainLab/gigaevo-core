@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.16.2 (2026-03-05)
+
+### Bug Fixes
+
+- Shutdown worker pool before event loop closes on Ctrl+C
+  ([`6bbbd1e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6bbbd1ea6260c3857a4dacd4e7f2deedbc4cafce))
+
+
 ## v1.16.1 (2026-03-05)
 
 ### Bug Fixes
