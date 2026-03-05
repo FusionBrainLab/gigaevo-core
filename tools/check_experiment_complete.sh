@@ -18,7 +18,7 @@ set -euo pipefail
 EXPERIMENT=${1:?Usage: $0 <experiment-name>}
 PROJ="$(git rev-parse --show-toplevel)"
 EXP_DIR="$PROJ/experiments/$EXPERIMENT"
-GH=~/envs/evo_fast/bin/gh
+GH=$(command -v gh)
 errors=0
 warnings=0
 
