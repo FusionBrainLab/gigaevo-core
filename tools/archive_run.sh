@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-PYTHON=~/envs/evo_fast/bin/python
+PYTHON=${GIGAEVO_PYTHON:-$(command -v python3)}
 GH=$(command -v gh)
 PROJ="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
