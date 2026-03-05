@@ -8,6 +8,7 @@ defaults:
   - /constants: base
   - /redis: default
   - /llm: heterogeneous
+  - /prompts: default
   - /evolution: default
   - /algorithm: single_island
   - /pipeline: auto

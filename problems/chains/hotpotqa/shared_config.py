@@ -1,11 +1,17 @@
 """Shared configuration for HotpotQA chain evolution experiments."""
 
 import json
-import random
+import os
 from pathlib import Path
-
+import random
 
 # --- LLM Configuration ---
+#
+# HOTPOTQA_CHAIN_URL overrides the chain-execution endpoint at runtime.
+# Use to split validation load across two vLLM ports:
+#   Runs A/C: HOTPOTQA_CHAIN_URL=http://localhost:8000/v1  (default)
+#   Runs B/D: HOTPOTQA_CHAIN_URL=http://localhost:8000/v1
+_CHAIN_URL = os.environ.get("HOTPOTQA_CHAIN_URL", "http://localhost:8000/v1")
 
 LLM_CONFIG = {
     "model": "Qwen/Qwen3-8B",
@@ -23,7 +29,7 @@ LLM_CONFIG = {
     },
     "client_kwargs": {
         "api_key": "None",
-        "base_url": "http://10.225.185.92:8000/v1",
+        "base_url": _CHAIN_URL,
     },
 }
 
@@ -39,7 +45,7 @@ DATASET_CONFIG = {
 
 # --- Corpus Configuration ---
 
-CORPUS_PATH = str(_BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.gz")
+CORPUS_PATH = str(_BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.passages.pkl")
 BM25S_INDEX_DIR = str(_BASE_DIR / "dataset" / "bm25s_index")
 
 

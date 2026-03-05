@@ -1,3 +1,6 @@
+import hashlib
+import json
+import random
 import re
 from statistics import mean
 
@@ -41,26 +44,15 @@ def calculate_exact_match(
     targets: list[str],
     predictions: list[str | None],
 ) -> float:
-    """Calculate Exact Match (EM) after text normalization.
-
-    Args:
-        targets: List of gold answer strings
-        predictions: List of predicted answer strings (None for extraction failures)
-
-    Returns:
-        EM score as a float in [0, 1]
-    """
+    """Calculate Exact Match (EM) after text normalization."""
     matches = []
-
     for pred, target in zip(predictions, targets):
         if pred is None:
             matches.append(0)
             continue
-
         norm_pred = normalize_text(pred)
         norm_target = normalize_text(str(target))
         matches.append(int(norm_pred == norm_target))
-
     return mean(matches) if matches else 0.0
 
 
@@ -73,22 +65,20 @@ def parse_retrieved_titles(step_output: str) -> list[str]:
     return re.findall(r"\[(?:\d+)\]\s+(.+?)\s+\|", step_output)
 
 
-def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
+def validate(chain_spec: dict) -> dict:
     """Validate chain specification and compute fitness metrics.
 
-    Returns ASI-enhanced failure cases with per-hop BM25 retrieval diagnostics,
-    giving the mutation LLM concrete signal about retrieval gaps vs. reasoning gaps.
-
-    step_outputs[0] = hop-1 BM25 retrieved passages
-    step_outputs[3] = hop-2 BM25 retrieved passages
+    P1 (Rotation) + P2 (ASI) combined:
+    - P1: chain_spec-hash-seeded random subset of 300 from 1000 training samples
+    - P2: per-hop BM25 retrieval recall vs gold supporting docs in failure cases
 
     Args:
         chain_spec: Dict from entrypoint() with system_prompt and steps
 
     Returns:
-        (metrics, failures[:10]) — metrics dict + ASI-enhanced failure cases
+        (metrics, failures[:10]) tuple — metrics dict + ASI-enhanced failure cases
     """
-    # 1. Structural validation (catch ValueError → return sentinels)
+    # 1. Structural validation
     baseline = load_baseline()
     chain = validate_chain_spec(
         chain_spec,
@@ -97,31 +87,38 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
         frozen_baseline=baseline,
     )
 
-    # 2. Load fixed first-300 samples (raw kept for supporting_facts)
-    raw_300 = load_jsonl(DATASET_CONFIG["train_path"])[:300]
+    # 2. Load rotated 300-sample subset seeded by chain_spec hash (P1)
+    #    Keep raw samples for supporting_facts access (P2)
+    raw_all = load_jsonl(DATASET_CONFIG["train_path"])  # 1000 samples
+    spec_seed = int(
+        hashlib.sha256(
+            json.dumps(chain_spec, sort_keys=True, default=str).encode()
+        ).hexdigest()[:16],
+        16,
+    ) % (2**32)
+    rng = random.Random(spec_seed)
+    raw_300 = rng.sample(raw_all, 300)
     dataset = [preprocess_sample(s) for s in raw_300]
     targets = [s[DATASET_CONFIG["target_field"]] for s in dataset]
 
     # 3. Create LLM client
     client = LLMClient(**LLM_CONFIG)
 
-    # 4. Build batch tool registry for step-batched execution
+    # 4. Build batch tool registry
     def _batch_retrieve(kwargs_list: list[dict]) -> list[str]:
         queries = [kw["query"] for kw in kwargs_list]
         return batch_retrieve(queries, BM25S_INDEX_DIR, k=7, corpus_path=CORPUS_PATH)
 
     batch_tool_registry = {"retrieve": _batch_retrieve}
 
-    # 5. Run chain on dataset (step-batched for optimal vLLM batching)
-    #    Per-step max_tokens: generous for all steps — thinking mode produces
-    #    <think>...</think> blocks that can consume 1000-2000 tokens before
-    #    the actual output. Steps 3 and 6 had 2048 which was insufficient
-    #    (thinking could exhaust the budget, leaving nothing for the query/answer).
+    # 5. Run chain
+    # Per-step max_tokens: generous for all steps — thinking mode <think> blocks
+    # can consume 1000-2000 tokens. Steps 3/6 had 2048 which was insufficient.
     step_max_tokens = {
-        2: 8192,   # summarize retrieved facts (thinking + substantial text)
-        3: 8192,   # generate search query (thinking + short query)
-        5: 8192,   # combine evidence from both retrievals (thinking + substantial text)
-        6: 8192,   # final answer (thinking + "Answer: X")
+        2: 8192,
+        3: 8192,
+        5: 8192,
+        6: 8192,
     }
     results = run_chain_on_dataset_stepwise(
         chain, client, dataset, outer_context_builder,
@@ -129,7 +126,7 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
         step_max_tokens=step_max_tokens,
     )
 
-    # 6. Extract answers from final step outputs
+    # 6. Extract answers
     predictions = [extract_answer(r.final_output) for r in results]
 
     # 7. Compute metrics
@@ -138,16 +135,14 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
         if predictions
         else 0.0
     )
-
     fitness = calculate_exact_match(targets, predictions)
-
     metrics = {
         "fitness": fitness,
         "avg_extraction_failures": extraction_failures,
         "is_valid": 1,
     }
 
-    # 8. Collect ASI-enhanced failure cases with per-hop retrieval diagnostics
+    # 8. Collect ASI-enhanced failure cases with per-hop retrieval diagnostics (P2)
     failures = []
     for raw_s, sample, result, pred, target in zip(
         raw_300, dataset, results, predictions, targets

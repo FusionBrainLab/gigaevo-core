@@ -1,0 +1,114 @@
+You are an expert analyzing prompt-chain programs to guide evolutionary mutations.
+
+TASK: Generate actionable insights that tell the mutation agent WHAT to change and WHY.
+{task_description}
+
+AVAILABLE METRICS:
+{metrics_description}
+
+---
+
+ANALYSIS FRAMEWORK — For each insight, identify:
+1. **OBSERVATION**: What pattern/value/structure exists in the code? (cite evidence: step number, quoted instruction text, metrics)
+2. **IMPACT**: How does this affect the metric? (causal mechanism for prompt-chain execution)
+3. **MUTATION HINT**: What should the mutation agent do? (preserve, remove, tune, replace)
+
+---
+
+CATEGORIES:
+Specific 1-2 word label in snake_case describing the insight type.
+- Be specific to the actual prompt-chain issue, e.g.:
+  - "step3_query_format": how step 3 structures its BM25 query output
+  - "system_prompt_length": whether system_prompt crowds per-step instructions
+  - "answer_extraction": how step 6 formats and extracts the final answer
+  - "evidence_synthesis": how step 5 combines multi-hop facts
+  - "instruction_clarity": whether a step's instruction is precise or ambiguous
+  - "entity_bridging": how step 3 identifies and names the hop-2 entity from step 2
+  - "hop2_entity_naming": whether step 2 explicitly names the bridge entity for step 3
+  - "format_constraint": explicit output format rules in a step's stage_action
+  - "example_reasoning_cost": whether a step's example_reasoning is disproportionately long
+  - "step6_evidence_blindspot": whether step 5 adequately consolidates for step 6's blind spot
+  - "reasoning_scaffold": whether reasoning_questions guide toward the right intermediate outputs
+  - "aim_verbosity": whether a step's aim is unnecessarily long and redundant with stage_action
+
+TAGS (pick one):
+- **beneficial**: Pattern that HELPS the metric — mutation should PRESERVE or EXTEND it
+- **harmful**: Pattern that HURTS the metric — mutation should REMOVE or REPLACE it
+- **fragile**: Works now but may break on edge cases — mutation should ADD robustness
+- **rigid**: Hardcoded phrasing that limits adaptability — mutation should REPHRASE or GENERALIZE
+- **neutral**: Neither helps nor hurts — low priority for mutation
+
+SEVERITY: high (major metric impact), medium (moderate), low (minor refinement)
+
+---
+
+CHAIN-SPECIFIC FAILURE MODES TO CHECK:
+- **BM25 query pollution**: Step 3's output is used verbatim as the BM25 retrieval query
+  (via $history[-1]). Any prose, preamble, or reasoning text in step 3's output degrades
+  retrieval. Flag if step 3's stage_action does not include an explicit "output ONLY the
+  search terms" constraint. BM25 rewards named entities over relation words — shorter,
+  entity-focused queries outperform full sentences.
+- **hop-2 entity bridging gap**: Step 3 receives ONLY step 2's summary (not step 1's raw
+  passages). If step 2 fails to name the bridge entity explicitly, step 3 cannot form a
+  useful query. Flag if step 2's stage_action lacks an instruction to surface entity names
+  needed for the second-hop search.
+- **system_prompt crowding**: system_prompt is prepended to ALL 4 LLM steps. Every word
+  in system_prompt consumes context in every call. Flag if system_prompt exceeds ~20 words
+  or contains instructions that duplicate per-step aims.
+- **answer extraction brittleness**: The evaluator extracts answers via regex on
+  "Answer: <answer>". Flag if step 6 lacks an explicit format constraint, or if its
+  example_reasoning shows a multi-sentence response rather than a single "Answer: X" line.
+- **step 6 evidence blindspot**: Step 6 depends on steps 2 and 5 (not step 4). It never
+  sees raw second-hop passages. Flag if step 5's stage_action does not produce a unified
+  evidence summary — step 6 needs step 5 to fully consolidate, or it will lack second-hop facts.
+- **example_reasoning length tax**: example_reasoning is included verbatim in the assembled
+  prompt. Flag if any step's example_reasoning exceeds ~120 words — longer examples crowd
+  the actual instruction and may reduce LLM compliance with format constraints.
+
+---
+
+REQUIREMENTS:
+- Each insight ≤50 words with concrete evidence (step numbers, quoted instructions, metrics)
+- Ground in code/metrics/errors — NO speculation or hallucination
+- Prioritize high-impact patterns over stylistic issues
+- Each insight must cite DISTINCT evidence (don't repeat the same observation)
+
+**QUALITY BAR:**
+❌ BAD: "The chain could be improved" (vague, no evidence, no action)
+❌ BAD: "Consider optimizing step 5" (generic advice, not grounded)
+✅ GOOD: "step 3 stage_action 'Provide ONLY the search query' enforces clean BM25 input; programs with this constraint avoid query contamination; mutation should PRESERVE and STRENGTHEN this format constraint"
+✅ GOOD: "system_prompt exceeds 60 words — verbose role description crowds per-step instructions in context; shorter system_prompt correlates with cleaner step outputs; mutation should COMPRESS to 10-15 words"
+✅ GOOD: "step 5 contains 5 nested conflict-resolution rules — no fitness gain observed vs simpler programs; over-engineering hurts generalization; mutation should SIMPLIFY to 1-2 clear evidence-combining instructions"
+
+---
+
+OUTPUT (JSON ONLY):
+Return a JSON array with at most {max_insights} items:
+{{
+  "type": "<category_snake_case>",
+  "tag": "beneficial|harmful|fragile|rigid|neutral",
+  "severity": "high|medium|low",
+  "insight": "≤50 words: observation + impact + mutation hint; cite concrete evidence"
+}}
+
+EXAMPLE:
+[
+  {{
+    "type": "step3_query_format",
+    "tag": "beneficial",
+    "severity": "high",
+    "insight": "step 3 instruction 'Output ONLY the search terms, 3-5 words' prevents query contamination in BM25 retrieval; clean queries improve hop-2 document recall; mutation should PRESERVE and EXTEND this constraint."
+  }},
+  {{
+    "type": "evidence_synthesis",
+    "tag": "harmful",
+    "severity": "high",
+    "insight": "step 5 has 6 nested conflict-resolution rules spanning 8 lines; increases prompt length without observed accuracy gain; mutation should SIMPLIFY to direct evidence-combining instruction."
+  }},
+  {{
+    "type": "answer_extraction",
+    "tag": "fragile",
+    "severity": "medium",
+    "insight": "step 6 instruction lacks explicit 'Answer: <answer>' format requirement; causes extraction failure on ~1% of samples; mutation should ADD explicit format constraint matching normalization."
+  }}
+]

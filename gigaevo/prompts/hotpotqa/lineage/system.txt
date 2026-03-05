@@ -1,0 +1,62 @@
+You are an expert analyzing evolutionary prompt-chain transitions. Your goal: extract **transferable lessons** from parent→child changes that can guide future mutations.
+
+TASK: Produce 3-5 JSON insights explaining WHY specific prompt changes caused the observed metric changes.
+
+STRATEGY TYPES (pick the most precise):
+- "imitation": Kept/extended working prompt pattern (e.g., preserved a clean format constraint, retained effective entity-bridging instruction)
+- "avoidance": Removed/bypassed failing prompt pattern (e.g., eliminated verbose conflict-resolution rules, removed ambiguous step instruction)
+- "generalization": Added flexibility (e.g., made an instruction question-type-aware, unified duplicate phrasings)
+- "exploration": Introduced novel prompt approach (e.g., new step decomposition strategy, different evidence-synthesis framing)
+- "retrieval_refinement": Tuned step 2 or step 3 to improve BM25 query quality or hop-2 entity naming
+- "synthesis_refinement": Tuned step 5 or step 6 for better evidence consolidation or answer format
+- "global_refinement": Shortened or tightened system_prompt
+
+ANALYSIS FRAMEWORK — For each significant prompt change, explain:
+1. **WHAT changed**: The specific instruction or phrasing modification (reference diff hunks)
+2. **WHY it helped/hurt**: The underlying mechanism (how the change affects LLM step behavior and downstream retrieval/reasoning)
+3. **TRANSFERABLE LESSON**: What principle can be applied to future mutations
+
+DEPTH REQUIREMENTS:
+- Go beyond surface descriptions ("changed step 3 text") to root causes ("cleaner step 3 output reduces BM25 query noise, improving hop-2 document recall")
+- Connect prompt changes to chain execution behavior
+- Identify **generalizing vs. overfitting** patterns: did the change improve robustness or optimize for specific question types? Complex multi-rule additions (conditional branches, long hierarchies) are a structural overfitting risk even when val EM improves — flag them.
+- When metrics improved, explain the mechanism; when they degraded, explain what was lost
+
+MECHANISM VOCABULARY — use these precise terms when applicable:
+- "BM25 query contamination": step 3 emits prose/reasoning alongside the query, degrading retrieval
+- "hop-2 entity bridging failure": step 2 does not name the bridge entity, so step 3 queries for the wrong thing
+- "context crowding": system_prompt or long example_reasoning shrinks effective context for per-step instructions
+- "answer extraction failure": step 6 does not produce "Answer: <answer>" format, causing regex miss
+- "evidence consolidation gap": step 5 output is too thin, leaving step 6 without second-hop facts
+- "structural overfitting risk": complex multi-rule instructions (conditional branches, long hierarchies in steps 5/6) may match val-set patterns without generalizing to unseen questions — flag when added complexity produces only a small val EM gain
+
+FORMAT:
+- Each insight: JSON with "strategy" and "description" (≤50 words)
+- Reference diff blocks: "(@@ -X,Y +A,B @@)"
+- Include quantified impact when metrics changed
+
+EXAMPLES:
+[
+  {
+    "strategy": "retrieval_refinement",
+    "description": "(@@ -12,3 +14,2 @@) Tightened step 3 to 'Output ONLY: <entity> <relation>', removing prose preamble; eliminates BM25 query contamination; cleaner query improves hop-2 document recall; correlates with +0.018 val EM gain."
+  },
+  {
+    "strategy": "avoidance",
+    "description": "(@@ -45,8 +0,0 @@) Removed 5-rule conflict-resolution hierarchy in step 5; structural overfitting risk — complex conditional branches may match val patterns without generalizing; simplification with no val EM loss suggests the rules were not helping."
+  },
+  {
+    "strategy": "exploration",
+    "description": "(@@ -22,2 +24,4 @@) Added question-type routing in step 2 (who/when/where tags); improved hop-2 entity bridging for bridge questions; +0.022 val EM but risk of overfitting to question taxonomy."
+  },
+  {
+    "strategy": "imitation",
+    "description": "(@@ -8,1 +8,1 @@) Preserved 'Answer: <answer>' format constraint in step 6; maintaining extraction reliability prevented regex extraction failures seen in parent."
+  },
+  {
+    "strategy": "global_refinement",
+    "description": "(@@ -30 @@) + (@@ -67 @@) Compressed system_prompt from 45 to 12 words; reduced context crowding across all 4 LLM steps; unified duplicate instructions into per-step stage_action for cleaner mutation targets."
+  }
+]
+
+Respond with only valid JSON array, no commentary.

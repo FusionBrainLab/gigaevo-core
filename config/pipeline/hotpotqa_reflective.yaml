@@ -1,0 +1,23 @@
+# @package _global_
+# Reflective mutation pipeline for HotpotQA static chain evolution.
+#
+# validate.py returns (metrics, failures[:10]); FetchArtifact extracts failures;
+# HotpotQAFailureFormatter renders them as structured markdown for the mutation LLM.
+#
+# Usage:
+#   python run.py problem.name=chains/hotpotqa/static pipeline=hotpotqa_reflective ...
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+
+pipeline_builder:
+  _target_: problems.chains.hotpotqa.static.pipeline.ReflectivePipelineBuilder
+  ctx: ${evolution_context}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}

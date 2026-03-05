@@ -1,8 +1,161 @@
 # GigaEvo Tools
 
-Utility scripts for analyzing, visualizing, and managing GigaEvo evolution experiments.
+Reusable scripts for any GigaEvo experiment — operational, analytical, and scaffolding.
+These are known-working tools; prefer them over ad-hoc one-liners.
+
+**Run format used by operational and analysis tools**: `prefix@db[:label]`
+where `prefix` = `problem.name` from the Hydra config (e.g., `chains/hotpotqa/static`).
+
+---
+
+## Operational Tools
+
+### `status.py` — Live run status
+
+Shows generation count, best val EM, key count, and PID liveness for multiple runs.
+
+```bash
+# One run
+PYTHONPATH=. python tools/status.py --run chains/hotpotqa/static@0:K
+
+# Multiple runs with PID and watchdog check
+PYTHONPATH=. python tools/status.py \
+    --run chains/hotpotqa/static@0:K \
+    --run chains/hotpotqa/static_r@1:L \
+    --run chains/hotpotqa/static_r@2:M \
+    --run chains/hotpotqa/static_r@3:N \
+    --pid K:2616605 --pid L:2616606 --pid M:2616607 --pid N:2616608 \
+    --watchdog 2716169
+```
+
+Output:
+```
+Run      DB    Gen   Best Val EM    Keys         PID  Status
+---------------------------------------------------------------
+K         0     26        66.0%     317     2616605  ✓ ALIVE
+L         1     25        65.7%     329     2616606  ✓ ALIVE
+M         2     27        70.7%     321     2616607  ✓ ALIVE
+N         3     25        67.7%     321     2616608  ✓ ALIVE
+
+Watchdog PID 2716169: ✓ ALIVE
+```
+
+---
+
+### `flush.py` — Safe Redis flush
+
+Kills stale exec_runner workers first (they repopulate Redis immediately after flush),
+then flushes each DB, then verifies 0 keys remain.
+
+**Dry-run by default** — shows what would happen without doing it.
+
+```bash
+# Preview (dry-run)
+PYTHONPATH=. python tools/flush.py --db 0 1 2 3
+
+# Execute
+PYTHONPATH=. python tools/flush.py --db 0 1 2 3 --confirm
+
+# P3 experiment DBs
+PYTHONPATH=. python tools/flush.py --db 14 15 --confirm
+```
+
+**Always kill exec_runner workers before flushing.** Flushing first then killing leaves
+a window where workers repopulate Redis. `flush.py` enforces the correct ordering.
+
+---
+
+### `archive_run.sh` — Archive and upload run data
+
+**Run this before flushing Redis or rebooting. Redis is ephemeral — data not exported is gone.**
+
+Exports all Redis data for a run to local files and uploads them as a GitHub Release asset.
+
+```bash
+# Dry run: export locally only (verify output)
+bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "chains/hotpotqa/static@0:K"
+
+# Export and upload to GitHub Release exp/hotpotqa_nlp_prompts
+bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "chains/hotpotqa/static@0:K" --upload
+
+# Archive all 4 runs
+for SPEC in "chains/hotpotqa/static@0:K" "chains/hotpotqa/static_r@1:L" \
+            "chains/hotpotqa/static_r@2:M" "chains/hotpotqa/static_r@3:N"; do
+  bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "$SPEC" --upload
+done
+```
+
+Each archive (uploaded as `<label>_archive.tar.gz` to the GitHub Release) contains:
+- `evolution_data.csv` — all programs, all generations, all metrics
+- `programs/*.py` — source code of every evaluated program
+- `top50.json` — top 50 programs with full metadata
+
+Also uploads `environment.txt` (pip freeze, OS, GPU) once per experiment.
+
+---
+
+### `check_experiment_complete.sh` — Full lifecycle gate (pre-merge)
+
+Verifies that ALL experiment phases are complete before the PR is merged.
+Complements `check_phase_order.sh` (which gates Phase 4 entry).
+
+```bash
+bash tools/check_experiment_complete.sh <experiment-name>
+```
+
+Checks:
+- All phase docs (01–05) exist and are committed
+- `02_review.md` contains a clear APPROVED verdict
+- GitHub Release `exp/<name>` exists and has uploaded assets
+- `environment_freeze.txt` committed
+- `05_results.md` has Deviations section and no unfilled placeholders
+- `experiments/INDEX.md` has an entry for this experiment
+
+Exit code 0 = safe to merge. Exit code 1 = do not merge.
+
+---
+
+### `check_phase_order.sh` — Protocol phase gate (pre-launch)
+
+Verifies that all required protocol documents exist, are committed, and are in the correct
+state before proceeding to launch. Run this as the first step of Phase 4.
+
+```bash
+bash tools/check_phase_order.sh <experiment-name>
+```
+
+Checks:
+- `01_design.md` exists
+- `02_review.md` exists and contains APPROVED verdict
+- `03_plan.md` is committed to git (not just on disk)
+- `run_test_eval.sh` sha256 hash matches what is pinned in `03_plan.md` (if applicable)
+
+Exit code 0 = all passed. Exit code 1 = one or more failures (do not proceed to launch).
+
+---
 
 ## Analysis Tools
+
+### `top_programs.py` — Inspect top programs
+
+Fetches all programs from a run, ranks by fitness, and prints a summary table
+with optional full source code. Use at checkpoints to inspect what evolved.
+
+```bash
+# Top 5 by fitness (default)
+PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@0:K
+
+# Top 1 with full code — the program to run test eval on
+PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@0:K -n 1 --code
+
+# Save top-3 codes to files
+PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@0 -n 3 --save-dir top_k/
+
+# JSON output for scripting
+PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@0 -n 1 --json
+```
+
+---
 
 ### `redis2pd.py` - Export Evolution Data
 
@@ -349,12 +502,17 @@ redis-cli -n <db> KEYS "*:program:*" | head -1
 **Important:** The `--redis-prefix` argument for tools should be just the problem name (e.g., `heilbron`), NOT the full key pattern.
 
 ### Clearing Old Data
-```bash
-# Flush specific database (removes ALL data in that database)
-redis-cli -n 5 FLUSHDB
 
-# Or delete by pattern for specific problem (careful!)
-redis-cli -n 5 --scan --pattern "old_problem:*" | xargs redis-cli -n 5 DEL
+**Do NOT use `redis-cli FLUSHDB` directly** — it bypasses the exec_runner worker
+kill step (workers repopulate Redis immediately) and the archive existence warning.
+Use `tools/flush.py` instead:
+
+```bash
+# Preview (dry-run, default)
+PYTHONPATH=. python tools/flush.py --db 5
+
+# Execute (kills workers first, then flushes, warns if data not archived)
+PYTHONPATH=. python tools/flush.py --db 5 --confirm
 ```
 
 ### Large Datasets

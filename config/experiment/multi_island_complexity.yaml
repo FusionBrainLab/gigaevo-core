@@ -8,6 +8,7 @@ defaults:
   - /constants: base
   - /redis: default
   - /llm: single
+  - /prompts: default
   - /evolution: default
   - /metrics: code_complexity  # Required by multi_island
   - /algorithm: multi_island

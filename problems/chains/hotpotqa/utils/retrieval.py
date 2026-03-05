@@ -4,11 +4,12 @@ Uses bm25s with disk persistence. Index is built once and saved to disk.
 Subsequent loads (including from subprocesses) just load the saved index.
 """
 
+from collections.abc import Callable
 import gzip
 import json
-import threading
-from collections.abc import Callable
 from pathlib import Path
+import pickle
+import threading
 
 import bm25s
 import Stemmer
@@ -100,30 +101,36 @@ def _ensure_initialized(
                         f"BM25s index not found at {index_dir} and no corpus_path "
                         f"provided for auto-build. Run download_corpus.py first."
                     )
-                print(f"BM25s index not found at {index_dir}, building from {corpus_path}...")
+                print(
+                    f"BM25s index not found at {index_dir}, building from {corpus_path}..."
+                )
                 build_bm25s_index(corpus_path, index_dir)
 
             # Load index (without corpus)
             _retriever = bm25s.BM25.load(str(index_dir))
             _stemmer = Stemmer.Stemmer("english")
 
-            # Load corpus separately from JSONL file
+            # Load corpus separately — supports .pkl (list[str]) or .jsonl/.jsonl.gz
             if corpus_path is None:
                 raise FileNotFoundError(
-                    f"corpus_path is required to load formatted passages"
+                    "corpus_path is required to load formatted passages"
                 )
             corpus_path = Path(corpus_path)
-            passages: list[str] = []
-            opener = gzip.open if corpus_path.suffix == ".gz" else open
-            with opener(corpus_path, "rt", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    doc = json.loads(line)
-                    title = doc.get("title", "")
-                    text = doc.get("text", "")
-                    passages.append(f"{title} | {text}")
-            _corpus = passages
+            if corpus_path.suffix == ".pkl":
+                with open(corpus_path, "rb") as f:
+                    _corpus = pickle.load(f)
+            else:
+                passages: list[str] = []
+                opener = gzip.open if corpus_path.suffix == ".gz" else open
+                with opener(corpus_path, "rt", encoding="utf-8") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        doc = json.loads(line)
+                        title = doc.get("title", "")
+                        text = doc.get("text", "")
+                        passages.append(f"{title} | {text}")
+                _corpus = passages
 
             _initialized = True
         except Exception:
@@ -163,7 +170,9 @@ def retrieve(
         query, stopwords="en", stemmer=_stemmer, show_progress=False
     )
     # retrieve() returns doc indices, not strings
-    results, _scores = _retriever.retrieve(tokens, k=k, n_threads=1, show_progress=False)
+    results, _scores = _retriever.retrieve(
+        tokens, k=k, n_threads=4, show_progress=False
+    )
 
     # Map indices to formatted passages from corpus
     retrieved = [_corpus[int(doc_idx)] for doc_idx in results[0][:k]]
@@ -185,7 +194,7 @@ def batch_retrieve(
         queries: List of search query strings
         index_dir: Path to saved bm25s index directory
         k: Number of passages to retrieve per query
-        corpus_path: Path to corpus JSONL for loading formatted passages
+        corpus_path: Path to corpus JSONL or .pkl for loading formatted passages
 
     Returns:
         List of formatted passage strings (one per query)
