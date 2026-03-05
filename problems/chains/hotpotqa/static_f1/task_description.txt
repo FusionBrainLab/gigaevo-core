@@ -74,16 +74,21 @@ Each step dict additionally includes a "frozen" metadata field (True/False).
 
 TASK DEFINITION — MULTI-HOP QUESTION ANSWERING
 
-Challenge: Design a chain that maximizes exact match accuracy on multi-hop reasoning questions.
+Challenge: Design a chain that maximizes token-level F1 accuracy on multi-hop reasoning questions.
 
 OBJECTIVE
 Return a chain specification guiding the downstream LLM such that:
  1) All chain steps are valid and well-defined
  2) The chain guides the LLM through multi-hop reasoning using retrieval and synthesis
  3) The final step returns a clear, extractable answer in "Answer: <answer>" format
- 4) Maximizes exact match accuracy after text normalization
+ 4) Maximizes token-level F1 accuracy between predicted and gold answers (SQuAD-style)
 
-Output: 'Answer: <answer>' (extractable by regex) | Goal: Exact Match > 0.7
+FITNESS METRIC: Token-level F1 (not Exact Match). Partial credit is awarded for predictions
+that share tokens with the gold answer — e.g., predicting "New York City" for gold "New York"
+scores F1=0.80 rather than 0. Focus on producing answers that contain the correct content
+tokens, not necessarily identical surface forms.
+
+Output: 'Answer: <answer>' (extractable by regex) | Goal: Token-level F1 > 0.7
 
 PIPELINE COMPONENTS
 - LLM: Model with basic multi-hop reasoning capabilities

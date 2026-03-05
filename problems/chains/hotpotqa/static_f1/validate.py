@@ -199,14 +199,17 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
         "is_valid": 1,
     }
 
-    # 8. Collect ASI-enhanced failure cases (F1 < 1.0, i.e. not perfect)
-    # Failure criterion: F1 < 1.0 (captures partial mismatches, not just EM=0)
+    # 8. Collect ASI-enhanced failure cases
+    # Failure criterion: EM=0 (same as static/validate.py), NOT F1 < 1.0.
+    # Using EM=0 here isolates the fitness metric effect (F1 vs EM for MAP-Elites
+    # selection) from the mutation feedback signal. If we used F1 < 1.0, nearly
+    # all samples would be included as "failures" (~60%), sending qualitatively
+    # different signal to the mutation LLM and compounding the treatment.
     failures = []
     for raw_s, sample, result, pred, target in zip(
         raw_300, dataset, results, predictions, targets
     ):
-        f1 = _f1_single(pred, str(target)) if pred is not None else 0.0
-        if f1 < 1.0:
+        if pred is None or normalize_text(pred) != normalize_text(str(target)):
             gold_titles = set(raw_s.get("supporting_facts", {}).get("title", []))
             hop1_out = result.step_outputs[0] if len(result.step_outputs) > 0 else ""
             hop2_out = result.step_outputs[3] if len(result.step_outputs) > 3 else ""
