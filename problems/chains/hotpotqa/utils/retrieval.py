@@ -6,6 +6,7 @@ Subsequent loads (including from subprocesses) just load the saved index.
 
 import gzip
 import json
+import pickle
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -107,23 +108,27 @@ def _ensure_initialized(
             _retriever = bm25s.BM25.load(str(index_dir))
             _stemmer = Stemmer.Stemmer("english")
 
-            # Load corpus separately from JSONL file
+            # Load corpus separately — supports .pkl (list[str]) or .jsonl/.jsonl.gz
             if corpus_path is None:
                 raise FileNotFoundError(
                     f"corpus_path is required to load formatted passages"
                 )
             corpus_path = Path(corpus_path)
-            passages: list[str] = []
-            opener = gzip.open if corpus_path.suffix == ".gz" else open
-            with opener(corpus_path, "rt", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    doc = json.loads(line)
-                    title = doc.get("title", "")
-                    text = doc.get("text", "")
-                    passages.append(f"{title} | {text}")
-            _corpus = passages
+            if corpus_path.suffix == ".pkl":
+                with open(corpus_path, "rb") as f:
+                    _corpus = pickle.load(f)
+            else:
+                passages: list[str] = []
+                opener = gzip.open if corpus_path.suffix == ".gz" else open
+                with opener(corpus_path, "rt", encoding="utf-8") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        doc = json.loads(line)
+                        title = doc.get("title", "")
+                        text = doc.get("text", "")
+                        passages.append(f"{title} | {text}")
+                _corpus = passages
 
             _initialized = True
         except Exception:

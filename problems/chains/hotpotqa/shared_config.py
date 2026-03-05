@@ -47,7 +47,7 @@ DATASET_CONFIG = {
 
 # --- Corpus Configuration ---
 
-CORPUS_PATH = str(_BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.gz")
+CORPUS_PATH = str(_BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.passages.pkl")
 BM25S_INDEX_DIR = str(_BASE_DIR / "dataset" / "bm25s_index")
 
 
