@@ -2,6 +2,35 @@
 
 <!-- version list -->
 
+## v1.18.0 (2026-03-06)
+
+### Bug Fixes
+
+- Wire stage_timeout through DefaultPipelineBuilder + validation speedup
+  ([`55772ba`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/55772bae28d491ee60d4247e2747c82612b9f522))
+
+### Chores
+
+- Update agent memories (push experiment + path fixes)
+  ([`6f50092`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6f5009271a863c2d17f8c8cf68517ea37273e470))
+
+### Documentation
+
+- Fix INDEX.md — hotpotqa_thinking test EM ~60% not 62.3%
+  ([`e8407d5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e8407d584a2f13be60b47f2d09f7f8538eb614b0))
+
+- Set pre-registration commit hash in 03_plan.md (push experiment)
+  ([`f47847f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f47847f358b44b120d927e94ecb9e597d28e1fe5))
+
+- Update INDEX.md — drop pre-protocol exps, close out nlp_prompts + val_gap
+  ([`7ed9ba9`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/7ed9ba9266f3db02da2bc193b6f9fe76a8613870))
+
+### Features
+
+- Pre-registration 03_plan.md + static_f1_600 problem directory (push experiment)
+  ([`9173c10`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9173c10da22b3e581e0be45db8383a73b37a9fa9))
+
+
 ## v1.17.0 (2026-03-06)
 
 ### Bug Fixes
