@@ -82,7 +82,9 @@ const ExecutionEdge = ({
             pointerEvents: 'all',
             boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
             minWidth: '20px',
-            textAlign: 'center'
+            textAlign: 'center',
+            zIndex: 10,
+            willChange: 'transform' // Optimize rendering
           }}
           className="nodrag nopan"
         >

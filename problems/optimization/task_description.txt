@@ -20,3 +20,47 @@ Discover accurate and generalizable regression strategies by leveraging:
 - Preprocessing pipeline modifications
 - Loss function or optimization strategy variation
 - Reject trivial variations unless they contribute clear performance or structural innovation
+
+STRATEGIC GUIDANCE
+🔍 REGRESSION STRATEGY HINTS
+
+**FEATURE ENGINEERING STRATEGIES**:
+- Apply **nonlinear transformations** (e.g., log, polynomial, interaction terms) to uncover hidden patterns
+- Normalize or scale inputs to improve model convergence and stability
+- Exploit **local feature interactions** to capture region-specific trends in the data
+
+**MODEL STRUCTURES & MOTIFS**:
+- Avoid default regressors (plain linear, unregularized trees) — unless **enhanced**, **stacked**, or **adaptively tuned**
+- Construct:
+  - **Ensemble models** (e.g., bagging, boosting, stacking)
+  - **Feature-wise subnetworks** (e.g., per-feature MLPs or attention heads)
+  - **Residual pipelines** (e.g., baseline + correction)
+  - **Multi-phase regressors** with coarse and fine predictors
+- Use **sub-model reuse** creatively: train partial regressors on subsets of features and integrate their outputs
+
+**ADVANCED CONCEPTS**:
+- Favor **error-first modeling**: handle outliers or boundary cases explicitly before bulk regression
+- Explore **layered modeling**: use one model to detect data regime, another to fit target
+- Consider **hierarchical regression**: coarse predictor followed by localized refinements
+
+**CAUTION ZONE**:
+- Avoid:
+  - Copy-paste templates with fixed parameters
+  - Purely random feature selection
+  - Overuse of regularization without justification
+- Designs must be **interpretable** and **generalizable**
+
+**REMINDER**:
+- Regression is a **flexible optimization problem**
+- Use feature and error reasoning to justify model design: bias–variance tradeoff, residual clustering, functional nonlinearity
+- For complex datasets, expect multi-model arrangements with staged or modular designs
+- Only subtle architectural innovation may push past standard baselines
+
+OUTPUT:
+```python
+# Imports as needed
+def entrypoint(context: dict[str, np.ndarray]):
+    # Archetype-appropriate implementation
+    # Fix all random seeds if using randomness
+    return output # format as described above
+```

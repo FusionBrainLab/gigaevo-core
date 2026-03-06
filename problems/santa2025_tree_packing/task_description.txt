@@ -1,0 +1,71 @@
+TASK DEFINITION – CHRISTMAS TREE PACKING OPTIMIZATION
+
+Challenge: Multi-scale 2D geometric packing optimization. Pack 1-200 Christmas trees into minimum square bounding boxes while avoiding overlaps. Target: total_packing_cost ≤ 60.0
+
+OBJECTIVE
+Return packing configurations for all tree counts (n=1 to 200) such that:
+1) (No Overlap) Trees do not collide or overlap
+2) (Position Bounds) All tree positions within [-100, 100] coordinate range
+3) (Minimality) The total packing cost Σ(s_n² / n) is minimized
+
+Where s_n is the side length of the minimum square bounding box for n trees.
+
+Output: pd.DataFrame with 20,100 rows  |  Fitness: Σ(s_n² / n)  |  Goal: fitness ≤ 60.0
+
+CONSTRAINTS
+- Fixed tree geometry: tiered triangular shape (trunk: 0.15 wide, base: 0.7 wide, height: ~1.0)
+- Trees can be rotated (deg parameter in degrees)
+- No overlapping trees (enforced via shapely polygon intersection)
+- Position bounds: -100 <= x, y <= 100
+- Must provide valid solution for ALL n from 1 to 200
+- Total trees: 20,100 (sum of 1+2+3+...+200)
+
+COMPUTATIONAL EFFICIENCY
+- TIME LIMIT: Solution must be generated within 60 minutes (for all n=1 to 200)
+- INCREMENTAL CONSTRUCTION: Strongly encouraged to reuse previous configurations
+  * When solving for n trees, consider reusing the optimal solution for n-1, n-2, etc.
+  * Add one or few trees to previous configuration rather than solving from scratch
+  * Cache intermediate results to avoid redundant computation
+- ALGORITHMIC EFFICIENCY: Favor O(n) or O(n log n) approaches over O(n²) or worse
+- Example incremental strategy:
+  * Store best configuration for each n as you compute it
+  * For n+1 trees, start with n-tree configuration and add 1 tree in optimal position
+  * Test multiple addition strategies (edge, center, optimal gap) and keep best
+
+FAILURE MODES
+- Overlapping trees causing validation errors (most common)
+- Ignoring tree geometry when estimating spacing
+- Exceeding position bounds [-100, 100]
+- Missing configurations or incorrect tree indices
+- Slow algorithms that cannot complete within 60 minutes
+
+HELPER FUNCTIONS
+- `check_trees_overlap(tree_polygons: list) -> bool`
+  - Args: List of shapely Polygon objects representing trees
+  - Returns: True if any trees overlap, False if all are non-overlapping
+  - Use this to verify your solution has no collisions
+These are available as import from `helper.py`
+
+TREE GEOMETRY CLASS
+- The ChristmasTree class represents the fixed tree geometry and is provided in each initial program. You can use this class to create tree objects and access their polygon geometry:
+  * Usage: tree = ChristmasTree(center_x='1.5', center_y='2.0', angle='45')
+  * Attributes: tree.polygon (shapely Polygon), tree.center_x, tree.center_y, tree.angle
+- The tree geometry is fixed - DO NOT modify the ChristmasTree class definition.
+
+PROBLEM COMPLEXITY
+This is a multi-scale geometric packing problem. Small n configurations (1-20 trees) can have different optimal strategies than large n configurations (100-200 trees). The asymmetric tree shape means rotation matters significantly. The problem requires balancing local packing efficiency (minimizing gaps), global arrangement strategy (grid vs hexagonal vs custom patterns), rotation optimization (trees pack tighter when rotated strategically), and scaling strategy across different n values. The search space is non-convex with many local minima corresponding to different packing patterns. Solutions must be computationally efficient - generating all 200 configurations should complete within 60 minutes. Incremental approaches that build on previous solutions (e.g., adding one tree to an n-1 configuration to get n trees) are strongly preferred over solving each configuration independently.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a pd.DataFrame:
+- Return type: pd.DataFrame with columns ['n', 'tree_idx', 'x', 'y', 'deg']
+- Total rows: 20,100 (one row per tree across all configurations)
+- DataFrame columns:
+  * 'n': int, number of trees in configuration (1 to 200)
+  * 'tree_idx': int, zero-based index within configuration (0 to n-1)
+  * 'x': float, x-coordinate of tree center
+  * 'y': float, y-coordinate of tree center
+  * 'deg': float, rotation angle in degrees
+- Use pandas, numpy, scipy, shapely, or standard library as needed
+- Fix random seeds if using randomness (e.g., np.random.seed(42))
+- ONLY modify code within EVOLVE-BLOCK-START and EVOLVE-BLOCK-END fences

@@ -13,15 +13,12 @@ class ProblemContext:
 
     Responsibilities:
     - Load and validate metrics.yaml into a MetricsContext
-    - Provide convenient accessors for task description/hints and mutation prompts
+    - Provide convenient accessors for task description
 
     Example:
-    pc = ProblemContext(Path("problems/heilbron_simplified"))
+    pc = ProblemContext(Path("problems/heilbron"))
     pc.metrics_context  # -> MetricsContext
     pc.task_description # -> str
-    pc.task_hints       # -> str
-    pc.mutation_system_prompt # -> str
-    pc.mutation_user_prompt   # -> str
     """
 
     def __init__(self, problem_dir: str | Path):
@@ -37,18 +34,6 @@ class ProblemContext:
     @property
     def task_description(self) -> str:
         return self.load_text(PL.TASK_DESCRIPTION)
-
-    @property
-    def task_hints(self) -> str:
-        return self.load_text(PL.TASK_HINTS)
-
-    @property
-    def mutation_system_prompt(self) -> str:
-        return self.load_text(PL.MUTATION_SYSTEM_PROMPT)
-
-    @property
-    def mutation_user_prompt(self) -> str:
-        return self.load_text(PL.MUTATION_USER_PROMPT)
 
     @property
     def is_contextual(self) -> bool:
@@ -74,11 +59,8 @@ class ProblemContext:
             if not isinstance(data, dict):
                 raise ValueError("metrics.yaml must be a mapping")
 
-            specs = data.get("specs") or {
-                k: v for k, v in data.items() if k != "display_order"
-            }
-            display_order = data.get("display_order")
-            ctx = MetricsContext.from_dict(specs=specs, display_order=display_order)
+            specs = data.get("specs") or data
+            ctx = MetricsContext.from_dict(specs=specs)
 
             # Strict validation: primary bounds and is_valid [0,1]
             primary_key = ctx.get_primary_key()

@@ -3,7 +3,7 @@
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
-  llm_wrapper: ${llm}
+  llm_wrapper: ${ref:llm}
   storage: ${redis_storage}
 
 pipeline_builder:

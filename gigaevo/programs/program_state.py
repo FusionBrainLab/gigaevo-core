@@ -2,75 +2,93 @@ from enum import Enum
 
 
 class ProgramState(str, Enum):
-    """Lifecycle state of a Program object."""
-
-    # Newly created – not yet sent to DAG
-    FRESH = "fresh"
-
-    # DAG execution has started but not yet finished
-    DAG_PROCESSING_STARTED = "dag_processing_started"
-
-    # DAG execution finished successfully
-    DAG_PROCESSING_COMPLETED = "dag_processing_completed"
-
-    # Program participates in evolution (selected/elites etc.)
-    EVOLVING = "evolving"
-
-    # Program explicitly discarded – excluded from any further processing
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
     DISCARDED = "discarded"
 
 
-FINAL_STATES_PROGRAM_LIFECYCLE = {
-    ProgramState.DAG_PROCESSING_COMPLETED,
-    ProgramState.EVOLVING,
+INCOMPLETE_STATES = {
+    ProgramState.QUEUED,
+    ProgramState.RUNNING,
+}
+
+COMPLETE_STATES = {
+    ProgramState.DONE,
+}
+
+TERMINAL_STATES = {
     ProgramState.DISCARDED,
 }
 
-STATE_HIERARCHY: dict[ProgramState, int] = {
-    ProgramState.FRESH: 0,
-    ProgramState.DAG_PROCESSING_STARTED: 1,
-    ProgramState.DAG_PROCESSING_COMPLETED: 2,
-    ProgramState.EVOLVING: 3,
-    ProgramState.DISCARDED: 99,  # Terminal state - highest priority
+STATES_WITH_METRICS = {
+    ProgramState.DONE,
+}
+
+VALID_TRANSITIONS: dict[ProgramState, set[ProgramState]] = {
+    ProgramState.QUEUED: {
+        ProgramState.RUNNING,
+        ProgramState.DISCARDED,
+    },
+    ProgramState.RUNNING: {
+        ProgramState.DONE,
+        ProgramState.DISCARDED,
+    },
+    ProgramState.DONE: {
+        ProgramState.QUEUED,
+        ProgramState.DISCARDED,
+    },
+    ProgramState.DISCARDED: set(),
 }
 
 
-def get_state_priority(state: ProgramState) -> int:
-    if state not in STATE_HIERARCHY:
-        raise ValueError(f"Unknown program state: {state}")
-    return STATE_HIERARCHY[state]
+def is_valid_transition(current: ProgramState, new: ProgramState) -> bool:
+    if current == new:
+        return True
+    return new in VALID_TRANSITIONS.get(current, set())
 
 
-def should_advance_state(current_state: ProgramState, new_state: ProgramState) -> bool:
-    return get_state_priority(new_state) > get_state_priority(current_state)
+def validate_transition(current: ProgramState, new: ProgramState) -> None:
+    if not is_valid_transition(current, new):
+        valid_next = VALID_TRANSITIONS.get(current, set())
+        raise ValueError(
+            f"Invalid state transition: {current.value} -> {new.value}. "
+            f"Valid transitions from {current.value}: {[s.value for s in valid_next]}"
+        )
+
+
+def is_incomplete(state: ProgramState) -> bool:
+    return state in INCOMPLETE_STATES
+
+
+def is_complete(state: ProgramState) -> bool:
+    return state in COMPLETE_STATES
+
+
+def is_terminal(state: ProgramState) -> bool:
+    return state in TERMINAL_STATES
+
+
+def has_metrics(state: ProgramState) -> bool:
+    return state in STATES_WITH_METRICS
 
 
 def merge_states(
     current_state: ProgramState, incoming_state: ProgramState
 ) -> ProgramState:
-    """Merge two program states, taking the more advanced one.
-
-    Special case: Allow bidirectional transitions between EVOLVING and FRESH
-    for refresh purposes (EVOLVING -> FRESH for refresh, FRESH -> EVOLVING after refresh).
-
-    Args:
-        current_state: The current program state
-        incoming_state: The incoming program state
-
-    Returns:
-        The more advanced state according to the hierarchy, or incoming state
-        for EVOLVING <-> FRESH transitions
-    """
-    # Special case: Allow bidirectional EVOLVING <-> FRESH transitions for refresh
-    if (
-        current_state == ProgramState.EVOLVING and incoming_state == ProgramState.FRESH
-    ) or (
-        current_state == ProgramState.FRESH and incoming_state == ProgramState.EVOLVING
-    ):
-        return incoming_state
-
-    # Normal hierarchy-based merging for all other cases
-    if get_state_priority(incoming_state) > get_state_priority(current_state):
-        return incoming_state
-    else:
+    if current_state == incoming_state:
         return current_state
+
+    if incoming_state in TERMINAL_STATES:
+        return incoming_state
+    if current_state in TERMINAL_STATES:
+        return current_state
+
+    if is_valid_transition(current_state, incoming_state):
+        return incoming_state
+    if is_valid_transition(incoming_state, current_state):
+        return current_state
+
+    raise ValueError(
+        f"Cannot merge incompatible states: {current_state.value} vs {incoming_state.value}"
+    )

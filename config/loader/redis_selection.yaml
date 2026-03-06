@@ -5,7 +5,7 @@ program_loader:
   source_host: ${redis.host}
   source_port: ${redis.port}
   source_db: ${loader.source_db}
-  key_prefix: ${problem.name}_evolution
+  key_prefix: ${problem.name}
   metric_key: ${primary_key}
   higher_is_better: ${higher_is_better}
   top_n: ${loader.top_n}

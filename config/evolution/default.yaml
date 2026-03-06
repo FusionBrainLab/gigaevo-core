@@ -8,30 +8,35 @@ required_behavior_keys:
 # Parent selector
 parent_selector:
   _target_: gigaevo.evolution.mutation.parent_selector.AllCombinationsParentSelector
-  num_parents: ${constants.num_parents}
+  num_parents: ${num_parents}
 
 # Program acceptor
 program_acceptor:
-  _target_: gigaevo.evolution.engine.MutationContextAndBehaviorKeysAcceptor
+  _target_: gigaevo.evolution.engine.acceptor.StandardEvolutionAcceptor
   required_behavior_keys: ${required_behavior_keys}
 
 # Engine config
 engine_config:
   _target_: gigaevo.evolution.engine.EngineConfig
-  loop_interval: ${constants.loop_interval}
-  max_elites_per_generation: ${constants.max_elites_per_generation}
-  max_mutations_per_generation: ${constants.max_mutations_per_generation}
+  loop_interval: ${loop_interval}
+  max_elites_per_generation: ${max_elites_per_generation}
+  max_mutations_per_generation: ${max_mutations_per_generation}
   max_generations: ${max_generations}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
 
-# Max generations (null means unlimited)
-max_generations: null
+metrics_tracker:
+  _target_: gigaevo.utils.metrics_tracker.MetricsTracker
+  storage: ${ref:redis_storage}
+  metrics_context: ${metrics_context}
+  writer: ${writer}
 
 # Evolution engine
 evolution_engine:
   _target_: gigaevo.evolution.engine.EvolutionEngine
-  storage: ${redis_storage}
+  storage: ${ref:redis_storage}
   strategy: ${evolution_strategy}
   mutation_operator: ${mutation_operator}
   config: ${engine_config}
+  writer: ${writer}
+  metrics_tracker: ${metrics_tracker}

@@ -1,0 +1,33 @@
+# @package _global_
+
+defaults:
+  - single_island
+
+# Override elite_selector with WeightedEliteSelector (ShinkaEvolve-inspired).
+# Combines sigmoid-scaled fitness with children-count novelty penalty.
+islands:
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: ${island_id}
+    max_size: ${island_max_size}
+    behavior_space: ${behavior_space}
+    archive_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
+      fitness_keys:
+        - ${primary_key}
+      fitness_key_higher_is_better:
+        - ${higher_is_better}
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+      lambda_: 10.0
+      epsilon: 1e-8
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migration_rate: ${migration_rate}

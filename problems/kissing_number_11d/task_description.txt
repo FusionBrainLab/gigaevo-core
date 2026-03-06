@@ -1,0 +1,34 @@
+TASK DEFINITION – KISSING NUMBER PROBLEM IN DIMENSION 11 (INTEGRAL CONSTRUCTION)
+
+Challenge: High-dimensional sphere packing with rigid separation constraints. Construct a large set of unit spheres in 11D, all mutually tangent and tangent to a central unit sphere, via integer coordinates. Target: N ≥ 593.
+
+OBJECTIVE
+Return distinct non-zero integer 11D vectors {x_i} ⊂ Z^11 such that:
+1) (Single shell) ||x_i||^2 = r^2 for all i and some r^2 > 0.
+2) (Separation) min_{i≠j} ||x_i - x_j||^2 ≥ r^2.
+Scaling by t = 2/√(r^2) yields a valid kissing configuration: all centers at radius 2, pairwise distances ≥ 2.
+
+Output: (N, 11) NumPy int array  |  Fitness: N  |  Goal: N ≥ 593
+
+CONSTRAINTS
+- Integer coordinates only; distinct, non-zero rows
+- Single-shell: ||x_i||^2 constant for all i
+- Exact integer arithmetic; use np.int32/int64 dtypes
+
+VALIDATION & EFFICIENCY (CRITICAL)
+- Check all norms equal; compute d²_min via vectorized NumPy operations; accept iff d²_min ≥ r²
+- MUST use matrix operations (broadcasting, scipy.spatial.distance) NOT Python loops—for N=593, this is 100-1000× faster
+- Avoid iterating over vectors/coordinates with Python for/while loops
+
+FAILURE MODES
+- Norm inconsistency; certificate violation (d²_min < r²); duplicates or zero vector
+- Symmetry duplicates; non-integer coordinates; float-based validation
+- Combinatorial enumeration (exponential complexity—use constructive/algebraic methods)
+- Nested Python loops instead of vectorized operations (causes timeouts for large N)
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns an (N, 11) NumPy integer array.
+- Use numpy, scipy, sklearn, or standard library as needed
+- Fix random seeds if using randomness (e.g., np.random.seed(42))
+- Return type: np.ndarray with dtype int32 or int64, shape (N, 11)

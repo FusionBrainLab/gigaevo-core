@@ -1,0 +1,48 @@
+TASK DEFINITION – ERDŐS' MINIMUM OVERLAP PROBLEM
+
+Challenge: Functional optimization in analysis. Find a step function h on [0, 2] with values in [0, 1] and ∫₀² h(x)dx = 1 that minimizes the constant C = max_k ∫ h(x)(1 - h(x+k)) dx. Target: C ≤ 0.380924
+
+OBJECTIVE
+
+Return a step function h: [0, 2] → [0, 1] such that:
+1) (Domain) Function is defined on [0, 2]
+2) (Range) All function values are in [0, 1]
+3) (Normalization) ∫₀² h(x)dx = 1
+4) (Step function) Function is piecewise constant (step function)
+5) (Minimality) The constant C = max_k ∫ h(x)(1 - h(x+k)) dx is minimized
+
+Output: 1D NumPy array representing step function values  |  Fitness: C  |  Goal: C ≤ 0.380924
+
+CONSTRAINTS
+- Step function h: [0, 2] → [0, 1]
+- Normalization: ∫₀² h(x)dx = 1
+- All function values must be in [0, 1]
+- Function represented as discrete samples on uniform grid over [0, 2]
+- Known bounds: 0.379005 ≤ C ≤ 0.380927
+
+FAILURE MODES
+- Functions with values outside [0, 1]
+- Violation of normalization constraint ∫₀² h(x)dx ≠ 1
+- Functions that don't represent valid step functions
+- Numerical instabilities in computing max_k ∫ h(x)(1 - h(x+k)) dx
+- Invalid or undefined C values
+
+HELPER FUNCTIONS
+- `compute_c(h_values)` -> float - computes C constant from step function values
+  - Input: (N,) array of function values on uniform grid over [0, 2]
+  - Computes max_k ∫ h(x)(1 - h(x+k)) dx for k in appropriate range
+  - Returns C = max_k ∫ h(x)(1 - h(x+k)) dx
+These are available as import from `helper.py`
+
+PROBLEM COMPLEXITY
+This is a non-convex functional optimization problem. The objective involves finding the maximum over k of an integral that depends on the step function h. The constraint ∫₀² h(x)dx = 1 creates a constrained optimization problem. The known bounds suggest that optimal solutions involve carefully designed step functions with specific breakpoints and values. The problem is equivalent to finding the infimum over all step functions h satisfying the constraints of max_k ∫ h(x)(1 - h(x+k)) dx.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a 1D NumPy array:
+- Shape: (N,) array of function values representing h(x) on uniform grid over [0, 2]
+- All values must be in [0, 1] and satisfy ∫₀² h(x)dx = 1
+- Use numpy, scipy, jax, or standard library as needed
+- Fix random seeds if using randomness (e.g., jax.random.PRNGKey(42))
+- Return type: np.ndarray with dtype float, shape (N,)
+

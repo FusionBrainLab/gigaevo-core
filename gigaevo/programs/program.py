@@ -7,7 +7,11 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from gigaevo.programs.core_types import ProgramStageResult, StageState
-from gigaevo.programs.program_state import FINAL_STATES_PROGRAM_LIFECYCLE, ProgramState
+from gigaevo.programs.program_state import (
+    COMPLETE_STATES,
+    TERMINAL_STATES,
+    ProgramState,
+)
 from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
 
 if TYPE_CHECKING:
@@ -17,6 +21,15 @@ if TYPE_CHECKING:
 GENESIS_GENERATION: int = 1
 NO_STAGE_ERRORS_MSG: str = "<No stage errors found>"
 NO_ERROR_DETAILS_MSG: str = "<Failed stages found but no error details available>"
+
+OPTIMIZATION_STAGES: frozenset[str] = frozenset(
+    {
+        "OptunaOptStage",
+        "CMAOptStage",
+        "OptunaPayloadBridge",
+        "PayloadResolver",
+    }
+)
 
 
 def _utcnow() -> datetime:
@@ -72,7 +85,7 @@ class Program(BaseModel):
     )
 
     state: ProgramState = Field(
-        default=ProgramState.FRESH, description="Lifecycle state."
+        default=ProgramState.QUEUED, description="Lifecycle state."
     )
     lineage: Lineage = Field(
         default_factory=Lineage, description="Evolutionary lineage."
@@ -148,12 +161,17 @@ class Program(BaseModel):
     @classmethod
     def from_mutation_spec(cls, spec: "MutationSpec") -> "Program":
         name = " -> ".join(p.id for p in spec.parents) + f" (mutation: {spec.name})"
-        return cls.create_child(
+        program = cls.create_child(
             parents=spec.parents,
             code=spec.code,
             mutation=spec.name,
             name=name,
         )
+        # Store mutation metadata (structured output) if available
+        if spec.metadata:
+            for key, value in spec.metadata.items():
+                program.set_metadata(key, value)
+        return program
 
     def add_metrics(self, metrics: Mapping[str, float | int]) -> None:
         for k, v in metrics.items():
@@ -173,9 +191,16 @@ class Program(BaseModel):
             return None
         return result.error.pretty(include_traceback=include_traceback)
 
-    def format_errors(self, *, include_traceback: bool = False) -> str:
+    def format_errors(
+        self,
+        *,
+        include_traceback: bool = False,
+        exclude_stages: set[str] | None = None,
+    ) -> str:
         """Aggregate LLM-friendly error summaries across all failed stages."""
         failed = self.failed_stages
+        if exclude_stages:
+            failed = [s for s in failed if s not in exclude_stages]
         if not failed:
             return NO_STAGE_ERRORS_MSG
         summaries: list[str] = []
@@ -213,4 +238,4 @@ class Program(BaseModel):
 
     @property
     def is_complete(self) -> bool:
-        return self.state in FINAL_STATES_PROGRAM_LIFECYCLE
+        return self.state in (COMPLETE_STATES | TERMINAL_STATES)

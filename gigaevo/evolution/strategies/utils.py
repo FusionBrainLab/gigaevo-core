@@ -1,4 +1,67 @@
+import random
+from typing import TypeVar
+
+from loguru import logger
+
 from gigaevo.programs.program import Program
+
+_T = TypeVar("_T")
+
+
+def weighted_sample_without_replacement(
+    items: list[_T],
+    weights: list[float],
+    k: int,
+) -> list[_T]:
+    """Select *k* items by weighted sampling without replacement.
+
+    When all remaining weights are zero, the remaining selections fall back
+    to uniform random sampling.
+
+    Parameters
+    ----------
+    items:
+        Population to sample from.
+    weights:
+        Non-negative sampling weights aligned with *items*.
+    k:
+        Number of items to select (clamped to ``len(items)``).
+
+    Returns
+    -------
+    list[_T]
+        Selected items in order of selection.
+    """
+    k = min(k, len(items))
+    selected: list[_T] = []
+    remaining_items = list(items)
+    remaining_weights = list(weights)
+
+    for _ in range(k):
+        if not remaining_items:
+            break
+
+        total_weight = sum(remaining_weights)
+        if total_weight == 0:
+            logger.warning(
+                "weighted_sample_without_replacement: all remaining weights "
+                "are zero; falling back to uniform sampling "
+                "(remaining={}, already_selected={}, requested_total={})",
+                len(remaining_items),
+                len(selected),
+                k,
+            )
+            selected.extend(random.sample(remaining_items, k - len(selected)))
+            break
+
+        chosen = random.choices(remaining_items, weights=remaining_weights, k=1)[0]
+        selected.append(chosen)
+
+        idx = remaining_items.index(chosen)
+        remaining_items.pop(idx)
+        remaining_weights.pop(idx)
+
+    return selected
 
 
 def extract_fitness_values(

@@ -6,7 +6,13 @@ from loguru import logger
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.program import Program
-from gigaevo.programs.program_state import ProgramState
+from gigaevo.programs.program_state import ProgramState, validate_transition
+
+# States after which the DagRunner never accesses the program again.
+# Evict per-program locks for these states to prevent unbounded memory growth.
+# DONE programs are picked up by EvolutionEngine (different ProgramStateManager),
+# so the DagRunner's lock is no longer needed.
+_TERMINAL_STATES = frozenset({ProgramState.DISCARDED, ProgramState.DONE})
 
 
 class ProgramStateManager:
@@ -29,14 +35,24 @@ class ProgramStateManager:
         *,
         started_at: datetime | None = None,
     ) -> None:
-        """Mark a stage as RUNNING and persist."""
+        """Mark a stage as RUNNING in-memory only (not persisted to Redis).
+
+        The RUNNING state is only used locally during DAG execution.
+        The final COMPLETED/FAILED state (with started_at preserved) is
+        persisted by update_stage_result().
+        """
         async with self._lock_for(program.id):
             ts = started_at or datetime.now(timezone.utc)
+            # Preserve input_hash from existing result if present
+            existing = program.stage_results.get(stage_name)
+            input_hash = existing.input_hash if existing else None
             program.stage_results[stage_name] = ProgramStageResult(
                 status=StageState.RUNNING,
                 started_at=ts,
+                input_hash=input_hash,
             )
-            await self.storage.update(program)
+            # No Redis write — RUNNING state is transient and never read back.
+            # DAG reads stage state from in-memory program.stage_results.
 
     async def update_stage_result(
         self,
@@ -44,43 +60,75 @@ class ProgramStateManager:
         stage_name: str,
         result: ProgramStageResult,
     ) -> None:
-        """Set a stage result and persist."""
+        """Set a stage result and persist the entire program.
+
+        Note: This persists the ENTIRE program object (metrics, metadata, lineage, etc.),
+        not just the stage_result. This is why additional snapshots are not needed.
+        Uses write_exclusive (2 RT) because the DAG holds exclusive ownership.
+        """
         async with self._lock_for(program.id):
             program.stage_results[stage_name] = result
+            await self.storage.write_exclusive(program)
+
+    async def write_exclusive(self, program: Program) -> None:
+        """Fast write without WATCH/MERGE. Safe only during DAG execution (exclusive ownership)."""
+        async with self._lock_for(program.id):
+            await self.storage.write_exclusive(program)
+
+    async def update_program(self, program: Program) -> None:
+        """Update program (for metadata, lineage, etc.) with proper locking."""
+        async with self._lock_for(program.id):
             await self.storage.update(program)
 
     async def set_program_state(
         self, program: Program, new_state: ProgramState
     ) -> None:
+        """Set program state with validation and atomic persistence."""
         async with self._lock_for(program.id):
             logger.debug(
-                f"[ProgramStateManager] Setting program {program.id[:8]} state from {program.state} to {new_state}"
+                "[ProgramStateManager] Setting program {} state from {} to {}",
+                program.id[:8],
+                program.state,
+                new_state,
             )
 
             if program.state == new_state:
                 logger.debug(
-                    f"[ProgramStateManager] Program {program.id[:8]} already in state {new_state}, skipping"
+                    "[ProgramStateManager] Program {} already in state {}, skipping",
+                    program.id[:8],
+                    new_state,
                 )
                 return
 
-            old_state = program.state  # keep a copy
+            old_state = program.state
+            try:
+                validate_transition(old_state, new_state)
+            except ValueError as e:
+                logger.error(
+                    "[ProgramStateManager] Invalid state transition for {}: {}",
+                    program.id[:8],
+                    e,
+                )
+                raise
+
+            # Update program object
             program.state = new_state
             logger.debug(
-                f"[ProgramStateManager] Updated program {program.id[:8]} state to {new_state}"
-            )
-
-            await self.storage.update(program)
-            logger.debug(
-                f"[ProgramStateManager] Updated program {program.id[:8]} in storage"
+                "[ProgramStateManager] Updated program {} state to {}",
+                program.id[:8],
+                new_state,
             )
 
             old = old_state.value if old_state else None
-            await self.storage.transition_status(program.id, old, new_state.value)
+            await self.storage.atomic_state_transition(program, old, new_state.value)
+
             logger.debug(
-                f"[ProgramStateManager] Transitioned {program.id[:8]} state {old_state} -> {new_state}"
+                "[ProgramStateManager] Atomically transitioned {} state {} -> {}",
+                program.id[:8],
+                old_state,
+                new_state,
             )
 
-            await self.storage.publish_status_event(new_state.value, program.id)
-            logger.debug(
-                f"[ProgramStateManager] Published status event for program {program.id[:8]}"
-            )
+        # Evict after releasing — terminal programs are never transitioned again.
+        if new_state in _TERMINAL_STATES:
+            self._locks.pop(program.id, None)

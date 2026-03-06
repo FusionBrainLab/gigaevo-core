@@ -63,21 +63,18 @@ def _merge_lineage(curr: Lineage, inc: Lineage) -> Lineage:
 def merge_programs(current: Program | None, incoming: Program) -> Program:
     """
     Minimal additive merge (dict tie-breaks ONLY by Program.atomic_counter):
-      - id / created_at / atomic_counter / code / name are immutable -> keep from CURRENT (storage bumps atomic_counter later)
+      - id / created_at / atomic_counter / name are immutable -> keep from CURRENT (storage bumps atomic_counter later)
+      - code                         -> take from side with larger atomic_counter (latest timestamp)
       - state                         -> merge_states(current, incoming)
       - metadata, metrics, stage_results -> shallow dict merge (program-level ts tie-break)
       - lineage                       -> keep immutables; union children
-      - code/name                     -> keep current; fill name if current is None
+      - name                          -> keep current; fill name if current is None
     """
     if current is None:
-        return incoming.model_copy(deep=True)
+        return incoming.model_copy(deep=False)
 
     if current.id != incoming.id:
         raise ValueError(f"id mismatch: current={current.id} incoming={incoming.id}")
-    if current.code != incoming.code:
-        raise ValueError(
-            f"code mismatch: current={current.code} incoming={incoming.code}"
-        )
     if (
         current.name is not None
         and incoming.name is not None
@@ -113,13 +110,17 @@ def merge_programs(current: Program | None, incoming: Program) -> Program:
     # Identity & timestamping (storage owns counter)
     updates["id"] = current.id
     updates["created_at"] = current.created_at
-    updates["code"] = current.code
+    updates["code"] = (
+        incoming.code
+        if incoming.atomic_counter > current.atomic_counter
+        else current.code
+    )
     updates["name"] = current.name
 
     # Will be updated by storage
     updates["atomic_counter"] = current.atomic_counter
 
-    return current.model_copy(update=updates, deep=True)
+    return current.model_copy(update=updates, deep=False)
 
 
 def resolve_merge_strategy(strategy: str):

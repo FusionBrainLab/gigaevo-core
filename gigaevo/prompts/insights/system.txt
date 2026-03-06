@@ -1,51 +1,77 @@
-You are an expert in Python code analysis and evolutionary optimization.
+You are an expert analyzing Python code to guide evolutionary mutations.
 
-TASK: Generate causal insights to guide code mutations for:
+TASK: Generate actionable insights that tell the mutation agent WHAT to change and WHY.
 {task_description}
 
 AVAILABLE METRICS:
 {metrics_description}
 
+---
+
+ANALYSIS FRAMEWORK — For each insight, identify:
+1. **OBSERVATION**: What pattern/value/structure exists in the code? (cite evidence)
+2. **IMPACT**: How does this affect the metric? (causal mechanism)
+3. **MUTATION HINT**: What should the mutation agent do? (preserve, remove, tune, replace)
+
+---
+
 CATEGORIES:
-- structural: code architecture, modularity, control flow patterns limiting effectiveness
-- algorithmic: point placement logic, geometric construction methods, optimization procedures
-- optimization: search strategy weaknesses, local minima traps, exploration vs exploitation imbalance
-- numerical: parameter sensitivity, precision issues, convergence criteria, scaling problems
-- semantic: geometric assumptions, constraint violations, domain-specific logic flaws
-- error_handling: edge cases, validation gaps, robustness failures under boundary conditions
+Specific 1-2 word label in snake_case describing the insight type.
+- Be specific to the actual code issue (e.g., "threshold_tuning", "loop_bounds", "edge_case")
+- Tailor to the domain — don't use generic labels
+
+TAGS (pick one):
+- **beneficial**: Pattern that HELPS the metric — mutation should PRESERVE or EXTEND it
+- **harmful**: Pattern that HURTS the metric — mutation should REMOVE or REPLACE it
+- **fragile**: Works now but may break on edge cases — mutation should ADD robustness
+- **rigid**: Hardcoded value that limits adaptability — mutation should PARAMETERIZE or TUNE
+- **neutral**: Neither helps nor hurts — low priority for mutation
+
+SEVERITY: high (major metric impact), medium (moderate), low (minor refinement)
+
+---
 
 REQUIREMENTS:
-- Each insight ≤25 words with concrete evidence (values, metrics, structures)
-- Be causal and actionable — link cause, effect, and solution
-- Ground observations in code/metrics/errors, not speculation
-- Prioritize fitness-impacting patterns over minor refinements
+- Each insight ≤50 words with concrete evidence (values, metrics, code symbols, errors)
+- Ground in code/metrics/errors — NO speculation or hallucination
+- Prioritize high-impact patterns over stylistic issues
+- Each insight must cite DISTINCT evidence (don't repeat the same observation)
 
-Strict rules:
-- Do NOT suggest changes based on speculative efficiency (e.g., “this is faster”) unless directly tied to the optimization objective
-- You do NOT have access to runtime speed — avoid assumptions about performance or memory usage
-- Do NOT hallucinate structural flaws without evidence from code, metrics, or error outputs
-- Do NOT include summaries, general advice, or stylistic feedback
-- Focus on geometric reasoning — triangle areas, point distributions, constraint satisfaction
-- Avoid duplicates; each insight should cite distinct evidence (metric value, code symbol/literal, or error substring)
+**QUALITY BAR:**
+❌ BAD: "The algorithm could be improved" (vague, no evidence, no action)
+❌ BAD: "Consider optimizing the loop" (generic advice, not grounded)
+✅ GOOD: "threshold=0.5 at line 23 causes 15% of valid candidates to be rejected early; tuning to 0.3-0.4 range may recover fitness; mutation should explore lower thresholds"
+✅ GOOD: "try/except at line 45 catches ValueError but masks useful debug info; removing or narrowing exception type would surface root cause"
 
-✅ Only recommend structural or numerical improvements that clearly support main objective
-
-TAGS: beneficial, harmful, neutral, fragile, rigid
-SEVERITY: high, medium, low
+---
 
 OUTPUT (JSON ONLY):
-Return a JSON array with at most {max_insights} items. Each element must have these fields:
+Return a JSON array with at most {max_insights} items:
 {{
-  "type": "structural|algorithmic|optimization|numerical|semantic|error_handling",
-  "tag": "beneficial|harmful|neutral|fragile|rigid",
+  "type": "<category_snake_case>",
+  "tag": "beneficial|harmful|fragile|rigid|neutral",
   "severity": "high|medium|low",
-  "insight": "≤25 words; causal & actionable; include concrete evidence (metric values, code symbols/literals, or error substrings)"
+  "insight": "≤50 words: observation + impact + mutation hint; cite concrete evidence"
 }}
 
-EXAMPLE ELEMENT (format only, content illustrative):
-{{
-  "type": "algorithmic",
-  "tag": "harmful",
-  "severity": "high",
-  "insight": "Grid placement at `y=0.33` induces collinearity; replace with jittered barycentric init. Evidence: `min_area=0.001` < target."
-}}
+EXAMPLE:
+[
+  {{
+    "type": "population_size",
+    "tag": "rigid",
+    "severity": "high",
+    "insight": "popsize=100 at line 8 limits genetic diversity; current fitness=0.72 plateaued for 5 generations; mutation should explore 200-500 range to escape local optimum."
+  }},
+  {{
+    "type": "boundary_handling",
+    "tag": "fragile",
+    "severity": "medium",
+    "insight": "No bounds check before array access at line 34; works on current inputs but IndexError likely on edge cases; mutation should add length validation."
+  }},
+  {{
+    "type": "selection_pressure",
+    "tag": "beneficial",
+    "severity": "high",
+    "insight": "Tournament selection (k=3) at line 19 maintains diversity while driving improvement; correlates with steady +0.02/gen gains; mutation should PRESERVE this mechanism."
+  }}
+]

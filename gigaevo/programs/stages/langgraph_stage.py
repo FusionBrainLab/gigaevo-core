@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -26,7 +26,7 @@ class LangGraphStage(Stage):
     Execution flow:
       1) Validate DAG inputs -> self.params (InputsModel)
       2) kwargs0 = preprocess(program, self.params)
-           - May return Dict[str, Any] (kwargs to pass to agent)
+           - May return dict[str, Any] (kwargs to pass to agent)
            - Or return ProgramStageResult to short-circuit (e.g., SKIPPED/FAILED)
       3) Inject program under `program_kwarg` (if set) + merge `extra_kwargs`
       4) result = agent(...) via ainvoke/arun/invoke/run/callable
@@ -37,7 +37,6 @@ class LangGraphStage(Stage):
 
     InputsModel = VoidInput
     OutputModel = VoidOutput
-    cacheable: bool = True
 
     def __init__(
         self,
@@ -58,13 +57,13 @@ class LangGraphStage(Stage):
 
     async def preprocess(
         self, program: Program, params: StageIO
-    ) -> Dict[str, Any] | ProgramStageResult:
+    ) -> dict[str, Any] | ProgramStageResult:
         """
         Build kwargs for the agent call from validated params.
         Default: pass through all fields from InputsModel.
         """
         fields = self.__class__.InputsModel.model_fields  # type: ignore[attr-defined]
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         for name in fields.keys():
             v = getattr(params, name)
             kwargs[name] = v
@@ -105,7 +104,7 @@ class LangGraphStage(Stage):
             f"cannot coerce to {self.__class__.OutputModel.__name__}"
         )
 
-    async def _agent_call(self, kwargs: Dict[str, Any]) -> Any:
+    async def _agent_call(self, kwargs: dict[str, Any]) -> Any:
         return await self.agent.arun(**kwargs)
 
     async def compute(self, program: Program) -> StageIO | ProgramStageResult:
@@ -126,5 +125,5 @@ class LangGraphStage(Stage):
         # 3) Call agent
         result = await self._agent_call(kwargs)
 
-        # 5) Postprocess
+        # 4) Postprocess
         return await self.postprocess(program, result)

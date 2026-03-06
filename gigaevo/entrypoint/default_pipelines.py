@@ -4,59 +4,49 @@ from typing import Callable
 
 from gigaevo.entrypoint.constants import (
     DEFAULT_DAG_CONCURRENCY,
-    DEFAULT_DAG_TIMEOUT,
     DEFAULT_MAX_INSIGHTS,
-    DEFAULT_STAGE_TIMEOUT,
+    DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION,
+    DEFAULT_SIMPLE_STAGE_TIMEOUT,
     MAX_CODE_LENGTH,
+    MAX_MEMORY_MB,
+    MAX_OUTPUT_SIZE,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.problems.layout import ProblemLayout
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.collector import AncestorProgramIds, DescendantProgramIds
+from gigaevo.programs.stages.collector import (
+    AncestorProgramIds,
+    DescendantProgramIds,
+    EvolutionaryStatisticsCollector,
+)
+from gigaevo.programs.stages.complexity import ComputeComplexityStage
+from gigaevo.programs.stages.formatter import FormatterStage
 from gigaevo.programs.stages.insights import InsightsStage
 from gigaevo.programs.stages.insights_lineage import (
     LineagesFromAncestors,
     LineageStage,
     LineagesToDescendants,
 )
+from gigaevo.programs.stages.json_processing import MergeDictStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
+from gigaevo.programs.stages.optimization.cma import CMANumericalOptimizationStage
+from gigaevo.programs.stages.optimization.optuna import (
+    OptunaOptimizationStage,
+    OptunaPayloadBridge,
+    PayloadResolver,
+)
 from gigaevo.programs.stages.python_executors.execution import (
     CallFileFunction,
     CallProgramFunction,
     CallValidatorFunction,
+    FetchArtifact,
+    FetchMetrics,
 )
 from gigaevo.programs.stages.validation import ValidateCodeStage
 from gigaevo.runner.dag_blueprint import DAGBlueprint
-
-trait_description = """
-Assess how modular the submitted code is.
-
-Focus on whether the solution decomposes the task into small, cohesive, reusable functions with clear interfaces and minimal coupling. Reward:
-- Clear separation of concerns: the top-level function orchestrates; helpers do one thing well.
-- Small functions (preferably < 40 LOC) with descriptive names, docstrings, and type hints.
-- Low coupling / high cohesion: helpers don’t reach into each other’s internals; parameters carry needed data.
-- Reuse over repetition (little to no copy-paste).
-- Controlled side effects: I/O and state changes isolated behind thin adapters; core logic mostly pure.
-- Testability and composability: helpers can be unit-tested in isolation; minimal global state.
-
-Penalize:
-- Monolithic or god functions, deep nesting, and long parameter lists.
-- Mixed responsibilities in a single function.
-- Hidden dependencies, global/mutable shared state, and tight coupling.
-- Duplicate logic instead of extracting helpers.
-
-Scoring rubric (0–100):
-- 90–100: Highly modular; clear orchestration + focused helpers; minimal coupling; excellent docs/types.
-- 70–89: Generally modular; a few oversized or mixed-concern helpers; minor duplication/coupling.
-- 40–69: Partially modular; main function still heavy; noticeable duplication and side-effect tangling.
-- 0–39: Monolithic; few/no helpers; tightly coupled, hard to test.
-
-Ignore performance or algorithmic optimality; evaluate modularity only.
-"""
-
 
 StageFactory = Callable[[], Stage]
 
@@ -64,12 +54,12 @@ StageFactory = Callable[[], Stage]
 class PipelineBuilder:
     """Mutable builder for pipeline nodes/edges/deps producing a DAGBlueprint."""
 
-    def __init__(self, ctx: EvolutionContext):
+    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
         self.ctx = ctx
         self._nodes: dict[str, StageFactory] = {}
         self._data_flow_edges: list[DataFlowEdge] = []
         self._deps: dict[str, list[ExecutionOrderDependency]] = {}
-        self._dag_timeout: float = DEFAULT_DAG_TIMEOUT
+        self._dag_timeout: float = dag_timeout
         self._max_parallel: int = DEFAULT_DAG_CONCURRENCY
 
     # Stage operations - add, replace, remove
@@ -150,8 +140,8 @@ class PipelineBuilder:
 class DefaultPipelineBuilder(PipelineBuilder):
     """Recreates the current default pipeline (no context added)."""
 
-    def __init__(self, ctx: EvolutionContext):
-        super().__init__(ctx)
+    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
+        super().__init__(ctx, dag_timeout=dag_timeout)
         self._contribute_default_nodes()
         self._contribute_default_edges()
         self._contribute_default_deps()
@@ -163,13 +153,14 @@ class DefaultPipelineBuilder(PipelineBuilder):
         llm_wrapper = self.ctx.llm_wrapper
         storage = self.ctx.storage
         task_description = self.ctx.problem_ctx.task_description
+        prompts_dir = self.ctx.prompts_dir
 
         # ValidateCompiles
         self.add_stage(
             "ValidateCodeStage",
             lambda: ValidateCodeStage(
                 max_code_length=MAX_CODE_LENGTH,
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
                 safe_mode=True,
             ),
         )
@@ -180,7 +171,9 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: CallProgramFunction(
                 function_name="entrypoint",
                 python_path=[problem_ctx.problem_dir.resolve()],
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                max_memory_mb=MAX_MEMORY_MB,
+                max_output_size=MAX_OUTPUT_SIZE,
             ),
         )
 
@@ -191,8 +184,24 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: CallValidatorFunction(
                 path=validator_path,
                 function_name="validate",
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                max_memory_mb=MAX_MEMORY_MB,
+                max_output_size=MAX_OUTPUT_SIZE,
             ),
+        )
+
+        # Extract metrics and artifact from validation result (artifact output unused for now)
+        self.add_stage(
+            "FetchMetrics",
+            lambda: FetchMetrics(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+        )
+        self.add_stage(
+            "FetchArtifact",
+            lambda: FetchArtifact(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+        )
+        self.add_stage(
+            "FormatterStage",
+            lambda: FormatterStage(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
         )
 
         # Insights stages
@@ -203,7 +212,8 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 task_description=task_description,
                 metrics_context=metrics_context,
                 max_insights=DEFAULT_MAX_INSIGHTS,
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                prompts_dir=prompts_dir,
             ),
         )
 
@@ -216,7 +226,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     strategy="best_fitness",
                     max_selected=1,
                 ),
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
             ),
         )
         self.add_stage(
@@ -228,7 +238,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     strategy="best_fitness",
                     max_selected=2,
                 ),
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
             ),
         )
 
@@ -239,7 +249,8 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 task_description=task_description,
                 metrics_context=metrics_context,
                 storage=storage,
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                prompts_dir=prompts_dir,
             ),
         )
 
@@ -248,7 +259,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: LineagesToDescendants(
                 storage=storage,
                 source_stage_name="LineageStage",
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
             ),
         )
 
@@ -257,7 +268,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: LineagesFromAncestors(
                 storage=storage,
                 source_stage_name="LineageStage",
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
             ),
         )
 
@@ -265,7 +276,21 @@ class DefaultPipelineBuilder(PipelineBuilder):
             "MutationContextStage",
             lambda: MutationContextStage(
                 metrics_context=metrics_context,
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+            ),
+        )
+
+        self.add_stage(
+            "ComputeComplexityStage",
+            lambda: ComputeComplexityStage(
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+            ),
+        )
+
+        self.add_stage(
+            "MergeMetricsStage",
+            lambda: MergeDictStage[str, float](
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
             ),
         )
 
@@ -274,7 +299,15 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: EnsureMetricsStage(
                 metrics_factory=metrics_context.get_sentinels,
                 metrics_context=metrics_context,
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+            ),
+        )
+        self.add_stage(
+            "EvolutionaryStatisticsCollector",
+            lambda: EvolutionaryStatisticsCollector(
+                storage=storage,
+                metrics_context=metrics_context,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
             ),
         )
 
@@ -283,8 +316,14 @@ class DefaultPipelineBuilder(PipelineBuilder):
             "CallProgramFunction", "CallValidatorFunction", "payload"
         )
         self.add_data_flow_edge(
-            "CallValidatorFunction", "EnsureMetricsStage", "candidate"
+            "CallValidatorFunction", "FetchMetrics", "validation_result"
         )
+        self.add_data_flow_edge(
+            "CallValidatorFunction", "FetchArtifact", "validation_result"
+        )
+        self.add_data_flow_edge("FetchMetrics", "MergeMetricsStage", "first")
+        self.add_data_flow_edge("ComputeComplexityStage", "MergeMetricsStage", "second")
+        self.add_data_flow_edge("MergeMetricsStage", "EnsureMetricsStage", "candidate")
         self.add_data_flow_edge("EnsureMetricsStage", "MutationContextStage", "metrics")
         self.add_data_flow_edge("InsightsStage", "MutationContextStage", "insights")
         self.add_data_flow_edge(
@@ -299,11 +338,27 @@ class DefaultPipelineBuilder(PipelineBuilder):
         self.add_data_flow_edge(
             "LineagesFromAncestors", "MutationContextStage", "lineage_ancestors"
         )
+        self.add_data_flow_edge(
+            "EvolutionaryStatisticsCollector",
+            "MutationContextStage",
+            "evolutionary_statistics",
+        )
+        self.add_data_flow_edge("FetchArtifact", "FormatterStage", "data")
+        self.add_data_flow_edge("FormatterStage", "MutationContextStage", "formatted")
 
     def _contribute_default_deps(self) -> None:
         self._deps = {
             "CallProgramFunction": [
                 ExecutionOrderDependency.on_success("ValidateCodeStage")
+            ],
+            "FetchMetrics": [
+                ExecutionOrderDependency.always_after("CallValidatorFunction"),
+            ],
+            "FetchArtifact": [
+                ExecutionOrderDependency.always_after("CallValidatorFunction"),
+            ],
+            "FormatterStage": [
+                ExecutionOrderDependency.always_after("FetchArtifact"),
             ],
             "InsightsStage": [
                 ExecutionOrderDependency.always_after("EnsureMetricsStage"),
@@ -317,14 +372,17 @@ class DefaultPipelineBuilder(PipelineBuilder):
             "LineagesFromAncestors": [
                 ExecutionOrderDependency.always_after("LineageStage"),
             ],
+            "EvolutionaryStatisticsCollector": [
+                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+            ],
         }
 
 
 class ContextPipelineBuilder(DefaultPipelineBuilder):
     """Default pipeline with AddContext stage and wiring enabled."""
 
-    def __init__(self, ctx: EvolutionContext):
-        super().__init__(ctx)
+    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
+        super().__init__(ctx, dag_timeout=dag_timeout)
         self._add_context_stage_and_edges()
 
     def _add_context_stage_and_edges(self) -> None:
@@ -336,12 +394,309 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
             lambda: CallFileFunction(
                 path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
                 function_name="build_context",
-                timeout=DEFAULT_STAGE_TIMEOUT,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
             ),
         )
 
         self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
         self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+
+
+class CMAOptPipelineBuilder(DefaultPipelineBuilder):
+    """Default pipeline + CMA-ES numerical constant optimisation.
+
+    Inherits :class:`DefaultPipelineBuilder` and inserts a
+    :class:`CMANumericalOptimizationStage` between ``ValidateCodeStage``
+    and ``CallProgramFunction``.  If the problem provides a ``context.py``
+    the ``AddContext`` stage is wired automatically (same as
+    :class:`ContextPipelineBuilder`).
+
+    Execution order::
+
+        ValidateCodeStage ─(success)─► CMAOptStage ─(always)─► CallProgramFunction
+        AddContext* ───────(always)──►              ─(data)──►
+        (* only when context.py exists)
+
+    If CMA fails, the program still runs with the original code.
+
+    Override ``_cma_stage_kwargs`` in a subclass to tweak hyper-parameters.
+    """
+
+    # Sensible defaults – override in subclasses.
+    CMA_SCORE_KEY: str = "fitness"
+    CMA_SIGMA0: float = 0.2
+    CMA_MAX_GENERATIONS: int = 20
+    CMA_POPULATION_SIZE: int = 10
+    CMA_MAX_PARALLEL: int = 10
+    # Current experiment policy: CMA tunes float literals only.
+    # Integer literals are left to mutation/structural evolution.
+    CMA_TUNE_FLOATS_ONLY: bool = True
+
+    def __init__(
+        self,
+        ctx: EvolutionContext,
+        *,
+        dag_timeout: float = 3600.0,
+        optimization_time_budget: float | None = None,
+    ):
+        super().__init__(ctx, dag_timeout=dag_timeout)
+        self._optimization_time_budget = (
+            optimization_time_budget
+            if optimization_time_budget is not None
+            else dag_timeout * DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION
+        )
+        has_context = ctx.problem_ctx.is_contextual
+        if has_context:
+            self._add_context_stage_and_edges()
+        self._add_cma_optimization(has_context=has_context)
+
+    def _add_context_stage_and_edges(self) -> None:
+        """Add the AddContext stage (same as ContextPipelineBuilder)."""
+        problem_ctx = self.ctx.problem_ctx
+        self.add_stage(
+            "AddContext",
+            lambda: CallFileFunction(
+                path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
+                function_name="build_context",
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+            ),
+        )
+        self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
+        self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+
+    def _cma_stage_kwargs(self) -> dict:
+        """Return extra kwargs forwarded to :class:`CMANumericalOptimizationStage`.
+
+        Override in a subclass to customise CMA hyper-parameters without
+        rewriting the whole pipeline.
+        """
+        return {}
+
+    def _add_cma_optimization(self, *, has_context: bool) -> None:
+        problem_ctx = self.ctx.problem_ctx
+        validator_path = problem_ctx.problem_dir / "validate.py"
+
+        extra = self._cma_stage_kwargs()
+
+        max_gen = extra.pop("max_generations", self.CMA_MAX_GENERATIONS)
+        pop_size = extra.pop("population_size", self.CMA_POPULATION_SIZE)
+        max_par = extra.pop("max_parallel", self.CMA_MAX_PARALLEL)
+
+        budget = self._optimization_time_budget
+
+        # Derive eval_timeout from budget if not explicitly overridden.
+        n_rounds = -(-max_gen * pop_size // max_par)  # ceil division
+        default_eval_to = max(30, min(300, budget * 0.9 / max(n_rounds, 1)))
+        eval_to = extra.pop("eval_timeout", int(default_eval_to))
+
+        # Stage timeout: capped to the optimization budget.
+        stage_timeout = min((n_rounds + 1) * eval_to, int(budget))
+
+        self.add_stage(
+            "CMAOptStage",
+            lambda: CMANumericalOptimizationStage(
+                validator_path=validator_path,
+                score_key=extra.pop("score_key", self.CMA_SCORE_KEY),
+                function_name="entrypoint",
+                validator_fn="validate",
+                python_path=[problem_ctx.problem_dir.resolve()],
+                minimize=False,
+                sigma0=extra.pop("sigma0", self.CMA_SIGMA0),
+                max_generations=max_gen,
+                population_size=pop_size,
+                max_parallel=max_par,
+                eval_timeout=eval_to,
+                skip_integers=extra.pop("skip_integers", self.CMA_TUNE_FLOATS_ONLY),
+                update_program_code=True,
+                timeout=stage_timeout,
+                max_memory_mb=MAX_MEMORY_MB,
+                **extra,
+            ),
+        )
+
+        # CMA runs after validation succeeds
+        self.add_exec_dep(
+            "CMAOptStage",
+            ExecutionOrderDependency.on_success("ValidateCodeStage"),
+        )
+
+        # If context exists, wire it into CMA and wait for it
+        if has_context:
+            self.add_data_flow_edge("AddContext", "CMAOptStage", "context")
+            self.add_exec_dep(
+                "CMAOptStage",
+                ExecutionOrderDependency.always_after("AddContext"),
+            )
+
+        # Program execution waits for CMA (but runs even if CMA fails)
+        self.add_exec_dep(
+            "CallProgramFunction",
+            ExecutionOrderDependency.always_after("CMAOptStage"),
+        )
+
+
+class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
+    """Default pipeline + LLM-guided Optuna hyperparameter optimisation.
+
+    Inherits :class:`DefaultPipelineBuilder` and inserts an
+    :class:`OptunaOptimizationStage` between ``ValidateCodeStage``
+    and ``CallProgramFunction``.  If the problem provides a ``context.py``
+    the ``AddContext`` stage is wired automatically.
+
+    Execution order::
+
+        ValidateCodeStage ─(success)─► OptunaOptStage ─(always)─► CallProgramFunction
+        AddContext* ───────(always)──►                 ─(data)──►
+        (* only when context.py exists)
+
+    If Optuna fails, the program still runs with the original code.
+
+    Override ``_optuna_stage_kwargs`` in a subclass to tweak hyper-parameters.
+    """
+
+    # Sensible defaults – override in subclasses.
+    OPTUNA_SCORE_KEY: str | None = None  # None -> auto-detect from problem_ctx
+    OPTUNA_MAX_PARALLEL: int = 10
+
+    def __init__(
+        self,
+        ctx: EvolutionContext,
+        *,
+        dag_timeout: float = 7200.0,
+        optimization_time_budget: float | None = None,
+    ):
+        super().__init__(ctx, dag_timeout=dag_timeout)
+        self._optimization_time_budget = (
+            optimization_time_budget
+            if optimization_time_budget is not None
+            else dag_timeout * DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION
+        )
+        has_context = ctx.problem_ctx.is_contextual
+        if has_context:
+            self._add_context_stage_and_edges()
+        self._add_optuna_optimization(has_context=has_context)
+
+    def _add_context_stage_and_edges(self) -> None:
+        """Add the AddContext stage (same as ContextPipelineBuilder)."""
+        problem_ctx = self.ctx.problem_ctx
+        self.add_stage(
+            "AddContext",
+            lambda: CallFileFunction(
+                path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
+                function_name="build_context",
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+            ),
+        )
+        self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
+        self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+
+    def _optuna_stage_kwargs(self) -> dict:
+        """Return extra kwargs forwarded to :class:`OptunaOptimizationStage`.
+
+        Override in a subclass to customise Optuna hyper-parameters without
+        rewriting the whole pipeline.
+        """
+        return {}
+
+    def _add_optuna_optimization(self, *, has_context: bool) -> None:
+        problem_ctx = self.ctx.problem_ctx
+        llm_wrapper = self.ctx.llm_wrapper
+        metrics_ctx = problem_ctx.metrics_context
+        primary_spec = metrics_ctx.get_primary_spec()
+
+        validator_path = problem_ctx.problem_dir / "validate2.py"
+        task_description = problem_ctx.task_description
+
+        extra = self._optuna_stage_kwargs()
+
+        max_par = extra.pop("max_parallel", self.OPTUNA_MAX_PARALLEL)
+        score_key = extra.pop(
+            "score_key", self.OPTUNA_SCORE_KEY or metrics_ctx.get_primary_key()
+        )
+        minimize = extra.pop("minimize", not primary_spec.higher_is_better)
+
+        budget = self._optimization_time_budget
+
+        # Pass None for eval_timeout and n_trials so the stage auto-computes
+        # them from the optimization budget + baseline runtime.
+        # Explicit overrides from _optuna_stage_kwargs() still work.
+        n_trials = extra.pop("n_trials", None)
+        eval_to = extra.pop("eval_timeout", None)
+
+        # Stage timeout = the full optimization budget
+        stage_timeout = int(budget)
+
+        self.add_stage(
+            "OptunaOptStage",
+            lambda: OptunaOptimizationStage(
+                llm=llm_wrapper,
+                validator_path=validator_path,
+                score_key=score_key,
+                function_name="entrypoint",
+                validator_fn="validate",
+                python_path=[problem_ctx.problem_dir.resolve()],
+                minimize=minimize,
+                n_trials=n_trials,
+                max_parallel=max_par,
+                eval_timeout=eval_to,
+                update_program_code=True,
+                task_description=task_description,
+                optimization_time_budget=budget,
+                timeout=stage_timeout,
+                max_memory_mb=MAX_MEMORY_MB,
+                **extra,
+            ),
+        )
+
+        # Optuna runs after validation succeeds
+        self.add_exec_dep(
+            "OptunaOptStage",
+            ExecutionOrderDependency.on_success("ValidateCodeStage"),
+        )
+
+        # If context exists, wire it into Optuna and wait for it
+        if has_context:
+            self.add_data_flow_edge("AddContext", "OptunaOptStage", "context")
+            self.add_exec_dep(
+                "OptunaOptStage",
+                ExecutionOrderDependency.always_after("AddContext"),
+            )
+
+        # -- Bypass: skip CallProgramFunction when Optuna succeeds --------
+        #
+        # OptunaPayloadBridge extracts best_program_output from Optuna.
+        # PayloadResolver picks whichever payload source completed.
+        # CallValidatorFunction always runs (single source of truth).
+        self.add_stage(
+            "OptunaPayloadBridge",
+            lambda: OptunaPayloadBridge(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+        )
+        self.add_stage(
+            "PayloadResolver",
+            lambda: PayloadResolver(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+        )
+
+        # Data flow: Optuna → bridge → resolver → validator
+        self.add_data_flow_edge(
+            "OptunaOptStage", "OptunaPayloadBridge", "optuna_output"
+        )
+        self.add_data_flow_edge(
+            "OptunaPayloadBridge", "PayloadResolver", "optuna_payload"
+        )
+        self.add_data_flow_edge(
+            "CallProgramFunction", "PayloadResolver", "program_payload"
+        )
+
+        # Replace the default CallProgramFunction → CallValidatorFunction edge
+        # with PayloadResolver → CallValidatorFunction.
+        self.remove_data_flow_edge("CallProgramFunction", "CallValidatorFunction")
+        self.add_data_flow_edge("PayloadResolver", "CallValidatorFunction", "payload")
+
+        # CallProgramFunction only runs when Optuna fails (fallback path).
+        self.add_exec_dep(
+            "CallProgramFunction",
+            ExecutionOrderDependency.on_failure("OptunaOptStage"),
+        )
 
 
 class CustomPipelineBuilder(PipelineBuilder):

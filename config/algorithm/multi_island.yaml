@@ -1,0 +1,111 @@
+# @package _global_
+
+defaults:
+  - _base
+
+# Multi-island MAP-Elites with two islands:
+# 1. Fitness Island: Optimizes primary fitness + validity
+# 2. Simplicity Island: Optimizes fitness + code simplicity (negative complexity)
+#
+# NOTE: This config requires complexity_score metric to be defined.
+#       Use with metrics/code_complexity.yaml or define it in your example.
+
+complexity_bounds:
+  _target_: gigaevo.config.helpers.get_bounds
+  metrics_context: ${metrics_context}
+  key: complexity_score
+
+# Island 1: Fitness-focused (primary + validity)
+fitness_behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - ${primary_key}
+    - ${validity_key}
+  bounds:
+    - ${primary_bounds}
+    - ${validity_bounds}
+  resolutions:
+    - ${primary_resolution}
+    - ${validity_resolution}
+  binning_types:
+    - ${binning_type}
+    - ${binning_type}
+
+# Island 2: Simplicity-focused (primary + complexity_score)
+simplicity_behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - ${primary_key}
+    - complexity_score
+  bounds:
+    - ${primary_bounds}
+    - ${complexity_bounds}
+  resolutions:
+    - 20
+    - 10  # Complexity resolution
+  binning_types:
+    - ${binning_type}
+    - ${binning_type}
+
+# Islands configuration
+islands:
+  # Island 1: Focus on fitness
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: fitness_island
+    max_size: ${island_max_size}
+    behavior_space: ${fitness_behavior_space}
+    archive_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
+      fitness_keys:
+        - ${primary_key}
+      fitness_key_higher_is_better:
+        - ${higher_is_better}
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migration_rate: ${migration_rate}
+
+  # Island 2: Focus on simplicity
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: simplicity_island
+    max_size: ${island_max_size}
+    behavior_space: ${simplicity_behavior_space}
+    archive_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
+      fitness_keys:
+        - ${primary_key}
+        - complexity_score  # Penalize complexity
+      fitness_key_higher_is_better:
+        - ${higher_is_better}
+        - false  # Lower complexity is better
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: complexity_score  # Remove most complex solutions first
+      fitness_key_higher_is_better: false
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migration_rate: ${migration_rate}
+
+# Evolution strategy
+evolution_strategy:
+  _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
+  island_configs: ${islands}
+  program_storage: ${ref:redis_storage}
+  migration_interval: ${migration_interval}
+  enable_migration: ${enable_migration}
+  max_migrants_per_island: ${max_migrants_per_island}

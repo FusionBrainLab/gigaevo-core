@@ -2,18 +2,27 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
 import traceback
 from typing import Any, Optional
 
+import cloudpickle
 from pydantic import BaseModel, Field, field_serializer
 
 from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
 
 
 class StageIO(BaseModel):
-    """Strict base for stage inputs/outputs (used by stage classes & DAG typing)."""
+    """Strict base for stage inputs/outputs (used by stage classes & DAG typing).
+
+    Provides a `content_hash` property for cache invalidation.
+    """
 
     model_config = {"extra": "forbid", "arbitrary_types_allowed": True}
+
+    @property
+    def content_hash(self) -> str:
+        return hashlib.sha256(cloudpickle.dumps(self.model_dump())).hexdigest()[:16]
 
 
 class VoidInput(StageIO):
@@ -78,6 +87,10 @@ class ProgramStageResult(BaseModel):
     error: Optional[StageError] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    input_hash: Optional[str] = Field(
+        None,
+        description="Hash of inputs when stage was executed (for cache invalidation)",
+    )
 
     def duration_seconds(self) -> Optional[float]:
         if self.started_at and self.finished_at:
@@ -114,6 +127,23 @@ class ProgramStageResult(BaseModel):
         res = cls(started_at=started_at or datetime.now(timezone.utc))
         res.mark_failed(error=error)
         return res
+
+    @classmethod
+    def skipped(
+        cls,
+        *,
+        message: str = "Stage skipped",
+        stage: Optional[str] = None,
+        error_type: str = "Skip",
+    ) -> "ProgramStageResult":
+        """Create a result indicating the stage was skipped (e.g. no input data)."""
+        now = datetime.now(timezone.utc)
+        return cls(
+            status=StageState.SKIPPED,
+            error=StageError(type=error_type, message=message, stage=stage),
+            started_at=now,
+            finished_at=now,
+        )
 
     @field_serializer("output", when_used="json")
     def _ser_output(self, value: Any | None) -> str | None:

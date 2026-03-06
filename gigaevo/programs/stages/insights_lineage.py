@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -10,14 +11,13 @@ from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.llm.models import ChatOpenAI, MultiModelRouter
 from gigaevo.programs.core_types import (
     ProgramStageResult,
-    StageError,
     StageIO,
-    StageState,
     VoidInput,
 )
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import ListOf
 from gigaevo.programs.stages.langgraph_stage import LangGraphStage
 from gigaevo.programs.stages.stage_registry import StageRegistry
@@ -44,7 +44,6 @@ class LineageStage(LangGraphStage):
 
     InputsModel = VoidInput
     OutputModel = LineageAnalysesOutput  # Output: list of TransitionAnalysis from parent<i> to child
-    cacheable: bool = True
 
     def __init__(
         self,
@@ -53,11 +52,17 @@ class LineageStage(LangGraphStage):
         task_description: str,
         metrics_context: MetricsContext,
         storage: ProgramStorage,
+        prompts_dir: str | Path | None = None,
         **kwargs: Any,
     ):
         # Inject live Program instance as `program` kwarg for the agent
         super().__init__(
-            agent=create_lineage_agent(llm, task_description, metrics_context),
+            agent=create_lineage_agent(
+                llm,
+                task_description,
+                metrics_context,
+                prompts_dir=prompts_dir,
+            ),
             program_kwarg="program",
             **kwargs,
         )
@@ -66,8 +71,8 @@ class LineageStage(LangGraphStage):
     async def preprocess(
         self, program: Program, params: VoidInput
     ) -> dict[str, Program] | ProgramStageResult:
-        ids: list[str] = program.lineage.parents
-        return {"parents": [await self.storage.get(pid) for pid in ids]}
+        ids: list[str] = list(program.lineage.parents)
+        return {"parents": await self.storage.mget(ids)}
 
 
 class LineagesToDescendantsInputs(StageIO):
@@ -85,7 +90,7 @@ class LineagesToDescendants(Stage):
 
     InputsModel = LineagesToDescendantsInputs
     OutputModel = TransitionAnalysisList
-    cacheable = False  # descendants and their lineage may evolve over time
+    cache_handler = NO_CACHE  # descendants and their lineage may evolve over time
 
     def __init__(
         self, *, storage: ProgramStorage, source_stage_name: str, **kwargs: Any
@@ -99,13 +104,9 @@ class LineagesToDescendants(Stage):
     ) -> TransitionAnalysisList | ProgramStageResult:
         child_ids = list(self.params.descendant_ids.items)
         if not child_ids:
-            return ProgramStageResult(
-                status=StageState.SKIPPED,
-                error=StageError(
-                    type="Skip",
-                    message="No descendant IDs provided for lineage analysis",
-                    stage=self.stage_name,
-                ),
+            return ProgramStageResult.skipped(
+                message="No descendant IDs provided for lineage analysis",
+                stage=self.stage_name,
             )
 
         children: list[Program] = await self.storage.mget(child_ids)
@@ -123,7 +124,9 @@ class LineagesToDescendants(Stage):
                 if a.from_id == want_parent:
                     out.append(a)
                     logger.info(
-                        f"[LineagesToDescendants] Added transition analysis for {a.from_id} -> {a.to_id}"
+                        "[LineagesToDescendants] Added transition for {} -> {}",
+                        a.from_id,
+                        a.to_id,
                     )
                     break
 
@@ -145,7 +148,7 @@ class LineagesFromAncestors(Stage):
 
     InputsModel = LineagesFromAncestorsInputs
     OutputModel = TransitionAnalysisList
-    cacheable = False
+    cache_handler = NO_CACHE
 
     def __init__(
         self, *, storage: ProgramStorage, source_stage_name: str, **kwargs: Any
@@ -159,30 +162,24 @@ class LineagesFromAncestors(Stage):
     ) -> TransitionAnalysisList | ProgramStageResult:
         parent_ids: list[str] = list(self.params.ancestor_ids.items)
         if not parent_ids:
-            return ProgramStageResult(
-                status=StageState.SKIPPED,
-                error=StageError(
-                    type="Skip",
-                    message="No ancestor IDs provided for lineage analysis",
-                    stage=self.stage_name,
-                ),
+            return ProgramStageResult.skipped(
+                message="No ancestor IDs provided for lineage analysis",
+                stage=self.stage_name,
             )
         res: ProgramStageResult = program.stage_results.get(self.source_stage_name)
         if not res or res.output is None:
-            return ProgramStageResult(
-                status=StageState.SKIPPED,
-                error=StageError(
-                    type="Skip",
-                    message="No transitions computed for this program",
-                    stage=self.stage_name,
-                ),
+            return ProgramStageResult.skipped(
+                message="No transitions computed for this program",
+                stage=self.stage_name,
             )
         analyses: list[TransitionAnalysis] = res.output.analyses
         want_child = program.id
         out = [a for a in analyses if a.to_id == want_child and a.from_id in parent_ids]
         for a in out:
             logger.info(
-                f"[LineagesFromAncestors] Added transition analysis for {a.from_id} -> {a.to_id}"
+                "[LineagesFromAncestors] Added transition for {} -> {}",
+                a.from_id,
+                a.to_id,
             )
 
         return TransitionAnalysisList(items=out)

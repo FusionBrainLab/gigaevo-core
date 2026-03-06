@@ -3,6 +3,8 @@ from __future__ import annotations
 import random
 from typing import Literal
 
+from loguru import logger
+
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 
@@ -36,9 +38,12 @@ class AncestrySelector:
             scored: list[tuple[float, str]] = []
             for program in programs:
                 if fitness_key not in program.metrics:
-                    raise ValueError(
-                        f"Missing fitness key '{fitness_key}' in program {program.id}"
+                    logger.warning(
+                        "[AncestrySelector] Skipping program {} — missing fitness key '{}'",
+                        program.id[:8],
+                        fitness_key,
                     )
+                    continue
                 val = program.metrics[fitness_key]
                 scored.append((val, program))
 

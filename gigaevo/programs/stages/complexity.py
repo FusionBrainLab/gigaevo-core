@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from collections import Counter
 import math
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -74,7 +74,7 @@ class NumericalComplexityVisitor(ast.NodeVisitor):
         self.current_depth -= 1
 
 
-def compute_numerical_complexity(code_str: str) -> Dict[str, int | float]:
+def compute_numerical_complexity(code_str: str) -> dict[str, int | float]:
     tree = ast.parse(code_str)
     visitor = NumericalComplexityVisitor()
     visitor.visit(tree)
@@ -115,31 +115,33 @@ def compute_numerical_complexity(code_str: str) -> Dict[str, int | float]:
     }
 
 
-def compute_complexity_score(features: Dict[str, Any]) -> float:
-    weights = {
-        "call_count": 0.15,
-        "binop_count": 0.10,
-        "loop_count": 0.15,
-        "condition_count": 0.15,
-        "function_def_count": 0.10,
-        "class_def_count": 0.05,
-        "max_depth": 0.20,
-        "unique_identifiers": 0.10,
-    }
-    caps = {
-        "call_count": 50,
-        "binop_count": 50,
-        "loop_count": 20,
-        "condition_count": 20,
-        "function_def_count": 10,
-        "class_def_count": 5,
-        "max_depth": 15,
-        "unique_identifiers": 50,
-    }
+_COMPLEXITY_WEIGHTS: dict[str, float] = {
+    "call_count": 0.15,
+    "binop_count": 0.10,
+    "loop_count": 0.15,
+    "condition_count": 0.15,
+    "function_def_count": 0.10,
+    "class_def_count": 0.05,
+    "max_depth": 0.20,
+    "unique_identifiers": 0.10,
+}
 
+_COMPLEXITY_CAPS: dict[str, int] = {
+    "call_count": 50,
+    "binop_count": 50,
+    "loop_count": 20,
+    "condition_count": 20,
+    "function_def_count": 10,
+    "class_def_count": 5,
+    "max_depth": 15,
+    "unique_identifiers": 50,
+}
+
+
+def compute_complexity_score(features: dict[str, Any]) -> float:
     score = 0.0
-    for k, w in weights.items():
-        v = min(int(features.get(k, 0) or 0), caps[k])
+    for k, w in _COMPLEXITY_WEIGHTS.items():
+        v = min(int(features.get(k, 0) or 0), _COMPLEXITY_CAPS[k])
         score += v * w
     return float(score)
 

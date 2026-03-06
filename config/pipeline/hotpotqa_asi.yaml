@@ -1,0 +1,24 @@
+# @package _global_
+# ASI mutation pipeline for HotpotQA static_a / static_ra chain evolution.
+#
+# validate.py returns (metrics, failures[:10]); FetchArtifact extracts failures;
+# HotpotQAASIFormatter renders them with per-hop BM25 retrieval diagnostics.
+#
+# Usage:
+#   python run.py problem.name=chains/hotpotqa/static_a pipeline=hotpotqa_asi ...
+#   python run.py problem.name=chains/hotpotqa/static_ra pipeline=hotpotqa_asi ...
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+
+pipeline_builder:
+  _target_: problems.chains.hotpotqa.static_a.pipeline.ASIPipelineBuilder
+  ctx: ${evolution_context}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}

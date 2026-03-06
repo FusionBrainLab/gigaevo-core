@@ -1,0 +1,5 @@
+# @package _global_
+# DAG runner constants
+
+runner_poll_interval: 5.0
+max_concurrent_dags: 10

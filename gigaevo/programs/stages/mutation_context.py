@@ -1,22 +1,26 @@
 # gigaevo/programs/stages/mutation_context.py
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
 from gigaevo.evolution.mutation.context import (
     MUTATION_CONTEXT_METADATA_KEY,
     CompositeMutationContext,
+    EvolutionaryStatisticsMutationContext,
     FamilyTreeMutationContext,
     InsightsMutationContext,
     MetricsMutationContext,
+    PreformattedMutationContext,
 )
 from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cache_handler import NO_CACHE
+from gigaevo.programs.stages.collector import EvolutionaryStatistics
 from gigaevo.programs.stages.common import FloatDictContainer, StageIO, StringContainer
 from gigaevo.programs.stages.insights import InsightsOutput
 from gigaevo.programs.stages.insights_lineage import TransitionAnalysisList
@@ -30,12 +34,16 @@ class MutationContextInputs(StageIO):
       - insights: ProgramInsights wrapped by the Insights stage output
       - lineage_ancestors: TransitionAnalysisList (from collector+lineage stages on ancestors)
       - lineage_descendants: TransitionAnalysisList (from collector+lineage stages on descendants)
+      - evolutionary_statistics: EvolutionaryStatistics (from EvolutionaryStatisticsCollector)
+      - formatted: preformatted string (e.g. from FormatterStage) for mutation prompt
     """
 
     metrics: Optional[FloatDictContainer]
     insights: Optional[InsightsOutput]
     lineage_ancestors: Optional[TransitionAnalysisList]
     lineage_descendants: Optional[TransitionAnalysisList]
+    evolutionary_statistics: Optional[EvolutionaryStatistics]
+    formatted: Optional[StringContainer]
 
 
 @StageRegistry.register(
@@ -53,15 +61,15 @@ class MutationContextStage(Stage):
 
     InputsModel = MutationContextInputs
     OutputModel = StringContainer
-    cacheable: bool = False
+    cache_handler = NO_CACHE
 
-    def __init__(self, *, metrics_context: MetricsContext, **kwargs):
+    def __init__(self, *, metrics_context: MetricsContext, **kwargs: Any):
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
         self.metadata_key = MUTATION_CONTEXT_METADATA_KEY
 
     async def compute(self, program: Program) -> StageIO:
-        contexts: list = []
+        contexts: list[CompositeMutationContext] = []
         params: MutationContextInputs = self.params
 
         if params.metrics is not None:
@@ -92,6 +100,17 @@ class MutationContextStage(Stage):
                     metrics_formatter=formatter,
                 )
             )
+
+        if params.evolutionary_statistics is not None:
+            contexts.append(
+                EvolutionaryStatisticsMutationContext(
+                    evolutionary_statistics=params.evolutionary_statistics,
+                    metrics_context=self.metrics_context,
+                )
+            )
+
+        if params.formatted is not None:
+            contexts.append(PreformattedMutationContext(content=params.formatted.data))
 
         if not contexts:
             logger.info(

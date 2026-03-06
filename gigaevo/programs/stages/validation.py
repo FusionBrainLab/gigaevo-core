@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import re
+from typing import Any
 
 from loguru import logger
 
@@ -31,7 +32,6 @@ class ValidateCodeStage(Stage):
 
     InputsModel = VoidInput
     OutputModel = CodeValidationOutput
-    cacheable: bool = True
 
     def __init__(
         self,
@@ -39,7 +39,7 @@ class ValidateCodeStage(Stage):
         safe_mode: bool = False,
         custom_patterns: list[str] | None = None,
         max_code_length: int = 10_000,
-        **kwargs,
+        **kwargs: Any,
     ):
         super().__init__(**kwargs)
         if max_code_length <= 0:
@@ -124,6 +124,7 @@ class ValidateCodeStage(Stage):
                     )
 
     def _validate_ast_imports(self, code: str) -> None:
+        """AST scan for imports of forbidden modules (os, sys, subprocess)."""
         try:
             tree = ast.parse(code)
         except SyntaxError:

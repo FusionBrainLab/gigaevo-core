@@ -4,13 +4,12 @@ import asyncio
 from asyncio import CancelledError
 from datetime import datetime, timezone
 import time
-from typing import Dict, Set, cast
+from typing import cast
 
 from loguru import logger
 
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.programs.core_types import (
-    FINAL_STATES,
     ProgramStageResult,
     StageError,
     StageState,
@@ -22,6 +21,10 @@ from gigaevo.programs.dag.automata import (
 )
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
+from gigaevo.utils.trackers.base import LogWriter
+
+DEFAULT_STALL_GRACE_SECONDS = 120.0
+DEFAULT_STAGE_TIMEOUT = 90.0
 
 
 class DAG:
@@ -37,21 +40,25 @@ class DAG:
 
     def __init__(
         self,
-        nodes: Dict[str, Stage],
+        nodes: dict[str, Stage],
         data_flow_edges: list[DataFlowEdge],
         execution_order_deps: dict[str, list[ExecutionOrderDependency]] | None,
         state_manager: ProgramStateManager,
         *,
         max_parallel_stages: int = 8,
-        dag_timeout: float | None = 2400.0,
-        stall_grace_seconds: float = 30.0,
+        dag_timeout: float | None = 3600.0,
+        writer: LogWriter,
     ) -> None:
         self.automata = DAGAutomata.build(nodes, data_flow_edges, execution_order_deps)
         self.state_manager = state_manager
         self._stage_sema = asyncio.Semaphore(max(1, max_parallel_stages))
         self.dag_timeout = dag_timeout
-        self.stall_grace_seconds = stall_grace_seconds
+        max_stage_timeout = max((s.timeout for s in nodes.values()))
+        self.stall_grace_seconds = max(
+            DEFAULT_STALL_GRACE_SECONDS, max_stage_timeout * 1.5
+        )
         self._previous_launched_hash = None
+        self._writer: LogWriter = writer.bind(path=["dag", "internals"])
 
     async def run(self, program: Program) -> None:
         pid = self._pid(program)
@@ -64,8 +71,11 @@ class DAG:
                 )
             else:
                 await self._run_internal(program)
+
+            self._writer.scalar("dag_timeout", 0)
         except asyncio.TimeoutError:
             logger.error("[DAG][{}] DAG run timed out after {}s", pid, self.dag_timeout)
+            self._writer.scalar("dag_timeout", 1)
             raise
 
     def _pid(self, program: Program) -> str:
@@ -83,12 +93,17 @@ class DAG:
                 name, ProgramStageResult(status=StageState.PENDING)
             )
 
-        # Persist the initial snapshot
-        await self._persist_program_snapshot(program)
+        # Persist initial state (PENDING stages) for monitoring/crash recovery.
+        # Uses write_exclusive (2 RT) — the DAG holds exclusive ownership here.
+        # Further snapshots are NOT needed because update_stage_result()
+        # persists the ENTIRE program object after each stage completes,
+        # including any changes to metrics, metadata, etc.
+        await self.state_manager.write_exclusive(program)
 
         running: set[str] = set()
         launched_this_run: set[str] = set()
         finished_this_run: set[str] = set()
+        pending_tasks: dict[asyncio.Task, str] = {}
 
         tick = 0
         last_progress_ts = time.time()
@@ -97,21 +112,7 @@ class DAG:
         while True:
             tick += 1
 
-            tuple_to_hash = tuple(
-                sorted(list(running))
-                + sorted(list(launched_this_run))
-                + sorted(list(finished_this_run))
-            )
-            if tuple_to_hash != self._previous_launched_hash:
-                self._previous_launched_hash = tuple_to_hash
-                logger.debug(
-                    "[DAG][{}] Running={} Launched={} Finished={}",
-                    pid,
-                    sorted(list(running)),
-                    sorted(list(launched_this_run)),
-                    sorted(list(finished_this_run)),
-                )
-
+            # 1) Auto-skips
             to_skip = self.automata.get_stages_to_skip(
                 program, running, launched_this_run, finished_this_run
             )
@@ -119,26 +120,28 @@ class DAG:
             for stage_name in to_skip:
                 res = program.stage_results.get(stage_name)
 
-                # don't re-skip RUNNING or FINAL; allow overwrite if None or PENDING
-                if res is not None and res.status not in (StageState.PENDING,):
+                # Don't re-skip stages already finalized *in this run* — their
+                # result is authoritative. However, a non-PENDING status from a
+                # *previous* run (not in finished_this_run) is stale and must be
+                # overwritten: the mandatory dep failed this run, so the cached
+                # COMPLETED result can no longer be used.
+                if (
+                    res is not None
+                    and res.status not in (StageState.PENDING,)
+                    and stage_name in finished_this_run
+                ):
                     logger.debug(
-                        "[DAG][{}] '{}' already finalized/running as {}; not re-skipping",
+                        "[DAG][{}] '{}' already finalized this run as {}; not re-skipping",
                         pid,
                         stage_name,
                         res.status.name,
                     )
                     continue
 
-                now_ts = datetime.now(timezone.utc)
-                skip_result = ProgramStageResult(
-                    status=StageState.SKIPPED,
-                    error=StageError(
-                        type="AutoSkip",
-                        message="Automata decided to skip stage due to contradictions or policy.",
-                        stage=self._canonical_stage_name(stage_name),
-                    ),
-                    started_at=now_ts,
-                    finished_at=now_ts,
+                skip_result = ProgramStageResult.skipped(
+                    message="Automata decided to skip stage due to contradictions or policy.",
+                    stage=self._canonical_stage_name(stage_name),
+                    error_type="AutoSkip",
                 )
                 await self._persist_stage_result(program, stage_name, skip_result)
                 finished_this_run.add(stage_name)
@@ -157,30 +160,64 @@ class DAG:
                 logger.error(msg)
                 raise RuntimeError(msg)
 
-            # 2) Ready set
-            ready = self.automata.get_ready_stages(
+            # 2) Ready set (with pre-computed inputs to avoid double traversal)
+            ready_with_inputs, newly_cached = self.automata.get_ready_stages(
                 program, running, launched_this_run, finished_this_run
             )
+            finished_this_run.update(newly_cached)
+            if newly_cached:
+                logger.info(
+                    "[DAG][{}] Stages CACHED (skipped execution): {}",
+                    pid,
+                    sorted(list(newly_cached)),
+                )
 
-            # 3) Launch ready
-            tasks = await self._launch_ready(program, ready)
-            if tasks:
-                running.update(tasks.keys())
-                launched_this_run.update(tasks.keys())
+            # Progress log: four disjoint sets (every stage in exactly one)
+            #   Running = in-flight (active tasks)
+            #   Ready   = can start now (deps met, not yet launched)
+            #   Blocked = deps not yet met (waiting on others)
+            #   Done    = completed this run (finished, skipped, or cached)
+            ready = set(ready_with_inputs.keys())
+            all_stages = set(self.automata.topology.nodes.keys())
+            blocked = all_stages - running - ready - finished_this_run
+            tuple_to_hash = (
+                tuple(sorted(running)),
+                tuple(sorted(ready)),
+                tuple(sorted(blocked)),
+                tuple(sorted(finished_this_run)),
+            )
+            if tuple_to_hash != self._previous_launched_hash:
+                self._previous_launched_hash = tuple_to_hash
+                logger.debug(
+                    "[DAG][{}] Running={} Ready={} Blocked={} Done={}",
+                    pid,
+                    sorted(running),
+                    sorted(ready),
+                    sorted(blocked),
+                    sorted(finished_this_run),
+                )
 
-            # 4) Collect
-            collected_any = False
-            if tasks:
-                await self._collect(program, tasks, running, finished_this_run)
-                collected_any = True
+            # 3) Launch ready (pass pre-computed inputs)
+            new_tasks_map = await self._launch_ready(program, ready_with_inputs)
+            if new_tasks_map:
+                running.update(new_tasks_map.keys())
+                launched_this_run.update(new_tasks_map.keys())
+                # Track tasks
+                for name, task in new_tasks_map.items():
+                    pending_tasks[task] = name
 
-            # 5) Progress accounting
-            if skip_progress or tasks or collected_any:
+            # 4) Progress accounting (skips, launches, or cache hits)
+            if skip_progress or new_tasks_map or newly_cached:
                 last_progress_ts = time.time()
                 stalled_reported = False
 
-            # 6) Termination / stall detection
-            if not tasks and not running and not to_skip:
+            # 5) Termination check
+            if (
+                not pending_tasks
+                and not to_skip
+                and not new_tasks_map
+                and not newly_cached
+            ):
                 # Are there unresolved stages left (neither done nor skipped)?
                 all_names = set(self.automata.topology.nodes.keys())
                 done, skipped = self.automata._compute_done_sets(
@@ -201,6 +238,29 @@ class DAG:
                     logger.info("[DAG][{}] Idle & no pending work — terminating.", pid)
                 break
 
+            # 6) Wait for tasks
+            collected_any = False
+            if pending_tasks:
+                # Wait for at least one task to complete, or timeout for watchdog/skips
+                # Using a short timeout allows us to re-check for skips or stalls periodically
+                wait_timeout = 1.0
+                done_tasks, _ = await asyncio.wait(
+                    pending_tasks.keys(),
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=wait_timeout,
+                )
+
+                for task in done_tasks:
+                    stage_name = pending_tasks.pop(task)
+                    await self._process_finished_task(
+                        program, stage_name, task, running, finished_this_run
+                    )
+                    collected_any = True
+
+            if collected_any:
+                last_progress_ts = time.time()
+                stalled_reported = False
+
             # 7) Stall watchdog (no progress while there is pending work)
             now = time.time()
             if (
@@ -217,33 +277,48 @@ class DAG:
                     blockers,
                 )
 
-            # Yield to avoid tight loop when nothing progressed
-            if not tasks and not skip_progress and running:
+            # Yield to avoid tight loop if we didn't wait on tasks (e.g. just processed skips)
+            if (
+                not collected_any
+                and not new_tasks_map
+                and not skip_progress
+                and not newly_cached
+                and pending_tasks
+            ):
+                # If we have pending tasks but didn't collect any (timeout), we are fine.
+                # The asyncio.wait timeout acts as our yield.
+                pass
+            elif (
+                not collected_any
+                and not new_tasks_map
+                and not skip_progress
+                and not newly_cached
+            ):
+                # Should mostly be covered by the wait, but if we have no tasks running
+                # and are just looping (e.g. waiting for something else? unlikely here), sleep briefly.
                 await asyncio.sleep(0.005)
 
-        await self._persist_program_snapshot(program)
-
     async def _launch_ready(
-        self, program: Program, ready: Set[str]
-    ) -> Dict[str, asyncio.Task]:
+        self, program: Program, ready_with_inputs: dict[str, dict]
+    ) -> dict[str, asyncio.Task]:
         pid = self._pid(program)
-        tasks: Dict[str, asyncio.Task] = {}
-        if not ready:
-            logger.debug("[DAG][{}] No ready stages to launch.", pid)
+        tasks: dict[str, asyncio.Task] = {}
+        if not ready_with_inputs:
             return tasks
 
         now_ts = datetime.now(timezone.utc)
-        for name in sorted(list(ready)):
+        for name in sorted(ready_with_inputs.keys()):
             await self.state_manager.mark_stage_running(
                 program, name, started_at=now_ts
             )
             logger.info("[DAG][{}] Stage '{}' STARTED.", pid, name)
 
-            async def _run_stage(stage_name=name):
+            async def _run_stage(
+                stage_name=name, precomputed_inputs=ready_with_inputs[name]
+            ):
                 async with self._stage_sema:
-                    named_inputs = self.automata.build_named_inputs(program, stage_name)
                     stage: Stage = self.automata.topology.nodes[stage_name]
-                    stage.attach_inputs(named_inputs)
+                    stage.attach_inputs(precomputed_inputs)
                     return await stage.execute(program)
 
             tasks[name] = asyncio.create_task(_run_stage(), name=f"stage-{name[:16]}")
@@ -251,79 +326,104 @@ class DAG:
         logger.debug("[DAG][{}] Launched stages: {}", pid, sorted(list(tasks.keys())))
         return tasks
 
-    async def _collect(
+    async def _process_finished_task(
         self,
         program: Program,
-        tasks: dict[str, asyncio.Task],
+        stage_name: str,
+        task: asyncio.Task,
         running: set[str],
         finished_this_run: set[str],
     ) -> None:
         pid = self._pid(program)
-        logger.debug("[DAG][{}] Collecting {} stage result(s)...", pid, len(tasks))
-        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
-        # Debug: log the types of results we get
-        for stage_name, outcome in zip(tasks.keys(), results):
-            logger.debug(
-                "[DAG][{}] Collected result for '{}': type={}",
+        # We get the result (or exception) from the task
+        try:
+            outcome = task.result()
+        except CancelledError:
+            outcome = CancelledError()
+        except Exception as e:
+            outcome = e
+
+        logger.debug(
+            "[DAG][{}] Collected result for '{}': type={}",
+            pid,
+            stage_name,
+            type(outcome).__name__ if outcome is not None else "None",
+        )
+
+        running.discard(stage_name)
+        now = datetime.now(timezone.utc)
+        started_at = program.stage_results[stage_name].started_at or now
+
+        result: ProgramStageResult
+        if isinstance(outcome, BaseException):
+            if isinstance(outcome, CancelledError):
+                result = ProgramStageResult(
+                    status=StageState.CANCELLED,
+                    error=StageError(
+                        type="Cancelled",
+                        message="Stage task was cancelled.",
+                        stage=self._canonical_stage_name(stage_name),
+                    ),
+                    started_at=started_at,
+                    finished_at=now,
+                )
+                logger.warning("[DAG][{}] Stage '{}' CANCELLED.", pid, stage_name)
+            else:
+                result = ProgramStageResult(
+                    status=StageState.FAILED,
+                    error=StageError.from_exception(
+                        outcome, stage=self._canonical_stage_name(stage_name)
+                    ),
+                    started_at=started_at,
+                    finished_at=now,
+                )
+        else:
+            result = cast(ProgramStageResult, outcome)
+
+        if result.status == StageState.FAILED and result.error is not None:
+            logger.exception(
+                "[DAG][{}] Stage '{}' FAILED with exception.\n### ERROR SUMMARY ###:\n{}",
                 pid,
                 stage_name,
-                type(outcome).__name__ if outcome is not None else "None",
+                result.error.pretty(include_traceback=True),
             )
 
-        for stage_name, outcome in zip(tasks.keys(), results):
-            running.discard(stage_name)
-            now = datetime.now(timezone.utc)
-            started_at = program.stage_results[stage_name].started_at or now
-            if isinstance(outcome, Exception):
-                if isinstance(outcome, CancelledError):
-                    result = ProgramStageResult(
-                        status=StageState.CANCELLED,
-                        error=StageError(
-                            type="Cancelled",
-                            message="Stage task was cancelled.",
-                            stage=self._canonical_stage_name(stage_name),
-                        ),
-                        started_at=started_at,
-                        finished_at=now,
-                    )
-                    logger.warning("[DAG][{}] Stage '{}' CANCELLED.", pid, stage_name)
-                else:
-                    result = ProgramStageResult(
-                        status=StageState.FAILED,
-                        error=StageError.from_exception(
-                            outcome, stage=self._canonical_stage_name(stage_name)
-                        ),
-                        started_at=started_at,
-                        finished_at=now,
-                    )
-            else:
-                result = cast(ProgramStageResult, outcome)
+        await self._persist_stage_result(program, stage_name, result)
 
-            if result.status == StageState.FAILED and result.error is not None:
-                logger.exception(
-                    "[DAG][{}] Stage '{}' FAILED with exception.\n### ERROR SUMMARY ###:\n{}",
-                    pid,
-                    stage_name,
-                    result.error.pretty(include_traceback=True),
-                )
-
-            await self._persist_stage_result(program, stage_name, result)
-            await self._persist_program_snapshot(program)
-
-            if result.status in FINAL_STATES:
-                finished_this_run.add(stage_name)
-                logger.info(
-                    "[DAG][{}] Stage '{}' FINALIZED as {}.",
-                    pid,
-                    stage_name,
-                    result.status.name,
-                )
+        finished_this_run.add(stage_name)
+        logger.info(
+            "[DAG][{}] Stage '{}' FINALIZED as {}.",
+            pid,
+            stage_name,
+            result.status.name,
+        )
 
     async def _persist_stage_result(
         self, program: Program, stage_name: str, result: ProgramStageResult
     ) -> None:
+        await self._write_stage_status(stage_name, result)
         await self.state_manager.update_stage_result(program, stage_name, result)
 
-    async def _persist_program_snapshot(self, program: Program) -> None:
-        await self.state_manager.storage.update(program)
+    async def _write_stage_status(
+        self, stage_name: str, result: ProgramStageResult
+    ) -> None:
+        self._writer.scalar(
+            "stage_success",
+            int(result.status == StageState.COMPLETED),
+            path=[stage_name],
+        )
+        self._writer.scalar(
+            "stage_failure", int(result.status == StageState.FAILED), path=[stage_name]
+        )
+        self._writer.scalar(
+            "stage_skipped", int(result.status == StageState.SKIPPED), path=[stage_name]
+        )
+        self._writer.scalar(
+            "stage_cancelled",
+            int(result.status == StageState.CANCELLED),
+            path=[stage_name],
+        )
+        self._writer.scalar(
+            "stage_duration", float(result.duration_seconds() or 0.0), path=[stage_name]
+        )

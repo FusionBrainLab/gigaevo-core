@@ -308,6 +308,7 @@ island_statistics*.txt
 top_programs_analysis*.txt
 stage_results_statistics*.txt
 time_since_update_statistics*.txt
+outputs
 
 # Generated plots and visualizations
 *.png
@@ -363,11 +364,13 @@ coverage.xml
 # Large data files
 *.csv
 *.json
+*.jsonl
 *.pickle
 *.pkl
 *.h5
 *.hdf5
 *.parquet
+.nltk_data/
 
 # Model files
 *.model
@@ -575,3 +578,5 @@ problems/*/*.json
 !docs/**/*.md
 !docs/**/*.rst
 !docs/**/*.txt
+!tools/**/*.ipynb
+!demos/**/*.svg

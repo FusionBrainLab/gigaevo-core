@@ -5,6 +5,7 @@ import asyncio
 from loguru import logger
 
 from gigaevo.database.program_storage import ProgramStorage
+from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.programs.program import Program
@@ -15,6 +16,7 @@ async def generate_mutations(
     *,
     mutator: MutationOperator,
     storage: ProgramStorage,
+    state_manager: ProgramStateManager,
     parent_selector: ParentSelector,
     limit: int,
     iteration: int,
@@ -68,10 +70,13 @@ async def generate_mutations(
                 program.set_metadata("iteration", iteration)
 
                 await storage.add(program)
+
                 for parent in parents:
                     fresh_parent = await storage.get(parent.id)
-                    fresh_parent.lineage.add_child(program.id)
-                    await storage.update(fresh_parent)
+                    if fresh_parent:
+                        fresh_parent.lineage.add_child(program.id)
+                        await state_manager.update_program(fresh_parent)
+
                 return True
 
             except Exception as exc:

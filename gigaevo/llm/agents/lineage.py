@@ -9,12 +9,12 @@ from typing import TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.formatter import MetricsFormatter
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
 
 
 class TransitionInsight(BaseModel):
@@ -43,11 +43,10 @@ class TransitionAnalysis(BaseModel):
     to_id: str = Field(alias="to")
     parent_metrics: dict[str, float]
     child_metrics: dict[str, float]
+    model_config = ConfigDict(populate_by_name=True)
+
     diff_blocks: list[str]
     insights: TransitionInsights
-
-    class Config:
-        populate_by_name = True
 
 
 class LineageState(TypedDict):
@@ -199,17 +198,31 @@ class LineageAgent(LangGraphAgent):
             else ""
         )
 
-        parent_errors = parent.format_errors()
-        child_errors = child.format_errors()
+        parent_errors = parent.format_errors(
+            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+        )
+        child_errors = child.format_errors(
+            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+        )
 
         metric_name = self.metrics_formatter.context.get_primary_key()
         metric_description = self.metrics_formatter.context.get_description(metric_name)
+        higher_is_better = self.metrics_formatter.context.is_higher_better(metric_name)
+
+        # Compute interpretation based on direction
+        higher_is_better_text = (
+            "↑ higher is better" if higher_is_better else "↓ lower is better"
+        )
+        is_improvement = (delta > 0) == higher_is_better
+        delta_interpretation = "IMPROVEMENT ✓" if is_improvement else "REGRESSION ✗"
 
         user_prompt = self.user_prompt_template.format(
             task_description=self.task_description,
             metric_name=metric_name,
             metric_description=metric_description,
             delta=delta,
+            higher_is_better_text=higher_is_better_text,
+            delta_interpretation=delta_interpretation,
             parent_errors=parent_errors,
             child_errors=child_errors,
             additional_metrics=additional_metrics_str,

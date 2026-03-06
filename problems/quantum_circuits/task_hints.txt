@@ -1,2 +1,0 @@
-Fitness Metric
-- You reward is the diffenece between rank of the decomposition and sota_rank

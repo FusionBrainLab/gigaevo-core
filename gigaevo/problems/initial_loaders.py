@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Protocol
 
-from gigaevo.database.redis_program_storage import RedisProgramStorage
+from tqdm import tqdm
+
+from gigaevo.database.redis_program_storage import (
+    RedisProgramStorage,
+    RedisProgramStorageConfig,
+)
 from gigaevo.programs.program import Program
 
 
@@ -21,7 +27,7 @@ class DirectoryProgramLoader:
             return []
         python_files = list(initial_dir.glob("*.py"))
         programs: list[Program] = []
-        for program_file in python_files:
+        for program_file in tqdm(python_files, desc="Loading initial programs"):
             try:
                 program_code = program_file.read_text()
                 program = Program(code=program_code)
@@ -65,8 +71,6 @@ class RedisTopProgramsLoader:
         self.health_check_interval = health_check_interval
 
     async def load(self, storage: RedisProgramStorage) -> list[Program]:
-        from gigaevo.database.redis_program_storage import RedisProgramStorageConfig
-
         source = RedisProgramStorage(
             RedisProgramStorageConfig(
                 redis_url=f"redis://{self.source_host}:{self.source_port}/{self.source_db}",
@@ -74,6 +78,7 @@ class RedisTopProgramsLoader:
                 max_connections=self.max_connections,
                 connection_pool_timeout=self.connection_pool_timeout,
                 health_check_interval=self.health_check_interval,
+                read_only=True,
             )
         )
         try:
@@ -91,8 +96,11 @@ class RedisTopProgramsLoader:
             selected = programs_with_metric[: self.top_n]
 
             added: list[Program] = []
-            for rank, program in enumerate(selected):
-                copy = Program(code=program.code)
+            all_ids = set(selected.id for selected in selected)
+            for rank, program in enumerate(
+                tqdm(selected, desc="Loading selected programs")
+            ):
+                copy = Program(code=program.code, id=program.id)
                 copy.metadata = {
                     "source": "redis_selection",
                     "source_db": self.source_db,
@@ -100,6 +108,15 @@ class RedisTopProgramsLoader:
                     "original_id": program.id,
                     "iteration": 0,
                 }
+                copy.metadata = {**copy.metadata, **program.metadata}
+                copy.metrics = deepcopy(program.metrics)
+                copy.stage_results = deepcopy(program.stage_results)
+                for child in program.lineage.children:
+                    if child.id in all_ids:
+                        copy.lineage.children.append(child)
+                for parent in program.lineage.parents:
+                    if parent.id in all_ids:
+                        copy.lineage.parents.append(parent)
                 await storage.add(copy)
                 added.append(copy)
             return added

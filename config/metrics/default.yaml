@@ -1,0 +1,4 @@
+# @package _global_
+
+# Default: no auxiliary metrics
+auxiliary_metrics: {}

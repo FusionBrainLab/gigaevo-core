@@ -37,7 +37,6 @@ class EnsureMetricsStage(Stage):
 
     InputsModel = EnsureMetricsInputs
     OutputModel = FloatDictContainer
-    cacheable: bool = True
 
     def __init__(
         self,
@@ -52,10 +51,18 @@ class EnsureMetricsStage(Stage):
         self.required_keys = set(self.ctx.specs.keys())
 
     async def compute(self, program: Program) -> StageIO:
+        # Write sentinel fallbacks immediately as a safety net.  If candidate
+        # processing raises below, the sentinel values are already on the program
+        # and will be persisted by the DAG's error-handling path.  This ensures
+        # the program always has all required metric keys (including the primary
+        # fitness key) even when upstream stages fail.
+        sentinel_metrics = self._get_factory_metrics()
+        program.add_metrics(sentinel_metrics)
+
         metrics_input = (
             self.params.candidate.data
             if self.params.candidate is not None
-            else self._get_factory_metrics()
+            else sentinel_metrics
         )
 
         final_metrics = self._process_metrics(metrics_input)
@@ -124,7 +131,6 @@ class NormalizeMetricsStage(Stage):
 
     InputsModel = VoidInput
     OutputModel = FloatDictContainer
-    cacheable: bool = True
 
     def __init__(
         self,

@@ -1,0 +1,9 @@
+# @package _global_
+# Pipeline execution constants
+
+stage_timeout: 2400               # lightweight stages only (validate, format, etc.)
+dag_timeout: 7200
+optimization_time_budget: null   # null = 0.75 * dag_timeout (auto-computed at runtime)
+dag_concurrency: 16
+max_code_length: 30000
+max_insights: 8

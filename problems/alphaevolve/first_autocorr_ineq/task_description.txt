@@ -1,0 +1,45 @@
+TASK DEFINITION – FIRST AUTOCORRELATION INEQUALITY
+
+Challenge: Functional optimization in analysis. Find a non-negative function f: ℝ → ℝ that minimizes the constant C in the inequality max_{-1/2≤t≤1/2} f ★ f(t) ≥ C (∫_{-1/4}^{1/4} f(x) dx)². Target: C ≤ 1.5053
+
+OBJECTIVE
+
+Return a discretized non-negative function f: ℝ → ℝ such that:
+1) (Non-negativity) All function values are non-negative: f(x) ≥ 0 for all x
+2) (Finiteness) All values are finite real numbers (no NaN or infinity)
+3) (Non-triviality) Function is not identically zero (∫f > 0)
+4) (Minimality) The C constant C = max(f ★ f) / (∫f)² is minimized
+
+Output: 1D NumPy array  |  Fitness: C  |  Goal: C ≤ 1.5053
+
+CONSTRAINTS
+- Function must be non-negative: f(x) ≥ 0 for all x ∈ ℝ
+- Represented as discrete samples on domain [-1/4, 1/4] (uniform grid implied by array length)
+- Autoconvolution (f ★ f)(t) = ∫_{-∞}^{∞} f(t-x)f(x) dx computed via FFT
+- Maximum evaluated over full convolution result (corresponding to t ∈ [-1/2, 1/2])
+- Known bounds: 1.28 ≤ C ≤ 1.5098 (arises in additive combinatorics, Sidon sets)
+
+FAILURE MODES
+- Zero or near-zero functions (C undefined due to division by zero)
+- Functions with concentrated mass creating high autoconvolution peaks
+- Insufficient discretization resolution missing optimal function shapes
+- Numerical instabilities from FFT precision
+
+HELPER FUNCTIONS
+- `compute_c(f_values)` -> float - computes C constant using FFT-based autoconvolution
+  - Input: (N,) array of non-negative function values on domain [-1/4, 1/4]
+  - Computes autoconvolution (f ★ f) via FFT (full mode)
+  - Returns C = max(f ★ f) / (∫f)²
+These are available as import from `helper.py`
+
+PROBLEM COMPLEXITY
+This is a non-convex functional optimization problem in high-dimensional space. The objective involves finding the maximum of autoconvolution normalized by squared integral, creating complex interactions between function shape and convolution structure. The problem arises in additive combinatorics (Sidon sets) and requires balancing autoconvolution peak height with integral magnitude. Gradient-based methods can navigate the landscape but face challenges from non-negativity constraints and discrete representation of continuous functions.
+
+OUTPUT FORMAT:
+
+Implement `def entrypoint():` that returns a 1D NumPy array:
+- Shape: (N,) array of non-negative function values
+- Represents f evaluated on uniform grid over [-1/4, 1/4] (grid spacing inferred from array length)
+- Use numpy, jax, scipy, or standard library as needed
+- Fix random seeds if using randomness (e.g., jax.random.PRNGKey(42))
+- Return type: np.ndarray with dtype float, shape (N,)

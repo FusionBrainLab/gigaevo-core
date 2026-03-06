@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.formatter import MetricsFormatter
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
 
 
 class ProgramInsight(BaseModel):
@@ -111,7 +111,9 @@ class InsightsAgent(LangGraphAgent):
             else "No metrics available"
         )
 
-        errors = program.format_errors(include_traceback=True)
+        errors = program.format_errors(
+            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+        )
         error_section = (
             f"**Error Analysis**: Focus on fixing or avoiding failure modes from stages:\n{errors}"
             if errors
@@ -125,7 +127,6 @@ class InsightsAgent(LangGraphAgent):
             max_insights=self.max_insights,
         )
 
-        # Create messages
         state["messages"] = [
             SystemMessage(content=self.system_prompt_template),
             HumanMessage(content=user_prompt),
@@ -139,7 +140,10 @@ class InsightsAgent(LangGraphAgent):
         state["insights"] = llm_response
         return state
 
-    async def arun(self, program: Program) -> ProgramInsights:
+    async def arun(
+        self,
+        program: Program,
+    ) -> ProgramInsights:
         """Run insights analysis on a program.
 
         Args:
@@ -147,6 +151,7 @@ class InsightsAgent(LangGraphAgent):
 
         Returns:
             List of insight dicts with "type" and "insight" keys
+            lineage_data: is not used for now; in the future we can use it to add more context to the insights
         """
         initial_state: InsightsState = {
             "program": program,

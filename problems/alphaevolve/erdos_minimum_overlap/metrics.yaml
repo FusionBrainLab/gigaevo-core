@@ -1,0 +1,22 @@
+specs:
+  fitness:
+    description: Main objective [C constant in Erdős minimum overlap problem]
+    decimals: 6
+    is_primary: true
+    higher_is_better: false
+    lower_bound: 0.380924
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.000001
+    sentinel_value: 1000.0
+  is_valid:
+    description: Whether the program is valid (1 valid, 0 invalid)
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0
+

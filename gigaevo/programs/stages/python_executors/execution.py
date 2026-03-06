@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Generic, Optional, Sequence, Tuple, TypeVar, cast
 
 from loguru import logger
 
@@ -22,18 +22,32 @@ from gigaevo.programs.stages.python_executors.wrapper import (
 from gigaevo.programs.stages.stage_registry import StageRegistry
 from gigaevo.programs.utils import dedent_code
 
+T = TypeVar("T")
 
-class PythonCodeExecutor(Stage):
+
+class PythonCodeExecutor(Stage, Generic[T]):
     """
-    Execute a user function from dynamic code in a subprocess.
+    Execute a user function from dynamic code in an isolated subprocess.
+
+    The subprocess has resource limits applied for safety:
+    - Memory limits (via resource.RLIMIT_AS) prevent RAM exhaustion
+    - Timeout limits prevent infinite loops
+    - Output size limits prevent excessive data generation
+
     The output is a Box[T] containing the result of the function call.
+
+    Args:
+        function_name: Name of the function to call in the user code
+        python_path: Additional paths to add to sys.path
+        max_output_size: Maximum size of output in bytes (default: 64MB)
+        max_memory_mb: Maximum memory in MB (default: None = unlimited)
+        timeout: Maximum execution time in seconds (inherited from Stage)
 
     Subclasses must implement `_build_call(self, program) -> (args, kwargs)`.
     """
 
     InputsModel = VoidInput
-    OutputModel = Box[Any]
-    cacheable = True
+    OutputModel = Box[T]
 
     def __init__(
         self,
@@ -41,18 +55,24 @@ class PythonCodeExecutor(Stage):
         function_name: str = "run_code",
         python_path: list[Path] | None = None,
         max_output_size: int = 64 * 1024 * 1024,
+        max_memory_mb: int | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self.function_name = function_name
         self.python_path = python_path or []
         self.max_output_size = int(max_output_size)
+        self.max_memory_mb = int(max_memory_mb) if max_memory_mb is not None else None
 
     def _code_str(self, program: Program) -> str:
         return program.code
 
     def _build_call(self, program: Program) -> tuple[Sequence[Any], dict[str, Any]]:
         return (), {}
+
+    def parse_output(self, x: Any) -> T:
+        """Parse raw subprocess return value; override in subclasses."""
+        return cast(T, x)
 
     async def compute(self, program: Program) -> ProgramStageResult | Box[Any]:
         stage_name = self.__class__.__name__
@@ -68,31 +88,43 @@ class PythonCodeExecutor(Stage):
         )
 
         try:
-            value, _stdout_bytes, _stderr_text = await run_exec_runner(
+            value, stdout_bytes, stderr_text = await run_exec_runner(
                 code=dedent_code(code_str),
                 function_name=self.function_name,
                 args=args,
                 kwargs=kwargs,
                 python_path=self.python_path,
                 timeout=int(self.timeout),
+                max_memory_mb=self.max_memory_mb,
+                max_output_size=self.max_output_size,
             )
 
-            size = len(_stdout_bytes)
-            if size > self.max_output_size:
-                return ProgramStageResult.failure(
-                    error=StageError(
-                        type="OutputTooLarge",
-                        message=f"Output {size} > limit {self.max_output_size}",
-                        stage=stage_name,
-                    )
-                )
-            return self.__class__.OutputModel(data=value)
+            value_parsed = self.parse_output(value)
+
+            del stdout_bytes
+            del stderr_text
+
+            return self.__class__.OutputModel(data=value_parsed)
 
         except ExecRunnerError as e:
+            # Detect memory limit errors
+            error_type = "SubprocessError"
+            error_msg = str(e)
+
+            if e.stderr and (
+                "MemoryError" in e.stderr or "Cannot allocate memory" in e.stderr
+            ):
+                error_type = "MemoryLimitExceeded"
+                error_msg = (
+                    f"Process exceeded memory limit of {self.max_memory_mb} MB"
+                    if self.max_memory_mb
+                    else "Process ran out of memory"
+                )
+
             return ProgramStageResult.failure(
                 error=StageError(
-                    type="SubprocessError",
-                    message=str(e),
+                    type=error_type,
+                    message=error_msg,
                     stage=stage_name,
                     traceback=e.stderr,
                 )
@@ -116,8 +148,8 @@ class CallProgramFunction(PythonCodeExecutor):
     InputsModel = ContextInputModel
     OutputModel = Box[Any]
 
-    def _build_call(self, program: Program):
-        params: ContextInputModel = self.params
+    def _build_call(self, program: Program) -> tuple[Sequence[Any], dict[str, Any]]:
+        params = cast(ContextInputModel, self.params)
         args: list[Any] = []
         context: AnyContainer | None = params.context
         if context is not None:
@@ -182,6 +214,9 @@ class ValidatorInput(StageIO):
     context: Optional[AnyContainer]
 
 
+ValidatorOutput = Box[Tuple[dict[str, float], Any]]
+
+
 @StageRegistry.register(
     description="Call a validator function from a Python file on program output (+ optional context)."
 )
@@ -189,7 +224,7 @@ class CallValidatorFunction(PythonCodeExecutor):
     """Loads validator file and calls function `validate(context?, program_output)`."""
 
     InputsModel = ValidatorInput
-    OutputModel = Box[dict[str, float]]
+    OutputModel = ValidatorOutput  # metrics dict and execution artifact
 
     def __init__(self, *, path: Path, function_name: str = "validate", **kwargs: Any):
         super().__init__(
@@ -206,11 +241,42 @@ class CallValidatorFunction(PythonCodeExecutor):
     def _code_str(self, program: Program) -> str:
         return self._validator_code
 
-    def _build_call(self, program: Program):
-        params: ValidatorInput = self.params
+    def parse_output(self, x: Any) -> Tuple[dict[str, float], Any]:
+        return x if isinstance(x, tuple) else (x, None)
+
+    def _build_call(self, program: Program) -> tuple[Sequence[Any], dict[str, Any]]:
+        params = cast(ValidatorInput, self.params)
         payload = params.payload.data
         if params.context is not None:
             context = params.context.data
         else:
             context = None
         return ([context, payload] if context is not None else [payload]), {}
+
+
+class ValidationResult(StageIO):
+    validation_result: ValidatorOutput
+
+
+@StageRegistry.register(
+    description="Extract metrics dict from a validation result (ValidatorOutput)."
+)
+class FetchMetrics(Stage):
+    InputsModel = ValidationResult
+    OutputModel = Box[dict[str, float]]
+
+    async def compute(self, program: Program) -> Box[dict[str, float]]:
+        params = cast(ValidationResult, self.params)
+        return Box[dict[str, float]](data=params.validation_result.data[0])
+
+
+@StageRegistry.register(
+    description="Extract execution artifact from a validation result (ValidatorOutput)."
+)
+class FetchArtifact(Stage):
+    InputsModel = ValidationResult
+    OutputModel = Box[Any]
+
+    async def compute(self, program: Program) -> Box[Any]:
+        params = cast(ValidationResult, self.params)
+        return Box[Any](data=params.validation_result.data[1])
