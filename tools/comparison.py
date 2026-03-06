@@ -25,6 +25,9 @@ from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
 from loguru import logger
+import matplotlib
+
+matplotlib.use("Agg")  # headless by default; override with --show or MPLBACKEND env var
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -361,6 +364,7 @@ def plot_comparison(
     xlabel: Optional[str] = None,
     ylabel: Optional[str] = None,
     aggregate_iterations: bool = True,
+    show: bool = False,
 ):
     """Plot comparison of multiple evolution runs with publication-quality styling.
 
@@ -559,7 +563,8 @@ def plot_comparison(
 
         logger.info(f"Saved comparison plots: {png.name}, {pdf.name}, {svg.name}")
 
-    plt.show()
+    if show:
+        plt.show()
     return fig, ax
 
 
@@ -871,6 +876,11 @@ async def main():
         action="store_true",
         help="Do not save plots to disk (show only)",
     )
+    output_group.add_argument(
+        "--show",
+        action="store_true",
+        help="Open interactive display window after saving (requires a display; sets MPLBACKEND)",
+    )
 
     args = parser.parse_args()
     output_folder = Path(args.output_folder)
@@ -935,6 +945,7 @@ async def main():
         xlabel=args.xlabel,
         ylabel=args.ylabel,
         aggregate_iterations=not args.no_aggregate,
+        show=args.show,
     )
 
 
