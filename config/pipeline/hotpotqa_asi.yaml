@@ -18,6 +18,8 @@ evolution_context:
 pipeline_builder:
   _target_: problems.chains.hotpotqa.static_a.pipeline.ASIPipelineBuilder
   ctx: ${evolution_context}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

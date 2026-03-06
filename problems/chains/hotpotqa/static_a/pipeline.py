@@ -23,9 +23,15 @@ class ASIPipelineBuilder(DefaultPipelineBuilder):
     MutationContextStage appends the block to the mutation prompt.
     """
 
-    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
-        super().__init__(ctx, dag_timeout=dag_timeout)
+    def __init__(
+        self,
+        ctx: EvolutionContext,
+        *,
+        dag_timeout: float = 3600.0,
+        stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
+    ):
+        super().__init__(ctx, dag_timeout=dag_timeout, stage_timeout=stage_timeout)
         self.replace_stage(
             "FormatterStage",
-            lambda: HotpotQAASIFormatter(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+            lambda: HotpotQAASIFormatter(timeout=self._stage_timeout),
         )

@@ -140,8 +140,15 @@ class PipelineBuilder:
 class DefaultPipelineBuilder(PipelineBuilder):
     """Recreates the current default pipeline (no context added)."""
 
-    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
+    def __init__(
+        self,
+        ctx: EvolutionContext,
+        *,
+        dag_timeout: float = 3600.0,
+        stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
+    ):
         super().__init__(ctx, dag_timeout=dag_timeout)
+        self._stage_timeout = stage_timeout
         self._contribute_default_nodes()
         self._contribute_default_edges()
         self._contribute_default_deps()
@@ -154,13 +161,14 @@ class DefaultPipelineBuilder(PipelineBuilder):
         storage = self.ctx.storage
         task_description = self.ctx.problem_ctx.task_description
         prompts_dir = self.ctx.prompts_dir
+        stage_timeout = self._stage_timeout
 
         # ValidateCompiles
         self.add_stage(
             "ValidateCodeStage",
             lambda: ValidateCodeStage(
                 max_code_length=MAX_CODE_LENGTH,
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
                 safe_mode=True,
             ),
         )
@@ -171,7 +179,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: CallProgramFunction(
                 function_name="entrypoint",
                 python_path=[problem_ctx.problem_dir.resolve()],
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
                 max_memory_mb=MAX_MEMORY_MB,
                 max_output_size=MAX_OUTPUT_SIZE,
             ),
@@ -184,7 +192,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: CallValidatorFunction(
                 path=validator_path,
                 function_name="validate",
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
                 max_memory_mb=MAX_MEMORY_MB,
                 max_output_size=MAX_OUTPUT_SIZE,
             ),
@@ -193,15 +201,15 @@ class DefaultPipelineBuilder(PipelineBuilder):
         # Extract metrics and artifact from validation result (artifact output unused for now)
         self.add_stage(
             "FetchMetrics",
-            lambda: FetchMetrics(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+            lambda: FetchMetrics(timeout=stage_timeout),
         )
         self.add_stage(
             "FetchArtifact",
-            lambda: FetchArtifact(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+            lambda: FetchArtifact(timeout=stage_timeout),
         )
         self.add_stage(
             "FormatterStage",
-            lambda: FormatterStage(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+            lambda: FormatterStage(timeout=stage_timeout),
         )
 
         # Insights stages
@@ -212,7 +220,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 task_description=task_description,
                 metrics_context=metrics_context,
                 max_insights=DEFAULT_MAX_INSIGHTS,
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
                 prompts_dir=prompts_dir,
             ),
         )
@@ -226,7 +234,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     strategy="best_fitness",
                     max_selected=1,
                 ),
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
         self.add_stage(
@@ -238,7 +246,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                     strategy="best_fitness",
                     max_selected=2,
                 ),
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
 
@@ -249,7 +257,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 task_description=task_description,
                 metrics_context=metrics_context,
                 storage=storage,
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
                 prompts_dir=prompts_dir,
             ),
         )
@@ -259,7 +267,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: LineagesToDescendants(
                 storage=storage,
                 source_stage_name="LineageStage",
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
 
@@ -268,7 +276,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: LineagesFromAncestors(
                 storage=storage,
                 source_stage_name="LineageStage",
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
 
@@ -276,21 +284,21 @@ class DefaultPipelineBuilder(PipelineBuilder):
             "MutationContextStage",
             lambda: MutationContextStage(
                 metrics_context=metrics_context,
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
 
         self.add_stage(
             "ComputeComplexityStage",
             lambda: ComputeComplexityStage(
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
 
         self.add_stage(
             "MergeMetricsStage",
             lambda: MergeDictStage[str, float](
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
 
@@ -299,7 +307,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: EnsureMetricsStage(
                 metrics_factory=metrics_context.get_sentinels,
                 metrics_context=metrics_context,
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
         self.add_stage(
@@ -307,7 +315,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: EvolutionaryStatisticsCollector(
                 storage=storage,
                 metrics_context=metrics_context,
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
 
