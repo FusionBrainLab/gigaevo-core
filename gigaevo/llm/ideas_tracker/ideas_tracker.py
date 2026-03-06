@@ -507,10 +507,15 @@ class IdeaTracker:
         if not banks_path.exists() or not programs_path.exists():
             return
 
-        df_summary, df_best_ideas = compute_origin_analysis(
-            banks_path=str(banks_path),
-            programs_path=str(programs_path),
-        )
+        try:
+            df_summary, df_best_ideas = compute_origin_analysis(
+                banks_path=str(banks_path),
+                programs_path=str(programs_path),
+            )
+        except RuntimeError as exc:
+            if str(exc) == "No valid programs with numeric generation and fitness found.":
+                return
+            raise
 
         if df_summary.empty:
             return
