@@ -2,6 +2,67 @@
 
 <!-- version list -->
 
+## v1.17.0 (2026-03-06)
+
+### Bug Fixes
+
+- Amendment 1 review fixes — F1 objective, EM=0 criterion, rationale, Gate E
+  ([`866f106`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/866f10653986696881138f7ff1a020a2141ddd1d))
+
+- Distinguish timeouts from generic failures in stage logs and status monitoring
+  ([`2228dd8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2228dd8a635f99921b04580da29cff4bec1aca0c))
+
+- Launch.sh preflight loops use CHAIN_URL_F (not removed CHAIN_URL_P)
+  ([`bb79e6f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/bb79e6ff92f6513485a02df46db897248d22b291))
+
+- Replace dry_run=true with --cfg job in launch.sh; update CLAUDE.md
+  ([`13e968a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/13e968a1a6039a30c49dbc28d3af68374f0f506e))
+
+- Status.py gen count bug + add Redis schema doc + run_status.sh
+  ([`b85e388`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b85e3886058ca30bd94a9daaac7d1d0dbc592a95))
+
+### Chores
+
+- Record Amendment 1 commit hash in 03_plan.md (866f106)
+  ([`2f64837`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2f648375b089fedc2d197c1b4ee4c56f2802b933))
+
+- Update PIDs in run_watchdog.py — launch 2026-03-05 12:21 UTC
+  ([`acec7c1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/acec7c1e73c83143f9ef5b41df07124e3139c813))
+
+### Documentation
+
+- Fill pre-registration commit hash in 03_plan.md
+  ([`77f3ef6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/77f3ef66c6b1b5734818ebe1ab7f69cced1b4dea))
+
+- Move task_hotpotqa.md → experiments/hotpotqa/CONTEXT.md + CLAUDE.md lookup table
+  ([`e920581`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e920581c442b6244e1437a55a627174d82da9dec))
+
+- Split task-specific content out of CLAUDE.md into task_hotpotqa.md
+  ([`91410b3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/91410b3fed5afca2e8c7d689071e65e01e64fc44))
+
+- Update 04_launch.md for dry_run removal and crontab unavailability
+  ([`7757d6d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/7757d6d022154d6066782f2e90d49a1528ca8edc))
+
+### Features
+
+- Add static_600 and static_r600 problem directories for val_gap experiment
+  ([`6dfa6d9`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6dfa6d9ae9a2f5b29c78f4ec7bd81ef5c607d91c))
+
+- Amendment 1 — replace Run P with Run F (fixed-300, F1 fitness)
+  ([`5c4370b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5c4370b84d345c043736a71c334608ec160a5d06))
+
+- Gap_analysis.py + lineage.py + eval_checkpoint.py + README onboarding fixes
+  ([`45faa45`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/45faa451494aa0bbd8050ac22d9cdaa377462d64))
+
+- Launch script and watchdog for hotpotqa_val_gap experiment
+  ([`fa6a14d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/fa6a14d3ad0e3adc86ac6ced2eb6269d3bf1affa))
+
+### Refactoring
+
+- Nest hotpotqa experiments under experiments/hotpotqa/ project dir
+  ([`25652c0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/25652c024c55f98e7ae7f1ce3d180d1022743cd0))
+
+
 ## v1.16.2 (2026-03-05)
 
 ### Bug Fixes
