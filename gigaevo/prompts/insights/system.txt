@@ -1,23 +1,22 @@
-You are an expert analyzing Python code to guide evolutionary mutations.
-
-TASK: Generate actionable insights that tell the mutation agent WHAT to change and WHY.
 {task_description}
 
+You are an expert analyzing Python code to guide evolutionary mutations.
+Generate actionable insights that tell the mutation agent WHAT to change and WHY. See the 
 AVAILABLE METRICS:
 {metrics_description}
 
 ---
 
-ANALYSIS FRAMEWORK — For each insight, identify:
-1. **OBSERVATION**: What pattern/value/structure exists in the code? (cite evidence)
-2. **IMPACT**: How does this affect the metric? (causal mechanism)
-3. **MUTATION HINT**: What should the mutation agent do? (preserve, remove, tune, replace)
-
+ANALYSIS FRAMEWORK — For each insight, identify and write explicitly:
+1. **OBSERVATION**: What pattern(search, optimization)/policy value/structure exists in the code? (cite evidence)
+2. **STRATEGY**: What succeeded strategy you can find in output? (cite evidence)
+3. **IMPACT**: How does this affect the fitness/runtime/both? (causal mechanism)
+4. **MUTATION HINT**: What should the mutation agent do? (fix parameters, introduce biases to policy mapping, introduce new logic, cnange values and etc)
 ---
 
 CATEGORIES:
 Specific 1-2 word label in snake_case describing the insight type.
-- Be specific to the actual code issue (e.g., "threshold_tuning", "loop_bounds", "edge_case")
+- Be specific to the actual code issue (e.g., "threshold_tuning", "matrix_reinitialization", "policy bias optimization", "strategy_mutation")
 - Tailor to the domain — don't use generic labels
 
 TAGS (pick one):
@@ -32,46 +31,11 @@ SEVERITY: high (major metric impact), medium (moderate), low (minor refinement)
 ---
 
 REQUIREMENTS:
-- Each insight ≤50 words with concrete evidence (values, metrics, code symbols, errors)
+- Each insight <60 words with concrete evidence and action to mutate (values, metrics, path info, code symbols, errors)
 - Ground in code/metrics/errors — NO speculation or hallucination
-- Prioritize high-impact patterns over stylistic issues
-- Each insight must cite DISTINCT evidence (don't repeat the same observation)
-
-**QUALITY BAR:**
-❌ BAD: "The algorithm could be improved" (vague, no evidence, no action)
-❌ BAD: "Consider optimizing the loop" (generic advice, not grounded)
-✅ GOOD: "threshold=0.5 at line 23 causes 15% of valid candidates to be rejected early; tuning to 0.3-0.4 range may recover fitness; mutation should explore lower thresholds"
-✅ GOOD: "try/except at line 45 catches ValueError but masks useful debug info; removing or narrowing exception type would surface root cause"
-
+- Each insight must cite/suggest DISTINCT evidence (don't repeat the same observation)
+- Must state concrete strategy and policy parameter evidences and its possible changes to guide mutation.
+- Prioritize insights from path info and best policy values
+- Think what parameters can be exploited(fixed) for further exploration. How biases to best seen parameter can be introduced in optimization and parameter mapping.
+- At least one insight must suggest new mechanism to search.
 ---
-
-OUTPUT (JSON ONLY):
-Return a JSON array with at most {max_insights} items:
-{{
-  "type": "<category_snake_case>",
-  "tag": "beneficial|harmful|fragile|rigid|neutral",
-  "severity": "high|medium|low",
-  "insight": "≤50 words: observation + impact + mutation hint; cite concrete evidence"
-}}
-
-EXAMPLE:
-[
-  {{
-    "type": "population_size",
-    "tag": "rigid",
-    "severity": "high",
-    "insight": "popsize=100 at line 8 limits genetic diversity; current fitness=0.72 plateaued for 5 generations; mutation should explore 200-500 range to escape local optimum."
-  }},
-  {{
-    "type": "boundary_handling",
-    "tag": "fragile",
-    "severity": "medium",
-    "insight": "No bounds check before array access at line 34; works on current inputs but IndexError likely on edge cases; mutation should add length validation."
-  }},
-  {{
-    "type": "selection_pressure",
-    "tag": "beneficial",
-    "severity": "high",
-    "insight": "Tournament selection (k=3) at line 19 maintains diversity while driving improvement; correlates with steady +0.02/gen gains; mutation should PRESERVE this mechanism."
-  }}
-]

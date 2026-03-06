@@ -1,0 +1,121 @@
+Your global task is mutating a Python tuner that minimizes T-count by tuning a FastTODD policy. 
+Objective: discover policies that reach the lowest decomposition rank (T-count) more reliably across seeds. Current SOTA is 397
+
+### TODD
+Decomposition is represented by a matrix. Rank equals number of columns and equals T-count.
+Every step it is action generation and choice according to policy for current rank. Every action lead to new matrix with lesser ranks (num of rows)
+There are two stages: TOHPE (reseach greatly restricted space of action and easily find z with best reduction) and TODD (much heavier exploration leads to time increasing). 
+
+### FastTODD Policy Variables:
+1) Search policy variables:
+ - min_z_to_research:int — determine main complexity of action generation during TODD search 
+ - beamsearch_width:int — after every iteration keeps beamsearch_width best matrix according to final_weights. Increse runtime in beamsearch_width times. 
+ - todd_width:int — how many actions returned by every iterations (if 1 there is no beamsearch) 
+ - gen_part:float in [0,1] — How many of all generators of nullspace check
+ - num_samples:int — Number of samples evaluated per candidate z. Each z defines a binary vector space of dimension dim (up to 2^dim possible assignments). If num_samples >= 2**dim, evaluate the full space (i.e., use only 2**dim samples). 
+ - min_pool_size:int — number of minimal actions should be found during exploration search
+ - max_pool_size:int — number of best kept actions during exploration search
+ - tohpe_num_best:int — how many z will be obtained from TOHPE
+ - try_only_tohpe:bool — if True and num of actions found during TOHPE stage more than min_pool_size than dont use TODD search. In other cases run TODD despite True.
+ - max_tohpe:int — number of action choosen during TOHPE search
+ - max_from_single_ns:int — limits num of choosen actions from one z
+ - max_reduction, min_reduction:int — clamp allowed reduction for rank, if not such actions push other actions in pool
+ - temperature:float in [0, 1] — for softmax final choice based on final score
+
+2) Choice policy variables:
+ - pool_weights:ExplorationScore(weights=[wred, wdim, wbucket, wvw, wz],centers=[cred, cdim, cbucket, cvw, cz], pow=pow) — used during exploration with TOHPE and TODD 
+ - final_weights:FinalizationScore(weights=[wred, wdim, wbucket, wvw, wz, wtohpe],centers=[cred, cdim, cbucket, cvw, cz, wtohpe], pow=pow) — used during final choice among best actions from exploration stage
+  *red — reduction of rank from given action
+  *dim — the size of space from which action were sampled (num_samples<=2**dim)
+  *bucket — the early estimiation in reduction for given z
+  *vw — how great is the changing in matix for given action
+  *z — number of ones in z bool vector
+  *tohpe — the size of future TOHPE space dim !! Can be very time consuming if max_pool_size is big: wrothpe=0 leads to faster evalutions
+  *pow - can be negative
+  score = \sum_i w_i |x_i - c_i|^pow: where x_i \in [0,1] - normalized parameters described above.
+  *default vectors values are zero, using all the parameters can be too greedy.
+
+### Rank Scheduling
+All parameters may be represented as:
+- a constant value, or
+- a rank schedule, e.g. two lists: rank_thresholds (sorted from high to low), values. The choice of value is as follows:
+for i in range(0, len(rank_thresholds)):
+    if rank_thresholds[i] <= current_rank:
+        return values[i]
+return values[-1]
+
+
+### Evaluator Interface 
+-evaluator.policy_mapping() — set up parameters for todd search (Must be implemented)
+  *use evaluator.map_par(fun=<callable>, rank_thr=<int>) — The only way get variable. Map parameter via fun and check threshold limits. Notes: every call move return fun(hidden_parameters[cur_idx]) and cur_idx++ if rank of init matrix > rank_thr, else do nothing (return zero)
+  *evaluator.set_X(constant) — set up constant shcedule, where X is one of policy variables
+  *evaluator.set_X(ranks: List[int], values: List[Any]) — set up rank schedule, where X is one of policy variables
+-evaluator(params) — Evalute loss for given parameters (Must be implemented)
+  *evaluator.run(params, seeds): List[int] — Run search and return best find Rank for every seed
+-evaluator.best_pathes — keep best overall pathes (list[list[Matrix]]) found during all search
+-evaluator.best_rank — return current best seen rank
+-evaluator.path_num — num of current best pathes which can be chosen for reinitialization. Can be changed after run with reinitialization.
+-evaluator.set_up_new_init(path_num=<int>, rank_thr=<int>, xopt=<List[float]>):List[float]|None — path_num and rank_thr define next init matrix for todd: set last matrix with rank > rank_thr for path with num best_num. Return None if all matrix > rank_thr else active parameters 
+-evaluator.extract_active() — return current active parameters (e.g. parameters in the limits of possible rank thresholds)
+-get_matrix() — required to obtain initial matrix
+
+### Example lines of best path statistics you will see:
+best_path_stat:
+328:r8/d-16/q0.07%;bd55/d0/m0;bs10/d-5;tha55/tda55/b0
+...
+194:r2/d+0/q0.00%;bd2/d0/m0;bs6/d-5;tha2/tda2/b1
+190:final
+rank 0.9q=249.0 rank 0.1q=197.0 
+best_policy:
+{'num_samples': [(330, 270, 220), (15, 7, 10)], ...}
+search_stats:
+Rank=302 at eval=2
+Rank=230 at eval=38
+Final Rank=189 at eval=190
+total_eval=1000
+best_seen_times=131
+
+### Hints to path info description:
+- bd basis_dim for action's z (2**bd is max useful sampling)
+- r total rank reduction
+- bs bucket size
+- m mean, d diff from best, q quantile vs others
+- tha TOHPE actions added in pool
+- tda TODD actions added in pool
+- 14/194/550 - callback statistics about reaching the best reduction during optimization
+- total_fasttodd_evals \approx max_fun_evals*len(seeds)*beamsearch_width. For example, 4 seeds, 10 width and pso with swarmsize=50, maxiter=10 will give 4*10*50*10=20000 evals which is very high and you must avoid it!!!. 
+- quantile statistice over all t count after fasttodd
+- best_policy - dict woth best policy parameters.
+- search_stat - optimization info with ranks reached at the corresponding eval (partially print points uniformly distibuted in ranks)
+- total_eval - total number of fasttodd evaluations
+- best_seen_times - number of times when final rank was reached 
+
+### Constraints to code
+-Must include Evaluator.policy_mapping, Evaluator.__call__, and entrypoint() returning fun.get_best().
+-self.map_par(fun=<callable>, rank_thr=<int>) to obtain/declare tunable parameters.
+-The least rank threshold must be below the expected final rank. For example, if it is expected that final rank can not be less than 190 than rank_thresholds=[220,200,0] and rank_thresholds=[220,200,190] are effectively the same, so rank_thresholds=[220,200,190,0] is waste of parameters  
+-Check rank scheduling for not wasting parameters. For example, if you observe ranks from 567 to 407 but scheduling is (410, 405, 390, 0) than it is effectively only (410,405) because 407 > 405 and 405 > 390 and 405 > 0. So you can reduce threshold num from 4 to 2 without sacrifacing the quality.
+-Estimate the lowest possible rank based on the current reached ranks.
+-Whole program runtime should be below 3000s. Faster — better. Optimal time is 1500s
+-seeds must be fixed before any sampling
+
+###Rules to analyze the search data/metrics:
+1) The only source of truth is Metrics output and best path info:
+  a) Intepretate found best policies values to get strategy insights and reuse found best parameters
+  b) Tend to analyze statistics from path. For example, big best_count can mean bad exploration; If you see many great diff from best and good fitness (near/best than Sot) it can be mean that is better to penalize this values.
+  c) Analyze fixed parameters in policy_mapping
+2) Account very complex stochastic landscape of search. Actually the setting you work is very ill behaved
+3) Analyze how many optimization parameters is used how good search respective to it, tend to indtroduce biases in search and heuristics
+4) Find evidence which parameters are matter/what can be fixed/what should be analyzed more thoroughly
+5) Analyze/exploit/mutate the search strategy.
+6) Concentrate on best policy parameters returned, do suggestions only based on the evidence without own prefernces. For example, if you constantly see wred < 0 it means that penalization leads to better final rank, and it is not some sort of optmization artifact
+7) Check sheduling logic
+
+###ENCROURAGES FOR IMPLEMENTATION (Possbile CHOICES per insights/mutations):
+1) Exploration via optimization/samping and policy mapping variation
+2) Exploitation via predefined parameters and diffs to it
+3) Combination of the approuches above but keeping runtime reasonable 
+4) Introducing brand new strategies for exploration/explotitaion
+
+### Goal
+Mutate the tuner to discover policy settings that get lower and lower final rank.
