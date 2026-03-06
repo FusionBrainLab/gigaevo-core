@@ -122,9 +122,9 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     #    2048 was insufficient at launch (thinking exhausted budget); 4096 is safe.
     step_max_tokens = {
         2: 8192,  # summarize retrieved facts (thinking + substantial text)
-        3: 4096,  # generate search query (thinking + short query)
+        3: 8192,  # generate search query (thinking + short query)
         5: 8192,  # combine evidence from both retrievals (thinking + substantial text)
-        6: 4096,  # final answer (thinking + "Answer: X")
+        6: 8192,  # final answer (thinking + "Answer: X")
     }
     results = run_chain_on_dataset_stepwise(
         chain,
