@@ -1,0 +1,41 @@
+specs:
+  fitness:
+    description: "Token-level F1 score on multi-hop questions (SQuAD-style). Higher is better. Drives MAP-Elites selection."
+    decimals: 3
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: -1000.0
+  em:
+    description: "Exact Match (EM) score — diagnostic only; not used for selection"
+    decimals: 3
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: false
+    significant_change: 0.01
+    sentinel_value: -1000.0
+  avg_extraction_failures:
+    description: "Average fraction of samples where answer extraction failed"
+    decimals: 3
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: 1.0
+  is_valid:
+    description: "Whether the program is valid (1 valid, 0 invalid)"
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0.0
