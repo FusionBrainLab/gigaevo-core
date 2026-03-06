@@ -1,67 +1,145 @@
 # GigaEvo Tools
 
-Reusable scripts for any GigaEvo experiment — operational, analytical, and scaffolding.
-These are known-working tools; prefer them over ad-hoc one-liners.
+**Run format** (all operational and analysis tools): `prefix@db[:label]`
+where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/static`).
 
-**Run format used by operational and analysis tools**: `prefix@db[:label]`
-where `prefix` = `problem.name` from the Hydra config (e.g., `chains/hotpotqa/static`).
+## Prerequisites
+
+All tool commands use the project venv and require `PYTHONPATH=.`:
+
+```bash
+PYTHONPATH=. ~/envs/evo_fast/bin/python tools/<tool>.py ...
+```
+
+Shell scripts use `$GIGAEVO_PYTHON` (falls back to `python3`):
+
+```bash
+export GIGAEVO_PYTHON=~/envs/evo_fast/bin/python
+```
+
+Protocol gates to run before launch and before merge:
+
+```bash
+bash tools/check_phase_order.sh <experiment-name>   # pre-launch (Phase 4)
+bash tools/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
+```
+
+## Quick Reference
+
+| Task | Tool | Command |
+|---|---|---|
+| Live status | `status.py` | `PYTHONPATH=. python tools/status.py --run prefix@db:label ...` |
+| Gen-by-gen trajectory | `trajectory.py` | `PYTHONPATH=. python tools/trajectory.py --run prefix@db:label` |
+| Top N programs | `top_programs.py` | `PYTHONPATH=. python tools/top_programs.py --run prefix@db:label -n 10` |
+| Evolutionary lineage | `lineage.py` | `PYTHONPATH=. python tools/lineage.py --run prefix@db:label --top-n 1` |
+| Fitness curves plot | `comparison.py` | `PYTHONPATH=. python tools/comparison.py --run prefix@db:label ... --output-folder /tmp/` |
+| Export full CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --output-file /tmp/o.csv` |
+| Export frontier CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --frontier-csv --output-file /tmp/f.csv` |
+| Archive + upload | `archive_run.sh` | `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload` |
+| Kill workers + flush | `flush.py` | `PYTHONPATH=. python tools/flush.py --db N [--confirm]` |
+| Task-specific tools | `experiments/<name>/tools/` | e.g. `experiments/hotpotqa_val_gap/tools/gap_analysis.py` |
 
 ---
 
-## Operational Tools
+## Monitoring a Running Experiment
 
 ### `status.py` — Live run status
 
-Shows generation count, best val EM, key count, and PID liveness for multiple runs.
+Shows generation, best val fitness, invalidity rate, validator timing, and PID liveness.
 
 ```bash
 # One run
-PYTHONPATH=. python tools/status.py --run chains/hotpotqa/static@0:K
+PYTHONPATH=. python tools/status.py --run chains/hotpotqa/static@4:O
 
 # Multiple runs with PID and watchdog check
 PYTHONPATH=. python tools/status.py \
-    --run chains/hotpotqa/static@0:K \
-    --run chains/hotpotqa/static_r@1:L \
-    --run chains/hotpotqa/static_r@2:M \
-    --run chains/hotpotqa/static_r@3:N \
-    --pid K:2616605 --pid L:2616606 --pid M:2616607 --pid N:2616608 \
-    --watchdog 2716169
+    --run chains/hotpotqa/static@4:O \
+    --run chains/hotpotqa/static_r@7:R \
+    --run chains/hotpotqa/static_r@6:Q \
+    --run chains/hotpotqa/static_r@5:F \
+    --pid O:3054746 --pid R:3054747 --pid Q:3054748 --pid F:3054749 \
+    --watchdog 3057704
 ```
 
 Output:
 ```
-Run      DB    Gen   Best Val EM    Keys         PID  Status
----------------------------------------------------------------
-K         0     26        66.0%     317     2616605  ✓ ALIVE
-L         1     25        65.7%     329     2616606  ✓ ALIVE
-M         2     27        70.7%     321     2616607  ✓ ALIVE
-N         3     25        67.7%     321     2616608  ✓ ALIVE
+Run      DB    Gen    Best Val    Invalid%    Val dur(s)    Keys         PID  Status
+------------------------------------------------------------------------------------
+O         4     42      66.0%          6%        281/310    1234     3054746  ✓ ALIVE
+R         7     41      65.7%          8%        278/305    1198     3054747  ✓ ALIVE
+Q         6     43      70.7%         12%        285/320    1256     3054748  ✓ ALIVE
+F         5     40      67.7%          7%        279/312    1187     3054749  ✓ ALIVE
 
-Watchdog PID 2716169: ✓ ALIVE
+Watchdog PID 3057704: ✓ ALIVE
 ```
+
+Column notes:
+- **Best Val** — best frontier fitness optimized by this run (EM, F1, or other depending on config)
+- **Invalid%** — fraction of programs that failed validation; >75% at gen 3+ = stage_timeout too short
+- **Val dur(s)** — validator stage mean/max duration in seconds (last 20 evaluations)
+
+**Per-experiment status script**: each experiment has `experiments/<name>/run_status.sh`
+with pre-filled args. Always use it — never reconstruct the invocation from scratch.
+
+**Watchdog**: each experiment has `experiments/<name>/run_watchdog.py`, launched at
+experiment start and kept alive throughout. Its PID appears in `run_status.sh` as
+`--watchdog <pid>`. The watchdog posts hourly PR comments and generates fitness plots.
 
 ---
 
-### `flush.py` — Safe Redis flush
+### `trajectory.py` — Gen-by-gen trajectory (text mode)
 
-Kills stale exec_runner workers first (they repopulate Redis immediately after flush),
-then flushes each DB, then verifies 0 keys remain.
-
-**Dry-run by default** — shows what would happen without doing it.
+Prints a gen-by-gen table of best (frontier), mean fitness, and valid program count.
+Lightweight — reads metrics history keys directly, no full program fetch.
 
 ```bash
-# Preview (dry-run)
-PYTHONPATH=. python tools/flush.py --db 0 1 2 3
+# Full trajectory
+PYTHONPATH=. python tools/trajectory.py --run chains/hotpotqa/static@4:O
 
-# Execute
-PYTHONPATH=. python tools/flush.py --db 0 1 2 3 --confirm
-
-# P3 experiment DBs
-PYTHONPATH=. python tools/flush.py --db 14 15 --confirm
+# Last 10 gens only
+PYTHONPATH=. python tools/trajectory.py --run chains/hotpotqa/static@4:O --tail 10
 ```
 
-**Always kill exec_runner workers before flushing.** Flushing first then killing leaves
-a window where workers repopulate Redis. `flush.py` enforces the correct ordering.
+Output:
+```
+Trajectory: O  (prefix=chains/hotpotqa/static, db=4)
+
+Gen  1: best=42.3%  mean=39.1%  n_valid=  6
+Gen  2: best=55.2%  mean=43.7%  n_valid=  7
+...
+Gen 42: best=66.0%  mean=57.3%  n_valid=  5
+
+  Last improvement: gen 38 (63.4% → 66.0%, +2.6pp)
+  Acceptance rate (gens 33–42): 8.5% (5 improvements / 59 valid programs)
+```
+
+Acceptance rate note: numerator = number of gens (in last 10) where the frontier improved
+(0–1 per gen); denominator = total valid programs in those gens summed. This is a
+per-valid-program improvement rate, not a per-mutation rate — invalid programs are excluded
+from the denominator.
+
+---
+
+## Ending a Run
+
+> **Required order** (skipping steps loses data permanently):
+> 1. Run test evaluations → `bash experiments/<name>/run_test_eval.sh`
+> 2. Archive all runs → `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload`
+> 3. Flush Redis → `PYTHONPATH=. python tools/flush.py --db N --confirm`
+
+### `run_test_eval.sh` — Test evaluation (per-experiment)
+
+Each experiment has `experiments/<name>/run_test_eval.sh`. Run it while Redis is live
+(before archiving or flushing). It evaluates the best-by-val program from each run on
+the held-out test set and writes results to `test_evals/results.json`.
+
+```bash
+export GIGAEVO_PYTHON=~/envs/evo_fast/bin/python
+bash experiments/hotpotqa_val_gap/run_test_eval.sh
+```
+
+Preflight: verifies thinking mode on all chain endpoints before evaluating.
+Results: `experiments/<name>/test_evals/results.json` (one entry per run).
 
 ---
 
@@ -69,23 +147,21 @@ a window where workers repopulate Redis. `flush.py` enforces the correct orderin
 
 **Run this before flushing Redis or rebooting. Redis is ephemeral — data not exported is gone.**
 
-Exports all Redis data for a run to local files and uploads them as a GitHub Release asset.
-
 ```bash
-# Dry run: export locally only (verify output)
-bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "chains/hotpotqa/static@0:K"
+# Dry run: export locally only (verify output first)
+bash tools/archive_run.sh --exp hotpotqa_val_gap --run "chains/hotpotqa/static@4:O"
 
-# Export and upload to GitHub Release exp/hotpotqa_nlp_prompts
-bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "chains/hotpotqa/static@0:K" --upload
+# Export and upload to GitHub Release exp/hotpotqa_val_gap
+bash tools/archive_run.sh --exp hotpotqa_val_gap --run "chains/hotpotqa/static@4:O" --upload
 
 # Archive all 4 runs
-for SPEC in "chains/hotpotqa/static@0:K" "chains/hotpotqa/static_r@1:L" \
-            "chains/hotpotqa/static_r@2:M" "chains/hotpotqa/static_r@3:N"; do
-  bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "$SPEC" --upload
+for SPEC in "chains/hotpotqa/static@4:O" "chains/hotpotqa/static_r@7:R" \
+            "chains/hotpotqa/static_r@6:Q" "chains/hotpotqa/static_r@5:F"; do
+  bash tools/archive_run.sh --exp hotpotqa_val_gap --run "$SPEC" --upload
 done
 ```
 
-Each archive (uploaded as `<label>_archive.tar.gz` to the GitHub Release) contains:
+Each archive (`<label>_archive.tar.gz` on the GitHub Release) contains:
 - `evolution_data.csv` — all programs, all generations, all metrics
 - `programs/*.py` — source code of every evaluated program
 - `top50.json` — top 50 programs with full metadata
@@ -94,444 +170,227 @@ Also uploads `environment.txt` (pip freeze, OS, GPU) once per experiment.
 
 ---
 
-### `check_experiment_complete.sh` — Full lifecycle gate (pre-merge)
+### `flush.py` — Safe Redis flush
 
-Verifies that ALL experiment phases are complete before the PR is merged.
-Complements `check_phase_order.sh` (which gates Phase 4 entry).
+Kills stale exec_runner workers first, then flushes each DB, then verifies 0 keys remain.
+**Never flush manually with `redis-cli FLUSHDB` or `FLUSHALL`** — workers will repopulate Redis immediately.
 
 ```bash
-bash tools/check_experiment_complete.sh <experiment-name>
+# Preview (dry-run, default)
+PYTHONPATH=. python tools/flush.py --db 0 1 2 3
+
+# Execute (kills workers first, then flushes)
+PYTHONPATH=. python tools/flush.py --db 0 1 2 3 --confirm
 ```
-
-Checks:
-- All phase docs (01–05) exist and are committed
-- `02_review.md` contains a clear APPROVED verdict
-- GitHub Release `exp/<name>` exists and has uploaded assets
-- `environment_freeze.txt` committed
-- `05_results.md` has Deviations section and no unfilled placeholders
-- `experiments/INDEX.md` has an entry for this experiment
-
-Exit code 0 = safe to merge. Exit code 1 = do not merge.
 
 ---
 
-### `check_phase_order.sh` — Protocol phase gate (pre-launch)
+## Analyzing Results
 
-Verifies that all required protocol documents exist, are committed, and are in the correct
-state before proceeding to launch. Run this as the first step of Phase 4.
+### `top_programs.py` — Inspect top programs
+
+```bash
+# Top 5 by fitness (default)
+PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O
+
+# Top 1 with full code (the program to run test eval on)
+PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O -n 1 --code
+
+# Save top-3 source files to disk
+PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O -n 3 --save-dir top_k/
+
+# JSON output for scripting
+PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O -n 1 --json
+```
+
+---
+
+### `comparison.py` — Fitness curve plots
+
+Plots rolling fitness vs iteration across multiple runs. Always emits all three formats
+(png/pdf/svg). Output folder is created automatically. Default backend is headless (Agg) — no
+display required.
+
+```bash
+PYTHONPATH=. python tools/comparison.py \
+    --run chains/hotpotqa/static@4:O \
+    --run chains/hotpotqa/static_r@7:R \
+    --run chains/hotpotqa/static_r@6:Q \
+    --run chains/hotpotqa/static_r@5:F \
+    --output-folder experiments/hotpotqa_val_gap/plots/
+
+# Interactive display (requires a display server)
+PYTHONPATH=. python tools/comparison.py --run ... --output-folder /tmp/ --show
+```
+
+Output files: `evolution_runs_comparison.{png,pdf,svg}` in the output folder.
+
+---
+
+### `redis2pd.py` — Export evolution data to CSV
+
+```bash
+# Full program history (all programs, all metrics)
+PYTHONPATH=. python tools/redis2pd.py \
+    --run chains/hotpotqa/static@4:O \
+    --output-file experiments/hotpotqa_val_gap/archives/O/evolution_data.csv
+
+# Frontier-only CSV (gen,best_val) — for 05_results.md tables
+PYTHONPATH=. python tools/redis2pd.py \
+    --run chains/hotpotqa/static@4:O \
+    --frontier-csv \
+    --output-file experiments/hotpotqa_val_gap/frontier_O.csv
+```
+
+Frontier CSV format (paste directly into results tables). Dense format — one row per gen,
+including gens without frontier improvement (value carries forward from last improvement):
+
+```
+gen,best_val
+1,0.423
+5,0.552
+...
+42,0.660
+```
+
+Legacy args (`--redis-db` / `--redis-prefix`) still work for `archive_run.sh` compatibility.
+
+---
+
+### `lineage.py` — Evolutionary ancestry trace
+
+Traces the ancestor chain of a program back to the root seed. Useful for Phase 5 "Lessons
+Learned" — which mutations led to the best result?
+
+```bash
+# Trace best program by fitness
+PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1
+
+# Trace specific program by ID prefix
+PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --program abc12345
+
+# Limit depth to 5 ancestor hops
+PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1 --depth 5
+```
+
+Output:
+```
+Lineage of program abc12345 (run O, gen 32, fitness=66.0%)
+
+  gen 32  abc12345  fitness=66.0%  mutation: rewrite_answer_extraction_step6
+  gen 29  def45678  fitness=63.4%  mutation: add_coreference_resolution_step4
+  gen 25  ghi90123  fitness=62.7%  [SEED — ddce37b4]
+```
+
+---
+
+## Protocol Gates
+
+### `check_phase_order.sh` — Pre-launch gate
+
+Verifies all required protocol documents exist, are committed, and are in the correct state.
+Run as the first step of Phase 4 (before any code changes, before launch).
 
 ```bash
 bash tools/check_phase_order.sh <experiment-name>
 ```
 
-Checks:
-- `01_design.md` exists
-- `02_review.md` exists and contains APPROVED verdict
-- `03_plan.md` is committed to git (not just on disk)
-- `run_test_eval.sh` sha256 hash matches what is pinned in `03_plan.md` (if applicable)
-
-Exit code 0 = all passed. Exit code 1 = one or more failures (do not proceed to launch).
+Exit 0 = safe to proceed. Exit 1 = do not launch.
 
 ---
 
-## Analysis Tools
+### `check_experiment_complete.sh` — Pre-merge gate
 
-### `top_programs.py` — Inspect top programs
-
-Fetches all programs from a run, ranks by fitness, and prints a summary table
-with optional full source code. Use at checkpoints to inspect what evolved.
+Verifies all five experiment phases are complete before the PR is merged.
 
 ```bash
-# Top 5 by fitness (default)
-PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@0:K
-
-# Top 1 with full code — the program to run test eval on
-PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@0:K -n 1 --code
-
-# Save top-3 codes to files
-PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@0 -n 3 --save-dir top_k/
-
-# JSON output for scripting
-PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@0 -n 1 --json
+bash tools/check_experiment_complete.sh <experiment-name>
 ```
+
+Checks: all phase docs committed, `02_review.md` APPROVED, GitHub Release assets uploaded,
+`05_results.md` filled, `experiments/INDEX.md` entry added.
 
 ---
 
-### `redis2pd.py` - Export Evolution Data
+## Scaffolding
 
-Exports evolution run data from Redis to a pandas DataFrame (CSV format) for further analysis.
+### `wizard` — Problem directory generator
 
-**Usage:**
+Generates a complete problem directory from a YAML config (validate.py, metrics.yaml,
+initial_programs/, task_description.txt). See `tools/wizard/` for documentation.
+
 ```bash
-python tools/redis2pd.py \
-  --redis-host localhost \
-  --redis-port 6379 \
-  --redis-db 11 \
-  --redis-prefix "heilbron" \
-  --output-file results.csv
-```
-
-**Arguments:**
-- `--redis-host`: Redis server hostname (default: localhost)
-- `--redis-port`: Redis server port (default: 6379)
-- `--redis-db`: Redis database number (required)
-- `--redis-prefix`: Problem name used in the run (required, same as `problem.name`)
-- `--output-file`: Output CSV file path (required)
-
-**Output:**
-CSV file containing program metrics, fitness scores, generation numbers, etc.
-
-**Example:**
-```bash
-# Export evolution run from database 5
-# Note: redis-prefix is just the problem name (e.g., problem.name=my_problem)
-python tools/redis2pd.py \
-  --redis-db 5 \
-  --redis-prefix "my_problem" \
-  --output-file my_run_data.csv
-```
-
----
-
-### `comparison.py` - Compare Multiple Runs
-
-Compares multiple evolution runs by plotting rolling fitness statistics over iterations.
-
-**Usage:**
-```bash
-python tools/comparison.py \
-  --redis-host localhost \
-  --redis-port 6379 \
-  --run "heilbron@11:Run_A" \
-  --run "heilbron@12:Run_B" \
-  --iteration-rolling-window 5 \
-  --output-folder results/comparison
-```
-
-**Arguments:**
-- `--redis-host`: Redis server hostname (default: localhost)
-- `--redis-port`: Redis server port (default: 6379)
-- `--run`: Run specification in format `<prefix>@<db>:<label>` (can be repeated)
-  - `<prefix>` is the problem name (same as `problem.name`)
-- `--iteration-rolling-window`: Window size for rolling statistics (default: 5)
-- `--output-folder`: Directory to save comparison plots (required)
-
-**Run Format:**
-- `prefix@db:label` - Full specification with custom label
-- `prefix@db` - Label defaults to "Run_<db>"
-- `prefix` is just the problem name (e.g., `heilbron`)
-
-**Output:**
-- PNG plots showing fitness evolution over iterations
-- Rolling mean with ±1 standard deviation bands
-- Multiple runs overlaid for easy comparison
-
-**Example:**
-```bash
-# Compare three different experiments (all using problem.name=test)
-python tools/comparison.py \
-  --run "test@5:Baseline" \
-  --run "test@6:Multi_Island" \
-  --run "test@7:Multi_LLM" \
-  --iteration-rolling-window 10 \
-  --output-folder results/my_comparison
-```
-
----
-
-### `wizard.py` - Problem Scaffolding
-
-Generates problem directory structure from YAML configuration.
-
-**Usage:**
-```bash
-python -m tools.wizard heilbron.yaml
+python -m tools.wizard my_config.yaml
 python -m tools.wizard my_config.yaml --overwrite
 python -m tools.wizard my_config.yaml --validate-only
-python -m tools.wizard my_config.yaml --output-dir custom/path
-```
-
-**Arguments:**
-- `CONFIG_NAME`: YAML configuration filename (required), e.g., `heilbron.yaml`
-- `--overwrite`: Overwrite existing problem directory if it exists
-- `--validate-only`: Validate configuration without generating files
-- `--output-dir PATH`: Override output directory (default: `problems/<problem.name>`)
-- `--problem-type TYPE`: Problem type determining templates (default: `programs`)
-
-**File Structure:**
-- **Configuration files:** Store in `tools/wizard/config/` directory
-- **Templates:** Located in `gigaevo/problems/types/{problem_type}/templates/`
-- **Output:** Generated in `problems/<name>/` by default
-
-**Configuration Example (`heilbron.yaml`):**
-```yaml
-name: "heilbron"
-description: "Heilbronn triangle problem"
-
-entrypoint:
-  params: []
-  returns: "(11, 2) array of coordinates"
-
-validation:
-  params: ["coordinates"]
-
-metrics:
-  fitness:
-    description: "Area of smallest triangle"
-    decimals: 5
-    is_primary: true
-    higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 0.0365
-    include_in_prompts: true
-    significant_change: !!float 1e-6
-
-task_description:
-  objective: |
-    Return 11 distinct 2D coordinates inside unit-area equilateral triangle.
-    Maximize the minimum area among all triangles formed by point triplets.
-
-add_helper: true
-
-initial_programs:
-  - name: arc
-    description: "Arc-based point distribution"
-```
-
-**Key Configuration Notes:**
-- Exactly one metric must have `is_primary: true`
-- `is_valid` metric is auto-generated (do NOT include in config)
-- Use `!!float` tag for small scientific notation values (e.g., `!!float 1e-6`)
-- `add_context: true` generates `context.py` (optional, requires `context` param in function signatures)
-- `add_helper: true` generates `helper.py` (optional)
-
-**Generated Structure:**
-```
-problems/heilbron/
-├── task_description.txt
-├── metrics.yaml
-├── validate.py          # User must implement
-├── helper.py            # Optional: User must implement utilities
-└── initial_programs/
-    └── arc.py           # User must implement strategy
-```
-
-**Required Implementation:**
-
-After scaffolding, you **must implement** the following:
-
-**1. `validate.py` - Validation and metrics computation:**
-```python
-"""
-Validation function for: Heilbronn triangle problem
-"""
-
-from helper import *
-
-
-def validate(coordinates):
-    """
-    Validate the solution and compute fitness metrics.
-
-    Returns:
-        dict with metrics:
-        - fitness: Area of smallest triangle
-        - is_valid: Whether the program is valid (1 valid, 0 invalid)
-    """
-    # TODO: Validate constraints from task_description.txt
-
-    # TODO: Compute metrics
-    fitness = 0.0  # Area of smallest triangle
-    is_valid = 1   # Set to 0 if any constraint violated
-
-    return {
-        "fitness": fitness,
-        "is_valid": is_valid,
-    }
-```
-
-**2. All `initial_programs/*.py` - Initial strategy implementations:**
-```python
-from helper import *
-
-
-def entrypoint():
-    """
-    Arc-based point distribution
-
-    Returns:
-        (11, 2) array of coordinates
-    """
-    # TODO: Implement strategy
-
-    pass
-```
-
-**Optional Implementation:**
-
-**If `add_helper: true`** - `helper.py` with utility functions:
-```python
-"""
-Helper functions for: Heilbronn triangle problem
-"""
-
-# TODO: Add helper functions here
-# Example:
-# def get_unit_triangle():
-#     """Return vertices of unit-area equilateral triangle."""
-#     unit_area_side = np.sqrt(4 / np.sqrt(3))
-#     height = np.sqrt(3) / 2 * unit_area_side
-#     A = np.array([0, 0])
-#     B = np.array([unit_area_side, 0])
-#     C = np.array([unit_area_side / 2, height])
-#     return A, B, C
-```
-
-**If `add_context: true`** - `context.py` with runtime context builder:
-```python
-"""
-Context builder for problem
-"""
-
-
-def build_context() -> dict:
-    """
-    Build runtime context data (called once at startup).
-
-    Returns:
-        dict: Context data passed to all programs
-    """
-    # TODO: Load or generate data
-
-    return {}
 ```
 
 ---
 
-## DAG Builder
+## Appendix: Redis Key Reference
 
-Visual tool for designing and debugging DAG pipelines.
+Every run uses one Redis DB (0–15), set via `redis.db=N`.
+All keys are prefixed with `problem.name` (e.g. `chains/hotpotqa/static`).
 
-See `tools/dag_builder/README.md` for detailed documentation.
+### Key format
 
-**Quick Start:**
-```bash
-cd tools/dag_builder
-./start.sh
+```
+{prefix}:metrics:history:program_metrics:{metric_name}
 ```
 
-Opens a web interface for:
-- Visually designing pipeline stages
-- Configuring stage connections
-- Debugging data flow
-- Exporting pipeline YAML
-
----
-
-## Common Workflows
-
-### 1. Analyze a Single Run
-```bash
-# Export data (assuming you ran: python run.py problem.name=my_problem redis.db=5)
-python tools/redis2pd.py \
-  --redis-db 5 \
-  --redis-prefix "my_problem" \
-  --output-file run5.csv
-
-# Analyze in Python/Jupyter
-import pandas as pd
-df = pd.read_csv('run5.csv')
-print(df.describe())
+Each metrics history key is a Redis **list**. Each entry is a JSON object:
+```json
+{"s": <step>, "t": <unix_timestamp>, "v": <value>, "k": "scalar"}
 ```
 
-### 2. Compare Experiments
+### Canonical metric keys
+
+| What you want | Redis key (after prefix:metrics:history:program_metrics:) | How to read |
+|---|---|---|
+| **Current generation** | `valid_iter_fitness_mean` | last entry `"s"` field |
+| **Best val fitness** | `valid_frontier_fitness` | last entry `"v"` field |
+| **Per-gen mean fitness** | `valid_gen_fitness_mean` | entries with `"s"` == gen; last `"v"` = mean |
+| **n_valid per gen** | `valid_gen_fitness_mean` | count entries with `"s"` == gen |
+| **Total programs (cumulative)** | `programs_total_count` | last entry `"v"` field |
+| **Valid programs (cumulative)** | `programs_valid_count` | last entry `"v"` field |
+| **Frontier improvements** | `valid_frontier_fitness` | list entries in order; `"s"` = iteration at improvement |
+
+### Rules
+
+1. **Never use `llen(valid_frontier_fitness)` as the generation count.** It counts frontier
+   improvements (a small number), not generations. Use `valid_iter_fitness_mean` last `"s"`.
+2. **Never write ad-hoc Redis queries** to answer questions the tools already answer.
+   If a tool gives wrong results, fix the tool — don't work around it with inline Python.
+3. **Archive is in-memory only** — `archive`/`archive:reverse` Redis keys are NOT persisted.
+   Export with `archive_run.sh` before flushing or rebooting.
+
+### Generation count caveat
+
+`valid_iter_fitness_mean` last `"s"` is the best Redis-based gen estimate, but it only
+updates when a valid program completes. For runs with many failing evaluations (e.g.
+600-sample), it lags. For accurate gen count on slow runs, check the log:
+
 ```bash
-# Run multiple experiments
-python run.py problem.name=test redis.db=10 experiment=base
-python run.py problem.name=test redis.db=11 experiment=multi_island_complexity
-python run.py problem.name=test redis.db=12 experiment=full_featured
-
-# Compare results (prefix is just problem.name which is "test")
-python tools/comparison.py \
-  --run "test@10:Base" \
-  --run "test@11:Multi_Island" \
-  --run "test@12:Full_Featured" \
-  --output-folder results/experiment_comparison
-```
-
-### 3. Extract Best Programs
-```bash
-# Export data (for problem.name=test in database 5)
-python tools/redis2pd.py --redis-db 5 --redis-prefix "test" --output-file run.csv
-
-# In Python, find best program
-import pandas as pd
-df = pd.read_csv('run.csv')
-best = df.loc[df['fitness'].idxmax()]
-print(f"Best program ID: {best['program_id']}")
-print(f"Fitness: {best['fitness']}")
-
-# Retrieve from Redis (full key includes the prefix)
-redis-cli -n 5 GET "test:program:<program_id>:code"
+grep -c "Phase 1: Idle confirmed" experiments/<name>/run_q.log
 ```
 
 ---
 
-## Tips
+## Experiment-specific tools
 
-### Redis Key Prefixes
-GigaEvo stores data with the problem name as prefix:
-```
-<problem_name>:program:<program_id>:*
-```
+Task-specific tools (problem eval, cross-metric gap tables, custom analysis) live in
+`experiments/<name>/tools/`, not in this directory. Each experiment that needs them
+creates its own `tools/` subdirectory.
 
-For example, if you run `python run.py problem.name=heilbron`, the keys will be:
-```
-heilbron:program:<uuid>:code
-heilbron:program:<uuid>:metrics
-heilbron:archive
-...
-```
+**Convention**:
+- A tool goes in `tools/` if it works for **any** GigaEvo run (just needs `--run prefix@db`)
+- A tool goes in `experiments/<name>/tools/` if it imports problem-specific code,
+  hardcodes experiment URLs/paths, or is only meaningful for one experiment's design
 
-Find your prefix:
-```bash
-# List all keys in database to see the prefix pattern
-redis-cli -n <db> KEYS "*:program:*" | head -1
-```
+**Examples**:
 
-**Important:** The `--redis-prefix` argument for tools should be just the problem name (e.g., `heilbron`), NOT the full key pattern.
-
-### Clearing Old Data
-
-**Do NOT use `redis-cli FLUSHDB` directly** — it bypasses the exec_runner worker
-kill step (workers repopulate Redis immediately) and the archive existence warning.
-Use `tools/flush.py` instead:
-
-```bash
-# Preview (dry-run, default)
-PYTHONPATH=. python tools/flush.py --db 5
-
-# Execute (kills workers first, then flushes, warns if data not archived)
-PYTHONPATH=. python tools/flush.py --db 5 --confirm
-```
-
-### Large Datasets
-For very large evolution runs, consider:
-- Using `--iteration-rolling-window` to smooth noisy plots
-- Sampling the data before exporting
-- Using databases with persistence enabled
-
----
-
-## Requirements
-
-These tools require additional dependencies:
-```bash
-pip install pandas matplotlib seaborn
-```
-
-For DAG Builder:
-```bash
-cd tools/dag_builder
-pip install -r requirements.txt
-```
+| Tool | Location | Reason |
+|---|---|---|
+| `lineage.py` | `tools/` | Generic — works for any GigaEvo run |
+| `gap_analysis.py` | `experiments/hotpotqa_val_gap/tools/` | Hardcodes O/R/Q/F run specs, gate criteria from 03_plan.md |
+| `eval_checkpoint.py` | `experiments/hotpotqa_val_gap/tools/` | Imports HotpotQA chain infra; HotpotQA-specific |
