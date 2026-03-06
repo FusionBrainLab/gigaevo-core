@@ -10,7 +10,7 @@ File: enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2 (~1.5GB)
 License: CC BY-SA 4.0
 
 Usage:
-    python -m problems.prompt_free_chains.hotpotqa.dataset.download_corpus
+    python -m problems.chains.hotpotqa.dataset.download_corpus
 """
 
 import bz2
@@ -18,6 +18,8 @@ import gzip
 import json
 import os
 from pathlib import Path
+import shutil
+import sys
 import tarfile
 import urllib.request
 
@@ -31,6 +33,18 @@ ARCHIVE_PATH = (
     OUTPUT_DIR / "enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2"
 )
 OUTPUT_PATH = OUTPUT_DIR / "wiki17_abstracts.jsonl.gz"
+BM25S_INDEX_DIR = OUTPUT_DIR / "bm25s_index"
+
+
+def _ensure_repo_root_on_path() -> None:
+    """Ensure repository root is on sys.path for direct script execution."""
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "problems").is_dir():
+            parent_str = str(parent)
+            if parent_str not in sys.path:
+                sys.path.insert(0, parent_str)
+            return
 
 
 def download_archive():
@@ -110,7 +124,41 @@ def process_archive():
 
     print(f"Done! Processed {doc_count:,} documents → {OUTPUT_PATH}")
 
+def build_index():
+    """Build BM25s index from processed corpus."""
+    if not OUTPUT_PATH.exists():
+        print(f"Corpus not found at {OUTPUT_PATH}. Run download and process first.")
+        return
 
+    _ensure_repo_root_on_path()
+    from problems.chains.hotpotqa.utils.retrieval import (
+        build_bm25s_index,
+        is_bm25s_index_ready,
+    )
+
+    if is_bm25s_index_ready(BM25S_INDEX_DIR):
+        print(f"BM25s index already exists: {BM25S_INDEX_DIR}")
+        return
+
+    if BM25S_INDEX_DIR.exists():
+        print(f"Removing incomplete BM25s index: {BM25S_INDEX_DIR}")
+        shutil.rmtree(BM25S_INDEX_DIR)
+
+    shard_size = int(os.environ.get("HOTPOT_BM25_SHARD_SIZE", "250000"))
+    dtype = os.environ.get("HOTPOT_BM25_DTYPE", "float32")
+    int_dtype = os.environ.get("HOTPOT_BM25_INT_DTYPE", "int32")
+    print(
+        "Building BM25s index with "
+        f"shard_size={shard_size:,}, dtype={dtype}, int_dtype={int_dtype}"
+    )
+
+    build_bm25s_index(
+        OUTPUT_PATH,
+        BM25S_INDEX_DIR,
+        shard_size=shard_size,
+        dtype=dtype,
+        int_dtype=int_dtype,
+    )
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     download_archive()
