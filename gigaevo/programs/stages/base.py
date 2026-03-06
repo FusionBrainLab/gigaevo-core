@@ -300,11 +300,20 @@ class Stage:
             return ok
 
         except Exception as exc:
-            logger.exception(
-                "[{stage}] Failed after {dur:.2f}s",
-                stage=self.stage_name,
-                dur=(time.monotonic() - t0),
-            )
+            dur = time.monotonic() - t0
+            if isinstance(exc, asyncio.TimeoutError):
+                logger.warning(
+                    "[{stage}] TIMED OUT after {dur:.2f}s (timeout={to}s)",
+                    stage=self.stage_name,
+                    dur=dur,
+                    to=self.timeout,
+                )
+            else:
+                logger.exception(
+                    "[{stage}] Failed after {dur:.2f}s",
+                    stage=self.stage_name,
+                    dur=dur,
+                )
             fail_result = ProgramStageResult.failure(
                 error=StageError.from_exception(exc, stage=self.stage_name),
                 started_at=started_at,
