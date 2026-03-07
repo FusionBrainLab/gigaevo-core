@@ -86,7 +86,8 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
         chain_spec: Dict from entrypoint() with system_prompt and steps
 
     Returns:
-        (metrics, failures[:10]) — metrics dict + ASI-enhanced failure cases
+        (metrics, failures) — metrics dict + ASI-enhanced failure cases (all failures;
+        FormatterStage random-samples up to 10 per generation)
     """
     # 1. Structural validation (catch ValueError → return sentinels)
     baseline = load_baseline()

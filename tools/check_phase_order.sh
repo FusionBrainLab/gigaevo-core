@@ -6,7 +6,7 @@
 #   bash tools/check_phase_order.sh <experiment-name>
 #
 # Example:
-#   bash tools/check_phase_order.sh hotpotqa_p3_crossover
+#   bash tools/check_phase_order.sh hotpotqa/p3_crossover
 #
 # Exit codes:
 #   0 — all checks passed
@@ -35,7 +35,7 @@ fi
 
 # ── Phase 2: review doc with APPROVED verdict ──────────────────────────────
 if [[ -f "$EXP_DIR/02_review.md" ]]; then
-    if grep -q '\[x\] APPROVED\|Verdict.*APPROVED\|Overall.*APPROVED\|## Overall.*APPROVED' "$EXP_DIR/02_review.md"; then
+    if grep -q '\[x\] APPROVED\|Verdict: APPROVED\|Overall Verdict: APPROVED\|## Overall.*: APPROVED' "$EXP_DIR/02_review.md"; then
         ok "02_review.md exists and contains APPROVED"
     else
         fail "02_review.md exists but does not contain APPROVED verdict"

@@ -461,6 +461,7 @@ benchmark
 # Program archives
 program_archive/
 archive_*/
+archives/
 
 # Fitness data
 fitness_*.csv

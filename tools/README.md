@@ -37,7 +37,7 @@ bash tools/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
 | Export frontier CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --frontier-csv --output-file /tmp/f.csv` |
 | Archive + upload | `archive_run.sh` | `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload` |
 | Kill workers + flush | `flush.py` | `PYTHONPATH=. python tools/flush.py --db N [--confirm]` |
-| Task-specific tools | `experiments/<name>/tools/` | e.g. `experiments/hotpotqa_val_gap/tools/gap_analysis.py` |
+| Task-specific tools | `experiments/<task>/<name>/tools/` | e.g. `experiments/hotpotqa/val_gap/tools/gap_analysis.py` |
 
 ---
 
@@ -78,10 +78,10 @@ Column notes:
 - **Invalid%** — fraction of programs that failed validation; >75% at gen 3+ = stage_timeout too short
 - **Val dur(s)** — validator stage mean/max duration in seconds (last 20 evaluations)
 
-**Per-experiment status script**: each experiment has `experiments/<name>/run_status.sh`
+**Per-experiment status script**: each experiment has `experiments/<task>/<name>/run_status.sh`
 with pre-filled args. Always use it — never reconstruct the invocation from scratch.
 
-**Watchdog**: each experiment has `experiments/<name>/run_watchdog.py`, launched at
+**Watchdog**: each experiment has `experiments/<task>/<name>/run_watchdog.py`, launched at
 experiment start and kept alive throughout. Its PID appears in `run_status.sh` as
 `--watchdog <pid>`. The watchdog posts hourly PR comments and generates fitness plots.
 
@@ -123,23 +123,23 @@ from the denominator.
 ## Ending a Run
 
 > **Required order** (skipping steps loses data permanently):
-> 1. Run test evaluations → `bash experiments/<name>/run_test_eval.sh`
+> 1. Run test evaluations → `bash experiments/<task>/<name>/run_test_eval.sh`
 > 2. Archive all runs → `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload`
 > 3. Flush Redis → `PYTHONPATH=. python tools/flush.py --db N --confirm`
 
 ### `run_test_eval.sh` — Test evaluation (per-experiment)
 
-Each experiment has `experiments/<name>/run_test_eval.sh`. Run it while Redis is live
+Each experiment has `experiments/<task>/<name>/run_test_eval.sh`. Run it while Redis is live
 (before archiving or flushing). It evaluates the best-by-val program from each run on
 the held-out test set and writes results to `test_evals/results.json`.
 
 ```bash
 export GIGAEVO_PYTHON=~/envs/evo_fast/bin/python
-bash experiments/hotpotqa_val_gap/run_test_eval.sh
+bash experiments/hotpotqa/push/run_test_eval.sh
 ```
 
 Preflight: verifies thinking mode on all chain endpoints before evaluating.
-Results: `experiments/<name>/test_evals/results.json` (one entry per run).
+Results: `experiments/<task>/<name>/test_evals/results.json` (one entry per run).
 
 ---
 
@@ -149,15 +149,15 @@ Results: `experiments/<name>/test_evals/results.json` (one entry per run).
 
 ```bash
 # Dry run: export locally only (verify output first)
-bash tools/archive_run.sh --exp hotpotqa_val_gap --run "chains/hotpotqa/static@4:O"
+bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C"
 
-# Export and upload to GitHub Release exp/hotpotqa_val_gap
-bash tools/archive_run.sh --exp hotpotqa_val_gap --run "chains/hotpotqa/static@4:O" --upload
+# Export and upload to GitHub Release exp/hotpotqa/push
+bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C" --upload
 
 # Archive all 4 runs
-for SPEC in "chains/hotpotqa/static@4:O" "chains/hotpotqa/static_r@7:R" \
-            "chains/hotpotqa/static_r@6:Q" "chains/hotpotqa/static_r@5:F"; do
-  bash tools/archive_run.sh --exp hotpotqa_val_gap --run "$SPEC" --upload
+for SPEC in "chains/hotpotqa/static_f1@8:A" "chains/hotpotqa/static@9:B" \
+            "chains/hotpotqa/static_f1_600@10:C" "chains/hotpotqa/static_f1_600@11:D"; do
+  bash tools/archive_run.sh --exp hotpotqa/push --run "$SPEC" --upload
 done
 ```
 
@@ -217,7 +217,7 @@ PYTHONPATH=. python tools/comparison.py \
     --run chains/hotpotqa/static_r@7:R \
     --run chains/hotpotqa/static_r@6:Q \
     --run chains/hotpotqa/static_r@5:F \
-    --output-folder experiments/hotpotqa_val_gap/plots/
+    --output-folder experiments/hotpotqa/val_gap/plots/
 
 # Interactive display (requires a display server)
 PYTHONPATH=. python tools/comparison.py --run ... --output-folder /tmp/ --show
@@ -233,13 +233,13 @@ Output files: `evolution_runs_comparison.{png,pdf,svg}` in the output folder.
 # Full program history (all programs, all metrics)
 PYTHONPATH=. python tools/redis2pd.py \
     --run chains/hotpotqa/static@4:O \
-    --output-file experiments/hotpotqa_val_gap/archives/O/evolution_data.csv
+    --output-file experiments/hotpotqa/val_gap/archives/O/evolution_data.csv
 
 # Frontier-only CSV (gen,best_val) — for 05_results.md tables
 PYTHONPATH=. python tools/redis2pd.py \
     --run chains/hotpotqa/static@4:O \
     --frontier-csv \
-    --output-file experiments/hotpotqa_val_gap/frontier_O.csv
+    --output-file experiments/hotpotqa/val_gap/frontier_O.csv
 ```
 
 Frontier CSV format (paste directly into results tables). Dense format — one row per gen,
@@ -364,27 +364,29 @@ Each metrics history key is a Redis **list**. Each entry is a JSON object:
 3. **Archive is in-memory only** — `archive`/`archive:reverse` Redis keys are NOT persisted.
    Export with `archive_run.sh` before flushing or rebooting.
 
-### Generation count caveat
+### Generation count
 
-`valid_iter_fitness_mean` last `"s"` is the best Redis-based gen estimate, but it only
-updates when a valid program completes. For runs with many failing evaluations (e.g.
-600-sample), it lags. For accurate gen count on slow runs, check the log:
+`valid_iter_fitness_mean` last `"s"` is the **canonical generation count**. Use it in
+watchdogs, scripts, and status checks. It only updates when a valid program completes,
+so it can lag slightly during bursts of invalid evaluations — but it is the authoritative
+source and is always eventually consistent.
 
-```bash
-grep -c "Phase 1: Idle confirmed" experiments/<name>/run_q.log
-```
+**Do NOT use log grep for gen count.** The pattern
+`grep -c "Phase 1: Idle confirmed" run.log` is brittle: it depends on exact log message
+format, silently returns 0 if the log path is wrong, and has caused watchdog crashes
+in production. It is listed here only as a historical warning — do not use it.
 
 ---
 
 ## Experiment-specific tools
 
 Task-specific tools (problem eval, cross-metric gap tables, custom analysis) live in
-`experiments/<name>/tools/`, not in this directory. Each experiment that needs them
+`experiments/<task>/<name>/tools/`, not in this directory. Each experiment that needs them
 creates its own `tools/` subdirectory.
 
 **Convention**:
 - A tool goes in `tools/` if it works for **any** GigaEvo run (just needs `--run prefix@db`)
-- A tool goes in `experiments/<name>/tools/` if it imports problem-specific code,
+- A tool goes in `experiments/<task>/<name>/tools/` if it imports problem-specific code,
   hardcodes experiment URLs/paths, or is only meaningful for one experiment's design
 
 **Examples**:
@@ -392,5 +394,5 @@ creates its own `tools/` subdirectory.
 | Tool | Location | Reason |
 |---|---|---|
 | `lineage.py` | `tools/` | Generic — works for any GigaEvo run |
-| `gap_analysis.py` | `experiments/hotpotqa_val_gap/tools/` | Hardcodes O/R/Q/F run specs, gate criteria from 03_plan.md |
-| `eval_checkpoint.py` | `experiments/hotpotqa_val_gap/tools/` | Imports HotpotQA chain infra; HotpotQA-specific |
+| `gap_analysis.py` | `experiments/hotpotqa/val_gap/tools/` | Hardcodes O/R/Q/F run specs, gate criteria from 03_plan.md |
+| `eval_checkpoint.py` | `experiments/hotpotqa/val_gap/tools/` | Imports HotpotQA chain infra; HotpotQA-specific |

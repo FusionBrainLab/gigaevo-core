@@ -1,7 +1,7 @@
 # @package _global_
 # Reflective mutation pipeline for HotpotQA static chain evolution.
 #
-# validate.py returns (metrics, failures[:10]); FetchArtifact extracts failures;
+# validate.py returns (metrics, failures); FetchArtifact extracts failures (all);
 # HotpotQAFailureFormatter renders them as structured markdown for the mutation LLM.
 #
 # Usage:
