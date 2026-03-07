@@ -1,7 +1,7 @@
 # @package _global_
 # ASI mutation pipeline for HotpotQA static_a / static_ra chain evolution.
 #
-# validate.py returns (metrics, failures[:10]); FetchArtifact extracts failures;
+# validate.py returns (metrics, failures); FetchArtifact extracts failures (all);
 # HotpotQAASIFormatter renders them with per-hop BM25 retrieval diagnostics.
 #
 # Usage:
