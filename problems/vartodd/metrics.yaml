@@ -31,3 +31,4 @@ specs:
     upper_bound: 1
     include_in_prompts: true
     sentinel_value: 0
+    significant_change: 1

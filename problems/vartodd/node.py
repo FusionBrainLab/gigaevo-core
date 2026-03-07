@@ -35,19 +35,11 @@ class Node:
     incoming: Optional[ActionInfo] = None
     depth: int = 0
 
-    @property
-    def value_mean(self) -> float:
-        return 0.0 if self.visits == 0 else self.value_sum / self.visits
-
     def add_child(
         self,
         *,
         state: Matrix,
         incoming: ActionInfo,
-        prior: float,
-        frozen_until: int = 0,
-        active: bool = True,
-        init_rank: int = 1000000
     ) -> "Node":
         child = Node(
             state=state,

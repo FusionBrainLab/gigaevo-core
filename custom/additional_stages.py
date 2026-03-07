@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Sequence, Tuple, cast
+from typing import Any, Sequence, Tuple, cast, Optional
 
 from loguru import logger
 
@@ -16,8 +16,15 @@ from gigaevo.evolution.mutation.context import MutationContext
 from gigaevo.programs.core_types import StageIO, VoidInput
 from gigaevo.programs.stages import Stage
 from gigaevo.programs.stages.python_executors import PythonCodeExecutor, ValidatorInput, CallValidatorFunction, ValidatorOutput
-from gigaevo.programs.stages.mutation_context import *
-
+from gigaevo.programs.stages.mutation_context import (
+    FloatDictContainer, StringContainer, 
+    MetricsMutationContext, InsightsMutationContext, 
+    TransitionAnalysis, TransitionAnalysisList, 
+    EvolutionaryStatistics, InsightsOutput,
+    MetricsContext, FamilyTreeMutationContext,
+    MUTATION_CONTEXT_METADATA_KEY, CompositeMutationContext,
+    EvolutionaryStatisticsMutationContext
+)
 from custom.metrics_formatter import BroaderMetricsFormatter
 
 
@@ -27,11 +34,6 @@ class DictInput(StageIO):
 
 class StrDictInput(StageIO):
     data: Box[dict[str, str]]
-
-
-class FloatDictInput(StageIO):
-    data: Box[dict[str, str]]
-
 
 @StageRegistry.register(description="LLM insights for a single program")
 class ComputeTimeStage(Stage):
@@ -100,7 +102,7 @@ class DistillMetrics(Stage):
         for key, val in self.params.data.data.items():
             if isinstance(val, float):
                 metrics[key] = val
-        logger.debug(f"[DistillMetrics] stage completed with {len(metrics)} /n{self.params.data=}")
+        logger.debug(f"[DistillMetrics] stage completed with {len(metrics)} \n{self.params.data=}")
         return Box[dict[str, float]](data=metrics)
     
     
@@ -118,7 +120,7 @@ class DistillNonMetrics(Stage):
         for key, val in params.data.data.items():
             if isinstance(val, str):
                 non_metrics[key] = val
-        logger.debug(f"[DistillNonMetrics] stage completed with {len(non_metrics)}/n{self.params.data=}")
+        logger.debug(f"[DistillNonMetrics] stage completed with {len(non_metrics)}\n{self.params.data=}")
         return Box[dict[str, str]](data=non_metrics)
     
 
@@ -203,7 +205,6 @@ class MutationContextStage(Stage):
             context = NonMetricsMutationContext(non_metrics=params.non_metrics.data)
             aux_info = context.format()
             program.set_metadata("aux_info", aux_info)
-            # logger.debug(f"{context.format()=}")
             contexts.append(context)
             
         if params.insights is not None:
@@ -235,11 +236,8 @@ class MutationContextStage(Stage):
                 )
             )
             logger.info(
-                "[{}] HELLO",
-                EvolutionaryStatisticsMutationContext(
-                    evolutionary_statistics=params.evolutionary_statistics,
-                    metrics_context=self.metrics_context,
-                ).format()
+                "[{}] Evolutionary statistic data",
+                contexts[-1].format()
             )
         if not contexts:
             logger.info(

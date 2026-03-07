@@ -43,7 +43,6 @@ class Todd:
                     child = node.add_child(
                         state=state,
                         incoming=info,
-                        prior=1.0
                     )
                     if child.state.rows < best_node.state.rows:
                         best_counter = 0

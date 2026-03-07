@@ -231,7 +231,7 @@ class BaseEvaluator:
     todd: Todd
     _best_rank: int=100000
     best_matrix: np.ndarray
-    best_pathes: List[Path] = field(default_factory=list)
+    best_pathes: List[Path]
     best_report: str
     best_pcfg: str
     best_eval: int = 0
@@ -241,8 +241,8 @@ class BaseEvaluator:
     bs_width: RankSchedule = RankSchedule.constant(1)
     todd_width: RankSchedule = RankSchedule.constant(1)
     current_path: Path
-    best_ranks: List[int] = field(default_factory=list)
-    best_evals: List[int] = field(default_factory=list)
+    best_ranks: List[int] 
+    best_evals: List[int] 
     def __init__(self, mat: Matrix, max_depth: int, fin_rank: int = 161, shedule: str = "rank", fill_tcounts=False):
         self.with_report = False
         self.current_path = Path()

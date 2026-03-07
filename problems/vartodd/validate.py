@@ -5,7 +5,7 @@ from helper import Matrix, Tensor3D, get_matrix
 
 
 def validate(
-    result: Tuple[np.ndarray, str]
+    result: Tuple[np.ndarray, str, str]
 ) -> dict[str, float]:
     context = get_matrix()
     result, report, best_path = result
