@@ -2,6 +2,78 @@
 
 <!-- version list -->
 
+## v1.18.1 (2026-03-07)
+
+### Bug Fixes
+
+- 12 infra correctness fixes from codebase audit
+  ([`ef89ba9`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ef89ba95a54d4e2905486170a92face53bfdd33e))
+
+- Check_experiment_complete.sh SIGPIPE bug + environment_freeze.txt
+  ([`815b47e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/815b47e6c7c1d80198da35459f16e339bf1f1b46))
+
+- Extend prompts_dir to all pipeline YAMLs + docstring accuracy pass
+  ([`939ec7d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/939ec7de27241aab1409907c36b897982c4cfcac))
+
+- Gen10_test_eval.py val_em gap correct for F1 runs
+  ([`9c9e65f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9c9e65ffb1441edce8343852bf291109e582a7a9))
+
+- Move analyze_test_results.py to push experiment tools dir
+  ([`e6367be`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e6367bed53ad2ff0ecf3cbfe50207aad5064f43c))
+
+- Pin push run_test_eval.sh sha256 in 03_plan.md (was val_gap hash)
+  ([`7763287`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/77632878015a27cbb4d85ee92b0c9711380a75df))
+
+- Propagate known bugs to templates and docs to prevent recurrence
+  ([`b545282`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b545282dda3053deb19f51cffb57461cd0091917))
+
+- Raise chain LLM HTTP timeout 120s→600s + hard reset all runs (Amendment 4)
+  ([`c0186a8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c0186a8ff3250cd6b7af764b0f3b29e67dd5c1b7))
+
+- Remove stale failures[:10] cap from docstrings and pipeline comments
+  ([`ac3c07d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ac3c07dd0cd6cb80404e4339a69168cd0b21b34c))
+
+- Tighten APPROVED grep + correct agent memories for Phase 5 readiness
+  ([`3ee5854`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3ee5854af29cae70e037c18c7d988790cf516863))
+
+- Update PR_DESCRIPTION.md template — val EM → val fitness
+  ([`e99f891`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e99f89146fd343f278618936ac35ad9f202834e0))
+
+- Watchdog PROJ path (3→4 parents) + stale Run D config
+  ([`a3dae8f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a3dae8f4daa79ee00921f6830a0d77cae0c85307))
+
+### Chores
+
+- Add run_status.sh template for push experiment monitoring
+  ([`6a1e86c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6a1e86cf6cda39b47900dac0e7cdb8e4b7bb12fd))
+
+- Infra improvements while runs are live
+  ([`466db87`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/466db87f477598b034cf389b07c1fa4b0916cc32))
+
+- Launch.sh for push experiment + CONTEXT.md updates
+  ([`c2da4a7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c2da4a752ee7c45e3e26cd8c18878ec7cc20a215))
+
+- Pre-fill 05_results.md skeleton + analysis script + INDEX.md entry
+  ([`a8e288b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a8e288b8f0fc79f4b29e5ee1fa12d853a4a0cd50))
+
+- Replace Run D EM+NLP+600 → F1+NLP+600 (Amendment 3)
+  ([`58ec1fa`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/58ec1fa3bc64723600076031a73ba252c9a0134c))
+
+- Update INDEX.md and CONTEXT.md naming consistency
+  ([`05bce0a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/05bce0adceee1a4ce0a39d559b79f2fed3e330db))
+
+- Watchdog + run_status.sh for push experiment
+  ([`81807ea`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/81807ea3faf4a4e135c9627d70ac60c95fda1d5b))
+
+### Documentation
+
+- Hotpotqa_asi.yaml is required for ALL hotpotqa variants, not just static_a/ra
+  ([`856125c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/856125c759c5b63264df2c2c4ae0f2cbe2b0635f))
+
+- Update all experiments/<name>/ → experiments/<task>/<name>/
+  ([`1b67951`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1b679516e7f5cc006fb9396adf6820d8a4df06f5))
+
+
 ## v1.18.0 (2026-03-06)
 
 ### Bug Fixes
