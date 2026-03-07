@@ -43,7 +43,7 @@ done
 if [[ "$DOCS_IN_EXP" == "true" ]]; then
     for doc in 01_design.md 02_review.md 03_plan.md; do
         REL="experiments/$EXPERIMENT/$doc"
-        if git -C "$PROJ" log --oneline -- "$REL" | grep -q .; then
+        if git -C "$PROJ" log --oneline --max-count=1 -- "$REL" | grep -q .; then
             ok "$doc committed"
         else
             fail "$doc exists but not committed to git"
@@ -95,7 +95,7 @@ fi
 
 # environment_freeze.txt committed
 ENV_FILE="experiments/$EXPERIMENT/environment_freeze.txt"
-if git -C "$PROJ" log --oneline -- "$ENV_FILE" | grep -q .; then
+if git -C "$PROJ" log --oneline --max-count=1 -- "$ENV_FILE" | grep -q .; then
     ok "environment_freeze.txt committed"
 else
     fail "environment_freeze.txt not committed (required for reproducibility)"
@@ -106,7 +106,7 @@ echo
 # ── Phase 5: results written ──────────────────────────────────────────────────
 if [[ -f "$EXP_DIR/05_results.md" ]]; then
     REL="experiments/$EXPERIMENT/05_results.md"
-    if git -C "$PROJ" log --oneline -- "$REL" | grep -q .; then
+    if git -C "$PROJ" log --oneline --max-count=1 -- "$REL" | grep -q .; then
         ok "05_results.md committed"
     else
         fail "05_results.md exists but not committed"
