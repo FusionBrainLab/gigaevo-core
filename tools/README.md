@@ -37,7 +37,7 @@ bash tools/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
 | Export frontier CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --frontier-csv --output-file /tmp/f.csv` |
 | Archive + upload | `archive_run.sh` | `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload` |
 | Kill workers + flush | `flush.py` | `PYTHONPATH=. python tools/flush.py --db N [--confirm]` |
-| Task-specific tools | `experiments/<name>/tools/` | e.g. `experiments/hotpotqa_val_gap/tools/gap_analysis.py` |
+| Task-specific tools | `experiments/<task>/<name>/tools/` | e.g. `experiments/hotpotqa/val_gap/tools/gap_analysis.py` |
 
 ---
 
@@ -135,7 +135,7 @@ the held-out test set and writes results to `test_evals/results.json`.
 
 ```bash
 export GIGAEVO_PYTHON=~/envs/evo_fast/bin/python
-bash experiments/hotpotqa_val_gap/run_test_eval.sh
+bash experiments/hotpotqa/push/run_test_eval.sh
 ```
 
 Preflight: verifies thinking mode on all chain endpoints before evaluating.
@@ -217,7 +217,7 @@ PYTHONPATH=. python tools/comparison.py \
     --run chains/hotpotqa/static_r@7:R \
     --run chains/hotpotqa/static_r@6:Q \
     --run chains/hotpotqa/static_r@5:F \
-    --output-folder experiments/hotpotqa_val_gap/plots/
+    --output-folder experiments/hotpotqa/val_gap/plots/
 
 # Interactive display (requires a display server)
 PYTHONPATH=. python tools/comparison.py --run ... --output-folder /tmp/ --show
@@ -233,13 +233,13 @@ Output files: `evolution_runs_comparison.{png,pdf,svg}` in the output folder.
 # Full program history (all programs, all metrics)
 PYTHONPATH=. python tools/redis2pd.py \
     --run chains/hotpotqa/static@4:O \
-    --output-file experiments/hotpotqa_val_gap/archives/O/evolution_data.csv
+    --output-file experiments/hotpotqa/val_gap/archives/O/evolution_data.csv
 
 # Frontier-only CSV (gen,best_val) — for 05_results.md tables
 PYTHONPATH=. python tools/redis2pd.py \
     --run chains/hotpotqa/static@4:O \
     --frontier-csv \
-    --output-file experiments/hotpotqa_val_gap/frontier_O.csv
+    --output-file experiments/hotpotqa/val_gap/frontier_O.csv
 ```
 
 Frontier CSV format (paste directly into results tables). Dense format — one row per gen,
@@ -364,15 +364,17 @@ Each metrics history key is a Redis **list**. Each entry is a JSON object:
 3. **Archive is in-memory only** — `archive`/`archive:reverse` Redis keys are NOT persisted.
    Export with `archive_run.sh` before flushing or rebooting.
 
-### Generation count caveat
+### Generation count
 
-`valid_iter_fitness_mean` last `"s"` is the best Redis-based gen estimate, but it only
-updates when a valid program completes. For runs with many failing evaluations (e.g.
-600-sample), it lags. For accurate gen count on slow runs, check the log:
+`valid_iter_fitness_mean` last `"s"` is the **canonical generation count**. Use it in
+watchdogs, scripts, and status checks. It only updates when a valid program completes,
+so it can lag slightly during bursts of invalid evaluations — but it is the authoritative
+source and is always eventually consistent.
 
-```bash
-grep -c "Phase 1: Idle confirmed" experiments/<name>/run_q.log
-```
+**Do NOT use log grep for gen count.** The pattern
+`grep -c "Phase 1: Idle confirmed" run.log` is brittle: it depends on exact log message
+format, silently returns 0 if the log path is wrong, and has caused watchdog crashes
+in production. It is listed here only as a historical warning — do not use it.
 
 ---
 
@@ -392,5 +394,5 @@ creates its own `tools/` subdirectory.
 | Tool | Location | Reason |
 |---|---|---|
 | `lineage.py` | `tools/` | Generic — works for any GigaEvo run |
-| `gap_analysis.py` | `experiments/hotpotqa_val_gap/tools/` | Hardcodes O/R/Q/F run specs, gate criteria from 03_plan.md |
-| `eval_checkpoint.py` | `experiments/hotpotqa_val_gap/tools/` | Imports HotpotQA chain infra; HotpotQA-specific |
+| `gap_analysis.py` | `experiments/hotpotqa/val_gap/tools/` | Hardcodes O/R/Q/F run specs, gate criteria from 03_plan.md |
+| `eval_checkpoint.py` | `experiments/hotpotqa/val_gap/tools/` | Imports HotpotQA chain infra; HotpotQA-specific |
