@@ -8,6 +8,7 @@ evolution_context:
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
   storage: ${ref:redis_storage}
+  prompts_dir: ${prompts.dir}
 
 dag_blueprint:
   _target_: gigaevo.runner.dag_blueprint.DAGBlueprint
@@ -85,6 +86,7 @@ dag_blueprint:
       task_description: ${ref:problem_context::task_description}
       metrics_context: ${metrics_context}
       max_insights: ${max_insights}
+      prompts_dir: ${prompts.dir}
       timeout: ${stage_timeout}
 
     # Lineage tracking - descendants (tracks the descendants of the program)
@@ -119,6 +121,7 @@ dag_blueprint:
       task_description: ${ref:problem_context::task_description}
       metrics_context: ${metrics_context}
       storage: ${ref:redis_storage}
+      prompts_dir: ${prompts.dir}
       timeout: ${stage_timeout}
 
     # Lineage tracking - descendants (aggregates the lineage of the descendants)

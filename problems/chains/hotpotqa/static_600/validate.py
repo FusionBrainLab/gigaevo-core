@@ -116,10 +116,9 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     batch_tool_registry = {"retrieve": _batch_retrieve}
 
     # 5. Run chain on dataset (step-batched for optimal vLLM batching)
-    #    Per-step max_tokens: steps 2/5 need 8192 (thinking + substantial text);
-    #    steps 3/6 reduced to 4096 — thinking takes ~1000-2000 tokens, leaving
-    #    2000+ for a search query or "Answer: X" output (well under 100 tokens).
-    #    2048 was insufficient at launch (thinking exhausted budget); 4096 is safe.
+    #    Per-step max_tokens: 8192 for all LLM steps — thinking mode <think> blocks
+    #    can consume 1000-2000 tokens before the actual output. 2048 was insufficient
+    #    (thinking exhausted budget); 8192 is generous enough for all step types.
     step_max_tokens = {
         2: 8192,  # summarize retrieved facts (thinking + substantial text)
         3: 8192,  # generate search query (thinking + short query)

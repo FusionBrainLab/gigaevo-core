@@ -18,7 +18,7 @@ from problems.chains.hotpotqa.static.formatter import HotpotQAFailureFormatter
 class ReflectivePipelineBuilder(DefaultPipelineBuilder):
     """DefaultPipelineBuilder with FormatterStage replaced by HotpotQAFailureFormatter.
 
-    validate.py returns (metrics, failures[:10]); FetchArtifact extracts failures;
+    validate.py returns (metrics, failures); FetchArtifact extracts all failures;
     HotpotQAFailureFormatter renders them as structured markdown; MutationContextStage
     appends the block to the mutation prompt.
     """

@@ -18,7 +18,7 @@ from problems.chains.hotpotqa.static_a.formatter import HotpotQAASIFormatter
 class ASIPipelineBuilder(DefaultPipelineBuilder):
     """DefaultPipelineBuilder with FormatterStage replaced by HotpotQAASIFormatter.
 
-    validate.py returns (metrics, failures[:10]); FetchArtifact extracts failures;
+    validate.py returns (metrics, failures); FetchArtifact extracts all failures;
     HotpotQAASIFormatter renders them with per-hop retrieval diagnostics;
     MutationContextStage appends the block to the mutation prompt.
     """

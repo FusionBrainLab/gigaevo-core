@@ -56,17 +56,14 @@ You should see:
 Open a new terminal:
 
 ```bash
-# Show current state
-python tools/inspect.py --summary
+# Show current run status (fitness, gen count, invalidity, etc.)
+PYTHONPATH=. python tools/status.py --run heilbron@0:run-1
 
-# Check if evolution is stuck
-python tools/inspect.py --stuck-check
+# Show top N programs
+PYTHONPATH=. python tools/top_programs.py --run heilbron@0:run-1 -n 5
 
-# View a specific program
-python tools/inspect.py --program <program-id>
-
-# See island contents
-python tools/inspect.py --island main_island
+# Export results to CSV
+PYTHONPATH=. python tools/redis2pd.py --run heilbron@0:run-1
 ```
 
 ## Step 5: View Evolution Logs
@@ -82,10 +79,13 @@ After evolution completes:
 
 ```bash
 # Export to CSV
-python tools/redis2pd.py --output results.csv
+PYTHONPATH=. python tools/redis2pd.py --run heilbron@0:run-1
 
-# View best program
-redis-cli GET "program:<best-program-id>" | jq .
+# Plot fitness curves
+PYTHONPATH=. python tools/comparison.py --run heilbron@0:run-1
+
+# View top programs
+PYTHONPATH=. python tools/top_programs.py --run heilbron@0:run-1 -n 10
 ```
 
 ## Understanding the Output
@@ -118,7 +118,8 @@ redis-cli GET "program:<best-program-id>" | jq .
 
 **Solution:**
 ```bash
-redis-cli FLUSHDB
+# Use tools/flush.py (kills exec_runner workers first):
+PYTHONPATH=. python tools/flush.py --db 0 --confirm
 # Or use a different database:
 python run.py problem.name=heilbron redis.db=1
 ```
@@ -129,11 +130,11 @@ python run.py problem.name=heilbron redis.db=1
 
 **Solution:**
 ```bash
-# Check what's failing
-python tools/inspect.py --stuck-check
+# Check invalidity rate
+PYTHONPATH=. python tools/status.py --run <prefix>@<db>:<label>
 
-# View a specific program's errors
-python tools/inspect.py --program <program-id>
+# View top programs and their fitness
+PYTHONPATH=. python tools/top_programs.py --run <prefix>@<db>:<label> -n 10
 ```
 
 ### Issue: Evolution seems slow
@@ -213,27 +214,29 @@ python run.py problem.name=<problem> max_generations=10
 # Use different experiment
 python run.py experiment=<experiment> problem.name=<problem>
 
-# Inspect evolution state
-python tools/inspect.py --summary
-python tools/inspect.py --stuck-check
+# Preview config (no execution)
+python run.py problem.name=<problem> --cfg job
 
-# Export results
-python tools/redis2pd.py --output results.csv
+# Check run status
+PYTHONPATH=. python tools/status.py --run <prefix>@<db>:<label>
 
-# Clear Redis
-redis-cli FLUSHDB
+# View top programs
+PYTHONPATH=. python tools/top_programs.py --run <prefix>@<db>:<label> -n 10
+
+# Export results to CSV
+PYTHONPATH=. python tools/redis2pd.py --run <prefix>@<db>:<label>
+
+# Flush Redis (kills exec_runners first — never use redis-cli FLUSHDB directly)
+PYTHONPATH=. python tools/flush.py --db 0 --confirm
 
 # View logs
 tail -f outputs/*/evolution_*.log
-
-# List Redis keys
-redis-cli KEYS "*" | head -20
 ```
 
 ## Getting Help
 
 1. **Check logs**: Most issues are explained in the logs
-2. **Use inspection tool**: `python tools/inspect.py --stuck-check`
+2. **Check run status**: `PYTHONPATH=. python tools/status.py --run <prefix>@<db>:<label>`
 3. **Read architecture doc**: `ARCHITECTURE.md` explains the system
 4. **Check examples**: Look at existing problems in `problems/`
 
