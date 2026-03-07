@@ -78,10 +78,10 @@ Column notes:
 - **Invalid%** — fraction of programs that failed validation; >75% at gen 3+ = stage_timeout too short
 - **Val dur(s)** — validator stage mean/max duration in seconds (last 20 evaluations)
 
-**Per-experiment status script**: each experiment has `experiments/<name>/run_status.sh`
+**Per-experiment status script**: each experiment has `experiments/<task>/<name>/run_status.sh`
 with pre-filled args. Always use it — never reconstruct the invocation from scratch.
 
-**Watchdog**: each experiment has `experiments/<name>/run_watchdog.py`, launched at
+**Watchdog**: each experiment has `experiments/<task>/<name>/run_watchdog.py`, launched at
 experiment start and kept alive throughout. Its PID appears in `run_status.sh` as
 `--watchdog <pid>`. The watchdog posts hourly PR comments and generates fitness plots.
 
@@ -123,13 +123,13 @@ from the denominator.
 ## Ending a Run
 
 > **Required order** (skipping steps loses data permanently):
-> 1. Run test evaluations → `bash experiments/<name>/run_test_eval.sh`
+> 1. Run test evaluations → `bash experiments/<task>/<name>/run_test_eval.sh`
 > 2. Archive all runs → `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload`
 > 3. Flush Redis → `PYTHONPATH=. python tools/flush.py --db N --confirm`
 
 ### `run_test_eval.sh` — Test evaluation (per-experiment)
 
-Each experiment has `experiments/<name>/run_test_eval.sh`. Run it while Redis is live
+Each experiment has `experiments/<task>/<name>/run_test_eval.sh`. Run it while Redis is live
 (before archiving or flushing). It evaluates the best-by-val program from each run on
 the held-out test set and writes results to `test_evals/results.json`.
 
@@ -139,7 +139,7 @@ bash experiments/hotpotqa/push/run_test_eval.sh
 ```
 
 Preflight: verifies thinking mode on all chain endpoints before evaluating.
-Results: `experiments/<name>/test_evals/results.json` (one entry per run).
+Results: `experiments/<task>/<name>/test_evals/results.json` (one entry per run).
 
 ---
 
@@ -381,12 +381,12 @@ in production. It is listed here only as a historical warning — do not use it.
 ## Experiment-specific tools
 
 Task-specific tools (problem eval, cross-metric gap tables, custom analysis) live in
-`experiments/<name>/tools/`, not in this directory. Each experiment that needs them
+`experiments/<task>/<name>/tools/`, not in this directory. Each experiment that needs them
 creates its own `tools/` subdirectory.
 
 **Convention**:
 - A tool goes in `tools/` if it works for **any** GigaEvo run (just needs `--run prefix@db`)
-- A tool goes in `experiments/<name>/tools/` if it imports problem-specific code,
+- A tool goes in `experiments/<task>/<name>/tools/` if it imports problem-specific code,
   hardcodes experiment URLs/paths, or is only meaningful for one experiment's design
 
 **Examples**:
