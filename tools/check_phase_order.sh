@@ -6,7 +6,7 @@
 #   bash tools/check_phase_order.sh <experiment-name>
 #
 # Example:
-#   bash tools/check_phase_order.sh hotpotqa_p3_crossover
+#   bash tools/check_phase_order.sh hotpotqa/p3_crossover
 #
 # Exit codes:
 #   0 — all checks passed

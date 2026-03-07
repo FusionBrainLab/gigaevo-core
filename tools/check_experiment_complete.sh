@@ -7,7 +7,7 @@
 #   bash tools/check_experiment_complete.sh <experiment-name>
 #
 # Example:
-#   bash tools/check_experiment_complete.sh hotpotqa_nlp_prompts
+#   bash tools/check_experiment_complete.sh hotpotqa/nlp_prompts
 #
 # Exit codes:
 #   0 — all checks passed; safe to merge
@@ -71,7 +71,7 @@ fi
 REVIEW_FILE=""
 [[ -f "$EXP_DIR/02_review.md" ]] && REVIEW_FILE="$EXP_DIR/02_review.md"
 if [[ -n "$REVIEW_FILE" ]]; then
-    if grep -q '\[x\] APPROVED\|Verdict.*APPROVED\|Overall.*APPROVED' "$REVIEW_FILE"; then
+    if grep -q '\[x\] APPROVED\|Verdict: APPROVED\|Overall Verdict: APPROVED\|## Overall.*: APPROVED' "$REVIEW_FILE"; then
         ok "02_review.md contains APPROVED verdict"
     else
         fail "02_review.md does not contain a clear APPROVED verdict"

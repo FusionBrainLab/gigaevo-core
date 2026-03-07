@@ -149,15 +149,15 @@ Results: `experiments/<name>/test_evals/results.json` (one entry per run).
 
 ```bash
 # Dry run: export locally only (verify output first)
-bash tools/archive_run.sh --exp hotpotqa_val_gap --run "chains/hotpotqa/static@4:O"
+bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C"
 
-# Export and upload to GitHub Release exp/hotpotqa_val_gap
-bash tools/archive_run.sh --exp hotpotqa_val_gap --run "chains/hotpotqa/static@4:O" --upload
+# Export and upload to GitHub Release exp/hotpotqa/push
+bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C" --upload
 
 # Archive all 4 runs
-for SPEC in "chains/hotpotqa/static@4:O" "chains/hotpotqa/static_r@7:R" \
-            "chains/hotpotqa/static_r@6:Q" "chains/hotpotqa/static_r@5:F"; do
-  bash tools/archive_run.sh --exp hotpotqa_val_gap --run "$SPEC" --upload
+for SPEC in "chains/hotpotqa/static_f1@8:A" "chains/hotpotqa/static@9:B" \
+            "chains/hotpotqa/static_f1_600@10:C" "chains/hotpotqa/static_f1_600@11:D"; do
+  bash tools/archive_run.sh --exp hotpotqa/push --run "$SPEC" --upload
 done
 ```
 

@@ -44,7 +44,7 @@ def get_run_status(
 
     Returns dict with:
       gen             -- MAP-Elites iteration (generation) number
-      best_val_em     -- best frontier fitness seen so far
+      best_val_fitness     -- best frontier fitness seen so far (val F1 for F1 runs, val EM for EM runs)
       total_keys      -- total Redis keys in this DB
       total_programs  -- total programs evaluated (valid + invalid)
       valid_programs  -- programs that passed validation
@@ -72,11 +72,11 @@ def get_run_status(
 
         # Best val fitness: last entry in the frontier fitness history list
         hist_key = f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness"
-        best_val_em = None
+        best_val_fitness = None
         raw = r.lindex(hist_key, -1)
         if raw:
             try:
-                best_val_em = json.loads(raw)["v"]
+                best_val_fitness = json.loads(raw)["v"]
             except (KeyError, json.JSONDecodeError):
                 pass
 
@@ -118,7 +118,7 @@ def get_run_status(
 
         return {
             "gen": gen,
-            "best_val_em": best_val_em,
+            "best_val_fitness": best_val_fitness,
             "total_keys": total_keys,
             "total_programs": total_programs,
             "valid_programs": valid_programs,
@@ -130,7 +130,7 @@ def get_run_status(
     except Exception as e:
         return {
             "gen": None,
-            "best_val_em": None,
+            "best_val_fitness": None,
             "total_keys": None,
             "total_programs": None,
             "valid_programs": None,
@@ -244,8 +244,8 @@ def main():
 
         gen_str = str(status["gen"]) if status["gen"] is not None else "?"
         em_str = (
-            f"{status['best_val_em'] * 100:.1f}%"
-            if status["best_val_em"] is not None
+            f"{status['best_val_fitness'] * 100:.1f}%"
+            if status["best_val_fitness"] is not None
             else "?"
         )
         inv_str = (

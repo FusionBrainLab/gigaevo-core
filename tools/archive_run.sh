@@ -9,15 +9,15 @@
 #
 # Examples:
 #   # Dry run: export locally, no upload
-#   bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "chains/hotpotqa/static@0:K"
+#   bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C"
 #
 #   # Export and upload to GitHub Release
-#   bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "chains/hotpotqa/static@0:K" --upload
+#   bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C" --upload
 #
 #   # Archive all 4 runs and upload
-#   for SPEC in "chains/hotpotqa/static@0:K" "chains/hotpotqa/static_r@1:L" \
-#               "chains/hotpotqa/static_r@2:M" "chains/hotpotqa/static_r@3:N"; do
-#     bash tools/archive_run.sh --exp hotpotqa_nlp_prompts --run "$SPEC" --upload
+#   for SPEC in "chains/hotpotqa/static_f1@8:A" "chains/hotpotqa/static@9:B" \
+#               "chains/hotpotqa/static_f1_600@10:C" "chains/hotpotqa/static_f1_600@11:D"; do
+#     bash tools/archive_run.sh --exp hotpotqa/push --run "$SPEC" --upload
 #   done
 #
 # GitHub Release naming: exp/<experiment-name>
