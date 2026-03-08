@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.18.2 (2026-03-08)
+
+### Bug Fixes
+
+- Watchdog gen count — use log file instead of Redis s field
+  ([`1d229e4`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1d229e445e2338855dd796a929dfe5c3eefeee7f))
+
+### Chores
+
+- Backfill pre-reg commit hash + add crossover entry to INDEX.md
+  ([`2733e86`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2733e8606438ea87daf68663933de19f9819b93e))
+
+- Fill PIDs into run_status.sh — P=3660148 Q=3660149 R=3660150 S=3660151 watchdog=3660461
+  ([`d52fe31`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d52fe31a1b8b0c0a8e577af0f74dfa50ec6335f8))
+
+- Launch.sh, run_status.sh, run_watchdog.py for crossover experiment
+  ([`e2c3629`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e2c3629d4fee4452503e38e59081a15e91d3fa35))
+
+
 ## v1.18.1 (2026-03-07)
 
 ### Bug Fixes
