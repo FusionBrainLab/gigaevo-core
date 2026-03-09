@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.20.0 (2026-03-09)
+
+### Features
+
+- **chains**: Hotpotqa: add Retriever class and colbertv2 retriever
+  ([`b681195`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b681195f49bfc878622e0c94ba227669fd549798))
+
+
 ## v1.19.0 (2026-03-09)
 
 ### Chores
