@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import random
+from typing import Literal
 
 # --- LLM Configuration ---
 #
@@ -45,8 +46,31 @@ DATASET_CONFIG = {
 
 # --- Corpus Configuration ---
 
-CORPUS_PATH = str(_BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.passages.pkl")
+_CORPUS_PKL = _BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.passages.pkl"
+_CORPUS_GZ = _BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.gz"
+CORPUS_PATH = str(_CORPUS_PKL if _CORPUS_PKL.exists() else _CORPUS_GZ)
 BM25S_INDEX_DIR = str(_BASE_DIR / "dataset" / "bm25s_index")
+
+# --- Retriever Configuration ---
+# Switch retriever here. "bm25" uses the pre-built BM25s index (default).
+# "colbert" uses ColBERTv2 loaded in-process via colbert-ai.
+# Build the ColBERT index first: python dataset/build_colbert_index.py
+RETRIEVER: Literal["bm25", "colbert"] = "bm25"
+COLBERT_INDEX_DIR = str(_BASE_DIR / "dataset" / "colbert_index")
+COLBERT_CHECKPOINT = "colbert-ir/colbertv2.0"
+
+
+def build_retriever(k: int = 7):
+    """Instantiate the retriever selected by the RETRIEVER constant.
+
+    Returns a BM25Retriever or ColBERTRetriever. Imports are deferred so
+    colbert-ai is only loaded when RETRIEVER == "colbert".
+    """
+    from problems.chains.hotpotqa.utils.retrieval import BM25Retriever, ColBERTRetriever
+
+    if RETRIEVER == "colbert":
+        return ColBERTRetriever(COLBERT_INDEX_DIR, checkpoint=COLBERT_CHECKPOINT, k=k)
+    return BM25Retriever(BM25S_INDEX_DIR, CORPUS_PATH, k=k)
 
 
 # --- Data Loading Utilities ---

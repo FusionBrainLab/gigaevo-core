@@ -5,16 +5,15 @@ from problems.chains.chain_runner import run_chain_on_dataset_stepwise
 from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.hotpotqa.shared_config import (
-    CORPUS_PATH,
-    BM25S_INDEX_DIR,
     DATASET_CONFIG,
     LLM_CONFIG,
+    build_retriever,
     load_jsonl,
     outer_context_builder,
     preprocess_sample,
 )
 from problems.chains.hotpotqa.static.config import STATIC_CHAIN_TOPOLOGY, load_baseline
-from problems.chains.hotpotqa.utils.retrieval import batch_retrieve
+from problems.chains.hotpotqa.utils.retrieval import make_batch_tool_fn
 from problems.chains.hotpotqa.utils.utils import normalize_text
 
 
@@ -65,7 +64,7 @@ def calculate_exact_match(
 
 
 def parse_retrieved_titles(step_output: str) -> list[str]:
-    """Parse document titles from BM25 retrieval output.
+    """Parse document titles from retrieval output.
 
     Input format: "[1] Title | passage text\n[2] Title | passage text..."
     Returns list of title strings.
@@ -107,11 +106,8 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     client = LLMClient(**LLM_CONFIG)
 
     # 4. Build batch tool registry for step-batched execution
-    def _batch_retrieve(kwargs_list: list[dict]) -> list[str]:
-        queries = [kw["query"] for kw in kwargs_list]
-        return batch_retrieve(queries, BM25S_INDEX_DIR, k=7, corpus_path=CORPUS_PATH)
-
-    batch_tool_registry = {"retrieve": _batch_retrieve}
+    retriever = build_retriever(k=7)
+    batch_tool_registry = {"retrieve": make_batch_tool_fn(retriever)}
 
     # 5. Run chain on dataset (step-batched for optimal vLLM batching)
     #    Per-step max_tokens: generous for all steps — thinking mode produces

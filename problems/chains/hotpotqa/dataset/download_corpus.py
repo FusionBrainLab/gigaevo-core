@@ -1,7 +1,9 @@
 """Download and process HotpotQA Wikipedia 2017 abstracts corpus.
 
 Downloads the official HotpotQA Wikipedia abstracts dump and processes it into
-a compact JSONL.gz format suitable for BM25 indexing.
+a compact JSONL.gz format. Index building is handled by separate scripts:
+  - build_bm25_index.py   (BM25s index)
+  - build_colbert_index.py (ColBERT index)
 
 Source: https://hotpotqa.github.io/wiki-readme.html
 File: enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2 (~1.5GB)
@@ -27,7 +29,6 @@ DOWNLOAD_URL = (
 OUTPUT_DIR = Path(__file__).parent
 ARCHIVE_PATH = OUTPUT_DIR / "enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2"
 OUTPUT_PATH = OUTPUT_DIR / "wiki17_abstracts.jsonl.gz"
-BM25S_INDEX_DIR = OUTPUT_DIR / "bm25s_index"
 
 
 def download_archive():
@@ -108,26 +109,14 @@ def process_archive():
     print(f"Done! Processed {doc_count:,} documents → {OUTPUT_PATH}")
 
 
-def build_index():
-    """Build BM25s index from processed corpus."""
-    if BM25S_INDEX_DIR.exists():
-        print(f"BM25s index already exists: {BM25S_INDEX_DIR}")
-        return
-
-    if not OUTPUT_PATH.exists():
-        print(f"Corpus not found at {OUTPUT_PATH}. Run download and process first.")
-        return
-
-    from problems.chains.hotpotqa.utils.retrieval import build_bm25s_index
-
-    build_bm25s_index(OUTPUT_PATH, BM25S_INDEX_DIR)
-
-
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     download_archive()
     process_archive()
-    build_index()
+
+    print("\nCorpus ready. Build a retrieval index:")
+    print("  BM25:    python dataset/build_bm25_index.py")
+    print("  ColBERT: python dataset/build_colbert_index.py")
 
     # Optional: remove archive to save space
     if ARCHIVE_PATH.exists() and OUTPUT_PATH.exists():
