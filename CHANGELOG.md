@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.19.0 (2026-03-09)
+
+### Chores
+
+- Add cold_start entry to INDEX.md + create experiment branch
+  ([`b0b47af`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b0b47affd7feb83a81be76e1007e005a10e5a129))
+
+- Fill PIDs into run_status.sh — T1=3812756 T2=3812757 T3=3812758 T4=3812759 watchdog=3813084
+  ([`cef1b24`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/cef1b2489f4007eda485bbb1c9a15c57ab5a9229))
+
+- Launch.sh, run_watchdog.py, run_status.sh for cold_start experiment
+  ([`53bbb1f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/53bbb1f9e0d34c6550c04d4d826b34706a35f642))
+
+### Features
+
+- Add baseline initial_programs to static_f1_600 for cold-start support
+  ([`f5adb9f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f5adb9f3868bc4ba59ae5f1275ffd7d675a0931d))
+
+
 ## v1.18.3 (2026-03-08)
 
 
