@@ -9,7 +9,13 @@ import asyncio
 from collections.abc import Callable
 import re
 
-from problems.chains.types import ChainResult, ChainSpec, LLMStep, ToolStep
+from problems.chains.types import (
+    ChainResult,
+    ChainSpec,
+    LLMStep,
+    StopCondition,
+    ToolStep,
+)
 
 
 def _strip_thinking(text: str) -> str:
@@ -36,6 +42,7 @@ def _resolve_reference(
     ref: str,
     outer_context: str,
     step_outputs: list[str],
+    sample: dict | None = None,
 ) -> str:
     """Resolve a $-reference to a concrete value.
 
@@ -43,6 +50,7 @@ def _resolve_reference(
         $outer_context  — the original sample context string
         $history[-1]    — last completed step's output
         $history[N]     — step output at history index N (0-based)
+        $sample.foo     — field from the current sample (supports dot path)
 
     Args:
         ref: The $-reference string
@@ -59,6 +67,19 @@ def _resolve_reference(
         if not step_outputs:
             return ""
         return step_outputs[-1]
+
+    if ref.startswith("$sample."):
+        if sample is None:
+            return ""
+        value: object = sample
+        for part in ref[len("$sample.") :].split("."):
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            else:
+                return ""
+        if value is None:
+            return ""
+        return value if isinstance(value, str) else str(value)
 
     match = re.match(r"\$history\[(\d+)\]", ref)
     if match:
@@ -116,11 +137,26 @@ async def _call_llm_with_semaphore(
         return await client(prompt)
 
 
+def _matches_stop_condition(output: str, condition: StopCondition | None) -> bool:
+    """Check whether a step output satisfies its optional stop condition."""
+    if condition is None:
+        return False
+
+    if condition.condition_type == "contains":
+        if condition.case_sensitive:
+            return condition.pattern in output
+        return condition.pattern.lower() in output.lower()
+
+    flags = 0 if condition.case_sensitive else re.IGNORECASE
+    return re.search(condition.pattern, output, flags=flags) is not None
+
+
 def _execute_tool_step_batch(
     step: ToolStep,
-    n: int,
+    sample_indices: list[int],
     outer_contexts: list[str],
     all_step_outputs: list[list[str]],
+    dataset: list[dict],
     tool_registry: dict[str, Callable],
 ) -> list[str]:
     """Execute a tool step for all samples in one batch call.
@@ -140,9 +176,14 @@ def _execute_tool_step_batch(
         )
 
     all_resolved = []
-    for i in range(n):
+    for i in sample_indices:
         resolved = {
-            param: _resolve_reference(ref, outer_contexts[i], all_step_outputs[i])
+            param: _resolve_reference(
+                ref,
+                outer_contexts[i],
+                all_step_outputs[i],
+                dataset[i],
+            )
             for param, ref in step.step_config.input_mapping.items()
         }
         all_resolved.append(resolved)
@@ -153,7 +194,7 @@ def _execute_tool_step_batch(
 async def _execute_llm_step_batch(
     step: LLMStep,
     chain: ChainSpec,
-    n: int,
+    sample_indices: list[int],
     outer_contexts: list[str],
     all_step_outputs: list[list[str]],
     all_histories: list[list[str]],
@@ -162,7 +203,7 @@ async def _execute_llm_step_batch(
 ) -> list[str]:
     """Execute an LLM step for all samples concurrently."""
     prompts = []
-    for i in range(n):
+    for i in sample_indices:
         visible_history, _ = _resolve_dependencies(
             step.dependencies, all_histories[i], all_step_outputs[i]
         )
@@ -195,9 +236,12 @@ async def _run_chain_on_dataset_async(
 ) -> list[ChainResult]:
     """Step-batched execution: all samples process each step together.
 
-    Processes ALL samples through step 1, then ALL through step 2, etc.
+    Processes all active (non-finished) samples through step 1, then step 2, etc.
     This yields homogeneous LLM request batches (same prompt structure,
     similar length) which vLLM can batch far more efficiently.
+
+    Samples can finish early when an LLM step's optional ``stop_condition``
+    matches that sample's step output.
 
     Tool functions receive a list of resolved kwargs dicts and return a list
     of result strings (one per sample). Tools are called via asyncio.to_thread()
@@ -226,17 +270,20 @@ async def _run_chain_on_dataset_async(
     outer_contexts = [outer_context_builder(s) for s in dataset]
     all_step_outputs: list[list[str]] = [[] for _ in range(n)]
     all_histories: list[list[str]] = [[] for _ in range(n)]
+    is_finished = [False for _ in range(n)]
     semaphore = asyncio.Semaphore(max_concurrent)
     chain_t0 = _time.time()
 
     for step_idx, step in enumerate(chain.steps):
+        active_indices = [i for i in range(n) if not is_finished[i]]
+        if not active_indices:
+            break
         step_t0 = _time.time()
         step_type = "tool" if isinstance(step, ToolStep) else "llm"
         _log(
             f"step {step_idx + 1}/{total_steps} "
-            f"({step_type}) '{step.title}' — {n} samples"
+            f"({step_type}) '{step.title}' — {len(active_indices)} active samples"
         )
-
         if isinstance(step, ToolStep):
             if tool_registry is None:
                 raise ValueError(
@@ -245,16 +292,17 @@ async def _run_chain_on_dataset_async(
             results = await asyncio.to_thread(
                 _execute_tool_step_batch,
                 step,
-                n,
+                active_indices,
                 outer_contexts,
                 all_step_outputs,
+                dataset,
                 tool_registry,
             )
         elif isinstance(step, LLMStep):
             results = await _execute_llm_step_batch(
                 step,
                 chain,
-                n,
+                active_indices,
                 outer_contexts,
                 all_step_outputs,
                 all_histories,
@@ -264,6 +312,20 @@ async def _run_chain_on_dataset_async(
         else:
             raise ValueError(f"Unknown step type: {type(step).__name__}")
 
+        for i, step_output in zip(active_indices, results, strict=False):
+            all_step_outputs[i].append(step_output)
+            all_histories[i].append(
+                chain.prompt_builder.format_history_entry(
+                    number=step.number,
+                    title=step.title,
+                    result=step_output,
+                )
+            )
+            if isinstance(step, LLMStep) and _matches_stop_condition(
+                step_output, step.stop_condition
+            ):
+                is_finished[i] = True
+
         elapsed = _time.time() - step_t0
         total_elapsed = _time.time() - chain_t0
         remaining_steps = total_steps - step_idx - 1
@@ -272,16 +334,6 @@ async def _run_chain_on_dataset_async(
             f"step {step_idx + 1}/{total_steps} done in {elapsed:.1f}s "
             f"(total {total_elapsed:.1f}s, ETA ~{eta:.0f}s)"
         )
-
-        for i in range(n):
-            all_step_outputs[i].append(results[i])
-            all_histories[i].append(
-                chain.prompt_builder.format_history_entry(
-                    number=step.number,
-                    title=step.title,
-                    result=results[i],
-                )
-            )
 
     return [
         ChainResult(

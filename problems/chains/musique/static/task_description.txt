@@ -1,0 +1,52 @@
+CHAIN EVOLUTION
+You are evolving a multi-step reasoning chain with structured LLM step fields.
+Prompts are assembled automatically from step fields (aim, stage_action, etc.).
+
+STEP TYPES
+Only one step type is available:
+- "llm"
+
+EVOLUTION MODE — STATIC
+Topology is fixed to 3 LLM steps. You can mutate:
+- system_prompt
+- structured fields of LLM steps
+But you cannot change step count, types, or dependencies.
+
+TASK DEFINITION — MUSIQUE MULTI-HOP QA
+Each sample provides a question and passages (supporting + distractors).
+Design a 3-step chain to maximize alias-aware exact match.
+
+FIXED TOPOLOGY
+Step 1: dependencies []
+Step 2: dependencies [1]
+Step 3: dependencies [1, 2]
+
+OBJECTIVE
+1) Extract relevant facts from passages.
+2) Perform multi-hop reasoning.
+3) Output final answer in exact format: Answer: <answer>
+
+GENOME FORMAT
+entrypoint() returns:
+{
+  "system_prompt": "string",
+  "steps": [
+    {
+      "number": 1,
+      "title": "...",
+      "step_type": "llm",
+      "aim": "required",
+      "stage_action": "required",
+      "reasoning_questions": "optional",
+      "example_reasoning": "optional",
+      "dependencies": [],
+      "frozen": false
+    },
+    ...
+  ]
+}
+
+CONSTRAINTS
+- Exactly 3 steps.
+- Step types and dependencies must match fixed topology.
+- Final step must produce extractable answer format.

@@ -1,0 +1,57 @@
+CHAIN EVOLUTION
+You are evolving a multi-step reasoning chain defined with structured fields.
+Each LLM step is specified by semantic fields (aim, stage_action, etc.) that are
+automatically assembled into prompts — you do not write raw prompt text. You control
+the structured-field content and the chain-level system_prompt.
+
+STEP TYPES
+The chain supports one step type:
+- "llm": LLM reasoning step with structured fields (aim, stage_action, reasoning_questions,
+  example_reasoning). The LLM receives the assembled prompt and produces a text response.
+
+EVOLUTION MODE — FULL CHAIN
+You can freely design the chain: change step count, dependencies, and structured fields.
+There are NO frozen steps.
+
+TASK DEFINITION — MUSIQUE MULTI-HOP QA
+
+Challenge: Design a chain that maximizes exact match on MuSiQue multi-hop questions.
+Each sample provides:
+- Question
+- A set of passages (supporting + distractor)
+
+OBJECTIVE
+Return a chain specification guiding the downstream LLM such that:
+1) The chain identifies relevant evidence from the provided passages.
+2) The chain performs multi-hop reasoning across passages.
+3) The final step outputs "Answer: <answer>".
+4) Exact Match is maximized (alias-aware normalization).
+
+CHAIN CONSTRAINTS
+- Maximum 4 steps.
+- All steps must be "llm".
+- Dependencies must point only to previous steps.
+- Last step must be "llm".
+
+GENOME FORMAT
+entrypoint() must return:
+{
+  "system_prompt": "shared instruction for all LLM steps",
+  "steps": [
+    {
+      "number": 1,
+      "title": "Step title",
+      "step_type": "llm",
+      "aim": "required",
+      "stage_action": "required",
+      "reasoning_questions": "optional",
+      "example_reasoning": "optional",
+      "dependencies": [],
+    },
+    ...
+  ]
+}
+
+FINAL OUTPUT FORMAT
+The final LLM step must produce:
+Answer: <your answer>
