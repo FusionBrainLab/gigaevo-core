@@ -29,12 +29,38 @@ INDEX_DIR = _REPO_ROOT / "experiments" / "colbert_index"
 CHECKPOINT = "colbert-ir/colbertv2.0"
 
 
+_NUM_PARTITIONS = 32768  # Override ColBERT default (~262K) for tractable CPU k-means.
+# Default heuristic: 2^floor(log2(16*sqrt(num_embeddings))) ≈ 262144 for 5.3M passages.
+# 32768 = 2^15 gives ~8× faster k-means with acceptable search quality.
+
+
+def _patch_num_partitions() -> None:
+    """Monkey-patch CollectionIndexer.setup to cap num_partitions after computation."""
+    import colbert.indexing.collection_indexer as _ci
+
+    _orig_setup = _ci.CollectionIndexer.setup
+
+    def _patched_setup(self: _ci.CollectionIndexer) -> None:  # type: ignore[name-defined]
+        _orig_setup(self)
+        if self.num_partitions != _NUM_PARTITIONS:
+            print(
+                f"[build_colbert_index] Overriding num_partitions "
+                f"{self.num_partitions:,} → {_NUM_PARTITIONS:,}"
+            )
+            self.num_partitions = _NUM_PARTITIONS
+            self._save_plan()
+
+    _ci.CollectionIndexer.setup = _patched_setup  # type: ignore[method-assign]
+
+
 def build_index(passages: list[str], *, use_gpu: bool = False) -> None:
     from colbert import Indexer
     from colbert.infra import ColBERTConfig, Run, RunConfig
 
     if not use_gpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+    _patch_num_partitions()
 
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -51,6 +77,7 @@ def build_index(passages: list[str], *, use_gpu: bool = False) -> None:
     with Run().context(RunConfig(nranks=1, experiment="hotpotqa")):
         config = ColBERTConfig(
             nbits=2,
+            kmeans_niters=4,
             root=str(INDEX_DIR.parent),
             index_root=str(INDEX_DIR.parent),
         )
