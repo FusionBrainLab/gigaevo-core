@@ -1,9 +1,7 @@
 from typing import Iterable
 import cma
-import nlopt
-from pyswarm import pso
 import numpy as np
-from helper import get_matrix, BaseEvaluator, Matrix, ExplorationScore, FinalizationScore, get_matrix
+from helper import get_matrix, BaseEvaluator, Matrix, ExplorationScore, FinalizationScore
 import random
 import pyswarms as ps
 

@@ -3,7 +3,7 @@ import collections.abc
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['BitVec', 'CandidateExport', 'DISTANCE', 'ExplorationScore', 'FinalizationScore', 'Function', 'LINEAR', 'LOGARITHMIC', 'Matrix', 'MatrixWithData', 'NullSpace', 'POLYNOM', 'PolicyConfig', 'RNG', 'Result', 'SIGMOID', 'ScoringFunction', 'Stats', 'Tensor3D', 'ToddGenerator', 'TohpeGenerator', 'get_omp_threads', 'policy_iteration', 'set_omp_threads']
+__all__: list[str] = ['BitVec', 'CandidateExport', 'DISTANCE', 'ExplorationScore', 'FinalizationScore', 'Function', 'LINEAR', 'LOGARITHMIC', 'Matrix', 'MatrixWithData', 'NullSpace', 'POLYNOM', 'PolicyConfig', 'RNG', 'Result', 'SIGMOID', 'ScoringFunction', 'Stats', 'Tensor3D', 'ToddGenerator', 'TohpeGenerator', 'policy_iteration']
 class BitVec:
     @staticmethod
     def from_numpy(a: typing.Annotated[numpy.typing.ArrayLike, numpy.bool]) -> BitVec:
@@ -572,11 +572,7 @@ class TohpeGenerator:
     @property
     def P(self) -> Matrix:
         ...
-def get_omp_threads() -> int:
-    ...
 def policy_iteration(cur_mat: Matrix, policy_cfg: PolicyConfig = ..., seed: typing.SupportsInt = 21, add_seed: typing.SupportsInt = 0) -> Result:
-    ...
-def set_omp_threads(arg0: typing.SupportsInt) -> None:
     ...
 DISTANCE: Function  # value = <Function.DISTANCE: 2>
 LINEAR: Function  # value = <Function.LINEAR: 0>
