@@ -56,7 +56,11 @@ BM25S_INDEX_DIR = str(_BASE_DIR / "dataset" / "bm25s_index")
 # "colbert" uses ColBERTv2 loaded in-process via colbert-ai.
 # Build the ColBERT index first: python dataset/build_colbert_index.py
 RETRIEVER: Literal["bm25", "colbert"] = "bm25"
-COLBERT_INDEX_DIR = str(_BASE_DIR / "dataset" / "colbert_index")
+# ColBERT saves index to {root}/{experiment}/indexes/{name} where experiment="hotpotqa".
+# ColBERTRetriever passes index_dir.parent as root and index_dir.name as index name.
+# So index_dir.parent must be the repo-level experiments/ dir.
+_REPO_ROOT = _BASE_DIR.parent.parent.parent  # .../problems/chains/hotpotqa -> repo root
+COLBERT_INDEX_DIR = str(_REPO_ROOT / "experiments" / "colbert_index")
 COLBERT_CHECKPOINT = "colbert-ir/colbertv2.0"
 
 

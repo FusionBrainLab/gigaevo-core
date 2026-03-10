@@ -204,9 +204,14 @@ def _ensure_colbert_initialized(index_dir: Path, checkpoint: str) -> None:
             from colbert import Searcher
             from colbert.infra import ColBERTConfig, Run, RunConfig
 
-            if not index_dir.exists():
+            # ColBERT resolves the index to {root}/{experiment}/indexes/{name}
+            # where root=index_dir.parent and experiment comes from RunConfig.
+            # The virtual index_dir itself may not exist on disk.
+            colbert_resolved = index_dir.parent / "hotpotqa" / "indexes" / index_dir.name
+            if not colbert_resolved.exists():
                 raise FileNotFoundError(
-                    f"ColBERT index not found at {index_dir}. "
+                    f"ColBERT index not found at {colbert_resolved} "
+                    f"(virtual index_dir={index_dir}). "
                     "Run dataset/build_colbert_index.py first."
                 )
 
