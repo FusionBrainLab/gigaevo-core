@@ -42,6 +42,16 @@ class ToolConfig(BaseModel):
         return self
 
 
+class StopCondition(BaseModel):
+    """Optional per-step early-stop condition based on step output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    condition_type: Literal["contains", "regex"] = "contains"
+    pattern: constr(min_length=1)  # type: ignore[valid-type]
+    case_sensitive: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Step models (discriminated union on step_type)
 # ---------------------------------------------------------------------------
@@ -74,6 +84,7 @@ class LLMStep(BaseModel):
     # Optional structured fields
     reasoning_questions: str = ""
     example_reasoning: str = ""
+    stop_condition: StopCondition | None = None
 
     @field_validator("aim", "stage_action", "reasoning_questions", "example_reasoning", mode="before")
     @classmethod
