@@ -644,3 +644,4 @@ evo_memory_agent_api/memory_usage_store/
 bm25s_index/
 wiki17_abstracts.jsonl.gz
 task_bm25s_index
+check_openrouter_key.py
