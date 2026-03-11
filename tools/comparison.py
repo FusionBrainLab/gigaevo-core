@@ -341,6 +341,25 @@ def _aggregate_per_iteration(
     )
 
 
+def _select_frontier_improvements(df, iteration_col: str, minimize: bool):
+    fp = (
+        df[[iteration_col, "frontier_fitness"]]
+        .dropna()
+        .sort_values(iteration_col)
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+    if fp.empty:
+        return fp
+
+    diffs = fp["frontier_fitness"].diff()
+    if minimize:
+        improve_mask = diffs < 0
+    else:
+        improve_mask = diffs > 0
+    return fp[improve_mask]
+
+
 def plot_comparison(
     prepared_dfs: list[tuple[str, object]],
     *,
