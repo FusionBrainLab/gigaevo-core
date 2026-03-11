@@ -2,18 +2,18 @@
 
 Run once before using RETRIEVER = "colbert" in shared_config.py:
     PYTHONPATH=. ~/envs/evo_fast/bin/python \
-        problems/chains/hotpotqa/dataset/build_colbert_index.py [--gpu]
+        problems/chains/hotpotqa/dataset/build_colbert_index.py
 
 Requirements:
-    pip install colbert-ai faiss-cpu   (or faiss-gpu for GPU indexing)
+    pip install colbert-ai faiss-cpu
 
 Encodes all ~5.3M passages with colbert-ir/colbertv2.0 and saves the index.
-GPU: ~30min, CPU: ~4-8h. Search-time is fast on CPU (~30ms/query).
+GPU k-means runs via PyTorch (bypasses faiss-gpu dependency).
+Encoding: ~30min on H100. Search-time is fast on CPU (~30ms/query).
 """
 
-import argparse
-import os
 from pathlib import Path
+import time
 
 from problems.chains.hotpotqa.utils.retrieval import load_corpus
 
@@ -28,39 +28,98 @@ _REPO_ROOT = BASE_DIR.parent.parent.parent.parent  # dataset/->hotpotqa/->chains
 INDEX_DIR = _REPO_ROOT / "experiments" / "colbert_index"
 CHECKPOINT = "colbert-ir/colbertv2.0"
 
+# Batch size for GPU k-means distance computation.
+# 4096 x 262144 x 4 bytes ~= 4.3 GB per batch -- fits comfortably on H100 80 GB.
+_KMEANS_BATCH = 4096
 
-_NUM_PARTITIONS = 32768  # Override ColBERT default (~262K) for tractable CPU k-means.
-# Default heuristic: 2^floor(log2(16*sqrt(num_embeddings))) ≈ 262144 for 5.3M passages.
-# 32768 = 2^15 gives ~8× faster k-means with acceptable search quality.
+
+def _torch_gpu_kmeans(
+    dim: int,
+    num_partitions: int,
+    kmeans_niters: int,
+    shared_lists,
+    return_value_queue=None,
+):
+    """GPU-accelerated k-means via PyTorch batched matmul.
+
+    Drop-in replacement for colbert.indexing.collection_indexer.compute_faiss_kmeans.
+    Uses PyTorch CUDA directly -- no faiss-gpu dependency required.
+
+    Args:
+        dim: Embedding dimension (128 for ColBERTv2).
+        num_partitions: Number of cluster centroids (k).
+        kmeans_niters: Number of Lloyd's iterations.
+        shared_lists: ColBERT internal; shared_lists[0][0] is the sample tensor.
+        return_value_queue: Optional mp.Queue for forked-process mode.
+
+    Returns:
+        torch.Tensor of shape [num_partitions, dim] (float32, on CPU).
+    """
+    import torch
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    sample = shared_lists[0][0]
+    if not isinstance(sample, torch.Tensor):
+        sample = torch.from_numpy(sample.astype("float32"))
+    X = sample.float().to(device)  # [N, D]
+    N = X.shape[0]
+
+    print(
+        f"[torch_kmeans] N={N:,} D={dim} K={num_partitions:,} "
+        f"iters={kmeans_niters} device={device}"
+    )
+
+    torch.manual_seed(123)
+    perm = torch.randperm(N, device=device)[:num_partitions]
+    centroids = X[perm].clone()  # [K, D]
+
+    for it in range(kmeans_niters):
+        t0 = time.time()
+        new_centroids = torch.zeros(num_partitions, dim, device=device)
+        counts = torch.zeros(num_partitions, device=device)
+
+        for start in range(0, N, _KMEANS_BATCH):
+            Xb = X[start : start + _KMEANS_BATCH]  # [B, D]
+            # ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * x @ c.T
+            dists = (
+                (Xb * Xb).sum(1, keepdim=True)
+                + (centroids * centroids).sum(1)
+                - 2 * (Xb @ centroids.T)
+            )  # [B, K]
+            labels = dists.argmin(dim=1)  # [B]
+            new_centroids.index_add_(0, labels, Xb)
+            counts += torch.bincount(labels, minlength=num_partitions).float()
+
+        # Update centroids; keep old centroid for empty clusters.
+        mask = counts > 0
+        new_centroids[mask] /= counts[mask, None]
+        new_centroids[~mask] = centroids[~mask]
+        centroids = new_centroids
+
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        print(f"[torch_kmeans] iter {it + 1}/{kmeans_niters} done in {time.time() - t0:.1f}s")
+
+    result = centroids.cpu()
+    if return_value_queue is not None:
+        return_value_queue.put(result)
+    return result
 
 
-def _patch_num_partitions() -> None:
-    """Monkey-patch CollectionIndexer.setup to cap num_partitions after computation."""
+def _patch_compute_faiss_kmeans() -> None:
+    """Replace ColBERT's faiss k-means with PyTorch GPU k-means."""
     import colbert.indexing.collection_indexer as _ci
 
-    _orig_setup = _ci.CollectionIndexer.setup
-
-    def _patched_setup(self: _ci.CollectionIndexer) -> None:  # type: ignore[name-defined]
-        _orig_setup(self)
-        if self.num_partitions != _NUM_PARTITIONS:
-            print(
-                f"[build_colbert_index] Overriding num_partitions "
-                f"{self.num_partitions:,} → {_NUM_PARTITIONS:,}"
-            )
-            self.num_partitions = _NUM_PARTITIONS
-            self._save_plan()
-
-    _ci.CollectionIndexer.setup = _patched_setup  # type: ignore[method-assign]
+    _ci.compute_faiss_kmeans = _torch_gpu_kmeans
+    print("[build_colbert_index] Patched compute_faiss_kmeans -> torch GPU k-means")
 
 
-def build_index(passages: list[str], *, use_gpu: bool = False) -> None:
+def build_index(passages: list[str]) -> None:
     from colbert import Indexer
     from colbert.infra import ColBERTConfig, Run, RunConfig
 
-    if not use_gpu:
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
-    _patch_num_partitions()
+    _patch_compute_faiss_kmeans()
 
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -72,8 +131,6 @@ def build_index(passages: list[str], *, use_gpu: bool = False) -> None:
             f.write(f"{i}\t{clean}\n")
     print(f"Collection written: {collection_path} ({len(passages):,} passages)")
 
-    # ColBERT resolves index path as {index_root}/{name}/.
-    # Set index_root=INDEX_DIR.parent so the index lands in INDEX_DIR.
     with Run().context(RunConfig(nranks=1, experiment="hotpotqa")):
         config = ColBERTConfig(
             nbits=2,
@@ -91,14 +148,6 @@ def build_index(passages: list[str], *, use_gpu: bool = False) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build ColBERT index for HotpotQA")
-    parser.add_argument(
-        "--gpu",
-        action="store_true",
-        help="Use GPU for encoding (~30min). Default: CPU (~4-8h).",
-    )
-    args = parser.parse_args()
-
     if not CORPUS_PATH.exists():
         print(f"Corpus not found at {CORPUS_PATH}. Run download_corpus.py first.")
         return
@@ -106,9 +155,8 @@ def main():
     print(f"Loading corpus from {CORPUS_PATH}...")
     passages = load_corpus(CORPUS_PATH)
     print(f"Loaded {len(passages):,} passages")
-    print(f"Device: {'GPU' if args.gpu else 'CPU'}")
 
-    build_index(passages, use_gpu=args.gpu)
+    build_index(passages)
 
 
 if __name__ == "__main__":
