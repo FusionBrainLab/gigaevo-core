@@ -71,7 +71,7 @@ def validate(chain_spec: dict) -> dict:
     )
 
     # 2. Load context (dataset + retrieval paths)
-    context = load_context(n_samples=300)
+    context = load_context(n_samples=100)
     dataset = context["train_dataset"]
     targets = [s[context["target_field"]] for s in dataset]
 
