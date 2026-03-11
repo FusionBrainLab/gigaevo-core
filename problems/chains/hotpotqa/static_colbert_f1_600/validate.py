@@ -26,7 +26,7 @@ from problems.chains.hotpotqa.shared_config import (
     preprocess_sample,
 )
 from problems.chains.hotpotqa.static.config import STATIC_CHAIN_TOPOLOGY, load_baseline
-from problems.chains.hotpotqa.utils.retrieval import ColBERTRetriever, make_batch_tool_fn
+from problems.chains.hotpotqa.utils.retrieval import make_batch_tool_fn
 from problems.chains.hotpotqa.utils.utils import normalize_text
 
 # ---------------------------------------------------------------------------
@@ -169,8 +169,11 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     # 3. Create LLM client
     client = LLMClient(**LLM_CONFIG)
 
-    # 4. Build ColBERT retriever (lazy-loads index on first call)
-    retriever = ColBERTRetriever(COLBERT_INDEX_DIR, checkpoint=COLBERT_CHECKPOINT, k=7)
+    # 4. Build retriever — uses ColBERTServerRetriever when
+    # HOTPOTQA_COLBERT_SERVER_URL is set (preferred for exec_runner workers),
+    # falling back to in-process ColBERTRetriever otherwise.
+    from problems.chains.hotpotqa.shared_config import build_retriever
+    retriever = build_retriever(k=7)
     batch_tool_registry = {"retrieve": make_batch_tool_fn(retriever)}
 
     # 5. Run chain on dataset (step-batched for optimal vLLM batching)
