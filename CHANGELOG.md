@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v1.21.0 (2026-03-12)
+
+### Bug Fixes
+
+- **build_colbert_index**: Cap num_partitions=32768, kmeans_niters=4 for tractable CPU k-means
+  ([`1b605b3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1b605b3bd4a064ecd7db1b1e33fd9eca59d3fd22))
+
+- **colbert**: Replace faiss GPU k-means with PyTorch batched k-means
+  ([`765e8aa`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/765e8aadc02ed46c59cc13dc6ecb2f9405012d20))
+
+- **colbert**: Simplify build script — patch applied directly to colbert source
+  ([`f86d3a4`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f86d3a4b4feb7481a72c960027e40375392c4f31))
+
+- **colbert_feedback**: Export HOTPOTQA_COLBERT_SERVER_URL in run_test_eval.sh
+  ([`ac1e423`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ac1e4230354c502568b8d616afd2b71ae22f3127))
+
+### Chores
+
+- Fill pre-registration commit hash and PR number in 03_plan.md
+  ([`454f817`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/454f81725e8abfd71fc87a80c739fbb5e25f9e4a))
+
+### Documentation
+
+- **colbert_feedback**: Amendment 5 — gap investigation results
+  ([`efdf087`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/efdf0877972798b575f4b130b94bf96314c1b0e8))
+
+- **colbert_feedback**: Record index build completion in 03_plan.md
+  ([`a8f4e9a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a8f4e9a94495f4fca2d64125557bb291bd1dfd00))
+
+### Features
+
+- **chains/hotpotqa**: Add ColBERT+rich-feedback experiment (colbert_feedback, Phase 3)
+  ([`20c8314`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/20c831427540e0d12ed0ac3e64dac0266ce7f06f))
+
+- **colbert_feedback**: Add ColBERT search server + update launch/validate/plan
+  ([`d7683d4`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d7683d4cbd8cffe614bec69a29382932d2b78bd7))
+
+- **colbert_feedback**: Watchdog + benchmark server-url support
+  ([`1272c1e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1272c1e42504d3cc9f842733a55535f9fffadf60))
+
+
 ## v1.20.0 (2026-03-09)
 
 ### Features
