@@ -9,6 +9,7 @@ from evo_memory_agent_api.shared_memory.card_update_dedup import (
     build_dedup_queries,
     compute_weighted_candidates,
     merge_updated_card,
+    merge_usage_payloads,
     parse_llm_card_decision,
 )
 
@@ -131,3 +132,50 @@ def test_build_dedup_queries_include_combined_fields() -> None:
     assert "TASK_DESCRIPTION_SUMMARY" in queries[
         QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY
     ]
+
+
+def test_merge_usage_payloads_accumulates_per_task_and_total() -> None:
+    existing_usage = {
+        "used": {
+            "entries": [
+                {
+                    "task_description_summary": "task A",
+                    "used_count": 1,
+                    "fitness_delta_per_use": [0.1],
+                    "median_delta_fitness": 0.1,
+                }
+            ],
+            "total": {"total_used": 1, "median_delta_fitness": 0.1},
+        }
+    }
+    incoming_usage = {
+        "used": {
+            "entries": [
+                {
+                    "task_description_summary": "task A",
+                    "used_count": 1,
+                    "fitness_delta_per_use": [0.3],
+                    "median_delta_fitness": 0.3,
+                },
+                {
+                    "task_description_summary": "task B",
+                    "used_count": 1,
+                    "fitness_delta_per_use": [-0.2],
+                    "median_delta_fitness": -0.2,
+                },
+            ],
+            "total": {"total_used": 2, "median_delta_fitness": 0.05},
+        }
+    }
+
+    merged = merge_usage_payloads(existing_usage, incoming_usage)
+    used = merged["used"]
+    assert used["total"]["total_used"] == 3
+    assert used["total"]["median_delta_fitness"] == 0.1
+
+    entries = {entry["task_description_summary"]: entry for entry in used["entries"]}
+    assert entries["task A"]["used_count"] == 2
+    assert entries["task A"]["fitness_delta_per_use"] == [0.1, 0.3]
+    assert entries["task A"]["median_delta_fitness"] == 0.2
+    assert entries["task B"]["used_count"] == 1
+    assert entries["task B"]["fitness_delta_per_use"] == [-0.2]

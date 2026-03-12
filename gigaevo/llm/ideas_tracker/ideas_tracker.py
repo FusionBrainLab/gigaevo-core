@@ -1,8 +1,11 @@
 import asyncio
+import ast
 import importlib
 import json
+import math
 import os
 from pathlib import Path
+import statistics
 import sys
 from typing import Any, Optional
 
@@ -62,6 +65,7 @@ class IdeaTracker:
         )
         self.programs_card: list[ProgramRecord] = []
         self.programs_ids: set[str] = set()
+        self.memory_usage_updates_by_card: dict[str, dict[str, Any]] = {}
 
         self.gen_delta: int = int(self.config.get("gen_delta", 100000))
 
@@ -87,11 +91,27 @@ class IdeaTracker:
 
         memory_write_cfg = self.config.get("memory_write_pipeline", False)
         if isinstance(memory_write_cfg, dict):
-            self.memory_write_pipeline_enabled = bool(
-                memory_write_cfg.get("enabled", False)
+            self.memory_write_pipeline_enabled = self._to_bool(
+                memory_write_cfg.get("enabled", False),
+                default=False,
             )
         else:
-            self.memory_write_pipeline_enabled = bool(memory_write_cfg)
+            self.memory_write_pipeline_enabled = self._to_bool(
+                memory_write_cfg,
+                default=False,
+            )
+
+        usage_tracking_cfg = self.config.get("usage_tracking", {"enabled": True})
+        if isinstance(usage_tracking_cfg, dict):
+            self.memory_usage_tracking_enabled = self._to_bool(
+                usage_tracking_cfg.get("enabled", True),
+                default=True,
+            )
+        else:
+            self.memory_usage_tracking_enabled = self._to_bool(
+                usage_tracking_cfg,
+                default=True,
+            )
 
         self.ideas_manager.logger = self.logger
         self.analyzer.logger = self.logger  # type: ignore[assignment]
@@ -111,6 +131,7 @@ class IdeaTracker:
             top_k_fitness=self.top_k_fitness,
             list_max_ideas=list_max_ideas,
             memory_write_pipeline_enabled=self.memory_write_pipeline_enabled,
+            memory_usage_tracking_enabled=self.memory_usage_tracking_enabled,
         )
 
     def _load_config(self, config_path: Optional[str | Path]) -> dict[str, Any]:
@@ -142,6 +163,7 @@ class IdeaTracker:
                 "label": "",
             },
             "memory_write_pipeline": {"enabled": False},
+            "usage_tracking": {"enabled": True},
         }
 
         if config_path is None:
@@ -203,6 +225,260 @@ class IdeaTracker:
             return "No description available"
 
         return "No description available"
+
+    @staticmethod
+    def _to_bool(value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    @staticmethod
+    def _to_float(value: Any) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(parsed) or math.isinf(parsed):
+            return None
+        return parsed
+
+    @staticmethod
+    def _as_string_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            parsed = value
+        elif isinstance(value, tuple):
+            parsed = list(value)
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            parsed: Any = text
+            if text[0] in "[{(":
+                try:
+                    parsed = json.loads(text)
+                except (json.JSONDecodeError, TypeError):
+                    try:
+                        parsed = ast.literal_eval(text)
+                    except Exception:
+                        parsed = text
+            if not isinstance(parsed, list):
+                return [str(parsed).strip()] if str(parsed).strip() else []
+        else:
+            return []
+
+        out: list[str] = []
+        for item in parsed:
+            text = str(item or "").strip()
+            if text:
+                out.append(text)
+        return out
+
+    @staticmethod
+    def _median_or_none(values: list[float]) -> float | None:
+        if not values:
+            return None
+        return float(statistics.median(values))
+
+    @staticmethod
+    def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
+        if not isinstance(usage, dict):
+            return {}
+        used = usage.get("used")
+        if not isinstance(used, dict):
+            return {}
+        entries = used.get("entries")
+        if not isinstance(entries, list):
+            return {}
+
+        task_to_deltas: dict[str, list[float]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            task_summary = str(entry.get("task_description_summary") or "").strip()
+            if not task_summary:
+                continue
+            raw_deltas = entry.get("fitness_delta_per_use")
+            if raw_deltas is None:
+                raw_deltas = entry.get("fitness_deltas")
+            if not isinstance(raw_deltas, list):
+                continue
+
+            parsed_deltas: list[float] = []
+            for raw_delta in raw_deltas:
+                delta = IdeaTracker._to_float(raw_delta)
+                if delta is not None:
+                    parsed_deltas.append(delta)
+            if not parsed_deltas:
+                continue
+            task_to_deltas.setdefault(task_summary, []).extend(parsed_deltas)
+        return task_to_deltas
+
+    @staticmethod
+    def _build_usage_payload_from_task_deltas(
+        task_to_deltas: dict[str, list[float]],
+    ) -> dict[str, Any]:
+        entries: list[dict[str, Any]] = []
+        total_deltas: list[float] = []
+
+        for task_summary in sorted(task_to_deltas):
+            deltas = [
+                parsed
+                for raw in task_to_deltas.get(task_summary, [])
+                if (parsed := IdeaTracker._to_float(raw)) is not None
+            ]
+            if not deltas:
+                continue
+            entries.append(
+                {
+                    "task_description_summary": task_summary,
+                    "used_count": len(deltas),
+                    "fitness_delta_per_use": deltas,
+                    "median_delta_fitness": IdeaTracker._median_or_none(deltas),
+                }
+            )
+            total_deltas.extend(deltas)
+
+        return {
+            "used": {
+                "entries": entries,
+                "total": {
+                    "total_used": len(total_deltas),
+                    "median_delta_fitness": IdeaTracker._median_or_none(total_deltas),
+                },
+            }
+        }
+
+    @staticmethod
+    def _merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, Any]:
+        existing_task_deltas = IdeaTracker._extract_usage_task_deltas(existing_usage)
+        incoming_task_deltas = IdeaTracker._extract_usage_task_deltas(incoming_usage)
+        if not existing_task_deltas and not incoming_task_deltas:
+            if isinstance(existing_usage, dict):
+                return dict(existing_usage)
+            if isinstance(incoming_usage, dict):
+                return dict(incoming_usage)
+            return {}
+
+        merged_task_deltas: dict[str, list[float]] = {
+            task: list(deltas) for task, deltas in existing_task_deltas.items()
+        }
+        for task_summary, deltas in incoming_task_deltas.items():
+            merged_task_deltas.setdefault(task_summary, []).extend(deltas)
+
+        merged_usage: dict[str, Any] = (
+            dict(existing_usage) if isinstance(existing_usage, dict) else {}
+        )
+        if isinstance(incoming_usage, dict):
+            for key, value in incoming_usage.items():
+                if key != "used":
+                    merged_usage[key] = value
+        merged_usage["used"] = IdeaTracker._build_usage_payload_from_task_deltas(
+            merged_task_deltas
+        )["used"]
+        return merged_usage
+
+    def _summarize_task_description(
+        self, task_description: str, cache: dict[str, str] | None = None
+    ) -> str:
+        task_text = str(task_description or "").strip()
+        if not task_text:
+            return ""
+        if cache is not None and task_text in cache:
+            return cache[task_text]
+
+        summary = ""
+        try:
+            task_sum_response = self.analyzer.call_llm("task_description_summary", task_text)
+            task_sum_parsed = json.loads(task_sum_response)
+            summary = str(task_sum_parsed.get("summary", "")).strip()
+        except Exception:
+            summary = ""
+        if not summary:
+            summary = task_text[:240].strip()
+
+        if cache is not None:
+            cache[task_text] = summary
+        return summary
+
+    def _build_memory_usage_updates(self, programs_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+        required_columns = {
+            "program_id",
+            "metric_fitness",
+            "parent_ids",
+            "metadata_memory_selected_idea_ids",
+        }
+        if not required_columns.issubset(programs_df.columns):
+            return {}
+
+        fitness_by_program_id: dict[str, float] = {}
+        for _, row in programs_df.iterrows():
+            program_id = str(row.get("program_id") or "").strip()
+            if not program_id:
+                continue
+            fitness = self._to_float(row.get("metric_fitness"))
+            if fitness is not None:
+                fitness_by_program_id[program_id] = fitness
+
+        task_summary = self._summarize_task_description(self.task_description)
+        if not task_summary:
+            task_summary = "Task summary unavailable"
+
+        usage_by_card: dict[str, dict[str, list[float]]] = {}
+        for _, row in programs_df.iterrows():
+            selected_ids = self._as_string_list(row.get("metadata_memory_selected_idea_ids"))
+            if not selected_ids:
+                continue
+
+            child_fitness = self._to_float(row.get("metric_fitness"))
+            if child_fitness is None:
+                continue
+
+            parent_ids = self._as_string_list(row.get("parent_ids"))
+            parent_fitnesses = [
+                fitness_by_program_id[parent_id]
+                for parent_id in parent_ids
+                if parent_id in fitness_by_program_id
+            ]
+            if not parent_fitnesses:
+                continue
+
+            delta_fitness = child_fitness - max(parent_fitnesses)
+            unique_selected_ids = list(dict.fromkeys(selected_ids))
+            for card_id in unique_selected_ids:
+                per_task = usage_by_card.setdefault(card_id, {})
+                per_task.setdefault(task_summary, []).append(delta_fitness)
+
+        return {
+            card_id: self._build_usage_payload_from_task_deltas(task_deltas)
+            for card_id, task_deltas in usage_by_card.items()
+        }
+
+    def _apply_memory_usage_updates_to_idea_banks(self) -> None:
+        if not self.memory_usage_updates_by_card:
+            return
+
+        for bank in (
+            self.ideas_manager.record_bank,
+            self.ideas_manager.inactive_record_bank,
+        ):
+            for idea in bank.all_ideas_cards():
+                usage_update = self.memory_usage_updates_by_card.get(str(idea.id or ""))
+                if not usage_update:
+                    continue
+                merged_usage = self._merge_usage_payloads(
+                    getattr(idea, "usage", {}),
+                    usage_update,
+                )
+                idea.update_metadata(usage=merged_usage)
 
     def wrap_data(self, programs: pd.DataFrame) -> list[ProgramRecord]:
         """
@@ -488,23 +764,11 @@ class IdeaTracker:
                     pass
 
             # --- Task description summary ---
-            task_description_summary = ""
             task_description = str(getattr(idea, "task_description", "") or "").strip()
-            if task_description:
-                if task_description in task_summary_cache:
-                    task_description_summary = task_summary_cache[task_description]
-                else:
-                    try:
-                        task_sum_response = self.analyzer.call_llm(
-                            "task_description_summary", task_description
-                        )
-                        task_sum_parsed = json.loads(task_sum_response)
-                        task_description_summary = str(
-                            task_sum_parsed.get("summary", "")
-                        )
-                    except Exception:
-                        task_description_summary = ""
-                    task_summary_cache[task_description] = task_description_summary
+            task_description_summary = self._summarize_task_description(
+                task_description,
+                cache=task_summary_cache,
+            )
 
             self.ideas_manager.enrich_idea_metadata(
                 idea_id,
@@ -626,6 +890,13 @@ class IdeaTracker:
             "MEMORY_BANKS_PATH": str(banks_path),
             "MEMORY_BEST_IDEAS_PATH": str(best_ideas_path),
         }
+        usage_updates_path = self.logger.memory_usage_updates_file
+        if (
+            self.memory_usage_tracking_enabled
+            and usage_updates_path is not None
+            and usage_updates_path.exists()
+        ):
+            env_overrides["MEMORY_USAGE_UPDATES_PATH"] = str(usage_updates_path)
         previous_env = {key: os.environ.get(key) for key in env_overrides}
 
         try:
@@ -669,6 +940,12 @@ class IdeaTracker:
         else:
             df = asyncio.run(self.load_database())
 
+        if self.memory_usage_tracking_enabled:
+            self.memory_usage_updates_by_card = self._build_memory_usage_updates(df)
+            self.logger.log_memory_usage_updates(self.memory_usage_updates_by_card)
+        else:
+            self.memory_usage_updates_by_card = {}
+
         last_gen = df["generation"].max()
         new_programs = self.get_new_programs(df)
         new_programs_processed = self.wrap_data(new_programs)
@@ -678,6 +955,8 @@ class IdeaTracker:
             pbar.update(1)
         pbar.close()
         self.refresh_main_bank(last_gen)
+        if self.memory_usage_tracking_enabled:
+            self._apply_memory_usage_updates_to_idea_banks()
 
         self.enrich_ideas()
 
