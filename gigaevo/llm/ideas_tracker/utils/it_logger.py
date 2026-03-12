@@ -97,6 +97,9 @@ class IdeasTrackerLogger:
                 "category": getattr(idea, "category", ""),
                 "description": idea.description,
                 "task_description": getattr(idea, "task_description", ""),
+                "task_description_summary": getattr(
+                    idea, "task_description_summary", ""
+                ),
                 "strategy": getattr(idea, "strategy", ""),
                 "last_generation": idea.last_generation,
                 "programs": list(getattr(idea, "programs", [])),

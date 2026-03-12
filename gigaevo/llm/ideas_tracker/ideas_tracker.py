@@ -443,15 +443,17 @@ class IdeaTracker:
 
     def enrich_ideas(self) -> None:
         """
-        Enrich every idea in both banks with LLM-generated keywords and explanation summary.
+        Enrich every idea in both banks with LLM-generated metadata.
 
         For each idea:
         1. Sends its description to the "keywords" prompt and stores the result.
         2. Sends its explanations list to the "usage_summary" prompt and stores the summary.
+        3. Sends its task description to "task_description_summary" and stores a short summary.
         """
         all_uuids = list(self.ideas_manager.record_bank.uuids) + list(
             self.ideas_manager.inactive_record_bank.uuids
         )
+        task_summary_cache: dict[str, str] = {}
         pbar = tqdm.tqdm(total=len(all_uuids), desc="Enriching ideas", leave=False)
         for idea_id in all_uuids:
             if idea_id in self.ideas_manager.record_bank.uuids:
@@ -485,8 +487,30 @@ class IdeaTracker:
                 except Exception:
                     pass
 
+            # --- Task description summary ---
+            task_description_summary = ""
+            task_description = str(getattr(idea, "task_description", "") or "").strip()
+            if task_description:
+                if task_description in task_summary_cache:
+                    task_description_summary = task_summary_cache[task_description]
+                else:
+                    try:
+                        task_sum_response = self.analyzer.call_llm(
+                            "task_description_summary", task_description
+                        )
+                        task_sum_parsed = json.loads(task_sum_response)
+                        task_description_summary = str(
+                            task_sum_parsed.get("summary", "")
+                        )
+                    except Exception:
+                        task_description_summary = ""
+                    task_summary_cache[task_description] = task_description_summary
+
             self.ideas_manager.enrich_idea_metadata(
-                idea_id, keywords=keywords, summary=summary
+                idea_id,
+                keywords=keywords,
+                summary=summary,
+                task_description_summary=task_description_summary,
             )
             pbar.update(1)
         pbar.close()
