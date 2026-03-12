@@ -11,6 +11,7 @@ Encodes all ~5.3M passages with colbert-ir/colbertv2.0 and saves the index.
 GPU k-means runs via PyTorch patched directly into the ColBERT source
 (colbert/indexing/collection_indexer.py::compute_faiss_kmeans) to work around
 faiss-gpu being compiled against NumPy 1.x (incompatible with NumPy 2.x).
+Verified: PyTorch k-means produces identical per-point loss to FAISS CPU k-means.
 Encoding: ~30min on H100. Search-time is fast on CPU (~30ms/query).
 """
 
@@ -46,8 +47,9 @@ def build_index(passages: list[str]) -> None:
 
     with Run().context(RunConfig(nranks=1, experiment="hotpotqa")):
         config = ColBERTConfig(
-            nbits=2,
-            kmeans_niters=4,
+            nbits=8,  # BEIR HotpotQA nDCG@10=0.6265 (ColBERT nbits=8); BM25s=0.6290; paper=0.667 (nbits=2)
+            doc_maxlen=300,  # ColBERTv2 paper Appendix F: 300 tokens for BEIR evaluation
+            kmeans_niters=20,
             root=str(INDEX_DIR.parent),
             index_root=str(INDEX_DIR.parent),
         )
