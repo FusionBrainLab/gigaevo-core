@@ -36,6 +36,7 @@ class IdeasTrackerLogger:
         self.banks_file: Optional[Path] = None
         self.programs_file: Optional[Path] = None
         self.best_ideas_file: Optional[Path] = None
+        self.memory_usage_updates_file: Optional[Path] = None
 
         os.makedirs(self.logs_dir, exist_ok=True)
         self._create_session_dir()
@@ -56,6 +57,7 @@ class IdeasTrackerLogger:
         self.banks_file = self.session_dir / "banks.json"
         self.programs_file = self.session_dir / "programs.json"
         self.best_ideas_file = self.session_dir / "best_ideas.json"
+        self.memory_usage_updates_file = self.session_dir / "memory_usage_updates.json"
 
         if not self.rankings_file.exists():
             with open(self.rankings_file, "w", encoding="utf-8") as f:
@@ -68,6 +70,9 @@ class IdeasTrackerLogger:
                 json.dump([], f)
         if not self.best_ideas_file.exists():
             with open(self.best_ideas_file, "w", encoding="utf-8") as f:
+                json.dump([], f)
+        if not self.memory_usage_updates_file.exists():
+            with open(self.memory_usage_updates_file, "w", encoding="utf-8") as f:
                 json.dump([], f)
 
     def _get_timestamp(self) -> str:
@@ -381,6 +386,34 @@ class IdeasTrackerLogger:
         existing.append(snapshot)
 
         with open(self.best_ideas_file, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=4)
+
+    def log_memory_usage_updates(self, usage_updates: dict[str, dict[str, Any]]) -> None:
+        """
+        Append memory usage updates snapshot to memory_usage_updates.json.
+
+        Args:
+            usage_updates: Mapping card_id -> usage payload snapshot.
+        """
+        if self.memory_usage_updates_file is None:
+            return
+
+        snapshot = {
+            "timestamp": self._get_timestamp(),
+            "usage_updates": usage_updates,
+        }
+
+        if self.memory_usage_updates_file.exists():
+            with open(self.memory_usage_updates_file, "r", encoding="utf-8") as f:
+                try:
+                    existing = json.load(f)
+                except json.JSONDecodeError:
+                    existing = []
+        else:
+            existing = []
+
+        existing.append(snapshot)
+        with open(self.memory_usage_updates_file, "w", encoding="utf-8") as f:
             json.dump(existing, f, indent=4)
 
     def dump_final_state(self, record_manager: "RecordManager") -> None:

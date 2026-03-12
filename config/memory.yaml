@@ -56,6 +56,7 @@ gam:
     page_index: 5
 
 # Update/dedup pipeline used when writing cards into an existing memory folder.
+# Set enabled=false to disable LLM deduplication/update actions.
 card_update_dedup:
   enabled: true
   retrieval:
@@ -121,6 +122,11 @@ ideas_tracker:
 
   # Optional: write current run's best ideas into memory DB pipeline.
   memory_write_pipeline:
+    enabled: true
+
+  # Track memory-card usage (selected memory IDs + per-use fitness deltas)
+  # and write it back into card `usage.used` during memory write pipeline.
+  usage_tracking:
     enabled: true
 
   experimental_features:

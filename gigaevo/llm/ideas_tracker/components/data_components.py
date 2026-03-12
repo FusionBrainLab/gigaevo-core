@@ -62,7 +62,7 @@ class RecordCardExtended:
     explanation: dict[str, list[str] | str] = field(default_factory=dict)
     works_with: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
-    usage: dict[str, str] = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)
 
     def __init__(self, **kwargs: Any) -> None:
         required_fields = [
@@ -143,7 +143,7 @@ class RecordCardExtended:
         evolution_statistics: dict[str, Any] | None = None,
         works_with: list[str] | None = None,
         links: list[str] | None = None,
-        usage: dict[str, str] | None = None,
+        usage: dict[str, Any] | None = None,
         summary: str | None = None,
         task_description_summary: str | None = None,
     ) -> None:
@@ -239,7 +239,7 @@ class RecordListV2:
         new_evolution_statistics: dict[str, Any] | None = None,
         new_works_with: list[str] | None = None,
         new_links: list[str] | None = None,
-        new_usage: dict[str, str] | None = None,
+        new_usage: dict[str, Any] | None = None,
         new_summary: str | None = None,
         new_task_description_summary: str | None = None,
     ) -> bool:
