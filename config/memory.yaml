@@ -37,7 +37,9 @@ gam:
 
   # Supported tools:
   # page_index, keyword, vector,
-  # vector_description, vector_task_description, vector_explanation_summary
+  # vector_description, vector_task_description, vector_explanation_summary,
+  # vector_description_explanation_summary,
+  # vector_description_task_description_summary
   allowed_tools:
     - page_index
     - vector
@@ -49,7 +51,32 @@ gam:
     vector_description: 3
     vector_task_description: 0
     vector_explanation_summary: 3
+    vector_description_explanation_summary: 3
+    vector_description_task_description_summary: 3
     page_index: 5
+
+# Update/dedup pipeline used when writing cards into an existing memory folder.
+card_update_dedup:
+  enabled: true
+  retrieval:
+    # Top-k retrieved per each query:
+    # 1) description
+    # 2) explanation summary
+    # 3) description + explanation summary
+    # 4) description + task description summary
+    top_k_per_query: 10
+    # Final top-N after weighted score aggregation.
+    final_top_n: 10
+    # Filter out very weak candidates before LLM decision.
+    min_final_score: 0.05
+    # final_score = sum_i(w_i * s_i)
+    weights:
+      description: 0.35
+      explanation_summary: 0.2
+      description_explanation_summary: 0.3
+      description_task_description_summary: 0.15
+  llm:
+    max_retries: 2
 
 # OpenRouter reasoning controls for evo_memory_agent_api/config.py.
 reasoning:
