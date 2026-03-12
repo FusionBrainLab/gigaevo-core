@@ -244,22 +244,28 @@ class RecordManager:
         idea_id: str,
         keywords: list[str] | None = None,
         summary: str | None = None,
+        task_description_summary: str | None = None,
     ) -> None:
         """
-        Update keywords and/or explanation summary on an idea in the active or inactive bank.
+        Update enrichment metadata on an idea in the active or inactive bank.
 
         Args:
             idea_id: UUID of the idea to update.
             keywords: Optional keyword list to set.
             summary: Optional explanation summary to set.
+            task_description_summary: Optional task-description summary to set.
 
         Raises:
             ValueError: If idea_id not found in either bank.
         """
         if idea_id in self.record_bank.uuids:
-            self.record_bank.modify_idea_metadata(idea_id, keywords, summary)
+            self.record_bank.modify_idea_metadata(
+                idea_id, keywords, summary, task_description_summary
+            )
         elif idea_id in self.inactive_record_bank.uuids:
-            self.inactive_record_bank.modify_idea_metadata(idea_id, keywords, summary)
+            self.inactive_record_bank.modify_idea_metadata(
+                idea_id, keywords, summary, task_description_summary
+            )
         else:
             raise ValueError(f"No idea with id {idea_id} found!")
 

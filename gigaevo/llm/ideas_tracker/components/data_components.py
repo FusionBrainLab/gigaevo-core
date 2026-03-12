@@ -52,6 +52,7 @@ class RecordCardExtended:
     category: str = ""
     description: str = ""
     task_description: str = ""
+    task_description_summary: str = ""
     strategy: str = ""
     last_generation: int = 0
     aliases: list[dict[str, dict[str, str | list[str]]]] = field(default_factory=list)
@@ -144,6 +145,7 @@ class RecordCardExtended:
         links: list[str] | None = None,
         usage: dict[str, str] | None = None,
         summary: str | None = None,
+        task_description_summary: str | None = None,
     ) -> None:
         """
         Update optional metadata fields for the idea.
@@ -155,6 +157,7 @@ class RecordCardExtended:
             links: List of reference links or resources.
             usage: Dictionary of usage patterns or examples.
             summary: Explanation summary text.
+            task_description_summary: Compact summary of the task description text.
         """
         if keywords is not None:
             self.keywords = keywords
@@ -168,6 +171,8 @@ class RecordCardExtended:
             self.usage = usage
         if summary is not None:
             self.explanation["summary"] = summary
+        if task_description_summary is not None:
+            self.task_description_summary = task_description_summary
 
 
 @dataclass
@@ -236,6 +241,7 @@ class RecordListV2:
         new_links: list[str] | None = None,
         new_usage: dict[str, str] | None = None,
         new_summary: str | None = None,
+        new_task_description_summary: str | None = None,
     ) -> bool:
         """Update metadata fields via RecordCardExtended.update_metadata. Returns True if found."""
         idea_index = self.find_idea_index(idea_id)
@@ -249,6 +255,7 @@ class RecordListV2:
             links=new_links,
             usage=new_usage,
             summary=new_summary,
+            task_description_summary=new_task_description_summary,
         )
         return True
 
@@ -570,6 +577,7 @@ class RecordBank:
         idea_id: str,
         new_keywords: list[str] | None = None,
         new_summary: str | None = None,
+        new_task_description_summary: str | None = None,
     ) -> None:
         """Update keywords and/or explanation summary on a RecordCardExtended in the bank."""
         if idea_id not in self.uuids:
@@ -580,6 +588,7 @@ class RecordBank:
                     idea_id,
                     new_keywords=new_keywords,
                     new_summary=new_summary,
+                    new_task_description_summary=new_task_description_summary,
                 )
                 return
 
