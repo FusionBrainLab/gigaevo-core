@@ -634,7 +634,17 @@ class IdeaTracker:
                 "evo_memory_agent_api.memory_write_example"
             )
             memory_write_module = importlib.reload(memory_write_module)
-            memory_write_module.main()
+            snapshot = memory_write_module.main()
+            if isinstance(snapshot, dict):
+                stats = snapshot.get("stats", {})
+                if isinstance(stats, dict):
+                    print(
+                        "Memory write pipeline stats: "
+                        f"processed={stats.get('processed', 0)}, "
+                        f"added={stats.get('added', 0)}, "
+                        f"updated={stats.get('updated', 0)}, "
+                        f"rejected={stats.get('rejected', 0)}"
+                    )
         finally:
             for key, value in previous_env.items():
                 if value is None:

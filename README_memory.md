@@ -13,6 +13,9 @@ Before step 1, ensure this is enabled in `config/memory.yaml`:
 ideas_tracker:
   memory_write_pipeline:
     enabled: true
+
+card_update_dedup:
+  enabled: true
 ```
 
 ### Step 1: build memory cards (no memory in evolution yet)
@@ -23,6 +26,9 @@ python run.py \
   ideas_tracker=true \
   checkpoint_dir=outputs/memory_bank_01
 ```
+
+After this step, the ideas-tracker run folder also includes `memory_write_stats.json`
+with per-run write stats (including `updated` and `rejected` counts).
 
 ### Step 2: run with memory enabled (read from that folder)
 
@@ -37,5 +43,3 @@ python run.py \
 
 - If `memory_enabled=true`, `checkpoint_dir` is used as `paths.checkpoint_dir` for the memory GAM backend during the run (this is where it reads/updates checkpointed memory state).
 - If `ideas_tracker=true` and `ideas_tracker.memory_write_pipeline.enabled=true`, the same `checkpoint_dir` is used by ideas tracker final write step to store cards into memory DB pipeline.
-
-
