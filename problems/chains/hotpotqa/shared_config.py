@@ -56,19 +56,33 @@ BM25S_INDEX_DIR = str(_BASE_DIR / "dataset" / "bm25s_index")
 # "colbert" uses ColBERTv2 loaded in-process via colbert-ai.
 # Build the ColBERT index first: python dataset/build_colbert_index.py
 RETRIEVER: Literal["bm25", "colbert"] = "bm25"
-COLBERT_INDEX_DIR = str(_BASE_DIR / "dataset" / "colbert_index")
+# ColBERT saves index to {root}/{experiment}/indexes/{name} where experiment="hotpotqa".
+# ColBERTRetriever passes index_dir.parent as root and index_dir.name as index name.
+# So index_dir.parent must be the repo-level experiments/ dir.
+_REPO_ROOT = _BASE_DIR.parent.parent.parent  # .../problems/chains/hotpotqa -> repo root
+COLBERT_INDEX_DIR = str(_REPO_ROOT / "experiments" / "colbert_index")
 COLBERT_CHECKPOINT = "colbert-ir/colbertv2.0"
 
 
 def build_retriever(k: int = 7):
     """Instantiate the retriever selected by the RETRIEVER constant.
 
-    Returns a BM25Retriever or ColBERTRetriever. Imports are deferred so
-    colbert-ai is only loaded when RETRIEVER == "colbert".
+    When RETRIEVER == "colbert", checks HOTPOTQA_COLBERT_SERVER_URL first.
+    If set, returns a ColBERTServerRetriever that proxies to the running
+    colbert_server.py process (recommended for exec_runner workers — avoids
+    loading the 15-20 GB index in every subprocess).  Falls back to the
+    in-process ColBERTRetriever if the env var is absent.
     """
-    from problems.chains.hotpotqa.utils.retrieval import BM25Retriever, ColBERTRetriever
+    from problems.chains.hotpotqa.utils.retrieval import (
+        BM25Retriever,
+        ColBERTRetriever,
+        ColBERTServerRetriever,
+    )
 
     if RETRIEVER == "colbert":
+        server_url = os.environ.get("HOTPOTQA_COLBERT_SERVER_URL", "")
+        if server_url:
+            return ColBERTServerRetriever(server_url, k=k)
         return ColBERTRetriever(COLBERT_INDEX_DIR, checkpoint=COLBERT_CHECKPOINT, k=k)
     return BM25Retriever(BM25S_INDEX_DIR, CORPUS_PATH, k=k)
 

@@ -1,0 +1,31 @@
+# @package _global_
+# Pipeline for HotpotQA static_colbert_f1_600 variant.
+#
+# validate.py returns (metrics, failures); FetchArtifact extracts failures (all);
+# HotpotQAColBERTFormatter renders them with full passage text for missing gold docs
+# (richer signal than HotpotQAASIFormatter's title-only feedback).
+# FormatterStage random-samples up to 10 failures per generation for the LLM.
+#
+# Usage:
+#   python run.py problem.name=chains/hotpotqa/static_colbert_f1_600 pipeline=hotpotqa_colbert ...
+#
+# NEVER use pipeline=standard or pipeline=hotpotqa_asi for this variant.
+# validate.py returns a tuple — standard calls repr() on it (repr-contamination bug).
+# hotpotqa_asi uses HotpotQAASIFormatter (title-only) not HotpotQAColBERTFormatter.
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+
+pipeline_builder:
+  _target_: problems.chains.hotpotqa.static_colbert_f1_600.pipeline.ColBERTPipelineBuilder
+  ctx: ${evolution_context}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}

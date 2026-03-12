@@ -2,33 +2,38 @@
 
 Run once before using RETRIEVER = "colbert" in shared_config.py:
     PYTHONPATH=. ~/envs/evo_fast/bin/python \
-        problems/chains/hotpotqa/dataset/build_colbert_index.py [--gpu]
+        problems/chains/hotpotqa/dataset/build_colbert_index.py
 
 Requirements:
-    pip install colbert-ai faiss-cpu   (or faiss-gpu for GPU indexing)
+    pip install colbert-ai faiss-cpu
 
 Encodes all ~5.3M passages with colbert-ir/colbertv2.0 and saves the index.
-GPU: ~30min, CPU: ~4-8h. Search-time is fast on CPU (~30ms/query).
+GPU k-means runs via PyTorch patched directly into the ColBERT source
+(colbert/indexing/collection_indexer.py::compute_faiss_kmeans) to work around
+faiss-gpu being compiled against NumPy 1.x (incompatible with NumPy 2.x).
+Verified: PyTorch k-means produces identical per-point loss to FAISS CPU k-means.
+Encoding: ~30min on H100. Search-time is fast on CPU (~30ms/query).
 """
 
-import argparse
-import os
 from pathlib import Path
 
 from problems.chains.hotpotqa.utils.retrieval import load_corpus
 
 BASE_DIR = Path(__file__).parent
-CORPUS_PATH = BASE_DIR / "wiki17_abstracts.jsonl.gz"
-INDEX_DIR = BASE_DIR / "colbert_index"
+_CORPUS_PKL = BASE_DIR / "wiki17_abstracts.jsonl.passages.pkl"
+_CORPUS_GZ = BASE_DIR / "wiki17_abstracts.jsonl.gz"
+CORPUS_PATH = _CORPUS_PKL if _CORPUS_PKL.exists() else _CORPUS_GZ
+# ColBERT saves index to {root}/{experiment}/indexes/{name}.
+# With root=REPO/experiments and experiment="hotpotqa", the index lands at
+# REPO/experiments/hotpotqa/indexes/colbert_index — matching shared_config.py.
+_REPO_ROOT = BASE_DIR.parent.parent.parent.parent  # dataset/->hotpotqa/->chains/->problems/->repo
+INDEX_DIR = _REPO_ROOT / "experiments" / "colbert_index"
 CHECKPOINT = "colbert-ir/colbertv2.0"
 
 
-def build_index(passages: list[str], *, use_gpu: bool = False) -> None:
+def build_index(passages: list[str]) -> None:
     from colbert import Indexer
     from colbert.infra import ColBERTConfig, Run, RunConfig
-
-    if not use_gpu:
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -40,11 +45,11 @@ def build_index(passages: list[str], *, use_gpu: bool = False) -> None:
             f.write(f"{i}\t{clean}\n")
     print(f"Collection written: {collection_path} ({len(passages):,} passages)")
 
-    # ColBERT resolves index path as {index_root}/{name}/.
-    # Set index_root=INDEX_DIR.parent so the index lands in INDEX_DIR.
     with Run().context(RunConfig(nranks=1, experiment="hotpotqa")):
         config = ColBERTConfig(
-            nbits=2,
+            nbits=8,  # BEIR HotpotQA nDCG@10=0.6265 (ColBERT nbits=8); BM25s=0.6290; paper=0.667 (nbits=2)
+            doc_maxlen=300,  # ColBERTv2 paper Appendix F: 300 tokens for BEIR evaluation
+            kmeans_niters=20,
             root=str(INDEX_DIR.parent),
             index_root=str(INDEX_DIR.parent),
         )
@@ -58,14 +63,6 @@ def build_index(passages: list[str], *, use_gpu: bool = False) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build ColBERT index for HotpotQA")
-    parser.add_argument(
-        "--gpu",
-        action="store_true",
-        help="Use GPU for encoding (~30min). Default: CPU (~4-8h).",
-    )
-    args = parser.parse_args()
-
     if not CORPUS_PATH.exists():
         print(f"Corpus not found at {CORPUS_PATH}. Run download_corpus.py first.")
         return
@@ -73,9 +70,8 @@ def main():
     print(f"Loading corpus from {CORPUS_PATH}...")
     passages = load_corpus(CORPUS_PATH)
     print(f"Loaded {len(passages):,} passages")
-    print(f"Device: {'GPU' if args.gpu else 'CPU'}")
 
-    build_index(passages, use_gpu=args.gpu)
+    build_index(passages)
 
 
 if __name__ == "__main__":

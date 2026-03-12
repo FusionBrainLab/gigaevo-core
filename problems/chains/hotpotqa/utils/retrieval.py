@@ -204,11 +204,42 @@ def _ensure_colbert_initialized(index_dir: Path, checkpoint: str) -> None:
             from colbert import Searcher
             from colbert.infra import ColBERTConfig, Run, RunConfig
 
-            if not index_dir.exists():
+            # ColBERT resolves the index to {root}/{experiment}/indexes/{name}
+            # where root=index_dir.parent and experiment comes from RunConfig.
+            # The virtual index_dir itself may not exist on disk.
+            colbert_resolved = index_dir.parent / "hotpotqa" / "indexes" / index_dir.name
+            if not colbert_resolved.exists():
                 raise FileNotFoundError(
-                    f"ColBERT index not found at {index_dir}. "
+                    f"ColBERT index not found at {colbert_resolved} "
+                    f"(virtual index_dir={index_dir}). "
                     "Run dataset/build_colbert_index.py first."
                 )
+
+            # Force CPU mode permanently in exec_runner workers — GPUs are
+            # reserved for vLLM.  exec_runners are isolated subprocesses so
+            # permanent patches are safe and don't affect the main process.
+            #
+            # Two module-level names must be patched and kept patched for the
+            # lifetime of the subprocess:
+            #
+            # (a) base_colbert.DEVICE: BaseColBERT.__init__ calls
+            #     `self.model.to(DEVICE)` using its LOCAL binding of DEVICE
+            #     (separate from colbert.parameters.DEVICE due to
+            #     `from … import`).  Set to cpu so BERT loads to CPU.
+            #     Must remain cpu after init — colbert_score_packed reads
+            #     config.total_visible_gpus at CALL TIME (not init time), so
+            #     restoring would re-enable GPU scoring and cause a device
+            #     mismatch (pids on CPU, scores_sorter.indices on CUDA).
+            #
+            # (b) ColBERTConfig.total_visible_gpus: plain class attribute
+            #     (not a dataclass field).  ColBERT reads it at CALL TIME in
+            #     colbert_score_packed / colbert_score / IndexScorer.rank.
+            #     Keep it at 0 permanently so all search operations use CPU.
+            import colbert.modeling.base_colbert as _base_colbert
+            import torch as _torch
+            from colbert.infra.config import ColBERTConfig as _ColBERTConfig
+            _base_colbert.DEVICE = _torch.device("cpu")
+            _ColBERTConfig.total_visible_gpus = 0
 
             with Run().context(RunConfig(nranks=1, experiment="hotpotqa")):
                 config = ColBERTConfig(
@@ -256,6 +287,50 @@ class ColBERTRetriever:
                 "\n".join(f"[{i + 1}] {p}" for i, p in enumerate(passages))
             )
         return results
+
+
+# ---------------------------------------------------------------------------
+# ColBERT server retriever (preferred for exec_runner workers)
+# ---------------------------------------------------------------------------
+
+
+class ColBERTServerRetriever:
+    """ColBERT retriever that proxies to a running colbert_server.py instance.
+
+    Load the index once in a dedicated server process
+    (``experiments/hotpotqa/tools/colbert_server.py``), then point all
+    exec_runner workers here via ``HOTPOTQA_COLBERT_SERVER_URL``.
+    This avoids loading the 15–20 GB index in every worker process.
+
+    Args:
+        server_url: Base URL of the search server, e.g. ``http://127.0.0.1:8888``
+        k: Default number of passages to retrieve.
+    """
+
+    def __init__(self, server_url: str, k: int = 7):
+        self._url = server_url.rstrip("/") + "/search"
+        self._k = k
+
+    def batch_retrieve(self, queries: list[str], k: int | None = None) -> list[str]:
+        import json
+        import urllib.error
+        import urllib.request
+
+        k = k or self._k
+        payload = json.dumps({"queries": queries, "k": k}).encode()
+        req = urllib.request.Request(
+            self._url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read())["results"]
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(
+                f"ColBERT server error {exc.code}: {exc.read().decode()}"
+            ) from exc
 
 
 # ---------------------------------------------------------------------------
