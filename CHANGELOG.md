@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.22.0 (2026-03-13)
+
+### Bug Fixes
+
+- **resume**: Make redis.resume produce a contiguous run
+  ([`07091fb`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/07091fbeb0ec5760d66e7892b600bf68343f1d91))
+
+### Features
+
+- **gemini_mutation**: Pre-register experiment — Gemini-3-Flash as mutation LLM
+  ([`0f42851`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0f42851217e9888c4009087ce9d59d451ab5ce83))
+
+
 ## v1.21.0 (2026-03-12)
 
 ### Bug Fixes
