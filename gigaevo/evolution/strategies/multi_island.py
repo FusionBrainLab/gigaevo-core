@@ -17,6 +17,10 @@ from gigaevo.evolution.strategies.mutant_router import RandomMutantRouter
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
+# Redis run-state field names (used for resume persistence)
+_RUN_STATE_GENERATION = "strategy:generation"
+_RUN_STATE_LAST_MIGRATION = "strategy:last_migration"
+
 
 class MapElitesMultiIsland(EvolutionStrategy):
     """Multi-island MAP-Elites strategy (updated to new island API)."""
@@ -145,6 +149,9 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 await self._perform_migration()
                 await self._enforce_all_island_size_limits()
                 self.last_migration = self.generation
+                await self.program_storage.save_run_state(
+                    _RUN_STATE_LAST_MIGRATION, self.last_migration
+                )
 
         # Calculate per-island quotas
         quotas = self._calculate_island_quotas(total)
@@ -188,6 +195,9 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 len(results),
                 self.generation - 1,
                 self.generation,
+            )
+            await self.program_storage.save_run_state(
+                _RUN_STATE_GENERATION, self.generation
             )
 
         return results
@@ -252,6 +262,21 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 **population_sizes,
             },
         )
+
+    async def restore_state(self) -> None:
+        """Restore generation counters from Redis after a resume."""
+        gen = await self.program_storage.load_run_state(_RUN_STATE_GENERATION)
+        last_mig = await self.program_storage.load_run_state(_RUN_STATE_LAST_MIGRATION)
+        if gen is not None:
+            self.generation = gen
+        if last_mig is not None:
+            self.last_migration = last_mig
+        if gen is not None or last_mig is not None:
+            logger.info(
+                "[MapElitesMultiIsland] Restored generation={}, last_migration={}",
+                self.generation,
+                self.last_migration,
+            )
 
     def _calculate_island_quotas(self, total: int) -> dict[str, int]:
         """Evenly distribute selection quotas across islands."""

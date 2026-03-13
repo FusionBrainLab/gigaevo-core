@@ -1,0 +1,23 @@
+# @package _global_
+
+# Single mutation LLM: google/gemini-3-flash-preview via OpenRouter.
+# Pricing: $0.50/M input, $3.00/M output (OpenRouter, 2026-03-12).
+#
+# Requires env var: OPENAI_API_KEY=<openrouter-api-key>
+#
+# Usage:
+#   python run.py ... llm=gemini3_flash
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: google/gemini-3-flash-preview
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+  probabilities: [1.0]
+  writer: ${writer}

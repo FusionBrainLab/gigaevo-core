@@ -22,6 +22,7 @@ from gigaevo.database.redis import (
 )
 from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
+from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
 from gigaevo.utils.trackers.base import LogWriter
@@ -444,6 +445,67 @@ class RedisProgramStorage(ProgramStorage):
                     continue
 
         await self._conn.execute("atomic_state_transition", _atomic)
+
+    # --------------------- Run State (resume support) ---------------------
+
+    async def save_run_state(self, field: str, value: int) -> None:
+        """Persist a named integer counter into the run-state hash."""
+        self._check_write_allowed("save_run_state")
+
+        async def _set(r: aioredis.Redis) -> None:
+            await r.hset(self._keys.run_state(), field, str(value))
+
+        await self._conn.execute("save_run_state", _set)
+
+    async def load_run_state(self, field: str) -> int | None:
+        """Load a previously saved integer counter. Returns None if not found."""
+
+        async def _get(r: aioredis.Redis) -> str | None:
+            return await r.hget(self._keys.run_state(), field)
+
+        raw = await self._conn.execute("load_run_state", _get)
+        return int(raw) if raw is not None else None
+
+    async def recover_stranded_programs(self) -> int:
+        """Reset all RUNNING programs to QUEUED after a crash/kill.
+
+        Uses write_exclusive (no merge) because the caller has exclusive access
+        during startup, and merge_states(RUNNING, QUEUED) would wrongly keep RUNNING.
+        Returns the number of programs recovered.
+        """
+        ids = await self.get_ids_by_status(ProgramState.RUNNING.value)
+        if not ids:
+            return 0
+
+        recovered = 0
+        for pid in ids:
+            prog = await self.get(pid)
+            if prog is None:
+                # Dangling entry in status set — clean it up
+                async def _clean(r: aioredis.Redis, _pid: str = pid) -> None:
+                    await r.srem(
+                        self._keys.status_set(ProgramState.RUNNING.value), _pid
+                    )
+
+                await self._conn.execute("recover_stranded_clean", _clean)
+                continue
+
+            prog.state = ProgramState.QUEUED
+            await self.write_exclusive(prog)
+
+            async def _move(r: aioredis.Redis, _pid: str = pid) -> None:
+                pipe = r.pipeline(transaction=False)
+                pipe.srem(self._keys.status_set(ProgramState.RUNNING.value), _pid)
+                pipe.sadd(self._keys.status_set(ProgramState.QUEUED.value), _pid)
+                await pipe.execute()
+
+            await self._conn.execute("recover_stranded_move", _move)
+            recovered += 1
+
+        logger.info(
+            "[RedisProgramStorage] Recovered {} stranded RUNNING → QUEUED", recovered
+        )
+        return recovered
 
     # --------------------- Activity Monitoring ---------------------
 

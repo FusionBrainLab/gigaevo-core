@@ -100,9 +100,19 @@ Or set resume=true to continue with existing data:
         should_resume = has_data and resume
 
         if should_resume:
-            programs = await redis_storage.get_all()
+            # Recover programs stuck in RUNNING state from prior kill/crash
+            recovered = await redis_storage.recover_stranded_programs()
+            if recovered:
+                logger.info(
+                    f"Step 3/5: Recovered {recovered} stranded RUNNING program(s) → QUEUED"
+                )
+            # Restore in-memory counters (generation, migration schedule)
+            await evolution_engine.restore_state()
+            await evolution_engine.strategy.restore_state()
+
+            program_count = await redis_storage.size()
             logger.info(
-                f"Step 3/5: Resumed with {len(programs)} existing programs from Redis"
+                f"Step 3/5: Resumed with {program_count} existing programs from Redis"
             )
         else:
             programs = await program_loader.load(redis_storage)
