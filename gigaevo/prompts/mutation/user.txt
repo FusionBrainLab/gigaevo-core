@@ -109,6 +109,5 @@ Your response format is enforced by the system — just fill in the fields.
 - Do NOT put JSON, templates, or format examples in the `code` field
 - Use `changes` to capture the main introduced modifications with both a description and explanation.
 - Focus on code quality — the justification should support your changes, not the other way around
-- Write `changes` so downstream idea selection can reuse them: prefer transferable principles, with concrete constants/formulas included only as supporting detail when relevant
 
 {parent_blocks}
