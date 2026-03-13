@@ -135,3 +135,10 @@ class EvolutionStrategy(ABC):
 
         Override this method if strategy supports pause/resume.
         """
+
+    async def restore_state(self) -> None:
+        """Restore persisted counters from storage after a resume.
+
+        Override in strategies that maintain in-memory counters which must
+        survive a stop/restart cycle (e.g., generation count, migration timer).
+        """

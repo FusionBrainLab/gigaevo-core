@@ -123,5 +123,19 @@ class ProgramStorage(ABC):
         """
         await asyncio.sleep(timeout)
 
+    async def save_run_state(self, field: str, value: int) -> None:
+        """Persist a named integer counter for resume support. No-op by default."""
+
+    async def load_run_state(self, field: str) -> int | None:
+        """Load a previously saved integer counter. Returns None if not found."""
+        return None
+
+    async def recover_stranded_programs(self) -> int:
+        """Reset RUNNING programs to QUEUED after a crash/kill (for resume).
+
+        Returns the number of programs recovered.
+        """
+        return 0
+
     @abstractmethod
     async def close(self) -> None: ...

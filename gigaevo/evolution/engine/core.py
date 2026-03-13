@@ -26,6 +26,9 @@ from gigaevo.utils.trackers.base import LogWriter
 if TYPE_CHECKING:
     from typing import Any
 
+# Redis run-state field names (used for resume persistence)
+_RUN_STATE_TOTAL_GENERATIONS = "engine:total_generations"
+
 
 class EvolutionEngine:
     """
@@ -204,6 +207,9 @@ class EvolutionEngine:
             logger.debug("[EvolutionEngine] Phase 6: Refresh DAGs finished (idle)")
 
         self.metrics.total_generations += 1
+        await self.storage.save_run_state(
+            _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
+        )
 
     async def _await_idle(self) -> None:
         """Block until there are no programs in QUEUED or RUNNING."""
@@ -357,6 +363,13 @@ class EvolutionEngine:
 
     async def _set_state(self, program: Program, state: ProgramState) -> None:
         await self.state.set_program_state(program, state)
+
+    async def restore_state(self) -> None:
+        """Restore total_generations from storage after a resume."""
+        gen = await self.storage.load_run_state(_RUN_STATE_TOTAL_GENERATIONS)
+        if gen is not None:
+            self.metrics.total_generations = gen
+            logger.info("[EvolutionEngine] Restored total_generations={}", gen)
 
     def _reached_generation_cap(self) -> bool:
         cap = self.config.max_generations

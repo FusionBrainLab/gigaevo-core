@@ -48,3 +48,7 @@ class RedisProgramKeys:
     def archive_reverse(self) -> str:
         """Key for the reverse index: program_id -> cells."""
         return f"{self.config.key_prefix}:archive:reverse"
+
+    def run_state(self) -> str:
+        """Hash key for persisting run-level counters (e.g., generation, migration)."""
+        return f"{self.config.key_prefix}:run_state"

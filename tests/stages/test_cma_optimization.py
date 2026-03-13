@@ -626,12 +626,14 @@ class TestEndToEnd:
         program = Program(code=program_code)
         original_code = program.code  # after Pydantic normalisation
 
+        # sigma0=5.0 covers the distance from (10,20) to optimum (3,7) in the
+        # first generation; 30 generations gives ample budget for reliable convergence.
         stage = CMANumericalOptimizationStage(
             validator_path=quadratic_validator,
             score_key="score",
             minimize=False,
-            sigma0=2.0,
-            max_generations=5,
+            sigma0=5.0,
+            max_generations=30,
             population_size=6,
             max_parallel=4,
             eval_timeout=10,
@@ -641,9 +643,9 @@ class TestEndToEnd:
         stage.attach_inputs({})
         result = await stage.compute(program)
 
-        # program.code should NOT have changed
+        # program.code should NOT have changed (primary assertion: feature under test)
         assert program.code == original_code
-        # But the output should contain the optimised code
+        # CMA should have found better constants (secondary: validates non-trivial run)
         assert result.optimized_code != original_code
 
     @pytest.mark.asyncio
