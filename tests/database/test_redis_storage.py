@@ -1154,3 +1154,60 @@ class TestKeyIsolationBetweenPrefixes:
         finally:
             await storage_a.close()
             await storage_b.close()
+
+
+# ===================================================================
+# Category: recover_stranded_programs — ghost ID regression
+# ===================================================================
+
+
+class TestRecoverStrandedGhostId:
+    """Regression: a dangling ID in status:RUNNING (no program hash) must be
+    silently removed without raising and must not be counted as recovered."""
+
+    async def test_ghost_id_cleaned_up_no_exception(self, fakeredis_storage) -> None:
+        ghost_id = "ghost-id-dangling-1234"
+
+        # Inject raw ID into the RUNNING status set bypassing normal add()
+        redis_conn = fakeredis_storage._conn._redis
+        running_key = fakeredis_storage._keys.status_set(ProgramState.RUNNING.value)
+        await redis_conn.sadd(running_key, ghost_id)
+
+        assert await fakeredis_storage.count_by_status(ProgramState.RUNNING.value) == 1
+
+        # Should not raise; ghost IDs are cleaned up silently
+        recovered = await fakeredis_storage.recover_stranded_programs()
+
+        # Ghost counts as 0 recovered (no real program moved to QUEUED)
+        assert recovered == 0
+
+        # Ghost ID must be gone from the RUNNING set
+        ids = await fakeredis_storage.get_ids_by_status(ProgramState.RUNNING.value)
+        assert ghost_id not in ids
+        assert await fakeredis_storage.count_by_status(ProgramState.RUNNING.value) == 0
+
+    async def test_ghost_id_mixed_with_real_program(
+        self, fakeredis_storage, make_program
+    ) -> None:
+        """Ghost ID alongside a real RUNNING program: ghost removed, real recovered."""
+        ghost_id = "ghost-id-dangling-5678"
+        redis_conn = fakeredis_storage._conn._redis
+        running_key = fakeredis_storage._keys.status_set(ProgramState.RUNNING.value)
+        await redis_conn.sadd(running_key, ghost_id)
+
+        # Also add a real program in RUNNING state
+        prog = make_program(state=ProgramState.RUNNING)
+        await fakeredis_storage.add(prog)
+
+        assert await fakeredis_storage.count_by_status(ProgramState.RUNNING.value) == 2
+
+        recovered = await fakeredis_storage.recover_stranded_programs()
+
+        # Only the real program counts as recovered
+        assert recovered == 1
+
+        # Ghost gone, real program moved to QUEUED
+        ids = await fakeredis_storage.get_ids_by_status(ProgramState.RUNNING.value)
+        assert ghost_id not in ids
+        queued = await fakeredis_storage.get_ids_by_status(ProgramState.QUEUED.value)
+        assert prog.id in queued

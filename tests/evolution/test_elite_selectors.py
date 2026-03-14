@@ -326,6 +326,40 @@ class TestFitnessProportionalTemperature:
 # ---------------------------------------------------------------------------
 
 
+class TestFitnessProportionalNanInf:
+    """Regression: non-finite fitnesses must fall back to uniform sampling, not raise."""
+
+    def test_nan_fitness_falls_back(self):
+        sel = FitnessProportionalEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(4)]
+        progs[1] = _make_program(float("nan"))
+        result = sel(progs, total=2)
+        assert len(result) == 2
+        assert len(set(id(p) for p in result)) == 2
+
+    def test_inf_fitness_falls_back(self):
+        sel = FitnessProportionalEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(4)]
+        progs[2] = _make_program(float("inf"))
+        result = sel(progs, total=2)
+        assert len(result) == 2
+        assert len(set(id(p) for p in result)) == 2
+
+    def test_neg_inf_fitness_falls_back(self):
+        sel = FitnessProportionalEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(4)]
+        progs[0] = _make_program(float("-inf"))
+        result = sel(progs, total=3)
+        assert len(result) == 3
+
+    def test_all_nan_returns_full_sample(self):
+        sel = FitnessProportionalEliteSelector(fitness_key="score")
+        progs = [_make_program(float("nan")) for _ in range(5)]
+        result = sel(progs, total=3)
+        assert len(result) == 3
+        assert len(set(id(p) for p in result)) == 3
+
+
 class TestScalarTournamentEliteSelector:
     def test_higher_is_better_true_selects_highest(self):
         sel = ScalarTournamentEliteSelector(

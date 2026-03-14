@@ -151,6 +151,37 @@ class TestValidateCodeStageSecurity:
         assert result.security_checks_passed is False
 
 
+class TestSecurityBypassGaps:
+    """Regression tests for bypass paths that were silently missed before the fix.
+
+    Each payload was previously accepted by safe_mode=True; the fix closes all
+    four gaps simultaneously.
+    """
+
+    @pytest.mark.parametrize(
+        "code,description",
+        [
+            ("import importlib", "import importlib bypasses DANGEROUS_PATTERNS"),
+            (
+                "importlib.import_module('os')",
+                "importlib.import_module bypasses text-regex and AST import check",
+            ),
+            (
+                "from socket import create_connection",
+                "from-import form bypasses \\bimport\\s+socket\\b regex",
+            ),
+            (
+                "from urllib import request",
+                "from-import form bypasses \\bimport\\s+urllib\\b regex",
+            ),
+        ],
+    )
+    async def test_bypass_payload_blocked(self, code: str, description: str) -> None:
+        stage = ValidateCodeStage(timeout=30.0, safe_mode=True)
+        with pytest.raises(SecurityViolationError):
+            await stage.compute(_prog(code))
+
+
 class TestValidateCodeStageOutput:
     async def test_output_fields(self):
         stage = ValidateCodeStage(timeout=30.0, safe_mode=True)

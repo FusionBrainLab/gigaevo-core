@@ -8,6 +8,7 @@ DANGEROUS_PATTERNS = [
     r"\bimport\s+urllib\b",
     r"\bimport\s+requests\b",
     r"\bimport\s+pickle\b",
+    r"\bimportlib\b",
     r"\b__import__\s*\(",
     r"\beval\s*\(",
     r"\bexec\s*\(",
