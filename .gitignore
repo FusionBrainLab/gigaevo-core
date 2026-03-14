@@ -581,3 +581,7 @@ problems/*/*.json
 !docs/**/*.txt
 !tools/**/*.ipynb
 !demos/**/*.svg
+
+# Dataset indexes (large binary files — rebuild locally with build_*_index.py)
+problems/chains/hotpotqa/dataset/bm25s_index/
+problems/chains/hotpotqa/dataset/colbert_index/
