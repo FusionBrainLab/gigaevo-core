@@ -153,7 +153,8 @@ class ValidateCodeStage(Stage):
                             f"Import of '{alias.name}' not allowed in safe_mode"
                         )
             elif isinstance(node, ast.ImportFrom):
-                if node.module in self._BLOCKED_MODULES:
+                root = (node.module or "").split(".")[0]
+                if root in self._BLOCKED_MODULES:
                     raise SecurityViolationError(
                         f"Import from '{node.module}' not allowed in safe_mode"
                     )

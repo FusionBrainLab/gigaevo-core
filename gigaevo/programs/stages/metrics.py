@@ -154,7 +154,9 @@ class NormalizeMetricsStage(Stage):
             if lo is None or hi is None or hi <= lo:
                 continue
 
-            v = program.metrics[key]
+            v = program.metrics.get(key)
+            if v is None:
+                continue
 
             ratio = (v - lo) / (hi - lo)
             # clamp

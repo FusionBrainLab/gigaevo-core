@@ -5,10 +5,10 @@ import threading
 from typing import Any, List, Literal
 
 from pydantic import BaseModel
+import wandb
 
 from gigaevo.utils.trackers.configs import WBConfig
 from gigaevo.utils.trackers.core import LoggerBackend
-import wandb
 
 EventKind = Literal["scalar", "hist", "text"]
 

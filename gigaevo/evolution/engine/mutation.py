@@ -91,7 +91,7 @@ async def generate_mutations(
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        persisted = sum(1 for result in results if result)
+        persisted = sum(1 for result in results if result is True)
 
         logger.info(
             f"[mutation] Created {persisted} mutations in parallel (immediately persisted)"

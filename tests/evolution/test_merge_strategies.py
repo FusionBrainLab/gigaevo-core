@@ -172,6 +172,37 @@ class TestMergePrograms:
         with pytest.raises(ValueError, match="name mismatch"):
             merge_programs(curr, inc)
 
+    def test_name_filled_from_incoming_when_current_is_none(self):
+        """When current.name is None and incoming has a name, incoming name is kept.
+
+        Bug (Finding 18): `updates["name"] = current.name` silently dropped the
+        incoming name when current.name was None. The docstring said "fill name if
+        current is None" but the code didn't do it.
+        """
+        p_id = _make_prog().id
+        curr = _make_prog(id=p_id, name=None, atomic_counter=1)
+        inc = _make_prog(id=p_id, name="discovered_name", atomic_counter=2)
+        result = merge_programs(curr, inc)
+        assert result.name == "discovered_name", (
+            "incoming name should be preserved when current.name is None"
+        )
+
+    def test_name_kept_from_current_when_both_have_same_name(self):
+        """When both programs have the same name, it is kept."""
+        p_id = _make_prog().id
+        curr = _make_prog(id=p_id, name="shared", atomic_counter=1)
+        inc = _make_prog(id=p_id, name="shared", atomic_counter=2)
+        result = merge_programs(curr, inc)
+        assert result.name == "shared"
+
+    def test_name_kept_from_current_when_incoming_has_no_name(self):
+        """When incoming.name is None, current name is preserved."""
+        p_id = _make_prog().id
+        curr = _make_prog(id=p_id, name="keep_me", atomic_counter=1)
+        inc = _make_prog(id=p_id, name=None, atomic_counter=2)
+        result = merge_programs(curr, inc)
+        assert result.name == "keep_me"
+
     def test_stage_results_merged(self):
         """Verify stage_results dict is merged like metrics."""
         from gigaevo.programs.core_types import ProgramStageResult, StageState
