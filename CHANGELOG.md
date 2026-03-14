@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v1.22.1 (2026-03-14)
+
+### Bug Fixes
+
+- **results_report**: Remove stray ESC character (U+001B)
+  ([`e2b01fa`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e2b01fa6de1b0c6334ca7e742bb2a5e49179fea7))
+
+- **status**: Use run_state Redis key for generation count
+  ([`e7648ab`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e7648ab00c903131902a2e4751201499b8818b30))
+
+### Chores
+
+- **gemini_mutation**: Pre-merge cleanup — environment freeze + PR description
+  ([`a36f29d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a36f29d38fda884c4cf02b5ab5ded8c9a2fd1974))
+
+### Documentation
+
+- **hotpotqa**: Add LaTeX results report for paper
+  ([`02adea3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/02adea39dc69f82ce4df36d836313c16a9f544b1))
+
+- **hotpotqa**: Make results_report.tex self-contained compilable document
+  ([`bf0ff3f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/bf0ff3f23bf8c4e454494551279549f51bf3c958))
+
+
 ## v1.22.0 (2026-03-13)
 
 ### Bug Fixes
