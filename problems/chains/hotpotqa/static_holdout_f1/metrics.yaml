@@ -1,0 +1,61 @@
+specs:
+  fitness:
+    description: "Token-level F1 on held-out val set (train[700:1000]). Never used for mutation feedback — pure unbiased selection signal. fitness = held_F1 only."
+    decimals: 3
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: -1000.0
+  evo_f1:
+    description: "Token-level F1 on evo set (train[0:700]). Shown alongside fitness so the mutation LLM can observe the generalization gap (evo_f1 - fitness). A large gap indicates overfitting to the evo set: the current chain exploits evo-set-specific patterns that do not transfer to unseen examples. Failure examples are evo-set-only, so this score is safe to show."
+    decimals: 3
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: -1000.0
+  em:
+    description: "Exact Match on full 1000 samples (evo + held). For val-test gap analysis in Phase 5 reporting. Not used for selection."
+    decimals: 3
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: false
+    significant_change: 0.01
+    sentinel_value: -1000.0
+  val_em_600:
+    description: "EM on train[0:600] only. Comparable to cold_start val EM for gap analysis against the reference experiment (PR #75). Not used for selection."
+    decimals: 3
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: false
+    significant_change: 0.01
+    sentinel_value: -1000.0
+  avg_extraction_failures:
+    description: "Fraction of evo-set samples where answer extraction failed (no 'Answer:' pattern found)."
+    decimals: 3
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: 1.0
+  is_valid:
+    description: "Whether the program is structurally valid (1 valid, 0 invalid)."
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0.0

@@ -1,0 +1,10 @@
+# @package prompts
+# Generalization-aware prompt templates for held-out validation experiment.
+# Overrides mutation/system with a prompt that:
+#   - explains evo_f1 vs fitness (held_F1) gap interpretation
+#   - instructs mutation LLM to treat large gap as overfitting signal
+#   - enforces anti-overfitting principles (process over examples)
+#   - maintains all hotpotqa-specific prompt engineering constraints
+# Other prompt files (insights, lineage, scoring, mutation/user) fall back to
+# package defaults.
+dir: ${hydra:runtime.cwd}/gigaevo/prompts/generalization
