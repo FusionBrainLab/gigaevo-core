@@ -57,17 +57,14 @@ def get_run_status(
     try:
         total_keys = r.dbsize()
 
-        # Generation count: "s" field of last entry in valid_iter_fitness_mean.
-        # This is the MAP-Elites iteration number (= generation).
-        # Do NOT use llen(valid_frontier_fitness) — that only increments when the
-        # frontier improves, giving a wildly wrong (too low) generation count.
-        iter_key = f"{prefix}:metrics:history:program_metrics:valid_iter_fitness_mean"
+        # Generation count: read from run_state hash persisted by EvolutionEngine.
+        # Written after every generation; survives restarts (fix/redis-resume).
         gen = None
-        raw_iter = r.lindex(iter_key, -1)
-        if raw_iter:
+        raw_gen = r.hget(f"{prefix}:run_state", "engine:total_generations")
+        if raw_gen:
             try:
-                gen = json.loads(raw_iter)["s"]
-            except (KeyError, json.JSONDecodeError):
+                gen = int(raw_gen)
+            except ValueError:
                 pass
 
         # Best val fitness: last entry in the frontier fitness history list
