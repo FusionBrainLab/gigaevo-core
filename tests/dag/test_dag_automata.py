@@ -2147,3 +2147,143 @@ class TestRunningStatusDependencyPath:
         assert "b" not in to_skip, (
             "Downstream 'b' must not be skipped when dep 'a' is still RUNNING"
         )
+
+
+# ===================================================================
+# Category I: H4 — required input from auto-skipped source (chaos round 5)
+# ===================================================================
+
+
+class TestAutoSkippedSourceImpossibleH4:
+    """H4 regression: required data-flow input from auto-skipped source → IMPOSSIBLE.
+
+    Scenario: A (source) fails; B (exec-order dep on A success) is auto-skipped;
+    C (required data-flow input from B) must be diagnosed IMPOSSIBLE — not WAIT.
+
+    The invariant: once B's SKIPPED result is committed to finished_this_run,
+    _check_dataflow_gate must detect that B finalized as non-COMPLETED and
+    return IMPOSSIBLE for any downstream stage that requires B's output.
+
+    The WAIT case (before B is committed) is also verified — C correctly WAITs
+    while B's fate in this run has not yet been decided.
+    """
+
+    def _build(self):
+        """3-stage DAG: A (no deps), B (exec-order on A success), C (data-flow from B)."""
+        return _build_automata(
+            nodes={
+                "A": FailingStage(timeout=5.0),
+                "B": FastStage(timeout=5.0),
+                "C": ChainedStage(timeout=5.0),
+            },
+            edges=[DataFlowEdge.create("B", "C", "data")],
+            exec_deps={"B": [ExecutionOrderDependency.on_success("A")]},
+        )
+
+    def test_b_impossible_when_a_fails(self):
+        """B is IMPOSSIBLE once A is finalized as FAILED this run."""
+        automata = self._build()
+        prog = _make_program(stage_results={"A": _make_result(StageState.FAILED)})
+        state, reasons = automata._diagnose_stage(prog, "B", finished_this_run={"A"})
+        assert state is DAGAutomata.GateState.IMPOSSIBLE
+        assert any("A" in r for r in reasons)
+
+    def test_c_impossible_after_b_skipped_this_run(self):
+        """C's required input can never arrive once B is finalized as SKIPPED.
+
+        This is the core H4 scenario: after the dag.py scheduler auto-skips B
+        and records it in finished_this_run, C must be diagnosed IMPOSSIBLE.
+        """
+        automata = self._build()
+        prog = _make_program(
+            stage_results={
+                "A": _make_result(StageState.FAILED),
+                "B": _make_result(StageState.SKIPPED),
+            }
+        )
+        finished_this_run = {"A", "B"}
+        state, reasons = automata._diagnose_stage(
+            prog, "C", finished_this_run=finished_this_run
+        )
+        assert state is DAGAutomata.GateState.IMPOSSIBLE, (
+            f"C should be IMPOSSIBLE (B is skipped, required input lost), got {state}. "
+            f"Reasons: {reasons}"
+        )
+
+    def test_c_waits_before_b_is_committed_to_this_run(self):
+        """C WAITs while B's fate in the current run is not yet decided.
+
+        Before B has been added to finished_this_run, C cannot know whether B
+        will succeed or fail. WAIT is the correct response.
+        """
+        automata = self._build()
+        prog = _make_program(stage_results={"A": _make_result(StageState.FAILED)})
+        # A is done this run, but B has not yet been processed
+        finished_this_run = {"A"}
+        state, _ = automata._diagnose_stage(
+            prog, "C", finished_this_run=finished_this_run
+        )
+        assert state is DAGAutomata.GateState.WAIT, (
+            f"C should WAIT while B has not been committed to this run, got {state}"
+        )
+
+    def test_get_stages_to_skip_cascades_a_to_b_then_b_to_c(self):
+        """get_stages_to_skip propagates correctly across two skip rounds.
+
+        Round 1 (A failed): B is IMPOSSIBLE → to_skip = {B}.
+        Round 2 (B skipped): C is IMPOSSIBLE → to_skip = {C}.
+        """
+        automata = self._build()
+
+        # Round 1: A failed this run
+        prog = _make_program(stage_results={"A": _make_result(StageState.FAILED)})
+        to_skip_r1 = automata.get_stages_to_skip(
+            prog, running=set(), launched_this_run=set(), finished_this_run={"A"}
+        )
+        assert "B" in to_skip_r1
+        assert "C" not in to_skip_r1, (
+            "C is not yet IMPOSSIBLE in round 1 — B has not been finalized yet"
+        )
+
+        # Simulate dag.py recording B's skip
+        prog.stage_results["B"] = _make_result(StageState.SKIPPED)
+
+        # Round 2: B is now finalized as SKIPPED in this run
+        to_skip_r2 = automata.get_stages_to_skip(
+            prog,
+            running=set(),
+            launched_this_run={"B"},
+            finished_this_run={"A", "B"},
+        )
+        assert "C" in to_skip_r2, (
+            "C must be in to_skip after B is finalized as SKIPPED this run"
+        )
+
+    def test_c_impossible_even_with_stale_b_result_from_prior_run(self):
+        """C is IMPOSSIBLE when B's SKIPPED result is committed as finalized_this_run.
+
+        Verifies that having B's result in program.stage_results is not
+        sufficient — B must also be in finished_this_run for C to be IMPOSSIBLE.
+        Without finished_this_run, C correctly WAITs (stale result ignored).
+        """
+        automata = self._build()
+        prog = _make_program(
+            stage_results={
+                "A": _make_result(StageState.FAILED),
+                "B": _make_result(StageState.SKIPPED),  # from a prior run
+            }
+        )
+
+        # B result exists in program but is NOT in finished_this_run this run
+        state_without_b, _ = automata._diagnose_stage(
+            prog, "C", finished_this_run={"A"}
+        )
+        assert state_without_b is DAGAutomata.GateState.WAIT, (
+            "C should WAIT when B's result exists but was not finalized in this run"
+        )
+
+        # Now commit B to this run
+        state_with_b, _ = automata._diagnose_stage(
+            prog, "C", finished_this_run={"A", "B"}
+        )
+        assert state_with_b is DAGAutomata.GateState.IMPOSSIBLE

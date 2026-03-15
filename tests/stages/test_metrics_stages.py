@@ -386,3 +386,136 @@ class TestNormalizeMetricsStage:
 
         assert result.status == StageState.COMPLETED
         assert "flat_norm" not in prog.metrics
+
+
+# ---------------------------------------------------------------------------
+# TestNormalizeMetricsSentinel  (H1 regression)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeMetricsSentinel:
+    """Regression: sentinel values must survive NormalizeMetricsStage intact.
+
+    Prior to the fix, a sentinel value (-1e5 for higher_is_better metrics) was
+    normalised via clamp((v - lo) / (hi - lo), 0, 1) which mapped it to 0.0.
+    This made a failed-run program indistinguishable from a zero-score run in
+    the archive's behavior-space lookup, corrupting MAP-Elites selection.
+    """
+
+    def _make_ctx_with_sentinel(self, sentinel: float = -1e5) -> MetricsContext:
+        return MetricsContext(
+            specs={
+                "score": MetricSpec(
+                    description="primary score",
+                    is_primary=True,
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                    sentinel_value=sentinel,
+                )
+            }
+        )
+
+    async def test_sentinel_not_normalised(self):
+        """score=sentinel → score_norm absent from output (not mapped to 0.0)."""
+        ctx = self._make_ctx_with_sentinel()
+        stage = _make_normalize_stage(ctx=ctx)
+        stage.attach_inputs({})
+        prog = _prog()
+        prog.add_metrics({"score": -1e5})  # sentinel value
+        result = await stage.execute(prog)
+
+        assert result.status == StageState.COMPLETED
+        # The sentinel must NOT produce a score_norm key — it would be 0.0 (a lie).
+        assert "score_norm" not in prog.metrics, (
+            "sentinel was normalised to 0.0; failed-run is indistinguishable "
+            "from a zero-score run"
+        )
+
+    async def test_non_sentinel_still_normalised(self):
+        """score=0.5 (valid, non-sentinel) → score_norm=0.5 as expected."""
+        ctx = self._make_ctx_with_sentinel()
+        stage = _make_normalize_stage(ctx=ctx)
+        stage.attach_inputs({})
+        prog = _prog()
+        prog.add_metrics({"score": 0.5})
+        result = await stage.execute(prog)
+
+        assert result.status == StageState.COMPLETED
+        assert prog.metrics["score_norm"] == pytest.approx(0.5)
+
+    async def test_sentinel_excluded_from_aggregate(self):
+        """Aggregate is computed only from non-sentinel metrics."""
+        ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="primary",
+                    is_primary=True,
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                    sentinel_value=-1e5,
+                ),
+                "quality": MetricSpec(
+                    description="secondary",
+                    is_primary=False,
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                ),
+            }
+        )
+        stage = NormalizeMetricsStage(metrics_context=ctx, timeout=5.0)
+        stage.__class__.cache_handler = NO_CACHE
+        stage.attach_inputs({})
+        prog = _prog()
+        # fitness is sentinel (failed run), quality is real
+        prog.add_metrics({"fitness": -1e5, "quality": 0.8})
+        result = await stage.execute(prog)
+
+        assert result.status == StageState.COMPLETED
+        assert "fitness_norm" not in prog.metrics
+        assert prog.metrics["quality_norm"] == pytest.approx(0.8)
+        # Aggregate must be based only on quality_norm (1 metric), not contaminated by 0.0
+        assert prog.metrics["normalized_score"] == pytest.approx(0.8)
+
+    async def test_pipeline_ensure_then_normalize_preserves_sentinel(self):
+        """End-to-end: EnsureMetrics writes sentinel → NormalizeMetrics skips it.
+
+        This is the real-world pipeline: a failed program gets sentinel metrics
+        from EnsureMetricsStage; NormalizeMetricsStage must not map them to 0.0.
+        """
+        ctx = MetricsContext(
+            specs={
+                "score": MetricSpec(
+                    description="primary",
+                    is_primary=True,
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                    sentinel_value=-1e5,
+                )
+            }
+        )
+        prog = _prog()
+
+        # Stage 1: EnsureMetrics with sentinel factory (simulates failed upstream)
+        ensure_stage = EnsureMetricsStage(
+            metrics_factory={"score": -1e5},
+            metrics_context=ctx,
+            timeout=5.0,
+        )
+        ensure_stage.__class__.cache_handler = NO_CACHE
+        ensure_stage.attach_inputs({"candidate": None})
+        await ensure_stage.execute(prog)
+        assert prog.metrics["score"] == -1e5  # sentinel written
+
+        # Stage 2: NormalizeMetrics must not corrupt the sentinel
+        norm_stage = _make_normalize_stage(ctx=ctx)
+        norm_stage.attach_inputs({})
+        result = await norm_stage.execute(prog)
+
+        assert result.status == StageState.COMPLETED
+        assert "score_norm" not in prog.metrics, (
+            "NormalizeMetricsStage mapped sentinel to 0.0, corrupting failed-run signal"
+        )

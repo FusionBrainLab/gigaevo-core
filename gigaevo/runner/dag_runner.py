@@ -250,6 +250,17 @@ class DagRunner:
             try:
                 prog = await self._storage.get(info.program_id)
                 if prog:
+                    if prog.state == ProgramState.DONE:
+                        # TOCTOU guard: the task completed successfully between the
+                        # "timed out" classification and this point. Don't discard
+                        # a program that already finished — it will be ingested normally.
+                        logger.warning(
+                            "[DagScheduler] program {} classified as timed out but "
+                            "already DONE — skipping discard",
+                            info.program_id,
+                        )
+                        self._metrics.record_timeout()
+                        continue
                     await self._state_manager.set_program_state(
                         prog, ProgramState.DISCARDED
                     )

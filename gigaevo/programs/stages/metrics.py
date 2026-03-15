@@ -168,6 +168,12 @@ class NormalizeMetricsStage(Stage):
             if v is None:
                 continue
 
+            # Sentinel values carry the "failed run" signal. Normalising them would
+            # map -1e5 → 0.0, making a failed run indistinguishable from a zero-score
+            # run. Skip normalization so the sentinel is preserved downstream.
+            if _spec.is_sentinel(v):
+                continue
+
             ratio = (v - lo) / (hi - lo)
             # clamp
             ratio = 0.0 if ratio < 0.0 else 1.0 if ratio > 1.0 else ratio

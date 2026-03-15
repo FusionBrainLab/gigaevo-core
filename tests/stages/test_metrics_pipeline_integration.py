@@ -312,10 +312,16 @@ class TestSentinelValueHandling:
     async def test_pipeline_with_sentinel_input(
         self, state_manager, fakeredis_storage, make_program
     ) -> None:
-        """Sentinel → EnsureMetrics preserves it → NormalizeMetrics clamps to 0/1 edges."""
+        """Sentinel → EnsureMetrics preserves it → NormalizeMetrics skips it.
+
+        Regression (H1 fix): NormalizeMetricsStage must NOT normalize sentinel
+        values.  Prior to the fix, score=-1.0 (sentinel) would be normalized
+        to 0.0 via clamp((-1-0)/100, 0, 1), making a failed run
+        indistinguishable from a zero-score run in MAP-Elites selection.
+        """
         ctx = _make_ctx()
-        # score sentinel = -1.0 → is_sentinel=True → EnsureMetrics preserves it
-        # NormalizeMetrics normalizes it: (-1 - 0) / (100 - 0) = -0.01 → clamped to 0.0
+        # score sentinel = -1.0 → EnsureMetrics preserves it
+        # NormalizeMetrics must skip it (no score_norm key emitted)
         producer = MetricsProducerStage({"score": -1.0, "cost": 10.0}, timeout=5.0)
         ensure = _ensure(ctx)
         normalize = _normalize(ctx)
@@ -334,5 +340,9 @@ class TestSentinelValueHandling:
         await fakeredis_storage.add(prog)
         await dag.run(prog)
 
-        # score=-1.0 (sentinel) → normalized to 0.0 (clamped from -0.01)
-        assert prog.metrics["score_norm"] == pytest.approx(0.0)
+        # score=-1.0 is the sentinel → NormalizeMetrics skips it, no score_norm key
+        assert "score_norm" not in prog.metrics, (
+            "Sentinel was normalised to 0.0 (H1 regression)"
+        )
+        # cost=10.0 is not a sentinel → still normalised normally
+        assert "cost_norm" in prog.metrics
