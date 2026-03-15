@@ -263,41 +263,57 @@ class EvolutionEngine:
         archive_program_ids = set(await self.strategy.get_program_ids())
 
         for prog in completed:
-            if prog.id in archive_program_ids:
-                # already in archive (arrived from a refresh DAG) — stays DONE
-                continue
-            elif not self.config.program_acceptor.is_accepted(prog):
-                # rejected by basic checks
-                rej_valid += 1
-                logger.debug(
-                    "[EvolutionEngine] Program {} rejected by acceptor",
+            try:
+                if prog.id in archive_program_ids:
+                    # already in archive (arrived from a refresh DAG) — stays DONE
+                    continue
+                elif not self.config.program_acceptor.is_accepted(prog):
+                    # rejected by basic checks
+                    rej_valid += 1
+                    logger.debug(
+                        "[EvolutionEngine] Program {} rejected by acceptor",
+                        prog.id,
+                    )
+                    await self.mutation_operator.on_program_ingested(
+                        prog, self.storage, outcome=MutationOutcome.REJECTED_ACCEPTOR
+                    )
+                    state_tasks.append(
+                        asyncio.create_task(
+                            self._set_state(prog, ProgramState.DISCARDED)
+                        )
+                    )
+                elif await self.strategy.add(prog):
+                    # accepted by strategy — stays DONE until next refresh
+                    added += 1
+                    await self.mutation_operator.on_program_ingested(
+                        prog, self.storage, outcome=MutationOutcome.ACCEPTED
+                    )
+                    logger.debug(
+                        "[EvolutionEngine] Program {} added to strategy",
+                        prog.id,
+                    )
+                else:
+                    # rejected by strategy / validation
+                    rej_strategy += 1
+                    logger.debug(
+                        "[EvolutionEngine] Program {} rejected by strategy",
+                        prog.id,
+                    )
+                    await self.mutation_operator.on_program_ingested(
+                        prog, self.storage, outcome=MutationOutcome.REJECTED_STRATEGY
+                    )
+                    state_tasks.append(
+                        asyncio.create_task(
+                            self._set_state(prog, ProgramState.DISCARDED)
+                        )
+                    )
+            except Exception as e:
+                # Isolate per-program failures: log and discard the offending program
+                # so the remaining programs in this batch are still processed.
+                logger.error(
+                    "[EvolutionEngine] Ingestion failed for program {}: {} — discarding",
                     prog.id,
-                )
-                await self.mutation_operator.on_program_ingested(
-                    prog, self.storage, outcome=MutationOutcome.REJECTED_ACCEPTOR
-                )
-                state_tasks.append(
-                    asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
-                )
-            elif await self.strategy.add(prog):
-                # accepted by strategy — stays DONE until next refresh
-                added += 1
-                await self.mutation_operator.on_program_ingested(
-                    prog, self.storage, outcome=MutationOutcome.ACCEPTED
-                )
-                logger.debug(
-                    "[EvolutionEngine] Program {} added to strategy",
-                    prog.id,
-                )
-            else:
-                # rejected by strategy / validation
-                rej_strategy += 1
-                logger.debug(
-                    "[EvolutionEngine] Program {} rejected by strategy",
-                    prog.id,
-                )
-                await self.mutation_operator.on_program_ingested(
-                    prog, self.storage, outcome=MutationOutcome.REJECTED_STRATEGY
+                    e,
                 )
                 state_tasks.append(
                     asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
@@ -341,11 +357,18 @@ class EvolutionEngine:
         return count
 
     async def _has_active_dags(self) -> bool:
-        """True if any programs are QUEUED or RUNNING (i.e., engine not idle)."""
-        queued, running = await asyncio.gather(
-            self.storage.count_by_status(ProgramState.QUEUED.value),
-            self.storage.count_by_status(ProgramState.RUNNING.value),
+        """True if any programs are QUEUED or RUNNING (i.e., engine not idle).
+
+        Uses get_all_by_status (SMEMBERS + MGET) rather than count_by_status
+        (raw SCARD) so that ghost IDs — set members with no backing program
+        data — are filtered out and cannot permanently stall _await_idle().
+        """
+        queued_progs, running_progs = await asyncio.gather(
+            self.storage.get_all_by_status(ProgramState.QUEUED.value),
+            self.storage.get_all_by_status(ProgramState.RUNNING.value),
         )
+        queued = len(queued_progs)
+        running = len(running_progs)
 
         if queued or running:
             current_counts = (queued, running)

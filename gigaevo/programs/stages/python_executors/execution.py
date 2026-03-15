@@ -242,7 +242,18 @@ class CallValidatorFunction(PythonCodeExecutor):
         return self._validator_code
 
     def parse_output(self, x: Any) -> Tuple[dict[str, float], Any]:
-        return x if isinstance(x, tuple) else (x, None)
+        # Validate the return type early to give a clear error pointing back to
+        # validate().  Allowing None or non-dict/tuple values through produces
+        # cryptic downstream errors (e.g. "TypeError: {**None}") with no hint
+        # that the problem is in the researcher's validate() return value.
+        if isinstance(x, tuple):
+            return x
+        if not isinstance(x, dict):
+            raise ValueError(
+                f"validate() must return a dict or (dict, artifact) tuple, "
+                f"got {type(x).__name__!r}: {x!r}"
+            )
+        return (x, None)
 
     def _build_call(self, program: Program) -> tuple[Sequence[Any], dict[str, Any]]:
         params = cast(ValidatorInput, self.params)

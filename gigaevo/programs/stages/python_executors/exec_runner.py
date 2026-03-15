@@ -130,7 +130,10 @@ def _run_one(payload: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None
         buf.write(_format_syntax_error(e))
         return (None, {"_error": True, "stderr": buf.getvalue(), "returncode": 1})
 
-    except Exception as e:
+    except BaseException as e:
+        # Catch BaseException (not just Exception) so that user code calling
+        # sys.exit() or raising SystemExit / KeyboardInterrupt is converted into
+        # an error result rather than killing the persistent worker process.
         printed = captured.getvalue()
         buf = io.StringIO()
         if printed:

@@ -95,6 +95,16 @@ class EnsureMetricsStage(Stage):
         return out
 
     def _coerce_and_clamp(self, key: str, value: float) -> float:
+        # Attempt numeric coercion before the isfinite check so that string
+        # values (e.g. "0.85") produce a clear ValueError pointing back to the
+        # metric key, not a cryptic TypeError from math.isfinite().
+        try:
+            value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Metric '{key}' must be numeric, "
+                f"got {type(value).__name__!r}: {value!r}"
+            ) from exc
         if not math.isfinite(value):
             raise ValueError(f"Metric '{key}' must be finite, got {value}")
 
