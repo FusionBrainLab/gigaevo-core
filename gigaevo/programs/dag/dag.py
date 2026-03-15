@@ -53,7 +53,9 @@ class DAG:
         self.state_manager = state_manager
         self._stage_sema = asyncio.Semaphore(max(1, max_parallel_stages))
         self.dag_timeout = dag_timeout
-        max_stage_timeout = max((s.timeout for s in nodes.values()))
+        if not nodes:
+            raise ValueError("DAG requires at least one stage; got empty nodes dict")
+        max_stage_timeout = max(s.timeout for s in nodes.values())
         self.stall_grace_seconds = max(
             DEFAULT_STALL_GRACE_SECONDS, max_stage_timeout * 1.5
         )

@@ -115,7 +115,7 @@ def merge_programs(current: Program | None, incoming: Program) -> Program:
         if incoming.atomic_counter > current.atomic_counter
         else current.code
     )
-    updates["name"] = current.name
+    updates["name"] = current.name if current.name is not None else incoming.name
 
     # Will be updated by storage
     updates["atomic_counter"] = current.atomic_counter

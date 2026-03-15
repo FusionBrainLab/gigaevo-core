@@ -81,8 +81,10 @@ class ValidityMetricAcceptor(ProgramEvolutionAcceptor):
     def is_accepted(self, program: Program) -> bool:
         is_valid = program.metrics.get(self.validity_key)
 
-        # We treat missing key as invalid, or explicit False/0 as invalid
-        if not is_valid:
+        # Reject missing key, None, zero, and any negative value (including the
+        # sentinel -1e5).  'not is_valid' is intentionally avoided here because
+        # bool(-1e5) is True — negative sentinel values would pass that check.
+        if is_valid is None or is_valid <= 0:
             logger.debug(
                 f"[ValidityMetricAcceptor] Program {program.id} rejected: "
                 f"{self.validity_key}={is_valid}"

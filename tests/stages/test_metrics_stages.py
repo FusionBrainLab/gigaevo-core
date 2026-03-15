@@ -308,8 +308,13 @@ class TestNormalizeMetricsStage:
         expected_agg = (prog.metrics["score_norm"] + prog.metrics["cost_norm"]) / 2
         assert prog.metrics["normalized_score"] == pytest.approx(expected_agg)
 
-    async def test_missing_metric_key_raises(self):
-        """Program.metrics missing 'score' → stage FAILED with KeyError."""
+    async def test_missing_metric_key_silently_skipped(self):
+        """Program.metrics missing 'score' → silently skipped, stage succeeds.
+
+        Regression test: previous implementation used bare dict[key] access which
+        raised KeyError. Fixed to use .get(key) with continue, so missing metrics
+        are skipped rather than crashing the stage.
+        """
         stage = _make_normalize_stage()
         stage.attach_inputs({})
         prog = _prog()
@@ -317,7 +322,11 @@ class TestNormalizeMetricsStage:
         prog.add_metrics({"cost": 25.0})
         result = await stage.execute(prog)
 
-        assert result.status == StageState.FAILED
+        assert result.status == StageState.COMPLETED
+        # cost was present → normalized
+        assert "cost_norm" in prog.metrics
+        # score was absent → silently skipped
+        assert "score_norm" not in prog.metrics
 
     async def test_no_bounds_skipped(self):
         """Metric with lo=None, hi=None → not in output."""

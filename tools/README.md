@@ -347,7 +347,7 @@ Each metrics history key is a Redis **list**. Each entry is a JSON object:
 
 | What you want | Redis key (after prefix:metrics:history:program_metrics:) | How to read |
 |---|---|---|
-| **Current generation** | `valid_iter_fitness_mean` | last entry `"s"` field |
+| **Current generation** | `{prefix}:run_state` (hash) | `hget … "engine:total_generations"` |
 | **Best val fitness** | `valid_frontier_fitness` | last entry `"v"` field |
 | **Per-gen mean fitness** | `valid_gen_fitness_mean` | entries with `"s"` == gen; last `"v"` = mean |
 | **n_valid per gen** | `valid_gen_fitness_mean` | count entries with `"s"` == gen |
@@ -357,8 +357,10 @@ Each metrics history key is a Redis **list**. Each entry is a JSON object:
 
 ### Rules
 
-1. **Never use `llen(valid_frontier_fitness)` as the generation count.** It counts frontier
-   improvements (a small number), not generations. Use `valid_iter_fitness_mean` last `"s"`.
+1. **Never use `llen(valid_frontier_fitness)` as the generation count**, and never use
+   `valid_iter_fitness_mean` last `"s"` as the canonical gen count. The canonical source is
+   `{prefix}:run_state` hash field `engine:total_generations` (hget, not lindex). Written by
+   `EvolutionEngine` after every generation; survives restarts.
 2. **Never write ad-hoc Redis queries** to answer questions the tools already answer.
    If a tool gives wrong results, fix the tool — don't work around it with inline Python.
 3. **Archive is in-memory only** — `archive`/`archive:reverse` Redis keys are NOT persisted.
@@ -366,10 +368,14 @@ Each metrics history key is a Redis **list**. Each entry is a JSON object:
 
 ### Generation count
 
-`valid_iter_fitness_mean` last `"s"` is the **canonical generation count**. Use it in
-watchdogs, scripts, and status checks. It only updates when a valid program completes,
-so it can lag slightly during bursts of invalid evaluations — but it is the authoritative
-source and is always eventually consistent.
+`{prefix}:run_state` hash field `engine:total_generations` is the **canonical generation
+count** (commit `e7648ab`). Use `hget {prefix}:run_state engine:total_generations` in
+watchdogs, scripts, and status checks. Written by `EvolutionEngine` after every generation;
+survives restarts. See `tools/status.py` lines 60–68 for the reference implementation.
+
+`valid_iter_fitness_mean` last `"s"` is still useful for **trend analysis** (per-gen mean
+fitness curves) but should NOT be used as the canonical gen count — under high throughput
+it can lag 5+ generations behind the true count.
 
 **Do NOT use log grep for gen count.** The pattern
 `grep -c "Phase 1: Idle confirmed" run.log` is brittle: it depends on exact log message

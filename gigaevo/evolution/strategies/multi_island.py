@@ -359,6 +359,11 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
             if await destination.add(migrant):
                 # Successfully added to destination, remove from source
+                if source_island_id is None or source_island_id not in self.islands:
+                    # Source island unknown (program evicted or metadata cleared);
+                    # nothing to remove — count as successful one-way migration.
+                    successful_migrations += 1
+                    continue
                 removed = await self.islands[
                     source_island_id
                 ].archive_storage.remove_elite_by_id(migrant.id)

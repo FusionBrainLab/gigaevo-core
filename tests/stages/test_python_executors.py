@@ -615,3 +615,40 @@ class TestCallValidatorFunction:
         raw = {"score": 0.5}
         out = stage.parse_output(raw)
         assert out == (raw, None)
+
+    async def test_validator_called_with_non_none_context(self, tmp_path) -> None:
+        """When context is non-None it is prepended to the call args.
+
+        The validate function receives (context, payload) when context is provided,
+        so the test verifies both args arrive correctly.
+        """
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.common import Box
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallValidatorFunction,
+        )
+
+        validator_file = tmp_path / "validator_ctx.py"
+        # Returns the context value so we can assert it was passed
+        validator_file.write_text(
+            "def validate(ctx, payload): return ({'ctx': ctx, 'payload': payload}, None)\n"
+        )
+
+        stage = CallValidatorFunction(path=validator_file, timeout=10)
+        stage.attach_inputs(
+            {
+                "payload": Box[float](data=3.0),
+                "context": Box[str](data="my-context"),
+            }
+        )
+
+        prog = Program(code="def f(): pass")
+        result = await stage.compute(prog)
+
+        from gigaevo.programs.core_types import ProgramStageResult
+
+        if not isinstance(result, ProgramStageResult):
+            metrics, artifact = result.data
+            assert metrics["ctx"] == "my-context"
+            assert metrics["payload"] == 3.0
+            assert artifact is None

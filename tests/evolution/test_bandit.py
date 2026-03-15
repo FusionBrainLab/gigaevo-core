@@ -341,6 +341,58 @@ class TestSlidingWindowUCB1EdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# SlidingWindowUCB1 — zero-observation regression
+# ---------------------------------------------------------------------------
+
+
+class TestSlidingWindowUCB1ZeroObservations:
+    """Regression: zero-pull arms must never cause ZeroDivisionError or crash.
+
+    The round-robin warmup in select() guarantees that UCB1 score computation
+    (which divides by n_i) is only reached after all arms have been pulled at
+    least once.  These tests verify that invariant explicitly.
+    """
+
+    def test_first_select_on_fresh_bandit_returns_valid_arm(self) -> None:
+        """select() on a completely fresh bandit returns one of the arm names."""
+        ucb = SlidingWindowUCB1(arm_names=["x", "y", "z"])
+        name = ucb.select()
+        assert name in {"x", "y", "z"}
+
+    def test_all_arms_visited_during_warmup(self) -> None:
+        """select()+record_pull() N times visits every arm exactly once before UCB1."""
+        ucb = SlidingWindowUCB1(arm_names=["a", "b", "c"])
+        visited = []
+        for _ in range(3):
+            name = ucb.select()
+            ucb.record_pull(name)
+            visited.append(name)
+        # All three arms visited, no repeats before warmup ends
+        assert set(visited) == {"a", "b", "c"}
+        assert len(visited) == 3
+
+    def test_no_division_by_zero_after_warmup(self) -> None:
+        """UCB1 score computation after warmup does not raise ZeroDivisionError."""
+        ucb = SlidingWindowUCB1(arm_names=["p", "q"])
+        for name in ["p", "q"]:
+            ucb.record_pull(name)
+            ucb.update_reward(name, 0.5)
+        # Should not raise — UCB1 formula executes without division by zero
+        result = ucb.select()
+        assert result in {"p", "q"}
+
+    def test_two_arm_bandit_warmup_visits_both(self) -> None:
+        """Two-arm bandit: both arms selected before exploitation begins."""
+        ucb = SlidingWindowUCB1(arm_names=["arm0", "arm1"])
+        first = ucb.select()
+        ucb.record_pull(first)
+        second = ucb.select()
+        ucb.record_pull(second)
+        assert first != second
+        assert {first, second} == {"arm0", "arm1"}
+
+
+# ---------------------------------------------------------------------------
 # BanditModelRouter
 # ---------------------------------------------------------------------------
 

@@ -123,8 +123,22 @@ class ValidateCodeStage(Stage):
                         f"File operation detected via AST ({node.func.attr})"
                     )
 
+    # Modules whose import (in any form) is forbidden in safe_mode.
+    _BLOCKED_MODULES = {
+        "os",
+        "sys",
+        "subprocess",
+        "socket",
+        "urllib",
+        "requests",
+        "pickle",
+        "shutil",
+        "glob",
+        "importlib",
+    }
+
     def _validate_ast_imports(self, code: str) -> None:
-        """AST scan for imports of forbidden modules (os, sys, subprocess)."""
+        """AST scan for imports of forbidden modules."""
         try:
             tree = ast.parse(code)
         except SyntaxError:
@@ -133,12 +147,25 @@ class ValidateCodeStage(Stage):
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name in {"os", "sys", "subprocess"}:
+                    root = alias.name.split(".")[0]
+                    if root in self._BLOCKED_MODULES:
                         raise SecurityViolationError(
                             f"Import of '{alias.name}' not allowed in safe_mode"
                         )
             elif isinstance(node, ast.ImportFrom):
-                if node.module in {"os", "sys", "subprocess"}:
+                root = (node.module or "").split(".")[0]
+                if root in self._BLOCKED_MODULES:
                     raise SecurityViolationError(
                         f"Import from '{node.module}' not allowed in safe_mode"
+                    )
+            elif isinstance(node, ast.Call):
+                # importlib.import_module("os") — dynamic import via attribute call
+                if (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "import_module"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "importlib"
+                ):
+                    raise SecurityViolationError(
+                        "importlib.import_module() not allowed in safe_mode"
                     )
