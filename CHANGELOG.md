@@ -2,6 +2,72 @@
 
 <!-- version list -->
 
+## v1.23.0 (2026-03-15)
+
+### Bug Fixes
+
+- **bugs**: Round-2 — migration KeyError on None island + DAG empty-nodes crash
+  ([`54810b0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/54810b0d9cc305dba83dd0cf65a3b0d03468e427))
+
+- **bugs**: Round-4 — 5 junior-researcher attack surface bugs
+  ([`073cc33`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/073cc333f342b0a54a41f4491b33729a25d2fc5e))
+
+- **bugs**: Round-5 — H1 sentinel bypass + TOCTOU dag_runner + H2-H4 guard tests
+  ([`d039cf1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d039cf13d9d3e3533ec9768358487349075d8cc0))
+
+- **tests**: Update test_evolution_engine.py for get_all_by_status migration
+  ([`a33604b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a33604bb68ed6ded20757162057715ff36b69980))
+
+### Chores
+
+- **generalization**: Add launch script and run_status.sh
+  ([`61e76af`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/61e76af44632004b1bcf5ad39ba50cedbe540370))
+
+- **generalization**: Add launch script and run_status.sh
+  ([`96bbb42`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/96bbb42765c1b8e0403fc1589873c1121b40bd15))
+
+- **generalization**: Add test eval script, PR description, gitignore indexes
+  ([`6405a22`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6405a2260574edc53b912f4a3d36c84b7bcc25a0))
+
+- **generalization**: Backfill pre-registration commit hash in 03_plan.md
+  ([`3bd7fea`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3bd7fea204b0b9b31e04570ed7f20c73449d38b6))
+
+- **generalization**: Gen-1 smoke check — all 4 runs alive, split bias OK
+  ([`17b25db`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/17b25dba677d8c7d9ae185c1644c850256ec9505))
+
+- **generalization**: Record binding prompt review sign-off in 03_plan.md
+  ([`6a0d2e6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6a0d2e6cdc6e176678fb04c59281df6ec345cc24))
+
+### Documentation
+
+- **memory**: Chaos-hacker round-5 findings summary
+  ([`4c742fc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4c742fcea386acbda921d1594f2611f48bc495db))
+
+- **memory**: Restructure Claude memory + propagate gen-count fix + add closeout step
+  ([`aca5f0d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/aca5f0d0b1210332cf32d142bd4c9772248776de))
+
+### Features
+
+- **generalization**: Implement static_holdout_f1 problem + generalization prompts
+  ([`1dbb05c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1dbb05cf18b392caf5c6df05923a1c2693b3ae7f))
+
+### Refactoring
+
+- **tests**: Move round2/round3 tests to semantic locations
+  ([`3b3117e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3b3117e7b0f76e1bf0cdcfcccc95bb05d97ec1d0))
+
+### Testing
+
+- **integration**: 21 new integration tests — DAG ordering + engine edge cases
+  ([`1bb5235`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1bb52359b7ae0b68266845fb480244304f12f286))
+
+- **round3**: Regression tests for Bug A and B fixes
+  ([`f778ad7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f778ad784c1088ec984995230d5f43f7106af9ee))
+
+- **security**: Fix safe_mode bypass + add regression tests from audit
+  ([`ca2d4cf`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ca2d4cf335708db9dcb98cb541138f1dbca38cf6))
+
+
 ## v1.22.1 (2026-03-14)
 
 ### Bug Fixes
