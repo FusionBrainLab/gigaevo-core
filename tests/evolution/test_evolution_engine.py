@@ -198,7 +198,11 @@ class TestIngestCompletedPrograms:
         engine.state.set_program_state.assert_not_called()
 
     async def test_strategy_add_exception_doesnt_crash_ingest(self) -> None:
-        """strategy.add() raises → ingestion continues, doesn't crash."""
+        """strategy.add() raises → exception caught per-item, program discarded, no propagation.
+
+        Regression guard for the per-item exception isolation fix: a failing strategy.add()
+        must NOT abort ingestion of remaining programs. The offending program is discarded.
+        """
         engine = _make_engine()
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = True
@@ -208,10 +212,13 @@ class TestIngestCompletedPrograms:
         engine.storage.get_all_by_status.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
 
-        # Should not raise — the exception propagates from strategy.add
-        # but step() catches it at the outer level
-        with pytest.raises(RuntimeError, match="archive full"):
-            await engine._ingest_completed_programs()
+        # Must NOT raise — per-item exception handler catches it and discards the program
+        await engine._ingest_completed_programs()
+
+        # The failed program must be scheduled for DISCARDED state
+        engine.state.set_program_state.assert_called_once_with(
+            prog, ProgramState.DISCARDED
+        )
 
     async def test_rejected_discard_gather_swallows_exceptions(self) -> None:
         """State discard task fails inside gather(return_exceptions=True) → doesn't crash."""
@@ -279,41 +286,54 @@ class TestAwaitIdle:
     async def test_returns_immediately_when_idle(self) -> None:
         """_await_idle returns at once when no QUEUED or RUNNING programs."""
         engine = _make_engine()
-        engine.storage.count_by_status.return_value = 0
+        # get_all_by_status filters ghost IDs; return empty lists → idle
+        engine.storage.get_all_by_status.return_value = []
 
         await engine._await_idle()
 
-        assert engine.storage.count_by_status.call_count == 2  # queued + running
+        # Two calls per poll: once for QUEUED, once for RUNNING (via asyncio.gather)
+        assert engine.storage.get_all_by_status.call_count == 2
 
     async def test_blocks_then_returns_when_counts_drop(self) -> None:
         """_await_idle blocks while programs are active, returns once counts drop to zero."""
         engine = _make_engine()
         engine.config.loop_interval = 0.01  # fast for tests
 
-        # First call: queued=1, running=0 → active
-        # Second call: queued=0, running=0 → idle
-        engine.storage.count_by_status.side_effect = [1, 0, 0, 0]
+        fake_prog = _prog(ProgramState.QUEUED)
+        # First gather: [queued=[prog], running=[]] → active
+        # Second gather: [queued=[], running=[]] → idle
+        engine.storage.get_all_by_status.side_effect = [
+            [fake_prog],
+            [],  # first poll: QUEUED=[prog], RUNNING=[]
+            [],
+            [],  # second poll: QUEUED=[], RUNNING=[]
+        ]
 
         await engine._await_idle()
 
-        # Must have polled at least twice (first active, then idle)
-        assert engine.storage.count_by_status.call_count >= 4
+        # Must have polled at least twice (2 calls per poll × 2 polls = 4 calls)
+        assert engine.storage.get_all_by_status.call_count >= 4
 
     async def test_has_active_dags_true_when_queued(self) -> None:
         engine = _make_engine()
-        engine.storage.count_by_status.side_effect = [3, 0]  # queued=3, running=0
+        fake_prog = _prog(ProgramState.QUEUED)
+        engine.storage.get_all_by_status.side_effect = [
+            [fake_prog, fake_prog, fake_prog],
+            [],
+        ]
 
         assert await engine._has_active_dags() is True
 
     async def test_has_active_dags_true_when_running(self) -> None:
         engine = _make_engine()
-        engine.storage.count_by_status.side_effect = [0, 2]  # queued=0, running=2
+        fake_prog = _prog(ProgramState.RUNNING)
+        engine.storage.get_all_by_status.side_effect = [[], [fake_prog, fake_prog]]
 
         assert await engine._has_active_dags() is True
 
     async def test_has_active_dags_false_when_all_zero(self) -> None:
         engine = _make_engine()
-        engine.storage.count_by_status.side_effect = [0, 0]
+        engine.storage.get_all_by_status.side_effect = [[], []]
 
         assert await engine._has_active_dags() is False
 
@@ -398,9 +418,6 @@ class TestStep:
         engine = _make_engine()
         engine.config.loop_interval = 0.01
 
-        # Phase 1,3,6: _await_idle → always idle
-        engine.storage.count_by_status.return_value = 0
-
         # Phase 2: elites & mutations
         elites = [_prog() for _ in range(2)]
         engine.strategy.select_elites.return_value = elites
@@ -410,8 +427,17 @@ class TestStep:
         engine.config.program_acceptor.is_accepted.return_value = True
         engine.strategy.add.return_value = True
         new_prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [new_prog]
-        engine.strategy.get_program_ids.return_value = []
+
+        # _await_idle (Phase 1,3,6) calls get_all_by_status(QUEUED) + get_all_by_status(RUNNING)
+        # → must return [] so _await_idle exits immediately.
+        # _ingest_completed_programs (Phase 4) calls get_all_by_status(DONE) → [new_prog].
+        # Use a side_effect function that dispatches by status value.
+        def _by_status(status: str):
+            if status == ProgramState.DONE.value:
+                return [new_prog]
+            return []  # QUEUED and RUNNING → idle
+
+        engine.storage.get_all_by_status.side_effect = _by_status
 
         # Phase 5: refresh → archive has the added program
         engine.strategy.get_program_ids.side_effect = [
@@ -452,9 +478,7 @@ class TestStep:
         """on_program_ingested is called with correct outcome for each program."""
         engine = _make_engine()
         engine.config.loop_interval = 0.01
-        engine.storage.count_by_status.return_value = 0
         engine.strategy.select_elites.return_value = []
-        engine.strategy.get_program_ids.return_value = []
 
         # One rejected by acceptor, one accepted
         engine.config.program_acceptor = MagicMock()
@@ -463,7 +487,15 @@ class TestStep:
 
         engine.config.program_acceptor.is_accepted.side_effect = [False, True]
         engine.strategy.add.return_value = True
-        engine.storage.get_all_by_status.return_value = [bad_prog, good_prog]
+
+        # _await_idle calls get_all_by_status(QUEUED/RUNNING) → must return [] to stay non-blocking.
+        # _ingest calls get_all_by_status(DONE) → returns the two test programs.
+        def _by_status(status: str):
+            if status == ProgramState.DONE.value:
+                return [bad_prog, good_prog]
+            return []
+
+        engine.storage.get_all_by_status.side_effect = _by_status
         # Neither in archive
         engine.strategy.get_program_ids.side_effect = [[], []]
 
