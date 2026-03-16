@@ -225,6 +225,10 @@ class EvolutionEngine:
                 "[EvolutionEngine] gen={} Phase 6: Refresh DAGs finished (idle)", gen
             )
 
+            # Phase 7: reindex archive with updated metrics (e.g., prompt fitness)
+            await self.strategy.reindex_archive()
+            logger.debug("[EvolutionEngine] gen={} Phase 7: Archive reindexed", gen)
+
         self.metrics.total_generations += 1
         await self.storage.save_run_state(
             _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations

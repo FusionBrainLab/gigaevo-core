@@ -263,7 +263,8 @@ class TestPromptFitnessStage:
         result = await stage.compute(program)
 
         # Verify
-        assert result.data["fitness"] == 0.7
+        # Bayesian posterior: (7+1)/(10+2) = 8/12
+        assert result.data["fitness"] == pytest.approx(8 / 12)
         assert result.data["is_valid"] == 1.0
         assert result.data["prompt_length"] == len("test prompt")
 
@@ -272,7 +273,7 @@ class TestPromptFitnessStage:
 
     @pytest.mark.asyncio
     async def test_compute_no_stats(self, mock_stats_provider: MagicMock):
-        """compute() returns optimistic default fitness when no stats available."""
+        """compute() returns Bayesian prior (0.5) when no stats available."""
         mock_stats_provider.get_stats = AsyncMock(
             return_value=PromptMutationStats(trials=0, successes=0, success_rate=0.0)
         )
@@ -285,7 +286,8 @@ class TestPromptFitnessStage:
 
         result = await stage.compute(program)
 
-        assert result.data["fitness"] == 0.01  # optimistic default
+        # Bayesian posterior with Beta(1,1) prior: (0+1)/(0+2) = 0.5
+        assert result.data["fitness"] == pytest.approx(0.5)
         assert result.data["is_valid"] == 1.0
 
     @pytest.mark.asyncio
@@ -305,7 +307,8 @@ class TestPromptFitnessStage:
 
         # Metrics should be stored on program
         assert "fitness" in program.metrics
-        assert program.metrics["fitness"] == 0.6
+        # Bayesian posterior: (3+1)/(5+2) = 4/7
+        assert program.metrics["fitness"] == pytest.approx(4 / 7)
 
 
 # ---------------------------------------------------------------------------

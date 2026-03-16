@@ -13,6 +13,7 @@ from loguru import logger
 from gigaevo.programs.core_types import StageIO, VoidInput
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import FloatDictContainer
 from gigaevo.programs.stages.stage_registry import StageRegistry
 from gigaevo.prompts.coevolution.stats import PromptStatsProvider, prompt_text_to_id
@@ -120,6 +121,10 @@ class PromptFitnessStage(Stage):
 
     The stats_provider is injected via constructor — no global state.
 
+    Uses NeverCached because fitness depends on external Redis stats that
+    change as the main run progresses — inputs (prompt text) stay the same
+    but the stats they reference do not.
+
     Args:
         stats_provider: Provides per-prompt stats from the main run's Redis
         min_trials: Minimum trials before reporting real success rate
@@ -127,17 +132,20 @@ class PromptFitnessStage(Stage):
 
     InputsModel = PromptFitnessInputs
     OutputModel = FloatDictContainer
+    cache_handler = NO_CACHE
 
     def __init__(
         self,
         stats_provider: PromptStatsProvider,
-        min_trials: int = 5,
+        prior_alpha: float = 1.0,
+        prior_beta: float = 1.0,
         timeout: float = 30.0,
         **kwargs,
     ):
         super().__init__(timeout=timeout, **kwargs)
         self._stats_provider = stats_provider
-        self._min_trials = min_trials
+        self._prior_alpha = prior_alpha
+        self._prior_beta = prior_beta
 
     async def compute(self, program: Program) -> FloatDictContainer:
         execution_output: PromptExecutionOutput = self.params.execution_output
@@ -145,18 +153,18 @@ class PromptFitnessStage(Stage):
         prompt_id = execution_output.prompt_id
         stats = await self._stats_provider.get_stats(prompt_id)
 
-        if stats.trials < self._min_trials:
-            # Optimistic default: allows archive entry but won't displace
-            # prompts with real fitness data.
-            fitness = 0.01
-        else:
-            fitness = stats.success_rate
+        # Bayesian posterior mean with Beta(alpha, beta) prior.
+        # Beta(1,1) = uniform: new prompts start at 0.50, converging to
+        # true success rate as trials accumulate.
+        fitness = (stats.successes + self._prior_alpha) / (
+            stats.trials + self._prior_alpha + self._prior_beta
+        )
         prompt_length = float(len(execution_output.prompt_text))
 
         logger.debug(
             f"[PromptFitnessStage] prompt_id={prompt_id} "
             f"trials={stats.trials} successes={stats.successes} "
-            f"fitness={fitness:.4f}"
+            f"fitness={fitness:.4f} (prior=Beta({self._prior_alpha},{self._prior_beta}))"
         )
 
         metrics = {

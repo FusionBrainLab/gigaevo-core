@@ -34,7 +34,7 @@ class MainRunSyncHook:
         port: int,
         db: int,
         prefix: str,
-        timeout: float = 600.0,
+        timeout: float = 7200.0,
         poll_interval: float = 5.0,
     ):
         self._host = host
