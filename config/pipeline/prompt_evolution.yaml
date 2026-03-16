@@ -14,6 +14,16 @@
 main_redis_db: ???
 main_redis_prefix: ???
 
+# Sync hook: blocks prompt run engine until main run advances by 1 gen
+pre_step_hook:
+  _target_: gigaevo.prompts.coevolution.sync.MainRunSyncHook
+  host: ${redis.host}
+  port: ${redis.port}
+  db: ${main_redis_db}
+  prefix: ${main_redis_prefix}
+  timeout: 600.0
+  poll_interval: 5.0
+
 prompt_stats_provider:
   _target_: gigaevo.prompts.coevolution.stats.RedisPromptStatsProvider
   host: ${redis.host}

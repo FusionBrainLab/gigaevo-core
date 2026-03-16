@@ -272,7 +272,7 @@ class TestPromptFitnessStage:
 
     @pytest.mark.asyncio
     async def test_compute_no_stats(self, mock_stats_provider: MagicMock):
-        """compute() returns 0.0 fitness when no stats available."""
+        """compute() returns optimistic default fitness when no stats available."""
         mock_stats_provider.get_stats = AsyncMock(
             return_value=PromptMutationStats(trials=0, successes=0, success_rate=0.0)
         )
@@ -285,7 +285,7 @@ class TestPromptFitnessStage:
 
         result = await stage.compute(program)
 
-        assert result.data["fitness"] == 0.0
+        assert result.data["fitness"] == 0.01  # optimistic default
         assert result.data["is_valid"] == 1.0
 
     @pytest.mark.asyncio

@@ -40,3 +40,4 @@ evolution_engine:
   config: ${engine_config}
   writer: ${writer}
   metrics_tracker: ${metrics_tracker}
+  pre_step_hook: ${pre_step_hook}

@@ -145,7 +145,12 @@ class PromptFitnessStage(Stage):
         prompt_id = execution_output.prompt_id
         stats = await self._stats_provider.get_stats(prompt_id)
 
-        fitness = stats.success_rate
+        if stats.trials < self._min_trials:
+            # Optimistic default: allows archive entry but won't displace
+            # prompts with real fitness data.
+            fitness = 0.01
+        else:
+            fitness = stats.success_rate
         prompt_length = float(len(execution_output.prompt_text))
 
         logger.debug(

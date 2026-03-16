@@ -220,11 +220,14 @@ class TestGigaEvoArchivePromptFetcher:
             fallback_prompts_dir=tmp_prompts_dir,
         )
         code = 'def entrypoint() -> str:\n    return "Hello system."'
-        pack = fetcher._execute_entrypoint(code, "abc123")
+        pack = fetcher._execute_entrypoint(code)
         assert pack is not None
         assert pack.system == "Hello system."
         assert pack.user is None
-        assert pack.prompt_id == "abc123"
+        # prompt_id is now derived from the text, not passed in
+        from gigaevo.prompts.coevolution.stats import prompt_text_to_id
+
+        assert pack.prompt_id == prompt_text_to_id("Hello system.")
 
     def test_execute_entrypoint_dict_return_with_user(self, tmp_prompts_dir: Path):
         """_execute_entrypoint() handles dict-returning entrypoint with user key."""
@@ -237,11 +240,13 @@ class TestGigaEvoArchivePromptFetcher:
             "def entrypoint() -> dict:\n"
             '    return {"system": "System text.", "user": "User text {count}."}'
         )
-        pack = fetcher._execute_entrypoint(code, "xyz789")
+        pack = fetcher._execute_entrypoint(code)
         assert pack is not None
         assert pack.system == "System text."
         assert pack.user == "User text {count}."
-        assert pack.prompt_id == "xyz789"
+        from gigaevo.prompts.coevolution.stats import prompt_text_to_id
+
+        assert pack.prompt_id == prompt_text_to_id("System text.")
 
     def test_execute_entrypoint_dict_return_no_user(self, tmp_prompts_dir: Path):
         """_execute_entrypoint() handles dict with system only."""
@@ -251,7 +256,7 @@ class TestGigaEvoArchivePromptFetcher:
             fallback_prompts_dir=tmp_prompts_dir,
         )
         code = 'def entrypoint() -> dict:\n    return {"system": "System only."}'
-        pack = fetcher._execute_entrypoint(code, "sys_only")
+        pack = fetcher._execute_entrypoint(code)
         assert pack is not None
         assert pack.system == "System only."
         assert pack.user is None
@@ -266,7 +271,7 @@ class TestGigaEvoArchivePromptFetcher:
             fallback_prompts_dir=tmp_prompts_dir,
         )
         code = 'def entrypoint() -> dict:\n    return {"user": "Only user."}'
-        pack = fetcher._execute_entrypoint(code, "no_sys")
+        pack = fetcher._execute_entrypoint(code)
         assert pack is None
 
     def test_execute_entrypoint_invalid_type_returns_none(self, tmp_prompts_dir: Path):
@@ -277,7 +282,7 @@ class TestGigaEvoArchivePromptFetcher:
             fallback_prompts_dir=tmp_prompts_dir,
         )
         code = "def entrypoint():\n    return 42"
-        pack = fetcher._execute_entrypoint(code, "bad_type")
+        pack = fetcher._execute_entrypoint(code)
         assert pack is None
 
 

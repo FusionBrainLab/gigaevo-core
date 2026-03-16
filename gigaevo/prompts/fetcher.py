@@ -9,14 +9,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
+import random
 import time
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from gigaevo.prompts import load_prompt
+from gigaevo.prompts.coevolution.stats import prompt_text_to_id
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
@@ -218,10 +219,13 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         return (time.monotonic() - self._cache_timestamp) >= self._cache_ttl
 
     def _refresh_champion(self) -> "_PromptPack | None":
-        """Read the current champion from the prompt run's Redis archive.
+        """Select a prompt from the prompt run's archive using fitness-proportional sampling.
+
+        Instead of always picking the single best, uses stochastic selection so
+        that multiple prompts accumulate trial data from the main run.
 
         Returns:
-            _PromptPack if a champion was found, None if archive is empty
+            _PromptPack if a prompt was selected, None if archive is empty
         """
         try:
             r = self._get_sync_redis()
@@ -235,46 +239,47 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                 )
                 return None
 
-            # Fetch all programs and find the champion
-            best_program_id: str | None = None
-            best_fitness: float = float("-inf")
-            best_code: str | None = None
+            # Collect all candidates with their fitness and code
+            import json
 
+            candidates: list[tuple[str, float, str]] = []  # (pid, fitness, code)
             for pid in program_ids:
                 program_key = f"{self._prompt_prefix}:program:{pid}"
                 raw = r.get(program_key)
                 if not raw:
                     continue
                 try:
-                    import json
-
                     data = json.loads(raw)
                     metrics = data.get("metrics", {})
-                    fitness = float(metrics.get(self._fitness_key, float("-inf")))
+                    fitness = float(metrics.get(self._fitness_key, 0.0))
                     code = data.get("code", "")
-                    if fitness > best_fitness and code:
-                        best_fitness = fitness
-                        best_program_id = pid
-                        best_code = code
+                    if code:
+                        candidates.append((pid, fitness, code))
                 except Exception as exc:
                     logger.debug(
                         f"[GigaEvoArchivePromptFetcher] Error parsing program {pid}: {exc}"
                     )
                     continue
 
-            if best_code is None or best_program_id is None:
+            if not candidates:
                 return None
 
-            # Execute the champion's entrypoint() to get the prompt pack
-            prompt_id = hashlib.sha256(best_program_id.encode()).hexdigest()[:16]
-            pack = self._execute_entrypoint(best_code, prompt_id)
+            # Fitness-proportional sampling (epsilon floor for zero-fitness prompts)
+            epsilon = 0.01
+            weights = [max(f, epsilon) for _, f, _ in candidates]
+            chosen_pid, chosen_fitness, chosen_code = random.choices(
+                candidates, weights=weights, k=1
+            )[0]
+
+            pack = self._execute_entrypoint(chosen_code)
             if pack is None:
                 return None
 
             logger.debug(
-                f"[GigaEvoArchivePromptFetcher] Champion: {best_program_id[:8]} "
-                f"fitness={best_fitness:.4f} prompt_id={prompt_id} "
-                f"has_user={pack.user is not None}"
+                f"[GigaEvoArchivePromptFetcher] Selected: {chosen_pid[:8]} "
+                f"fitness={chosen_fitness:.4f} prompt_id={pack.prompt_id} "
+                f"has_user={pack.user is not None} "
+                f"(from {len(candidates)} candidates)"
             )
             return pack
 
@@ -285,17 +290,19 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             )
             return None
 
-    def _execute_entrypoint(self, code: str, prompt_id: str) -> "_PromptPack | None":
+    def _execute_entrypoint(self, code: str) -> "_PromptPack | None":
         """Execute a program's entrypoint() in a clean namespace.
+
+        Computes prompt_id from the system prompt TEXT (not the program UUID)
+        so it matches the ID used by PromptFitnessStage on the read side.
 
         Args:
             code: Python source code with entrypoint() function that returns
                   either a str (system prompt only) or a dict with keys
                   "system" (required) and "user" (optional).
-            prompt_id: Pre-computed prompt_id to attach to the resulting pack.
 
         Returns:
-            _PromptPack with system/user texts, or None on error
+            _PromptPack with system/user texts and text-derived prompt_id, or None on error
         """
         try:
             namespace: dict[str, Any] = {}
@@ -313,7 +320,8 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         "[GigaEvoArchivePromptFetcher] entrypoint() returned empty string"
                     )
                     return None
-                return _PromptPack(system=result, user=None, prompt_id=prompt_id)
+                pid = prompt_text_to_id(result)
+                return _PromptPack(system=result, user=None, prompt_id=pid)
             elif isinstance(result, dict):
                 system = result.get("system", "")
                 if not isinstance(system, str) or not system.strip():
@@ -327,7 +335,8 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         "[GigaEvoArchivePromptFetcher] dict entrypoint() has invalid 'user' key — ignoring"
                     )
                     user = None
-                return _PromptPack(system=system, user=user, prompt_id=prompt_id)
+                pid = prompt_text_to_id(system)
+                return _PromptPack(system=system, user=user, prompt_id=pid)
             else:
                 logger.warning(
                     f"[GigaEvoArchivePromptFetcher] entrypoint() returned {type(result)}, "

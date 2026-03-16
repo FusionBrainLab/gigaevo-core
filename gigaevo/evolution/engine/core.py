@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import contextlib
 from typing import TYPE_CHECKING
 
@@ -49,6 +50,7 @@ class EvolutionEngine:
         config: EngineConfig,
         writer: LogWriter,
         metrics_tracker: MetricsTracker,
+        pre_step_hook: Callable[[], Awaitable[None]] | None = None,
     ):
         self.storage = storage
         self.strategy = strategy
@@ -67,6 +69,7 @@ class EvolutionEngine:
         self.metrics = EngineMetrics()
         self.state = ProgramStateManager(self.storage)
         self._metrics_tracker = metrics_tracker
+        self._pre_step_hook = pre_step_hook
 
         logger.info(
             "[EvolutionEngine] Init | strategy={}, acceptor={}",
@@ -180,6 +183,9 @@ class EvolutionEngine:
 
     async def step(self) -> None:
         """One generation step (idle → mutate → idle → ingest → refresh → idle)."""
+        if self._pre_step_hook:
+            await self._pre_step_hook()
+
         # Phase 1: wait until engine is idle (no QUEUED/RUNNING programs)
         await self._await_idle()
         logger.debug("[EvolutionEngine] Phase 1: Idle confirmed")
