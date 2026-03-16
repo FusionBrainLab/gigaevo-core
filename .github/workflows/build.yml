@@ -9,6 +9,19 @@ on:
       - main
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - name: Ruff check
+        run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +84,7 @@ jobs:
           git push origin HEAD:main
 
   release:
-    needs: [build, test]
+    needs: [lint, build, test]
     permissions:
       contents: write
       id-token: write

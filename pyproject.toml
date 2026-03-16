@@ -83,6 +83,7 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "run_hydra.py" = ["E402"]
 "tools/**/*.py" = ["E402"]
 "__init__.py" = ["F401"]
+"problems/**/*.py" = ["E402", "E722", "E741", "F841"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["gigaevo"]
