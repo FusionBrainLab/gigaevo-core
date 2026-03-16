@@ -1,7 +1,7 @@
 from typing import Iterable
 import cma
 import numpy as np
-from helper import get_matrix, BaseEvaluator, Matrix, ExplorationScore, FinalizationScore
+from helper import BaseEvaluator, Matrix, ExplorationScore, FinalizationScore
 import random
 import pyswarms as ps
 
@@ -88,7 +88,7 @@ def run_pso(fun: Evaluator, num_eval: int=5, options={ 'c1': 1.0, 'c2': 1.0, 'w'
         
 
 def entrypoint():
-    fun = Evaluator(mat=get_matrix(), max_depth=250)
-    xopt = run_pso(fun, 1)
+    fun = Evaluator(path_name="init", max_depth=250)
+    xopt = run_pso(fun, 10)
     
     return fun.get_best()

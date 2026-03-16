@@ -44,8 +44,15 @@ for i in range(0, len(rank_thresholds)):
         return values[i]
 return values[-1]
 
+### Reusing backuped pathes from previous programs
+During initizalization of parameters you must choose path_name to load path from previous evolutions
+"init" is reserved name for pure run with init decomposition without preloaded path. Use it only during stagnation of evolution
+you must use other names you will see in evo path statistics.
+Example:
+  fun = Evaluator(path_name="init_r207_e8asef0e843") # for exploitation (use path_name you will see in prompt for concrete program)
+  fun = Evaluator(path_name="init") # for exploration 
 
-### Evaluator Interface 
+### Evaluator Interface (you must follow it)
 -evaluator.policy_mapping() — set up parameters for todd search (Must be implemented)
   *use evaluator.map_par(fun=<callable>, rank_thr=<int>) — The only way get variable. Map parameter via fun and check threshold limits. Notes: every call move return fun(hidden_parameters[cur_idx]) and cur_idx++ if rank of init matrix > rank_thr, else do nothing (return zero)
   *evaluator.set_X(constant) — set up constant shcedule, where X is one of policy variables
@@ -57,7 +64,6 @@ return values[-1]
 -evaluator.path_num — num of current best pathes which can be chosen for reinitialization. Can be changed after run with reinitialization.
 -evaluator.set_up_new_init(path_num=<int>, rank_thr=<int>, xopt=<List[float]>):List[float]|None — path_num and rank_thr define next init matrix for todd: set last matrix with rank > rank_thr for path with num best_num. Return None if all matrix > rank_thr else active parameters 
 -evaluator.extract_active() — return current active parameters (e.g. parameters in the limits of possible rank thresholds)
--get_matrix() — required to obtain initial matrix
 
 ### Example lines of best path statistics you will see:
 best_path_stat:
@@ -74,6 +80,10 @@ Rank=230 at eval=38
 Final Rank=189 at eval=190
 total_eval=1000
 best_seen_times=131
+evo path statistics:
+best_overall=['rused_r{num}_{hash}', 'rused_r{num}_{hash}', 'rused_r{num}_{hash}']
+best_with_init=['init_r{num}_{hash}', 'init_r{num}_{hash}']
+this path name: init_r117_979d82426430
 
 ### Hints to path info description:
 - bd basis_dim for action's z (2**bd is max useful sampling)
@@ -89,6 +99,9 @@ best_seen_times=131
 - search_stat - optimization info with ranks reached at the corresponding eval (partially print points uniformly distibuted in ranks)
 - total_eval - total number of fasttodd evaluations
 - best_seen_times - number of times when final rank was reached 
+- names in evo path statistics are the path which must be used during evaluator initialization:
+ * init/reused -- path during run without/with known init path
+ * r{num} -- num is final found rank in path
 
 ### Constraints to code
 -Must include Evaluator.policy_mapping, Evaluator.__call__, and entrypoint() returning fun.get_best().
@@ -96,10 +109,10 @@ best_seen_times=131
 -The least rank threshold must be below the expected final rank. For example, if it is expected that final rank can not be less than 190 than rank_thresholds=[220,200,0] and rank_thresholds=[220,200,190] are effectively the same, so rank_thresholds=[220,200,190,0] is waste of parameters  
 -Check rank scheduling for not wasting parameters. For example, if you observe ranks from 567 to 407 but scheduling is (410, 405, 390, 0) than it is effectively only (410,405) because 407 > 405 and 405 > 390 and 405 > 0. So you can reduce threshold num from 4 to 2 without sacrifacing the quality.
 -Estimate the lowest possible rank based on the current reached ranks.
--Whole program runtime should be below 3000s. Faster — better. Optimal time is 1500s
+-Whole program runtime should be below 1000s. Faster — better. Optimal time is 300s
 -seeds must be fixed before any sampling
 
-###Rules to analyze the search data/metrics:
+###Rules to analyze the search data/metrics and mutate:
 1) The only source of truth is Metrics output and best path info:
   a) Intepretate found best policies values to get strategy insights and reuse found best parameters
   b) Tend to analyze statistics from path. For example, big best_count can mean bad exploration; If you see many great diff from best and good fitness (near/best than Sot) it can be mean that is better to penalize this values.
@@ -110,6 +123,7 @@ best_seen_times=131
 5) Analyze/exploit/mutate the search strategy.
 6) Concentrate on best policy parameters returned, do suggestions only based on the evidence without own prefernces. For example, if you constantly see wred < 0 it means that penalization leads to better final rank, and it is not some sort of optmization artifact
 7) Check sheduling logic
+8) When exploring and exploiting path from evo path statistics use set_up_new_init immidetly to not waste computation
 
 ###ENCROURAGES FOR IMPLEMENTATION (Possbile CHOICES per insights/mutations):
 1) Exploration via optimization/samping and policy mapping variation

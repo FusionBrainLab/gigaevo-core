@@ -1,7 +1,7 @@
 from typing import Iterable
 import cma
 import numpy as np
-from helper import get_matrix, BaseEvaluator, Matrix, ExplorationScore, FinalizationScore
+from helper import BaseEvaluator, Matrix, ExplorationScore, FinalizationScore
 import random
 import pyswarms as ps
 
@@ -94,13 +94,13 @@ def run_cma(fun, num_eval: int = 5, initial_sigma: float = 0.5) -> np.ndarray:
     return np.array(xopt)
 
 def entrypoint():
-    fun = Evaluator(mat=get_matrix(), max_depth=250)
+    fun = Evaluator(path_name="init", max_depth=250)
     
-    xopt = run_cma(fun, 80)
+    xopt = run_cma(fun, 20)
     # fun(xopt)
     x_active = fun.set_up_new_init(0, rank_thr=270, xopt=xopt)
     if x_active is not None and len(x_active) > 0:
-        xopt = run_cma(fun, 100)
+        xopt = run_cma(fun, 70)
         fun(xopt)
     
     return fun.get_best()

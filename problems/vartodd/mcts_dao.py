@@ -35,6 +35,7 @@ class Path:
         return new_path
         
     def branch_path_at(self, rank_thr: int):
+        print(f"{self.final_node.state.rows=}")
         node = self.final_node
         if node.state.rows > rank_thr:
             return None
@@ -60,6 +61,8 @@ class Path:
             node = node.parent
         path = list(reversed(path))
         for index, node in enumerate(path[1:]):
+            if node.incoming is None:
+                return "path stats unavailable (missing incoming info)"
 
             cand = node.incoming.cand
             s = node.incoming.global_info

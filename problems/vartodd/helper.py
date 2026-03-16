@@ -1,4 +1,7 @@
-from typing import List
+from typing import List, Optional
+import hashlib
+import json
+from pathlib import Path as FsPath
 import numpy as np
 from node import Matrix, Node, FinalizationScore, ExplorationScore, Tensor3D
 from mcts_dao import Dao, RankSchedule, Path
@@ -7,6 +10,7 @@ from typing import Iterable, Sequence, Any, Tuple
 from concurrent.futures import ProcessPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
+from path_store import PathStore, X0_LENGTH
 
 
 def _worker_run_one_from_template(seed, path: Path, todd: Todd, bs_width: RankSchedule = RankSchedule.constant(1), todd_width: RankSchedule = RankSchedule.constant(1)):
@@ -24,9 +28,8 @@ def find_rank(path, rank):
         
 def get_matrix(name:str=None) -> Matrix:
     if name is None:
-        # return Matrix.from_numpy(np.load("problems/vartodd/npy/gf2^16_1612310.npy") )
-        return Matrix.from_numpy(np.load("problems/vartodd/npy/gf2^10_1030.npy") )
-        # return Matrix.from_numpy(np.load("problems/vartodd/npy/gf2^9_940.npy") )
+        # return Matrix.from_numpy(np.load("npy/gf2^16_1612310.npy") )
+        return Matrix.from_numpy(np.load("npy/gf2^10_1030.npy") )
     return Matrix.from_numpy(np.load(f"npy/{name}.npy") )
 
 
@@ -227,11 +230,82 @@ def print_uniform_by_rank(best_ranks, best_evals, max_lines=10):
         s += f"Rank={rank} at eval={eval_step}\n"
     return s
 
+
+def summarize_path_backups(root_dir: str = "data/path_backups", top_k: int = 10, init_word: str = "init") -> str:
+    root = FsPath(root_dir)
+    if not root.exists() or not root.is_dir():
+        return "best_overall=[]\nbest_with_init=[]"
+
+    top_k = max(1, int(top_k))
+    records = []
+
+    for backup_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        meta_path = backup_dir / "meta.json"
+        matrices_path = backup_dir / "matrices.npz"
+        if not meta_path.exists() or not matrices_path.exists():
+            continue
+
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            paths_meta = meta.get("paths", [])
+            if not paths_meta:
+                continue
+
+            best_rank = None
+            with np.load(matrices_path) as data:
+                for p in paths_meta:
+                    keys = p.get("matrix_keys", [])
+                    if not keys:
+                        continue
+                    last_key = keys[-1]
+                    if last_key not in data:
+                        continue
+                    rank = int(data[last_key].shape[0])
+                    if best_rank is None or rank < best_rank:
+                        best_rank = rank
+
+            if best_rank is None:
+                continue
+
+            records.append((backup_dir.name, best_rank))
+        except Exception:
+            continue
+
+    records.sort(key=lambda x: (x[1], x[0]))
+
+    def _take_with_rank_cap(items, limit: int, per_rank_cap: int = 4):
+        out = []
+        rank_counts = {}
+        for name, rank in items:
+            if len(out) >= limit:
+                break
+            count = rank_counts.get(rank, 0)
+            if count >= per_rank_cap:
+                continue
+            out.append(name)
+            rank_counts[rank] = count + 1
+        return out
+
+    word = init_word.lower()
+    overall_records = [(name, rank) for name, rank in records if word not in name.lower()]
+    best_overall = _take_with_rank_cap(overall_records, top_k)
+    init_records = [(name, rank) for name, rank in records if word in name.lower()]
+    best_with_init = _take_with_rank_cap(init_records, top_k)
+    total_without_init = len(overall_records)
+    total_with_init = len(init_records)
+    return (
+        f"best_overall={best_overall}\n"
+        f"best_with_init={best_with_init}\n"
+        f"count_without_init={total_without_init}\n"
+        f"count_with_init={total_with_init}"
+    )
+
 class BaseEvaluator:
     todd: Todd
     _best_rank: int=100000
     best_matrix: np.ndarray
-    best_pathes: List[Path]
+    best_pathes: List[Path] = field(default_factory=list)
     best_report: str
     best_pcfg: str
     best_eval: int = 0
@@ -241,16 +315,25 @@ class BaseEvaluator:
     bs_width: RankSchedule = RankSchedule.constant(1)
     todd_width: RankSchedule = RankSchedule.constant(1)
     current_path: Path
-    best_ranks: List[int] 
-    best_evals: List[int] 
-    def __init__(self, mat: Matrix, max_depth: int, fin_rank: int = 161, shedule: str = "rank", fill_tcounts=False):
+    best_ranks: List[int] = field(default_factory=list)
+    best_evals: List[int] = field(default_factory=list)
+    def __init__(self, path_name: str = "init", mat: Matrix=None, max_depth: int=300, fin_rank: int = 161, shedule: str = "rank", fill_tcounts=False):
         self.with_report = False
         self.current_path = Path()
-        self.init_rank = mat.rows
+        self.is_init = True
+        self.dao: Dao = Dao()
+        if mat is None and path_name == "init":
+            mat = get_matrix()
+        elif path_name != "init":
+            self.is_init = False
+            self.path_name = path_name
+            self.load_path(path_name)
+            self.loaded_rank = self.best_pathes[0].final_node.state.rows
+            mat = self.best_pathes[0].final_node.path_from_root()[0].state
         self.current_path.final_node = Node(mat)
+        self.init_rank = mat.rows
         self.fin_rank = fin_rank
         self.shedule = shedule
-        self.dao: Dao = Dao()
         self.dao.threads = 4
         self.todd = Todd(self.dao, max_depth)
         self.max_depth = max_depth
@@ -260,7 +343,10 @@ class BaseEvaluator:
         self.best_evals = []
         self.active_params = []
         self.best_params = []
-        self.x0 = [0 for i in range(200)]
+        # self
+        self.x0 = [0 for i in range(X0_LENGTH)]
+
+            
         self.reinit()    
 
     def set_up_new_init(self, path_num:int, rank_thr:int, xopt=None):
@@ -361,6 +447,11 @@ class BaseEvaluator:
         return mats_ranks
 
     def get_best(self):
+        if not self.is_init:
+            if self.best_rank != self.loaded_rank:
+                self.path_name = self.save_path("reused")
+        else:
+            self.path_name = self.save_path("init")
         return (
             self.best_pathes[0].final_node.state.to_numpy(), 
             self.best_pathes[0].format_path_stats_tiny(),
@@ -370,8 +461,58 @@ class BaseEvaluator:
             f"rank 0.1q={np.quantile(self.tcount, 0.1)} \n" +
             print_uniform_by_rank(self.best_ranks, self.best_evals, 8) +
             f"total_evals: {self.total_eval}" +
-            f"\nbest_seen_times: {self.best_seen}"
+            f"\nbest_seen_times: {self.best_seen}" + 
+            f"\nevo path statistics:\n{summarize_path_backups(top_k=20)}" +
+            f"\nthis path name: {self.path_name}"
             )
+
+    def _path_depth(self, path: Path) -> int:
+        depth = 0
+        node = path.final_node
+        while node is not None:
+            depth += 1
+            node = node.parent
+        return depth
+
+    def _pick_path_for_save(self) -> Path:
+        if not self.best_pathes:
+            raise ValueError("no best paths available to save")
+        best_rank = min(p.final_node.state.rows for p in self.best_pathes if p.final_node is not None)
+        candidates = [p for p in self.best_pathes if p.final_node is not None and p.final_node.state.rows == best_rank]
+        # Prefer a shorter solution when ranks tie.
+        return min(candidates, key=self._path_depth)
+
+    def _auto_hashed_name(self, name: str, path: Path) -> str:
+        rank = int(path.final_node.state.rows)
+        mat = path.final_node.state.to_numpy()
+        h = hashlib.blake2b(digest_size=6)
+        h.update(str(rank).encode("utf-8"))
+        h.update(mat.tobytes())
+        return f"{name}_r{rank}_{h.hexdigest()}"
+
+    def save_path(self, name: str, root_dir: str = "data/path_backups", store_daos: bool = True, auto_hash: bool = True) -> str:
+        store = PathStore(root_dir=root_dir)
+        best_path = self._pick_path_for_save()
+        save_name = self._auto_hashed_name(name, best_path) if auto_hash else name
+        store.save(save_name, [best_path], store_daos=store_daos)
+        return save_name
+
+    def load_path(self, name: str, root_dir: str = "data/path_backups", dao_fallback: Optional[Dao] = None):
+        store = PathStore(root_dir=root_dir)
+        fallback = self.dao if dao_fallback is None else dao_fallback
+        self.best_pathes = store.load(name, dao_fallback=fallback)
+        return self.best_pathes
+    
+    def insert_path(self, name: str, root_dir: str = "data/path_backups", dao_fallback: Optional[Dao] = None):
+        store = PathStore(root_dir=root_dir)
+        fallback = self.dao if dao_fallback is None else dao_fallback
+        self.best_pathes = store.load(name, dao_fallback=fallback)
+        self._best_rank = self.best_pathes[0].final_node.state.rows
+        self.best_seen = 1
+        self.total_eval = 1
+        # self.dao = 
+        return self.best_pathes
+    
     def set_final_scores(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))

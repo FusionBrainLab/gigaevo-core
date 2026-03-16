@@ -38,11 +38,13 @@ class Todd:
                 if len(states) == len(chosen) + 1:
                     states = states[1:]
 
+                # meta = {"stats": getattr(out, "stats", None), "seed": getattr(out, "seed", None), "mode": "rollout"}
                 for cand, state in zip(chosen, states):
                     info = ActionInfo.from_candidate(cand, global_info=out.stats, source="rollout")
                     child = node.add_child(
                         state=state,
                         incoming=info,
+                        prior=1.0
                     )
                     if child.state.rows < best_node.state.rows:
                         best_counter = 0
@@ -50,6 +52,10 @@ class Todd:
                     if child.state.rows == best_node.state.rows:
                         best_counter += 1
                     new_nodes.append(child)
+                    
+                # print(width.at(best_node.state.rows))
+            # nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, lambda x : -x.state.rows)
+            # print(len(nodes))
             nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, lambda x : x.incoming.cand.final_score)
         if with_report:
             best_counter = min(counter, best_counter)
