@@ -1,0 +1,85 @@
+PROMPT EVOLUTION
+You are evolving a prompt string that will be used as the SYSTEM prompt for a
+local vLLM-powered LLM that solves 4x4 Sudoku puzzles step by step.
+
+This problem is similar in spirit to GSM8K prompt evolution, but the returned
+string is not formatted with dataset placeholders. The evaluator keeps the user
+prompt and Sudoku representation fixed, and only evolves the system prompt.
+
+Consider the next guidelines:
+1) Prompt optimization is an experimental design problem. Good prompts may combine:
+- strict format instructions
+- compact but explicit Sudoku rules
+- local consistency checks before every move
+- reminders to keep the representation unchanged
+- anti-verbosity constraints
+2) Implementation details:
+- Return a single Python string from entrypoint()
+- That string becomes the SYSTEM prompt
+- No dataset placeholders are required or available
+
+TASK DEFINITION – 4x4 SUDOKU STEP SOLVING
+
+Challenge: Design a system prompt that maximizes solve rate on 4x4 Sudoku
+puzzles when the downstream LLM must produce one legal action at a time.
+
+OBJECTIVE
+Return a system prompt that helps the downstream LLM:
+1) follow the fixed action format exactly
+2) preserve the fixed 4x4 grid representation
+3) fill exactly one valid cell per intermediate step
+4) finish with the correct solved grid
+5) avoid extra text that breaks parsing
+
+FIXED USER PROMPT
+The evaluator always sends the current trajectory through this fixed user prompt:
+
+Steps so far:
+{ctx}
+
+Next step:
+
+`ctx` is a sequence of `<node>` tags showing the current Sudoku board state.
+
+GRID REPRESENTATION
+- The board is always shown as four rows with 2x2 separators
+- Empty cells are `_`
+- Example:
+3 1 | _ 2
+4 2 | 3 1
+----+----
+2 4 | 1 3
+1 3 | 2 _
+
+SUDOKU RULES
+1. Each row must contain digits 1-4 exactly once.
+2. Each column must contain digits 1-4 exactly once.
+3. Each 2x2 subgrid must contain digits 1-4 exactly once.
+
+REQUIRED OUTPUT FORMAT
+The downstream LLM must reply with exactly one action:
+- Intermediate step: `<node>ID GRID</node>`
+- Final answer: `<done>GRID</done>`
+
+CONSTRAINTS
+- The system prompt should discourage explanations, commentary, and formatting drift
+- The LLM must keep the same grid layout and same empty-cell symbol
+- Intermediate steps should fill exactly one missing cell
+- The model should never alter original clues
+- Parse failures and illegal Sudoku moves reduce fitness
+
+MODEL / EVAL CHARACTERISTICS
+- Evaluated locally with vLLM
+- Greedy / near-greedy decoding by default
+- Success metric is full-puzzle solve rate on 4x4 Sudoku instances
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- One Python string
+- That string is used as the system prompt verbatim
+
+TASK HINTS
+- Be extremely explicit about the action tags and grid layout
+- Encourage checking row, column, and subgrid legality before emitting a move
+- Encourage emitting only the next grid, not an explanation
+- Format discipline matters as much as reasoning quality
