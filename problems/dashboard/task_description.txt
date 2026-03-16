@@ -1,0 +1,20 @@
+Evolve a Python function `entrypoint(context) -> str` that generates a **stunning, single-file HTML monitoring dashboard** for GigaEvo evolutionary AI experiments.
+
+**INPUT**: `context["runs"]` — a list of experiment run dicts, each containing:
+- Identity: `name`, `label`, `status` ("running"/"stalled"/"complete")
+- Progress: `current_gen`, `total_gens`, `gens_since_improvement`
+- Fitness history: `gen_fitness_mean` (list), `gen_fitness_frontier` (list, running best), `best_fitness`
+- Valid/invalid counts: `gen_valid_count`, `gen_invalid_count`, `valid_rate`
+- Archive: `archive_cells` (sparse list of `{bin, center, fitness, program_id}`), `archive_filled_cells`, `archive_total_cells`
+- Top programs: `top_programs` (list of `{rank, id, fitness, generation, mutation, code_preview}`)
+- Genealogy: `genealogy` (recursive `{id, fitness, generation, mutation, parents:[...]}`)
+- Timing: `validator_mean_s`, `validator_p95_s`
+
+**OUTPUT**: A complete self-contained HTML string.
+
+**HARD CONSTRAINTS**:
+- No CSS entrance animations starting at `opacity:0` (screenshot taken 2s after load)
+- Must contain `<html` and be > 500 chars
+- External JS libraries (Chart.js, D3.js, Plotly.js, etc.) are **allowed via CDN** for better charts
+
+**GOAL**: Make it beautiful, information-dense, and immediately useful to an AI researcher. AIRI brand: bg `#161C27`, teal `#2FBEAD`, coral `#E5434D`, cream `#F2EEE9`.

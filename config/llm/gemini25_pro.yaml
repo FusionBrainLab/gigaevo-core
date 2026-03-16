@@ -1,0 +1,24 @@
+# @package _global_
+
+# Single mutation LLM: google/gemini-2.5-pro via OpenRouter.
+# Pricing: $1.25/M input, $10.00/M output (OpenRouter).
+# Best for: final quality, complex reasoning, WebDev Arena #1.
+#
+# Requires env var: OPENAI_API_KEY=<openrouter-api-key>
+#
+# Usage:
+#   python run.py ... llm=gemini25_pro
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: google/gemini-2.5-pro
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: ${temperature}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+  probabilities: [1.0]
+  writer: ${writer}
