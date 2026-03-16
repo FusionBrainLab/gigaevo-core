@@ -1,0 +1,75 @@
+runtime_evaluation:
+  warmup_repetitions: 3
+  timing_repetitions: 33
+
+specs:
+  fitness:
+    description: Execution speed score for valid programs, computed as 1 / execution_time_sec
+    decimals: 6
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 1.0e-9
+    upper_bound: 1000000.0
+    include_in_prompts: true
+    significant_change: 1.0e-6
+    sentinel_value: 0.0
+  execution_time_sec:
+    description: Median runtime of the full 5-case entrypoint batch in seconds after warm-up, lower is better
+    decimals: 6
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 1000.0
+    include_in_prompts: true
+    significant_change: 1.0e-6
+    sentinel_value: 1000000.0
+  timing_repetitions:
+    description: Number of timed full-batch runs used to compute the median execution_time_sec
+    decimals: 0
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 1.0
+    upper_bound: 1000000.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0.0
+  warmup_repetitions:
+    description: Number of untimed full-batch warm-up runs executed before timed measurement
+    decimals: 0
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 1000000.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0.0
+  avg_relative_error:
+    description: Mean relative L2 error across all fixed convolution cases
+    decimals: 6
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 1000000.0
+    include_in_prompts: true
+    significant_change: 1.0e-6
+    sentinel_value: 1000000.0
+  exact_case_fraction:
+    description: Fraction of cases that match the reference solution within AlgoTune tolerance
+    decimals: 6
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0e-6
+    sentinel_value: 0.0
+  is_valid:
+    description: Whether the program is valid (1 valid, 0 invalid)
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0.0
