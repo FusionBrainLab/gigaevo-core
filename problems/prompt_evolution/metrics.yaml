@@ -1,4 +1,4 @@
-metrics:
+specs:
   fitness:
     description: "Success rate — fraction of mutations that improved fitness over parent"
     higher_is_better: true
