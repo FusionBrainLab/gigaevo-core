@@ -207,18 +207,22 @@ class MutationAgent(LangGraphAgent):
         Returns:
             Updated state with messages field and optional prompt_id
         """
-        # Refresh system prompt from dynamic fetcher if available
+        # Refresh system and user prompts from dynamic fetcher if available
         if (
             self._prompt_fetcher is not None
             and self._prompt_fetcher.is_dynamic
             and self._metrics_formatter is not None
         ):
-            fetched = self._prompt_fetcher.fetch("mutation", "system")
-            self.system_prompt = fetched.text.format(
+            fetched_sys = self._prompt_fetcher.fetch("mutation", "system")
+            self.system_prompt = fetched_sys.text.format(
                 task_description=self._task_description,
                 metrics_description=self._metrics_formatter.format_metrics_description(),
             )
-            state["prompt_id"] = fetched.prompt_id
+            state["prompt_id"] = fetched_sys.prompt_id
+            # Also refresh user prompt template if a co-evolved version is available
+            fetched_user = self._prompt_fetcher.fetch("mutation", "user")
+            if fetched_user.prompt_id is not None:
+                self.user_prompt_template = fetched_user.text
         else:
             state["prompt_id"] = None
 

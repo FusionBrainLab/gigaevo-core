@@ -24,6 +24,15 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class _PromptPack:
+    """Internal holder for co-evolved system + optional user prompt texts."""
+
+    system: str
+    user: str | None
+    prompt_id: str
+
+
+@dataclass
 class FetchedPrompt:
     """Result of a prompt fetch operation."""
 
@@ -161,7 +170,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self._fitness_key = fitness_key
 
         # Cache state
-        self._cached_prompt: FetchedPrompt | None = None
+        self._cached_pack: "_PromptPack | None" = None
         self._cache_timestamp: float = 0.0
 
         # Lazy-imported redis clients (set on first use)
@@ -216,11 +225,11 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
     def _is_cache_stale(self) -> bool:
         return (time.monotonic() - self._cache_timestamp) >= self._cache_ttl
 
-    def _refresh_champion(self) -> FetchedPrompt | None:
+    def _refresh_champion(self) -> "_PromptPack | None":
         """Read the current champion from the prompt run's Redis archive.
 
         Returns:
-            FetchedPrompt if a champion was found, None if archive is empty
+            _PromptPack if a champion was found, None if archive is empty
         """
         try:
             r = self._get_sync_redis()
@@ -264,17 +273,18 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             if best_code is None or best_program_id is None:
                 return None
 
-            # Execute the champion's entrypoint() to get the prompt text
-            prompt_text = self._execute_entrypoint(best_code)
-            if prompt_text is None:
+            # Execute the champion's entrypoint() to get the prompt pack
+            prompt_id = hashlib.sha256(best_program_id.encode()).hexdigest()[:16]
+            pack = self._execute_entrypoint(best_code, prompt_id)
+            if pack is None:
                 return None
 
-            prompt_id = hashlib.sha256(best_program_id.encode()).hexdigest()[:16]
             logger.debug(
                 f"[GigaEvoArchivePromptFetcher] Champion: {best_program_id[:8]} "
-                f"fitness={best_fitness:.4f} prompt_id={prompt_id}"
+                f"fitness={best_fitness:.4f} prompt_id={prompt_id} "
+                f"has_user={pack.user is not None}"
             )
-            return FetchedPrompt(text=prompt_text, prompt_id=prompt_id)
+            return pack
 
         except Exception as exc:
             self._fetch_errors += 1
@@ -283,14 +293,17 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             )
             return None
 
-    def _execute_entrypoint(self, code: str) -> str | None:
+    def _execute_entrypoint(self, code: str, prompt_id: str) -> "_PromptPack | None":
         """Execute a program's entrypoint() in a clean namespace.
 
         Args:
-            code: Python source code with entrypoint() -> str function
+            code: Python source code with entrypoint() function that returns
+                  either a str (system prompt only) or a dict with keys
+                  "system" (required) and "user" (optional).
+            prompt_id: Pre-computed prompt_id to attach to the resulting pack.
 
         Returns:
-            String returned by entrypoint(), or None on error
+            _PromptPack with system/user texts, or None on error
         """
         try:
             namespace: dict[str, Any] = {}
@@ -302,12 +315,33 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                 )
                 return None
             result = entrypoint_fn()
-            if not isinstance(result, str):
+            if isinstance(result, str):
+                if not result.strip():
+                    logger.warning(
+                        "[GigaEvoArchivePromptFetcher] entrypoint() returned empty string"
+                    )
+                    return None
+                return _PromptPack(system=result, user=None, prompt_id=prompt_id)
+            elif isinstance(result, dict):
+                system = result.get("system", "")
+                if not isinstance(system, str) or not system.strip():
+                    logger.warning(
+                        "[GigaEvoArchivePromptFetcher] dict entrypoint() missing valid 'system' key"
+                    )
+                    return None
+                user = result.get("user")
+                if user is not None and (not isinstance(user, str) or not user.strip()):
+                    logger.warning(
+                        "[GigaEvoArchivePromptFetcher] dict entrypoint() has invalid 'user' key — ignoring"
+                    )
+                    user = None
+                return _PromptPack(system=system, user=user, prompt_id=prompt_id)
+            else:
                 logger.warning(
-                    f"[GigaEvoArchivePromptFetcher] entrypoint() returned {type(result)}, expected str"
+                    f"[GigaEvoArchivePromptFetcher] entrypoint() returned {type(result)}, "
+                    f"expected str or dict"
                 )
                 return None
-            return result
         except Exception as exc:
             logger.warning(
                 f"[GigaEvoArchivePromptFetcher] entrypoint() execution error: {exc}"
@@ -317,29 +351,42 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
     def fetch(self, agent_name: str, prompt_type: str) -> FetchedPrompt:
         """Fetch the current champion's prompt, falling back to fixed if unavailable.
 
+        For "mutation" agent, serves co-evolved system and user prompts from the
+        champion pack. Only mutation prompts are tracked; all others use fallback.
+
         Args:
-            agent_name: Agent type (only "mutation" and "system" are tracked)
-            prompt_type: Prompt type (system or user)
+            agent_name: Agent type (only "mutation" prompts are co-evolved)
+            prompt_type: "system" or "user"
 
         Returns:
             FetchedPrompt with champion text and tracking ID, or fallback
         """
-        # Only track mutation system prompts; others use fallback
-        if agent_name != "mutation" or prompt_type != "system":
+        # Only co-evolve mutation prompts
+        if agent_name != "mutation":
             return self._fallback.fetch(agent_name, prompt_type)
 
-        # Refresh champion if cache is stale
+        # Refresh champion pack if cache is stale
         if self._is_cache_stale():
-            new_champion = self._refresh_champion()
-            if new_champion is not None:
-                self._cached_prompt = new_champion
+            new_pack = self._refresh_champion()
+            if new_pack is not None:
+                self._cached_pack = new_pack
             self._cache_timestamp = time.monotonic()
 
-        if self._cached_prompt is not None:
+        if self._cached_pack is not None:
             self._cache_hits += 1
-            return self._cached_prompt
+            if prompt_type == "system":
+                return FetchedPrompt(
+                    text=self._cached_pack.system,
+                    prompt_id=self._cached_pack.prompt_id,
+                )
+            elif prompt_type == "user" and self._cached_pack.user is not None:
+                return FetchedPrompt(
+                    text=self._cached_pack.user,
+                    prompt_id=self._cached_pack.prompt_id,
+                )
+            # user prompt not co-evolved yet — fall through to fallback
 
-        # No champion yet: use fallback
+        # No champion yet or no user in pack: use fallback
         return self._fallback.fetch(agent_name, prompt_type)
 
     def record_outcome(
@@ -406,5 +453,8 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         return {
             "cache_hits": self._cache_hits,
             "fetch_errors": self._fetch_errors,
-            "has_champion": self._cached_prompt is not None,
+            "has_champion": self._cached_pack is not None,
+            "champion_has_user": (
+                self._cached_pack is not None and self._cached_pack.user is not None
+            ),
         }

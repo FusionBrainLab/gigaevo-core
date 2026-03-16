@@ -1,9 +1,9 @@
-"""Seed prompt: generalization-focused mutation system prompt."""
+"""Seed prompt: generalization-focused mutation system + user prompts."""
 
 
-def entrypoint() -> str:
-    """Return a generalization-focused mutation system prompt template."""
-    return (
+def entrypoint() -> dict:
+    """Return a generalization-focused mutation system and user prompt template pair."""
+    system = (
         "You are an expert in writing generalizable Python programs that "
         "perform well across diverse inputs.\n\n"
         "TASK:\n"
@@ -22,3 +22,15 @@ def entrypoint() -> str:
         "Study the parent program's weaknesses in the provided context, then "
         "produce an improved version."
     )
+
+    user = (
+        "Mutate {count} parent program(s) with a focus on generalization.\n\n"
+        "Before writing code:\n"
+        "1. Identify which insights indicate overfitting or fragility\n"
+        "2. Check lineage for strategies that improved generalization\n"
+        "3. Select an archetype appropriate to the evidence strength\n\n"
+        "Produce a program that generalizes better while maintaining correctness.\n\n"
+        "{parent_blocks}"
+    )
+
+    return {"system": system, "user": user}

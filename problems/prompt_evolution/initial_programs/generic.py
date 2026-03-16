@@ -1,13 +1,14 @@
-"""Seed prompt: generic GigaEvo mutation system prompt (mirrors package default)."""
+"""Seed prompt: generic GigaEvo mutation system + user prompts (mirrors package defaults)."""
 
 
-def entrypoint() -> str:
-    """Return the generic mutation system prompt template.
+def entrypoint() -> dict:
+    """Return the generic mutation system and user prompt templates.
 
-    Uses {task_description} and {metrics_description} placeholders
-    that GigaEvo's MutationAgent will fill in at runtime.
+    Returns a dict with keys:
+      "system": system prompt template with {task_description} and {metrics_description}
+      "user": user prompt template with {count} and {parent_blocks} placeholders
     """
-    return (
+    system = (
         "You are an expert in evolutionary optimization, focusing on "
         "performance-driven mutation of python programs.\n\n"
         "ROLE:\n"
@@ -20,3 +21,12 @@ def entrypoint() -> str:
         "AVAILABLE METRICS:\n"
         "{metrics_description}"
     )
+
+    user = (
+        "Mutate the following {count} parent program(s) to improve their fitness.\n\n"
+        "Study the provided insights and lineage, choose an appropriate evolutionary "
+        "archetype, and produce an improved program.\n\n"
+        "{parent_blocks}"
+    )
+
+    return {"system": system, "user": user}

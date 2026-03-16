@@ -26,7 +26,6 @@ from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.prompts import (
     InsightsPrompts,
     LineagePrompts,
-    MutationPrompts,
     ScoringPrompts,
 )
 
@@ -86,8 +85,9 @@ def create_mutation_agent(
     initial_fetch = fetcher.fetch("mutation", "system")
     system_template = initial_fetch.text
 
-    # Load user template (always from files, not co-evolved)
-    user_template = MutationPrompts.user(prompts_dir=prompts_dir)
+    # Load user template via fetcher (co-evolved if champion has user prompt, else from files)
+    user_fetch = fetcher.fetch("mutation", "user")
+    user_template = user_fetch.text
 
     # Create metrics formatter
     metrics_formatter = MetricsFormatter(metrics_context)

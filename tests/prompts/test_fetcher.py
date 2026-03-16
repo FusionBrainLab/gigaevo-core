@@ -168,6 +168,159 @@ class TestGigaEvoArchivePromptFetcher:
         assert "cache_hits" in stats
         assert "fetch_errors" in stats
         assert "has_champion" in stats
+        assert "champion_has_user" in stats
+
+    def test_fetch_user_returns_fallback_when_no_champion(self, tmp_prompts_dir: Path):
+        """fetch('mutation', 'user') returns fallback when no champion."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="chains/hotpotqa",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        result = fetcher.fetch("mutation", "user")
+        assert result.text == "User prompt for {code}"
+        assert result.prompt_id is None  # fallback has no tracking ID
+
+    def test_execute_entrypoint_str_return(self, tmp_prompts_dir: Path):
+        """_execute_entrypoint() handles str-returning entrypoint."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="prefix",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        code = 'def entrypoint() -> str:\n    return "Hello system."'
+        pack = fetcher._execute_entrypoint(code, "abc123")
+        assert pack is not None
+        assert pack.system == "Hello system."
+        assert pack.user is None
+        assert pack.prompt_id == "abc123"
+
+    def test_execute_entrypoint_dict_return_with_user(self, tmp_prompts_dir: Path):
+        """_execute_entrypoint() handles dict-returning entrypoint with user key."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="prefix",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        code = (
+            "def entrypoint() -> dict:\n"
+            '    return {"system": "System text.", "user": "User text {count}."}'
+        )
+        pack = fetcher._execute_entrypoint(code, "xyz789")
+        assert pack is not None
+        assert pack.system == "System text."
+        assert pack.user == "User text {count}."
+        assert pack.prompt_id == "xyz789"
+
+    def test_execute_entrypoint_dict_return_no_user(self, tmp_prompts_dir: Path):
+        """_execute_entrypoint() handles dict with system only."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="prefix",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        code = 'def entrypoint() -> dict:\n    return {"system": "System only."}'
+        pack = fetcher._execute_entrypoint(code, "sys_only")
+        assert pack is not None
+        assert pack.system == "System only."
+        assert pack.user is None
+
+    def test_execute_entrypoint_dict_missing_system_returns_none(
+        self, tmp_prompts_dir: Path
+    ):
+        """_execute_entrypoint() returns None when dict missing 'system' key."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="prefix",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        code = 'def entrypoint() -> dict:\n    return {"user": "Only user."}'
+        pack = fetcher._execute_entrypoint(code, "no_sys")
+        assert pack is None
+
+    def test_execute_entrypoint_invalid_type_returns_none(self, tmp_prompts_dir: Path):
+        """_execute_entrypoint() returns None when entrypoint returns invalid type."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="prefix",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        code = "def entrypoint():\n    return 42"
+        pack = fetcher._execute_entrypoint(code, "bad_type")
+        assert pack is None
+
+
+# ---------------------------------------------------------------------------
+# Seed Program Tests
+# ---------------------------------------------------------------------------
+
+
+class TestSeedPrograms:
+    """Tests that all seed programs return valid dict entrypoints."""
+
+    def _load_seed(self, name: str) -> dict:
+        """Load and execute a seed program's entrypoint()."""
+        import importlib.util
+
+        seed_path = (
+            Path(__file__).parent.parent.parent
+            / "problems"
+            / "prompt_evolution"
+            / "initial_programs"
+            / f"{name}.py"
+        )
+        spec = importlib.util.spec_from_file_location(f"seed_{name}", seed_path)
+        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        return mod.entrypoint()
+
+    @pytest.mark.parametrize(
+        "seed_name", ["generic", "hotpotqa", "minimal", "generalization"]
+    )
+    def test_seed_returns_dict(self, seed_name: str):
+        """All seed programs return a dict."""
+        result = self._load_seed(seed_name)
+        assert isinstance(result, dict), (
+            f"{seed_name}: expected dict, got {type(result)}"
+        )
+
+    @pytest.mark.parametrize(
+        "seed_name", ["generic", "hotpotqa", "minimal", "generalization"]
+    )
+    def test_seed_has_system_key(self, seed_name: str):
+        """All seed programs include non-empty 'system' key."""
+        result = self._load_seed(seed_name)
+        assert "system" in result, f"{seed_name}: missing 'system' key"
+        assert isinstance(result["system"], str) and result["system"].strip()
+
+    @pytest.mark.parametrize(
+        "seed_name", ["generic", "hotpotqa", "minimal", "generalization"]
+    )
+    def test_seed_has_user_key(self, seed_name: str):
+        """All seed programs include non-empty 'user' key."""
+        result = self._load_seed(seed_name)
+        assert "user" in result, f"{seed_name}: missing 'user' key"
+        assert isinstance(result["user"], str) and result["user"].strip()
+
+    @pytest.mark.parametrize(
+        "seed_name", ["generic", "hotpotqa", "minimal", "generalization"]
+    )
+    def test_seed_system_has_task_description_placeholder(self, seed_name: str):
+        """All seed system prompts include {task_description} placeholder."""
+        result = self._load_seed(seed_name)
+        assert "{task_description}" in result["system"], (
+            f"{seed_name}: system prompt missing {{task_description}} placeholder"
+        )
+
+    @pytest.mark.parametrize(
+        "seed_name", ["generic", "hotpotqa", "minimal", "generalization"]
+    )
+    def test_seed_user_has_parent_blocks_placeholder(self, seed_name: str):
+        """All seed user prompts include {parent_blocks} placeholder."""
+        result = self._load_seed(seed_name)
+        assert "{parent_blocks}" in result["user"], (
+            f"{seed_name}: user prompt missing {{parent_blocks}} placeholder"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -19,9 +19,15 @@ from gigaevo.prompts.coevolution.stats import PromptStatsProvider, prompt_text_t
 
 
 class PromptExecutionOutput(StageIO):
-    """Output of PromptExecutionStage."""
+    """Output of PromptExecutionStage.
+
+    prompt_text: system prompt template (required)
+    user_text: user prompt template (None if entrypoint() returns str, not dict)
+    prompt_id: sha256[:16] of system prompt text
+    """
 
     prompt_text: str
+    user_text: str | None = None
     prompt_id: str
 
 
@@ -60,19 +66,38 @@ class PromptExecutionStage(Stage):
         except Exception as exc:
             raise ValueError(f"entrypoint() raised an exception: {exc}") from exc
 
-        if not isinstance(result, str):
+        if isinstance(result, str):
+            if not result.strip():
+                raise ValueError("entrypoint() returned empty string")
+            system_text = result
+            user_text = None
+        elif isinstance(result, dict):
+            system_text = result.get("system", "")
+            if not isinstance(system_text, str) or not system_text.strip():
+                raise ValueError(
+                    "dict entrypoint() must have a non-empty 'system' key (str)"
+                )
+            user_text = result.get("user")
+            if user_text is not None and (
+                not isinstance(user_text, str) or not user_text.strip()
+            ):
+                raise ValueError(
+                    "dict entrypoint() 'user' key must be a non-empty str when present"
+                )
+        else:
             raise ValueError(
-                f"entrypoint() must return str, got {type(result).__name__}"
+                f"entrypoint() must return str or dict, got {type(result).__name__}"
             )
-        if not result.strip():
-            raise ValueError("entrypoint() returned empty string")
 
-        prompt_id = prompt_text_to_id(result)
+        prompt_id = prompt_text_to_id(system_text)
         logger.debug(
             f"[PromptExecutionStage] Executed entrypoint(): "
-            f"{len(result)} chars, id={prompt_id}"
+            f"system={len(system_text)} chars, user={len(user_text) if user_text else 0} chars, "
+            f"id={prompt_id}"
         )
-        return PromptExecutionOutput(prompt_text=result, prompt_id=prompt_id)
+        return PromptExecutionOutput(
+            prompt_text=system_text, user_text=user_text, prompt_id=prompt_id
+        )
 
 
 class PromptFitnessInputs(StageIO):

@@ -142,6 +142,91 @@ def entrypoint() -> str:
         result2 = await stage.compute(simple_prompt_program)
         assert result1.prompt_id == result2.prompt_id
 
+    @pytest.mark.asyncio
+    async def test_str_entrypoint_has_no_user_text(
+        self, simple_prompt_program: Program
+    ):
+        """str-returning entrypoint sets user_text=None."""
+        stage = PromptExecutionStage(timeout=30.0)
+        stage.attach_inputs({})
+        result = await stage.compute(simple_prompt_program)
+        assert result.user_text is None
+
+    @pytest.mark.asyncio
+    async def test_dict_entrypoint_system_and_user(self):
+        """dict entrypoint with system+user keys extracts both texts."""
+        code = """
+def entrypoint() -> dict:
+    return {
+        "system": "You are a mutation expert for {task_description}.",
+        "user": "Mutate {count} programs.\\n\\n{parent_blocks}",
+    }
+"""
+        program = Program(code=code)
+        stage = PromptExecutionStage(timeout=30.0)
+        stage.attach_inputs({})
+        result = await stage.compute(program)
+        assert result.prompt_text == "You are a mutation expert for {task_description}."
+        assert result.user_text == "Mutate {count} programs.\n\n{parent_blocks}"
+        assert len(result.prompt_id) == 16
+
+    @pytest.mark.asyncio
+    async def test_dict_entrypoint_system_only(self):
+        """dict entrypoint with only 'system' key sets user_text=None."""
+        code = """
+def entrypoint() -> dict:
+    return {"system": "System prompt here."}
+"""
+        program = Program(code=code)
+        stage = PromptExecutionStage(timeout=30.0)
+        stage.attach_inputs({})
+        result = await stage.compute(program)
+        assert result.prompt_text == "System prompt here."
+        assert result.user_text is None
+
+    @pytest.mark.asyncio
+    async def test_dict_entrypoint_missing_system_key(self):
+        """dict entrypoint without 'system' key raises ValueError."""
+        code = """
+def entrypoint() -> dict:
+    return {"user": "Some user prompt."}
+"""
+        program = Program(code=code)
+        stage = PromptExecutionStage(timeout=30.0)
+        stage.attach_inputs({})
+        with pytest.raises(ValueError, match="non-empty 'system' key"):
+            await stage.compute(program)
+
+    @pytest.mark.asyncio
+    async def test_dict_entrypoint_empty_user_raises(self):
+        """dict entrypoint with empty 'user' value raises ValueError."""
+        code = """
+def entrypoint() -> dict:
+    return {"system": "Valid system.", "user": "   "}
+"""
+        program = Program(code=code)
+        stage = PromptExecutionStage(timeout=30.0)
+        stage.attach_inputs({})
+        with pytest.raises(ValueError, match="non-empty str"):
+            await stage.compute(program)
+
+    @pytest.mark.asyncio
+    async def test_dict_prompt_id_based_on_system_text(self):
+        """prompt_id is hash of system text, not user text."""
+        code_a = """
+def entrypoint() -> dict:
+    return {"system": "Same system prompt.", "user": "User A."}
+"""
+        code_b = """
+def entrypoint() -> dict:
+    return {"system": "Same system prompt.", "user": "User B."}
+"""
+        stage = PromptExecutionStage(timeout=30.0)
+        stage.attach_inputs({})
+        result_a = await stage.compute(Program(code=code_a))
+        result_b = await stage.compute(Program(code=code_b))
+        assert result_a.prompt_id == result_b.prompt_id  # Same system → same ID
+
 
 # ---------------------------------------------------------------------------
 # PromptFitnessStage Tests
@@ -171,10 +256,6 @@ class TestPromptFitnessStage:
         execution_output = PromptExecutionOutput(
             prompt_text="test prompt", prompt_id="abc123"
         )
-
-        # Create inputs
-        class MockInputs:
-            execution_output = execution_output
 
         stage.attach_inputs({"execution_output": execution_output})
 
@@ -240,3 +321,13 @@ class TestPromptExecutionOutput:
         output = PromptExecutionOutput(prompt_text="Hello", prompt_id="abc")
         assert output.prompt_text == "Hello"
         assert output.prompt_id == "abc"
+        assert output.user_text is None  # optional, defaults to None
+
+    def test_creation_with_user_text(self):
+        """PromptExecutionOutput can include user_text."""
+        output = PromptExecutionOutput(
+            prompt_text="System prompt", user_text="User {count}", prompt_id="def"
+        )
+        assert output.prompt_text == "System prompt"
+        assert output.user_text == "User {count}"
+        assert output.prompt_id == "def"
