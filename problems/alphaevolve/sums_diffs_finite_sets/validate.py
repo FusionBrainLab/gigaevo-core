@@ -25,7 +25,7 @@ def validate(u_set):
 
     if size_U_minus_U > 2 * max_U + 1:
         raise ValueError(
-            f"Constraint violated: |U-U| = {size_U_minus_U} > 2*max(U)+1 = {2*max_U+1}"
+            f"Constraint violated: |U-U| = {size_U_minus_U} > 2*max(U)+1 = {2 * max_U + 1}"
         )
 
     ratio = size_U_minus_U / size_U_plus_U

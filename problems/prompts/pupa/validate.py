@@ -1,9 +1,9 @@
-from typing import List
 from statistics import mean
+from typing import List
 
-from problems.prompts.utils import validate_prompt_template
 from problems.prompts.pupa.config import load_context
 from problems.prompts.pupa.utils.pipeline import run_pipeline
+from problems.prompts.utils import validate_prompt_template
 
 
 def calculate_fitness(results: List[dict]) -> dict:

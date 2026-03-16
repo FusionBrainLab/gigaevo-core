@@ -1,15 +1,15 @@
 import re
 from statistics import mean
 
-from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
+from problems.chains.hotpotqa.full.config import FULL_CHAIN_CONFIG
 from problems.chains.hotpotqa.shared_config import (
     LLM_CONFIG,
     load_context,
     outer_context_builder,
 )
-from problems.chains.hotpotqa.full.config import FULL_CHAIN_CONFIG
 from problems.chains.hotpotqa.utils.retrieval import make_retrieve_fn
 from problems.chains.hotpotqa.utils.utils import normalize_text
 

@@ -1,0 +1,20 @@
+# @package _global_
+# Coevolved prompt fetcher: reads the current MAP-Elites champion from a
+# co-running prompt GigaEvo instance and feeds its system prompt to agents.
+#
+# Required overrides at run time:
+#   prompt_fetcher.prompt_redis_db=M   (DB of the prompt evolution run)
+#
+# Optional overrides:
+#   prompt_fetcher.prompt_prefix=prompt_evolution  (default)
+#   prompt_fetcher.cache_ttl_seconds=30.0           (default)
+
+prompt_fetcher:
+  _target_: gigaevo.prompts.fetcher.GigaEvoArchivePromptFetcher
+  prompt_redis_db: ???                    # set at run time
+  main_redis_prefix: ${problem.name}      # prefix of the main (HotpotQA) run
+  prompt_prefix: prompt_evolution         # prefix of the prompt evolution run
+  host: ${redis.host}
+  port: ${redis.port}
+  cache_ttl_seconds: 30.0
+  fallback_prompts_dir: ${prompts.dir}

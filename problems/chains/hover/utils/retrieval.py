@@ -7,11 +7,11 @@ Reimplemented from hotpotqa/utils/retrieval.py — not imported because
 module-level singletons would conflict across problems.
 """
 
+from collections.abc import Callable
 import gzip
 import json
-import threading
-from collections.abc import Callable
 from pathlib import Path
+import threading
 
 import bm25s
 import Stemmer

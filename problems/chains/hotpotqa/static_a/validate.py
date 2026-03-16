@@ -5,8 +5,8 @@ from problems.chains.chain_runner import run_chain_on_dataset_stepwise
 from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.hotpotqa.shared_config import (
-    CORPUS_PATH,
     BM25S_INDEX_DIR,
+    CORPUS_PATH,
     DATASET_CONFIG,
     LLM_CONFIG,
     load_jsonl,
@@ -113,7 +113,10 @@ def validate(chain_spec: dict) -> dict:
         6: 8192,
     }
     results = run_chain_on_dataset_stepwise(
-        chain, client, dataset, outer_context_builder,
+        chain,
+        client,
+        dataset,
+        outer_context_builder,
         batch_tool_registry=batch_tool_registry,
         step_max_tokens=step_max_tokens,
     )
@@ -140,24 +143,24 @@ def validate(chain_spec: dict) -> dict:
         raw_300, dataset, results, predictions, targets
     ):
         if pred is None or normalize_text(pred) != normalize_text(str(target)):
-            gold_titles = set(
-                raw_s.get("supporting_facts", {}).get("title", [])
-            )
+            gold_titles = set(raw_s.get("supporting_facts", {}).get("title", []))
             hop1_out = result.step_outputs[0] if len(result.step_outputs) > 0 else ""
             hop2_out = result.step_outputs[3] if len(result.step_outputs) > 3 else ""
             hop1_titles = set(parse_retrieved_titles(hop1_out))
             hop2_titles = set(parse_retrieved_titles(hop2_out))
             hop1_missing = sorted(gold_titles - hop1_titles)
             hop2_missing = sorted(gold_titles - hop2_titles)
-            failures.append({
-                "question": sample["question"],
-                "gold": target,
-                "predicted": pred,
-                "hop1_retrieved": len(hop1_titles & gold_titles),
-                "hop2_retrieved": len(hop2_titles & gold_titles),
-                "n_gold": len(gold_titles),
-                "hop1_missing": hop1_missing,
-                "hop2_missing": hop2_missing,
-            })
+            failures.append(
+                {
+                    "question": sample["question"],
+                    "gold": target,
+                    "predicted": pred,
+                    "hop1_retrieved": len(hop1_titles & gold_titles),
+                    "hop2_retrieved": len(hop2_titles & gold_titles),
+                    "n_gold": len(gold_titles),
+                    "hop1_missing": hop1_missing,
+                    "hop2_missing": hop2_missing,
+                }
+            )
 
     return (metrics, failures)

@@ -64,7 +64,9 @@ class HotpotQAColBERTFormatter(FormatterStage):
             # Hop 1 retrieval summary with full passage text for missing docs
             if n_gold == 0:
                 hop1_label = "N/A (no gold docs)"
-                lines.append(f"**Hop 1 retrieval** ({hop1_ret}/{n_gold} gold): {hop1_label}")
+                lines.append(
+                    f"**Hop 1 retrieval** ({hop1_ret}/{n_gold} gold): {hop1_label}"
+                )
             elif hop1_ret == n_gold:
                 lines.append(
                     f"**Hop 1 retrieval** ({hop1_ret}/{n_gold} gold): ✓ all {n_gold} retrieved"
@@ -80,7 +82,9 @@ class HotpotQAColBERTFormatter(FormatterStage):
             # Hop 2 retrieval summary with full passage text for missing docs
             if n_gold == 0:
                 hop2_label = "N/A (no gold docs)"
-                lines.append(f"**Hop 2 retrieval** ({hop2_ret}/{n_gold} gold): {hop2_label}")
+                lines.append(
+                    f"**Hop 2 retrieval** ({hop2_ret}/{n_gold} gold): {hop2_label}"
+                )
             elif hop2_ret == n_gold:
                 lines.append(
                     f"**Hop 2 retrieval** ({hop2_ret}/{n_gold} gold): ✓ all {n_gold} retrieved"

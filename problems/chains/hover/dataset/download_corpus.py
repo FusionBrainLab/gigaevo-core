@@ -15,10 +15,9 @@ import bz2
 import gzip
 import json
 import os
+from pathlib import Path
 import tarfile
 import urllib.request
-from pathlib import Path
-
 
 DOWNLOAD_URL = (
     "https://nlp.stanford.edu/projects/hotpotqa/"
@@ -26,7 +25,9 @@ DOWNLOAD_URL = (
 )
 
 OUTPUT_DIR = Path(__file__).parent
-ARCHIVE_PATH = OUTPUT_DIR / "enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2"
+ARCHIVE_PATH = (
+    OUTPUT_DIR / "enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2"
+)
 OUTPUT_PATH = OUTPUT_DIR / "wiki17_abstracts.jsonl.gz"
 BM25S_INDEX_DIR = OUTPUT_DIR / "bm25s_index"
 
@@ -82,9 +83,7 @@ def process_archive():
 
                     text_field = doc.get("text", [])
                     if isinstance(text_field, list):
-                        text = " ".join(
-                            str(s).strip() for s in text_field if s
-                        ).strip()
+                        text = " ".join(str(s).strip() for s in text_field if s).strip()
                     elif isinstance(text_field, str):
                         text = text_field.strip()
                     else:

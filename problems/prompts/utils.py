@@ -10,10 +10,9 @@ from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
-from tools.utils import RedisRunConfig
 from problems.prompts.client import LLMClient
 from problems.prompts.types import CallLog, OutputDict
-
+from tools.utils import RedisRunConfig
 
 __all__ = [
     "get_best_program",

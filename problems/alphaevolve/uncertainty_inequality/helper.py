@@ -2,7 +2,9 @@ import numpy as np
 from scipy.special import hermite
 
 
-def _build_P_from_hermite_coeffs(hermite_coeffs: np.ndarray, degrees: list[int]) -> np.poly1d:
+def _build_P_from_hermite_coeffs(
+    hermite_coeffs: np.ndarray, degrees: list[int]
+) -> np.poly1d:
     max_degree = degrees[-1]
     hermite_polys = [hermite(d) for d in degrees]
 
@@ -18,7 +20,9 @@ def _build_P_from_hermite_coeffs(hermite_coeffs: np.ndarray, degrees: list[int])
     return np.poly1d(P_poly_coeffs)
 
 
-def _c_and_rmax_from_hermite_coeffs(hermite_coeffs: np.ndarray, num_hermite_coeffs: int):
+def _c_and_rmax_from_hermite_coeffs(
+    hermite_coeffs: np.ndarray, num_hermite_coeffs: int
+):
     degrees = [4 * k for k in range(num_hermite_coeffs)]
     P = _build_P_from_hermite_coeffs(hermite_coeffs.copy(), degrees)
 
@@ -49,10 +53,10 @@ def _c_and_rmax_from_hermite_coeffs(hermite_coeffs: np.ndarray, num_hermite_coef
 def compute_c_and_rmax(coefficients: np.ndarray):
     coefficients = np.asarray(coefficients, dtype=float)
     num_hermite_coeffs = len(coefficients)
-    
+
     c, rmax = _c_and_rmax_from_hermite_coeffs(coefficients.copy(), num_hermite_coeffs)
-    
+
     if c is None:
         raise ValueError("Failed to compute C - invalid polynomial")
-    
+
     return c, rmax

@@ -26,7 +26,6 @@ import langdetect
 
 import problems.chains.ifbench.utils.instructions_util_ifeval as instructions_util
 
-
 logger = logging.getLogger(__name__)
 
 _InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]

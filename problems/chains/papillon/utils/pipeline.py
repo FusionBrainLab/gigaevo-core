@@ -11,8 +11,8 @@ import re
 import pandas as pd
 
 from problems.chains.papillon.utils.prompts import (
-    QUALITY_JUDGE_PROMPT,
     LEAKAGE_JUDGE_PROMPT,
+    QUALITY_JUDGE_PROMPT,
 )
 
 
@@ -51,9 +51,7 @@ async def judge_quality(
     )
     response_forward = await judge_client(prompt_forward)
     parsed_forward = parse_json_response(response_forward)
-    judgment_forward = int(
-        parsed_forward.get("judgment", "").lower().startswith("yes")
-    )
+    judgment_forward = int(parsed_forward.get("judgment", "").lower().startswith("yes"))
 
     prompt_backward = QUALITY_JUDGE_PROMPT.format(
         user_query=user_query,

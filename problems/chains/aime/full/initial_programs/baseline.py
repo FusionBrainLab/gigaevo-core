@@ -6,9 +6,7 @@ def entrypoint() -> dict:
                 "number": 1,
                 "title": "Solve the problem",
                 "step_type": "llm",
-                "aim": (
-                    "Solve the math olympiad problem and provide the answer."
-                ),
+                "aim": ("Solve the math olympiad problem and provide the answer."),
                 "stage_action": (
                     "Please reason step by step, and provide your final answer "
                     "enclosed in a LaTeX \\boxed{...} command."

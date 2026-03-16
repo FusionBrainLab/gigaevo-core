@@ -9,9 +9,9 @@ entrypoint(context) runs. Uses the sync redis client directly.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
-from datetime import datetime, timezone
 
 import redis as redis_lib
 
@@ -23,9 +23,9 @@ REDIS_HOST: str = "localhost"
 REDIS_PORT: int = 6379
 
 _RUN_SPECS: list[dict] = [
-    {"prefix": "hotpotqa/cold_start",   "label": "T1", "total_gens": 50},
-    {"prefix": "hotpotqa/nlp_prompts",  "label": "T2", "total_gens": 50},
-    {"prefix": "hotpotqa/thinking",     "label": "T3", "total_gens": 30},
+    {"prefix": "hotpotqa/cold_start", "label": "T1", "total_gens": 50},
+    {"prefix": "hotpotqa/nlp_prompts", "label": "T2", "total_gens": 50},
+    {"prefix": "hotpotqa/thinking", "label": "T3", "total_gens": 30},
     {"prefix": "hotpotqa/p3_crossover", "label": "T4", "total_gens": 50},
 ]
 
@@ -33,6 +33,7 @@ _RUN_SPECS: list[dict] = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _read_hist(r: redis_lib.Redis, key: str) -> list[float]:
     """Read a metrics history list (JSON entries {s, v}), sort by step, return values."""
@@ -162,7 +163,9 @@ def _build_run_context(r: redis_lib.Redis, spec: dict) -> dict:
     # ---- run_state ----
     run_state_raw = r.hgetall(f"{prefix}:run_state")
     run_state = {
-        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        k.decode() if isinstance(k, bytes) else k: v.decode()
+        if isinstance(v, bytes)
+        else v
         for k, v in run_state_raw.items()
     }
     current_gen = int(run_state.get("engine:total_generations", 0))
@@ -212,7 +215,9 @@ def _build_run_context(r: redis_lib.Redis, spec: dict) -> dict:
     archive_raw = r.hgetall(f"{prefix}:archive")
     archive_cells: list[dict] = []
     for cell_key_b, pid_b in archive_raw.items():
-        bin_idx = int(cell_key_b.decode() if isinstance(cell_key_b, bytes) else cell_key_b)
+        bin_idx = int(
+            cell_key_b.decode() if isinstance(cell_key_b, bytes) else cell_key_b
+        )
         pid_str = pid_b.decode() if isinstance(pid_b, bytes) else pid_b
         p = _load_program(r, prefix, pid_str)
         if p is not None:

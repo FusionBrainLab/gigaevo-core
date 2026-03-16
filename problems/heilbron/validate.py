@@ -6,6 +6,7 @@ import numpy as np
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import pdist
 
+
 def compute_layout_metrics(points: np.ndarray) -> dict:
     """
     Compute geometric and distribution metrics for a set of 11 2D points.

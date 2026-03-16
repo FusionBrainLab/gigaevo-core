@@ -29,10 +29,10 @@ def validate(data):
         raise ValueError(f"Invalid shape: expected (26, 3), got {data.shape}")
     if not np.all(np.isfinite(data)):
         raise ValueError("Data has NaN or infinite values")
-    
-    centers = data[:, :2]  
-    radii = data[:, 2]     
-    
+
+    centers = data[:, :2]
+    radii = data[:, 2]
+
     if np.any(radii <= 0):
         raise ValueError("All radii must be positive")
     try:
@@ -47,4 +47,3 @@ def validate(data):
         "fitness": fitness,
         "is_valid": is_valid,
     }
-

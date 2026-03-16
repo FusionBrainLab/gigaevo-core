@@ -17,7 +17,7 @@ LLM_CONFIG = {
         "extra_body": {
             "top_k": 20,
         },
-        "max_tokens": 16384
+        "max_tokens": 16384,
     },
     "client_kwargs": {
         "api_key": "None",
@@ -46,7 +46,9 @@ def load_context(years=(2023, 2024), n_trials: int = 2) -> dict:
     train_dataset = pd.read_csv(DATASET_CONFIG["path"])
 
     # Evaluate on a specific year
-    train_dataset = train_dataset[train_dataset["Year"].isin(years)].reset_index(drop=True)
+    train_dataset = train_dataset[train_dataset["Year"].isin(years)].reset_index(
+        drop=True
+    )
 
     # Evaluate multiple independent times on each problem to reduce variance
     train_dataset = pd.concat([train_dataset] * n_trials, ignore_index=True)

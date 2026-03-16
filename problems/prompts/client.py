@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-import httpx
 from typing import Any, List
 
+import httpx
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 

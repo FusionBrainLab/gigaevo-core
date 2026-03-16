@@ -45,9 +45,7 @@ def extract_titles_from_passages(passages_text: str) -> set[str]:
     return titles
 
 
-def discrete_retrieval_eval(
-    gold_titles: set[str], found_titles: set[str]
-) -> int:
+def discrete_retrieval_eval(gold_titles: set[str], found_titles: set[str]) -> int:
     """Returns 1 if all gold titles were found in retrieved passages, else 0.
 
     Both sets should contain normalized title strings.

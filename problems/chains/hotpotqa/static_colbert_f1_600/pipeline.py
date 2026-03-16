@@ -11,7 +11,9 @@ Usage (Hydra config):
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT
 from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
 from gigaevo.entrypoint.evolution_context import EvolutionContext
-from problems.chains.hotpotqa.static_colbert_f1_600.formatter import HotpotQAColBERTFormatter
+from problems.chains.hotpotqa.static_colbert_f1_600.formatter import (
+    HotpotQAColBERTFormatter,
+)
 
 
 class ColBERTPipelineBuilder(DefaultPipelineBuilder):

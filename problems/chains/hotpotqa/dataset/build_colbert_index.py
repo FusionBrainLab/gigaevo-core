@@ -26,7 +26,9 @@ CORPUS_PATH = _CORPUS_PKL if _CORPUS_PKL.exists() else _CORPUS_GZ
 # ColBERT saves index to {root}/{experiment}/indexes/{name}.
 # With root=REPO/experiments and experiment="hotpotqa", the index lands at
 # REPO/experiments/hotpotqa/indexes/colbert_index — matching shared_config.py.
-_REPO_ROOT = BASE_DIR.parent.parent.parent.parent  # dataset/->hotpotqa/->chains/->problems/->repo
+_REPO_ROOT = (
+    BASE_DIR.parent.parent.parent.parent
+)  # dataset/->hotpotqa/->chains/->problems/->repo
 INDEX_DIR = _REPO_ROOT / "experiments" / "colbert_index"
 CHECKPOINT = "colbert-ir/colbertv2.0"
 

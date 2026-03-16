@@ -1,14 +1,13 @@
 import re
 from typing import List, Union
-from statistics import mean
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
 from problems.prompts.client import LLMClient
-from problems.prompts.utils import validate_prompt_template, run_prompts
 from problems.prompts.jigsaw_community_rules.config import LLM_CONFIG, load_context
+from problems.prompts.utils import run_prompts, validate_prompt_template
 
 
 def extract_answer(response: str) -> float | None:
@@ -21,7 +20,7 @@ def extract_answer(response: str) -> float | None:
         Extracted answer float, or None if extraction failed
     """
     # Match "Answer:" followed by optional whitespace and a number
-    match = re.search(r'Answer:\s*([0-9]*\.?[0-9]+)', response, re.IGNORECASE)
+    match = re.search(r"Answer:\s*([0-9]*\.?[0-9]+)", response, re.IGNORECASE)
     if match:
         try:
             value = float(match.group(1))

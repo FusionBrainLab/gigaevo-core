@@ -1,13 +1,14 @@
-from pathlib import Path
-
-from datasets import load_dataset
-import json
 import ast
+import json
+from pathlib import Path
 import random
 import urllib.request
 
-from problems.chains.ifbench.utils.instructions_registry_ifeval import INSTRUCTION_DICT as IFEVAL_CONSTRAINTS
+from datasets import load_dataset
 
+from problems.chains.ifbench.utils.instructions_registry_ifeval import (
+    INSTRUCTION_DICT as IFEVAL_CONSTRAINTS,
+)
 
 MAX_CHARS = 2048 * 4  # Max tokens * chars per token
 SEED = 42
@@ -29,7 +30,7 @@ def transform_row(row):
         "kwargs": [{} if k is None else k for k in ground_truth[0]["kwargs"]],
         "instruction_id_list": ground_truth[0]["instruction_id"],
         "constraint": row["constraint"],
-        "key": row["key"]
+        "key": row["key"],
     }
 
 
@@ -50,7 +51,9 @@ def main():
         if is_ifeval_only(transformed["instruction_id_list"]):
             ifeval_only_examples.append(transformed)
 
-    sampled_examples = random.sample(all_examples, min(len(ifeval_only_examples), len(all_examples)))
+    sampled_examples = random.sample(
+        all_examples, min(len(ifeval_only_examples), len(all_examples))
+    )
 
     with open(str(_DIR / "IFEval_train.jsonl"), "w", encoding="utf-8") as f:
         for example in ifeval_only_examples:
@@ -60,11 +63,15 @@ def main():
         for example in sampled_examples:
             f.write(json.dumps(example, ensure_ascii=False) + "\n")
 
-    print(f"Dataset ready: IFEval_train.jsonl ({len(ifeval_only_examples):,} samples), "
-          f"IFBench_train.jsonl ({len(sampled_examples):,} samples)")
+    print(
+        f"Dataset ready: IFEval_train.jsonl ({len(ifeval_only_examples):,} samples), "
+        f"IFBench_train.jsonl ({len(sampled_examples):,} samples)"
+    )
 
     # Download IFBench_test.jsonl from GitHub
-    test_url = "https://raw.githubusercontent.com/allenai/IFBench/main/data/IFBench_test.jsonl"
+    test_url = (
+        "https://raw.githubusercontent.com/allenai/IFBench/main/data/IFBench_test.jsonl"
+    )
     urllib.request.urlretrieve(test_url, str(_DIR / "IFBench_test.jsonl"))
     with open(str(_DIR / "IFBench_test.jsonl"), "r") as f:
         test_count = sum(1 for _ in f)

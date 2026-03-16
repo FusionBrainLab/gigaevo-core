@@ -9,7 +9,10 @@ These factories encapsulate all the complexity of agent creation:
 Stages just call these factories and use the agents - no LLM logic in stages!
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 
@@ -27,6 +30,9 @@ from gigaevo.prompts import (
     ScoringPrompts,
 )
 
+if TYPE_CHECKING:
+    from gigaevo.prompts.fetcher import PromptFetcher
+
 
 def create_mutation_agent(
     llm: ChatOpenAI | MultiModelRouter,
@@ -34,11 +40,12 @@ def create_mutation_agent(
     metrics_context: MetricsContext,
     mutation_mode: str = "rewrite",
     prompts_dir: str | Path | None = None,
+    prompt_fetcher: "PromptFetcher | None" = None,
 ) -> MutationAgent:
     """Create a fully configured mutation agent.
 
     This factory does ALL the setup:
-    - Loads prompts from files
+    - Loads prompts from files (or initial fetch from prompt_fetcher)
     - Formats system prompt with task description and metrics
     - Returns ready-to-use agent
 
@@ -47,7 +54,12 @@ def create_mutation_agent(
         task_description: Description of the optimization task
         metrics_context: Metrics context for formatting
         mutation_mode: "rewrite" or "diff"
-        prompts_dir: Optional prompts directory (e.g. config.prompts.dir). If None, package defaults are used.
+        prompts_dir: Optional prompts directory (e.g. config.prompts.dir). If None,
+            package defaults are used. Ignored when prompt_fetcher is provided.
+        prompt_fetcher: Optional PromptFetcher for dynamic prompt co-evolution.
+            When provided, the fetcher is used both for the initial system prompt
+            and for refreshing it on every build_prompt() call (if is_dynamic=True).
+            When None, a FixedDirPromptFetcher(prompts_dir) is created.
 
     Returns:
         Ready-to-use MutationAgent
@@ -61,8 +73,20 @@ def create_mutation_agent(
         ... )
         >>> result = await agent.arun(parents, mutation_mode)
     """
-    # Load prompts from files
-    system_template = MutationPrompts.system(prompts_dir=prompts_dir)
+    from gigaevo.prompts.fetcher import FixedDirPromptFetcher
+
+    # Use provided fetcher or create a default fixed-dir one
+    fetcher = (
+        prompt_fetcher
+        if prompt_fetcher is not None
+        else FixedDirPromptFetcher(prompts_dir)
+    )
+
+    # Load initial system prompt template via the fetcher
+    initial_fetch = fetcher.fetch("mutation", "system")
+    system_template = initial_fetch.text
+
+    # Load user template (always from files, not co-evolved)
     user_template = MutationPrompts.user(prompts_dir=prompts_dir)
 
     # Create metrics formatter
@@ -74,12 +98,15 @@ def create_mutation_agent(
         metrics_description=metrics_formatter.format_metrics_description(),
     )
 
-    # Return configured agent
+    # Return configured agent with fetcher wired in for dynamic updates
     return MutationAgent(
         llm=llm,
         system_prompt=system_prompt,
         user_prompt_template=user_template,
         mutation_mode=mutation_mode,
+        prompt_fetcher=fetcher,
+        task_description=task_description,
+        metrics_context=metrics_context,
     )
 
 

@@ -5,9 +5,9 @@ import argparse
 import pandas as pd
 
 from problems.prompts.client import LLMClient
-from problems.prompts.utils import run_prompts, RedisRunConfig, get_best_program
-from problems.prompts.ifbench.config import LLM_CONFIG, DATASET_CONFIG, load_baseline
+from problems.prompts.ifbench.config import DATASET_CONFIG, LLM_CONFIG, load_baseline
 from problems.prompts.ifbench.validate import calculate_fitness
+from problems.prompts.utils import RedisRunConfig, get_best_program, run_prompts
 
 
 def load_test_context(n_samples: int | None = None) -> dict:

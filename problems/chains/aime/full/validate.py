@@ -6,20 +6,20 @@ No tools — all steps are LLM reasoning steps.
 
 from statistics import mean
 
-from problems.chains.chain_validation import validate_chain_spec
-from problems.chains.chain_runner import run_chain_on_dataset
-from problems.chains.client import LLMClient
+from problems.chains.aime.full.config import FULL_CHAIN_CONFIG
 from problems.chains.aime.shared_config import (
     LLM_CONFIG,
     load_context,
     outer_context_builder,
 )
-from problems.chains.aime.full.config import FULL_CHAIN_CONFIG
 from problems.chains.aime.utils.utils import (
-    remove_boxed,
     last_boxed_only_string,
+    remove_boxed,
     strip_string,
 )
+from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_validation import validate_chain_spec
+from problems.chains.client import LLMClient
 
 
 def extract_answer(response: str) -> str | None:

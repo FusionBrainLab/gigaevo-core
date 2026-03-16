@@ -5,6 +5,5 @@ Answer:
 """.strip()
 
 
-
 def entrypoint():
     return PROMPT_TEMPLATE

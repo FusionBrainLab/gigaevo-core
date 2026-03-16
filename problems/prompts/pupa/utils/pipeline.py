@@ -3,19 +3,21 @@
 import asyncio
 import json
 import re
-from statistics import mean
 from typing import List
 
 import pandas as pd
 
 from problems.prompts.client import LLMClient
-from problems.prompts.pupa.config import LLM_CONFIG, JUDGE_CONFIG
-from problems.prompts.pupa.utils.prompts import QUALITY_JUDGE_PROMPT, LEAKAGE_JUDGE_PROMPT
+from problems.prompts.pupa.config import JUDGE_CONFIG, LLM_CONFIG
+from problems.prompts.pupa.utils.prompts import (
+    LEAKAGE_JUDGE_PROMPT,
+    QUALITY_JUDGE_PROMPT,
+)
 
 
 def parse_json_response(response: str) -> dict:
     """Extract JSON from LLM response."""
-    json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
+    json_match = re.search(r"\{[^{}]*\}", response, re.DOTALL)
     if json_match:
         try:
             return json.loads(json_match.group())
@@ -80,7 +82,9 @@ async def judge_quality(
     )
     response_backward = await judge_client(prompt_backward)
     parsed_backward = parse_json_response(response_backward)
-    judgment_backward = int(parsed_backward.get("judgment", "").lower().startswith("yes"))
+    judgment_backward = int(
+        parsed_backward.get("judgment", "").lower().startswith("yes")
+    )
 
     if judgment_forward == judgment_backward:
         return 1.0

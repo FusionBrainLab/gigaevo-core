@@ -1,0 +1,23 @@
+Optimize the system prompt used by GigaEvo's mutation agent to maximize the
+success rate of mutations in a HotpotQA multi-hop QA chain evolution run.
+
+Each candidate program is a Python module that exports:
+    entrypoint() -> str
+
+The returned string is the mutation system prompt that will be given to the LLM
+mutation operator. The prompt tells the LLM how to mutate a Python chain function
+to improve its HotpotQA performance (EM / F1 accuracy).
+
+A "successful" mutation is one where the mutated program achieves higher fitness
+than its parent (strict improvement). The fitness here is the fraction of
+mutations that produced strict improvements (success_rate).
+
+The prompt should:
+- Clearly describe the mutation task (improve HotpotQA chain accuracy)
+- Guide the LLM toward code changes likely to improve question answering
+- Specify the desired output format (valid Python function)
+- Be concise enough to not consume excessive tokens
+- Be diverse from other evolved prompt variants to explore the space
+
+The behavior descriptor is prompt_length (number of characters).
+The primary fitness metric is success_rate (fraction of strict improvements).

@@ -11,10 +11,9 @@ Usage:
 """
 
 import json
+from pathlib import Path
 import random
 import urllib.request
-from pathlib import Path
-
 
 SEED = 42
 TRAIN_SAMPLES = 1000

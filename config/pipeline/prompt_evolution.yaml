@@ -1,0 +1,42 @@
+# @package _global_
+# Pipeline for the prompt_evolution problem.
+# Uses PromptFitnessStage (custom) instead of validate.py.
+#
+# Requires at run time:
+#   main_redis_db=N          (DB of the main HotpotQA run)
+#   main_redis_prefix=chains/hotpotqa   (prefix of the main run)
+#
+# Usage:
+#   python run.py \
+#     problem.name=prompt_evolution pipeline=prompt_evolution redis.db=6 \
+#     main_redis_db=5 main_redis_prefix=chains/hotpotqa
+
+main_redis_db: ???
+main_redis_prefix: ???
+
+prompt_stats_provider:
+  _target_: gigaevo.prompts.coevolution.stats.RedisPromptStatsProvider
+  host: ${redis.host}
+  port: ${redis.port}
+  db: ${main_redis_db}
+  prefix: ${main_redis_prefix}
+  min_trials: 5
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+
+pipeline_builder:
+  _target_: gigaevo.prompts.coevolution.pipeline.PromptEvolutionPipelineBuilder
+  ctx: ${evolution_context}
+  stats_provider: ${prompt_stats_provider}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}

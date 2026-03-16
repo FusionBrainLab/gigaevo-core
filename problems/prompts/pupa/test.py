@@ -4,10 +4,10 @@ import argparse
 
 import pandas as pd
 
-from problems.prompts.utils import RedisRunConfig, get_best_program
 from problems.prompts.pupa.config import DATASET_CONFIG, load_baseline
 from problems.prompts.pupa.utils.pipeline import run_pipeline
 from problems.prompts.pupa.validate import calculate_fitness
+from problems.prompts.utils import RedisRunConfig, get_best_program
 
 
 def load_test_context(n_samples: int | None = None) -> dict:

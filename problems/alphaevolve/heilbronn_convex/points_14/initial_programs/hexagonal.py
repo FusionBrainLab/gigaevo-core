@@ -26,8 +26,9 @@ def entrypoint():
 
     points = np.array(points[:14], dtype=np.float32)
 
-    points = (points - points.min(axis=0)) / (points.max(axis=0) - points.min(axis=0) + 1e-10)
+    points = (points - points.min(axis=0)) / (
+        points.max(axis=0) - points.min(axis=0) + 1e-10
+    )
     points = points * 0.8 + 0.1
 
     return points.astype(np.float32)
-

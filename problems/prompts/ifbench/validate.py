@@ -1,12 +1,12 @@
-from typing import List, Union
 from statistics import mean
+from typing import List, Union
 
 import pandas as pd
 
 from problems.prompts.client import LLMClient
-from problems.prompts.utils import validate_prompt_template, run_prompts
 from problems.prompts.ifbench.config import LLM_CONFIG, load_context
 from problems.prompts.ifbench.utils import instructions_registry
+from problems.prompts.utils import run_prompts, validate_prompt_template
 
 
 def test_instruction_following(input, response):
@@ -35,7 +35,9 @@ def test_instruction_following(input, response):
         instruction_cls = instructions_registry.INSTRUCTION_DICT[instruction_id]
         instruction = instruction_cls(instruction_id)
 
-        input["kwargs"][index] = {k:v for k,v in input["kwargs"][index].items() if v is not None}
+        input["kwargs"][index] = {
+            k: v for k, v in input["kwargs"][index].items() if v is not None
+        }
 
         instruction.build_description(**input["kwargs"][index])
         args = instruction.get_instruction_args()
@@ -55,7 +57,7 @@ def test_instruction_following(input, response):
 
 def calculate_fitness(data: pd.DataFrame, responses: List[Union[str, None]]):
     accuracy = []
-    for (input, response) in zip(data.to_dict(orient="records"), responses):
+    for input, response in zip(data.to_dict(orient="records"), responses):
         accuracy.append(test_instruction_following(input, response))
     return mean(accuracy)
 

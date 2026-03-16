@@ -11,7 +11,6 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-
 SEED = 42
 
 _DIR = Path(__file__).parent

@@ -6,18 +6,16 @@ F1-600 variant with two enhancements over static_f1_600:
      not just titles — gives the mutation LLM actionable content to improve queries.
 """
 
+from pathlib import Path
 import pickle
 import re
-import threading
-from pathlib import Path
 from statistics import mean
+import threading
 
 from problems.chains.chain_runner import run_chain_on_dataset_stepwise
 from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.hotpotqa.shared_config import (
-    COLBERT_CHECKPOINT,
-    COLBERT_INDEX_DIR,
     CORPUS_PATH,
     DATASET_CONFIG,
     LLM_CONFIG,
@@ -52,13 +50,16 @@ def _get_title_to_passage() -> dict[str, str]:
         else:
             import gzip
             import json
+
             passages = []
             opener = gzip.open if corpus_path.suffix == ".gz" else open
             with opener(corpus_path, "rt", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         doc = json.loads(line)
-                        passages.append(f"{doc.get('title', '')} | {doc.get('text', '')}")
+                        passages.append(
+                            f"{doc.get('title', '')} | {doc.get('text', '')}"
+                        )
         result: dict[str, str] = {}
         for passage in passages:
             sep = passage.find(" | ")
@@ -115,8 +116,7 @@ def calculate_f1(targets: list[str], predictions: list[str | None]) -> float:
 
 def calculate_exact_match(targets: list[str], predictions: list[str | None]) -> float:
     matches = [
-        0 if pred is None
-        else int(normalize_text(pred) == normalize_text(str(target)))
+        0 if pred is None else int(normalize_text(pred) == normalize_text(str(target)))
         for pred, target in zip(predictions, targets)
     ]
     return mean(matches) if matches else 0.0
@@ -173,6 +173,7 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     # HOTPOTQA_COLBERT_SERVER_URL is set (preferred for exec_runner workers),
     # falling back to in-process ColBERTRetriever otherwise.
     from problems.chains.hotpotqa.shared_config import build_retriever
+
     retriever = build_retriever(k=7)
     batch_tool_registry = {"retrieve": make_batch_tool_fn(retriever)}
 
@@ -235,17 +236,19 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
                 title_to_passage.get(t, f"{t} | (not found in corpus)")
                 for t in hop2_missing
             ]
-            failures.append({
-                "question": sample["question"],
-                "gold": target,
-                "predicted": pred,
-                "hop1_retrieved": len(hop1_titles & gold_titles),
-                "hop2_retrieved": len(hop2_titles & gold_titles),
-                "n_gold": len(gold_titles),
-                "hop1_missing": hop1_missing,
-                "hop2_missing": hop2_missing,
-                "hop1_missing_passages": hop1_missing_passages,
-                "hop2_missing_passages": hop2_missing_passages,
-            })
+            failures.append(
+                {
+                    "question": sample["question"],
+                    "gold": target,
+                    "predicted": pred,
+                    "hop1_retrieved": len(hop1_titles & gold_titles),
+                    "hop2_retrieved": len(hop2_titles & gold_titles),
+                    "n_gold": len(gold_titles),
+                    "hop1_missing": hop1_missing,
+                    "hop2_missing": hop2_missing,
+                    "hop1_missing_passages": hop1_missing_passages,
+                    "hop2_missing_passages": hop2_missing_passages,
+                }
+            )
 
     return (metrics, failures)

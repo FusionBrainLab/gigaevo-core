@@ -1,13 +1,16 @@
-import re
-from typing import List, Union
 from statistics import mean
+from typing import List, Union
 
 import pandas as pd
 
 from problems.prompts.client import LLMClient
-from problems.prompts.utils import validate_prompt_template, run_prompts
 from problems.prompts.gsm8k.config import LLM_CONFIG, load_context
-from problems.prompts.gsm8k.utils import remove_boxed, last_boxed_only_string, strip_string
+from problems.prompts.gsm8k.utils import (
+    last_boxed_only_string,
+    remove_boxed,
+    strip_string,
+)
+from problems.prompts.utils import run_prompts, validate_prompt_template
 
 
 def extract_answer(response: str) -> str | None:

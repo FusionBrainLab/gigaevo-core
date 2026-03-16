@@ -3,25 +3,25 @@
 import argparse
 from statistics import mean
 
-from problems.chains.utils import get_best_program
-from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.hover.shared_config import (
+    BM25S_INDEX_DIR,
+    CORPUS_PATH,
     DATASET_CONFIG,
     LLM_CONFIG,
     load_jsonl,
-    preprocess_sample,
     outer_context_builder,
-    CORPUS_PATH,
-    BM25S_INDEX_DIR,
+    preprocess_sample,
 )
 from problems.chains.hover.static.config import STATIC_CHAIN_TOPOLOGY, load_baseline
 from problems.chains.hover.utils.retrieval import make_retrieve_fn
 from problems.chains.hover.utils.utils import (
-    extract_titles_from_passages,
     discrete_retrieval_eval,
+    extract_titles_from_passages,
 )
+from problems.chains.utils import get_best_program
 
 
 def load_test_context(n_samples: int | None = None) -> dict:
@@ -68,7 +68,9 @@ def test_baseline(n_samples: int = 3):
     )
 
     print(f"Baseline validated: {len(chain.steps)} steps")
-    print(f"System prompt: {chain.system_prompt[:80] if chain.system_prompt else '(empty)'}...")
+    print(
+        f"System prompt: {chain.system_prompt[:80] if chain.system_prompt else '(empty)'}..."
+    )
 
     context = load_test_context(n_samples=n_samples)
     dataset = context["test_dataset"]
@@ -102,7 +104,9 @@ def test_baseline(n_samples: int = 3):
         )
         gold = set(sample["supporting_facts"])
         hit = discrete_retrieval_eval(gold, found)
-        print(f"  Sample {i+1}: coverage={hit}, gold={gold}, found_count={len(found)}")
+        print(
+            f"  Sample {i + 1}: coverage={hit}, gold={gold}, found_count={len(found)}"
+        )
 
     print(f"\nRetrieval Coverage: {coverage:.4f}")
 
@@ -173,7 +177,9 @@ def test_best_chain(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test HoVer chain on test dataset (static)")
+    parser = argparse.ArgumentParser(
+        description="Test HoVer chain on test dataset (static)"
+    )
     parser.add_argument(
         "--mode",
         choices=["baseline", "redis"],

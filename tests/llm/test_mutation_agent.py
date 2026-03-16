@@ -418,7 +418,7 @@ class TestArun:
 
         parent = _make_program(metadata={MUTATION_CONTEXT_METADATA_KEY: "ctx"})
         result = await agent.arun(input=[parent], mutation_mode="rewrite")
-        assert result == {}
+        assert result == {"prompt_id": None}
 
 
 # ---------------------------------------------------------------------------
