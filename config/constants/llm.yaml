@@ -5,4 +5,4 @@ temperature: 0.6
 max_tokens: 81920
 top_p: 0.95
 top_k: 20
-request_timeout: 1800
+request_timeout: 600
