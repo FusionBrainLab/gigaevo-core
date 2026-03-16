@@ -18,9 +18,8 @@ Categories:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import time
-from typing import Optional
 
 import pytest
 
@@ -136,8 +135,8 @@ class FanInStage(Stage):
 
 
 class DualOptionalInput(StageIO):
-    data: Optional[MockOutput] = None
-    score: Optional[SecondInput] = None
+    data: MockOutput | None = None
+    score: SecondInput | None = None
 
 
 class MultiOptionalStage(Stage):
@@ -163,11 +162,11 @@ class MultiOptionalStage(Stage):
 def _make_result(
     status: StageState,
     *,
-    input_hash: Optional[str] = None,
-    output: Optional[StageIO] = None,
+    input_hash: str | None = None,
+    output: StageIO | None = None,
 ) -> ProgramStageResult:
     """Construct a ProgramStageResult with a given status and optional hash."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ProgramStageResult(
         status=status,
         started_at=now,
@@ -1780,7 +1779,7 @@ class TestFinalizedThisRunCompoundFlag:
         # Stage "a" has RUNNING status (non-final)
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})
@@ -1845,7 +1844,7 @@ class TestFinalizedThisRunCompoundFlag:
         )
         pending_result = ProgramStageResult(
             status=StageState.PENDING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": pending_result})
@@ -1982,7 +1981,7 @@ class TestRunningStatusDependencyPath:
         )
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})
@@ -2003,7 +2002,7 @@ class TestRunningStatusDependencyPath:
         )
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})
@@ -2024,7 +2023,7 @@ class TestRunningStatusDependencyPath:
         )
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})
@@ -2050,7 +2049,7 @@ class TestRunningStatusDependencyPath:
         )
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})
@@ -2072,7 +2071,7 @@ class TestRunningStatusDependencyPath:
         )
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})
@@ -2092,7 +2091,7 @@ class TestRunningStatusDependencyPath:
         )
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})
@@ -2112,7 +2111,7 @@ class TestRunningStatusDependencyPath:
         )
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})
@@ -2136,7 +2135,7 @@ class TestRunningStatusDependencyPath:
         )
         running_result = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         prog = _make_program(stage_results={"a": running_result})

@@ -93,7 +93,7 @@ def build_retriever(k: int = 7):
 def load_jsonl(path: str) -> list[dict]:
     """Load JSONL file as list of dicts."""
     samples = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 samples.append(json.loads(line))

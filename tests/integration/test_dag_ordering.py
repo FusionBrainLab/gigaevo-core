@@ -15,8 +15,6 @@ reused from a prior run of the same program object.
 
 from __future__ import annotations
 
-from typing import Optional
-
 import pytest  # noqa: F401  (used implicitly for fixtures)
 
 from gigaevo.programs.core_types import (
@@ -47,7 +45,7 @@ class IntInput(StageIO):
 
 
 class OptIntInput(StageIO):
-    upstream: Optional[IntOutput] = None
+    upstream: IntOutput | None = None
 
 
 # ---------------------------------------------------------------------------

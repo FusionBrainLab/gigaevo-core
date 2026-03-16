@@ -297,7 +297,7 @@ async def _run_with_metrics(
     engine.start()
     try:
         await asyncio.wait_for(engine.task, timeout=30.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"Engine did not finish {max_generations} gens within 30s")
     finally:
         await dag_runner.stop()

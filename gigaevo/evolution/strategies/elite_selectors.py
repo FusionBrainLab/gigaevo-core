@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 import random
-from typing import Callable, List, Optional, Protocol
+from typing import Protocol
 
 from loguru import logger
 import numpy as np
@@ -278,9 +279,9 @@ class ScalarTournamentEliteSelector(EliteSelector):
 class ParetoTournamentEliteSelector(EliteSelector):
     def __init__(
         self,
-        fitness_keys: List[str],
-        fitness_key_higher_is_better: Optional[dict[str, bool]] = None,
-        tie_breaker: Optional[Callable[[Program], float]] = None,
+        fitness_keys: list[str],
+        fitness_key_higher_is_better: dict[str, bool] | None = None,
+        tie_breaker: Callable[[Program], float] | None = None,
         tournament_size: int = 3,
     ):
         if not fitness_keys or len(fitness_keys) < 2:
@@ -293,7 +294,7 @@ class ParetoTournamentEliteSelector(EliteSelector):
         self.tie_breaker = tie_breaker or (lambda p: p.created_at.timestamp())
         self.tournament_size = tournament_size
 
-    def _pareto_rank(self, target: Program, population: List[Program]) -> int:
+    def _pareto_rank(self, target: Program, population: list[Program]) -> int:
         vec = extract_fitness_values(target, self.fitness_keys, self.higher_is_better)
         return sum(
             1
@@ -305,7 +306,7 @@ class ParetoTournamentEliteSelector(EliteSelector):
             )
         )
 
-    def __call__(self, programs: List[Program], total: int) -> List[Program]:
+    def __call__(self, programs: list[Program], total: int) -> list[Program]:
         if len(programs) <= total:
             logger.warning(
                 f"Only {len(programs)} programs available, requested {total}. Returning all."

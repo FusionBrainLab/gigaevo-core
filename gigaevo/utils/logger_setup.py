@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import os
 import sys
 
@@ -29,7 +29,7 @@ def setup_logger(
     os.makedirs(log_dir, exist_ok=True)
 
     # Create timestamped log file
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"evolution_{timestamp}.log")
 
     # Remove any existing handlers to avoid duplicates

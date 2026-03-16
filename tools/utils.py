@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from loguru import logger
@@ -14,7 +14,7 @@ from gigaevo.database.redis_program_storage import (
 )
 
 
-class OutlierMethod(str, Enum):
+class OutlierMethod(StrEnum):
     """Outlier detection methods."""
 
     IQR = "iqr"  # Interquartile Range (Tukey's method)

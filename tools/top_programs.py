@@ -33,7 +33,6 @@ import json
 from pathlib import Path
 import sys
 import textwrap
-from typing import Optional
 
 from loguru import logger
 
@@ -47,7 +46,7 @@ from tools.utils import RedisRunConfig
 
 def _parse_run_arg(arg: str, default_host: str, default_port: int) -> RedisRunConfig:
     """Parse --run argument of the form prefix@db[:label]."""
-    label: Optional[str] = None
+    label: str | None = None
     if ":" in arg:
         prefix_db, label = arg.split(":", 1)
     else:
@@ -89,7 +88,7 @@ def rank_programs(
     *,
     metric: str = "fitness",
     minimize: bool = False,
-    state_filter: Optional[str] = None,
+    state_filter: str | None = None,
     top_n: int = 5,
 ) -> list[Program]:
     """Filter and rank programs by metric value."""

@@ -1,5 +1,4 @@
 import re
-from typing import List, Union
 
 import numpy as np
 import pandas as pd
@@ -33,7 +32,7 @@ def extract_answer(response: str) -> float | None:
 
 def calculate_fitness(
     data: pd.DataFrame,
-    preds: List[Union[float, int, None]],
+    preds: list[float | int | None],
     target_field: str = "rule_violation",
 ):
     rule_metrics = []

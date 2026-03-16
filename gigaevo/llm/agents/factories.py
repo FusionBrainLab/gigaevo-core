@@ -39,7 +39,7 @@ def create_mutation_agent(
     metrics_context: MetricsContext,
     mutation_mode: str = "rewrite",
     prompts_dir: str | Path | None = None,
-    prompt_fetcher: "PromptFetcher | None" = None,
+    prompt_fetcher: PromptFetcher | None = None,
 ) -> MutationAgent:
     """Create a fully configured mutation agent.
 

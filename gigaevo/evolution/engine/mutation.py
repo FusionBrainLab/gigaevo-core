@@ -53,7 +53,8 @@ async def generate_mutations(
             return 0
 
         logger.info(
-            f"[mutation] Generated {len(parent_selections)} parent selections for parallel mutation"
+            "[mutation] Generated {} parent selections for parallel mutation",
+            len(parent_selections),
         )
 
         async def generate_and_persist_mutation(
@@ -64,12 +65,24 @@ async def generate_mutations(
                 mutation_spec = await mutator.mutate_single(parents)
 
                 if mutation_spec is None:
+                    logger.debug(
+                        "[mutation] Task {}: mutate_single returned None (parents={})",
+                        task_id,
+                        [p.short_id for p in parents],
+                    )
                     return False
 
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
 
                 await storage.add(program)
+                logger.debug(
+                    "[mutation] Task {}: {} → {} (model={})",
+                    task_id,
+                    [p.short_id for p in parents],
+                    program.short_id,
+                    mutation_spec.metadata.get("mutation_model", "?"),
+                )
 
                 for parent in parents:
                     fresh_parent = await storage.get(parent.id)
@@ -81,7 +94,9 @@ async def generate_mutations(
 
             except Exception as exc:
                 logger.error(
-                    f"[mutation] Task {task_id}: Failed to generate/persist mutation: {exc}"
+                    "[mutation] Task {}: Failed to generate/persist mutation: {}",
+                    task_id,
+                    exc,
                 )
                 return False
 
@@ -94,10 +109,11 @@ async def generate_mutations(
         persisted = sum(1 for result in results if result is True)
 
         logger.info(
-            f"[mutation] Created {persisted} mutations in parallel (immediately persisted)"
+            "[mutation] Created {} mutations in parallel (immediately persisted)",
+            persisted,
         )
         return persisted
 
     except Exception as exc:  # pragma: no cover
-        logger.error(f"[mutation] Mutation generation failed: {exc}.")
+        logger.error("[mutation] Mutation generation failed: {}", exc)
         return 0

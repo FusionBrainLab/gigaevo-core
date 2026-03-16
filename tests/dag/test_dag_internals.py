@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import patch
 
@@ -96,7 +96,7 @@ def _make_result(
     input_hash: str | None = None,
     output: Any = None,
 ) -> ProgramStageResult:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ProgramStageResult(
         status=status,
         started_at=now,
@@ -176,7 +176,7 @@ class TestTaskCancellation:
 
         prog.stage_results["a"] = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         await state_manager.storage.add(prog)
 
@@ -207,7 +207,7 @@ class TestTaskCancellation:
         prog = make_program()
         prog.stage_results["stage"] = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         await state_manager.storage.add(prog)
 
@@ -438,9 +438,7 @@ class TestStageStatusMetrics:
         calls: list[tuple[str, float, dict]] = []
 
         class RecordingWriter(LogWriter):
-            def bind(
-                self, path: list[str] | None = None, **kw: Any
-            ) -> "RecordingWriter":
+            def bind(self, path: list[str] | None = None, **kw: Any) -> RecordingWriter:
                 return self
 
             def scalar(self, metric: str, value: float, **kwargs: Any) -> None:
@@ -516,7 +514,7 @@ class TestStageStatusMetrics:
             writer=writer,
         )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         result = ProgramStageResult(status=status, started_at=now, finished_at=now)
         await dag._write_stage_status("a", result)
 
@@ -546,7 +544,7 @@ class TestStageStatusMetrics:
             writer=writer,
         )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         result = ProgramStageResult(
             status=StageState.COMPLETED, started_at=now, finished_at=now
         )
@@ -580,8 +578,8 @@ class TestBuildNamedInputs:
         prog.stage_results["a"] = ProgramStageResult(
             status=StageState.COMPLETED,
             output=None,
-            started_at=datetime.now(timezone.utc),
-            finished_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
         )
 
         named = dag.automata.build_named_inputs(prog, "b")
@@ -601,8 +599,8 @@ class TestBuildNamedInputs:
         prog.stage_results["a"] = ProgramStageResult(
             status=StageState.COMPLETED,
             output=output,
-            started_at=datetime.now(timezone.utc),
-            finished_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
         )
 
         named = dag.automata.build_named_inputs(prog, "b")
@@ -624,8 +622,8 @@ class TestBuildNamedInputs:
         prog.stage_results["a"] = ProgramStageResult(
             status=StageState.FAILED,
             error=StageError(type="RuntimeError", message="boom"),
-            started_at=datetime.now(timezone.utc),
-            finished_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
         )
 
         named = dag.automata.build_named_inputs(prog, "opt")
@@ -954,7 +952,7 @@ class TestRunningStateInMemoryOnly:
             write_count += 1
             return await original_write(p)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with patch.object(
             fakeredis_storage, "write_exclusive", side_effect=counting_write
         ):

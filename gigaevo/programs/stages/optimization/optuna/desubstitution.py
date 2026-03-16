@@ -11,7 +11,7 @@ import ast
 import bisect
 import copy
 import re
-from typing import Any, Optional
+from typing import Any
 
 from gigaevo.programs.stages.optimization.optuna.models import (
     _DEFAULT_PRECISION,
@@ -91,7 +91,7 @@ class _ParamDesubstitutor(ast.NodeTransformer):
         # (start_char, end_char, value_str) for comment-accurate replacement in source
         self._tuned_spans: list[tuple[int, int, str]] = []
 
-    def _is_param_subscript(self, node: ast.AST) -> Optional[str]:
+    def _is_param_subscript(self, node: ast.AST) -> str | None:
         """Return the param name if *node* is ``_optuna_params["key"]``."""
         if (
             isinstance(node, ast.Subscript)

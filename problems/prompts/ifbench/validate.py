@@ -1,5 +1,4 @@
 from statistics import mean
-from typing import List, Union
 
 import pandas as pd
 
@@ -55,7 +54,7 @@ def test_instruction_following(input, response):
     return mean(is_following_list)
 
 
-def calculate_fitness(data: pd.DataFrame, responses: List[Union[str, None]]):
+def calculate_fitness(data: pd.DataFrame, responses: list[str | None]):
     accuracy = []
     for input, response in zip(data.to_dict(orient="records"), responses):
         accuracy.append(test_instruction_following(input, response))

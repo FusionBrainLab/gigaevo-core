@@ -7,7 +7,7 @@ aliases, Union/Optional annotations, Any, and subclass relations.
 
 from __future__ import annotations
 
-from typing import Any, Generic, List, Optional, TypeVar, Union, get_origin
+from typing import Any, Generic, Optional, TypeVar, Union, get_origin
 
 from pydantic import BaseModel
 
@@ -34,7 +34,7 @@ class ChildModel(PlainModel):
     extra: str = ""
 
 
-class GenericBox(BaseModel, Generic[T]):
+class GenericBox[T](BaseModel):
     data: T
 
 
@@ -118,7 +118,7 @@ class TestTypeOriginArgs:
 
     def test_typing_capital_list_alias(self) -> None:
         """List[int] (typing.List) -> (list, (int,))"""
-        origin, args = _type_origin_args(List[int])
+        origin, args = _type_origin_args(list[int])
         assert origin is list
         assert args == (int,)
 
@@ -161,13 +161,13 @@ class TestNormalizeAnnotation:
 
     def test_union_returns_list_of_alternatives(self) -> None:
         """Union[int, str] -> [int, str]"""
-        result = _normalize_annotation(Union[int, str])
+        result = _normalize_annotation(Union[int, str])  # noqa: UP007
         assert result is not None
         assert set(result) == {int, str}
 
     def test_optional_strips_none_type(self) -> None:
         """Optional[str] == Union[str, None] -> [str] (NoneType excluded)."""
-        result = _normalize_annotation(Optional[str])
+        result = _normalize_annotation(Optional[str])  # noqa: UP045
         assert result is not None
         # NoneType must not appear in the result
         assert type(None) not in result
@@ -175,12 +175,12 @@ class TestNormalizeAnnotation:
 
     def test_optional_with_any_returns_none(self) -> None:
         """Optional[Any] == Union[Any, None] — Any in union means unconstrained -> None."""
-        result = _normalize_annotation(Optional[Any])
+        result = _normalize_annotation(Optional[Any])  # noqa: UP045
         assert result is None
 
     def test_union_with_any_returns_none(self) -> None:
         """Union[int, Any] — Any in union means unconstrained -> None."""
-        result = _normalize_annotation(Union[int, Any])
+        result = _normalize_annotation(Union[int, Any])  # noqa: UP007
         assert result is None
 
     def test_plain_model_returns_singleton_list(self) -> None:
@@ -190,7 +190,7 @@ class TestNormalizeAnnotation:
 
     def test_nested_union_flattened(self) -> None:
         """Union[int, str, float] -> [int, str, float]."""
-        result = _normalize_annotation(Union[int, str, float])
+        result = _normalize_annotation(Union[int, str, float])  # noqa: UP007
         assert result is not None
         assert set(result) == {int, str, float}
 
@@ -322,7 +322,7 @@ class TestCovariantTypeCompatible:
     def test_non_type_ann_origin_mismatch(self) -> None:
         """When ann_o is not a type (e.g. Union alias as ann), the else branch (line 107) fires."""
         # Union[int, str] has origin typing.Union which is NOT a type
-        union_ann = Union[int, str]
+        union_ann = Union[int, str]  # noqa: UP007
         assert get_origin(union_ann) is Union
         # PlainModel src origin IS a type, but Union is not → else branch: PlainModel != Union → False
         assert _covariant_type_compatible(PlainModel, union_ann) is False
@@ -395,9 +395,9 @@ class TestCovariantTypeCompatible:
         """
         # A non-class src that passes isinstance(src, type) check but whose
         # _type_origin_args returns a non-type origin is hard to construct.
-        # Instead, test that Union as ann (non-type origin) vs class src
+        # Instead, test that a union ann (non-type origin) vs class src
         # enters the else branch.
-        assert _covariant_type_compatible(int, Union[int, str]) is False
+        assert _covariant_type_compatible(int, int | str) is False
 
     def test_pydantic_generic_mismatched_arg_count_same_origin(self) -> None:
         """Src and ann from same generic origin but different arg counts → not compatible.

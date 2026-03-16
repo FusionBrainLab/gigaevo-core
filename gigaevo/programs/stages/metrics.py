@@ -1,8 +1,8 @@
 # gigaevo/programs/stages/metrics_stages.py
 from __future__ import annotations
 
+from collections.abc import Callable
 import math
-from typing import Callable, Optional
 
 from loguru import logger
 
@@ -20,7 +20,7 @@ class EnsureMetricsInputs(StageIO):
     If absent, a factory will be used.
     """
 
-    candidate: Optional[FloatDictContainer]
+    candidate: FloatDictContainer | None
 
 
 @StageRegistry.register(

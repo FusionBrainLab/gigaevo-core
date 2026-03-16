@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import typing
-from typing import Type, get_args, get_origin
+from typing import get_args, get_origin
 
 from gigaevo.programs.stages.base import Stage
 
@@ -34,7 +34,7 @@ class StageRegistry:
             import_path: Import path (auto-detected if None)
         """
 
-        def decorator(stage_class: Type[Stage]) -> Type[Stage]:
+        def decorator(stage_class: type[Stage]) -> type[Stage]:
             # Use class name as the registry key
             class_name = stage_class.__name__
 

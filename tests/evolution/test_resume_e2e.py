@@ -260,7 +260,7 @@ async def _run(storage: RedisProgramStorage, max_generations: int) -> EvolutionE
     engine.start()
     try:
         await asyncio.wait_for(engine.task, timeout=30.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"Engine did not finish {max_generations} gens within 30 s")
     finally:
         await dag_runner.stop()
@@ -282,7 +282,7 @@ async def _resume(storage: RedisProgramStorage, total_cap: int) -> EvolutionEngi
     engine.start()
     try:
         await asyncio.wait_for(engine.task, timeout=30.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("Resumed engine did not finish within 30 s")
     finally:
         await dag_runner.stop()

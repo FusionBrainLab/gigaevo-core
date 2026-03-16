@@ -13,7 +13,7 @@ import asyncio
 import math
 from pathlib import Path
 import time
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from loguru import logger
@@ -150,7 +150,7 @@ class OptunaOptimizationStage(Stage):
         python_path: list[Path] | None = None,
         max_memory_mb: int | None = None,
         optimization_time_budget: float | None = None,
-        config: Optional[OptunaOptimizationConfig] = None,
+        config: OptunaOptimizationConfig | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -449,7 +449,7 @@ class OptunaOptimizationStage(Stage):
         self,
         parameterized_code: str,
         params: dict[str, Any],
-        context: Optional[dict[str, Any]],
+        context: dict[str, Any] | None,
     ) -> tuple[dict[str, float] | None, Any, str | None]:
         """Run one trial capturing both scores and raw program output.
 
@@ -488,7 +488,7 @@ class OptunaOptimizationStage(Stage):
             if isinstance(val_result, dict) and self.score_key in val_result:
                 return val_result, prog_output, None
             return None, None, f"Unexpected result type: {type(val_result).__name__}"
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None, None, "Timeout"
         except ExecRunnerError as exc:
             last_line = (exc.stderr or "").strip().rsplit("\n", 1)[-1]
@@ -498,7 +498,7 @@ class OptunaOptimizationStage(Stage):
         self,
         parameterized_code: str,
         param_specs: list[ParamSpec],
-        context: Optional[dict[str, Any]],
+        context: dict[str, Any] | None,
         pid: str,
         compute_start: float,
     ) -> tuple[dict[str, Any], dict[str, float], int, int, Any]:

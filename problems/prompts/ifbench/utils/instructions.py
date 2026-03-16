@@ -14,13 +14,13 @@
 
 """Library of instructions."""
 
+from collections.abc import Sequence
 import logging
 import os
 from pathlib import Path
 import random
 import re
 import string
-from typing import Dict, Optional, Sequence, Union
 
 # Set NLTK data path to local directory before importing nltk
 _nltk_data_dir = Path(__file__).parent / ".nltk_data"
@@ -42,7 +42,7 @@ import problems.prompts.ifbench.utils.instructions_util as instructions_util
 
 logger = logging.getLogger(__name__)
 
-_InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]
+_InstructionArgsDtype = dict[str, int | str | Sequence[str]] | None
 
 # The number of keywords.
 _NUM_KEYWORDS = 2
@@ -411,7 +411,7 @@ class PersonNameCountChecker(Instruction):
         person_names = []
         for name in person_name_list:
             # Use regex with word boundaries
-            pattern = r"\b{}\b".format(re.escape(name))
+            pattern = rf"\b{re.escape(name)}\b"
             if re.search(pattern, value):
                 person_names.append(name)
         unique_person_names = set(person_names)
@@ -1171,7 +1171,7 @@ class IncludeKeywordChecker(Instruction):
         if len(sentences) < self._keyword_position:
             return False
         # Use regex with word boundaries for robust matching
-        pattern = r"\b{}\b".format(re.escape(self._keyword))
+        pattern = rf"\b{re.escape(self._keyword)}\b"
         return bool(
             re.search(
                 pattern, sentences[int(self._keyword_position - 1)], re.IGNORECASE

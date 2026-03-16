@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 import random
-from typing import Callable
 
 from gigaevo.evolution.strategies.utils import dominates, extract_fitness_values
 from gigaevo.programs.program import Program

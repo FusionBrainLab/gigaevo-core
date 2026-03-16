@@ -122,10 +122,10 @@ def update_global_record_if_better(f_values, metrics, output_file: str):
     existing_fitness = -1.0
     if os.path.exists(output_file):
         try:
-            with open(output_file, "r") as f:
+            with open(output_file) as f:
                 data = json.load(f)
                 existing_fitness = data.get("fitness", -1.0)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
 
     # Update if better

@@ -589,3 +589,4 @@ problems/chains/hotpotqa/dataset/colbert_index/
 # Claude Code local configuration (machine-specific, not for sharing)
 .claude/
 CLAUDE.md
+.gitnexus

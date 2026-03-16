@@ -126,7 +126,7 @@ class MutationAgent(LangGraphAgent):
         if metrics_context is not None:
             from gigaevo.programs.metrics.formatter import MetricsFormatter
 
-            self._metrics_formatter: "MetricsFormatter | None" = MetricsFormatter(
+            self._metrics_formatter: MetricsFormatter | None = MetricsFormatter(
                 metrics_context
             )
         else:

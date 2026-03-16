@@ -79,7 +79,7 @@ class PromptFetcher(ABC):
         child_fitness: float,
         parent_fitness: float,
         higher_is_better: bool,
-        outcome: "MutationOutcome",
+        outcome: MutationOutcome,
     ) -> None:
         """Called after mutation outcome known. Default no-op.
 
@@ -91,7 +91,7 @@ class PromptFetcher(ABC):
             outcome: Outcome enum (ACCEPTED, REJECTED_STRATEGY, REJECTED_ACCEPTOR)
         """
 
-    async def start(self, storage: "ProgramStorage | None" = None) -> None:
+    async def start(self, storage: ProgramStorage | None = None) -> None:
         """Optional lifecycle hook called when the fetcher is started."""
 
     async def stop(self) -> None:
@@ -177,7 +177,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self._fitness_key = fitness_key
 
         # Cache state
-        self._cached_pack: "_PromptPack | None" = None
+        self._cached_pack: _PromptPack | None = None
         self._cache_timestamp: float = 0.0
 
         # Lazy-imported redis client for archive reads (prompt run DB)
@@ -220,7 +220,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
     def _is_cache_stale(self) -> bool:
         return (time.monotonic() - self._cache_timestamp) >= self._cache_ttl
 
-    def _refresh_champion(self) -> "_PromptPack | None":
+    def _refresh_champion(self) -> _PromptPack | None:
         """Select a prompt from the prompt run's archive using fitness-proportional sampling.
 
         Instead of always picking the single best, uses stochastic selection so
@@ -293,7 +293,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             )
             return None
 
-    def _execute_entrypoint(self, code: str) -> "_PromptPack | None":
+    def _execute_entrypoint(self, code: str) -> _PromptPack | None:
         """Execute a program's entrypoint() in a clean namespace.
 
         Computes prompt_id from the system prompt TEXT (not the program UUID)
@@ -399,7 +399,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         child_fitness: float,
         parent_fitness: float,
         higher_is_better: bool,
-        outcome: "MutationOutcome",
+        outcome: MutationOutcome,
     ) -> None:
         """Write mutation outcome stats to Redis for the prompt run to read.
 

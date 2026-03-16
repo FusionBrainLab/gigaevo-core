@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 import functools
 import os
 from pathlib import Path
 import struct
 import sys
-from typing import Any, Sequence
+from typing import Any
 
 import cloudpickle
 import psutil
@@ -227,7 +228,7 @@ async def _run_via_worker(
             )
         stdout = await asyncio.wait_for(proc.stdout.readexactly(n), timeout=timeout)
     except (
-        asyncio.TimeoutError,
+        TimeoutError,
         asyncio.IncompleteReadError,
         BrokenPipeError,
         ConnectionResetError,
@@ -328,7 +329,7 @@ async def run_exec_runner(
         await worker_pool.return_worker(worker)
         raise
     except (
-        asyncio.TimeoutError,
+        TimeoutError,
         asyncio.IncompleteReadError,
         BrokenPipeError,
         ConnectionResetError,
@@ -359,7 +360,7 @@ async def run_exec_runner(
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(input=data), timeout=timeout
         )
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError):
         if monitor_task is not None:
             monitor_task.cancel()
         await _kill_process_tree(proc)

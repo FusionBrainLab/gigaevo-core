@@ -14,7 +14,7 @@ class BinningStrategy(BaseModel, abc.ABC):
     num_bins: int = Field(gt=0)
 
     @model_validator(mode="after")
-    def check_bounds(self) -> "BinningStrategy":
+    def check_bounds(self) -> BinningStrategy:
         if self.min_val > self.max_val:
             raise ValueError(
                 f"Invalid bounds: min ({self.min_val}) > max ({self.max_val})"
@@ -132,7 +132,7 @@ class BehaviorSpace(BaseModel):
         return total
 
     @model_validator(mode="after")
-    def check_dimensionality(self) -> "BehaviorSpace":
+    def check_dimensionality(self) -> BehaviorSpace:
         if not self.bins:
             raise ValueError("Behavior space must have at least one dimension")
         return self

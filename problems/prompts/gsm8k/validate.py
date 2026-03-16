@@ -1,5 +1,4 @@
 from statistics import mean
-from typing import List, Union
 
 import pandas as pd
 
@@ -41,7 +40,7 @@ def normalize_number(value: str) -> str:
 
 def calculate_fitness(
     data: pd.DataFrame,
-    preds: List[Union[str, None]],
+    preds: list[str | None],
     target_field: str = "answer",
 ):
     """Calculate accuracy."""

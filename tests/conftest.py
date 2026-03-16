@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 import fakeredis.aioredis
 import pytest
@@ -29,7 +29,7 @@ from gigaevo.utils.trackers.base import LogWriter
 
 
 class NullWriter(LogWriter):
-    def bind(self, path: list[str]) -> "NullWriter":
+    def bind(self, path: list[str]) -> NullWriter:
         return self
 
     def scalar(self, metric: str, value: float, **kwargs: Any) -> None:
@@ -59,7 +59,7 @@ class MockInput(StageIO):
 
 
 class OptionalInput(StageIO):
-    data: Optional[MockOutput] = None
+    data: MockOutput | None = None
 
 
 # ---------------------------------------------------------------------------

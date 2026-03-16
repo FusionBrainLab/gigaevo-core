@@ -1,6 +1,6 @@
 """Tests for gigaevo/evolution/strategies/removers.py"""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 import random
 
 import pytest
@@ -27,7 +27,7 @@ def _prog(metrics=None, created_at=None):
 
 class TestOldestArchiveRemover:
     def test_removes_oldest(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         old = _prog(created_at=now - timedelta(hours=2))
         mid = _prog(created_at=now - timedelta(hours=1))
         new = _prog(created_at=now)
@@ -203,7 +203,7 @@ class TestParetoFrontArchiveRemover:
 
     def test_all_equal_fitness(self):
         """All programs have identical metrics: removal falls to tie-breaker."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         p1 = _prog(metrics={"a": 5.0, "b": 5.0})
         p1.created_at = now - timedelta(hours=3)
         p2 = _prog(metrics={"a": 5.0, "b": 5.0})
@@ -228,7 +228,7 @@ class TestParetoFrontArchiveRemover:
 
 class TestParetoFrontArchiveRemoverDropOldest:
     def test_tie_breaks_by_age(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # Same fitness, different ages
         old = _prog(metrics={"a": 5.0, "b": 5.0})
         old.created_at = now - timedelta(hours=2)

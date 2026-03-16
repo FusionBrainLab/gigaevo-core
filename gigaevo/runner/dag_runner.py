@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import gc
 import os
 import time
@@ -31,7 +31,7 @@ class TaskInfo(NamedTuple):
 class DagRunnerMetrics(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
-    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     loop_iterations: int = 0
     dag_runs_started: int = 0
     dag_runs_completed: int = 0
@@ -44,7 +44,7 @@ class DagRunnerMetrics(BaseModel):
     @computed_field
     @property
     def uptime_seconds(self) -> int:
-        return int((datetime.now(timezone.utc) - self.started_at).total_seconds())
+        return int((datetime.now(UTC) - self.started_at).total_seconds())
 
     @computed_field
     @property
@@ -257,7 +257,7 @@ class DagRunner:
                         logger.warning(
                             "[DagScheduler] program {} classified as timed out but "
                             "already DONE — skipping discard",
-                            info.program_id,
+                            info.program_id[:8],
                         )
                         self._metrics.record_timeout()
                         continue
@@ -265,11 +265,11 @@ class DagRunner:
                         prog, ProgramState.DISCARDED
                     )
                 self._metrics.record_timeout()
-                logger.error("[DagScheduler] program {} timed out", info.program_id)
+                logger.error("[DagScheduler] program {} timed out", info.program_id[:8])
             except Exception as e:
                 logger.error(
                     "[DagScheduler] discard after timeout failed for {}: {}",
-                    info.program_id,
+                    info.program_id[:8],
                     e,
                 )
 
@@ -280,11 +280,13 @@ class DagRunner:
                 self._metrics.increment_dag_runs_completed()
                 logger.debug(
                     "[DagScheduler] harvested completed task for program {}",
-                    info.program_id,
+                    info.program_id[:8],
                 )
             except Exception as e:
                 self._metrics.increment_dag_errors()
-                logger.error("[DagScheduler] program {} failed: {}", info.program_id, e)
+                logger.error(
+                    "[DagScheduler] program {} failed: {}", info.program_id[:8], e
+                )
             finally:
                 del info
 
@@ -327,11 +329,14 @@ class DagRunner:
                         )
                         self._metrics.record_orphaned()
                         logger.warning(
-                            "[DagScheduler] orphaned program {} discarded", p.id
+                            "[DagScheduler] orphaned program {} discarded", p.short_id
                         )
                     except Exception as se:
+                        self._metrics.record_state_update_failure()
                         logger.error(
-                            "[DagScheduler] orphan discard failed for {}: {}", p.id, se
+                            "[DagScheduler] orphan discard failed for {}: {}",
+                            p.short_id,
+                            se,
                         )
             except Exception as e:
                 logger.error("[DagScheduler] orphan fetch failed: {}", e)
@@ -367,17 +372,19 @@ class DagRunner:
                 import traceback
 
                 logger.error(
-                    "[DagScheduler] DAG build failed for {}: {}", program.id, e
+                    "[DagScheduler] DAG build failed for {}: {}", program.short_id, e
                 )
                 logger.error("[DagScheduler] Traceback:\n{}", traceback.format_exc())
+                self._metrics.record_build_failure()
                 try:
                     await self._state_manager.set_program_state(
                         program, ProgramState.DISCARDED
                     )
-                    self._metrics.record_build_failure()
                 except Exception as se:
                     logger.error(
-                        "[DagScheduler] state update failed for {}: {}", program.id, se
+                        "[DagScheduler] state update failed for {}: {}",
+                        program.short_id,
+                        se,
                     )
                     self._metrics.record_state_update_failure()
                 continue
@@ -386,7 +393,7 @@ class DagRunner:
                 async with self._sema:
                     await self._execute_dag(dag_inst, prog)
 
-            task = asyncio.create_task(_run_one(), name=f"dag-{program.id[:8]}")
+            task = asyncio.create_task(_run_one(), name=f"dag-{program.short_id}")
             self._active[program.id] = TaskInfo(task, program.id, time.monotonic())
             capacity -= 1
 
@@ -395,10 +402,10 @@ class DagRunner:
                     program, ProgramState.RUNNING
                 )
                 self._metrics.increment_dag_runs_started()
-                logger.info("[DagScheduler] launched {}", program.id)
+                logger.info("[DagScheduler] launched {}", program.short_id)
             except Exception as e:
                 logger.error(
-                    "[DagScheduler] mark-started failed for {}: {}", program.id, e
+                    "[DagScheduler] mark-started failed for {}: {}", program.short_id, e
                 )
                 task.cancel()
                 self._active.pop(program.id, None)
@@ -409,7 +416,9 @@ class DagRunner:
             await dag.run(program)
         except Exception as exc:
             ok = False
-            logger.error("[DagScheduler] DAG run failed for {}: {}", program.id, exc)
+            logger.error(
+                "[DagScheduler] DAG run failed for {}: {}", program.short_id, exc
+            )
         finally:
             dag.automata.topology.nodes.clear()
             dag.automata.topology = None
@@ -425,12 +434,13 @@ class DagRunner:
             # Log completion immediately when state is updated
             if ok:
                 logger.debug(
-                    "[DagScheduler] DAG completed for {} (state updated)", program.id
+                    "[DagScheduler] DAG completed for {} (state updated)",
+                    program.short_id,
                 )
         except Exception as se:
             self._metrics.record_state_update_failure()
             logger.error(
-                "[DagScheduler] state update failed for {}: {}", program.id, se
+                "[DagScheduler] state update failed for {}: {}", program.short_id, se
             )
 
     async def _cancel_task(self, info: TaskInfo) -> None:
@@ -441,9 +451,9 @@ class DagRunner:
             await asyncio.wait_for(info.task, timeout=2.0)
         except asyncio.CancelledError:
             pass
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "[DagScheduler] task for {} did not terminate within 2s after cancel; "
                 "atomic_state_transition merge will resolve any concurrent state race",
-                info.program_id,
+                info.program_id[:8],
             )

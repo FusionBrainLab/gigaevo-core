@@ -93,7 +93,7 @@ def save_best_config(configuration, metrics, output_file: str):
     existing_fitness = -float("inf")
     if os.path.exists(output_file):
         try:
-            with open(output_file, "r") as f:
+            with open(output_file) as f:
                 data = json.load(f)
                 existing_fitness = data.get("fitness", -float("inf"))
         except:

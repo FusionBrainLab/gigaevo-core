@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from asyncio import CancelledError
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import time
 from typing import cast
 
@@ -75,13 +75,13 @@ class DAG:
                 await self._run_internal(program)
 
             self._writer.scalar("dag_timeout", 0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("[DAG][{}] DAG run timed out after {}s", pid, self.dag_timeout)
             self._writer.scalar("dag_timeout", 1)
             raise
 
     def _pid(self, program: Program) -> str:
-        return program.id[:8]
+        return program.short_id
 
     def _canonical_stage_name(self, stage_name: str) -> str:
         return self.automata.topology.nodes[stage_name].stage_name  # type: ignore
@@ -191,6 +191,14 @@ class DAG:
             if tuple_to_hash != self._previous_launched_hash:
                 self._previous_launched_hash = tuple_to_hash
                 logger.debug(
+                    "[DAG][{}] Running={} Ready={} Blocked={} Done={}",
+                    pid,
+                    len(running),
+                    len(ready),
+                    len(blocked),
+                    len(finished_this_run),
+                )
+                logger.trace(
                     "[DAG][{}] Running={} Ready={} Blocked={} Done={}",
                     pid,
                     sorted(running),
@@ -308,7 +316,7 @@ class DAG:
         if not ready_with_inputs:
             return tasks
 
-        now_ts = datetime.now(timezone.utc)
+        now_ts = datetime.now(UTC)
         for name in sorted(ready_with_inputs.keys()):
             await self.state_manager.mark_stage_running(
                 program, name, started_at=now_ts
@@ -346,15 +354,8 @@ class DAG:
         except Exception as e:
             outcome = e
 
-        logger.debug(
-            "[DAG][{}] Collected result for '{}': type={}",
-            pid,
-            stage_name,
-            type(outcome).__name__ if outcome is not None else "None",
-        )
-
         running.discard(stage_name)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         started_at = program.stage_results[stage_name].started_at or now
 
         result: ProgramStageResult
@@ -394,11 +395,14 @@ class DAG:
         await self._persist_stage_result(program, stage_name, result)
 
         finished_this_run.add(stage_name)
+        duration = result.duration_seconds()
+        dur_str = f" ({duration:.1f}s)" if duration else ""
         logger.info(
-            "[DAG][{}] Stage '{}' FINALIZED as {}.",
+            "[DAG][{}] Stage '{}' FINALIZED as {}{}",
             pid,
             stage_name,
             result.status.name,
+            dur_str,
         )
 
     async def _persist_stage_result(

@@ -15,8 +15,7 @@ Test groups:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import pytest
 
@@ -52,12 +51,12 @@ class IntInput(StageIO):
 
 
 class OptIntInput(StageIO):
-    data: Optional[IntOutput] = None
+    data: IntOutput | None = None
 
 
 class DualOptInput(StageIO):
-    left: Optional[IntOutput] = None
-    right: Optional[IntOutput] = None
+    left: IntOutput | None = None
+    right: IntOutput | None = None
 
 
 class DualMandatoryInput(StageIO):
@@ -284,7 +283,7 @@ def _make_result(
     input_hash: str | None = None,
     output=None,
 ) -> ProgramStageResult:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ProgramStageResult(
         status=status,
         started_at=now,

@@ -117,7 +117,8 @@ class TestGigaEvoArchivePromptFetcher:
             main_redis_prefix="chains/hotpotqa",
             fallback_prompts_dir=tmp_prompts_dir,
         )
-        # No Redis available, should fall back
+        # Force no champion (avoid depending on real Redis state)
+        fetcher._refresh_champion = lambda: None  # type: ignore[assignment]
         result = fetcher.fetch("mutation", "system")
         assert (
             result.text == "System prompt for {task_description}: {metrics_description}"
@@ -208,6 +209,8 @@ class TestGigaEvoArchivePromptFetcher:
             main_redis_prefix="chains/hotpotqa",
             fallback_prompts_dir=tmp_prompts_dir,
         )
+        # Force no champion (avoid depending on real Redis state)
+        fetcher._refresh_champion = lambda: None  # type: ignore[assignment]
         result = fetcher.fetch("mutation", "user")
         assert result.text == "User prompt for {code}"
         assert result.prompt_id is None  # fallback has no tracking ID

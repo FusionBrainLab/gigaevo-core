@@ -3,7 +3,6 @@
 import asyncio
 import json
 import re
-from typing import List
 
 import pandas as pd
 
@@ -160,7 +159,7 @@ async def run_pipeline_async(
     context: dict,
     dataset_key: str = "train_dataset",
     max_concurrent: int = 32,
-) -> List[dict]:
+) -> list[dict]:
     """Run the full pipeline on dataset."""
     dataset = context[dataset_key]
 
@@ -197,7 +196,7 @@ def run_pipeline(
     rewriter_prompt_template: str,
     context: dict,
     dataset_key: str = "train_dataset",
-) -> List[dict]:
+) -> list[dict]:
     """Run the full pipeline synchronously."""
     return asyncio.run(
         run_pipeline_async(rewriter_prompt_template, context, dataset_key)

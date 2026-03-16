@@ -228,7 +228,7 @@ async def _run_engine(
     engine.start()
     try:
         await asyncio.wait_for(engine.task, timeout=30.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"Engine did not finish {max_generations} gens within 30s")
     finally:
         await runner.stop()
@@ -313,7 +313,7 @@ class TestMaxGenerationsCap:
         engine.start()
         try:
             await asyncio.wait_for(engine.task, timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail("Engine did not finish within 30s")
         finally:
             await runner.stop()
@@ -408,7 +408,7 @@ class TestAllMutationsRejected:
         engine.start()
         try:
             await asyncio.wait_for(engine.task, timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail("Engine stalled when all mutations were rejected")
         finally:
             await runner.stop()

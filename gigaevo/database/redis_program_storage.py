@@ -56,7 +56,7 @@ class RedisProgramStorage(ProgramStorage):
 
     # --------------------- Context Manager ---------------------
 
-    async def __aenter__(self) -> "RedisProgramStorage":
+    async def __aenter__(self) -> RedisProgramStorage:
         """Acquire instance lock and start metrics collection."""
         if not self.config.read_only:
             await self._lock.acquire()

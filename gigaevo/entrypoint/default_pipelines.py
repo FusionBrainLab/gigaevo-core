@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from gigaevo.entrypoint.constants import (
     DEFAULT_DAG_CONCURRENCY,
@@ -63,15 +63,15 @@ class PipelineBuilder:
         self._max_parallel: int = DEFAULT_DAG_CONCURRENCY
 
     # Stage operations - add, replace, remove
-    def add_stage(self, name: str, factory: StageFactory) -> "PipelineBuilder":
+    def add_stage(self, name: str, factory: StageFactory) -> PipelineBuilder:
         self._nodes[name] = factory
         return self
 
-    def replace_stage(self, name: str, factory: StageFactory) -> "PipelineBuilder":
+    def replace_stage(self, name: str, factory: StageFactory) -> PipelineBuilder:
         self._nodes[name] = factory
         return self
 
-    def remove_stage(self, name: str) -> "PipelineBuilder":
+    def remove_stage(self, name: str) -> PipelineBuilder:
         self._nodes.pop(name, None)
         self._data_flow_edges = [
             edge
@@ -86,14 +86,14 @@ class PipelineBuilder:
     # Data flow operations - add, remove
     def add_data_flow_edge(
         self, src: str, dst: str, input_name: str
-    ) -> "PipelineBuilder":
+    ) -> PipelineBuilder:
         """Add a data flow edge with semantic input naming."""
         self._data_flow_edges.append(
             DataFlowEdge.create(source=src, destination=dst, input_name=input_name)
         )
         return self
 
-    def remove_data_flow_edge(self, src: str, dst: str) -> "PipelineBuilder":
+    def remove_data_flow_edge(self, src: str, dst: str) -> PipelineBuilder:
         """Remove a data flow edge."""
         self._data_flow_edges = [
             e
@@ -105,13 +105,13 @@ class PipelineBuilder:
     # Execution order dependency operations - add, remove
     def add_exec_dep(
         self, stage: str, dep: ExecutionOrderDependency
-    ) -> "PipelineBuilder":
+    ) -> PipelineBuilder:
         self._deps.setdefault(stage, []).append(dep)
         return self
 
     def remove_exec_dep(
         self, stage: str, dep: ExecutionOrderDependency
-    ) -> "PipelineBuilder":
+    ) -> PipelineBuilder:
         if stage in self._deps:
             self._deps[stage] = [d for d in self._deps[stage] if d != dep]
         return self
@@ -119,7 +119,7 @@ class PipelineBuilder:
     # Set limits for the pipeline
     def set_limits(
         self, *, dag_timeout: float | None, max_parallel: int | None
-    ) -> "PipelineBuilder":
+    ) -> PipelineBuilder:
         if dag_timeout is not None:
             self._dag_timeout = dag_timeout
         if max_parallel is not None:

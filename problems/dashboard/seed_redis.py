@@ -9,7 +9,7 @@ Usage:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 import json
 import math
 import os
@@ -168,7 +168,7 @@ def seed_run(r: redis_lib.Redis, spec: dict, rng: random.Random) -> tuple[int, i
     n_programs = spec["n_programs"]
     valid_frac = spec["valid_frac"]
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # ---- Build programs with lineage ----
     programs: list[Program] = []

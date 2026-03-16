@@ -192,7 +192,9 @@ def _make_island_config(
 ) -> IslandConfig:
     behavior_space = BehaviorSpace(
         bins={
-            "x": LinearBinning(min_val=0.0, max_val=10.0, num_bins=num_bins, type="linear")
+            "x": LinearBinning(
+                min_val=0.0, max_val=10.0, num_bins=num_bins, type="linear"
+            )
         }
     )
     return IslandConfig(
@@ -201,7 +203,9 @@ def _make_island_config(
         max_size=max_size,
         archive_selector=SumArchiveSelector(fitness_keys=["fitness"]),
         archive_remover=(
-            FitnessArchiveRemover(fitness_key="fitness", fitness_key_higher_is_better=True)
+            FitnessArchiveRemover(
+                fitness_key="fitness", fitness_key_higher_is_better=True
+            )
             if max_size is not None
             else None
         ),
@@ -292,7 +296,7 @@ async def _run(
     engine.start()
     try:
         await asyncio.wait_for(engine.task, timeout=30.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"Engine did not finish {max_generations} gens within 30s")
     finally:
         await runner.stop()
@@ -594,9 +598,7 @@ class TestMultiGenArchiveReplacement:
         )
 
         # The mutant in the x=0.5 bin should have the highest fitness
-        mutant_bin_progs = [
-            p for p in programs if p.metrics.get("x", -1) == 0.5
-        ]
+        mutant_bin_progs = [p for p in programs if p.metrics.get("x", -1) == 0.5]
         if mutant_bin_progs:
             best = mutant_bin_progs[0]
             # After 4 gens (gen1=seed only, gen2/3/4 produce mutants),

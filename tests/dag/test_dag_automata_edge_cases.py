@@ -46,8 +46,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import pytest
 
@@ -86,11 +85,11 @@ from tests.conftest import (
 def _make_result(
     status: StageState,
     *,
-    input_hash: Optional[str] = None,
-    output: Optional[StageIO] = None,
+    input_hash: str | None = None,
+    output: StageIO | None = None,
 ) -> ProgramStageResult:
     """Construct a ProgramStageResult with a given status."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ProgramStageResult(
         status=status,
         started_at=now,
@@ -141,8 +140,8 @@ def _result(status: StageState, output=None) -> ProgramStageResult:
     return ProgramStageResult(
         status=status,
         output=output,
-        started_at=datetime.now(timezone.utc),
-        finished_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
     )
 
 
@@ -211,7 +210,7 @@ class TestIsSatisfiedHistorically:
         # We construct manually to bypass the _make_result finished_at logic
         result_pending = ProgramStageResult(
             status=StageState.PENDING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         assert dep.is_satisfied_historically(result_pending) is False
@@ -221,7 +220,7 @@ class TestIsSatisfiedHistorically:
         dep = ExecutionOrderDependency.always_after("a")
         result_running = ProgramStageResult(
             status=StageState.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             finished_at=None,
         )
         assert dep.is_satisfied_historically(result_running) is False
@@ -329,7 +328,7 @@ class TestIsSatisfiedHistorically:
         )
         assert gate_state is DAGAutomata.GateState.WAIT, (
             "Stale FAILED result must not satisfy on_failure dep in _check_dependency_gate; "
-            "got {} with reason {!r}".format(gate_state, reason)
+            f"got {gate_state} with reason {reason!r}"
         )
 
     def test_divergence_from_check_dependency_gate_for_stale_completed_result(self):
@@ -1363,7 +1362,7 @@ class TestFinalizedThisRunWithNonFinalStatus:
         prog = _prog(
             a=ProgramStageResult(
                 status=StageState.RUNNING,
-                started_at=datetime.now(timezone.utc),
+                started_at=datetime.now(UTC),
             )
         )
         dep = ExecutionOrderDependency.always_after("a")
@@ -1397,7 +1396,7 @@ class TestFinalizedThisRunWithNonFinalStatus:
         prog = _prog(
             a=ProgramStageResult(
                 status=StageState.RUNNING,
-                started_at=datetime.now(timezone.utc),
+                started_at=datetime.now(UTC),
             )
         )
         status = aut._get_stage_status(prog, "a", finished_this_run={"a"})
@@ -1641,7 +1640,7 @@ class TestBuildNamedInputsOrdering:
             a=ProgramStageResult(
                 status=StageState.COMPLETED,
                 output=None,
-                started_at=datetime.now(timezone.utc),
+                started_at=datetime.now(UTC),
             )
         )
         named = aut.build_named_inputs(prog, "b")
@@ -1680,8 +1679,8 @@ class TestGetReadyStageCacheHashNone:
             s=ProgramStageResult(
                 status=StageState.COMPLETED,
                 input_hash="stored_hash_abc",
-                started_at=datetime.now(timezone.utc),
-                finished_at=datetime.now(timezone.utc),
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
             )
         )
         ready, cached = aut.get_ready_stages(
@@ -1802,7 +1801,7 @@ class TestIsSatisfiedHistoricallyCombinations:
         dep = ExecutionOrderDependency(stage_name="x", condition=condition)
         result = ProgramStageResult(
             status=status,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         assert dep.is_satisfied_historically(result) is expected
 

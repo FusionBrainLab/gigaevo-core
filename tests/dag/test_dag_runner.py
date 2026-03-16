@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+from datetime import UTC
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -886,9 +887,9 @@ class TestMetricsComputed:
         # Simulate some iterations with known uptime
         m.loop_iterations = 100
         # Manually set started_at to 10 seconds ago
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        m.started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        m.started_at = datetime.now(UTC) - timedelta(seconds=10)
         result = m.average_iterations_per_second
         # Should be approximately 10 iterations/second
         assert result > 0.0

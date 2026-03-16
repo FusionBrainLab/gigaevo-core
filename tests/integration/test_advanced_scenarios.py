@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from typing import Optional
 from unittest.mock import MagicMock
 
 import fakeredis.aioredis
@@ -33,9 +32,13 @@ from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
-from gigaevo.programs.core_types import FINAL_STATES, StageIO, StageState, VoidInput, VoidOutput
+from gigaevo.programs.core_types import (
+    FINAL_STATES,
+    StageIO,
+    StageState,
+    VoidInput,
+)
 from gigaevo.programs.dag.automata import (
-    DAGAutomata,
     DAGValidator,
     DataFlowEdge,
     ExecutionOrderDependency,
@@ -61,20 +64,20 @@ class IntInput(StageIO):
 
 
 class OptIntInput(StageIO):
-    data: Optional[IntOutput] = None
+    data: IntOutput | None = None
 
 
 class MultiIntInput(StageIO):
     """Accepts up to 8 optional integer inputs."""
 
-    i0: Optional[IntOutput] = None
-    i1: Optional[IntOutput] = None
-    i2: Optional[IntOutput] = None
-    i3: Optional[IntOutput] = None
-    i4: Optional[IntOutput] = None
-    i5: Optional[IntOutput] = None
-    i6: Optional[IntOutput] = None
-    i7: Optional[IntOutput] = None
+    i0: IntOutput | None = None
+    i1: IntOutput | None = None
+    i2: IntOutput | None = None
+    i3: IntOutput | None = None
+    i4: IntOutput | None = None
+    i5: IntOutput | None = None
+    i6: IntOutput | None = None
+    i7: IntOutput | None = None
 
 
 # ===========================================================================
@@ -592,8 +595,6 @@ def _make_metrics_tracker():
 
 
 async def _run_engine(storage, max_generations, *, mutation_operator, acceptor=None):
-    from gigaevo.evolution.engine.acceptor import DefaultProgramEvolutionAcceptor
-
     strategy = MapElitesMultiIsland(
         island_configs=[_make_island_config()],
         program_storage=storage,
@@ -623,7 +624,7 @@ async def _run_engine(storage, max_generations, *, mutation_operator, acceptor=N
     engine.start()
     try:
         await asyncio.wait_for(engine.task, timeout=30.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"Engine did not finish {max_generations} gens within 30s")
     finally:
         await runner.stop()
@@ -734,9 +735,7 @@ class TestWideFanOutFanIn:
         branches = {f"b{i}": ProduceN(value=i + 1) for i in range(8)}
         nodes = {"src": ProduceN(value=0), **branches, "agg": SumAllStage(timeout=5.0)}
 
-        edges = [
-            DataFlowEdge.create(f"b{i}", "agg", f"i{i}") for i in range(8)
-        ]
+        edges = [DataFlowEdge.create(f"b{i}", "agg", f"i{i}") for i in range(8)]
         exec_deps = {
             f"b{i}": [ExecutionOrderDependency(stage_name="src", condition="success")]
             for i in range(8)
@@ -765,9 +764,7 @@ class TestWideFanOutFanIn:
 
         nodes = {"src": ProduceN(value=0), **branches, "agg": SumAllStage(timeout=5.0)}
 
-        edges = [
-            DataFlowEdge.create(f"b{i}", "agg", f"i{i}") for i in range(8)
-        ]
+        edges = [DataFlowEdge.create(f"b{i}", "agg", f"i{i}") for i in range(8)]
         exec_deps = {
             f"b{i}": [ExecutionOrderDependency(stage_name="src", condition="success")]
             for i in range(8)
@@ -788,11 +785,13 @@ class TestWideFanOutFanIn:
         """Source fails → all 8 branches skipped (on_success dep) → aggregator
         runs with all None inputs."""
         branches = {f"b{i}": ProduceN(value=i + 1) for i in range(8)}
-        nodes = {"src": FailStage(timeout=5.0), **branches, "agg": SumAllStage(timeout=5.0)}
+        nodes = {
+            "src": FailStage(timeout=5.0),
+            **branches,
+            "agg": SumAllStage(timeout=5.0),
+        }
 
-        edges = [
-            DataFlowEdge.create(f"b{i}", "agg", f"i{i}") for i in range(8)
-        ]
+        edges = [DataFlowEdge.create(f"b{i}", "agg", f"i{i}") for i in range(8)]
         exec_deps = {
             f"b{i}": [ExecutionOrderDependency(stage_name="src", condition="success")]
             for i in range(8)
@@ -820,9 +819,7 @@ class TestWideFanOutFanIn:
                 branches[f"b{i}"] = ProduceN(value=i + 1)
 
         nodes = {"src": ProduceN(value=0), **branches, "agg": SumAllStage(timeout=5.0)}
-        edges = [
-            DataFlowEdge.create(f"b{i}", "agg", f"i{i}") for i in range(8)
-        ]
+        edges = [DataFlowEdge.create(f"b{i}", "agg", f"i{i}") for i in range(8)]
         exec_deps = {
             f"b{i}": [ExecutionOrderDependency(stage_name="src", condition="success")]
             for i in range(8)
@@ -846,11 +843,11 @@ class TestWideFanOutFanIn:
 class TestComplexTopology:
     """A 7-node DAG with mixed exec-order and data-flow deps:
 
-        A ──data──→ B ──data──→ D ──data──→ F
-        A ──exec──→ C ──data──→ D
-        A ──exec──→ E ──exec──→ F
-        C ──exec──→ G (always_after C)
-        B ──data──→ G (optional)
+    A ──data──→ B ──data──→ D ──data──→ F
+    A ──exec──→ C ──data──→ D
+    A ──exec──→ E ──exec──→ F
+    C ──exec──→ G (always_after C)
+    B ──data──→ G (optional)
     """
 
     async def test_complex_topology_happy_path(self, state_manager, make_program):
@@ -858,12 +855,12 @@ class TestComplexTopology:
         dag = _make_dag(
             {
                 "a": ProduceN(value=1),
-                "b": IncrStage(timeout=5.0),      # a→b data: 1+1=2
+                "b": IncrStage(timeout=5.0),  # a→b data: 1+1=2
                 "c": ProduceN(value=10),
-                "d": IncrStage(timeout=5.0),       # b→d data: 2+1=3
+                "d": IncrStage(timeout=5.0),  # b→d data: 2+1=3
                 "e": ProduceN(value=20),
-                "f": IncrStage(timeout=5.0),       # d→f data: 3+1=4
-                "g": OptIncrStage(timeout=5.0),    # b→g optional data: 2+1=3
+                "f": IncrStage(timeout=5.0),  # d→f data: 3+1=4
+                "g": OptIncrStage(timeout=5.0),  # b→g optional data: 2+1=3
             },
             [
                 DataFlowEdge.create("a", "b", "data"),

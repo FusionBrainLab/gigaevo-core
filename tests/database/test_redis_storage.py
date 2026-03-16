@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
@@ -398,7 +398,7 @@ class TestPickleB64EdgeCases:
         assert np.array_equal(restored, arr)
 
     def test_datetime_roundtrip(self):
-        dt = datetime(2024, 1, 15, 12, 30, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 15, 12, 30, 0, tzinfo=UTC)
         s = pickle_b64_serialize(dt)
         assert pickle_b64_deserialize(s) == dt
 

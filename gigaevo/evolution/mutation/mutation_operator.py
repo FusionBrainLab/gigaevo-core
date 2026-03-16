@@ -44,7 +44,7 @@ class LLMMutationOperator(MutationOperator):
         problem_context: ProblemContext,
         strip_comments_and_docstrings: bool = False,
         prompts_dir: str | Path | None = None,
-        prompt_fetcher: "PromptFetcher | None" = None,
+        prompt_fetcher: PromptFetcher | None = None,
     ):
         self.problem_context = problem_context
         self.llm_wrapper = llm_wrapper
@@ -65,9 +65,11 @@ class LLMMutationOperator(MutationOperator):
         )
 
         logger.info(
-            f"[LLMMutationOperator] Initialized with mode: {mutation_mode}, "
-            f"strip_comments_and_docstrings: {strip_comments_and_docstrings} "
-            "(using LangGraph agent)"
+            "[LLMMutationOperator] Initialized with mode: {}, "
+            "strip_comments_and_docstrings: {} "
+            "(using LangGraph agent)",
+            mutation_mode,
+            strip_comments_and_docstrings,
         )
 
     @staticmethod
@@ -88,8 +90,9 @@ class LLMMutationOperator(MutationOperator):
             return canonicalized
         except SyntaxError as e:
             logger.warning(
-                f"[LLMMutationOperator] Failed to canonicalize code due to syntax error: {e}. "
-                "Returning original code."
+                "[LLMMutationOperator] Failed to canonicalize code due to syntax error: {}. "
+                "Returning original code.",
+                e,
             )
             return code
 
@@ -115,7 +118,8 @@ class LLMMutationOperator(MutationOperator):
                 )
 
             logger.debug(
-                f"[LLMMutationOperator] Running mutation agent for {len(selected_parents)} parents"
+                "[LLMMutationOperator] Running mutation agent for {} parents",
+                len(selected_parents),
             )
 
             result = await self.agent.arun(
@@ -144,7 +148,7 @@ class LLMMutationOperator(MutationOperator):
             if structured_output:
                 mutation_metadata[MUTATION_OUTPUT_METADATA_KEY] = structured_output
                 archetype = result.get("archetype", "unknown")
-                logger.debug(f"[LLMMutationOperator] Mutation archetype: {archetype}.")
+                logger.debug("[LLMMutationOperator] Mutation archetype: {}", archetype)
             if model_name:
                 mutation_metadata["mutation_model"] = model_name
             # Stamp prompt tracking ID if present

@@ -73,7 +73,7 @@ def main():
         "https://raw.githubusercontent.com/allenai/IFBench/main/data/IFBench_test.jsonl"
     )
     urllib.request.urlretrieve(test_url, str(_DIR / "IFBench_test.jsonl"))
-    with open(str(_DIR / "IFBench_test.jsonl"), "r") as f:
+    with open(str(_DIR / "IFBench_test.jsonl")) as f:
         test_count = sum(1 for _ in f)
     print(f"Downloaded: IFBench_test.jsonl ({test_count:,} samples)")
 

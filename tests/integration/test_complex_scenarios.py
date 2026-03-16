@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from typing import Optional
 from unittest.mock import MagicMock
 
 import fakeredis.aioredis
@@ -30,7 +29,7 @@ from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
-from gigaevo.programs.core_types import StageIO, StageState, VoidInput, VoidOutput
+from gigaevo.programs.core_types import StageIO, StageState, VoidInput
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.dag.dag import DAG
 from gigaevo.programs.program import Program
@@ -55,7 +54,7 @@ class IntInput(StageIO):
 
 
 class OptIntInput(StageIO):
-    data: Optional[IntOutput] = None
+    data: IntOutput | None = None
 
 
 class DualMandatoryInput(StageIO):
@@ -64,8 +63,8 @@ class DualMandatoryInput(StageIO):
 
 
 class DualOptInput(StageIO):
-    left: Optional[IntOutput] = None
-    right: Optional[IntOutput] = None
+    left: IntOutput | None = None
+    right: IntOutput | None = None
 
 
 # -- Stage classes --
@@ -466,7 +465,9 @@ def _build_engine(storage, max_generations, *, mutation_operator):
 
 
 async def _run_engine(storage, max_generations, *, mutation_operator):
-    engine = _build_engine(storage, max_generations, mutation_operator=mutation_operator)
+    engine = _build_engine(
+        storage, max_generations, mutation_operator=mutation_operator
+    )
     sm = ProgramStateManager(storage)
     runner = FakeDagRunner(storage, sm)
 
@@ -474,7 +475,7 @@ async def _run_engine(storage, max_generations, *, mutation_operator):
     engine.start()
     try:
         await asyncio.wait_for(engine.task, timeout=30.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(f"Engine did not finish {max_generations} gens within 30s")
     finally:
         await runner.stop()
@@ -486,14 +487,18 @@ async def _run_engine(storage, max_generations, *, mutation_operator):
 class AlwaysNoneMutationOperator(MutationOperator):
     """Returns None for every mutation attempt — simulates LLM producing garbage."""
 
-    async def mutate_single(self, selected_parents: list[Program]) -> MutationSpec | None:
+    async def mutate_single(
+        self, selected_parents: list[Program]
+    ) -> MutationSpec | None:
         return None
 
 
 class AlwaysRaisingMutationOperator(MutationOperator):
     """Raises on every mutation attempt — simulates LLM timeout/crash."""
 
-    async def mutate_single(self, selected_parents: list[Program]) -> MutationSpec | None:
+    async def mutate_single(
+        self, selected_parents: list[Program]
+    ) -> MutationSpec | None:
         raise RuntimeError("LLM unavailable")
 
 
@@ -504,7 +509,9 @@ class FailFirstThenSucceedOperator(MutationOperator):
         self._calls = 0
         self._fail_count = fail_count
 
-    async def mutate_single(self, selected_parents: list[Program]) -> MutationSpec | None:
+    async def mutate_single(
+        self, selected_parents: list[Program]
+    ) -> MutationSpec | None:
         self._calls += 1
         if self._calls <= self._fail_count:
             raise RuntimeError(f"Transient failure #{self._calls}")
@@ -568,7 +575,9 @@ class TestAllMutationsRaise:
         await storage.add(seed)
 
         engine = await _run_engine(
-            storage, max_generations=3, mutation_operator=AlwaysRaisingMutationOperator()
+            storage,
+            max_generations=3,
+            mutation_operator=AlwaysRaisingMutationOperator(),
         )
 
         assert engine.metrics.total_generations == 3
@@ -582,7 +591,9 @@ class TestAllMutationsRaise:
         await storage.add(seed)
 
         await _run_engine(
-            storage, max_generations=3, mutation_operator=AlwaysRaisingMutationOperator()
+            storage,
+            max_generations=3,
+            mutation_operator=AlwaysRaisingMutationOperator(),
         )
 
         check_storage = _make_fakeredis_storage(server)

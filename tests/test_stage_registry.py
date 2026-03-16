@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import Field
 
 from gigaevo.programs.core_types import StageIO, VoidInput, VoidOutput
@@ -23,7 +21,7 @@ class TypedInput(StageIO):
     name: str
     count: int = 0
     tags: list[str] = Field(default_factory=list)
-    alias: Optional[str] = None
+    alias: str | None = None
 
 
 class SimpleStage(Stage):
@@ -68,13 +66,16 @@ class TestStageRegistry:
         assert info.input_types["name"] == "str"
         assert info.input_types["count"] == "int"
         assert "list" in info.input_types["tags"]
-        assert "Optional" in info.input_types["alias"]
+        # Check that alias field accepts None (modern X | None syntax shows as UnionType[str, None])
+        assert (
+            "Union" in info.input_types["alias"] or "None" in info.input_types["alias"]
+        )
 
     def test_register_mandatory_and_optional(self) -> None:
         StageRegistry.register()(TypedInputStage)
         info = StageRegistry.get_stage("TypedInputStage")
         assert "name" in info.mandatory_inputs
-        # Fields with defaults that are Optional[...] (None default) are optional
+        # Fields with defaults that are X | None (None default) are optional
         assert "alias" in info.optional_inputs
 
     def test_get_all_stages(self) -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from string import Formatter
-from typing import Tuple
 
 from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
@@ -132,7 +131,7 @@ async def _process_sample(
     index: int,
     sample: dict,
     semaphore: asyncio.Semaphore,
-) -> Tuple[int, str, CallLog]:
+) -> tuple[int, str, CallLog]:
     """Process single sample with cost tracking.
 
     Args:

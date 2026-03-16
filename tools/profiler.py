@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 import statistics
 import time
-from typing import Any, Callable, Coroutine
+from typing import Any
 import uuid
 
 from loguru import logger
@@ -603,7 +604,7 @@ async def run_dag_benchmarks(
     return results
 
 
-def _make_heavy_program() -> "Program":
+def _make_heavy_program() -> Program:
     """Create a program with realistic heavy payload (large metadata, many stage results)."""
     from gigaevo.programs.core_types import ProgramStageResult, StageState
     from gigaevo.programs.program import Program

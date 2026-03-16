@@ -9,7 +9,7 @@ entrypoint(context) runs. Uses the sync redis client directly.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import json
 import os
 
@@ -314,5 +314,5 @@ def build_context() -> dict:
     return {
         "runs": runs,
         "framework": "GigaEvo v1.23",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }

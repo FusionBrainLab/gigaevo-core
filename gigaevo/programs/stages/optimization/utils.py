@@ -10,11 +10,11 @@ Contains common functionality:
 from __future__ import annotations
 
 import ast
-import asyncio
 import base64
+from collections.abc import Sequence
 import math
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from loguru import logger
 
@@ -91,7 +91,7 @@ class OptimizationInput(StageIO):
     forwarded to both the program function and the validator.
     """
 
-    context: Optional[AnyContainer]
+    context: AnyContainer | None
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +247,7 @@ async def evaluate_single(
         logger.warning("[{}] {}", log_tag, msg)
         return None, msg
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.trace("[{}] single evaluation timed out", log_tag)
         return None, "Timeout"
     except ExecRunnerError as exc:
