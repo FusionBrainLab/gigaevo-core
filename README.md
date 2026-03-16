@@ -40,6 +40,19 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 pip install -e .
 ```
 
+Install Redis if not already available:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install redis-server
+
+# macOS
+brew install redis
+
+# Or run via Docker
+docker run -d -p 6379:6379 redis:7-alpine
+```
+
 ### 2. Configure LLM Access
 
 Create a `.env` file with your API key:
