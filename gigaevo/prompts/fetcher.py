@@ -137,6 +137,9 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
     Args:
         prompt_redis_db: Redis DB of the prompt GigaEvo run
         main_redis_prefix: Key prefix of the main run (for stats keys)
+        main_redis_db: Redis DB of the main run (required for stats writes).
+            Set to the same value as redis.db of the main run — in Hydra config
+            use ``main_redis_db: ${redis.db}``.
         prompt_prefix: Key prefix of the prompt run (default: "prompt_evolution")
         host: Redis host (default: localhost)
         port: Redis port (default: 6379)
@@ -153,6 +156,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self,
         prompt_redis_db: int,
         main_redis_prefix: str,
+        main_redis_db: int | None = None,
         prompt_prefix: str = "prompt_evolution",
         host: str = "localhost",
         port: int = 6379,
@@ -173,9 +177,24 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self._cached_pack: "_PromptPack | None" = None
         self._cache_timestamp: float = 0.0
 
-        # Lazy-imported redis clients (set on first use)
+        # Lazy-imported redis client for archive reads (prompt run DB)
         self._redis_sync: Any = None
-        self._redis_main_sync: Any = None
+
+        # Synchronous Redis client for main run stats writes.
+        # Initialized immediately if main_redis_db is provided.
+        if main_redis_db is not None:
+            import redis as sync_redis
+
+            self._redis_main_sync: Any = sync_redis.Redis(
+                host=host,
+                port=port,
+                db=main_redis_db,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+        else:
+            self._redis_main_sync = None
 
         self._fetch_errors: int = 0
         self._cache_hits: int = 0
@@ -194,33 +213,6 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                 socket_timeout=2,
             )
         return self._redis_sync
-
-    def _get_main_sync_redis(self) -> Any:
-        """Lazy-create synchronous Redis client for main run stats writes."""
-        if self._redis_main_sync is None:
-            # Extract DB from redis_prefix if it looks like "prefix@db"
-            # Otherwise use a separate main_redis_db approach
-            # For now, stats are written to a well-known key pattern
-            # The main DB number is passed via separate mechanism if needed
-            # Default: assume same host/port but DB 0 (will be overridden)
-            self._redis_main_sync = None  # set up properly via set_main_db()
-        return self._redis_main_sync
-
-    def set_main_redis_db(self, db: int) -> None:
-        """Configure the main run's Redis DB for stats writes.
-
-        Called by EvolutionContext.start() after configuration is resolved.
-        """
-        import redis as sync_redis
-
-        self._redis_main_sync = sync_redis.Redis(
-            host=self._host,
-            port=self._port,
-            db=db,
-            decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
 
     def _is_cache_stale(self) -> bool:
         return (time.monotonic() - self._cache_timestamp) >= self._cache_ttl

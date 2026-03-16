@@ -170,6 +170,37 @@ class TestGigaEvoArchivePromptFetcher:
         assert "has_champion" in stats
         assert "champion_has_user" in stats
 
+    def test_main_redis_db_none_leaves_stats_write_disabled(
+        self, tmp_prompts_dir: Path
+    ):
+        """Without main_redis_db, _redis_main_sync is None and record_outcome is a no-op."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="prefix",
+            main_redis_db=None,  # explicit None
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        assert fetcher._redis_main_sync is None
+        # record_outcome must be silent no-op, not raise
+        fetcher.record_outcome(
+            prompt_id="abc123",
+            child_fitness=0.7,
+            parent_fitness=0.5,
+            higher_is_better=True,
+            outcome=MutationOutcome.ACCEPTED,
+        )
+
+    def test_main_redis_db_provided_initializes_client(self, tmp_prompts_dir: Path):
+        """Providing main_redis_db initializes _redis_main_sync immediately in __init__."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="prefix",
+            main_redis_db=5,  # main run's DB
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        # Client should be initialized (even if Redis is not actually running)
+        assert fetcher._redis_main_sync is not None
+
     def test_fetch_user_returns_fallback_when_no_champion(self, tmp_prompts_dir: Path):
         """fetch('mutation', 'user') returns fallback when no champion."""
         fetcher = GigaEvoArchivePromptFetcher(
