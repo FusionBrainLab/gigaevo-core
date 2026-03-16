@@ -2,10 +2,12 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Coverage](https://img.shields.io/badge/coverage-91%25-brightgreen)](https://github.com/KhrulkovV/gigaevo-core-internal/actions)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-Evolutionary algorithm that uses Large Language Models (LLMs) to automatically improve programs through iterative mutation and selection.
+Evolutionary algorithm framework that uses Large Language Models to automatically
+improve programs through iterative mutation and selection (MAP-Elites). Programs
+are Python functions; fitness is task performance. The framework is task-agnostic
+and supports single runs, multi-island evolution, and prompt co-evolution.
 
 ## Demo
 
@@ -13,39 +15,42 @@ Evolutionary algorithm that uses Large Language Models (LLMs) to automatically i
 
 ## Getting Started
 
-- **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes
-- **[Architecture Guide](docs/ARCHITECTURE.md)** - Understand the system design
+- **[Quick Start](docs/QUICKSTART.md)** — Get running in 5 minutes
+- **[Architecture Guide](docs/ARCHITECTURE.md)** — System design overview
 
 ## Documentation
 
-- **[DAG System](docs/DAG_SYSTEM.md)** - Comprehensive guide to GigaEvo's execution engine
-- **[Evolution Strategies](docs/EVOLUTION_STRATEGIES.md)** - MAP-Elites and multi-island evolution system
-- **[Tools](tools/README.md)** - Helper utilities for analysis, debugging, and problem scaffolding
-- **[Usage Guide](docs/USAGE.md)** - Detailed usage instructions
-- **[Changelog](CHANGELOG.md)** - Version history and changes
-- **[Contributing](docs/CONTRIBUTING.md)** - Guidelines for contributors
+| Guide | Description |
+|-------|-------------|
+| [DAG System](docs/DAG_SYSTEM.md) | Execution engine: stages, dependencies, caching |
+| [Evolution Strategies](docs/EVOLUTION_STRATEGIES.md) | MAP-Elites, multi-island, migration |
+| [Prompt Co-Evolution](docs/COEVOLUTION.md) | Co-evolve mutation prompts alongside programs |
+| [Tools](tools/README.md) | Analysis, debugging, and problem scaffolding utilities |
+| [Usage Guide](docs/USAGE.md) | Detailed usage and Hydra configuration |
+| [Contributing](docs/CONTRIBUTING.md) | Guidelines for contributors |
+| [Changelog](CHANGELOG.md) | Version history |
 
 ## Quick Start
 
-### 1. Install Dependencies
+### 1. Install
 
-**Requirements:** Python 3.12+
+**Requirements:** Python 3.12+, Redis
 
 ```bash
 pip install -e .
 ```
 
-### 2. Set up Environment
+### 2. Configure LLM Access
 
-Create a `.env` file with your OpenRouter API key:
+Create a `.env` file with your API key:
 
 ```bash
 OPENAI_API_KEY=sk-or-v1-your-api-key-here
 
-# Optional: Langfuse tracing (for observability)
-LANGFUSE_PUBLIC_KEY=<your_langfuse_public_key>
-LANGFUSE_SECRET_KEY=<your_langfuse_secret_key>
-LANGFUSE_HOST=https://cloud.langfuse.com  # or your self-hosted URL
+# Optional: Langfuse tracing
+LANGFUSE_PUBLIC_KEY=<key>
+LANGFUSE_SECRET_KEY=<key>
+LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 ### 3. Start Redis
@@ -60,31 +65,42 @@ redis-server
 python run.py problem.name=heilbron
 ```
 
-That's it! Evolution will start and logs will be saved to `outputs/`.
-To study results, check `tools` or start `tensorboard` / `wandb`.
-Sample analysis code is available at `tools/playground.ipynb`.
+Evolution starts immediately. Logs are saved to `outputs/`.
 
-## What Happens
+## How It Works
 
-1. **Loads initial programs** from `problems/heilbron/`
-2. **Mutates programs** using LLMs (GPT, Claude, Gemini, etc.)
-3. **Evaluates fitness** by running the programs
-4. **Selects best solutions** using MAP-Elites algorithm
-5. **Repeats** for multiple generations
+1. **Load initial programs** from `problems/<name>/initial_programs/`
+2. **Mutate programs** using LLMs (GPT, Claude, Gemini, Qwen, etc.)
+3. **Evaluate fitness** by running each program's `entrypoint()` + `validate()`
+4. **Select solutions** using MAP-Elites across a behavior space
+5. **Repeat** for N generations
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Problem   │────▶│  Evolution  │────▶│     LLM     │
+│  (programs, │     │   Engine    │     │  (mutation)  │
+│   metrics)  │     │ (MAP-Elites)│     └──────┬──────┘
+└─────────────┘     └──────┬──────┘            │
+                           │                   ▼
+                    ┌──────┴──────┐     ┌─────────────┐
+                    │   Storage   │◀────│  Evaluator   │
+                    │   (Redis)   │     │ (DAG Runner) │
+                    └─────────────┘     └─────────────┘
+```
 
 ## Customization
 
-### Use a Different Experiment
+### Different Experiments
 
 ```bash
-# Multi-island evolution (explores diverse solutions)
+# Multi-island evolution (diverse solution exploration)
 python run.py experiment=multi_island_complexity problem.name=heilbron
 
 # Multi-LLM exploration (uses multiple models)
 python run.py experiment=multi_llm_exploration problem.name=heilbron
 ```
 
-### Change Settings
+### Common Overrides
 
 ```bash
 # Limit generations
@@ -95,184 +111,62 @@ python run.py problem.name=heilbron redis.db=5
 
 # Change LLM model
 python run.py problem.name=heilbron model_name=anthropic/claude-3.5-sonnet
+
+# Preview config without running
+python run.py problem.name=heilbron --cfg job
 ```
+
+### Prompt Co-Evolution
+
+Co-evolve the mutation prompts alongside your programs. A paired prompt run
+evolves the system prompt used by the mutation LLM, selecting for prompts that
+produce better mutations:
+
+```bash
+# Main run — uses co-evolved prompts from DB 6
+python run.py problem.name=my_task pipeline=my_pipeline \
+    prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
+
+# Prompt run — evolves mutation prompts, reads outcomes from DB 4
+python run.py problem.name=prompt_evolution pipeline=prompt_evolution \
+    redis.db=6 main_redis_db=4 main_redis_prefix=my_task
+```
+
+See [Prompt Co-Evolution Guide](docs/COEVOLUTION.md) for the full architecture,
+launch instructions, and monitoring.
 
 ## Configuration
 
-GigaEvo uses a modular configuration system based on [Hydra](https://hydra.cc/). All configuration is in `config/`:
+GigaEvo uses [Hydra](https://hydra.cc/) for modular configuration. All config
+files are in `config/`:
 
-### Top-Level Configuration
-
-- **`experiment/`** - Complete experiment templates (start here!)
-  - `base.yaml` - Simple single-island evolution (default)
-  - `full_featured.yaml` - Multi-island + multi-LLM exploration
-  - `multi_island_complexity.yaml` - Two islands: performance + simplicity
-  - `multi_llm_exploration.yaml` - Multiple LLMs for diverse mutations
-
-### Component Configurations
-
-- **`algorithm/`** - Evolution algorithms
-  - `single_island.yaml` - Standard MAP-Elites
-  - `multi_island.yaml` - Multiple independent populations with migration
-
-- **`llm/`** - Language model setups
-  - `single.yaml` - One LLM for all mutations
-  - `heterogeneous.yaml` - Multiple LLMs (GPT, Claude, Gemini, etc.) for diverse mutations
-
-- **`pipeline/`** - DAG execution pipelines
-  - `auto.yaml` - Automatically selects pipeline (standard or contextual) based on problem
-  - `standard.yaml` - Basic validation → execution → metrics
-  - `with_context.yaml` - Includes contextual information extraction
-  - `custom.yaml` - Template for custom pipelines
-
-- **`constants/`** - Tunable parameters grouped by domain
-  - `evolution.yaml` - Generation limits, mutation rates, selection pressure
-  - `llm.yaml` - Temperature, max tokens, retry logic
-  - `islands.yaml` - Island sizes, migration frequency, diversity settings
-  - `pipeline.yaml` - Stage timeouts, parallelization settings
-  - `redis.yaml` - Connection settings, key patterns
-  - `logging.yaml` - Log levels, output formats
-  - `runner.yaml` - DAG execution settings
-  - `endpoints.yaml` - API endpoint defaults
-
-### Supporting Configurations
-
-- **`loader/`** - Program loading strategies
-  - `directory.yaml` - Load initial programs from filesystem
-  - `redis_selection.yaml` - Load from existing Redis archive
-
-- **`logging/`** - Logging backends
-  - `tensorboard.yaml` - TensorBoard integration
-  - `wandb.yaml` - Weights & Biases tracking
-
-- **`metrics/`** - Metric computation
-  - `default.yaml` - Basic fitness metrics
-  - `code_complexity.yaml` - Includes cyclomatic complexity, LOC, etc.
-
-- **`redis/`** - Redis storage backend
-- **`runner/`** - DAG runner configuration
-- **`evolution/`** - Core evolution engine settings
-
-### Configuration Overrides
+| Directory | Purpose | Key files |
+|-----------|---------|-----------|
+| `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `multi_island_complexity.yaml` |
+| `algorithm/` | Evolution algorithms | `single_island.yaml`, `multi_island.yaml` |
+| `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml` |
+| `pipeline/` | DAG execution pipelines | `standard.yaml`, `with_context.yaml`, `prompt_evolution.yaml` |
+| `prompt_fetcher/` | Prompt sourcing | `fixed.yaml`, `coevolved.yaml` |
+| `constants/` | Tunable parameters | `evolution.yaml`, `llm.yaml`, `islands.yaml`, `pipeline.yaml` |
+| `loader/` | Program loading | `directory.yaml`, `redis_selection.yaml` |
+| `logging/` | Backends | `tensorboard.yaml`, `wandb.yaml` |
 
 Override any setting via command line:
-
 ```bash
-# Override experiment
-python run.py experiment=full_featured
-
-# Override specific settings
-python run.py problem.name=heilbron max_generations=50 temperature=0.8
-
-# Override nested settings
-python run.py constants.evolution.mutation_rate=0.3
+python run.py experiment=full_featured max_generations=50 temperature=0.8
 ```
 
-See individual YAML files for detailed documentation on each component.
+## Creating a Problem
 
-## Output
-
-Results are saved to `outputs/YYYY-MM-DD/HH-MM-SS/`:
-
-- **Logs**: `evolution_YYYYMMDD_HHMMSS.log`
-- **Programs**: Stored in Redis for fast access
-- **Metrics**: TensorBoard logs (if enabled)
-
-## Troubleshooting
-
-### Redis Database Not Empty
-
-If you see:
-```
-ERROR: Redis database is not empty!
-```
-
-Flush the database manually:
-```bash
-redis-cli -n 0 FLUSHDB
-```
-
-Or use a different database number:
-```bash
-python run.py redis.db=1
-```
-
-### LLM Connection Issues
-
-Check your API key in `.env`:
-```bash
-echo $OPENAI_API_KEY
-```
-
-Verify OpenRouter is accessible:
-```bash
-curl -H "Authorization: Bearer $OPENAI_API_KEY" https://openrouter.ai/api/v1/models
-```
-
-## Architecture
-
-```
-┌─────────────┐
-│   Problem   │  Define task, initial programs, metrics
-└──────┬──────┘
-       │
-       v
-┌─────────────┐
-│  Evolution  │  MAP-Elites algorithm
-│   Engine    │  Selects parents, generates mutations
-└──────┬──────┘
-       │
-       v
-┌─────────────┐
-│     LLM     │  Generates code mutations
-│   Wrapper   │  (GPT, Claude, Gemini, etc.)
-└──────┬──────┘
-       │
-       v
-┌─────────────┐
-│  Evaluator  │  Runs programs, computes fitness
-│ (DAG Runner)│  Validates solutions
-└──────┬──────┘
-       │
-       v
-┌─────────────┐
-│   Storage   │  Redis for fast program access
-│   (Redis)   │  Maintains archive of solutions
-└─────────────┘
-```
-
-## Key Concepts
-
-- **MAP-Elites**: Algorithm that maintains diverse solutions across behavior dimensions
-- **Islands**: Independent populations that can exchange solutions (migration)
-- **DAG Pipeline**: Stages for validation, execution, complexity analysis, etc.
-- **Behavior Space**: Multi-dimensional grid dividing solutions by characteristics
-
-## Advanced Usage
-
-### Generate Problem with Wizard
-
-Create problem scaffolding from YAML configuration:
-
-```bash
-python -m tools.wizard heilbron.yaml
-```
-
-See `tools/README.md` for detailed wizard documentation.
-
-### Create Your Own Problem Manually
-
-1. Create directory in `problems/`:
+1. Create a directory under `problems/`:
    ```
    problems/my_problem/
-     - validate.py           # Fitness evaluation function
-     - metrics.yaml          # Metrics specification
-     - task_description.txt  # Problem description
-     - initial_programs/     # Directory with initial programs
-       - strategy1.py        # Each contains entrypoint() function
-       - strategy2.py
-     - helper.py             # Optional: utility functions
-     - context.py            # Optional: runtime context builder
+   ├── validate.py           # Fitness evaluation
+   ├── metrics.yaml          # Metric specifications
+   ├── task_description.txt  # Problem description for the LLM
+   └── initial_programs/     # Seed programs
+       ├── strategy1.py      # Must define entrypoint()
+       └── strategy2.py
    ```
 
 2. Run:
@@ -280,209 +174,73 @@ See `tools/README.md` for detailed wizard documentation.
    python run.py problem.name=my_problem
    ```
 
+Or use the wizard: `python -m tools.wizard config.yaml`
+
 See `problems/heilbron/` for a complete example.
 
-### Custom Experiment
+## Output
 
-Copy an existing experiment and modify:
-
-```bash
-cp config/experiment/base.yaml config/experiment/my_experiment.yaml
-# Edit my_experiment.yaml...
-python run.py experiment=my_experiment
-```
+Results are saved to `outputs/YYYY-MM-DD/HH-MM-SS/`:
+- **Logs**: `evolution_*.log`
+- **Programs**: Stored in Redis (export with `tools/redis2pd.py`)
+- **Metrics**: TensorBoard / W&B (if configured)
 
 ## Tools
 
-GigaEvo includes utilities for analysis and visualization:
+| Tool | Purpose |
+|------|---------|
+| `tools/redis2pd.py` | Export evolution data to CSV/DataFrame |
+| `tools/comparison.py` | Compare runs with fitness curve plots |
+| `tools/top_programs.py` | Extract best programs from archive |
+| `tools/flush.py` | Safely flush Redis DBs (kills workers first) |
+| `tools/archive_run.sh` | Archive run data before flush |
+| `tools/dag_builder/` | Visual DAG pipeline designer |
+| `tools/wizard/` | Interactive problem scaffolding |
 
-- **`tools/redis2pd.py`** - Export evolution data to CSV
-- **`tools/comparison.py`** - Compare multiple runs with plots
-- **`tools/dag_builder/`** - Visual DAG pipeline designer
-- **`tools/wizard/`** - Interactive problem setup
-
-See `tools/README.md` for detailed documentation.
+See [tools/README.md](tools/README.md) for full documentation and Redis key schema.
 
 ## Testing
 
-GigaEvo uses [pytest](https://docs.pytest.org/) with [pytest-asyncio](https://pytest-asyncio.readthedocs.io/) for async test support. Tests use `fakeredis` to avoid needing a running Redis server.
-
-### Running Tests
-
 ```bash
-# Install test dependencies
-pip install -e ".[test]"
-
-# Run the full test suite
+# Full test suite (uses fakeredis, no Redis server needed)
 python -m pytest
 
-# Run a specific subdirectory
+# Specific area
 python -m pytest tests/stages/
 python -m pytest tests/evolution/
 
-# Run a single test file
-python -m pytest tests/evolution/test_elite_selectors.py
-
-# Run a specific test by name
-python -m pytest tests/evolution/test_elite_selectors.py::TestFitnessProportionalTemperature -v
-
-# Run with verbose output
-python -m pytest -v
-
-# Run only tests matching a keyword
-python -m pytest -k "optuna" -v
-
-# Run with coverage
+# With coverage
 python -m pytest --cov=gigaevo --cov-report=term-missing
+
+# Linting
+ruff check . && ruff format --check .
 ```
 
-### Test Structure
+## Troubleshooting
 
-Tests are organized into subdirectories that mirror the source layout:
-
-```
-tests/
-├── conftest.py              # Shared fixtures (fakeredis, mock stages, factories)
-├── test_metrics_tracker.py  # MetricsTracker: RunningStats, drain, frontier, lifecycle
-├── stages/                  # Pipeline stage unit tests
-│   ├── test_stage_execute.py            # Stage.execute() return dispatch, timeout, cleanup,
-│   │                                    #   on_complete all 4 call sites, failure error fields,
-│   │                                    #   hash-before-compute ordering, PSR timestamps
-│   ├── test_stage_base_edge_cases.py    # __init_subclass__ validation, _is_optional_type,
-│   │                                    #   VoidOutput, compute_hash_from_inputs, on_complete,
-│   │                                    #   InputHashCache, ProbabilisticCache, wrong output type,
-│   │                                    #   finally cleanup, timeout+hash interaction
-│   ├── test_exec_runner.py              # exec_runner subprocess protocol: register_source,
-│   │                                    #   load_module, run_one, worker loop, format errors
-│   ├── test_wrapper_enhanced.py         # _kill_process_tree, _monitor_rss_limit,
-│   │                                    #   WorkerPool return/discard/saturation/shutdown
-│   ├── test_metrics_stages.py           # EnsureMetricsStage, NormalizeMetricsStage
-│   ├── test_complexity.py               # AST complexity analysis, code length
-│   ├── test_json_processing.py          # MergeDictStage, ParseJSON, StringifyJSON
-│   ├── test_formatter.py                # FormatterStage (None, string, repr paths)
-│   ├── test_langgraph_stage.py          # LangGraphStage postprocess, preprocess, errors
-│   ├── test_collector.py                # ProgramIds, descendants, ancestors, stats
-│   ├── test_mutation_context.py         # MutationContextStage optional input combos
-│   ├── test_lineage_stages.py           # LineagesToDescendants, LineagesFromAncestors
-│   ├── test_validation_stage.py         # Code validation and syntax checking
-│   ├── test_validation_edge_cases.py    # Invalid regex, AST file ops, import edge cases
-│   ├── test_python_executors.py         # Exec runner, worker pool, timeouts
-│   ├── test_optuna_optimization.py      # Optuna search-space, trials, parameter freezing,
-│   │                                    #   time-budget deadline
-│   ├── test_cma_optimization.py         # CMA-ES numerical optimization
-│   ├── test_cma_optimization_edge_cases.py  # _should_extract, _extract_constants, _substitute,
-│   │                                    #   adaptive penalty via _evaluate_population, sign convention
-│   ├── test_optimization_utils.py       # format_value_for_source, make_numeric_const_node,
-│   │                                    #   read_validator, build_eval_code
-│   └── test_desubstitution_edge_cases.py  # _coerce_param_value, _find_matching_close_paren,
-│                                        #   _clean_eval_in_source, desubstitute_params
-├── dag/                     # DAG runner and scheduling
-│   ├── test_dag_automata.py             # Stage state machine transitions, CANCELLED status
-│   │                                    #   in dependency gate, finalized_this_run compound
-│   │                                    #   flag, launched_this_run exclusion, RUNNING path
-│   ├── test_dag_automata_edge_cases.py  # is_satisfied_historically, non-Stage validation,
-│   │                                    #   duplicate input_name, _check_dataflow_gate,
-│   │                                    #   explain_blockers, build_named_inputs, gate
-│   │                                    #   priority (IMPOSSIBLE > WAIT > READY), optional
-│   │                                    #   inputs, cache hash, skip/ready consistency
-│   ├── test_dag_execution.py            # Individual stage execution, timeouts, caching,
-│   │                                    #   CancelledError cascading, semaphore concurrency
-│   │                                    #   tracking, input_hash correctness end-to-end
-│   ├── test_dag_integration.py          # End-to-end DAG pipeline runs, Redis metric
-│   │                                    #   persistence, skip result persistence
-│   ├── test_dag_complex_integration.py  # Complex topologies, failure propagation,
-│   │                                    #   cancelled diamond cascade, semaphore limits
-│   ├── test_dag_internals.py            # Dependency resolution, topological ordering
-│   ├── test_dag_caching.py              # Stage result caching: InputHashCache, NeverCached,
-│   │                                    #   ProbabilisticCache, failed-stage caching, long chains,
-│   │                                    #   on_complete in exception handler, mixed success/failure
-│   ├── test_dag_runner.py               # DagRunner cleanup, crash paths, scheduling,
-│   │                                    #   GC timing, error recovery, maintain-before-launch
-│   ├── test_dag_runner_edge_cases.py    # DAG runner orchestration edge cases
-│   └── test_dag_compatibility_edge_cases.py  # _normalize_annotation, _covariant_type_compatible
-├── evolution/               # Evolution engine and strategies
-│   ├── test_evolution_engine.py     # Generation loop, ingestion, exception handling,
-│   │                                #   phase ordering verification, child lineage
-│   ├── test_island.py               # MapElitesIsland add, size limit, reindex, elites,
-│   │                                #   displaced program verification, survivor identity,
-│   │                                #   migration integration
-│   ├── test_mutation_operator.py    # LLMMutationOperator with mocked LLM agent,
-│   │                                #   agent input verification (code, mode, metrics)
-│   ├── test_elite_selectors.py      # Fitness-proportional, tournament, Pareto selectors,
-│   │                                #   reverse domination, tournament size variation,
-│   │                                #   dominates() asymmetry, negative fitness, seeds
-│   ├── test_elite_selectors_edge_cases.py  # RandomEliteSelector, inf/nan fallback, Pareto
-│   │                                    #   constructor guards, custom tie-breaker,
-│   │                                    #   weighted_sample distribution, single-element
-│   ├── test_strategy_utils.py       # weighted_sample_without_replacement, extract_fitness_values,
-│   │                                #   dominates
-│   ├── test_selectors_edge_cases.py  # Tournament _rank, Pareto rank on candidates,
-│   │                                #   weighted_sample edge cases, dominates() corners
-│   ├── test_island_edge_cases.py    # MapElitesIsland boundary conditions, BehaviorSpace
-│   │                                #   degenerate binning, DynamicBehaviorSpace zero-range
-│   ├── test_selectors.py            # Parent selection strategies
-│   ├── test_acceptors.py            # Program acceptance criteria
-│   ├── test_removers.py             # Archive removal strategies
-│   ├── test_merge_strategies.py     # Program merge conflict resolution
-│   ├── test_bandit.py               # Multi-armed bandit LLM model selector
-│   ├── test_behavior_space.py       # Behavior space binning and dynamics
-│   └── test_archive_storage.py      # Redis-backed archive operations
-├── problems/                # Problem definition tests
-│   ├── test_context.py              # ProblemContext: load_text, metrics YAML validation,
-│   │                                #   caching, validate(), contextual flag
-│   └── test_layout.py              # ProblemLayout: scaffold, templates, Jinja filters,
-│                                    #   required_files, utils imports
-├── database/                # Storage and state management
-│   ├── test_redis_storage.py        # Redis CRUD, locking, merge strategies, read-only mode,
-│   │                                #   stream ops, WatchError retries, full-field round-trip,
-│   │                                #   concurrent same-key writes, state persistence read-back,
-│   │                                #   remove() status cleanup, prefix isolation
-│   ├── test_redis_locking.py        # RedisInstanceLock: acquire, release, renew,
-│   │                                #   periodic renewal, connection errors, TTL
-│   ├── test_redis_metrics_collector.py  # RedisMetricsCollector: start/stop, collect,
-│   │                                    #   flatten_numbers, double-start guard
-│   ├── test_redis_connection.py     # Connection pooling, retries, reconnection,
-│   │                                #   exponential backoff boundary and cap
-│   ├── test_state_manager.py        # Program state transitions, concurrent updates,
-│   │                                #   Redis persistence read-back, status set verification
-│   ├── test_state_consistency.py    # Cross-component state invariants
-│   └── test_program_state.py        # Program state machine validation
-└── llm/                     # LLM integration
-    ├── test_llm_routing.py          # MultiModelRouter, token tracking
-    ├── test_mutation_agent.py       # MutationAgent: extract_code_block, apply_diff,
-    │                                #   build_prompt, parse_response, acall_llm, arun
-    └── test_lineage_agent.py        # LineageAgent: compute_diff_blocks, build_prompt,
-                                     #   parse_response, transition analysis, edge cases
-```
-
-### Shared Fixtures
-
-`tests/conftest.py` provides reusable fixtures:
-
-- `fakeredis_storage` — `RedisProgramStorage` backed by in-memory `fakeredis` (no Redis server needed)
-- `state_manager` — `ProgramStateManager` wrapping the fake storage
-- `make_program` — factory for creating `Program` objects with configurable state, metrics, and stage results
-- `null_writer` — no-op `LogWriter` for tests that need a metrics sink
-- Mock stages — `FastStage`, `FailingStage`, `SlowStage`, `VoidStage`, `SideEffectStage`, etc.
-
-### Linting
-
+**Redis database not empty:**
 ```bash
-# Run all pre-commit hooks (ruff format + lint, trailing whitespace, YAML check)
-pre-commit run --all-files
+# Use tools/flush.py (kills exec_runner workers first):
+PYTHONPATH=. python tools/flush.py --db 0 --confirm
 
-# Or run individually
-ruff check .       # lint
-ruff format .      # format
+# Or use a different DB:
+python run.py redis.db=1
+```
+
+**LLM connection issues:**
+```bash
+# Verify API key
+echo $OPENAI_API_KEY
+
+# Test OpenRouter
+curl -H "Authorization: Bearer $OPENAI_API_KEY" https://openrouter.ai/api/v1/models
 ```
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](LICENSE).
 
 ## Citation
-
-If you use GigaEvo in your research, please cite:
 
 ```bibtex
 @misc{khrulkov2025gigaevoopensourceoptimization,
