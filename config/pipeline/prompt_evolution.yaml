@@ -24,6 +24,26 @@ pre_step_hook:
   timeout: 600.0
   poll_interval: 5.0
 
+# Override behavior space: 2D MAP-Elites grid (fitness × prompt_length).
+# fitness axis: better prompts displace worse ones in the same length bin.
+# prompt_length axis: prompts of different lengths coexist (diversity).
+behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - fitness
+    - prompt_length
+  bounds:
+    - ${primary_bounds}
+    - [0.0, 10000.0]
+  resolutions:
+    - ${primary_resolution}
+    - ${primary_resolution}
+  binning_types:
+    - ${binning_type}
+    - ${binning_type}
+  dynamic: true
+  expansion_buffer_ratio: 0.1
+
 prompt_stats_provider:
   _target_: gigaevo.prompts.coevolution.stats.RedisPromptStatsProvider
   host: ${redis.host}

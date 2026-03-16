@@ -159,6 +159,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         main_redis_prefix: str,
         main_redis_db: int | None = None,
         prompt_prefix: str = "prompt_evolution",
+        archive_prefix: str = "island_fitness_island",
         host: str = "localhost",
         port: int = 6379,
         cache_ttl_seconds: float = 30.0,
@@ -168,6 +169,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self._prompt_redis_db = prompt_redis_db
         self._main_redis_prefix = main_redis_prefix
         self._prompt_prefix = prompt_prefix
+        self._archive_prefix = archive_prefix
         self._host = host
         self._port = port
         self._cache_ttl = cache_ttl_seconds
@@ -231,7 +233,8 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             r = self._get_sync_redis()
 
             # Get all elite program IDs from archive hash
-            archive_key = f"{self._prompt_prefix}:archive"
+            # Archive key uses island prefix (e.g. island_fitness_island:archive)
+            archive_key = f"{self._archive_prefix}:archive"
             program_ids = list(r.hvals(archive_key))
             if not program_ids:
                 logger.debug(
