@@ -180,8 +180,13 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self._fallback = FixedDirPromptFetcher(fallback_prompts_dir)
         self._fitness_key = fitness_key
 
-        # Cache state
-        self._cached_pack: _PromptPack | None = None
+        # Cache state — candidates list is cached (expensive Redis read),
+        # but sampling happens fresh on every fetch("mutation", "system") call
+        # so each mutation gets an independently sampled prompt.
+        # The _current_pack persists across system+user calls within one mutation.
+        self._cached_candidates: list[tuple[str, float, str]] | None = None
+        self._current_pack: _PromptPack | None = None  # current mutation's sample
+        self._cached_pack: _PromptPack | None = None  # last sampled (for get_stats)
         self._cache_timestamp: float = 0.0
 
         # Lazy-imported redis client for archive reads (prompt run DB)
@@ -224,20 +229,18 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
     def _is_cache_stale(self) -> bool:
         return (time.monotonic() - self._cache_timestamp) >= self._cache_ttl
 
-    def _refresh_champion(self) -> _PromptPack | None:
-        """Select a prompt from the prompt run's archive using fitness-proportional sampling.
+    def _refresh_candidates(self) -> list[tuple[str, float, str]] | None:
+        """Read candidate prompts from the prompt run's archive.
 
-        Instead of always picking the single best, uses stochastic selection so
-        that multiple prompts accumulate trial data from the main run.
+        Caches the candidates list (Redis read is expensive). Sampling happens
+        independently on every fetch() call via _sample_prompt().
 
         Returns:
-            _PromptPack if a prompt was selected, None if archive is empty
+            List of (program_id, fitness, code) tuples, or None if archive is empty
         """
         try:
             r = self._get_sync_redis()
 
-            # Get all elite program IDs from archive hash
-            # Archive key uses island prefix (e.g. island_fitness_island:archive)
             archive_key = f"{self._archive_prefix}:archive"
             program_ids = list(r.hvals(archive_key))
             if not program_ids:
@@ -246,10 +249,9 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                 )
                 return None
 
-            # Collect all candidates with their fitness and code
             import json
 
-            candidates: list[tuple[str, float, str]] = []  # (pid, fitness, code)
+            candidates: list[tuple[str, float, str]] = []
             for pid in program_ids:
                 program_key = f"{self._prompt_prefix}:program:{pid}"
                 raw = r.get(program_key)
@@ -268,27 +270,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                     )
                     continue
 
-            if not candidates:
-                return None
-
-            # Fitness-proportional sampling (epsilon floor for zero-fitness prompts)
-            epsilon = 0.01
-            weights = [max(f, epsilon) for _, f, _ in candidates]
-            chosen_pid, chosen_fitness, chosen_code = random.choices(
-                candidates, weights=weights, k=1
-            )[0]
-
-            pack = self._execute_entrypoint(chosen_code)
-            if pack is None:
-                return None
-
-            logger.debug(
-                f"[GigaEvoArchivePromptFetcher] Selected: {chosen_pid[:8]} "
-                f"fitness={chosen_fitness:.4f} prompt_id={pack.prompt_id} "
-                f"has_user={pack.user is not None} "
-                f"(from {len(candidates)} candidates)"
-            )
-            return pack
+            return candidates if candidates else None
 
         except Exception as exc:
             self._fetch_errors += 1
@@ -296,6 +278,36 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                 f"[GigaEvoArchivePromptFetcher] Archive read error (#{self._fetch_errors}): {exc}"
             )
             return None
+
+    def _sample_prompt(self) -> _PromptPack | None:
+        """Sample a prompt from cached candidates using fitness-proportional selection.
+
+        Called on every fetch() for mutation — each mutation gets an independent sample.
+
+        Returns:
+            _PromptPack if successful, None if no candidates or entrypoint fails
+        """
+        candidates = self._cached_candidates
+        if not candidates:
+            return None
+
+        epsilon = 0.01
+        weights = [max(f, epsilon) for _, f, _ in candidates]
+        chosen_pid, chosen_fitness, chosen_code = random.choices(
+            candidates, weights=weights, k=1
+        )[0]
+
+        pack = self._execute_entrypoint(chosen_code)
+        if pack is None:
+            return None
+
+        logger.debug(
+            f"[GigaEvoArchivePromptFetcher] Selected: {chosen_pid[:8]} "
+            f"fitness={chosen_fitness:.4f} prompt_id={pack.prompt_id} "
+            f"has_user={pack.user is not None} "
+            f"(from {len(candidates)} candidates)"
+        )
+        return pack
 
     def _execute_entrypoint(self, code: str) -> _PromptPack | None:
         """Execute a program's entrypoint() in a clean namespace.
@@ -383,24 +395,32 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         if agent_name != "mutation":
             return self._fallback.fetch(agent_name, prompt_type)
 
-        # Refresh champion pack if cache is stale
+        # Refresh candidates list if cache is stale (expensive Redis read)
         if self._is_cache_stale():
-            new_pack = self._refresh_champion()
-            if new_pack is not None:
-                self._cached_pack = new_pack
+            new_candidates = self._refresh_candidates()
+            if new_candidates is not None:
+                self._cached_candidates = new_candidates
             self._cache_timestamp = time.monotonic()
 
-        if self._cached_pack is not None:
+        # Sample fresh on "system" (first call per mutation), reuse on "user"
+        if prompt_type == "system":
+            pack = self._sample_prompt()
+            if pack is not None:
+                self._current_pack = pack
+                self._cached_pack = pack  # track last sample for get_stats()
+        pack = self._current_pack
+
+        if pack is not None:
             self._cache_hits += 1
             if prompt_type == "system":
                 return FetchedPrompt(
-                    text=self._cached_pack.system,
-                    prompt_id=self._cached_pack.prompt_id,
+                    text=pack.system,
+                    prompt_id=pack.prompt_id,
                 )
-            elif prompt_type == "user" and self._cached_pack.user is not None:
+            elif prompt_type == "user" and pack.user is not None:
                 return FetchedPrompt(
-                    text=self._cached_pack.user,
-                    prompt_id=self._cached_pack.prompt_id,
+                    text=pack.user,
+                    prompt_id=pack.prompt_id,
                 )
             # user prompt not co-evolved yet — fall through to fallback
 
@@ -503,5 +523,8 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             "has_champion": self._cached_pack is not None,
             "champion_has_user": (
                 self._cached_pack is not None and self._cached_pack.user is not None
+            ),
+            "n_candidates": (
+                len(self._cached_candidates) if self._cached_candidates else 0
             ),
         }
