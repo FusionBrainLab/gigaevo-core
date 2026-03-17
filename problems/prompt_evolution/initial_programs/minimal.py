@@ -1,22 +1,19 @@
-"""Seed prompt: minimal mutation system + user prompts (short, direct)."""
+"""Seed prompt: minimal mutation prompts — short, direct, with frozen constraints."""
+
+from gigaevo.prompts.hotpotqa.mutation.frozen import SYSTEM_CONSTRAINTS
 
 
 def entrypoint() -> dict:
-    """Return minimal, concise mutation system and user prompt templates."""
-    system = (
-        "You are a code mutation expert. Improve the given Python program "
-        "to maximize the following objective:\n\n"
-        "{task_description}\n\n"
-        "Metrics:\n"
-        "{metrics_description}\n\n"
-        "Analyze what is failing and make targeted, high-impact changes. "
-        "Return only valid Python code."
-    )
+    strategy = """\
+STRATEGY: Make targeted, high-impact changes. Analyze what is failing and fix it.
+Prefer compression over expansion. Return only valid Python code."""
 
-    user = (
-        "Mutate {count} parent program(s). "
-        "Use the insights and lineage to guide your changes.\n\n"
-        "{parent_blocks}"
-    )
+    user = """\
+Mutate the parent program(s). Use the insights and lineage to guide your changes.
 
-    return {"system": system, "user": user}
+Return JSON with keys: "archetype", "justification", "insights_used", "code".
+The "code" field must contain only valid Python code (no markdown fences).
+
+{parent_blocks}"""
+
+    return {"system": SYSTEM_CONSTRAINTS + "\n\n" + strategy, "user": user}

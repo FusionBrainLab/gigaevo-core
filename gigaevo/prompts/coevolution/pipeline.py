@@ -61,11 +61,17 @@ class PromptEvolutionPipelineBuilder:
         stats_provider: PromptStatsProvider,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
         dag_timeout: float = 3600.0,
+        prior_alpha: float = 1.0,
+        prior_beta: float = 3.0,
+        required_prefix: str | None = None,
     ):
         self._ctx = ctx
         self._stats_provider = stats_provider
         self._stage_timeout = stage_timeout
         self._dag_timeout = dag_timeout
+        self._prior_alpha = prior_alpha
+        self._prior_beta = prior_beta
+        self._required_prefix = required_prefix
 
     def build_blueprint(self) -> DAGBlueprint:
         ctx = self._ctx
@@ -83,9 +89,13 @@ class PromptEvolutionPipelineBuilder:
                 timeout=st,
                 safe_mode=True,
             ),
-            "PromptExecutionStage": lambda: PromptExecutionStage(timeout=st),
+            "PromptExecutionStage": lambda: PromptExecutionStage(
+                required_prefix=self._required_prefix, timeout=st
+            ),
             "PromptFitnessStage": lambda: PromptFitnessStage(
                 stats_provider=stats_provider,
+                prior_alpha=self._prior_alpha,
+                prior_beta=self._prior_beta,
                 timeout=st,
             ),
             "ComputeComplexityStage": lambda: ComputeComplexityStage(timeout=st),

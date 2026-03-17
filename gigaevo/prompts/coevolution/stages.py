@@ -45,8 +45,11 @@ class PromptExecutionStage(Stage):
     InputsModel = VoidInput
     OutputModel = PromptExecutionOutput
 
-    def __init__(self, *, timeout: float = 30.0, **kwargs):
+    def __init__(
+        self, *, required_prefix: str | None = None, timeout: float = 30.0, **kwargs
+    ):
         super().__init__(timeout=timeout, **kwargs)
+        self._required_prefix = required_prefix
 
     async def compute(self, program: Program) -> PromptExecutionOutput:
         code = program.code
@@ -90,7 +93,14 @@ class PromptExecutionStage(Stage):
                 f"entrypoint() must return str or dict, got {type(result).__name__}"
             )
 
-        prompt_id = prompt_text_to_id(system_text)
+        if self._required_prefix and self._required_prefix not in system_text:
+            raise ValueError(
+                "Prompt program output is missing the required prefix "
+                "(frozen constraints). The entrypoint() must produce system "
+                "text that contains the required_prefix string."
+            )
+
+        prompt_id = prompt_text_to_id(system_text, user_text=user_text)
         logger.debug(
             f"[PromptExecutionStage] Executed entrypoint(): "
             f"system={len(system_text)} chars, user={len(user_text) if user_text else 0} chars, "
@@ -138,7 +148,7 @@ class PromptFitnessStage(Stage):
         self,
         stats_provider: PromptStatsProvider,
         prior_alpha: float = 1.0,
-        prior_beta: float = 1.0,
+        prior_beta: float = 3.0,
         timeout: float = 30.0,
         **kwargs,
     ):
@@ -154,8 +164,8 @@ class PromptFitnessStage(Stage):
         stats = await self._stats_provider.get_stats(prompt_id)
 
         # Bayesian posterior mean with Beta(alpha, beta) prior.
-        # Beta(1,1) = uniform: new prompts start at 0.50, converging to
-        # true success rate as trials accumulate.
+        # Default Beta(1,3): untested prompts start at 0.25, preventing
+        # them from outranking mediocre-but-tested prompts.
         fitness = (stats.successes + self._prior_alpha) / (
             stats.trials + self._prior_alpha + self._prior_beta
         )
@@ -164,13 +174,22 @@ class PromptFitnessStage(Stage):
         logger.debug(
             f"[PromptFitnessStage] prompt_id={prompt_id} "
             f"trials={stats.trials} successes={stats.successes} "
-            f"fitness={fitness:.4f} (prior=Beta({self._prior_alpha},{self._prior_beta}))"
+            f"fitness={fitness:.4f} mean_child_f1={stats.mean_child_fitness:.4f} "
+            f"(prior=Beta({self._prior_alpha},{self._prior_beta}))"
         )
 
-        metrics = {
+        metrics: dict[str, float] = {
             "fitness": fitness,
             "is_valid": 1.0,
             "prompt_length": prompt_length,
+            "trials": float(stats.trials),
+            "successes": float(stats.successes),
+            "mean_child_fitness": stats.mean_child_fitness,
         }
+        # Store per-metric means from main runs (e.g., EM, F1, retrieval scores)
+        if stats.mean_metrics:
+            for k, v in stats.mean_metrics.items():
+                metrics[f"main_{k}"] = v
+
         program.add_metrics(metrics)
         return FloatDictContainer(data=metrics)

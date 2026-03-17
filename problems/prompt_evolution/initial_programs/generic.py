@@ -1,18 +1,15 @@
-"""Seed prompt: production gigaevo/prompts/mutation/{system,user}.txt inlined."""
+"""Seed prompt: generic mutation system + user prompt with frozen constraints import."""
+
+from gigaevo.prompts.hotpotqa.mutation.frozen import SYSTEM_CONSTRAINTS
 
 
 def entrypoint() -> dict:
-    system = """\
-You are an expert in evolutionary optimization, focusing on performance-driven mutation of python programs.
-
-ROLE:
-You operate within an evolutionary framework where programs are iteratively mutated and evaluated based on their performance according to metrics described below. Your task is to apply strategic, evidence-driven modifications to improve solution fitness.
-
-OBJECTIVE:
-{task_description}
-
-AVAILABLE METRICS:
-{metrics_description}"""
+    strategy = """\
+MUTATION FOCUS AREAS (general):
+1. CODE QUALITY: Improve algorithmic correctness, efficiency, and robustness.
+2. PATTERN LEVERAGE: Extend beneficial patterns identified in insights.
+3. FAILURE REMOVAL: Eliminate harmful patterns documented in lineage.
+4. EXPLORATION: Try fundamentally different approaches when evidence is weak."""
 
     user = """\
 EVOLUTIONARY MUTATION: Adaptive Code Evolution
@@ -47,68 +44,18 @@ Transform the program using program insights and historical lineage intelligence
 Choose your evolutionary approach based on evidence strength and risk tolerance:
 
 ### EXPLOITATION ARCHETYPES (Evidence-Driven Refinement)
-**When lineage shows consistent positive outcomes and strong beneficial insights:**
-
-1. **Precision Optimization**
-   → Fine-tune proven patterns, minimal risk changes, conservative improvements
-
-2. **Proven Pattern Extension**
-   → Replicate successful strategies, generalize working approaches, safe adaptations
-
-3. **Harmful Pattern Removal**
-   → Eliminate documented failure modes, clean up problematic code, defensive improvements
+1. **Precision Optimization** → Fine-tune proven patterns
+2. **Proven Pattern Extension** → Replicate successful strategies
+3. **Harmful Pattern Removal** → Eliminate documented failure modes
 
 ### EXPLORATION ARCHETYPES (Innovation-Driven Change)
-**When lineage shows failures, weak evidence, or strong harmful/rigid insights:**
-
-4. **Computational Reinvention**
-   → Novel algorithmic paradigms, alternative data representations, constraint-driven design
-
-5. **Solution Space Exploration**
-   → New problem-solving strategies, unexplored search spaces, alternative optimization flows
-
-6. **Approach Synthesis**
-   → Combine multiple techniques, hybrid architectures, emergent computational behaviors
+4. **Computational Reinvention** → Novel algorithmic paradigms
+5. **Solution Space Exploration** → New problem-solving strategies
+6. **Approach Synthesis** → Combine multiple techniques
 
 ### HYBRID ARCHETYPES (Balanced Approach)
-**When evidence is mixed or moderate confidence:**
-
-7. **Guided Innovation**
-   → Preserve proven elements while introducing targeted improvements
-
-8. **Conservative Exploration**
-   → Explore within safe boundaries, maintain structural integrity
-
-## ARCHETYPE SELECTION FRAMEWORK
-
-**Evidence Assessment**:
-- **Strong positive lineage** + **beneficial insights** → Choose Exploitation archetype
-- **Weak/negative lineage** + **harmful/rigid insights** → Choose Exploration archetype
-- **Mixed evidence** + **moderate confidence** → Choose Hybrid archetype
-
-**Risk Tolerance**:
-- **High confidence** → Exploitation archetypes (1-3)
-- **Low confidence** → Exploration archetypes (4-6)
-- **Moderate confidence** → Hybrid archetypes (7-8)
-
-## EXECUTION PRINCIPLES
-
-- **Evidence-driven**: 1-3 program insights from distinct categories required
-- **Archetype-appropriate**: Match change scope to selected archetype
-- **Historical guidance**: leverage lineage outcomes while allowing for innovation
-- **Traceability**: link all changes to specific insights or lineage evidence
-- **Prioritization**: severity first, then beneficial/fragile tags preferred
-- **Delta preference**: favor strategies with positive historical outcomes
-- **Tag-based action**: Use harmful insights to REMOVE patterns, beneficial/fragile to PRESERVE/IMPROVE patterns
-- **Archetype constraints**:
-  - Exploitation: ≤2 small, localized changes
-  - Exploration: Meaningful structural novelty required
-  - Hybrid: Balance proven elements with targeted innovations
-
-## LIGHTWEIGHT ADDITIONS (ADAPTIVE)
-- **Plateau trigger:** If recent lineage shows small |Δfitness| magnitudes, prefer **Exploration** for this mutation.
-- **Category diversification:** If a category recently produced harmful/negative Δfitness, explore a **different** category this time.
-- **No-repeat harmful (unguarded):** Do **not** reintroduce a strategy tagged **harmful** in lineage unless accompanied by a clear **guard** or corrective mechanism.
+7. **Guided Innovation** → Preserve proven + introduce targeted improvements
+8. **Conservative Exploration** → Explore within safe boundaries
 
 ## OUTPUT FORMAT (STRUCTURED JSON)
 
@@ -123,12 +70,6 @@ Your response will be parsed as JSON. Format:
 }}
 ```
 
-**FIELDS:**
-- **archetype**: One of the 8 archetypes (e.g., "Precision Optimization", "Computational Reinvention")
-- **justification**: Free-form reasoning — cite program insights, lineage insights, and/or evolutionary statistics naturally
-- **insights_used**: Flat array of insight strings you acted on (copy the insight text verbatim)
-- **code**: Complete mutated Python program (raw code, NO markdown fences)
-
 **CRITICAL**:
 - Include 1-3 insights in `insights_used` from the provided program insights
 - The `code` field must contain ONLY valid Python code
@@ -136,4 +77,4 @@ Your response will be parsed as JSON. Format:
 
 {parent_blocks}"""
 
-    return {"system": system, "user": user}
+    return {"system": SYSTEM_CONSTRAINTS + "\n\n" + strategy, "user": user}

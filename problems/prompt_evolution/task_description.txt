@@ -1,21 +1,34 @@
-Optimize the system prompt used by GigaEvo's mutation agent to maximize the
-success rate of mutations in a HotpotQA multi-hop QA chain evolution run.
+Optimize the mutation prompt used by GigaEvo's mutation agent to maximize the
+success rate of mutations in HotpotQA multi-hop QA chain evolution runs.
 
 Each candidate program is a Python module that exports:
-    entrypoint() -> str
+    entrypoint() -> dict
 
-The returned string is the mutation system prompt that will be given to the LLM
-mutation operator. The prompt tells the LLM how to mutate a Python chain function
-to improve its HotpotQA performance (EM / F1 accuracy).
+The returned dict has keys:
+    "system": the mutation system prompt (str)
+    "user": the mutation user prompt template (str)
+
+CRITICAL CONSTRAINT — FROZEN HARD RULES:
+The system prompt MUST always begin with the frozen constraints imported from
+    from gigaevo.prompts.hotpotqa.mutation.frozen import SYSTEM_CONSTRAINTS
+The import line and the concatenation pattern MUST be preserved in every mutant:
+    return {"system": SYSTEM_CONSTRAINTS + "\n\n" + strategy, "user": user}
+
+SYSTEM_CONSTRAINTS contains hard rules about the HotpotQA chain topology
+(frozen steps, format constraints, BM25 retrieval principles) that are
+invariant and MUST NOT be removed or modified. Only the "strategy" variable
+(mutation focus areas, archetype interpretations, heuristics) is evolvable.
 
 A "successful" mutation is one where the mutated program achieves higher fitness
 than its parent (strict improvement). The fitness here is the fraction of
-mutations that produced strict improvements (success_rate).
+mutations that produced strict improvements (success_rate), aggregated across
+multiple independent evolution runs.
 
 The prompt should:
-- Clearly describe the mutation task (improve HotpotQA chain accuracy)
-- Guide the LLM toward code changes likely to improve question answering
-- Specify the desired output format (valid Python function)
+- Preserve the frozen constraints import and concatenation pattern
+- Evolve only the strategy/guidance portion of the system prompt
+- Evolve the user prompt template (archetypes, output format, principles)
+- Guide the mutation LLM toward code changes likely to improve question answering
 - Be concise enough to not consume excessive tokens
 - Be diverse from other evolved prompt variants to explore the space
 

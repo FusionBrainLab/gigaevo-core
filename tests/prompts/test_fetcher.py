@@ -249,7 +249,9 @@ class TestGigaEvoArchivePromptFetcher:
         assert pack.user == "User text {count}."
         from gigaevo.prompts.coevolution.stats import prompt_text_to_id
 
-        assert pack.prompt_id == prompt_text_to_id("System text.")
+        assert pack.prompt_id == prompt_text_to_id(
+            "System text.", user_text="User text {count}."
+        )
 
     def test_execute_entrypoint_dict_return_no_user(self, tmp_prompts_dir: Path):
         """_execute_entrypoint() handles dict with system only."""

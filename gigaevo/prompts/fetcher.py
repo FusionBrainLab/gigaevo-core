@@ -80,6 +80,7 @@ class PromptFetcher(ABC):
         parent_fitness: float,
         higher_is_better: bool,
         outcome: MutationOutcome,
+        child_metrics: dict[str, float] | None = None,
     ) -> None:
         """Called after mutation outcome known. Default no-op.
 
@@ -89,6 +90,7 @@ class PromptFetcher(ABC):
             parent_fitness: Fitness of the best parent
             higher_is_better: Whether higher fitness is better
             outcome: Outcome enum (ACCEPTED, REJECTED_STRATEGY, REJECTED_ACCEPTOR)
+            child_metrics: Full metrics dict of the child program (optional)
         """
 
     async def start(self, storage: ProgramStorage | None = None) -> None:
@@ -165,9 +167,11 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         cache_ttl_seconds: float = 30.0,
         fallback_prompts_dir: str | Path | None = None,
         fitness_key: str = "fitness",
+        required_prefix: str | None = None,
     ):
         self._prompt_redis_db = prompt_redis_db
         self._main_redis_prefix = main_redis_prefix
+        self._required_prefix = required_prefix
         self._prompt_prefix = prompt_prefix
         self._archive_prefix = archive_prefix
         self._host = host
@@ -323,6 +327,11 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         "[GigaEvoArchivePromptFetcher] entrypoint() returned empty string"
                     )
                     return None
+                if self._required_prefix and self._required_prefix not in result:
+                    logger.warning(
+                        "[GigaEvoArchivePromptFetcher] Prompt missing required prefix — rejecting"
+                    )
+                    return None
                 pid = prompt_text_to_id(result)
                 return _PromptPack(system=result, user=None, prompt_id=pid)
             elif isinstance(result, dict):
@@ -338,7 +347,12 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         "[GigaEvoArchivePromptFetcher] dict entrypoint() has invalid 'user' key — ignoring"
                     )
                     user = None
-                pid = prompt_text_to_id(system)
+                if self._required_prefix and self._required_prefix not in system:
+                    logger.warning(
+                        "[GigaEvoArchivePromptFetcher] Prompt missing required prefix — rejecting"
+                    )
+                    return None
+                pid = prompt_text_to_id(system, user_text=user)
                 return _PromptPack(system=system, user=user, prompt_id=pid)
             else:
                 logger.warning(
@@ -400,8 +414,13 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         parent_fitness: float,
         higher_is_better: bool,
         outcome: MutationOutcome,
+        child_metrics: dict[str, float] | None = None,
     ) -> None:
         """Write mutation outcome stats to Redis for the prompt run to read.
+
+        Stores enriched per-prompt statistics including fitness distribution
+        and metrics breakdown so the prompt evolution run can understand
+        not just success rate but HOW programs perform with each prompt.
 
         Skips REJECTED_ACCEPTOR (no reliable fitness).
 
@@ -411,6 +430,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             parent_fitness: Best parent fitness
             higher_is_better: Whether higher fitness is better
             outcome: Mutation outcome
+            child_metrics: Full metrics dict of the child program (optional)
         """
         if prompt_id is None:
             return
@@ -434,7 +454,13 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             if raw:
                 stats = _json.loads(raw)
             else:
-                stats = {"trials": 0, "successes": 0}
+                stats = {
+                    "trials": 0,
+                    "successes": 0,
+                    "fitnesses": [],
+                    "metrics_sums": {},
+                    "metrics_count": 0,
+                }
 
             stats["trials"] += 1
             is_improvement = (
@@ -445,10 +471,27 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             if is_improvement:
                 stats["successes"] += 1
 
+            # Store recent fitness values (keep last 20 for distribution)
+            fitnesses = stats.get("fitnesses", [])
+            fitnesses.append(round(child_fitness, 4))
+            if len(fitnesses) > 20:
+                fitnesses = fitnesses[-20:]
+            stats["fitnesses"] = fitnesses
+
+            # Accumulate per-metric sums for mean computation
+            if child_metrics:
+                stats["metrics_count"] = stats.get("metrics_count", 0) + 1
+                metrics_sums = stats.get("metrics_sums", {})
+                for k, v in child_metrics.items():
+                    if isinstance(v, (int, float)):
+                        metrics_sums[k] = metrics_sums.get(k, 0.0) + float(v)
+                stats["metrics_sums"] = metrics_sums
+
             self._redis_main_sync.set(stats_key, _json.dumps(stats))
             logger.debug(
                 f"[GigaEvoArchivePromptFetcher] Stats updated for {prompt_id}: "
-                f"trials={stats['trials']} successes={stats['successes']}"
+                f"trials={stats['trials']} successes={stats['successes']} "
+                f"child_fitness={child_fitness:.4f}"
             )
         except Exception as exc:
             logger.warning(f"[GigaEvoArchivePromptFetcher] Stats write error: {exc}")

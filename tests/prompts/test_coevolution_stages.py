@@ -211,8 +211,8 @@ def entrypoint() -> dict:
             await stage.compute(program)
 
     @pytest.mark.asyncio
-    async def test_dict_prompt_id_based_on_system_text(self):
-        """prompt_id is hash of system text, not user text."""
+    async def test_dict_prompt_id_based_on_system_and_user_text(self):
+        """prompt_id is hash of both system AND user text (M4 fix)."""
         code_a = """
 def entrypoint() -> dict:
     return {"system": "Same system prompt.", "user": "User A."}
@@ -225,7 +225,8 @@ def entrypoint() -> dict:
         stage.attach_inputs({})
         result_a = await stage.compute(Program(code=code_a))
         result_b = await stage.compute(Program(code=code_b))
-        assert result_a.prompt_id == result_b.prompt_id  # Same system → same ID
+        # M4: Different user text → different IDs (prevents stats conflation)
+        assert result_a.prompt_id != result_b.prompt_id
 
 
 # ---------------------------------------------------------------------------
@@ -263,8 +264,8 @@ class TestPromptFitnessStage:
         result = await stage.compute(program)
 
         # Verify
-        # Bayesian posterior: (7+1)/(10+2) = 8/12
-        assert result.data["fitness"] == pytest.approx(8 / 12)
+        # Bayesian posterior with Beta(1,3): (7+1)/(10+1+3) = 8/14 = 4/7
+        assert result.data["fitness"] == pytest.approx(4 / 7)
         assert result.data["is_valid"] == 1.0
         assert result.data["prompt_length"] == len("test prompt")
 
@@ -273,7 +274,7 @@ class TestPromptFitnessStage:
 
     @pytest.mark.asyncio
     async def test_compute_no_stats(self, mock_stats_provider: MagicMock):
-        """compute() returns Bayesian prior (0.5) when no stats available."""
+        """compute() returns Bayesian prior (0.25 with Beta(1,3)) when no stats available."""
         mock_stats_provider.get_stats = AsyncMock(
             return_value=PromptMutationStats(trials=0, successes=0, success_rate=0.0)
         )
@@ -286,8 +287,8 @@ class TestPromptFitnessStage:
 
         result = await stage.compute(program)
 
-        # Bayesian posterior with Beta(1,1) prior: (0+1)/(0+2) = 0.5
-        assert result.data["fitness"] == pytest.approx(0.5)
+        # Bayesian posterior with Beta(1,3) prior: (0+1)/(0+1+3) = 0.25
+        assert result.data["fitness"] == pytest.approx(0.25)
         assert result.data["is_valid"] == 1.0
 
     @pytest.mark.asyncio
@@ -307,8 +308,8 @@ class TestPromptFitnessStage:
 
         # Metrics should be stored on program
         assert "fitness" in program.metrics
-        # Bayesian posterior: (3+1)/(5+2) = 4/7
-        assert program.metrics["fitness"] == pytest.approx(4 / 7)
+        # Bayesian posterior with Beta(1,3): (3+1)/(5+1+3) = 4/9
+        assert program.metrics["fitness"] == pytest.approx(4 / 9)
 
 
 # ---------------------------------------------------------------------------

@@ -207,4 +207,5 @@ class LLMMutationOperator(MutationOperator):
                     parent_fitness=best_parent_fitness,
                     higher_is_better=higher_is_better,
                     outcome=outcome,
+                    child_metrics=dict(program.metrics),
                 )
