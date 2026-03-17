@@ -67,6 +67,7 @@ pipeline_builder:
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}
   prior_beta: 3.0
+  required_prefix: "You are an expert in evolutionary optimization, focusing on performance-driven mutation"
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder
