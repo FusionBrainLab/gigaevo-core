@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
 from gigaevo.database.program_storage import ProgramStorage
@@ -14,12 +14,18 @@ from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
+from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program
+from gigaevo.programs.stages.cache_handler import InputHashCache
+from gigaevo.programs.stages.common import FloatDictContainer
 from gigaevo.prompts.coevolution.pipeline import PromptEvolutionPipelineBuilder
 from gigaevo.prompts.coevolution.stages import (
+    FitnessMetricsInput,
     PromptExecutionStage,
     PromptFitnessStage,
+    PromptInsightsStage,
+    PromptLineageStage,
 )
 from gigaevo.prompts.coevolution.stats import (
     PromptStatsProvider,
@@ -445,3 +451,298 @@ class TestPromptTextToIdUserText:
         id_system_only = prompt_text_to_id("system")
         id_with_user = prompt_text_to_id("system", user_text="user")
         assert id_system_only != id_with_user
+
+
+# ===================================================================
+# Amendment #11: PromptInsightsStage / PromptLineageStage
+# ===================================================================
+
+
+class TestPromptInsightsStageInputModel:
+    """Verify FitnessMetricsInput schema and cache key behavior."""
+
+    def test_input_model_is_fitness_metrics_input(self):
+        """PromptInsightsStage uses FitnessMetricsInput, not VoidInput."""
+        assert PromptInsightsStage.InputsModel is FitnessMetricsInput
+
+    def test_input_model_is_fitness_metrics_input_lineage(self):
+        """PromptLineageStage uses FitnessMetricsInput, not VoidInput."""
+        assert PromptLineageStage.InputsModel is FitnessMetricsInput
+
+    def test_fitness_metrics_is_optional(self):
+        """fitness_metrics field is optional (defaults to None)."""
+        assert "fitness_metrics" in PromptInsightsStage.optional_fields()
+        assert "fitness_metrics" not in PromptInsightsStage.required_fields()
+
+    def test_fitness_metrics_is_optional_lineage(self):
+        assert "fitness_metrics" in PromptLineageStage.optional_fields()
+        assert "fitness_metrics" not in PromptLineageStage.required_fields()
+
+    def test_uses_input_hash_cache(self):
+        """PromptInsightsStage uses InputHashCache (default), not NO_CACHE."""
+        assert isinstance(PromptInsightsStage.cache_handler, InputHashCache)
+
+    def test_uses_input_hash_cache_lineage(self):
+        assert isinstance(PromptLineageStage.cache_handler, InputHashCache)
+
+
+class TestFitnessMetricsCacheKey:
+    """Verify that different fitness values produce different cache keys."""
+
+    def test_different_trials_different_hash(self):
+        """Cache key changes when trials changes."""
+        metrics_0 = FloatDictContainer(data={"fitness": 0.25, "trials": 0.0})
+        metrics_5 = FloatDictContainer(data={"fitness": 0.40, "trials": 5.0})
+
+        input_0 = FitnessMetricsInput(fitness_metrics=metrics_0)
+        input_5 = FitnessMetricsInput(fitness_metrics=metrics_5)
+
+        assert input_0.content_hash != input_5.content_hash
+
+    def test_same_trials_same_hash(self):
+        """Cache key is stable when metrics don't change."""
+        metrics_a = FloatDictContainer(data={"fitness": 0.40, "trials": 5.0})
+        metrics_b = FloatDictContainer(data={"fitness": 0.40, "trials": 5.0})
+
+        input_a = FitnessMetricsInput(fitness_metrics=metrics_a)
+        input_b = FitnessMetricsInput(fitness_metrics=metrics_b)
+
+        assert input_a.content_hash == input_b.content_hash
+
+    def test_none_metrics_stable_hash(self):
+        """Cache key is stable when fitness_metrics is None."""
+        input_a = FitnessMetricsInput(fitness_metrics=None)
+        input_b = FitnessMetricsInput(fitness_metrics=None)
+
+        assert input_a.content_hash == input_b.content_hash
+
+    def test_none_vs_zero_trials_different_hash(self):
+        """None (no edge provided) differs from trials=0 metrics."""
+        metrics_0 = FloatDictContainer(data={"fitness": 0.25, "trials": 0.0})
+        input_none = FitnessMetricsInput(fitness_metrics=None)
+        input_0 = FitnessMetricsInput(fitness_metrics=metrics_0)
+
+        assert input_none.content_hash != input_0.content_hash
+
+
+class TestPromptInsightsStageSkipLogic:
+    """Test that PromptInsightsStage skips when trials=0."""
+
+    def _make_stage(self):
+        """Create a PromptInsightsStage with mocked LLM."""
+        llm = MagicMock()
+        metrics_ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="fitness",
+                    is_primary=True,
+                    higher_is_better=True,
+                ),
+            }
+        )
+        stage = PromptInsightsStage(
+            llm=llm,
+            task_description="test task",
+            metrics_context=metrics_ctx,
+            timeout=10.0,
+        )
+        return stage
+
+    def test_skips_when_trials_zero(self):
+        """Stage skips when trials=0 (Beta prior fitness)."""
+        stage = self._make_stage()
+        metrics = FloatDictContainer(data={"fitness": 0.25, "trials": 0.0})
+        stage.attach_inputs({"fitness_metrics": metrics})
+
+        prog = _make_program("def entrypoint(): return 'test'")
+        result = _run(stage.compute(prog))
+
+        assert isinstance(result, ProgramStageResult)
+        assert result.status == StageState.SKIPPED
+        assert "Beta prior" in result.error.message
+
+    def test_runs_when_trials_positive(self):
+        """Stage delegates to parent when trials > 0."""
+        stage = self._make_stage()
+        metrics = FloatDictContainer(data={"fitness": 0.40, "trials": 5.0})
+        stage.attach_inputs({"fitness_metrics": metrics})
+
+        prog = _make_program("def entrypoint(): return 'test'")
+        # Mock the parent's compute to avoid needing a real LLM
+        with patch.object(
+            stage.__class__.__bases__[0],
+            "compute",
+            new_callable=AsyncMock,
+        ) as mock_compute:
+            from gigaevo.llm.agents.insights import ProgramInsights
+            from gigaevo.programs.stages.insights import InsightsOutput
+
+            mock_insights = ProgramInsights(insights=[])
+            mock_compute.return_value = InsightsOutput(insights=mock_insights)
+
+            result = _run(stage.compute(prog))
+            assert isinstance(result, InsightsOutput)
+            mock_compute.assert_called_once()
+
+    def test_skips_when_trials_float_zero(self):
+        """Handles trials as float 0.0 (as stored in metrics dict)."""
+        stage = self._make_stage()
+        metrics = FloatDictContainer(
+            data={"fitness": 0.25, "trials": 0.0, "successes": 0.0}
+        )
+        stage.attach_inputs({"fitness_metrics": metrics})
+
+        prog = _make_program("def entrypoint(): return 'test'")
+        result = _run(stage.compute(prog))
+
+        assert isinstance(result, ProgramStageResult)
+        assert result.status == StageState.SKIPPED
+
+    def test_runs_when_no_metrics_provided(self):
+        """Stage runs normally when fitness_metrics is None (no DAG edge)."""
+        stage = self._make_stage()
+        stage.attach_inputs({"fitness_metrics": None})
+
+        prog = _make_program("def entrypoint(): return 'test'")
+        with patch.object(
+            stage.__class__.__bases__[0],
+            "compute",
+            new_callable=AsyncMock,
+        ) as mock_compute:
+            from gigaevo.llm.agents.insights import ProgramInsights
+            from gigaevo.programs.stages.insights import InsightsOutput
+
+            mock_insights = ProgramInsights(insights=[])
+            mock_compute.return_value = InsightsOutput(insights=mock_insights)
+
+            result = _run(stage.compute(prog))
+            assert isinstance(result, InsightsOutput)
+
+
+class TestPromptLineageStageSkipLogic:
+    """Test that PromptLineageStage skips when trials=0."""
+
+    def _make_stage(self):
+        llm = MagicMock()
+        storage = MagicMock(spec=ProgramStorage)
+        metrics_ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="fitness",
+                    is_primary=True,
+                    higher_is_better=True,
+                ),
+            }
+        )
+        stage = PromptLineageStage(
+            llm=llm,
+            task_description="test task",
+            metrics_context=metrics_ctx,
+            storage=storage,
+            timeout=10.0,
+        )
+        return stage
+
+    def test_skips_when_trials_zero(self):
+        """Stage skips when trials=0 (Beta prior fitness)."""
+        stage = self._make_stage()
+        metrics = FloatDictContainer(data={"fitness": 0.25, "trials": 0.0})
+        stage.attach_inputs({"fitness_metrics": metrics})
+
+        prog = _make_program("def entrypoint(): return 'test'")
+        result = _run(stage.compute(prog))
+
+        assert isinstance(result, ProgramStageResult)
+        assert result.status == StageState.SKIPPED
+        assert "Beta prior" in result.error.message
+
+    def test_runs_when_trials_positive(self):
+        """Stage delegates to parent when trials > 0."""
+        stage = self._make_stage()
+        metrics = FloatDictContainer(data={"fitness": 0.60, "trials": 10.0})
+        stage.attach_inputs({"fitness_metrics": metrics})
+
+        prog = _make_program("def entrypoint(): return 'test'")
+        prog.lineage.parents = []
+
+        with patch.object(
+            stage.__class__.__bases__[0],
+            "compute",
+            new_callable=AsyncMock,
+        ) as mock_compute:
+            from gigaevo.programs.stages.insights_lineage import LineageAnalysesOutput
+
+            mock_compute.return_value = LineageAnalysesOutput(analyses=[])
+
+            result = _run(stage.compute(prog))
+            assert isinstance(result, LineageAnalysesOutput)
+            mock_compute.assert_called_once()
+
+
+class TestPipelineDataFlowEdges:
+    """Verify the fitness_metrics DataFlowEdges are correctly wired."""
+
+    def test_insights_gets_fitness_metrics_edge(self):
+        """InsightsStage receives fitness_metrics from EnsureMetricsStage."""
+        ctx = _make_ctx()
+        stats = MagicMock(spec=PromptStatsProvider)
+        bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
+
+        fitness_edges = [
+            e
+            for e in bp.data_flow_edges
+            if e.destination_stage == "InsightsStage"
+            and e.input_name == "fitness_metrics"
+        ]
+        assert len(fitness_edges) == 1
+        assert fitness_edges[0].source_stage == "EnsureMetricsStage"
+
+    def test_lineage_gets_fitness_metrics_edge(self):
+        """LineageStage receives fitness_metrics from EnsureMetricsStage."""
+        ctx = _make_ctx()
+        stats = MagicMock(spec=PromptStatsProvider)
+        bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
+
+        fitness_edges = [
+            e
+            for e in bp.data_flow_edges
+            if e.destination_stage == "LineageStage"
+            and e.input_name == "fitness_metrics"
+        ]
+        assert len(fitness_edges) == 1
+        assert fitness_edges[0].source_stage == "EnsureMetricsStage"
+
+    def test_insights_node_is_prompt_subclass(self):
+        """InsightsStage node factory creates PromptInsightsStage."""
+        ctx = _make_ctx()
+        stats = MagicMock(spec=PromptStatsProvider)
+        bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
+
+        stage = bp.nodes["InsightsStage"]()
+        assert isinstance(stage, PromptInsightsStage)
+
+    def test_lineage_node_is_prompt_subclass(self):
+        """LineageStage node factory creates PromptLineageStage."""
+        ctx = _make_ctx()
+        stats = MagicMock(spec=PromptStatsProvider)
+        bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
+
+        stage = bp.nodes["LineageStage"]()
+        assert isinstance(stage, PromptLineageStage)
+
+    def test_no_exec_order_dep_for_insights_on_metrics(self):
+        """InsightsStage should NOT have explicit exec_order_dep on EnsureMetricsStage
+        (ordering is now implicit via DataFlowEdge)."""
+        ctx = _make_ctx()
+        stats = MagicMock(spec=PromptStatsProvider)
+        bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
+
+        assert "InsightsStage" not in (bp.exec_order_deps or {})
+
+    def test_no_exec_order_dep_for_lineage_on_metrics(self):
+        """LineageStage should NOT have explicit exec_order_dep on EnsureMetricsStage."""
+        ctx = _make_ctx()
+        stats = MagicMock(spec=PromptStatsProvider)
+        bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
+
+        assert "LineageStage" not in (bp.exec_order_deps or {})
