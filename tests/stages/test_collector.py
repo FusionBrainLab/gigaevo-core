@@ -392,6 +392,8 @@ class TestEvolutionaryStatisticsCollector:
         p3 = _prog(score=40.0, generation=1)
         storage.get_all.return_value = [p1, p2, p3]
         storage.mget.return_value = []  # no ancestors/descendants
+        # Wire snapshot to return the same list as get_all
+        storage.snapshot.get_all.return_value = [p1, p2, p3]
 
         ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(
@@ -416,6 +418,7 @@ class TestEvolutionaryStatisticsCollector:
         p3 = _prog(score=40.0, generation=2)
         storage.get_all.return_value = [p1, p2, p3]
         storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1, p2, p3]
 
         ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(
@@ -440,6 +443,7 @@ class TestEvolutionaryStatisticsCollector:
         storage.get_all.return_value = [parent, child]
         # First mget call is for ancestors (parents), second is for descendants (children)
         storage.mget.side_effect = [[parent], []]
+        storage.snapshot.get_all.return_value = [parent, child]
 
         ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(
@@ -461,6 +465,7 @@ class TestEvolutionaryStatisticsCollector:
         p3 = _prog(score=40.0, generation=2)
         storage.get_all.return_value = [p1, p2, p3]
         storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1, p2, p3]
 
         ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(
@@ -481,6 +486,7 @@ class TestEvolutionaryStatisticsCollector:
         storage = AsyncMock()
         storage.get_all.return_value = []
         storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = []
 
         # Need a program to execute on even though storage is "empty"
         prog = _prog(score=50.0, generation=0)
@@ -507,6 +513,7 @@ class TestEvolutionaryStatisticsCollector:
         p3.set_metadata("iteration", 2)
         storage.get_all.return_value = [p1, p2, p3]
         storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1, p2, p3]
 
         ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(
@@ -527,6 +534,7 @@ class TestEvolutionaryStatisticsCollector:
         p1 = _prog(score=60.0, generation=0)
         storage.get_all.return_value = [p1]
         storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1]
 
         ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(

@@ -7,8 +7,44 @@ from typing import Any
 from gigaevo.programs.program import Program
 
 
+class PopulationSnapshot:
+    """Epoch-based cache for ``storage.get_all()``.
+
+    Shared across all collector instances via ``storage.snapshot``.
+    Call :meth:`bump` at phase boundaries to invalidate; collectors that
+    see a stale epoch will re-fetch exactly once (others piggyback).
+    """
+
+    __slots__ = ("_epoch", "_cached_epoch", "_cached", "_lock")
+
+    def __init__(self) -> None:
+        self._epoch: int = 0
+        self._cached_epoch: int = -1
+        self._cached: list[Program] = []
+        self._lock = asyncio.Lock()
+
+    def bump(self) -> None:
+        """Increment the epoch, invalidating the cached snapshot."""
+        self._epoch += 1
+
+    async def get_all(self, storage: ProgramStorage) -> list[Program]:
+        """Return cached programs if epoch matches, else fetch + cache."""
+        if self._cached_epoch == self._epoch:
+            return self._cached
+        async with self._lock:
+            if self._cached_epoch == self._epoch:
+                return self._cached
+            programs = await storage.get_all()
+            self._cached = programs
+            self._cached_epoch = self._epoch
+            return programs
+
+
 class ProgramStorage(ABC):
     """Abstract interface for persisting :class:`Program` objects."""
+
+    def __init__(self) -> None:
+        self.snapshot = PopulationSnapshot()
 
     @abstractmethod
     async def add(self, program: Program) -> None: ...

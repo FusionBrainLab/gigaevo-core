@@ -43,6 +43,7 @@ class RedisProgramStorage(ProgramStorage):
     def __init__(
         self, config: RedisProgramStorageConfig, writer: LogWriter | None = None
     ):
+        super().__init__()
         self.config = config
         self._merge = resolve_merge_strategy(config.merge_strategy)
 

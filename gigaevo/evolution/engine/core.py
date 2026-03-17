@@ -191,6 +191,8 @@ class EvolutionEngine:
         if self._pre_step_hook:
             await self._pre_step_hook()
 
+        self.storage.snapshot.bump()
+
         # Phase 1: wait until engine is idle (no QUEUED/RUNNING programs)
         await self._await_idle()
         logger.debug("[EvolutionEngine] gen={} Phase 1: Idle confirmed", gen)
@@ -211,6 +213,8 @@ class EvolutionEngine:
         # Phase 4: ingest newly completed programs (typically the mutants)
         await self._ingest_completed_programs()
         logger.debug("[EvolutionEngine] gen={} Phase 4: Ingestion done", gen)
+
+        self.storage.snapshot.bump()
 
         # Phase 5: refresh all archive programs (to re-run lineage/descendant-aware stages)
         refreshed = await self._refresh_archive_programs()
