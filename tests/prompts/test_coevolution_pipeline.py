@@ -229,18 +229,20 @@ class TestPromptEvolutionPipelineDeps:
         assert "PromptExecutionStage" in _dep_names(bp, "PromptFitnessStage")
 
     def test_insights_after_metrics(self):
+        """InsightsStage depends on EnsureMetricsStage via DataFlowEdge (fitness_metrics)."""
         ctx = _make_ctx()
         stats = MagicMock(spec=PromptStatsProvider)
         bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
 
-        assert "EnsureMetricsStage" in _dep_names(bp, "InsightsStage")
+        assert ("EnsureMetricsStage", "InsightsStage") in _edge_pairs(bp)
 
     def test_lineage_after_metrics(self):
+        """LineageStage depends on EnsureMetricsStage via DataFlowEdge (fitness_metrics)."""
         ctx = _make_ctx()
         stats = MagicMock(spec=PromptStatsProvider)
         bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
 
-        assert "EnsureMetricsStage" in _dep_names(bp, "LineageStage")
+        assert ("EnsureMetricsStage", "LineageStage") in _edge_pairs(bp)
         assert "LineageStage" in _dep_names(bp, "LineagesToDescendants")
         assert "LineageStage" in _dep_names(bp, "LineagesFromAncestors")
 

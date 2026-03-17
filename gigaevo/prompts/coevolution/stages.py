@@ -2,6 +2,8 @@
 
 PromptExecutionStage: executes entrypoint() from the program to get prompt text.
 PromptFitnessStage: reads mutation success stats from the main run's Redis.
+PromptInsightsStage / PromptLineageStage: cache-aware wrappers that invalidate
+    when fitness changes and skip when fitness is a dummy Beta prior.
 """
 
 from __future__ import annotations
@@ -10,11 +12,13 @@ from typing import Any
 
 from loguru import logger
 
-from gigaevo.programs.core_types import StageIO, VoidInput
+from gigaevo.programs.core_types import ProgramStageResult, StageIO, VoidInput
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import FloatDictContainer
+from gigaevo.programs.stages.insights import InsightsOutput, InsightsStage
+from gigaevo.programs.stages.insights_lineage import LineageAnalysesOutput, LineageStage
 from gigaevo.programs.stages.stage_registry import StageRegistry
 from gigaevo.prompts.coevolution.stats import PromptStatsProvider, prompt_text_to_id
 
@@ -183,3 +187,72 @@ class PromptFitnessStage(Stage):
 
         program.add_metrics(metrics)
         return FloatDictContainer(data=metrics)
+
+
+# ---------------------------------------------------------------------------
+# Cache-aware wrappers for InsightsStage / LineageStage
+# ---------------------------------------------------------------------------
+# In the prompt evolution pipeline, fitness starts as a Beta(1,3) prior
+# (0.25, trials=0) and updates as the main runs report mutation outcomes.
+# The base InsightsStage / LineageStage use InputHashCache with VoidInput,
+# so their cache key never changes — they compute once at dummy fitness and
+# never re-run when real data arrives.
+#
+# These subclasses accept the validated metrics dict as an optional input.
+# Including it in the InputsModel means the cache key changes whenever
+# trials/fitness change, causing automatic re-computation.  When trials=0
+# (no real data), they skip entirely to avoid generating misleading
+# insights from the Beta prior.
+# ---------------------------------------------------------------------------
+
+
+class FitnessMetricsInput(StageIO):
+    """Optional fitness metrics for cache invalidation in prompt evolution."""
+
+    fitness_metrics: FloatDictContainer | None = None
+
+
+@StageRegistry.register(
+    description="LLM insights for a prompt program (cache-invalidates on fitness change)"
+)
+class PromptInsightsStage(InsightsStage):
+    """InsightsStage that invalidates cache when prompt fitness changes.
+
+    Skips when trials=0 (Beta prior, no real data) to avoid misleading
+    insights like "this prompt is bad" based on a dummy 0.25 fitness.
+    """
+
+    InputsModel = FitnessMetricsInput
+
+    async def compute(self, program: Program) -> InsightsOutput | ProgramStageResult:
+        fm = self.params.fitness_metrics
+        if fm is not None and fm.data.get("trials", 0) == 0:
+            return ProgramStageResult.skipped(
+                message="No trials yet — fitness is Beta prior, insights deferred",
+                stage=self.stage_name,
+            )
+        return await super().compute(program)
+
+
+@StageRegistry.register(
+    description="Lineage analysis for a prompt program (cache-invalidates on fitness change)"
+)
+class PromptLineageStage(LineageStage):
+    """LineageStage that invalidates cache when prompt fitness changes.
+
+    Same rationale as PromptInsightsStage: skip when trials=0 to avoid
+    misleading transition analysis based on dummy fitness values.
+    """
+
+    InputsModel = FitnessMetricsInput
+
+    async def compute(
+        self, program: Program
+    ) -> LineageAnalysesOutput | ProgramStageResult:
+        fm = self.params.fitness_metrics
+        if fm is not None and fm.data.get("trials", 0) == 0:
+            return ProgramStageResult.skipped(
+                message="No trials yet — fitness is Beta prior, lineage deferred",
+                stage=self.stage_name,
+            )
+        return await super().compute(program)

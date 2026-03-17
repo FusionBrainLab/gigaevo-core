@@ -299,11 +299,16 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         if pack is None:
             return None
 
-        logger.debug(
-            f"[GigaEvoArchivePromptFetcher] Selected: {chosen_pid[:8]} "
+        user_preview = repr(pack.user[:300]) if pack.user else "None"
+        logger.info(
+            f"[GigaEvoArchivePromptFetcher] Sampled: {chosen_pid[:8]} "
             f"fitness={chosen_fitness:.4f} prompt_id={pack.prompt_id} "
             f"has_user={pack.user is not None} "
-            f"(from {len(candidates)} candidates)"
+            f"(from {len(candidates)} candidates)\n"
+            f"  SYSTEM[:{min(300, len(pack.system))}]: "
+            f"{pack.system[:300]!r}\n"
+            f"  USER[:{min(300, len(pack.user)) if pack.user else 0}]: "
+            f"{user_preview}"
         )
         return pack
 

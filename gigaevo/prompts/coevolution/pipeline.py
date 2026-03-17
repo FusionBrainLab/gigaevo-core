@@ -21,17 +21,20 @@ from gigaevo.programs.stages.collector import (
     EvolutionaryStatisticsCollector,
 )
 from gigaevo.programs.stages.complexity import ComputeComplexityStage
-from gigaevo.programs.stages.insights import InsightsStage
 from gigaevo.programs.stages.insights_lineage import (
     LineagesFromAncestors,
-    LineageStage,
     LineagesToDescendants,
 )
 from gigaevo.programs.stages.json_processing import MergeDictStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
 from gigaevo.programs.stages.validation import ValidateCodeStage
-from gigaevo.prompts.coevolution.stages import PromptExecutionStage, PromptFitnessStage
+from gigaevo.prompts.coevolution.stages import (
+    PromptExecutionStage,
+    PromptFitnessStage,
+    PromptInsightsStage,
+    PromptLineageStage,
+)
 from gigaevo.prompts.coevolution.stats import PromptStatsProvider
 from gigaevo.runner.dag_blueprint import DAGBlueprint
 
@@ -101,7 +104,7 @@ class PromptEvolutionPipelineBuilder:
                 metrics_context=metrics_context,
                 timeout=st,
             ),
-            "InsightsStage": lambda: InsightsStage(
+            "InsightsStage": lambda: PromptInsightsStage(
                 llm=llm_wrapper,
                 task_description=task_description,
                 metrics_context=metrics_context,
@@ -127,7 +130,7 @@ class PromptEvolutionPipelineBuilder:
                 ),
                 timeout=st,
             ),
-            "LineageStage": lambda: LineageStage(
+            "LineageStage": lambda: PromptLineageStage(
                 llm=llm_wrapper,
                 task_description=task_description,
                 metrics_context=metrics_context,
@@ -182,6 +185,18 @@ class PromptEvolutionPipelineBuilder:
                 destination="MutationContextStage",
                 input_name="metrics",
             ),
+            # Fitness-dependent cache invalidation: InsightsStage and LineageStage
+            # re-run when metrics change (e.g., trials goes from 0 → N).
+            DataFlowEdge.create(
+                source="EnsureMetricsStage",
+                destination="InsightsStage",
+                input_name="fitness_metrics",
+            ),
+            DataFlowEdge.create(
+                source="EnsureMetricsStage",
+                destination="LineageStage",
+                input_name="fitness_metrics",
+            ),
             DataFlowEdge.create(
                 source="InsightsStage",
                 destination="MutationContextStage",
@@ -221,12 +236,8 @@ class PromptEvolutionPipelineBuilder:
             "PromptFitnessStage": [
                 ExecutionOrderDependency.always_after("PromptExecutionStage"),
             ],
-            "InsightsStage": [
-                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-            ],
-            "LineageStage": [
-                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-            ],
+            # InsightsStage and LineageStage ordering is now implicit via
+            # DataFlowEdge from EnsureMetricsStage (fitness_metrics input).
             "LineagesToDescendants": [
                 ExecutionOrderDependency.always_after("LineageStage"),
             ],

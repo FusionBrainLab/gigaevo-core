@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+import os
 import re
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
@@ -137,6 +139,31 @@ class MutationAgent(LangGraphAgent):
 
         super().__init__(llm)
 
+    _PROMPT_LOG_DIR = os.environ.get("GIGAEVO_PROMPT_LOG_DIR", "")
+
+    def _dump_prompt_to_file(
+        self, prompt_id: str | None, system: str, user: str
+    ) -> None:
+        """Write full system+user prompts to a log file for offline inspection."""
+        log_dir = self._PROMPT_LOG_DIR
+        if not log_dir:
+            return
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+            pid = prompt_id or "fixed"
+            path = os.path.join(log_dir, f"{ts}_{pid[:12]}.txt")
+            with open(path, "w") as f:
+                f.write(f"=== PROMPT DUMP {ts} ===\n")
+                f.write(f"prompt_id: {prompt_id}\n\n")
+                f.write("=== SYSTEM PROMPT ===\n")
+                f.write(system)
+                f.write("\n\n=== USER PROMPT ===\n")
+                f.write(user)
+                f.write("\n")
+        except Exception as exc:
+            logger.debug(f"[MutationAgent] prompt dump failed: {exc}")
+
     async def arun(self, input: list[Program], mutation_mode: str) -> dict:
         """Execute mutation agent.
 
@@ -262,10 +289,15 @@ class MutationAgent(LangGraphAgent):
 
         state["messages"] = messages
 
-        logger.debug(
+        logger.info(
             f"[MutationAgent] Built prompt with {len(parents)} parents "
             f"(system: {len(self.system_prompt)} chars, "
-            f"user: {len(user_prompt)} chars)"
+            f"user: {len(user_prompt)} chars, "
+            f"prompt_id={state.get('prompt_id', 'N/A')})"
+        )
+        # Dump full prompts to file for offline verification
+        self._dump_prompt_to_file(
+            state.get("prompt_id"), self.system_prompt, user_prompt
         )
 
         return state
