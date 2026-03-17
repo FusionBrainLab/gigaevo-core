@@ -167,11 +167,9 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         cache_ttl_seconds: float = 30.0,
         fallback_prompts_dir: str | Path | None = None,
         fitness_key: str = "fitness",
-        required_prefix: str | None = None,
     ):
         self._prompt_redis_db = prompt_redis_db
         self._main_redis_prefix = main_redis_prefix
-        self._required_prefix = required_prefix
         self._prompt_prefix = prompt_prefix
         self._archive_prefix = archive_prefix
         self._host = host
@@ -339,11 +337,6 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         "[GigaEvoArchivePromptFetcher] entrypoint() returned empty string"
                     )
                     return None
-                if self._required_prefix and self._required_prefix not in result:
-                    logger.warning(
-                        "[GigaEvoArchivePromptFetcher] Prompt missing required prefix — rejecting"
-                    )
-                    return None
                 pid = prompt_text_to_id(result)
                 return _PromptPack(system=result, user=None, prompt_id=pid)
             elif isinstance(result, dict):
@@ -359,11 +352,6 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         "[GigaEvoArchivePromptFetcher] dict entrypoint() has invalid 'user' key — ignoring"
                     )
                     user = None
-                if self._required_prefix and self._required_prefix not in system:
-                    logger.warning(
-                        "[GigaEvoArchivePromptFetcher] Prompt missing required prefix — rejecting"
-                    )
-                    return None
                 pid = prompt_text_to_id(system, user_text=user)
                 return _PromptPack(system=system, user=user, prompt_id=pid)
             else:

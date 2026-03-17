@@ -19,4 +19,3 @@ prompt_fetcher:
   port: ${redis.port}
   cache_ttl_seconds: 30.0
   fallback_prompts_dir: ${prompts.dir}
-  required_prefix: "You are an expert in evolutionary optimization, focusing on performance-driven mutation"

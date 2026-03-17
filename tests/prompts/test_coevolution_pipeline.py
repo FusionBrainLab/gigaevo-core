@@ -8,8 +8,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 import uuid
 
-import pytest
-
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.entrypoint.constants import DEFAULT_DAG_CONCURRENCY
 from gigaevo.entrypoint.evolution_context import EvolutionContext
@@ -295,7 +293,7 @@ class TestPromptEvolutionPipelineConfig:
 
 
 # ===================================================================
-# C1: PromptExecutionStage required_prefix enforcement
+# PromptExecutionStage basic tests
 # ===================================================================
 
 
@@ -308,50 +306,25 @@ def _make_program(code: str) -> Program:
     return Program(id=str(uuid.uuid4()), code=code)
 
 
-class TestPromptExecutionStageConstraintEnforcement:
-    def test_rejects_missing_required_prefix(self):
-        """C1: Programs whose system text lacks required_prefix are rejected."""
-        stage = PromptExecutionStage(required_prefix="FROZEN_CONSTRAINTS")
-        prog = _make_program('def entrypoint():\n    return "no constraints here"')
-
-        with pytest.raises(ValueError, match="required prefix"):
-            _run(stage.compute(prog))
-
-    def test_accepts_present_required_prefix(self):
-        """C1: Programs whose system text contains required_prefix pass."""
-        stage = PromptExecutionStage(required_prefix="FROZEN")
-        prog = _make_program(
-            'def entrypoint():\n    return "FROZEN constraints included"'
-        )
+class TestPromptExecutionStageBasic:
+    def test_accepts_str_return(self):
+        """Programs returning a str are accepted."""
+        stage = PromptExecutionStage()
+        prog = _make_program('def entrypoint():\n    return "hello system"')
         result = _run(stage.compute(prog))
-        assert result.prompt_text == "FROZEN constraints included"
+        assert result.prompt_text == "hello system"
 
-    def test_rejects_dict_missing_prefix(self):
-        """C1: Dict-returning programs also validated for required_prefix."""
-        stage = PromptExecutionStage(required_prefix="REQUIRED")
-        code = 'def entrypoint():\n    return {"system": "no prefix", "user": "hello"}'
-        prog = _make_program(code)
-
-        with pytest.raises(ValueError, match="required prefix"):
-            _run(stage.compute(prog))
-
-    def test_accepts_dict_with_prefix(self):
-        """C1: Dict-returning programs with required_prefix pass."""
-        stage = PromptExecutionStage(required_prefix="REQUIRED")
+    def test_accepts_dict_return(self):
+        """Programs returning a dict with system/user keys are accepted."""
+        stage = PromptExecutionStage()
         code = (
             "def entrypoint():\n"
-            '    return {"system": "REQUIRED prefix here", "user": "hello"}'
+            '    return {"system": "sys prompt", "user": "usr prompt"}'
         )
         prog = _make_program(code)
         result = _run(stage.compute(prog))
-        assert result.prompt_text == "REQUIRED prefix here"
-
-    def test_no_prefix_means_no_validation(self):
-        """When required_prefix is None, any output is accepted."""
-        stage = PromptExecutionStage(required_prefix=None)
-        prog = _make_program('def entrypoint():\n    return "anything goes"')
-        result = _run(stage.compute(prog))
-        assert result.prompt_text == "anything goes"
+        assert result.prompt_text == "sys prompt"
+        assert result.user_text == "usr prompt"
 
 
 # ===================================================================

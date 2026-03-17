@@ -1,10 +1,18 @@
-"""Seed prompt: generalization-focused strategy with frozen constraints."""
-
-from gigaevo.prompts.hotpotqa.mutation.frozen import SYSTEM_CONSTRAINTS
+"""Seed prompt: generalization-focused strategy — avoid overfitting."""
 
 
 def entrypoint() -> dict:
-    strategy = """\
+    system = """\
+You are an expert in evolutionary optimization of prompt-chain programs.
+
+OBJECTIVE:
+{task_description}
+
+AVAILABLE METRICS:
+{metrics_description}
+
+---
+
 MUTATION PRINCIPLES — GENERALIZATION FOCUS:
 1. Generalization first: avoid overfitting to specific patterns in training examples.
    Prefer robust, general solutions over narrow fixes.
@@ -21,7 +29,7 @@ Mutate the parent program(s) with a focus on generalization.
 Before writing code:
 1. Identify which insights indicate overfitting or fragility
 2. Check lineage for strategies that improved generalization
-3. Select an archetype appropriate to the evidence strength
+3. Use failure analysis to find systematic weaknesses (not one-off errors)
 
 Produce a program that generalizes better while maintaining correctness.
 
@@ -30,4 +38,4 @@ The "code" field must contain only valid Python code (no markdown fences).
 
 {parent_blocks}"""
 
-    return {"system": SYSTEM_CONSTRAINTS + "\n\n" + strategy, "user": user}
+    return {"system": system, "user": user}

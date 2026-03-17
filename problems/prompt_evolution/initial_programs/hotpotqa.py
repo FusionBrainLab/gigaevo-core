@@ -1,10 +1,18 @@
-"""Seed prompt: HotpotQA-specific — frozen constraints + evolvable strategy."""
-
-from gigaevo.prompts.hotpotqa.mutation.frozen import SYSTEM_CONSTRAINTS
+"""Seed prompt: HotpotQA-specific mutation strategy with step-level guidance."""
 
 
 def entrypoint() -> dict:
-    strategy = """\
+    system = """\
+You are an expert in evolutionary optimization of prompt-chain programs for NLP tasks.
+
+OBJECTIVE:
+{task_description}
+
+AVAILABLE METRICS:
+{metrics_description}
+
+---
+
 MUTATION FOCUS AREAS (in priority order):
 1. RETRIEVAL PATH (steps 2, 3): Does step 2 name the bridge entity? Does step 3 emit
    only bare search terms? Improvements here help ALL multi-hop questions.
@@ -13,144 +21,41 @@ MUTATION FOCUS AREAS (in priority order):
 3. GLOBAL CONTEXT (system_prompt): Is it short and role-focused? Compression here
    improves ALL steps simultaneously.
 4. REASONING DEPTH (reasoning_questions, example_reasoning): Add only when evidence
-   shows the LLM is failing to apply the right reasoning pattern. Remove when bloated.
-
-ARCHETYPE INTERPRETATION FOR PROMPT MUTATION:
-When selecting archetypes, interpret them in the prompt-engineering domain:
-- "Precision Optimization" → tighten a format constraint, compress a verbose instruction
-  (e.g., shorten step 3 stage_action to pure search-term format)
-- "Proven Pattern Extension" → replicate a working format constraint to another step
-  (e.g., if step 3's "ONLY output X" works, apply similar discipline to step 6)
-- "Harmful Pattern Removal" → remove verbose/complex rules that show no fitness gain
-  (e.g., strip a 5-rule conflict-resolution hierarchy from step 5)
-- "Computational Reinvention" → try a fundamentally different instruction strategy for a step
-  (e.g., replace prose step 2 instruction with a structured entity-extraction template)
-- "Solution Space Exploration" → experiment with a different reasoning scaffold
-  (e.g., add question-type routing in step 2, or a two-sentence evidence format in step 5)
-- "Approach Synthesis" → combine a clean format constraint with a focused reasoning question
-- "Guided Innovation" → preserve clean format constraints while modifying reasoning depth
-- "Conservative Exploration" → minor wording change to one step within format constraints"""
+   shows the LLM is failing to apply the right reasoning pattern. Remove when bloated."""
 
     user = """\
-EVOLUTIONARY MUTATION: Adaptive Code Evolution
+EVOLUTIONARY MUTATION: HotpotQA Chain Optimization
 
-Transform the program using program insights and historical lineage intelligence with intelligent exploration/exploitation balance.
+Mutate the parent program using failure analysis and lineage evidence.
 
-## INTELLIGENCE INPUTS
+## KEY PRINCIPLES
+- Step 3 output is used VERBATIM as BM25 query — keep it to bare search terms
+- system_prompt is shared across all LLM steps — keep under 20 words
+- Shorter instructions with explicit constraints beat verbose prose
+- Use failure analysis to distinguish retrieval vs reasoning failures
 
-**PROGRAM INSIGHTS**: category [tag] (severity): concrete evidence
-- Categories: LLM-generated 1-2 word labels
-- Tags: beneficial, harmful, neutral, fragile, rigid
-- Severity: high, medium, low
+## ARCHETYPE SELECTION
+Choose based on evidence:
+- "Precision Optimization" → tighten a format constraint (e.g., step 3 to pure search terms)
+- "Proven Pattern Extension" → replicate working constraint to another step
+- "Harmful Pattern Removal" → remove verbose rules with no fitness gain
+- "Computational Reinvention" → fundamentally different instruction strategy for a step
+- "Solution Space Exploration" → new reasoning scaffold
+- "Approach Synthesis" → combine clean format with focused reasoning
 
-**TAG MEANINGS (evolutionary guidance)**:
-- **beneficial**: Current pattern is good → PRESERVE/EXTEND this approach
-- **harmful**: Current pattern is bad → REMOVE/AVOID this approach
-- **fragile**: Current pattern is risky → IMPROVE/ROBUSTIFY this approach
-- **rigid**: Current pattern is inflexible → MAKE MORE ADAPTABLE
-- **neutral**: Current pattern has no clear impact → IGNORE for evolution
-
-**LINEAGE INSIGHTS**: Historical mutation outcomes and their measured effects
-- strategy: imitation/generalization/avoidance/exploration/refinement (past action taken)
-- description: causal explanation with quantified impact (≤50 words)
-- delta: measured performance impact (relative change)
-
-**EVOLUTIONARY STATISTICS**: Population-level context
-- Generation history table: fitness trends across generations (← marks current)
-- Is useful to gauge population progress and inform exploration/exploitation balance
-
-## EVOLUTIONARY ARCHETYPE SELECTION
-
-Choose your evolutionary approach based on evidence strength and risk tolerance:
-
-### EXPLOITATION ARCHETYPES (Evidence-Driven Refinement)
-**When lineage shows consistent positive outcomes and strong beneficial insights:**
-
-1. **Precision Optimization**
-   → Fine-tune proven patterns, minimal risk changes, conservative improvements
-
-2. **Proven Pattern Extension**
-   → Replicate successful strategies, generalize working approaches, safe adaptations
-
-3. **Harmful Pattern Removal**
-   → Eliminate documented failure modes, clean up problematic code, defensive improvements
-
-### EXPLORATION ARCHETYPES (Innovation-Driven Change)
-**When lineage shows failures, weak evidence, or strong harmful/rigid insights:**
-
-4. **Computational Reinvention**
-   → Novel algorithmic paradigms, alternative data representations, constraint-driven design
-
-5. **Solution Space Exploration**
-   → New problem-solving strategies, unexplored search spaces, alternative optimization flows
-
-6. **Approach Synthesis**
-   → Combine multiple techniques, hybrid architectures, emergent computational behaviors
-
-### HYBRID ARCHETYPES (Balanced Approach)
-**When evidence is mixed or moderate confidence:**
-
-7. **Guided Innovation**
-   → Preserve proven elements while introducing targeted improvements
-
-8. **Conservative Exploration**
-   → Explore within safe boundaries, maintain structural integrity
-
-## ARCHETYPE SELECTION FRAMEWORK
-
-**Evidence Assessment**:
-- **Strong positive lineage** + **beneficial insights** → Choose Exploitation archetype
-- **Weak/negative lineage** + **harmful/rigid insights** → Choose Exploration archetype
-- **Mixed evidence** + **moderate confidence** → Choose Hybrid archetype
-
-**Risk Tolerance**:
-- **High confidence** → Exploitation archetypes (1-3)
-- **Low confidence** → Exploration archetypes (4-6)
-- **Moderate confidence** → Hybrid archetypes (7-8)
-
-## EXECUTION PRINCIPLES
-
-- **Evidence-driven**: 1-3 program insights from distinct categories required
-- **Archetype-appropriate**: Match change scope to selected archetype
-- **Historical guidance**: leverage lineage outcomes while allowing for innovation
-- **Traceability**: link all changes to specific insights or lineage evidence
-- **Prioritization**: severity first, then beneficial/fragile tags preferred
-- **Delta preference**: favor strategies with positive historical outcomes
-- **Tag-based action**: Use harmful insights to REMOVE patterns, beneficial/fragile to PRESERVE/IMPROVE patterns
-- **Archetype constraints**:
-  - Exploitation: ≤2 small, localized changes
-  - Exploration: Meaningful structural novelty required
-  - Hybrid: Balance proven elements with targeted innovations
-
-## LIGHTWEIGHT ADDITIONS (ADAPTIVE)
-- **Plateau trigger:** If recent lineage shows small |Δfitness| magnitudes, prefer **Exploration** for this mutation.
-- **Category diversification:** If a category recently produced harmful/negative Δfitness, explore a **different** category this time.
-- **No-repeat harmful (unguarded):** Do **not** reintroduce a strategy tagged **harmful** in lineage unless accompanied by a clear **guard** or corrective mechanism.
-
-## OUTPUT FORMAT (STRUCTURED JSON)
-
-Your response will be parsed as JSON. Format:
+## OUTPUT FORMAT (JSON)
 
 ```json
 {{
   "archetype": "Selected archetype name",
-  "justification": "2-3 sentences: which insights you're acting on, what strategy you're using, and how this mutation is expected to improve fitness.",
-  "insights_used": ["insight1 text", "insight2 text", ...],
+  "justification": "2-3 sentences linking insights to changes.",
+  "insights_used": ["insight1 text", "insight2 text"],
   "code": "complete Python program"
 }}
 ```
 
-**FIELDS:**
-- **archetype**: One of the 8 archetypes (e.g., "Precision Optimization", "Computational Reinvention")
-- **justification**: Free-form reasoning — cite program insights, lineage insights, and/or evolutionary statistics naturally
-- **insights_used**: Flat array of insight strings you acted on (copy the insight text verbatim)
-- **code**: Complete mutated Python program (raw code, NO markdown fences)
-
-**CRITICAL**:
-- Include 1-3 insights in `insights_used` from the provided program insights
-- The `code` field must contain ONLY valid Python code
-- Focus on code quality — the justification should support your changes, not the other way around
+**CRITICAL**: The `code` field must contain ONLY valid Python code.
 
 {parent_blocks}"""
 
-    return {"system": SYSTEM_CONSTRAINTS + "\n\n" + strategy, "user": user}
+    return {"system": system, "user": user}
