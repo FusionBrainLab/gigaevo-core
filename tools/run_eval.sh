@@ -67,8 +67,9 @@ echo "  Redis prefix: $REDIS_PREFIX"
 echo "  Conda environment: $CONDA_ENV"
 echo ""
 
-source /home/user/conda/etc/profile.d/conda.sh
-conda activate "$CONDA_ENV"
+source /home/danilkafish/.venvs/metaevolve312/bin/activate
+# source /home/user/conda/etc/profile.d/conda.sh
+# conda activate "$CONDA_ENV"
 
 while true; do
   echo "[$(date)] Running evolution_fitness_analyzer..."

@@ -11,7 +11,7 @@ __pycache__/
 *$py.class
 
 # C extensions
-*.so
+# *.so
 
 # Distribution / packaging
 .Python
@@ -32,13 +32,13 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
+*top_programs
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
-
+*results*
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
