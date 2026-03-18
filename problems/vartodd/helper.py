@@ -30,8 +30,8 @@ def find_rank(path, rank):
         
 def get_matrix(name:str=None) -> Matrix:
     if name is None:
-        # return Matrix.from_numpy(np.load(_HERE / "npy/gf2^16_1612310.npy") )
-        return Matrix.from_numpy(np.load(_HERE / "npy/gf2^10_1030.npy") )
+        return Matrix.from_numpy(np.load(_HERE / "npy/gf2^16_1612310.npy") )
+        # return Matrix.from_numpy(np.load(_HERE / "npy/gf2^10_1030.npy") )
     return Matrix.from_numpy(np.load(_HERE / f"npy/{name}.npy") )
 
 
