@@ -12,14 +12,14 @@ License: CC BY-SA 4.0
 Usage:
     python -m problems.prompt_free_chains.hotpotqa.dataset.download_corpus
 """
+
 import bz2
 import gzip
 import json
 import os
+from pathlib import Path
 import tarfile
 import urllib.request
-from pathlib import Path
-
 
 DOWNLOAD_URL = (
     "https://nlp.stanford.edu/projects/hotpotqa/"
@@ -27,7 +27,9 @@ DOWNLOAD_URL = (
 )
 
 OUTPUT_DIR = Path(__file__).parent
-ARCHIVE_PATH = OUTPUT_DIR / "enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2"
+ARCHIVE_PATH = (
+    OUTPUT_DIR / "enwiki-20171001-pages-meta-current-withlinks-abstracts.tar.bz2"
+)
 OUTPUT_PATH = OUTPUT_DIR / "wiki17_abstracts.jsonl.gz"
 
 

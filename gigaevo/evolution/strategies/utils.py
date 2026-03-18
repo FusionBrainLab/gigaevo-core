@@ -8,11 +8,11 @@ from gigaevo.programs.program import Program
 _T = TypeVar("_T")
 
 
-def weighted_sample_without_replacement(
-    items: list[_T],
+def weighted_sample_without_replacement[T](
+    items: list[T],
     weights: list[float],
     k: int,
-) -> list[_T]:
+) -> list[T]:
     """Select *k* items by weighted sampling without replacement.
 
     When all remaining weights are zero, the remaining selections fall back
@@ -33,7 +33,7 @@ def weighted_sample_without_replacement(
         Selected items in order of selection.
     """
     k = min(k, len(items))
-    selected: list[_T] = []
+    selected: list[T] = []
     remaining_items = list(items)
     remaining_weights = list(weights)
 

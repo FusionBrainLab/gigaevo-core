@@ -65,7 +65,7 @@ def entrypoint(context: dict) -> str:
         line = (
             f'<div class="gnode" style="padding-left:{pad}px">'
             f'<span class="gid" style="color:{color}">{node["id"]}</span>'
-            f'<span class="gdim"> gen {node.get("generation","?")} · f={f_val:.3f}</span>'
+            f'<span class="gdim"> gen {node.get("generation", "?")} · f={f_val:.3f}</span>'
             f"{mut_span}</div>"
         )
         for p in node.get("parents", []):
@@ -95,9 +95,7 @@ def entrypoint(context: dict) -> str:
 
         stag_html = ""
         if gsi >= 5:
-            stag_html = (
-                f'<div class="stag-warn">⚠ Stalled &mdash; {gsi} generations since improvement</div>'
-            )
+            stag_html = f'<div class="stag-warn">⚠ Stalled &mdash; {gsi} generations since improvement</div>'
 
         # Status color
         if status == "stalled":
@@ -116,37 +114,48 @@ def entrypoint(context: dict) -> str:
         cid_f = f"cf{i}"
         cid_p = f"cp{i}"
 
-        chart_data.append({
-            "cf": cid_f, "cp": cid_p,
-            "mean": run.get("gen_fitness_mean", []),
-            "frontier": run.get("gen_fitness_frontier", []),
-            "valid": run.get("gen_valid_count", []),
-            "invalid": run.get("gen_invalid_count", []),
-        })
+        chart_data.append(
+            {
+                "cf": cid_f,
+                "cp": cid_p,
+                "mean": run.get("gen_fitness_mean", []),
+                "frontier": run.get("gen_fitness_frontier", []),
+                "valid": run.get("gen_valid_count", []),
+                "invalid": run.get("gen_invalid_count", []),
+            }
+        )
 
         # Top programs
         top_progs = run.get("top_programs", [])
         rows = []
         for p in top_progs:
             mut = (p.get("mutation") or "—")[:22]
-            preview = (p.get("code_preview") or "").replace("<", "&lt;").replace(">", "&gt;")[:80]
+            preview = (
+                (p.get("code_preview") or "")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")[:80]
+            )
             hl = ' style="color:#2FBEAD"' if p["rank"] == 1 else ""
             rows.append(
-                f'<tr{hl}>'
+                f"<tr{hl}>"
                 f'<td class="tc">{p["rank"]}</td>'
                 f'<td class="tc mono">{p["id"]}</td>'
                 f'<td class="tc teal">{p["fitness"]:.4f}</td>'
                 f'<td class="tc dim">{p["generation"]}</td>'
                 f'<td class="tc dim">{mut}</td>'
                 f'<td class="tc mono dim code-cell" title="{preview}">{preview[:50]}</td>'
-                f'</tr>'
+                f"</tr>"
             )
         top_html = (
-            '<table class="prog-table">'
-            '<thead><tr>'
-            '<th>#</th><th>ID</th><th>Fitness</th><th>Gen</th><th>Mutation</th><th>Code preview</th>'
-            '</tr></thead><tbody>' + "".join(rows) + "</tbody></table>"
-        ) if rows else '<div class="dim">No programs yet</div>'
+            (
+                '<table class="prog-table">'
+                "<thead><tr>"
+                "<th>#</th><th>ID</th><th>Fitness</th><th>Gen</th><th>Mutation</th><th>Code preview</th>"
+                "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+            )
+            if rows
+            else '<div class="dim">No programs yet</div>'
+        )
 
         genealogy = run.get("genealogy", {})
         gen_html = f'<div class="genealogy-tree">{_genealogy_html(genealogy)}</div>'
@@ -160,8 +169,8 @@ def entrypoint(context: dict) -> str:
   <!-- Card header -->
   <div class="card-header">
     <div class="card-title">
-      <span class="run-label" style="color:{status_color}">{run['label']}</span>
-      <span class="run-name">{run['name']}</span>
+      <span class="run-label" style="color:{status_color}">{run["label"]}</span>
+      <span class="run-name">{run["name"]}</span>
     </div>
     <div class="header-right">
       <span class="best-badge">{best_f:.4f}</span>
@@ -173,7 +182,7 @@ def entrypoint(context: dict) -> str:
 
   <!-- Progress -->
   <div class="progress-row">
-    <span class="dim">Gen {run['current_gen']} / {run['total_gens']}</span>
+    <span class="dim">Gen {run["current_gen"]} / {run["total_gens"]}</span>
     <span class="dim">stagnant: {gsi}g</span>
   </div>
   <div class="progress-bg"><div class="progress-fill" style="width:{pct:.1f}%;background:{status_color}"></div></div>
@@ -202,8 +211,8 @@ def entrypoint(context: dict) -> str:
   <div class="stats-grid">
     <div class="stat-cell"><div class="sv teal">{valid_p}</div><div class="sl">valid</div></div>
     <div class="stat-cell"><div class="sv coral">{invalid_p}</div><div class="sl">invalid</div></div>
-    <div class="stat-cell"><div class="sv" style="color:{inv_color}">{valid_rate*100:.0f}%</div><div class="sl">valid rate</div></div>
-    <div class="stat-cell"><div class="sv">{accept_rate*100:.0f}%</div><div class="sl">accept rate</div></div>
+    <div class="stat-cell"><div class="sv" style="color:{inv_color}">{valid_rate * 100:.0f}%</div><div class="sl">valid rate</div></div>
+    <div class="stat-cell"><div class="sv">{accept_rate * 100:.0f}%</div><div class="sl">accept rate</div></div>
     <div class="stat-cell"><div class="sv">{val_mean:.1f}s</div><div class="sl">val mean</div></div>
     <div class="stat-cell"><div class="sv">{val_p95:.1f}s</div><div class="sl">val p95</div></div>
   </div>
@@ -344,8 +353,11 @@ body {
 }
 """
 
-    js = """
-var CD = """ + chart_json + """;
+    js = (
+        """
+var CD = """
+        + chart_json
+        + """;
 
 function drawFitness(cid, mean, frontier) {
     var cv = document.getElementById(cid);
@@ -454,6 +466,7 @@ window.addEventListener('load', function() {
     }
 });
 """
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -483,7 +496,7 @@ window.addEventListener('load', function() {
       <div class="gh-lbl">Programs</div>
     </div>
     <div class="gh-stat">
-      <div class="gh-val {'coral' if stalled_count else ''}">{stalled_count}</div>
+      <div class="gh-val {"coral" if stalled_count else ""}">{stalled_count}</div>
       <div class="gh-lbl">Stalled</div>
     </div>
   </div>

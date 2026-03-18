@@ -29,7 +29,7 @@ def validate(points):
     max_distance = np.max(distances)
 
     ratio = max_distance / min_distance
-    fitness = ratio ** 2
+    fitness = ratio**2
 
     return {
         "fitness": float(fitness),

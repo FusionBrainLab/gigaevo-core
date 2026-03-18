@@ -2,8 +2,8 @@
 
 from statistics import mean
 
-from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.hover.shared_config import (
     LLM_CONFIG,
@@ -13,8 +13,8 @@ from problems.chains.hover.shared_config import (
 from problems.chains.hover.static.config import STATIC_CHAIN_TOPOLOGY, load_baseline
 from problems.chains.hover.utils.retrieval import make_retrieve_fn
 from problems.chains.hover.utils.utils import (
-    extract_titles_from_passages,
     discrete_retrieval_eval,
+    extract_titles_from_passages,
 )
 
 

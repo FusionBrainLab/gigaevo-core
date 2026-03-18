@@ -19,7 +19,6 @@ from problems.chains.types import (
     ToolStep,
 )
 
-
 # ---------------------------------------------------------------------------
 # DAG validation
 # ---------------------------------------------------------------------------
@@ -36,9 +35,7 @@ def _validate_dag(steps: list[LLMStep | ToolStep]) -> None:
                     f"Step {step.number} depends on non-existent step {dep}"
                 )
             if dep >= step.number:
-                raise ValueError(
-                    f"Step {step.number} depends on later step {dep}"
-                )
+                raise ValueError(f"Step {step.number} depends on later step {dep}")
 
     # Topological sort cycle check (Kahn's algorithm)
     in_degree = {s.number: 0 for s in steps}
@@ -84,14 +81,10 @@ def _check_frozen_steps(
 
         baseline_step = baseline_by_num.get(step.number)
         if baseline_step is None:
-            raise ValueError(
-                f"Step {step.number} is frozen but not found in baseline"
-            )
+            raise ValueError(f"Step {step.number} is frozen but not found in baseline")
 
         if step != baseline_step:
-            raise ValueError(
-                f"Step {step.number} is frozen but differs from baseline"
-            )
+            raise ValueError(f"Step {step.number} is frozen but differs from baseline")
 
 
 # ---------------------------------------------------------------------------
@@ -135,12 +128,9 @@ def _validate_static(
             )
 
     if frozen_baseline is not None:
-        frozen_numbers = {
-            s["number"] for s in expected_steps if s.get("frozen", False)
-        }
+        frozen_numbers = {s["number"] for s in expected_steps if s.get("frozen", False)}
         if frozen_numbers:
             _check_frozen_steps(steps, frozen_baseline, frozen_numbers)
-
 
 
 def _validate_full_chain(

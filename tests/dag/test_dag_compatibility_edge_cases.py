@@ -10,7 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from typing import Any, Generic, Optional, TypeVar, Union
+from typing import Any, Optional, TypeVar, Union
 
 from pydantic import BaseModel
 
@@ -26,11 +26,11 @@ K = TypeVar("K")
 V = TypeVar("V")
 
 
-class BoxModel(BaseModel, Generic[T]):
+class BoxModel[T](BaseModel):
     data: T
 
 
-class PairModel(BaseModel, Generic[K, V]):
+class PairModel[K, V](BaseModel):
     first: K
     second: V
 
@@ -62,7 +62,7 @@ class TestNormalizeAnnotationExtended:
 
     def test_nested_optional_union(self) -> None:
         """Union[Optional[int], str] → Union[int, None, str] → [int, str]."""
-        ann = Union[Optional[int], str]
+        ann = Union[int | None, str]  # noqa: UP007
         result = _normalize_annotation(ann)
         assert result is not None
         assert type(None) not in result
@@ -71,7 +71,7 @@ class TestNormalizeAnnotationExtended:
 
     def test_union_of_models(self) -> None:
         """Union[Dog, Cat] → [Dog, Cat]."""
-        result = _normalize_annotation(Union[Dog, Cat])
+        result = _normalize_annotation(Union[Dog, Cat])  # noqa: UP007
         assert result is not None
         assert Dog in result
         assert Cat in result
@@ -79,7 +79,7 @@ class TestNormalizeAnnotationExtended:
     def test_complex_nested_union_with_any(self) -> None:
         """Union[int, Union[str, Any]] → Any in nested union → None."""
         # Union[int, str, Any] → Any encountered → None (no enforcement)
-        result = _normalize_annotation(Union[int, str, Any])
+        result = _normalize_annotation(Union[int, str, Any])  # noqa: UP007
         assert result is None
 
     def test_pydantic_model_not_union(self) -> None:
@@ -199,12 +199,12 @@ class TestMatchParamClassArgs:
 
 class TestNonTypeOrigins:
     def test_class_src_vs_union_ann(self) -> None:
-        """int (class src) vs Union[int, str] (non-type origin) → False."""
-        assert _covariant_type_compatible(int, Union[int, str]) is False
+        """int (class src) vs int | str (non-type origin) → False."""
+        assert _covariant_type_compatible(int, int | str) is False
 
     def test_class_src_vs_optional_ann(self) -> None:
-        """int vs Optional[int] → origin is Union → False."""
-        assert _covariant_type_compatible(int, Optional[int]) is False
+        """int vs int | None → non-type origin → False."""
+        assert _covariant_type_compatible(int, int | None) is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -220,13 +220,13 @@ class TestTypeOriginArgsExtended:
 
     def test_union_type(self) -> None:
         """Union[int, str] → (Union, (int, str))."""
-        origin, args = _type_origin_args(Union[int, str])
+        origin, args = _type_origin_args(Union[int, str])  # noqa: UP007
         assert origin is Union
         assert set(args) == {int, str}
 
     def test_optional_type(self) -> None:
         """Optional[int] → (Union, (int, NoneType))."""
-        origin, args = _type_origin_args(Optional[int])
+        origin, args = _type_origin_args(Optional[int])  # noqa: UP045
         assert origin is Union
         assert int in args
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 
 from gigaevo.programs.core_types import (
     ProgramStageResult,
@@ -872,9 +873,9 @@ class TestProgramStageResultTimestampBranches:
     async def test_psr_passthrough_preserves_existing_started_at(self):
         """When compute() returns a PSR with started_at already set,
         execute() does not overwrite it."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        fixed_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        fixed_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
 
         class PSRWithTimestampStage(Stage):
             InputsModel = VoidInput

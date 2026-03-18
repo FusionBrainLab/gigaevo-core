@@ -3,19 +3,22 @@
 import argparse
 import random
 
-from problems.chains.utils import get_best_program
-from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
+from problems.chains.hotpotqa_qa.full.config import FULL_CHAIN_CONFIG, load_baseline
+from problems.chains.hotpotqa_qa.full.validate import (
+    calculate_exact_match,
+    extract_answer,
+)
 from problems.chains.hotpotqa_qa.shared_config import (
     DATASET_CONFIG,
     LLM_CONFIG,
     load_jsonl,
-    preprocess_sample,
     outer_context_builder,
+    preprocess_sample,
 )
-from problems.chains.hotpotqa_qa.full.config import FULL_CHAIN_CONFIG, load_baseline
-from problems.chains.hotpotqa_qa.full.validate import extract_answer, calculate_exact_match
+from problems.chains.utils import get_best_program
 
 
 def load_test_context(n_samples: int | None = None, seed: int = 42) -> dict:
@@ -48,7 +51,9 @@ def test_baseline(n_samples: int = 3):
     )
 
     print(f"Baseline validated: {len(chain.steps)} steps")
-    print(f"System prompt: {chain.system_prompt[:80] if chain.system_prompt else '(empty)'}...")
+    print(
+        f"System prompt: {chain.system_prompt[:80] if chain.system_prompt else '(empty)'}..."
+    )
 
     context = load_test_context(n_samples=n_samples)
     dataset = context["test_dataset"]

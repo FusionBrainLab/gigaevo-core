@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Any
 
 __all__ = ["dumps", "loads", "json"]
 
@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover – dev/test envs without orjson
         """Serialize *obj* to a ``str`` using the stdlib *json* module."""
         return _backend.dumps(obj)
 
-    def loads(data: Union[str, bytes, bytearray]):  # type: ignore[override]
+    def loads(data: str | bytes | bytearray):  # type: ignore[override]
         """Deserialize *data* using the stdlib *json* module."""
         return _backend.loads(data)
 

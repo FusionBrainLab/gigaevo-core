@@ -1,8 +1,8 @@
 """Configuration for HotpotQA prompt evolution."""
 
 import json
-import random
 from pathlib import Path
+import random
 
 import pandas as pd
 
@@ -21,7 +21,7 @@ LLM_CONFIG = {
         "extra_body": {
             "top_k": 20,
         },
-        "max_tokens": 16384
+        "max_tokens": 16384,
     },
     "client_kwargs": {
         "api_key": "None",
@@ -41,7 +41,7 @@ DATASET_CONFIG = {
 def load_jsonl(path: str) -> list[dict]:
     """Load JSONL file as list of dicts."""
     samples = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 samples.append(json.loads(line))
@@ -53,7 +53,9 @@ def format_passage(title: str, sentences: list[str]) -> str:
     return f"{title} | {' '.join(sentences)}"
 
 
-def select_passages(sample: dict, k: int = 7, rng: random.Random | None = None) -> list[str]:
+def select_passages(
+    sample: dict, k: int = 7, rng: random.Random | None = None
+) -> list[str]:
     if rng is None:
         rng = random.Random()
 
@@ -62,8 +64,7 @@ def select_passages(sample: dict, k: int = 7, rng: random.Random | None = None) 
     context_titles = sample["context"]["title"]
     context_sentences = sample["context"]["sentences"]
     title_to_sentences = {
-        title: sentences
-        for title, sentences in zip(context_titles, context_sentences)
+        title: sentences for title, sentences in zip(context_titles, context_sentences)
     }
 
     golden_passages = []
@@ -88,10 +89,12 @@ def select_passages(sample: dict, k: int = 7, rng: random.Random | None = None) 
     return selected
 
 
-def preprocess_sample(sample: dict, k: int = 7, rng: random.Random | None = None) -> dict:
+def preprocess_sample(
+    sample: dict, k: int = 7, rng: random.Random | None = None
+) -> dict:
     """Preprocess a single sample for prompt formatting."""
     passages = select_passages(sample, k=k, rng=rng)
-    formatted_passages = "\n".join(f"[{i+1}] {p}" for i, p in enumerate(passages))
+    formatted_passages = "\n".join(f"[{i + 1}] {p}" for i, p in enumerate(passages))
 
     return {
         "question": sample["question"],

@@ -361,7 +361,7 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         self.metrics_context = metrics_context
 
     async def _collect_programs(self, program: Program) -> list[Program]:
-        return await self.storage.get_all()
+        return await self.storage.snapshot.get_all(self.storage)
 
     async def _process(
         self, program: Program, programs: list[Program]

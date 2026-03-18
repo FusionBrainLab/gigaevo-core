@@ -58,7 +58,9 @@ class HotpotQAASIFormatter(FormatterStage):
             else:
                 missing_str = ", ".join(f'"{t}"' for t in hop1_missing)
                 hop1_label = f"MISSING — {missing_str}"
-            lines.append(f"**Hop 1 retrieval** ({hop1_ret}/{n_gold} gold): {hop1_label}")
+            lines.append(
+                f"**Hop 1 retrieval** ({hop1_ret}/{n_gold} gold): {hop1_label}"
+            )
 
             # Hop 2 retrieval summary
             if n_gold == 0:
@@ -68,7 +70,9 @@ class HotpotQAASIFormatter(FormatterStage):
             else:
                 missing_str = ", ".join(f'"{t}"' for t in hop2_missing)
                 hop2_label = f"MISSING — {missing_str}"
-            lines.append(f"**Hop 2 retrieval** ({hop2_ret}/{n_gold} gold): {hop2_label}")
+            lines.append(
+                f"**Hop 2 retrieval** ({hop2_ret}/{n_gold} gold): {hop2_label}"
+            )
             lines.append("")
 
         lines.append(

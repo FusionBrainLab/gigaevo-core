@@ -96,7 +96,8 @@ FUNCTION_DICT = {
     _KEYWORD + "no_adjacent_consecutive": instructions.AdjacentLetterChecker,
     _FORMAT + "square_brackets": instructions.SquareBracketChecker,
     _KEYWORD + "word_once": instructions.KeywordFrequencyOnceChecker,
-    _KEYWORD + "word_count_different_numbers": instructions.KeywordFrequencyCheckerDifferent,
+    _KEYWORD
+    + "word_count_different_numbers": instructions.KeywordFrequencyCheckerDifferent,
     _KEYWORD + "exclude_word_harder": instructions.ExcludeWordHarderChecker,
     _PARAGRAPH + "paragraphs": instructions.ParagraphBasicChecker,
     _PARAGRAPH + "paragraphs2": instructions.ParagraphBasicChecker2,
@@ -108,7 +109,8 @@ FUNCTION_DICT = {
     _COPY + "copying_simple": instructions.CopyingSimpleChecker,
     _COPY + "copying_multiple": instructions.CopyingMultipleChecker,
     _PUNCTUATION + "punctuation_dot": instructions.PunctuationDotChecker,
-    _PUNCTUATION + "punctuation_exclamation": instructions.PunctuationExclamationChecker,
+    _PUNCTUATION
+    + "punctuation_exclamation": instructions.PunctuationExclamationChecker,
     _COUNT + "lowercase_counting": instructions.LowercaseCountingChecker,
     _LETTER + "letter_counting": instructions.LetterCountingChecker,
     _LETTER + "letter_counting2": instructions.LetterFrequencyChecker,
@@ -162,7 +164,8 @@ INSTRUCTION_DICT = {
     _KEYWORD + "no_adjacent_consecutive": instructions.AdjacentLetterChecker,
     _FORMAT + "square_brackets": instructions.SquareBracketChecker,
     _KEYWORD + "word_once": instructions.KeywordFrequencyOnceChecker,
-    _KEYWORD + "word_count_different_numbers": instructions.KeywordFrequencyCheckerDifferent,
+    _KEYWORD
+    + "word_count_different_numbers": instructions.KeywordFrequencyCheckerDifferent,
     _KEYWORD + "exclude_word_harder": instructions.ExcludeWordHarderChecker,
     _PARAGRAPH + "paragraphs": instructions.ParagraphBasicChecker,
     _PARAGRAPH + "paragraphs2": instructions.ParagraphBasicChecker2,
@@ -174,7 +177,8 @@ INSTRUCTION_DICT = {
     _COPY + "copying_simple": instructions.CopyingSimpleChecker,
     _COPY + "copying_multiple": instructions.CopyingMultipleChecker,
     _PUNCTUATION + "punctuation_dot": instructions.PunctuationDotChecker,
-    _PUNCTUATION + "punctuation_exclamation": instructions.PunctuationExclamationChecker,
+    _PUNCTUATION
+    + "punctuation_exclamation": instructions.PunctuationExclamationChecker,
     _COUNT + "lowercase_counting": instructions.LowercaseCountingChecker,
     _LETTER + "letter_counting": instructions.LetterCountingChecker,
     _LETTER + "letter_counting2": instructions.LetterFrequencyChecker,
@@ -211,7 +215,10 @@ INSTRUCTION_CONFLICTS = {
         _LENGTH + "nth_paragraph_first_word",
     },
     _LENGTH + "number_words": {_LENGTH + "number_words"},
-    _LENGTH + "nth_paragraph_first_word": {_LENGTH + "nth_paragraph_first_word", _LENGTH + "number_paragraphs"},
+    _LENGTH + "nth_paragraph_first_word": {
+        _LENGTH + "nth_paragraph_first_word",
+        _LENGTH + "number_paragraphs",
+    },
     _CONTENT + "number_placeholders": {_CONTENT + "number_placeholders"},
     _CONTENT + "postscript": {_CONTENT + "postscript"},
     _FORMAT + "number_bullet_lists": {_FORMAT + "number_bullet_lists"},
@@ -251,7 +258,10 @@ INSTRUCTION_CONFLICTS = {
         _CHANGE_CASES + "english_capital",
     },
     _CHANGE_CASES + "english_capital": {_CHANGE_CASES + "english_capital"},
-    _CHANGE_CASES + "english_lowercase": {_CHANGE_CASES + "english_lowercase", _CHANGE_CASES + "english_capital"},
+    _CHANGE_CASES + "english_lowercase": {
+        _CHANGE_CASES + "english_lowercase",
+        _CHANGE_CASES + "english_capital",
+    },
     _PUNCTUATION + "no_comma": {_PUNCTUATION + "no_comma"},
     _STARTEND + "quotation": {_STARTEND + "quotation", _FORMAT + "title"},
     _COPY + "repeat_phrase": {_COPY + "repeat_phrase"},
@@ -261,19 +271,29 @@ INSTRUCTION_CONFLICTS = {
     _KEYWORD + "no_adjacent_consecutive": {_KEYWORD + "no_adjacent_consecutive"},
     _FORMAT + "square_brackets": {_FORMAT + "square_brackets"},
     _KEYWORD + "word_once": {_KEYWORD + "word_once"},
-    _KEYWORD + "word_count_different_numbers": {_KEYWORD + "word_count_different_numbers"},
+    _KEYWORD + "word_count_different_numbers": {
+        _KEYWORD + "word_count_different_numbers"
+    },
     _KEYWORD + "exclude_word_harder": {_KEYWORD + "exclude_word_harder"},
     _PARAGRAPH + "paragraphs": {_PARAGRAPH + "paragraphs", _PARAGRAPH + "paragraphs2"},
     _PARAGRAPH + "paragraphs2": {_PARAGRAPH + "paragraphs", _PARAGRAPH + "paragraphs2"},
-    _FIRSTWORD + "first_word_sent": {_FIRSTWORD + "first_word_sent", _FIRSTWORD + "first_word_answer"},
-    _FIRSTWORD + "first_word_answer": {_FIRSTWORD + "first_word_sent", _FIRSTWORD + "first_word_answer"},
+    _FIRSTWORD + "first_word_sent": {
+        _FIRSTWORD + "first_word_sent",
+        _FIRSTWORD + "first_word_answer",
+    },
+    _FIRSTWORD + "first_word_answer": {
+        _FIRSTWORD + "first_word_sent",
+        _FIRSTWORD + "first_word_answer",
+    },
     _LASTWORD + "last_word_sent": {_LASTWORD + "last_word_sent"},
     _LASTWORD + "last_word_answer": {_LASTWORD + "last_word_answer"},
     _FORMAT + "bigram_wrapping": {_FORMAT + "bigram_wrapping"},
     _COPY + "copying_simple": set(INSTRUCTION_DICT.keys()),
     _COPY + "copying_multiple": set(INSTRUCTION_DICT.keys()),
     _PUNCTUATION + "punctuation_dot": {_PUNCTUATION + "punctuation_dot"},
-    _PUNCTUATION + "punctuation_exclamation": {_PUNCTUATION + "punctuation_exclamation"},
+    _PUNCTUATION + "punctuation_exclamation": {
+        _PUNCTUATION + "punctuation_exclamation"
+    },
     _COUNT + "lowercase_counting": {_COUNT + "lowercase_counting"},
     _LETTER + "letter_counting": {_LETTER + "letter_counting"},
     _LETTER + "letter_counting2": {_LETTER + "letter_counting2"},

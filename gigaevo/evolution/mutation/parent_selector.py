@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from itertools import combinations
 import random
-from typing import Iterator
 
 from loguru import logger
 

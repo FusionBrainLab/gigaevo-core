@@ -1,5 +1,7 @@
+from datetime import UTC, datetime
+import os
 import re
-from typing import Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 import diffpatch
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -11,6 +13,10 @@ from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.program import Program
+
+if TYPE_CHECKING:
+    from gigaevo.programs.metrics.context import MetricsContext
+    from gigaevo.prompts.fetcher import PromptFetcher
 
 
 class MutationStructuredOutput(BaseModel):
@@ -60,6 +66,8 @@ class MutationState(TypedDict):
     # Fields set during prompt building (optional initially)
     system_prompt: NotRequired[str]
     user_prompt: NotRequired[str]
+    # Prompt tracking ID (None for fixed prompts, sha256[:16] for co-evolved prompts)
+    prompt_id: NotRequired[str | None]
     # Fields set during response parsing (optional initially)
     parsed_output: NotRequired[dict[str, Any]]
     structured_output: NotRequired[MutationStructuredOutput]
@@ -89,23 +97,72 @@ class MutationAgent(LangGraphAgent):
         system_prompt: str,
         user_prompt_template: str,
         mutation_mode: str = "rewrite",
+        # Optional: enable dynamic prompt fetching
+        prompt_fetcher: "PromptFetcher | None" = None,
+        task_description: str = "",
+        metrics_context: "MetricsContext | None" = None,
     ):
         """Initialize mutation agent.
 
         Args:
             llm: LangChain chat model or router
             mutation_mode: "rewrite" or "diff"
-            system_prompt: System prompt string
+            system_prompt: System prompt string (static or initial value)
             user_prompt_template: User prompt template string
+            prompt_fetcher: Optional fetcher for dynamic prompt co-evolution.
+                When set and is_dynamic=True, system_prompt is refreshed on
+                every build_prompt() call. For FixedDirPromptFetcher, the
+                static system_prompt is used without re-fetching.
+            task_description: Task description for prompt template formatting
+                (required when prompt_fetcher.is_dynamic is True)
+            metrics_context: Metrics context for prompt template formatting
+                (required when prompt_fetcher.is_dynamic is True)
         """
         self.mutation_mode = mutation_mode
         self.system_prompt = system_prompt
         self.user_prompt_template = user_prompt_template
 
+        # Dynamic prompt fetching support
+        self._prompt_fetcher = prompt_fetcher
+        self._task_description = task_description
+        if metrics_context is not None:
+            from gigaevo.programs.metrics.formatter import MetricsFormatter
+
+            self._metrics_formatter: MetricsFormatter | None = MetricsFormatter(
+                metrics_context
+            )
+        else:
+            self._metrics_formatter = None
+
         # Create structured output LLM
         self.structured_llm = llm.with_structured_output(MutationStructuredOutput)
 
         super().__init__(llm)
+
+    _PROMPT_LOG_DIR = os.environ.get("GIGAEVO_PROMPT_LOG_DIR", "")
+
+    def _dump_prompt_to_file(
+        self, prompt_id: str | None, system: str, user: str
+    ) -> None:
+        """Write full system+user prompts to a log file for offline inspection."""
+        log_dir = self._PROMPT_LOG_DIR
+        if not log_dir:
+            return
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+            pid = prompt_id or "fixed"
+            path = os.path.join(log_dir, f"{ts}_{pid[:12]}.txt")
+            with open(path, "w") as f:
+                f.write(f"=== PROMPT DUMP {ts} ===\n")
+                f.write(f"prompt_id: {prompt_id}\n\n")
+                f.write("=== SYSTEM PROMPT ===\n")
+                f.write(system)
+                f.write("\n\n=== USER PROMPT ===\n")
+                f.write(user)
+                f.write("\n")
+        except Exception as exc:
+            logger.debug(f"[MutationAgent] prompt dump failed: {exc}")
 
     async def arun(self, input: list[Program], mutation_mode: str) -> dict:
         """Execute mutation agent.
@@ -115,7 +172,7 @@ class MutationAgent(LangGraphAgent):
             mutation_mode: Mutation mode
 
         Returns:
-            Dict with 'code', 'structured_output', and other mutation results
+            Dict with 'code', 'structured_output', 'prompt_id', and other results
         """
         initial_state: MutationState = {
             "input": input,
@@ -127,7 +184,10 @@ class MutationAgent(LangGraphAgent):
         }
 
         final_state = await self.graph.ainvoke(initial_state)
-        return final_state.get("parsed_output", {})
+        result = final_state.get("parsed_output", {})
+        # Forward prompt_id from state into result for operator to stamp in metadata
+        result["prompt_id"] = final_state.get("prompt_id")
+        return result
 
     async def acall_llm(self, state: MutationState) -> MutationState:
         """Call LLM with structured output.
@@ -165,12 +225,34 @@ class MutationAgent(LangGraphAgent):
         - Insights
         - Family tree lineage
 
+        If a dynamic prompt_fetcher is configured (is_dynamic=True), refreshes the
+        system prompt from the co-evolving archive and stamps prompt_id in state.
+
         Args:
             state: Current state with parents field
 
         Returns:
-            Updated state with messages field
+            Updated state with messages field and optional prompt_id
         """
+        # Refresh system and user prompts from dynamic fetcher if available
+        if (
+            self._prompt_fetcher is not None
+            and self._prompt_fetcher.is_dynamic
+            and self._metrics_formatter is not None
+        ):
+            fetched_sys = self._prompt_fetcher.fetch("mutation", "system")
+            self.system_prompt = fetched_sys.text.format(
+                task_description=self._task_description,
+                metrics_description=self._metrics_formatter.format_metrics_description(),
+            )
+            state["prompt_id"] = fetched_sys.prompt_id
+            # Also refresh user prompt template if a co-evolved version is available
+            fetched_user = self._prompt_fetcher.fetch("mutation", "user")
+            if fetched_user.prompt_id is not None:
+                self.user_prompt_template = fetched_user.text
+        else:
+            state["prompt_id"] = None
+
         parents = state["input"]
 
         # Build parent blocks - code + mutation context
@@ -207,10 +289,15 @@ class MutationAgent(LangGraphAgent):
 
         state["messages"] = messages
 
-        logger.debug(
+        logger.info(
             f"[MutationAgent] Built prompt with {len(parents)} parents "
             f"(system: {len(self.system_prompt)} chars, "
-            f"user: {len(user_prompt)} chars)"
+            f"user: {len(user_prompt)} chars, "
+            f"prompt_id={state.get('prompt_id', 'N/A')})"
+        )
+        # Dump full prompts to file for offline verification
+        self._dump_prompt_to_file(
+            state.get("prompt_id"), self.system_prompt, user_prompt
         )
 
         return state

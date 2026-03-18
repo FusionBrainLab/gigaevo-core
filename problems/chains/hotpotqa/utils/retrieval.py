@@ -15,7 +15,6 @@ import pickle
 import threading
 from typing import Protocol, runtime_checkable
 
-
 # ---------------------------------------------------------------------------
 # Corpus loading (shared by BM25 index builder and lazy-init)
 # ---------------------------------------------------------------------------
@@ -132,14 +131,18 @@ def _ensure_bm25_initialized(
                         f"BM25s index not found at {index_dir} and no corpus_path "
                         f"provided for auto-build. Run build_bm25_index.py first."
                     )
-                print(f"BM25s index not found at {index_dir}, building from {corpus_path}...")
+                print(
+                    f"BM25s index not found at {index_dir}, building from {corpus_path}..."
+                )
                 build_bm25s_index(corpus_path, index_dir)
 
             _bm25_retriever = bm25s.BM25.load(str(index_dir))
             _bm25_stemmer = Stemmer.Stemmer("english")
 
             if corpus_path is None:
-                raise FileNotFoundError("corpus_path is required to load formatted passages")
+                raise FileNotFoundError(
+                    "corpus_path is required to load formatted passages"
+                )
             _bm25_corpus = load_corpus(corpus_path)
 
             _bm25_initialized = True
@@ -173,8 +176,7 @@ class BM25Retriever:
         )
         return [
             "\n".join(
-                f"[{j + 1}] {_bm25_corpus[int(idx)]}"
-                for j, idx in enumerate(row[:k])
+                f"[{j + 1}] {_bm25_corpus[int(idx)]}" for j, idx in enumerate(row[:k])
             )
             for row in results
         ]
@@ -207,7 +209,9 @@ def _ensure_colbert_initialized(index_dir: Path, checkpoint: str) -> None:
             # ColBERT resolves the index to {root}/{experiment}/indexes/{name}
             # where root=index_dir.parent and experiment comes from RunConfig.
             # The virtual index_dir itself may not exist on disk.
-            colbert_resolved = index_dir.parent / "hotpotqa" / "indexes" / index_dir.name
+            colbert_resolved = (
+                index_dir.parent / "hotpotqa" / "indexes" / index_dir.name
+            )
             if not colbert_resolved.exists():
                 raise FileNotFoundError(
                     f"ColBERT index not found at {colbert_resolved} "
@@ -235,9 +239,10 @@ def _ensure_colbert_initialized(index_dir: Path, checkpoint: str) -> None:
             #     (not a dataclass field).  ColBERT reads it at CALL TIME in
             #     colbert_score_packed / colbert_score / IndexScorer.rank.
             #     Keep it at 0 permanently so all search operations use CPU.
+            from colbert.infra.config import ColBERTConfig as _ColBERTConfig
             import colbert.modeling.base_colbert as _base_colbert
             import torch as _torch
-            from colbert.infra.config import ColBERTConfig as _ColBERTConfig
+
             _base_colbert.DEVICE = _torch.device("cpu")
             _ColBERTConfig.total_visible_gpus = 0
 
@@ -283,9 +288,7 @@ class ColBERTRetriever:
         for query in queries:
             pids, _ranks, _scores = _colbert_searcher.search(query, k=k)
             passages = [_colbert_searcher.collection[pid] for pid in pids[:k]]
-            results.append(
-                "\n".join(f"[{i + 1}] {p}" for i, p in enumerate(passages))
-            )
+            results.append("\n".join(f"[{i + 1}] {p}" for i, p in enumerate(passages)))
         return results
 
 
@@ -408,7 +411,9 @@ def batch_retrieve(
     )
 
     return [
-        "\n".join(f"[{j + 1}] {_bm25_corpus[int(idx)]}" for j, idx in enumerate(row[:k]))
+        "\n".join(
+            f"[{j + 1}] {_bm25_corpus[int(idx)]}" for j, idx in enumerate(row[:k])
+        )
         for row in results
     ]
 

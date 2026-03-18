@@ -1,5 +1,6 @@
 """LLM client with cost tracking for chain evolution."""
 
+from dataclasses import dataclass
 import os
 import re
 from typing import Any
@@ -7,9 +8,6 @@ from typing import Any
 import httpx
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
-
-
-from dataclasses import dataclass
 
 
 @dataclass

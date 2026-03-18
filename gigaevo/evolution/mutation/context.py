@@ -73,7 +73,9 @@ class FamilyTreeMutationContext(MutationContext):
         lines = ["## Family Tree (Current State)", ""]
 
         logger.debug(
-            f"[FamilyTreeMutationContext] Formatting with {len(self.ancestors)} ancestors and {len(self.descendants)} descendants"
+            "[FamilyTreeMutationContext] Formatting with {} ancestors and {} descendants",
+            len(self.ancestors),
+            len(self.descendants),
         )
 
         if self.ancestors:

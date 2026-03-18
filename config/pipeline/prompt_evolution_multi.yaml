@@ -1,0 +1,67 @@
+# @package _global_
+# Pipeline for the prompt_evolution problem with 1-to-many coupling.
+# Aggregates stats from multiple main runs feeding one prompt evolution run.
+#
+# Requires at run time:
+#   main_run_sources (list of {db, prefix} dicts for all main runs)
+#
+# Usage:
+#   python run.py \
+#     problem.name=prompt_evolution pipeline=prompt_evolution_multi redis.db=6 \
+#     '+main_run_sources=[{db:4,prefix:chains/hotpotqa/static_f1_600},{db:5,prefix:chains/hotpotqa/static_f1_600},{db:8,prefix:chains/hotpotqa/static_f1_600}]'
+
+main_run_sources: ???
+
+# Sync hook: blocks prompt run engine until ALL main runs advance by 1 gen
+pre_step_hook:
+  _target_: gigaevo.prompts.coevolution.sync.MainRunSyncHook
+  host: ${redis.host}
+  port: ${redis.port}
+  sources: ${main_run_sources}
+  timeout: 7200.0
+  poll_interval: 5.0
+
+# Override behavior space: 2D MAP-Elites grid (fitness × prompt_length).
+behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - fitness
+    - prompt_length
+  bounds:
+    - ${primary_bounds}
+    - [0.0, 10000.0]
+  resolutions:
+    - ${primary_resolution}
+    - ${primary_resolution}
+  binning_types:
+    - ${binning_type}
+    - ${binning_type}
+  dynamic: true
+  expansion_buffer_ratio: 0.1
+
+prompt_stats_provider:
+  _target_: gigaevo.prompts.coevolution.stats.RedisPromptStatsProvider
+  host: ${redis.host}
+  port: ${redis.port}
+  sources: ${main_run_sources}
+  min_trials: 5
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+
+pipeline_builder:
+  _target_: gigaevo.prompts.coevolution.pipeline.PromptEvolutionPipelineBuilder
+  ctx: ${evolution_context}
+  stats_provider: ${prompt_stats_provider}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+  prior_beta: 3.0
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}

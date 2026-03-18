@@ -18,7 +18,7 @@ async def _maybe_await(x: Any) -> Any:
 def start_metrics_collector(
     *,
     writer: LogWriter,
-    collect_fn: Callable[[], dict[str, Any] | "asyncio.Future[dict[str, Any]]"],
+    collect_fn: Callable[[], dict[str, Any] | asyncio.Future[dict[str, Any]]],
     interval: float,
     stop_flag: Callable[[], bool],
     task_name: str = "metrics-collector",  # kept for backward compat; used as task name

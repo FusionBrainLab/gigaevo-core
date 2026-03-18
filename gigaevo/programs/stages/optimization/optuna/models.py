@@ -7,7 +7,7 @@ parameter specs, search-space proposals, stage config, and stage output.
 from __future__ import annotations
 
 import math
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -109,7 +109,7 @@ def compute_n_trials(
 _PARAM_TYPES = Literal["float", "int", "log_float", "categorical"]
 
 #: Union of all value types a parameter can hold.
-_ParamValue = Union[float, int, str, bool]
+_ParamValue = float | int | str | bool
 
 #: Name of the params dict injected into the parameterized code.
 _OPTUNA_PARAMS_NAME = "_optuna_params"
@@ -154,15 +154,15 @@ class ParamSpec(BaseModel):
             "or booleans)."
         )
     )
-    low: Optional[float] = Field(
+    low: float | None = Field(
         default=None,
         description="Lower bound (required for float / int / log_float).",
     )
-    high: Optional[float] = Field(
+    high: float | None = Field(
         default=None,
         description="Upper bound (required for float / int / log_float).",
     )
-    choices: Optional[list[_ParamValue]] = Field(
+    choices: list[_ParamValue] | None = Field(
         default=None,
         description=(
             "List of allowed values (required for categorical).  "
@@ -275,13 +275,13 @@ class OptunaOptimizationConfig(BaseModel):
     """Configuration for Optuna features and sampler settings."""
 
     # Reproducibility
-    random_state: Optional[int] = Field(
+    random_state: int | None = Field(
         default=None,
         description="Random seed for the sampler. Set for reproducible runs.",
     )
 
     # TPE sampler
-    n_startup_trials: Optional[int] = Field(
+    n_startup_trials: int | None = Field(
         default=None,
         description=(
             "Number of random trials run before TPE (in addition to n_trials). "
@@ -327,14 +327,14 @@ class OptunaOptimizationConfig(BaseModel):
         default=0.10,
         description="PED-ANOVA target_quantile for the late check (standard selectivity).",
     )
-    max_params: Optional[int] = Field(
+    max_params: int | None = Field(
         default=None,
         description=(
             "Maximum parameters the LLM should propose. "
             "If None, auto-computed as min(5, max(3, n_trials // 15))."
         ),
     )
-    importance_check_at: Optional[int] = Field(
+    importance_check_at: int | None = Field(
         default=None,
         description=(
             "Trial count for the EARLY importance check. If None, auto-computed "
@@ -342,7 +342,7 @@ class OptunaOptimizationConfig(BaseModel):
             "Uses a conservative threshold (0.5x standard)."
         ),
     )
-    importance_check_late_at: Optional[int] = Field(
+    importance_check_late_at: int | None = Field(
         default=None,
         description=(
             "Trial count for the LATE importance check. If None, auto-computed "
@@ -367,7 +367,7 @@ class OptunaOptimizationConfig(BaseModel):
     )
 
     # Early stopping
-    early_stopping_patience: Optional[int] = Field(
+    early_stopping_patience: int | None = Field(
         default=None,
         description=(
             "Stop optimization after this many consecutive trials without "

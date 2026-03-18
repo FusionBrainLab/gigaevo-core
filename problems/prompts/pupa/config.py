@@ -37,11 +37,11 @@ JUDGE_CONFIG = {
         "temperature": 0.0,
     },
     "client_kwargs": {
-        "api_key": os.environ.get('PROMPT_API_KEY'),
+        "api_key": os.environ.get("PROMPT_API_KEY"),
         "base_url": "https://openrouter.ai/api/v1",
         "proxy": f"socks5://{os.environ.get('PROXY_USER')}:"
         f"{os.environ.get('PROXY_PASS')}@"
-        f"{os.environ.get('PROXY_HOST')}"
+        f"{os.environ.get('PROXY_HOST')}",
     },
 }
 

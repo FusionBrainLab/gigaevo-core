@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from collections.abc import Mapping
+from datetime import UTC, datetime
 import time
 import types
 from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
-    Mapping,
-    Optional,
-    Type,
     TypeVar,
     Union,
     get_args,
@@ -107,8 +105,8 @@ class Stage:
           (None allowed only if OutputModel is VoidOutput)
     """
 
-    InputsModel: ClassVar[Type[I]]
-    OutputModel: ClassVar[Type[O]]
+    InputsModel: ClassVar[type[I]]
+    OutputModel: ClassVar[type[O]]
 
     # Caching behavior
     cache_handler: ClassVar[CacheHandler] = DEFAULT_CACHE
@@ -141,8 +139,8 @@ class Stage:
     def __init__(self, *, timeout: float):
         self.timeout = timeout
         self._raw_inputs: dict[str, Any] = {}
-        self._params_obj: Optional[I] = None
-        self._current_inputs_hash: Optional[str] = None
+        self._params_obj: I | None = None
+        self._current_inputs_hash: str | None = None
 
     @property
     def stage_name(self) -> str:
@@ -237,8 +235,8 @@ class Stage:
                 f"Optional: {self.__class__.optional_fields()}"
             )
 
-    async def execute(self, program: "Program") -> ProgramStageResult:
-        started_at = datetime.now(timezone.utc)
+    async def execute(self, program: Program) -> ProgramStageResult:
+        started_at = datetime.now(UTC)
         t0 = time.monotonic()
         logger.info("[{}] Executing for {}", self.stage_name, program.id[:8])
 
@@ -254,7 +252,7 @@ class Stage:
                 if result.started_at is None:
                     result.started_at = started_at
                 if result.finished_at is None and result.status in FINAL_STATES:
-                    result.finished_at = datetime.now(timezone.utc)
+                    result.finished_at = datetime.now(UTC)
                 # Let cache handler augment result
                 result = self.get_cache_handler().on_complete(
                     result, self._current_inputs_hash
@@ -329,6 +327,6 @@ class Stage:
             self._params_obj = None
             self._current_inputs_hash = None
 
-    async def compute(self, program: "Program") -> O | ProgramStageResult | None:
+    async def compute(self, program: Program) -> O | ProgramStageResult | None:
         """Override in subclasses."""
         raise NotImplementedError(f"{self.__class__.__name__} must implement compute()")

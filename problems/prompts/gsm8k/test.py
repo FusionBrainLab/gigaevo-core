@@ -5,9 +5,9 @@ import argparse
 import pandas as pd
 
 from problems.prompts.client import LLMClient
-from problems.prompts.utils import run_prompts, RedisRunConfig, get_best_program
-from problems.prompts.gsm8k.config import LLM_CONFIG, DATASET_CONFIG, load_baseline
-from problems.prompts.gsm8k.validate import extract_answer, calculate_fitness
+from problems.prompts.gsm8k.config import DATASET_CONFIG, LLM_CONFIG, load_baseline
+from problems.prompts.gsm8k.validate import calculate_fitness, extract_answer
+from problems.prompts.utils import RedisRunConfig, get_best_program, run_prompts
 
 
 def load_test_context(n_samples: int | None = None) -> dict:
@@ -41,7 +41,7 @@ def test_baseline(n_samples: int = 3):
 
     print(f"\n=== Baseline Results ({len(dataset)} samples) ===")
     for i, (pred, target) in enumerate(zip(predictions, targets)):
-        print(f"  Sample {i+1}: pred={pred!r}, target={target!r}")
+        print(f"  Sample {i + 1}: pred={pred!r}, target={target!r}")
 
     accuracy = calculate_fitness(dataset, predictions, context["target_field"])
     extraction_failures = (

@@ -17,7 +17,7 @@ forward the captured output directly to ``CallValidatorFunction``.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from gigaevo.programs.core_types import StageIO
 from gigaevo.programs.program import Program
@@ -69,8 +69,8 @@ class OptunaPayloadBridge(Stage):
 class PayloadResolverInput(StageIO):
     """Both inputs optional — exactly one should be non-None at runtime."""
 
-    optuna_payload: Optional[AnyContainer] = None
-    program_payload: Optional[AnyContainer] = None
+    optuna_payload: AnyContainer | None = None
+    program_payload: AnyContainer | None = None
 
 
 @StageRegistry.register(

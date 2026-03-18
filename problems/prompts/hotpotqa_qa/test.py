@@ -6,15 +6,15 @@ import random
 import pandas as pd
 
 from problems.prompts.client import LLMClient
-from problems.prompts.utils import run_prompts, RedisRunConfig, get_best_program
 from problems.prompts.hotpotqa_qa.config import (
-    LLM_CONFIG,
     DATASET_CONFIG,
-    load_jsonl,
+    LLM_CONFIG,
     load_baseline,
+    load_jsonl,
     preprocess_sample,
 )
-from problems.prompts.hotpotqa_qa.validate import extract_answer, calculate_fitness
+from problems.prompts.hotpotqa_qa.validate import calculate_fitness, extract_answer
+from problems.prompts.utils import RedisRunConfig, get_best_program, run_prompts
 
 
 def load_test_context(n_samples: int | None = None, seed: int = 42) -> dict:
@@ -55,7 +55,7 @@ def test_baseline(n_samples: int = 3):
 
     print(f"\n=== Baseline Results ({n_samples} samples) ===")
     for i, (pred, target) in enumerate(zip(predictions, targets)):
-        print(f"  Sample {i+1}: pred={pred!r}, target={target!r}")
+        print(f"  Sample {i + 1}: pred={pred!r}, target={target!r}")
 
     exact_match = calculate_fitness(dataset, predictions, context["target_field"])
     extraction_failures = (

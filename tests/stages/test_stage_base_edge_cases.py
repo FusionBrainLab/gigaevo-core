@@ -26,6 +26,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 import types
 from typing import Optional, Union
 
@@ -85,7 +86,7 @@ class PartiallyOptionalInput(StageIO):
     """Mix of required and optional fields."""
 
     required_str: str
-    optional_int: Optional[int] = None
+    optional_int: int | None = None
 
 
 class ModernUnionInput(StageIO):
@@ -115,7 +116,7 @@ class WrongOutput(StageIO):
 
 class InputWithOptional(StageIO):
     required: str
-    opt: Optional[str] = None
+    opt: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +478,8 @@ class TestEnsureRequiredPresent:
         computation completes without error — so no KeyError is raised."""
 
         class AllOptionalInput(StageIO):
-            opt_a: Optional[str] = None
-            opt_b: Optional[int] = None
+            opt_a: str | None = None
+            opt_b: int | None = None
 
         class AllOptionalStage(Stage):
             InputsModel = AllOptionalInput
@@ -528,11 +529,11 @@ class TestIsOptionalTypeModernSyntax:
 
     def test_typing_optional_still_works(self):
         """Optional[str] (legacy syntax) continues to be detected as optional."""
-        assert _is_optional_type(Optional[str]) is True
+        assert _is_optional_type(Optional[str]) is True  # noqa: UP045
 
     def test_typing_union_with_none_still_works(self):
         """Union[str, None] (legacy syntax) continues to be detected as optional."""
-        assert _is_optional_type(Union[str, None]) is True
+        assert _is_optional_type(Union[str, None]) is True  # noqa: UP007
 
     def test_plain_type_is_not_optional(self):
         """A plain type like str is not optional."""
@@ -1263,12 +1264,12 @@ class TestTimestampBranchesExtended:
             cache_handler = NO_CACHE
 
             async def compute(self, program: Program) -> ProgramStageResult:
-                from datetime import datetime, timezone
+                from datetime import datetime
 
                 return ProgramStageResult(
                     status=StageState.COMPLETED,
                     output=TextOutput(message="no_finish"),
-                    started_at=datetime.now(timezone.utc),
+                    started_at=datetime.now(UTC),
                     # finished_at intentionally omitted
                 )
 
@@ -1328,9 +1329,9 @@ class TestTimestampBranchesExtended:
 
     async def test_duration_seconds_with_both_timestamps(self):
         """ProgramStageResult.duration_seconds() returns a float when both set."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        t0 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        t0 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
         t1 = t0 + timedelta(seconds=3.5)
         result = ProgramStageResult(
             status=StageState.COMPLETED,
@@ -1736,7 +1737,7 @@ class TestComputeHashFromInputsExtraKeys:
 
         class NInput(StageIO):
             x: int
-            opt: Optional[str] = None
+            opt: str | None = None
 
         class NStage(Stage):
             InputsModel = NInput

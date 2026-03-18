@@ -13,9 +13,8 @@ def entrypoint() -> np.ndarray:
         r = np.random.uniform(0.01, max_r * 0.5)
         centers.append([x, y])
         radii.append(r)
-    
+
     centers = np.array(centers, dtype=np.float32)
     radii = np.array(radii, dtype=np.float32)
     result = np.column_stack([centers, radii])
     return result
-

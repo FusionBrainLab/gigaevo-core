@@ -20,7 +20,7 @@ class CompositeLogger(LogWriter):
             raise ValueError("CompositeLogger requires at least one logger")
         self._loggers = list(loggers)
 
-    def bind(self, *, path: list[str] | None = None) -> "BoundComposite":
+    def bind(self, *, path: list[str] | None = None) -> BoundComposite:
         return BoundComposite(self, path or [])
 
     def scalar(self, metric: str, value: float, **kwargs) -> None:
@@ -59,7 +59,7 @@ class BoundComposite(LogWriter):
         self._base = base
         self._path = list(path)
 
-    def bind(self, *, path: list[str] | None = None) -> "BoundComposite":
+    def bind(self, *, path: list[str] | None = None) -> BoundComposite:
         return BoundComposite(self._base, [*self._path, *(path or [])])
 
     def scalar(self, metric: str, value: float, **kwargs) -> None:

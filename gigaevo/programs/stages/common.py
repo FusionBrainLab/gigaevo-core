@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
 from gigaevo.programs.core_types import StageIO
 
@@ -9,13 +9,13 @@ K = TypeVar("K")
 V = TypeVar("V")
 
 
-class Box(StageIO, Generic[T]):
+class Box[T](StageIO):
     """Generic single-value container: { data: T }."""
 
     data: T
 
 
-class ListOf(StageIO, Generic[T]):
+class ListOf[T](StageIO):
     """Generic list container: { items: list[T] }."""
 
     items: list[T]

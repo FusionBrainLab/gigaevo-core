@@ -8,7 +8,7 @@ and execution-order dependency gates (success/failure/always).
 
 from __future__ import annotations
 
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 import pytest
 
@@ -475,7 +475,7 @@ class TestDiamondDagCaching:
         # D needs inputs from both B and C — use optional input pattern
         class DualInput(StageIO):
             data_b: CountedOutput
-            data_c: Optional[CountedOutput] = None
+            data_c: CountedOutput | None = None
 
         class DualInputStage(Stage):
             InputsModel = DualInput

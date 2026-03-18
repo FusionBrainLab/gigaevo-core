@@ -2,7 +2,6 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-
 SEED = 42
 
 _DIR = Path(__file__).parent
@@ -20,7 +19,9 @@ def main():
     train.to_csv(str(_DIR / "PUPA_train.csv"))
     test.to_csv(str(_DIR / "PUPA_test.csv"))
 
-    print(f"Dataset ready: PUPA_train.csv ({len(train):,} samples), PUPA_test.csv ({len(test):,} samples)")
+    print(
+        f"Dataset ready: PUPA_train.csv ({len(train):,} samples), PUPA_test.csv ({len(test):,} samples)"
+    )
 
 
 if __name__ == "__main__":

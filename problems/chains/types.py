@@ -10,7 +10,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, constr, model_validator
 
-
 # ---------------------------------------------------------------------------
 # Structured field constants (used in frozen-step comparison and elsewhere)
 # ---------------------------------------------------------------------------
@@ -136,10 +135,7 @@ class PromptBuilder(BaseModel):
         "Example reasoning: {example_reasoning}"
     )
 
-    chain_template: str = (
-        "Data:\n{outer_context}\n\n"
-        "{step_prompt}"
-    )
+    chain_template: str = "Data:\n{outer_context}\n\n{step_prompt}"
 
     history_template: str = (
         "Previous steps:\n{history}\n\n"

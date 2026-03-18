@@ -1,4 +1,9 @@
-Analyze this program and extract 3-{max_insights} insights to guide the next mutation.
+OUTPUT (JSON ONLY):
+Return a JSON array with at most {max_insights} items:
+{{ "insights": [ {{type, tag, severity, insight}}, ... ] }}
+
+
+Analyze this program and extract 1-{max_insights} insights to guide the next mutation.
 
 PROGRAM:
 ```python
@@ -12,6 +17,6 @@ ERRORS: {error_section}
 ---
 
 For each insight, answer:
-1. **What** pattern/value exists? (cite line numbers, variable names, literals)
-2. **Why** does it help or hurt the metric? (causal mechanism)
-3. **What** should the mutation agent do? (preserve, remove, tune, replace, add)
+1. **What** policy patern, optimization pattern exists/not exist? (cite evidence)
+2. **Why** does it help or hurt the final rank/runtime? (causal mechanism)
+3. **What** should the mutation agent do? (fix, optimize, remove, tune, try new)

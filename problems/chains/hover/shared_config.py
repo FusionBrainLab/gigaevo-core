@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-
 # --- LLM Configuration ---
 
 LLM_CONFIG = {
@@ -47,7 +46,7 @@ BM25S_INDEX_DIR = str(_BASE_DIR / "dataset" / "bm25s_index")
 def load_jsonl(path: str) -> list[dict]:
     """Load JSONL file as list of dicts."""
     samples = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 samples.append(json.loads(line))

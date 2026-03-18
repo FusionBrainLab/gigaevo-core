@@ -1,9 +1,8 @@
+from helper import compute_c
 import jax
 import jax.numpy as jnp
-import optax
 import numpy as np
-
-from helper import compute_c
+import optax
 
 
 def entrypoint() -> np.ndarray:
@@ -17,10 +16,10 @@ def entrypoint() -> np.ndarray:
     def objective_fn(latent_h_values: jnp.ndarray) -> jnp.ndarray:
         h = jax.nn.sigmoid(latent_h_values)
         objective_loss = compute_c(h)
-        
+
         integral_h = jnp.sum(h) * dx
         constraint_loss = (integral_h - 1.0) ** 2
-        
+
         total_loss = objective_loss + penalty_strength * constraint_loss
         return total_loss
 
@@ -44,4 +43,3 @@ def entrypoint() -> np.ndarray:
     final_h = jax.nn.sigmoid(latent_h_values)
 
     return np.array(final_h)
-

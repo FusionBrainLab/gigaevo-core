@@ -50,38 +50,40 @@ def _largest_positive_root_of_P_over_x2(P: sp.Expr) -> float:
 
 def compute_c_and_rmax(coefficients):
     coefficients = np.asarray(coefficients, dtype=float)
-    
+
     P = _construct_P_with_forced_zero(coefficients)
     assert P.subs(x, 0) == 0, "P(0) != 0 after forcing."
     assert sp.limit(P, x, sp.oo) > 0, "Limit at +inf is not positive."
 
     rmax = _largest_positive_root_of_P_over_x2(P)
     c = (rmax**2) / (2.0 * np.pi)
-    
+
     return c, rmax
 
 
 def validate(coefficients):
     if coefficients is None:
-        raise ValueError("Program returned None - optimization failed to find valid coefficients")
-    
+        raise ValueError(
+            "Program returned None - optimization failed to find valid coefficients"
+        )
+
     coefficients = np.asarray(coefficients, dtype=float)
-    
+
     if coefficients.ndim != 1:
         raise ValueError(f"Expected 1D array, got shape {coefficients.shape}")
-    
+
     if coefficients.size == 0:
         raise ValueError("Array cannot be empty")
-    
+
     if not np.all(np.isfinite(coefficients)):
         raise ValueError("Some coefficients are NaN or infinite")
-    
+
     try:
         c, rmax = compute_c_and_rmax(coefficients)
     except Exception as e:
         raise ValueError(f"Error computing C: {e}")
-    
+
     if not np.isfinite(c) or c <= 0:
         raise ValueError(f"Invalid C value: {c}")
-    
+
     return {"fitness": c, "is_valid": 1}

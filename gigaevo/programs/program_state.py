@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class ProgramState(str, Enum):
+class ProgramState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     DONE = "done"

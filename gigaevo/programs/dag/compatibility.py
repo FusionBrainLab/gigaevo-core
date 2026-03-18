@@ -1,4 +1,5 @@
-from typing import Any, Optional, TypeVar, Union, get_args, get_origin
+import types
+from typing import Any, TypeVar, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -50,11 +51,13 @@ def _normalize_annotation(annotation: Any) -> list[Any] | None:
       - []   => invalid (we can't reason about it)
       - [a1, a2, ...] => acceptable alternatives (Union unpacked)
     Accepts ANY reasonable type (typing alias, BaseModel generic, plain class).
+    Handles both typing.Union (Optional[X]) and types.UnionType (X | None).
     """
     if annotation is Any:
         return None
     o = get_origin(annotation)
-    if o in (Union, Optional):
+    # Handle both typing.Union and modern X | None syntax (types.UnionType)
+    if o is Union or isinstance(annotation, types.UnionType):
         alts: list[Any] = []
         for arg in get_args(annotation):
             if arg is type(None):

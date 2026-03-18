@@ -2,7 +2,6 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-
 SEED = 42
 TRAIN_SAMPLES = 1000
 TEST_SAMPLES = 300
@@ -23,7 +22,9 @@ def main():
     train.to_json(train_path)
     test.to_json(test_path)
 
-    print(f"Dataset ready: {train_path} ({len(train):,} samples), {test_path} ({len(test):,} samples)")
+    print(
+        f"Dataset ready: {train_path} ({len(train):,} samples), {test_path} ({len(test):,} samples)"
+    )
 
 
 if __name__ == "__main__":

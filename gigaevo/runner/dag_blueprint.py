@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 

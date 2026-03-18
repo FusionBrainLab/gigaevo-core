@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import time
 
 from dotenv import load_dotenv
@@ -26,7 +26,7 @@ async def run_experiment(cfg: DictConfig):
     logger.info("GigaEvo Evolution Experiment")
     logger.info("=" * 80)
     logger.info(f"Problem: {cfg.problem.name}")
-    logger.info(f"Start time: {datetime.now(timezone.utc).isoformat()}")
+    logger.info(f"Start time: {datetime.now(UTC).isoformat()}")
     logger.info("")
 
     redis_storage: RedisProgramStorage | None = None
@@ -152,7 +152,7 @@ Or set resume=true to continue with existing data:
         logger.info(
             f"Total experiment duration: {duration:.2f} seconds ({duration / 3600:.2f} hours)"
         )
-        logger.info(f"End time: {datetime.now(timezone.utc).isoformat()}")
+        logger.info(f"End time: {datetime.now(UTC).isoformat()}")
         logger.info("=" * 80)
 
 

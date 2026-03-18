@@ -94,10 +94,10 @@ def validate(
     batch_tool_registry = {"retrieve": _batch_retrieve}
 
     step_max_tokens = {
-        2: 1024,   # summarize retrieved facts
-        3: 1024,   # generate search query
-        5: 1024,   # combine evidence
-        6: 1024,   # final answer
+        2: 1024,  # summarize retrieved facts
+        3: 1024,  # generate search query
+        5: 1024,  # combine evidence
+        6: 1024,  # final answer
     }
 
     # 5. Early stopping: run first batch, abort if below baseline
@@ -105,7 +105,10 @@ def validate(
     early_targets = targets[:early_stop_after]
 
     early_results = run_chain_on_dataset_stepwise(
-        chain, client, early_dataset, outer_context_builder,
+        chain,
+        client,
+        early_dataset,
+        outer_context_builder,
         batch_tool_registry=batch_tool_registry,
         step_max_tokens=step_max_tokens,
     )
@@ -129,7 +132,10 @@ def validate(
     remaining_targets = targets[early_stop_after:]
 
     remaining_results = run_chain_on_dataset_stepwise(
-        chain, client, remaining_dataset, outer_context_builder,
+        chain,
+        client,
+        remaining_dataset,
+        outer_context_builder,
         batch_tool_registry=batch_tool_registry,
         step_max_tokens=step_max_tokens,
     )
@@ -140,9 +146,7 @@ def validate(
     all_targets = early_targets + remaining_targets
 
     extraction_failures = (
-        sum(1 for p in all_preds if p is None) / len(all_preds)
-        if all_preds
-        else 0.0
+        sum(1 for p in all_preds if p is None) / len(all_preds) if all_preds else 0.0
     )
     fitness = calculate_exact_match(all_targets, all_preds)
 

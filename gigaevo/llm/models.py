@@ -169,9 +169,7 @@ class MultiModelRouter(Runnable):
         if last:
             self._tracker.track(last, name)
 
-    def with_structured_output(
-        self, schema: Any, **kwargs
-    ) -> "_StructuredOutputRouter":
+    def with_structured_output(self, schema: Any, **kwargs) -> _StructuredOutputRouter:
         """Create a router that returns parsed Pydantic models with token tracking."""
         wrapped = [
             m.with_structured_output(schema, include_raw=True, **kwargs)

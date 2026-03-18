@@ -15,14 +15,14 @@
 """Library of instructions."""
 
 import collections
+from collections.abc import Sequence
 import json
 import random
 import re
 import string
-from collections.abc import Sequence
 
-import langdetect
 from absl import logging
+import langdetect
 
 import problems.prompts.ifbench.utils.instructions_util_ifevalg as instructions_util
 
@@ -43,7 +43,11 @@ _NUM_PLACEHOLDERS = 4
 _NUM_BULLETS = 5
 
 # The options of constrained response.
-_CONSTRAINED_RESPONSE_OPTIONS = ("My answer is yes.", "My answer is no.", "My answer is maybe.")
+_CONSTRAINED_RESPONSE_OPTIONS = (
+    "My answer is yes.",
+    "My answer is no.",
+    "My answer is maybe.",
+)
 
 # The options of starter keywords.
 _STARTER_OPTIONS = (
@@ -154,7 +158,8 @@ class ResponseLanguageChecker(Instruction):
             self._language = random.choice(list(_LANGUAGES.keys()))
         # TODO(tianjianlu): opens the description generation to more choices.
         self._description_pattern = (
-            "Your ENTIRE response should be in {language} language, no other " + "language is allowed."
+            "Your ENTIRE response should be in {language} language, no other "
+            + "language is allowed."
         )
         return self._description_pattern.format(language=_LANGUAGES[self._language])
 
@@ -181,7 +186,9 @@ class ResponseLanguageChecker(Instruction):
             return langdetect.detect(value) == self._language
         except langdetect.LangDetectException as e:
             # Count as instruction is followed.
-            logging.error("Unable to detect language for text %s due to %s", value, e)  # refex: disable=pytotw.037
+            logging.error(
+                "Unable to detect language for text %s due to %s", value, e
+            )  # refex: disable=pytotw.037
             return True
 
 
@@ -217,14 +224,20 @@ class NumberOfSentences(Instruction):
         else:
             self._comparison_relation = relation
 
-        self._description_pattern = "Your response should contain {relation} {num_sentences} sentences."
+        self._description_pattern = (
+            "Your response should contain {relation} {num_sentences} sentences."
+        )
         return self._description_pattern.format(
-            relation=self._comparison_relation, num_sentences=self._num_sentences_threshold
+            relation=self._comparison_relation,
+            num_sentences=self._num_sentences_threshold,
         )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
-        return {"num_sentences": self._num_sentences_threshold, "relation": self._comparison_relation}
+        return {
+            "num_sentences": self._num_sentences_threshold,
+            "relation": self._comparison_relation,
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -247,7 +260,9 @@ class NumberOfSentences(Instruction):
         if self._comparison_relation == _COMPARISON_RELATION[0]:
             return num_sentences < self._num_sentences_threshold
         elif self._comparison_relation == _COMPARISON_RELATION[1]:
-            return num_sentences >= self._num_sentences_threshold  # pytype: disable=bad-return-type
+            return (
+                num_sentences >= self._num_sentences_threshold
+            )  # pytype: disable=bad-return-type
 
 
 class PlaceholderChecker(Instruction):
@@ -351,8 +366,12 @@ class ConstrainedResponseChecker(Instruction):
         """Build the instruction description."""
         # A sequence of string(s) representing the options of the expected response.
         self._constrained_responses = _CONSTRAINED_RESPONSE_OPTIONS
-        self._description_pattern = "Answer with one of the following options: {response_options}"
-        return self._description_pattern.format(response_options=self._constrained_responses)
+        self._description_pattern = (
+            "Answer with one of the following options: {response_options}"
+        )
+        return self._description_pattern.format(
+            response_options=self._constrained_responses
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
@@ -373,7 +392,10 @@ class ConstrainedResponseChecker(Instruction):
           responses; otherwise False.
         """
         value = value.strip()
-        return any(constrained_response in value for constrained_response in self._constrained_responses)
+        return any(
+            constrained_response in value
+            for constrained_response in self._constrained_responses
+        )
 
 
 class ConstrainedStartChecker(Instruction):
@@ -393,7 +415,8 @@ class ConstrainedStartChecker(Instruction):
         if self._starter is None:
             self._starter = random.choice(_STARTER_OPTIONS)
         self._description_pattern = (
-            "During the conversation, when it is your turn, " + "please always start with {starter}"
+            "During the conversation, when it is your turn, "
+            + "please always start with {starter}"
         )
         return self._description_pattern.format(starter=self._starter)
 
@@ -416,7 +439,9 @@ class ConstrainedStartChecker(Instruction):
           contained in `instruction_args`; otherwise, False.
         """
         response_pattern = r"^\s*" + self._starter + r".*$"
-        response_with_constrained_start = re.search(response_pattern, value, flags=re.MULTILINE)
+        response_with_constrained_start = re.search(
+            response_pattern, value, flags=re.MULTILINE
+        )
         return bool(response_with_constrained_start)
 
 
@@ -490,7 +515,11 @@ class SectionChecker(Instruction):
         Returns:
           A string representing the instruction description.
         """
-        self._section_spliter = section_spliter.strip() if isinstance(section_spliter, str) else section_spliter
+        self._section_spliter = (
+            section_spliter.strip()
+            if isinstance(section_spliter, str)
+            else section_spliter
+        )
         if self._section_spliter is None:
             self._section_spliter = random.choice(_SECTION_SPLITER)
 
@@ -507,11 +536,16 @@ class SectionChecker(Instruction):
             + "[content of section 2]"
         )
 
-        return self._description_pattern.format(num_sections=self._num_sections, section_spliter=self._section_spliter)
+        return self._description_pattern.format(
+            num_sections=self._num_sections, section_spliter=self._section_spliter
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
-        return {"section_spliter": self._section_spliter, "num_sections": self._num_sections}
+        return {
+            "section_spliter": self._section_spliter,
+            "num_sections": self._num_sections,
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -553,7 +587,8 @@ class ParagraphChecker(Instruction):
             self._num_paragraphs = random.randint(1, _NUM_PARAGRAPHS)
 
         self._description_pattern = (
-            "There should be {num_paragraphs} paragraphs. " + "Paragraphs are separated with the markdown divider: ***"
+            "There should be {num_paragraphs} paragraphs. "
+            + "Paragraphs are separated with the markdown divider: ***"
         )
 
         return self._description_pattern.format(num_paragraphs=self._num_paragraphs)
@@ -604,13 +639,16 @@ class PostscriptChecker(Instruction):
           A string representing the instruction description.
         """
         self._postscript_marker = (
-            postscript_marker.strip() if isinstance(postscript_marker, str) else postscript_marker
+            postscript_marker.strip()
+            if isinstance(postscript_marker, str)
+            else postscript_marker
         )
         if self._postscript_marker is None:
             self._postscript_marker = random.choice(_POSTSCRIPT_MARKER)
 
         self._description_pattern = (
-            "At the end of your response, please explicitly add a postscript " + "starting with {postscript}"
+            "At the end of your response, please explicitly add a postscript "
+            + "starting with {postscript}"
         )
 
         return self._description_pattern.format(postscript=self._postscript_marker)
@@ -661,7 +699,9 @@ class RephraseChecker(Instruction):
           A string representing the instruction description.
         """
         if not self.is_change(original_message):
-            raise ValueError(f"Message {original_message} does not contain changes in the form of *change me*.")
+            raise ValueError(
+                f"Message {original_message} does not contain changes in the form of *change me*."
+            )
 
         self._reference_without_change = original_message
         self._description = (
@@ -692,7 +732,9 @@ class RephraseChecker(Instruction):
         """
 
         if not self.is_change(value):
-            raise ValueError(f"value {value} does not contain changes in the form of *change me*.")
+            raise ValueError(
+                f"value {value} does not contain changes in the form of *change me*."
+            )
 
         response_without_changes = self.strip_changes(value)
         reference_without_changes = self.strip_changes(self._reference_without_change)
@@ -723,7 +765,9 @@ class KeywordChecker(Instruction):
         """
 
         if not keywords:
-            self._keywords = instructions_util.generate_keywords(num_keywords=_NUM_KEYWORDS)
+            self._keywords = instructions_util.generate_keywords(
+                num_keywords=_NUM_KEYWORDS
+            )
         else:
             self._keywords = keywords
         self._keywords = sorted(self._keywords)
@@ -742,7 +786,9 @@ class KeywordChecker(Instruction):
 
     def check_following(self, value):
         """Check if the response contain the expected keywords."""
-        return all(re.search(keyword, value, flags=re.IGNORECASE) for keyword in self._keywords)
+        return all(
+            re.search(keyword, value, flags=re.IGNORECASE) for keyword in self._keywords
+        )
 
 
 class KeywordFrequencyChecker(Instruction):
@@ -783,16 +829,23 @@ class KeywordFrequencyChecker(Instruction):
             self._comparison_relation = relation
 
         self._description_pattern = (
-            "In your response, the word {keyword} should appear {relation} " + "{frequency} times."
+            "In your response, the word {keyword} should appear {relation} "
+            + "{frequency} times."
         )
 
         return self._description_pattern.format(
-            keyword=self._keyword, relation=self._comparison_relation, frequency=self._frequency
+            keyword=self._keyword,
+            relation=self._comparison_relation,
+            frequency=self._frequency,
         )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
-        return {"keyword": self._keyword, "frequency": self._frequency, "relation": self._comparison_relation}
+        return {
+            "keyword": self._keyword,
+            "frequency": self._frequency,
+            "relation": self._comparison_relation,
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -805,7 +858,9 @@ class KeywordFrequencyChecker(Instruction):
         if self._comparison_relation == _COMPARISON_RELATION[0]:
             return actual_occurrences < self._frequency
         elif self._comparison_relation == _COMPARISON_RELATION[1]:
-            return actual_occurrences >= self._frequency  # pytype: disable=bad-return-type
+            return (
+                actual_occurrences >= self._frequency
+            )  # pytype: disable=bad-return-type
 
 
 class NumberOfWords(Instruction):
@@ -829,7 +884,9 @@ class NumberOfWords(Instruction):
 
         self._num_words = num_words
         if self._num_words is None or self._num_words < 0:
-            self._num_words = random.randint(_NUM_WORDS_LOWER_LIMIT, _NUM_WORDS_UPPER_LIMIT)
+            self._num_words = random.randint(
+                _NUM_WORDS_LOWER_LIMIT, _NUM_WORDS_UPPER_LIMIT
+            )
 
         if relation is None:
             self._comparison_relation = random.choice(_COMPARISON_RELATION)
@@ -842,7 +899,9 @@ class NumberOfWords(Instruction):
 
         self._description_pattern = "Answer with {relation} {num_words} words."
 
-        return self._description_pattern.format(relation=self._comparison_relation, num_words=self._num_words)
+        return self._description_pattern.format(
+            relation=self._comparison_relation, num_words=self._num_words
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
@@ -866,9 +925,7 @@ class JsonFormat(Instruction):
     """Check the Json format."""
 
     def build_description(self):
-        self._description_pattern = (
-            "Entire output should be wrapped in JSON format. You can use markdown ticks such as ```."
-        )
+        self._description_pattern = "Entire output should be wrapped in JSON format. You can use markdown ticks such as ```."
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -899,7 +956,9 @@ class JsonFormat(Instruction):
 class ParagraphFirstWordCheck(Instruction):
     """Check the paragraph and the first word of the nth paragraph."""
 
-    def build_description(self, num_paragraphs=None, nth_paragraph=None, first_word=None):
+    def build_description(
+        self, num_paragraphs=None, nth_paragraph=None, first_word=None
+    ):
         r"""Build the instruction description.
 
         Args:
@@ -918,7 +977,11 @@ class ParagraphFirstWordCheck(Instruction):
             self._num_paragraphs = random.randint(1, _NUM_PARAGRAPHS)
 
         self._nth_paragraph = nth_paragraph
-        if self._nth_paragraph is None or self._nth_paragraph <= 0 or self._nth_paragraph > self._num_paragraphs:
+        if (
+            self._nth_paragraph is None
+            or self._nth_paragraph <= 0
+            or self._nth_paragraph > self._num_paragraphs
+        ):
             self._nth_paragraph = random.randint(1, self._num_paragraphs + 1)
 
         self._first_word = first_word
@@ -934,7 +997,9 @@ class ParagraphFirstWordCheck(Instruction):
         )
 
         return self._description_pattern.format(
-            num_paragraphs=self._num_paragraphs, nth_paragraph=self._nth_paragraph, first_word=self._first_word
+            num_paragraphs=self._num_paragraphs,
+            nth_paragraph=self._nth_paragraph,
+            first_word=self._first_word,
         )
 
     def get_instruction_args(self):
@@ -1022,13 +1087,20 @@ class KeySentenceChecker(Instruction):
         else:
             self._num_sentences = num_sentences
 
-        self._description_pattern = "Include {num_sentences} of the following sentences {key_sentences}"
+        self._description_pattern = (
+            "Include {num_sentences} of the following sentences {key_sentences}"
+        )
 
-        return self._description_pattern.format(num_sentences=self._num_sentences, key_sentences=self._key_sentences)
+        return self._description_pattern.format(
+            num_sentences=self._num_sentences, key_sentences=self._key_sentences
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
-        return {"num_sentences": self._num_sentences, "key_sentences": list(self._key_sentences)}
+        return {
+            "num_sentences": self._num_sentences,
+            "key_sentences": list(self._key_sentences),
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -1060,11 +1132,15 @@ class ForbiddenWords(Instruction):
         """
 
         if not forbidden_words:
-            self._forbidden_words = instructions_util.generate_keywords(num_keywords=_NUM_KEYWORDS)
+            self._forbidden_words = instructions_util.generate_keywords(
+                num_keywords=_NUM_KEYWORDS
+            )
         else:
             self._forbidden_words = list(set(forbidden_words))
         self._forbidden_words = sorted(self._forbidden_words)
-        self._description_pattern = "Do not include keywords {forbidden_words} in the response."
+        self._description_pattern = (
+            "Do not include keywords {forbidden_words} in the response."
+        )
 
         return self._description_pattern.format(forbidden_words=self._forbidden_words)
 
@@ -1078,7 +1154,10 @@ class ForbiddenWords(Instruction):
 
     def check_following(self, value):
         """Check if the response does not contain the expected keywords."""
-        return all(not re.search(r"\b" + word + r"\b", value, flags=re.IGNORECASE) for word in self._forbidden_words)
+        return all(
+            not re.search(r"\b" + word + r"\b", value, flags=re.IGNORECASE)
+            for word in self._forbidden_words
+        )
 
 
 class RephraseParagraph(Instruction):
@@ -1111,11 +1190,17 @@ class RephraseParagraph(Instruction):
             + "to 'ran'."
         )
 
-        return self._description.format(original_paragraph=original_paragraph, low=self._low, high=self._high)
+        return self._description.format(
+            original_paragraph=original_paragraph, low=self._low, high=self._high
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
-        return {"original_paragraph": self._original_paragraph, "low": self._low, "high": self._high}
+        return {
+            "original_paragraph": self._original_paragraph,
+            "low": self._low,
+            "high": self._high,
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -1171,7 +1256,10 @@ class TwoResponsesChecker(Instruction):
                     return False
             else:
                 valid_responses.append(response)
-        return len(valid_responses) == 2 and valid_responses[0].strip() != valid_responses[1].strip()
+        return (
+            len(valid_responses) == 2
+            and valid_responses[0].strip() != valid_responses[1].strip()
+        )
 
 
 class RepeatPromptThenAnswer(Instruction):
@@ -1206,7 +1294,9 @@ class RepeatPromptThenAnswer(Instruction):
         return ["prompt_to_repeat"]
 
     def check_following(self, value):
-        return bool(value.strip().lower().startswith(self._prompt_to_repeat.strip().lower()))
+        return bool(
+            value.strip().lower().startswith(self._prompt_to_repeat.strip().lower())
+        )
 
 
 class EndChecker(Instruction):
@@ -1221,12 +1311,12 @@ class EndChecker(Instruction):
         Returns:
           A string representing the instruction description.
         """
-        self._end_phrase = end_phrase.strip() if isinstance(end_phrase, str) else end_phrase
+        self._end_phrase = (
+            end_phrase.strip() if isinstance(end_phrase, str) else end_phrase
+        )
         if self._end_phrase is None:
             self._end_phrase = random.choice(_ENDING_OPTIONS)
-        self._description_pattern = (
-            "Finish your response with this exact phrase {ender}. No other words should follow this phrase."
-        )
+        self._description_pattern = "Finish your response with this exact phrase {ender}. No other words should follow this phrase."
         return self._description_pattern.format(ender=self._end_phrase)
 
     def get_instruction_args(self):
@@ -1248,9 +1338,7 @@ class TitleChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = (
-            "Your answer must contain a title, wrapped in double angular brackets, such as <<poem of joy>>."
-        )
+        self._description_pattern = "Your answer must contain a title, wrapped in double angular brackets, such as <<poem of joy>>."
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -1288,7 +1376,12 @@ class LetterFrequencyChecker(Instruction):
         Returns:
           A string representing the instruction description.
         """
-        if not letter or len(letter) > 1 or ord(letter.lower()) < 97 or ord(letter.lower()) > 122:
+        if (
+            not letter
+            or len(letter) > 1
+            or ord(letter.lower()) < 97
+            or ord(letter.lower()) > 122
+        ):
             self._letter = random.choice(list(string.ascii_letters))
         else:
             self._letter = letter.strip()
@@ -1308,17 +1401,21 @@ class LetterFrequencyChecker(Instruction):
         else:
             self._comparison_relation = let_relation
 
-        self._description_pattern = (
-            "In your response, the letter {letter} should appear {let_relation} {let_frequency} times."
-        )
+        self._description_pattern = "In your response, the letter {letter} should appear {let_relation} {let_frequency} times."
 
         return self._description_pattern.format(
-            letter=self._letter, let_frequency=self._frequency, let_relation=self._comparison_relation
+            letter=self._letter,
+            let_frequency=self._frequency,
+            let_relation=self._comparison_relation,
         )
 
     def get_instruction_args(self):
         """Returns the keyword args of build description."""
-        return {"letter": self._letter, "let_frequency": self._frequency, "let_relation": self._comparison_relation}
+        return {
+            "letter": self._letter,
+            "let_frequency": self._frequency,
+            "let_relation": self._comparison_relation,
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -1340,7 +1437,9 @@ class CapitalLettersEnglishChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = "Your entire response should be in English, and in all capital letters."
+        self._description_pattern = (
+            "Your entire response should be in English, and in all capital letters."
+        )
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -1358,7 +1457,9 @@ class CapitalLettersEnglishChecker(Instruction):
             return value.isupper() and langdetect.detect(value) == "en"
         except langdetect.LangDetectException as e:
             # Count as instruction is followed.
-            logging.error("Unable to detect language for text %s due to %s", value, e)  # refex: disable=pytotw.037
+            logging.error(
+                "Unable to detect language for text %s due to %s", value, e
+            )  # refex: disable=pytotw.037
             return True
 
 
@@ -1367,9 +1468,7 @@ class LowercaseLettersEnglishChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = (
-            "Your entire response should be in English, and in all lowercase letters. No capital letters are allowed."
-        )
+        self._description_pattern = "Your entire response should be in English, and in all lowercase letters. No capital letters are allowed."
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -1387,7 +1486,9 @@ class LowercaseLettersEnglishChecker(Instruction):
             return value.islower() and langdetect.detect(value) == "en"
         except langdetect.LangDetectException as e:
             # Count as instruction is followed.
-            logging.error("Unable to detect language for text %s due to %s", value, e)  # refex: disable=pytotw.037
+            logging.error(
+                "Unable to detect language for text %s due to %s", value, e
+            )  # refex: disable=pytotw.037
             return True
 
 
@@ -1396,7 +1497,9 @@ class CommaChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = "In your entire response, refrain from the use of any commas."
+        self._description_pattern = (
+            "In your entire response, refrain from the use of any commas."
+        )
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -1439,15 +1542,18 @@ class CapitalWordFrequencyChecker(Instruction):
                 f"{_COMPARISON_RELATION}, but {capital_relation} is given."
             )
 
-        self._description_pattern = (
-            "In your response, words with all capital letters should appear {relation} {frequency} times."
-        )
+        self._description_pattern = "In your response, words with all capital letters should appear {relation} {frequency} times."
 
-        return self._description_pattern.format(frequency=self._frequency, relation=self._comparison_relation)
+        return self._description_pattern.format(
+            frequency=self._frequency, relation=self._comparison_relation
+        )
 
     def get_instruction_args(self):
         """Returns the keyword args of build description."""
-        return {"capital_frequency": self._frequency, "capital_relation": self._comparison_relation}
+        return {
+            "capital_frequency": self._frequency,
+            "capital_relation": self._comparison_relation,
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -1472,7 +1578,9 @@ class QuotationChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = "Wrap your entire response with double quotation marks."
+        self._description_pattern = (
+            "Wrap your entire response with double quotation marks."
+        )
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -1513,7 +1621,9 @@ class RepeatPhraseChecker(Instruction):
             self._small_n = small_n
 
         self._description_pattern = "Repeat the phrase {phrase} exactly {small_n} times, transforming it slightly each time by replacing only one word in the center of the phrase."
-        return self._description_pattern.format(phrase=self._phrase, small_n=self._small_n)
+        return self._description_pattern.format(
+            phrase=self._phrase, small_n=self._small_n
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
@@ -1604,17 +1714,25 @@ class CopySpanIdxChecker(Instruction):
         else:
             self._n_start = n_start
         if not n_end:
-            self._n_end = random.randint(self._n_start + 1, len(self._prompt_to_repeat) - 1)
+            self._n_end = random.randint(
+                self._n_start + 1, len(self._prompt_to_repeat) - 1
+            )
         else:
             self._n_end = n_end
         self._description_pattern = "Copy the span of words that lies between (and including) index {n_start} and {n_end}, the indices are character indices!"
         return self._description_pattern.format(
-            n_start=self._n_start, n_end=self._n_end, prompt_to_repeat=self._prompt_to_repeat
+            n_start=self._n_start,
+            n_end=self._n_end,
+            prompt_to_repeat=self._prompt_to_repeat,
         )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
-        return {"n_start": self._n_start, "n_end": self._n_end, "prompt_to_repeat": self._prompt_to_repeat}
+        return {
+            "n_start": self._n_start,
+            "n_end": self._n_end,
+            "prompt_to_repeat": self._prompt_to_repeat,
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -1622,7 +1740,10 @@ class CopySpanIdxChecker(Instruction):
 
     def check_following(self, value):
         """Checks if the response contains the expected number of phrases with the correct modifications."""
-        return value.strip().lower() == self._prompt_to_repeat[self._n_start : self._n_end].strip().lower()
+        return (
+            value.strip().lower()
+            == self._prompt_to_repeat[self._n_start : self._n_end].strip().lower()
+        )
 
 
 class SentenceHyphenChecker(Instruction):
@@ -1657,7 +1778,9 @@ class AdjacentLetterChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = "No two adjacent words can start with consecutive letters of the alphabet."
+        self._description_pattern = (
+            "No two adjacent words can start with consecutive letters of the alphabet."
+        )
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -1685,7 +1808,9 @@ class SquareBracketChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = "Enclose every word in your response within square brackets."
+        self._description_pattern = (
+            "Enclose every word in your response within square brackets."
+        )
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -1729,7 +1854,9 @@ class KeywordFrequencyOnceChecker(Instruction):
 
         self._description_pattern = "Include keyword {keyword} in your response."
 
-        return self._description_pattern.format(keyword=self._keyword, frequency=self._frequency)
+        return self._description_pattern.format(
+            keyword=self._keyword, frequency=self._frequency
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
@@ -1783,15 +1910,23 @@ class KeywordFrequencyCheckerDifferent(Instruction):
         else:
             self._comparison_relation = relation
 
-        self._description_pattern = "In your response, the word {keyword} should appear {frequency} times."
+        self._description_pattern = (
+            "In your response, the word {keyword} should appear {frequency} times."
+        )
 
         return self._description_pattern.format(
-            keyword=self._keyword, relation=self._comparison_relation, frequency=self._frequency
+            keyword=self._keyword,
+            relation=self._comparison_relation,
+            frequency=self._frequency,
         )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
-        return {"keyword": self._keyword, "frequency": self._frequency, "relation": self._comparison_relation}
+        return {
+            "keyword": self._keyword,
+            "frequency": self._frequency,
+            "relation": self._comparison_relation,
+        }
 
     def get_instruction_args_keys(self):
         """Returns the args keys of `build_description`."""
@@ -1804,7 +1939,9 @@ class KeywordFrequencyCheckerDifferent(Instruction):
         if self._comparison_relation == _COMPARISON_RELATION[0]:
             return actual_occurrences < self._frequency
         elif self._comparison_relation == _COMPARISON_RELATION[1]:
-            return actual_occurrences >= self._frequency  # pytype: disable=bad-return-type
+            return (
+                actual_occurrences >= self._frequency
+            )  # pytype: disable=bad-return-type
 
 
 class ExcludeWordHarderChecker(Instruction):
@@ -1855,7 +1992,8 @@ class ParagraphBasicChecker(Instruction):
           A string representing the instruction description.
         """
         self._description_pattern = (
-            "There should be 2 paragraphs. " + "Paragraphs are separated with the markdown divider: ***"
+            "There should be 2 paragraphs. "
+            + "Paragraphs are separated with the markdown divider: ***"
         )
 
         return self._description_pattern
@@ -1960,7 +2098,9 @@ class FirstWordSentChecker(Instruction):
             else:
                 self._first_word = first_word.strip()
 
-        self._description_pattern = "The first word of each sentence should be the word {first_word}."
+        self._description_pattern = (
+            "The first word of each sentence should be the word {first_word}."
+        )
 
         return self._description_pattern.format(first_word=self._first_word)
 
@@ -2011,7 +2151,9 @@ class FirstWordAnswerChecker(Instruction):
         else:
             self._first_word = first_word.strip()
 
-        self._description_pattern = "The first word of your response should be the word {first_word}."
+        self._description_pattern = (
+            "The first word of your response should be the word {first_word}."
+        )
 
         return self._description_pattern.format(first_word=self._first_word)
 
@@ -2059,9 +2201,7 @@ class LastWordSentChecker(Instruction):
             else:
                 self._last_word = last_word.strip()
 
-        self._description_pattern = (
-            "The last word of each sentence, before punctuation, should be the word {last_word}."
-        )
+        self._description_pattern = "The last word of each sentence, before punctuation, should be the word {last_word}."
 
         return self._description_pattern.format(last_word=self._last_word)
 
@@ -2114,7 +2254,9 @@ class LastWordAnswerChecker(Instruction):
         else:
             self._last_word = last_word.strip()
 
-        self._description_pattern = "The last word of your response should be the word {last_word}."
+        self._description_pattern = (
+            "The last word of your response should be the word {last_word}."
+        )
 
         return self._description_pattern.format(last_word=self._last_word)
 
@@ -2147,9 +2289,7 @@ class BiGramWrappingChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = (
-            "Wrap every word bigram in double angular brackets, such as <<I am>> <<at home>> <<with my>> <<cute dog>>."
-        )
+        self._description_pattern = "Wrap every word bigram in double angular brackets, such as <<I am>> <<at home>> <<with my>> <<cute dog>>."
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -2163,7 +2303,9 @@ class BiGramWrappingChecker(Instruction):
         """Checks if every word bigram is enclosed within double angular brackets."""
         words = value.split()
         for i in range(0, len(words) - 1, 2):
-            if i + 1 < len(words) and not (words[i].startswith("<<") and words[i + 1].endswith(">>")):
+            if i + 1 < len(words) and not (
+                words[i].startswith("<<") and words[i + 1].endswith(">>")
+            ):
                 return False
         return True
 
@@ -2233,7 +2375,10 @@ class CopyingMultipleChecker(Instruction):
         prompts = value.split("******")
         if len(prompts) != self._N:
             return False
-        return all(prompt.strip().lower() == self._prompt_to_repeat.strip().lower() for prompt in prompts)
+        return all(
+            prompt.strip().lower() == self._prompt_to_repeat.strip().lower()
+            for prompt in prompts
+        )
 
 
 class PunctuationDotChecker(Instruction):
@@ -2241,9 +2386,7 @@ class PunctuationDotChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = (
-            "In your entire response, refrain from the use of . (i.e. dots) as punctuation and in general."
-        )
+        self._description_pattern = "In your entire response, refrain from the use of . (i.e. dots) as punctuation and in general."
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -2294,7 +2437,9 @@ class LowercaseCountingChecker(Instruction):
             self._N = random.randint(2, 3)
         else:
             self._N = N
-        self._description_pattern = "In your response, all lowercase words should appear at most {N} times."
+        self._description_pattern = (
+            "In your response, all lowercase words should appear at most {N} times."
+        )
         return self._description_pattern.format(N=self._N)
 
     def get_instruction_args(self):
@@ -2371,7 +2516,9 @@ class CountingCompositionChecker(Instruction):
         else:
             self._n_words = n_words
         self._description_pattern = "Write 3 paragraphs, delimited by the markdown divider: * * *, with exactly {n_sent} sentences each, with exactly {n_words} words in each sentence."
-        return self._description_pattern.format(n_sent=self._n_sent, n_words=self._n_words)
+        return self._description_pattern.format(
+            n_sent=self._n_sent, n_words=self._n_words
+        )
 
     def get_instruction_args(self):
         return {"n_sent": self._n_sent, "n_words": self._n_words}
@@ -2420,7 +2567,9 @@ class CountUniqueChecker(Instruction):
 
     def build_description(self):
         """Build the instruction description."""
-        self._description_pattern = "Only use unique words in your response, no word should be repeated!"
+        self._description_pattern = (
+            "Only use unique words in your response, no word should be repeated!"
+        )
         return self._description_pattern
 
     def get_instruction_args(self):
@@ -2459,11 +2608,11 @@ class CountIncrementWordChecker(Instruction):
         else:
             self._keyword2 = keyword2.strip()
 
-        self._description_pattern = (
-            "Include keyword {keyword1} once in your response, keyword {keyword2} twice in your response."
-        )
+        self._description_pattern = "Include keyword {keyword1} once in your response, keyword {keyword2} twice in your response."
 
-        return self._description_pattern.format(keyword1=self._keyword1, keyword2=self._keyword2)
+        return self._description_pattern.format(
+            keyword1=self._keyword1, keyword2=self._keyword2
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""
@@ -2483,8 +2632,12 @@ class CountIncrementWordChecker(Instruction):
           True if the response contains the expected number of keywords;
           otherwise, False.
         """
-        actual_occurrences1 = len(re.findall(self._keyword1, value, flags=re.IGNORECASE))
-        actual_occurrences2 = len(re.findall(self._keyword2, value, flags=re.IGNORECASE))
+        actual_occurrences1 = len(
+            re.findall(self._keyword1, value, flags=re.IGNORECASE)
+        )
+        actual_occurrences2 = len(
+            re.findall(self._keyword2, value, flags=re.IGNORECASE)
+        )
 
         return bool(actual_occurrences1 == 1 and actual_occurrences2 == 2)
 
@@ -2547,11 +2700,11 @@ class KeywordSpecificPositionChecker(Instruction):
         else:
             self._m = m
 
-        self._description_pattern = (
-            "Include keyword {keyword} in the {n}-th sentence, as the {m}-th word of that sentence."
-        )
+        self._description_pattern = "Include keyword {keyword} in the {n}-th sentence, as the {m}-th word of that sentence."
 
-        return self._description_pattern.format(keyword=self._keyword, n=self._n, m=self._m)
+        return self._description_pattern.format(
+            keyword=self._keyword, n=self._n, m=self._m
+        )
 
     def get_instruction_args(self):
         """Returns the keyward args of `build_description`."""

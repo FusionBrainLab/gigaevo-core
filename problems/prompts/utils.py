@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from string import Formatter
-from typing import Tuple
 
 from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
-from tools.utils import RedisRunConfig
 from problems.prompts.client import LLMClient
 from problems.prompts.types import CallLog, OutputDict
-
+from tools.utils import RedisRunConfig
 
 __all__ = [
     "get_best_program",
@@ -133,7 +131,7 @@ async def _process_sample(
     index: int,
     sample: dict,
     semaphore: asyncio.Semaphore,
-) -> Tuple[int, str, CallLog]:
+) -> tuple[int, str, CallLog]:
     """Process single sample with cost tracking.
 
     Args:

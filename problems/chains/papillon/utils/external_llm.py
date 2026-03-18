@@ -28,9 +28,7 @@ def make_external_llm_fn(llm_config: dict) -> Callable[[list[dict]], list[str]]:
     def external_llm(items: list[dict]) -> list[str]:
         async def _run():
             return list(
-                await asyncio.gather(
-                    *(client.copy()(item["query"]) for item in items)
-                )
+                await asyncio.gather(*(client.copy()(item["query"]) for item in items))
             )
 
         return asyncio.run(_run())

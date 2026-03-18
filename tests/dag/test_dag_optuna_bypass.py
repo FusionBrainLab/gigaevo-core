@@ -10,7 +10,7 @@ Uses mock stages that mimic the relevant I/O types.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -46,7 +46,7 @@ class ValidatorPayloadInput(StageIO):
     """Mimics CallValidatorFunction.InputsModel (payload field)."""
 
     payload: AnyContainer
-    context: Optional[AnyContainer] = None
+    context: AnyContainer | None = None
 
 
 class ValidatorOutput(StageIO):

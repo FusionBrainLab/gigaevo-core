@@ -9,12 +9,12 @@ Usage:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import json
 import math
 import os
 import random
 import uuid
-from datetime import datetime, timedelta, timezone
 
 import redis as redis_lib
 
@@ -168,7 +168,7 @@ def seed_run(r: redis_lib.Redis, spec: dict, rng: random.Random) -> tuple[int, i
     n_programs = spec["n_programs"]
     valid_frac = spec["valid_frac"]
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # ---- Build programs with lineage ----
     programs: list[Program] = []
@@ -211,9 +211,7 @@ def seed_run(r: redis_lib.Redis, spec: dict, rng: random.Random) -> tuple[int, i
             fitness += rng.gauss(0, noise)
             fitness = round(max(0.0, min(1.0, fitness)), 4)
             is_valid = 1.0 if rng.random() < valid_frac else 0.0
-            child.add_metrics(
-                {"fitness": fitness * is_valid, "is_valid": is_valid}
-            )
+            child.add_metrics({"fitness": fitness * is_valid, "is_valid": is_valid})
             parent.lineage.add_child(child.id)
             programs.append(child)
             living.append(child)
@@ -240,7 +238,10 @@ def seed_run(r: redis_lib.Redis, spec: dict, rng: random.Random) -> tuple[int, i
                 created_at=cur.created_at - timedelta(hours=2),
             )
             ancestor.add_metrics(
-                {"fitness": round(rng.uniform(start_f, end_f * 0.85), 4), "is_valid": 1.0}
+                {
+                    "fitness": round(rng.uniform(start_f, end_f * 0.85), 4),
+                    "is_valid": 1.0,
+                }
             )
             cur.lineage.parents = [ancestor.id]
             ancestor.lineage.add_child(cur.id)

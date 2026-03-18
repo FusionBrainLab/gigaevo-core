@@ -19,8 +19,12 @@ from gigaevo.programs.program import Program
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
     from gigaevo.llm.bandit import MutationOutcome
+    from gigaevo.prompts.fetcher import PromptFetcher
 
 MutationMode = Literal["rewrite", "diff"]
+
+#: Metadata key for storing the prompt tracking ID in program metadata
+PROMPT_ID_METADATA_KEY = "prompt_id"
 
 
 class LLMMutationOperator(MutationOperator):
@@ -40,6 +44,7 @@ class LLMMutationOperator(MutationOperator):
         problem_context: ProblemContext,
         strip_comments_and_docstrings: bool = False,
         prompts_dir: str | Path | None = None,
+        prompt_fetcher: PromptFetcher | None = None,
     ):
         self.problem_context = problem_context
         self.llm_wrapper = llm_wrapper
@@ -48,6 +53,7 @@ class LLMMutationOperator(MutationOperator):
         self.context_key = context_key
         self.metrics_context = problem_context.metrics_context
         self.strip_comments_and_docstrings = strip_comments_and_docstrings
+        self._prompt_fetcher = prompt_fetcher
 
         self.agent = create_mutation_agent(
             llm=llm_wrapper,
@@ -55,12 +61,15 @@ class LLMMutationOperator(MutationOperator):
             metrics_context=self.metrics_context,
             mutation_mode=mutation_mode,
             prompts_dir=prompts_dir,
+            prompt_fetcher=prompt_fetcher,
         )
 
         logger.info(
-            f"[LLMMutationOperator] Initialized with mode: {mutation_mode}, "
-            f"strip_comments_and_docstrings: {strip_comments_and_docstrings} "
-            "(using LangGraph agent)"
+            "[LLMMutationOperator] Initialized with mode: {}, "
+            "strip_comments_and_docstrings: {} "
+            "(using LangGraph agent)",
+            mutation_mode,
+            strip_comments_and_docstrings,
         )
 
     @staticmethod
@@ -81,8 +90,9 @@ class LLMMutationOperator(MutationOperator):
             return canonicalized
         except SyntaxError as e:
             logger.warning(
-                f"[LLMMutationOperator] Failed to canonicalize code due to syntax error: {e}. "
-                "Returning original code."
+                "[LLMMutationOperator] Failed to canonicalize code due to syntax error: {}. "
+                "Returning original code.",
+                e,
             )
             return code
 
@@ -108,7 +118,8 @@ class LLMMutationOperator(MutationOperator):
                 )
 
             logger.debug(
-                f"[LLMMutationOperator] Running mutation agent for {len(selected_parents)} parents"
+                "[LLMMutationOperator] Running mutation agent for {} parents",
+                len(selected_parents),
             )
 
             result = await self.agent.arun(
@@ -137,9 +148,13 @@ class LLMMutationOperator(MutationOperator):
             if structured_output:
                 mutation_metadata[MUTATION_OUTPUT_METADATA_KEY] = structured_output
                 archetype = result.get("archetype", "unknown")
-                logger.debug(f"[LLMMutationOperator] Mutation archetype: {archetype}.")
+                logger.debug("[LLMMutationOperator] Mutation archetype: {}", archetype)
             if model_name:
                 mutation_metadata["mutation_model"] = model_name
+            # Stamp prompt tracking ID if present
+            prompt_id = result.get("prompt_id")
+            if prompt_id is not None:
+                mutation_metadata[PROMPT_ID_METADATA_KEY] = prompt_id
 
             mutation_spec = MutationSpec(
                 code=final_code,
@@ -157,11 +172,40 @@ class LLMMutationOperator(MutationOperator):
         storage: ProgramStorage,
         outcome: MutationOutcome | None = None,
     ) -> None:
-        """Fetch parents and forward to the router's mutation outcome callback."""
+        """Fetch parents and forward to the router's mutation outcome callback.
+
+        Also records prompt outcome stats for the prompt co-evolution run,
+        if a dynamic prompt_fetcher is configured.
+        """
         parent_ids = program.lineage.parents
-        if not parent_ids:
-            return
-        parents = await storage.mget(parent_ids)
-        self.llm_wrapper.on_mutation_outcome(
-            program, [p for p in parents if p], outcome=outcome
-        )
+        parents: list[Program] = []
+        if parent_ids:
+            parents = await storage.mget(parent_ids)
+            self.llm_wrapper.on_mutation_outcome(
+                program, [p for p in parents if p], outcome=outcome
+            )
+
+        # Record prompt outcome for co-evolution stats tracking
+        _fetcher = getattr(self, "_prompt_fetcher", None)
+        if _fetcher is not None and _fetcher.is_dynamic and outcome is not None:
+            prompt_id = program.metadata.get(PROMPT_ID_METADATA_KEY)
+            if prompt_id:
+                primary_key = self.metrics_context.get_primary_key()
+                higher_is_better = self.metrics_context.is_higher_better(primary_key)
+                child_fitness = program.metrics.get(primary_key, 0.0)
+                parent_fitness_values = [
+                    p.metrics.get(primary_key, 0.0)
+                    for p in parents
+                    if p and primary_key in p.metrics
+                ]
+                best_parent_fitness = (
+                    max(parent_fitness_values) if parent_fitness_values else 0.0
+                )
+                _fetcher.record_outcome(
+                    prompt_id=prompt_id,
+                    child_fitness=child_fitness,
+                    parent_fitness=best_parent_fitness,
+                    higher_is_better=higher_is_better,
+                    outcome=outcome,
+                    child_metrics=dict(program.metrics),
+                )

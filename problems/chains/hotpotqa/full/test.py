@@ -2,22 +2,22 @@
 
 import argparse
 
-from problems.chains.utils import get_best_program
-from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
+from problems.chains.hotpotqa.full.config import FULL_CHAIN_CONFIG, load_baseline
+from problems.chains.hotpotqa.full.validate import calculate_exact_match, extract_answer
 from problems.chains.hotpotqa.shared_config import (
+    BM25S_INDEX_DIR,
+    CORPUS_PATH,
     DATASET_CONFIG,
     LLM_CONFIG,
     load_jsonl,
-    preprocess_sample,
     outer_context_builder,
-    CORPUS_PATH,
-    BM25S_INDEX_DIR,
+    preprocess_sample,
 )
-from problems.chains.hotpotqa.full.config import FULL_CHAIN_CONFIG, load_baseline
-from problems.chains.hotpotqa.full.validate import extract_answer, calculate_exact_match
 from problems.chains.hotpotqa.utils.retrieval import make_retrieve_fn
+from problems.chains.utils import get_best_program
 
 
 def load_test_context(n_samples: int | None = None) -> dict:
@@ -68,7 +68,7 @@ def test_baseline(n_samples: int = 3):
 
     print(f"\n=== Baseline Results ({n_samples} samples) ===")
     for i, (pred, target) in enumerate(zip(predictions, targets)):
-        print(f"  Sample {i+1}: pred={pred!r}, target={target!r}")
+        print(f"  Sample {i + 1}: pred={pred!r}, target={target!r}")
 
     exact_match = calculate_exact_match(targets, predictions)
     extraction_failures = (
@@ -151,7 +151,9 @@ def test_best_chain(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test chain on test dataset (full_chain)")
+    parser = argparse.ArgumentParser(
+        description="Test chain on test dataset (full_chain)"
+    )
     parser.add_argument(
         "--mode",
         choices=["baseline", "redis"],

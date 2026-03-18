@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
+
+if TYPE_CHECKING:
+    pass
 
 
 class EvolutionContext(BaseModel):
@@ -24,5 +28,10 @@ class EvolutionContext(BaseModel):
     prompts_dir: str | Path | None = Field(
         default=None,
         description="Optional directory for prompt templates (e.g. from config.prompts.dir). Same layout as gigaevo/prompts.",
+    )
+    prompt_fetcher: Any | None = Field(
+        default=None,
+        description="Optional PromptFetcher for dynamic prompt co-evolution. "
+        "When None, agents use FixedDirPromptFetcher(prompts_dir) by default.",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)

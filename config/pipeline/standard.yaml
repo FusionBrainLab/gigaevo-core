@@ -6,6 +6,7 @@ evolution_context:
   llm_wrapper: ${ref:llm}
   storage: ${redis_storage}
   prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
 
 pipeline_builder:
   _target_: gigaevo.entrypoint.default_pipelines.DefaultPipelineBuilder

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from loguru import logger
 
@@ -42,7 +42,7 @@ class ProgramStateManager:
         persisted by update_stage_result().
         """
         async with self._lock_for(program.id):
-            ts = started_at or datetime.now(timezone.utc)
+            ts = started_at or datetime.now(UTC)
             # Preserve input_hash from existing result if present
             existing = program.stage_results.get(stage_name)
             input_hash = existing.input_hash if existing else None
@@ -85,17 +85,10 @@ class ProgramStateManager:
     ) -> None:
         """Set program state with validation and atomic persistence."""
         async with self._lock_for(program.id):
-            logger.debug(
-                "[ProgramStateManager] Setting program {} state from {} to {}",
-                program.id[:8],
-                program.state,
-                new_state,
-            )
-
             if program.state == new_state:
                 logger.debug(
-                    "[ProgramStateManager] Program {} already in state {}, skipping",
-                    program.id[:8],
+                    "[ProgramStateManager] {} already in state {}, skipping",
+                    program.short_id,
                     new_state,
                 )
                 return
@@ -106,25 +99,18 @@ class ProgramStateManager:
             except ValueError as e:
                 logger.error(
                     "[ProgramStateManager] Invalid state transition for {}: {}",
-                    program.id[:8],
+                    program.short_id,
                     e,
                 )
                 raise
 
-            # Update program object
             program.state = new_state
-            logger.debug(
-                "[ProgramStateManager] Updated program {} state to {}",
-                program.id[:8],
-                new_state,
-            )
-
             old = old_state.value if old_state else None
             await self.storage.atomic_state_transition(program, old, new_state.value)
 
             logger.debug(
-                "[ProgramStateManager] Atomically transitioned {} state {} -> {}",
-                program.id[:8],
+                "[ProgramStateManager] {} {} → {}",
+                program.short_id,
                 old_state,
                 new_state,
             )

@@ -14,7 +14,7 @@ def validate_packing(centers, radii):
     for i in range(n):
         for j in range(i + 1, n):
             dist = np.sqrt(np.sum((centers[i] - centers[j]) ** 2))
-            if dist < radii[i] + radii[j] - 1e-6:  
+            if dist < radii[i] + radii[j] - 1e-6:
                 raise ValueError(
                     f"Circles {i} and {j} overlap: dist={dist}, r1+r2={radii[i] + radii[j]}"
                 )
@@ -29,10 +29,10 @@ def validate(data):
         raise ValueError(f"Invalid shape: expected (32, 3), got {data.shape}")
     if not np.all(np.isfinite(data)):
         raise ValueError("Data has NaN or infinite values")
-    
-    centers = data[:, :2]  
-    radii = data[:, 2]     
-    
+
+    centers = data[:, :2]
+    radii = data[:, 2]
+
     if np.any(radii <= 0):
         raise ValueError("All radii must be positive")
     try:
@@ -47,4 +47,3 @@ def validate(data):
         "fitness": fitness,
         "is_valid": is_valid,
     }
-

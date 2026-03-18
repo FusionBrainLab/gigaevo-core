@@ -1,12 +1,11 @@
-from typing import List
 from statistics import mean
 
-from problems.prompts.utils import validate_prompt_template
 from problems.prompts.pupa.config import load_context
 from problems.prompts.pupa.utils.pipeline import run_pipeline
+from problems.prompts.utils import validate_prompt_template
 
 
-def calculate_fitness(results: List[dict]) -> dict:
+def calculate_fitness(results: list[dict]) -> dict:
     """Calculate fitness and aggregate metrics from results."""
     if not results:
         return {"fitness": 0.0, "avg_quality": 0.0, "avg_leakage": 1.0}

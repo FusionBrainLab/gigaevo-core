@@ -28,7 +28,7 @@ class RecordingWriter(LogWriter):
     def __init__(self) -> None:
         self.calls: list[tuple[str, float]] = []
 
-    def bind(self, path: list[str]) -> "RecordingWriter":
+    def bind(self, path: list[str]) -> RecordingWriter:
         return self
 
     def scalar(self, metric: str, value: float, **kwargs: Any) -> None:

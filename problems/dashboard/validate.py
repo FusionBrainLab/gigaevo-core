@@ -15,9 +15,9 @@ Each file is named: fitness{score:.4f}_{hash}.html
 import base64
 import hashlib
 import os
+from pathlib import Path
 import tempfile
 import time
-from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,7 @@ _DEFAULT_HTML_DIR = "/tmp/gigaevo_dashboard_outputs"
 # ---------------------------------------------------------------------------
 # Hard validation (fast, before any rendering)
 # ---------------------------------------------------------------------------
+
 
 def _hard_validate(html: str) -> None:
     """Raise ValueError if HTML is structurally broken."""
@@ -43,6 +44,7 @@ def _hard_validate(html: str) -> None:
 # ---------------------------------------------------------------------------
 # Playwright rendering
 # ---------------------------------------------------------------------------
+
 
 def _render_screenshot(html: str) -> bytes:
     """Render HTML in Chromium and return full-page PNG bytes."""
@@ -72,14 +74,16 @@ def _render_screenshot(html: str) -> bytes:
                 raise ValueError(f"Page load timed out (CDN unreachable?): {e}") from e
             # Collapse all CSS animation/transition durations so entrance animations
             # (e.g. opacity:0 → 1 fade-ins) complete instantly before screenshot.
-            page.add_style_tag(content=(
-                "*, *::before, *::after {"
-                "  animation-duration: 0.001s !important;"
-                "  animation-delay: 0s !important;"
-                "  transition-duration: 0.001s !important;"
-                "  transition-delay: 0s !important;"
-                "}"
-            ))
+            page.add_style_tag(
+                content=(
+                    "*, *::before, *::after {"
+                    "  animation-duration: 0.001s !important;"
+                    "  animation-delay: 0s !important;"
+                    "  transition-duration: 0.001s !important;"
+                    "  transition-delay: 0s !important;"
+                    "}"
+                )
+            )
             # Wait for JS/canvas rendering to settle
             page.wait_for_timeout(2000)
             screenshot_bytes = page.screenshot(full_page=True)
@@ -100,7 +104,6 @@ def _render_screenshot(html: str) -> bytes:
 def _is_blank_screenshot(png_bytes: bytes) -> bool:
     """Return True if screenshot is nearly uniform (all one colour = blank/crash)."""
     try:
-        import struct
         import zlib
 
         # Parse PNG IDAT to sample pixels — approximate check via gzip entropy
@@ -205,7 +208,13 @@ If there are NO hover effects or animations visible, interactivity_cues CANNOT e
 If the layout looks like a standard Bootstrap/generic template, innovation CANNOT exceed 3.
 """
 
-_SCORE_KEYS = ["visual_appeal", "multi_run_clarity", "data_completeness", "interactivity_cues", "innovation"]
+_SCORE_KEYS = [
+    "visual_appeal",
+    "multi_run_clarity",
+    "data_completeness",
+    "interactivity_cues",
+    "innovation",
+]
 
 
 class DashboardScores(BaseModel):
@@ -228,8 +237,9 @@ def _resolve_api_key() -> str:
     if key and key.upper() != "EMPTY":
         return key
     from dotenv import dotenv_values
+
     for candidate in [
-        os.path.join(os.getcwd(), ".env"),   # repo root (exec_runner cwd = project root)
+        os.path.join(os.getcwd(), ".env"),  # repo root (exec_runner cwd = project root)
         ".env",
     ]:
         vals = dotenv_values(os.path.abspath(candidate))
@@ -263,10 +273,15 @@ def _score_with_vlm(png_bytes: bytes) -> dict[str, float]:
     b64 = base64.b64encode(png_bytes).decode("ascii")
     messages = [
         SystemMessage(content=_SYSTEM_PROMPT),
-        HumanMessage(content=[
-            {"type": "text", "text": _SCORING_PROMPT},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-        ]),
+        HumanMessage(
+            content=[
+                {"type": "text", "text": _SCORING_PROMPT},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}"},
+                },
+            ]
+        ),
     ]
 
     config = {}
@@ -282,7 +297,7 @@ def _score_with_vlm(png_bytes: bytes) -> dict[str, float]:
         except Exception:
             if attempt == 2:
                 raise
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
 
     return {k: float(getattr(scores, k)) for k in _SCORE_KEYS}
 
@@ -290,6 +305,7 @@ def _score_with_vlm(png_bytes: bytes) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 # Main validate entry point
 # ---------------------------------------------------------------------------
+
 
 def validate(context: dict, html: str) -> dict:
     """Validate an evolved dashboard HTML.
@@ -312,7 +328,9 @@ def validate(context: dict, html: str) -> dict:
 
     # 3. Blank-screen check
     if _is_blank_screenshot(png_bytes):
-        raise ValueError("Screenshot appears blank (all one colour) — likely a render crash")
+        raise ValueError(
+            "Screenshot appears blank (all one colour) — likely a render crash"
+        )
 
     # 4. VLM scoring
     scores = _score_with_vlm(png_bytes)

@@ -3,19 +3,19 @@
 import argparse
 from statistics import mean
 
-from problems.chains.utils import get_best_program
-from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.ifbench.shared_config import (
     DATASET_CONFIG,
     LLM_CONFIG,
     load_jsonl,
-    preprocess_sample,
     outer_context_builder,
+    preprocess_sample,
 )
 from problems.chains.ifbench.static.config import STATIC_CHAIN_TOPOLOGY, load_baseline
 from problems.chains.ifbench.utils.evaluation import test_instruction_following
+from problems.chains.utils import get_best_program
 
 
 def load_test_context(n_samples: int | None = None) -> dict:
@@ -58,7 +58,9 @@ def test_baseline(n_samples: int = 3):
     )
 
     print(f"Baseline validated: {len(chain.steps)} steps")
-    print(f"System prompt: {chain.system_prompt[:80] if chain.system_prompt else '(empty)'}...")
+    print(
+        f"System prompt: {chain.system_prompt[:80] if chain.system_prompt else '(empty)'}..."
+    )
 
     context = load_test_context(n_samples=n_samples)
     dataset = context["test_dataset"]
@@ -73,7 +75,7 @@ def test_baseline(n_samples: int = 3):
     for i, result in enumerate(results):
         response = result.final_output
         preview = response[:100] if response else "(empty)"
-        print(f"  Sample {i+1}: {preview!r}...")
+        print(f"  Sample {i + 1}: {preview!r}...")
 
     metrics = evaluate_results(dataset, results)
     print(f"\nConstraint satisfaction: {metrics['fitness']:.4f}")

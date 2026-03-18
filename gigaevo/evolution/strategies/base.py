@@ -142,3 +142,12 @@ class EvolutionStrategy(ABC):
         Override in strategies that maintain in-memory counters which must
         survive a stop/restart cycle (e.g., generation count, migration timer).
         """
+
+    async def reindex_archive(self) -> None:
+        """Re-evaluate archive placements using current program metrics.
+
+        Clears the archive and re-inserts all programs, so that programs
+        whose fitness changed (e.g., from external stats updates) compete
+        fairly against each other. Default is a no-op for strategies where
+        fitness is immutable.
+        """

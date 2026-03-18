@@ -21,7 +21,6 @@ import argparse
 import asyncio
 from pathlib import Path
 import sys
-from typing import Optional
 
 PROJ = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJ))
@@ -71,7 +70,7 @@ def _resolve_program(id_prefix: str, id_map: dict[str, Program]) -> Program:
     )
 
 
-def _get_fitness(p: Program, metric: str) -> Optional[float]:
+def _get_fitness(p: Program, metric: str) -> float | None:
     return p.metrics.get(metric)
 
 
@@ -89,7 +88,7 @@ def _format_fitness(p: Program, metric: str) -> str:
 def _walk_lineage(
     start: Program,
     id_map: dict[str, Program],
-    depth: Optional[int],
+    depth: int | None,
     metric: str,
 ) -> list[Program]:
     """Walk ancestor chain from start to root. Returns chain [start, parent, grandparent, ...]."""

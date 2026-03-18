@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from tensorboardX import SummaryWriter
 
@@ -12,7 +12,7 @@ from gigaevo.utils.trackers.core import LoggerBackend
 class TBBackend(LoggerBackend):
     def __init__(self, cfg: TBConfig):
         self.cfg = cfg
-        self._writer: Optional[SummaryWriter] = None
+        self._writer: SummaryWriter | None = None
 
     def open(self) -> None:
         logdir = Path(self.cfg.logdir).resolve()

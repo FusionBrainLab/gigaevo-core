@@ -1,0 +1,110 @@
+PROMPT META-OPTIMIZATION FOR HOTPOTQA CHAIN EVOLUTION
+
+You are evolving the mutation prompt used by an evolutionary algorithm to guide
+LLM-driven code mutations of HotpotQA multi-hop QA chains.
+
+Each candidate is a Python module exporting:
+    entrypoint() -> dict
+
+The returned dict has keys:
+    "system": the mutation system prompt template (str)
+    "user": the mutation user prompt template (str)
+
+────────────────────────────────────────────────────
+CONTRACTS — REQUIREMENTS FOR EVOLVED PROMPTS
+────────────────────────────────────────────────────
+
+The evolved prompt (system + user) must satisfy ALL of these contracts.
+Violating any contract causes the mutation pipeline to fail silently, wasting
+compute and hurting this prompt's fitness score.
+
+CONTRACT 1 — SYSTEM PROMPT PLACEHOLDERS:
+The system prompt MUST contain these exact placeholders (filled at runtime):
+    {task_description} — full HotpotQA chain task description (injected by framework)
+    {metrics_description} — fitness metrics and their optimization directions
+Without these, the mutation LLM receives no information about the downstream task.
+
+CONTRACT 2 — USER PROMPT PLACEHOLDER:
+The user prompt MUST contain this exact placeholder:
+    {parent_blocks} — parent program code, insights, lineage data, failure analysis
+Without this, the mutation LLM has no parent code to mutate.
+
+CONTRACT 3 — JSON OUTPUT FORMAT:
+The mutation LLM's response is parsed as JSON. The prompt (typically the user
+prompt) MUST instruct the mutation LLM to return a JSON object with these fields:
+    "code": str — complete mutated Python program (REQUIRED — raw code, no markdown)
+    "archetype": str — name of the mutation strategy used
+    "justification": str — reasoning linking insights to changes
+    "insights_used": list[str] — which insights were acted upon
+The "code" field is extracted and used as the child program. If the response is
+not valid JSON or lacks "code", the mutation fails entirely.
+
+CONTRACT 4 — PYTHON DOUBLE-BRACE ESCAPING:
+Since the prompt templates are Python strings processed with str.format(), any
+literal curly braces in the prompt text must be escaped as {{ and }}. For example,
+a JSON example block must use {{  }} not {  }. Unescaped braces cause KeyError
+at runtime.
+
+────────────────────────────────────────────────────
+DOWNSTREAM TASK: HOTPOTQA MULTI-HOP QA CHAIN
+────────────────────────────────────────────────────
+
+The mutation prompt you are evolving guides an LLM to mutate a 6-step prompt-chain
+for multi-hop question answering over Wikipedia. Understanding this chain structure
+is essential to writing effective mutation prompts.
+
+CHAIN TOPOLOGY (fixed — mutations cannot add/remove/reorder steps):
+
+  Step 1 (TOOL, frozen): BM25 retrieval — question → top-k Wikipedia passages
+  Step 2 (LLM, evolvable): Summarize first-hop passages, extract key facts
+  Step 3 (LLM, evolvable): Generate second-hop BM25 search query
+  Step 4 (TOOL, frozen): BM25 retrieval — step 3 output → more passages
+  Step 5 (LLM, evolvable): Combine evidence from both hops
+  Step 6 (LLM, evolvable): Synthesize final "Answer: <answer>"
+
+Each LLM step has structured fields that the mutation can modify:
+  - aim: step objective (required, 8-15 words ideal)
+  - stage_action: what the LLM should do (required)
+  - reasoning_questions: guiding questions (optional)
+  - example_reasoning: example thought process (optional, <120 words)
+Plus a chain-level system_prompt shared by all LLM steps.
+
+CRITICAL DOMAIN KNOWLEDGE:
+
+- BM25 is a fixed bag-of-words retrieval tool — NOT tunable. No parameters to
+  adjust. The only way to improve retrieval is through better query generation
+  in step 3.
+- Step 3's LLM output is used VERBATIM as a BM25 query. Any prose, preamble, or
+  reasoning text will degrade retrieval. This is the highest-priority constraint.
+- BM25 rewards named entities and key attributes, not relation words or sentence
+  structure. Good: "Marie Curie nationality". Bad: "Find information about Marie
+  Curie's national origin."
+- system_prompt is prepended to ALL 4 LLM steps — every word costs context 4x.
+- Step 6 depends on steps 2 and 5 — it never sees raw second-hop passages. Step 5
+  must fully consolidate evidence.
+- Shorter instructions with explicit constraints outperform longer instructions
+  with implicit expectations.
+
+RUNTIME CONTEXT AVAILABLE TO MUTATION PROMPTS:
+
+The mutation prompt receives (via {parent_blocks} and other context):
+- Parent program code with all step definitions
+- Program insights: [category][tag](severity) with tags: beneficial/harmful/fragile/rigid
+- Lineage insights: historical mutation outcomes with strategy labels and measured deltas
+- Failure analysis: up to 10 wrong predictions showing:
+  · Question, expected answer, predicted answer
+  · Per-hop BM25 retrieval coverage (how many gold docs were retrieved)
+  · MISSING entries (gold document titles BM25 failed to surface)
+  This distinguishes retrieval failures (fix step 3 query generation) from reasoning
+  failures (fix steps 5-6 evidence synthesis).
+
+────────────────────────────────────────────────────
+FITNESS DEFINITION
+────────────────────────────────────────────────────
+
+A "successful" mutation = child chain achieves strictly higher token-level F1 than parent.
+Prompt fitness = success_rate = fraction of mutations that achieved strict improvement,
+aggregated across 3 independent evolution runs with Bayesian Beta(1,3) prior.
+
+The behavior descriptor is prompt_length (number of characters).
+The primary fitness metric is success_rate.

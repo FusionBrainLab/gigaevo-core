@@ -75,7 +75,7 @@ target-version = "py312"
 [tool.ruff.lint]
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes
 # See https://beta.ruff.rs/docs/rules/ for more possible rules
-select = ["E", "F", "I"]
+select = ["E", "F", "I", "UP"]
 ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 
 [tool.ruff.lint.per-file-ignores]
@@ -83,6 +83,7 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "run_hydra.py" = ["E402"]
 "tools/**/*.py" = ["E402"]
 "__init__.py" = ["F401"]
+"problems/**/*.py" = ["E402", "E722", "E741", "F841"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["gigaevo"]

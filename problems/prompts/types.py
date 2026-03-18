@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, TypedDict
+from typing import Any, TypedDict
 
 
 @dataclass
@@ -24,5 +24,5 @@ class CallLog:
 class OutputDict(TypedDict):
     """Output from run_prompts."""
 
-    predictions: List[Any]  # Raw response strings
-    call_logs: List[CallLog]
+    predictions: list[Any]  # Raw response strings
+    call_logs: list[CallLog]

@@ -1,8 +1,7 @@
+from helper import compute_c
 import jax
 import numpy as np
 import optax
-
-from helper import compute_c
 
 
 def entrypoint() -> np.ndarray:

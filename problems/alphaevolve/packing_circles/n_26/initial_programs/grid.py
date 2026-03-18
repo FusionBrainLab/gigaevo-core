@@ -20,9 +20,8 @@ def entrypoint() -> np.ndarray:
             radii.append(r)
         if len(centers) >= n:
             break
-    
+
     centers = np.array(centers, dtype=np.float32)
     radii = np.array(radii, dtype=np.float32)
     result = np.column_stack([centers, radii])
     return result
-

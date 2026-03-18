@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
@@ -33,7 +34,7 @@ OPTIMIZATION_STAGES: frozenset[str] = frozenset(
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Lineage(BaseModel):
@@ -108,6 +109,11 @@ class Program(BaseModel):
         use_enum_values=False,
     )
 
+    @property
+    def short_id(self) -> str:
+        """First 8 characters of the program UUID, for compact log output."""
+        return self.id[:8]
+
     @field_validator("id", mode="before")
     @classmethod
     def _coerce_and_validate_uuid(cls, v: Any) -> str:
@@ -129,7 +135,7 @@ class Program(BaseModel):
         return self.model_dump(mode="json")
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Program":
+    def from_dict(cls, data: dict[str, Any]) -> Program:
         d = dict(data)
         if "metadata" in d and isinstance(d["metadata"], str):
             d["metadata"] = pickle_b64_deserialize(d["metadata"])
@@ -143,11 +149,11 @@ class Program(BaseModel):
     @classmethod
     def create_child(
         cls,
-        parents: list["Program"],
+        parents: list[Program],
         code: str,
         mutation: str | None = None,
         name: str | None = None,
-    ) -> "Program":
+    ) -> Program:
         if not parents:
             raise ValueError("At least one parent is required")
         generation = max((p.lineage.generation for p in parents), default=0) + 1
@@ -159,7 +165,7 @@ class Program(BaseModel):
         return cls(code=code, lineage=lineage, name=name)
 
     @classmethod
-    def from_mutation_spec(cls, spec: "MutationSpec") -> "Program":
+    def from_mutation_spec(cls, spec: MutationSpec) -> Program:
         name = " -> ".join(p.id for p in spec.parents) + f" (mutation: {spec.name})"
         program = cls.create_child(
             parents=spec.parents,

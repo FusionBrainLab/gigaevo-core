@@ -2,7 +2,6 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-
 SEED = 42
 TRAIN_SAMPLES = 1000
 TEST_SAMPLES = 300
@@ -20,7 +19,9 @@ def main():
     train.to_json(str(_DIR / "HotpotQA_train.jsonl"))
     test.to_json(str(_DIR / "HotpotQA_test.jsonl"))
 
-    print(f"Dataset ready: HotpotQA_train.jsonl ({len(train):,} samples), HotpotQA_test.jsonl ({len(test):,} samples)")
+    print(
+        f"Dataset ready: HotpotQA_train.jsonl ({len(train):,} samples), HotpotQA_test.jsonl ({len(test):,} samples)"
+    )
 
 
 if __name__ == "__main__":

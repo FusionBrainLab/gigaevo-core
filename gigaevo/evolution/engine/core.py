@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import contextlib
+import time
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -49,6 +51,7 @@ class EvolutionEngine:
         config: EngineConfig,
         writer: LogWriter,
         metrics_tracker: MetricsTracker,
+        pre_step_hook: Callable[[], Awaitable[None]] | None = None,
     ):
         self.storage = storage
         self.strategy = strategy
@@ -67,6 +70,7 @@ class EvolutionEngine:
         self.metrics = EngineMetrics()
         self.state = ProgramStateManager(self.storage)
         self._metrics_tracker = metrics_tracker
+        self._pre_step_hook = pre_step_hook
 
         logger.info(
             "[EvolutionEngine] Init | strategy={}, acceptor={}",
@@ -157,7 +161,7 @@ class EvolutionEngine:
                         await asyncio.wait_for(self.step(), timeout=timeout)
                     else:
                         await self.step()
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # One step took too long; log and continue the loop.
                     logger.warning(
                         "[EvolutionEngine] step() timed out after {}s", timeout
@@ -180,52 +184,101 @@ class EvolutionEngine:
 
     async def step(self) -> None:
         """One generation step (idle → mutate → idle → ingest → refresh → idle)."""
+        gen = self.metrics.total_generations
+        logger.info("[EvolutionEngine] ──────────── Generation {} ────────────", gen)
+        step_t0 = time.monotonic()
+
+        if self._pre_step_hook:
+            await self._pre_step_hook()
+
+        self.storage.snapshot.bump()
+
         # Phase 1: wait until engine is idle (no QUEUED/RUNNING programs)
         await self._await_idle()
-        logger.debug("[EvolutionEngine] Phase 1: Idle confirmed")
+        logger.debug("[EvolutionEngine] gen={} Phase 1: Idle confirmed", gen)
 
         # Phase 2: select elites & create mutants
         elites = await self._select_elites_for_mutation()
         created = await self._create_mutants(elites) if elites else 0
-        logger.debug("[EvolutionEngine] Phase 2: Created {} mutant(s)", created)
+        logger.debug(
+            "[EvolutionEngine] gen={} Phase 2: Created {} mutant(s)", gen, created
+        )
 
         # Phase 3: wait for the mutants' DAGs to finish
         await self._await_idle()
-        logger.debug("[EvolutionEngine] Phase 3: Mutant DAGs finished (idle)")
+        logger.debug(
+            "[EvolutionEngine] gen={} Phase 3: Mutant DAGs finished (idle)", gen
+        )
 
         # Phase 4: ingest newly completed programs (typically the mutants)
         await self._ingest_completed_programs()
-        logger.debug("[EvolutionEngine] Phase 4: Ingestion done")
+        logger.debug("[EvolutionEngine] gen={} Phase 4: Ingestion done", gen)
+
+        self.storage.snapshot.bump()
 
         # Phase 5: refresh all archive programs (to re-run lineage/descendant-aware stages)
         refreshed = await self._refresh_archive_programs()
-        logger.debug("[EvolutionEngine] Phase 5: Refreshed {} program(s)", refreshed)
+        logger.debug(
+            "[EvolutionEngine] gen={} Phase 5: Refreshed {} program(s)", gen, refreshed
+        )
 
         # Phase 6: wait for refresh DAGs to finish
         if refreshed:
             await self._await_idle()
-            logger.debug("[EvolutionEngine] Phase 6: Refresh DAGs finished (idle)")
+            logger.debug(
+                "[EvolutionEngine] gen={} Phase 6: Refresh DAGs finished (idle)", gen
+            )
+
+            # Phase 7: reindex archive with updated metrics (e.g., prompt fitness)
+            await self.strategy.reindex_archive()
+            logger.debug("[EvolutionEngine] gen={} Phase 7: Archive reindexed", gen)
 
         self.metrics.total_generations += 1
         await self.storage.save_run_state(
             _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
         )
 
+        step_elapsed = time.monotonic() - step_t0
+        logger.info(
+            "[EvolutionEngine] gen={} done | elites={} mutants={} refreshed={} ({:.1f}s)",
+            gen,
+            len(elites),
+            created,
+            refreshed,
+            step_elapsed,
+        )
+
     async def _await_idle(self) -> None:
         """Block until there are no programs in QUEUED or RUNNING."""
+        t0 = time.monotonic()
         while await self._has_active_dags():
+            elapsed = time.monotonic() - t0
+            if elapsed > 30 and int(elapsed) % 60 < self.config.loop_interval:
+                logger.info(
+                    "[EvolutionEngine] gen={} Waiting for idle ({:.0f}s elapsed)",
+                    self.metrics.total_generations,
+                    elapsed,
+                )
             await asyncio.sleep(self.config.loop_interval)
 
     async def _select_elites_for_mutation(self) -> list[Program]:
         elites = await self.strategy.select_elites(
             total=self.config.max_elites_per_generation
         )
-        logger.debug("[EvolutionEngine] Elites selected: {}", len(elites))
+        logger.debug(
+            "[EvolutionEngine] gen={} Elites selected: {}",
+            self.metrics.total_generations,
+            len(elites),
+        )
         self.metrics.record_elite_selection_metrics(len(elites), 0)
         return elites
 
     async def _create_mutants(self, elites: list[Program]) -> int:
-        logger.debug("[EvolutionEngine] Mutate from {} elite(s)", len(elites))
+        logger.debug(
+            "[EvolutionEngine] gen={} Mutate from {} elite(s)",
+            self.metrics.total_generations,
+            len(elites),
+        )
         created = await generate_mutations(
             elites,
             mutator=self.mutation_operator,
@@ -246,13 +299,21 @@ class EvolutionEngine:
         """
         completed = await self.storage.get_all_by_status(ProgramState.DONE.value)
         if not completed:
-            logger.debug("[EvolutionEngine] No completed programs to ingest")
+            logger.debug(
+                "[EvolutionEngine] gen={} No completed programs to ingest",
+                self.metrics.total_generations,
+            )
             return
 
-        logger.info("[EvolutionEngine] Ingest {} program(s)", len(completed))
+        logger.info(
+            "[EvolutionEngine] gen={} Ingest {} program(s)",
+            self.metrics.total_generations,
+            len(completed),
+        )
         logger.debug(
             "[EvolutionEngine] Program IDs: {}",
-            [p.id for p in completed[:8]] + (["..."] if len(completed) > 8 else []),
+            [p.short_id for p in completed[:8]]
+            + (["..."] if len(completed) > 8 else []),
         )
 
         added = 0
@@ -271,12 +332,11 @@ class EvolutionEngine:
                     # rejected by basic checks
                     rej_valid += 1
                     logger.debug(
-                        "[EvolutionEngine] Program {} rejected by acceptor",
-                        prog.id,
+                        "[EvolutionEngine] Program {} rejected by acceptor (metrics={})",
+                        prog.short_id,
+                        prog.metrics,
                     )
-                    await self.mutation_operator.on_program_ingested(
-                        prog, self.storage, outcome=MutationOutcome.REJECTED_ACCEPTOR
-                    )
+                    await self._notify_hook(prog, MutationOutcome.REJECTED_ACCEPTOR)
                     state_tasks.append(
                         asyncio.create_task(
                             self._set_state(prog, ProgramState.DISCARDED)
@@ -285,23 +345,21 @@ class EvolutionEngine:
                 elif await self.strategy.add(prog):
                     # accepted by strategy — stays DONE until next refresh
                     added += 1
-                    await self.mutation_operator.on_program_ingested(
-                        prog, self.storage, outcome=MutationOutcome.ACCEPTED
-                    )
+                    await self._notify_hook(prog, MutationOutcome.ACCEPTED)
                     logger.debug(
-                        "[EvolutionEngine] Program {} added to strategy",
-                        prog.id,
+                        "[EvolutionEngine] Program {} added to strategy (metrics={})",
+                        prog.short_id,
+                        prog.metrics,
                     )
                 else:
                     # rejected by strategy / validation
                     rej_strategy += 1
                     logger.debug(
-                        "[EvolutionEngine] Program {} rejected by strategy",
-                        prog.id,
+                        "[EvolutionEngine] Program {} rejected by strategy (metrics={})",
+                        prog.short_id,
+                        prog.metrics,
                     )
-                    await self.mutation_operator.on_program_ingested(
-                        prog, self.storage, outcome=MutationOutcome.REJECTED_STRATEGY
-                    )
+                    await self._notify_hook(prog, MutationOutcome.REJECTED_STRATEGY)
                     state_tasks.append(
                         asyncio.create_task(
                             self._set_state(prog, ProgramState.DISCARDED)
@@ -312,7 +370,7 @@ class EvolutionEngine:
                 # so the remaining programs in this batch are still processed.
                 logger.error(
                     "[EvolutionEngine] Ingestion failed for program {}: {} — discarding",
-                    prog.id,
+                    prog.short_id,
                     e,
                 )
                 state_tasks.append(
@@ -325,7 +383,8 @@ class EvolutionEngine:
         self.metrics.programs_processed += added
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
         logger.info(
-            "[EvolutionEngine] Ingest done | added={}, rejected_validation={}, rejected_strategy={}",
+            "[EvolutionEngine] gen={} Ingest done | added={}, rejected_validation={}, rejected_strategy={}",
+            self.metrics.total_generations,
             added,
             rej_valid,
             rej_strategy,
@@ -352,7 +411,11 @@ class EvolutionEngine:
 
         count = len(tasks)
         if count:
-            logger.info("[EvolutionEngine] Submitted {} program(s) for refresh", count)
+            logger.info(
+                "[EvolutionEngine] gen={} Submitted {} program(s) for refresh",
+                self.metrics.total_generations,
+                count,
+            )
             self.metrics.record_reprocess_metrics(count)
         return count
 
@@ -386,6 +449,25 @@ class EvolutionEngine:
 
     async def _set_state(self, program: Program, state: ProgramState) -> None:
         await self.state.set_program_state(program, state)
+
+    async def _notify_hook(self, prog: Program, outcome: MutationOutcome) -> None:
+        """Call on_program_ingested with fault isolation.
+
+        Hook failures are non-fatal: they must never cause a program that was
+        already accepted by the strategy to be discarded (which would create a
+        ghost entry in the archive).
+        """
+        try:
+            await self.mutation_operator.on_program_ingested(
+                prog, self.storage, outcome=outcome
+            )
+        except Exception as exc:
+            logger.warning(
+                "[EvolutionEngine] on_program_ingested hook failed for {}: {} "
+                "(non-fatal, program state unchanged)",
+                prog.short_id,
+                exc,
+            )
 
     async def restore_state(self) -> None:
         """Restore total_generations from storage after a resume."""

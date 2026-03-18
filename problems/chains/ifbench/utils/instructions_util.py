@@ -16,7 +16,6 @@
 
 import functools
 import random
-import re
 
 import nltk
 
@@ -1548,6 +1547,7 @@ WORD_LIST = [
     "apartment",
 ]  # pylint: disable=line-too-long
 
+
 def download_nltk_resources():
     """Download 'punkt' and 'stopwords' if not already installed"""
     try:
@@ -1591,7 +1591,7 @@ def count_words(text):
     return num_words
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _get_sentence_tokenizer():
     return nltk.data.load("nltk:tokenizers/punkt/english.pickle")
 
@@ -1599,11 +1599,12 @@ def _get_sentence_tokenizer():
 def count_stopwords(text):
     """Counts the number of stopwords."""
     """Counts the number of stopwords."""
-    stopwords = nltk.corpus.stopwords.words('english')
+    stopwords = nltk.corpus.stopwords.words("english")
     tokenizer = nltk.tokenize.RegexpTokenizer(r"\w+")
     tokens = tokenizer.tokenize(text)
     num_stopwords = len([t for t in tokens if t.lower() in stopwords])
     return num_stopwords
+
 
 def generate_keywords(num_keywords):
     """Randomly generates a few keywords."""

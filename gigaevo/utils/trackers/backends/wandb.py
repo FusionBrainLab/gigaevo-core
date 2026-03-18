@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import threading
-from typing import Any, List, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 import wandb
@@ -26,7 +26,7 @@ class WandBBackend(LoggerBackend):
         self.cfg = cfg
         self._run = None
         self._lock = threading.Lock()
-        self._buffer: List[Event] = []
+        self._buffer: list[Event] = []
 
     def _prepare_init_kwargs(self) -> dict[str, Any]:
         base = self.cfg.model_dump(exclude_none=True)

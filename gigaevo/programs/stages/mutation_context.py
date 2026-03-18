@@ -1,7 +1,7 @@
 # gigaevo/programs/stages/mutation_context.py
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -38,12 +38,12 @@ class MutationContextInputs(StageIO):
       - formatted: preformatted string (e.g. from FormatterStage) for mutation prompt
     """
 
-    metrics: Optional[FloatDictContainer]
-    insights: Optional[InsightsOutput]
-    lineage_ancestors: Optional[TransitionAnalysisList]
-    lineage_descendants: Optional[TransitionAnalysisList]
-    evolutionary_statistics: Optional[EvolutionaryStatistics]
-    formatted: Optional[StringContainer]
+    metrics: FloatDictContainer | None
+    insights: InsightsOutput | None
+    lineage_ancestors: TransitionAnalysisList | None
+    lineage_descendants: TransitionAnalysisList | None
+    evolutionary_statistics: EvolutionaryStatistics | None
+    formatted: StringContainer | None
 
 
 @StageRegistry.register(

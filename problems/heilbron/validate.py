@@ -6,6 +6,7 @@ import numpy as np
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import pdist
 
+
 def compute_layout_metrics(points: np.ndarray) -> dict:
     """
     Compute geometric and distribution metrics for a set of 11 2D points.
@@ -151,11 +152,9 @@ def validate(coordinates):
     c = pts[:, 2, :]
 
     areas = 0.5 * np.abs(
-        (
-            a[:, 0] * (b[:, 1] - c[:, 1])
-            + b[:, 0] * (c[:, 1] - a[:, 1])
-            + c[:, 0] * (a[:, 1] - b[:, 1])
-        )
+        a[:, 0] * (b[:, 1] - c[:, 1])
+        + b[:, 0] * (c[:, 1] - a[:, 1])
+        + c[:, 0] * (a[:, 1] - b[:, 1])
     )
 
     min_area = np.min(areas)

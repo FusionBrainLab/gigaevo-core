@@ -1045,3 +1045,149 @@ class TestDynamicDescribe:
         desc = space.describe()
         assert desc["x"]["min"] == 20.0
         assert desc["x"]["max"] == 80.0
+
+
+# ===================================================================
+# reindex_archive idempotency tests
+# ===================================================================
+
+
+class TestReindexArchiveIdempotency:
+    """reindex_archive() must be idempotent: calling it twice with unchanged
+    metrics produces the same archive state (same elites, same cells)."""
+
+    async def test_double_reindex_same_result(self, fakeredis_storage):
+        """Calling reindex_archive twice yields identical archive both times."""
+        config = _make_island_config()
+        isl = MapElitesIsland(config, fakeredis_storage)
+
+        progs = [_prog(score=float(i * 20 + 10), x=float(i * 2 + 1)) for i in range(4)]
+        for p in progs:
+            await fakeredis_storage.add(p)
+            await isl.add(p)
+
+        await isl.reindex_archive()
+        elites_first = await isl.get_elites()
+        ids_first = sorted(e.id for e in elites_first)
+        cells_first = sorted(
+            (
+                isl.config.behavior_space.get_cell(e.metrics),
+                e.id,
+            )
+            for e in elites_first
+        )
+
+        await isl.reindex_archive()
+        elites_second = await isl.get_elites()
+        ids_second = sorted(e.id for e in elites_second)
+        cells_second = sorted(
+            (
+                isl.config.behavior_space.get_cell(e.metrics),
+                e.id,
+            )
+            for e in elites_second
+        )
+
+        assert ids_first == ids_second
+        assert cells_first == cells_second
+
+    async def test_reindex_after_fitness_change_evicts_worse(self, fakeredis_storage):
+        """When a program's fitness degrades, reindex evicts it if a better
+        program now maps to the same cell."""
+        # Single bin so all programs compete in same cell
+        space = BehaviorSpace(
+            bins={"x": LinearBinning(min_val=0, max_val=10, num_bins=1, type="linear")}
+        )
+        config = _make_island_config(behavior_space=space)
+        isl = MapElitesIsland(config, fakeredis_storage)
+
+        # p1 starts as the better program
+        p1 = _prog(score=80.0, x=5.0)
+        p2 = _prog(score=40.0, x=3.0)
+        await fakeredis_storage.add(p1)
+        await fakeredis_storage.add(p2)
+        await isl.add(p1)
+        await isl.add(p2)  # rejected: p1 (80) > p2 (40)
+
+        elites = await isl.get_elites()
+        assert len(elites) == 1
+        assert elites[0].id == p1.id
+
+        # Degrade p1's score and manually add p2 to storage
+        # (simulates what happens after PromptFitnessStage re-runs)
+        p1.metrics["score"] = 20.0
+        await fakeredis_storage.add(p1)
+
+        # Before reindex: p1 still in archive with stale high score
+        elites_before = await isl.get_elites()
+        assert elites_before[0].id == p1.id
+
+        # Force p2 into archive first so reindex has both candidates
+        # We need to manually set up the archive to have both
+        await isl.archive_storage.add_elite(
+            space.get_cell(p2.metrics), p2, config.archive_selector
+        )
+
+        await isl.reindex_archive()
+
+        elites_after = await isl.get_elites()
+        assert len(elites_after) == 1
+        # p2 (40) should now beat p1 (20)
+        assert elites_after[0].id == p2.id
+
+    async def test_reindex_idempotent_with_dynamic_space(self, fakeredis_storage):
+        """reindex_archive on DynamicBehaviorSpace is idempotent."""
+        space = DynamicBehaviorSpace(
+            bins={
+                "x": LinearBinning(
+                    min_val=0.0, max_val=100.0, num_bins=10, type="linear"
+                )
+            },
+            expansion_buffer_ratio=0.1,
+        )
+        config = _make_island_config(behavior_space=space, island_id="dynamic")
+        isl = MapElitesIsland(config, fakeredis_storage)
+
+        progs = [_prog(score=float(i * 15 + 5), x=float(i * 25 + 5)) for i in range(3)]
+        for p in progs:
+            await fakeredis_storage.add(p)
+            await isl.add(p)
+
+        # Snapshot bounds before
+        desc_before = space.describe()
+
+        await isl.reindex_archive()
+        elites_first = sorted(e.id for e in await isl.get_elites())
+        desc_mid = space.describe()
+
+        await isl.reindex_archive()
+        elites_second = sorted(e.id for e in await isl.get_elites())
+        desc_after = space.describe()
+
+        assert elites_first == elites_second
+        # Bounds should not change from reindex (no check_and_expand called)
+        assert desc_before == desc_mid == desc_after
+
+    async def test_reindex_multi_island_delegates(self, fakeredis_storage):
+        """MapElitesMultiIsland.reindex_archive delegates to each island."""
+        from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
+
+        configs = [
+            _make_island_config(island_id="a"),
+            _make_island_config(island_id="b"),
+        ]
+        multi = MapElitesMultiIsland(configs, fakeredis_storage)
+
+        # Add one program to island a
+        p = _prog(score=50.0, x=5.0)
+        await fakeredis_storage.add(p)
+        await multi.add(p, island_id="a")
+
+        # Double reindex should not error and be idempotent
+        await multi.reindex_archive()
+        ids_first = sorted(await multi.get_program_ids())
+
+        await multi.reindex_archive()
+        ids_second = sorted(await multi.get_program_ids())
+
+        assert ids_first == ids_second

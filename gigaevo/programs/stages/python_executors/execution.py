@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Generic, Optional, Sequence, Tuple, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from loguru import logger
 
@@ -25,7 +26,7 @@ from gigaevo.programs.utils import dedent_code
 T = TypeVar("T")
 
 
-class PythonCodeExecutor(Stage, Generic[T]):
+class PythonCodeExecutor[T](Stage):
     """
     Execute a user function from dynamic code in an isolated subprocess.
 
@@ -136,7 +137,7 @@ class PythonCodeExecutor(Stage, Generic[T]):
 
 
 class ContextInputModel(StageIO):
-    context: Optional[AnyContainer]
+    context: AnyContainer | None
 
 
 @StageRegistry.register(
@@ -211,10 +212,10 @@ class CallFileFunction(PythonCodeExecutor):
 
 class ValidatorInput(StageIO):
     payload: AnyContainer
-    context: Optional[AnyContainer]
+    context: AnyContainer | None
 
 
-ValidatorOutput = Box[Tuple[dict[str, float], Any]]
+ValidatorOutput = Box[tuple[dict[str, float], Any]]
 
 
 @StageRegistry.register(
@@ -241,7 +242,7 @@ class CallValidatorFunction(PythonCodeExecutor):
     def _code_str(self, program: Program) -> str:
         return self._validator_code
 
-    def parse_output(self, x: Any) -> Tuple[dict[str, float], Any]:
+    def parse_output(self, x: Any) -> tuple[dict[str, float], Any]:
         # Validate the return type early to give a clear error pointing back to
         # validate().  Allowing None or non-dict/tuple values through produces
         # cryptic downstream errors (e.g. "TypeError: {**None}") with no hint

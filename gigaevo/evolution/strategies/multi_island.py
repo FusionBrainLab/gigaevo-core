@@ -278,6 +278,12 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 self.last_migration,
             )
 
+    async def reindex_archive(self) -> None:
+        """Re-evaluate archive placements on all islands using current metrics."""
+        tasks = [island.reindex_archive() for island in self.islands.values()]
+        if tasks:
+            await asyncio.gather(*tasks)
+
     def _calculate_island_quotas(self, total: int) -> dict[str, int]:
         """Evenly distribute selection quotas across islands."""
         island_ids = list(self.islands.keys())

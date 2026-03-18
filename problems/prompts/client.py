@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-import httpx
-from typing import Any, List
+from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -70,7 +70,7 @@ class LLMClient:
         """
         self.model = model
         self.max_cost = max_cost
-        self._call_logs: List[CallLog] = []
+        self._call_logs: list[CallLog] = []
         self.client = get_async_client(**(client_kwargs or {}))
 
         # Model pricing (per 1M tokens) - user-provided or default
@@ -92,7 +92,7 @@ class LLMClient:
         return cls.DEFAULT_GENERATION_KWARGS.get(model, {"max_tokens": 1024})
 
     @property
-    def call_logs(self) -> List[CallLog]:
+    def call_logs(self) -> list[CallLog]:
         """Get list of all call logs."""
         return self._call_logs
 
@@ -176,7 +176,7 @@ class LLMClient:
         """Close the underlying client."""
         await self.client.close()
 
-    def copy(self) -> "LLMClient":
+    def copy(self) -> LLMClient:
         """Create an isolated copy with fresh call logs.
 
         The copy shares the underlying AsyncOpenAI client (stateless)

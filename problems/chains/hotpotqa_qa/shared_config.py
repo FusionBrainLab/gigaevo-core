@@ -5,8 +5,8 @@ golden passages (plus distractors) in outer_context. No tools needed.
 """
 
 import json
-import random
 from pathlib import Path
+import random
 
 from problems.chains.hotpotqa_qa.utils.passages import select_passages
 
@@ -50,7 +50,7 @@ DATASET_CONFIG = {
 def load_jsonl(path: str) -> list[dict]:
     """Load JSONL file as list of dicts."""
     samples = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 samples.append(json.loads(line))
@@ -65,9 +65,7 @@ def preprocess_sample(
     Returns dict with question, passages (formatted string), and answer.
     """
     passages = select_passages(sample, k=k, rng=rng)
-    formatted_passages = "\n".join(
-        f"[{i + 1}] {p}" for i, p in enumerate(passages)
-    )
+    formatted_passages = "\n".join(f"[{i + 1}] {p}" for i, p in enumerate(passages))
 
     return {
         "question": sample["question"],

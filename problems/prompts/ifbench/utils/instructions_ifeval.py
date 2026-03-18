@@ -15,21 +15,20 @@
 """Library of instructions."""
 
 import collections
+from collections.abc import Sequence
 import json
 import logging
 import random
 import re
 import string
-from typing import Dict, Optional, Sequence, Union
 
 import langdetect
 
 import problems.prompts.ifbench.utils.instructions_util_ifeval as instructions_util
 
-
 logger = logging.getLogger(__name__)
 
-_InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]
+_InstructionArgsDtype = dict[str, int | str | Sequence[str]] | None
 
 _LANGUAGES = instructions_util.LANGUAGE_CODES
 

@@ -115,13 +115,16 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     #    the actual output. Steps 3 and 6 had 2048 which was insufficient
     #    (thinking could exhaust the budget, leaving nothing for the query/answer).
     step_max_tokens = {
-        2: 8192,   # summarize retrieved facts (thinking + substantial text)
-        3: 8192,   # generate search query (thinking + short query)
-        5: 8192,   # combine evidence from both retrievals (thinking + substantial text)
-        6: 8192,   # final answer (thinking + "Answer: X")
+        2: 8192,  # summarize retrieved facts (thinking + substantial text)
+        3: 8192,  # generate search query (thinking + short query)
+        5: 8192,  # combine evidence from both retrievals (thinking + substantial text)
+        6: 8192,  # final answer (thinking + "Answer: X")
     }
     results = run_chain_on_dataset_stepwise(
-        chain, client, dataset, outer_context_builder,
+        chain,
+        client,
+        dataset,
+        outer_context_builder,
         batch_tool_registry=batch_tool_registry,
         step_max_tokens=step_max_tokens,
     )
@@ -150,24 +153,24 @@ def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
         raw_300, dataset, results, predictions, targets
     ):
         if pred is None or normalize_text(pred) != normalize_text(str(target)):
-            gold_titles = set(
-                raw_s.get("supporting_facts", {}).get("title", [])
-            )
+            gold_titles = set(raw_s.get("supporting_facts", {}).get("title", []))
             hop1_out = result.step_outputs[0] if len(result.step_outputs) > 0 else ""
             hop2_out = result.step_outputs[3] if len(result.step_outputs) > 3 else ""
             hop1_titles = set(parse_retrieved_titles(hop1_out))
             hop2_titles = set(parse_retrieved_titles(hop2_out))
             hop1_missing = sorted(gold_titles - hop1_titles)
             hop2_missing = sorted(gold_titles - hop2_titles)
-            failures.append({
-                "question": sample["question"],
-                "gold": target,
-                "predicted": pred,
-                "hop1_retrieved": len(hop1_titles & gold_titles),
-                "hop2_retrieved": len(hop2_titles & gold_titles),
-                "n_gold": len(gold_titles),
-                "hop1_missing": hop1_missing,
-                "hop2_missing": hop2_missing,
-            })
+            failures.append(
+                {
+                    "question": sample["question"],
+                    "gold": target,
+                    "predicted": pred,
+                    "hop1_retrieved": len(hop1_titles & gold_titles),
+                    "hop2_retrieved": len(hop2_titles & gold_titles),
+                    "n_gold": len(gold_titles),
+                    "hop1_missing": hop1_missing,
+                    "hop2_missing": hop2_missing,
+                }
+            )
 
     return (metrics, failures)

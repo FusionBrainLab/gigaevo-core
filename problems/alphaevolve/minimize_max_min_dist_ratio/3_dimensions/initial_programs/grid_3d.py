@@ -11,6 +11,5 @@ def entrypoint() -> np.ndarray:
                 z = k / 1.0
                 points.append([x, y, z])
     points = points[:14]
-    
-    return np.array(points, dtype=np.float32)
 
+    return np.array(points, dtype=np.float32)

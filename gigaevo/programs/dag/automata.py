@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Type
+from typing import Any, Literal
 
 import networkx as nx
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,7 +31,7 @@ class DataFlowEdge(BaseModel):
     )
 
     @classmethod
-    def create(cls, source: str, destination: str, input_name: str) -> "DataFlowEdge":
+    def create(cls, source: str, destination: str, input_name: str) -> DataFlowEdge:
         return cls(
             source_stage=source, destination_stage=destination, input_name=input_name
         )
@@ -58,27 +58,27 @@ class ExecutionOrderDependency(BaseModel):
             )
         return False
 
-    def is_satisfied_historically(self, result: Optional[ProgramStageResult]) -> bool:
+    def is_satisfied_historically(self, result: ProgramStageResult | None) -> bool:
         if result is None or result.status in (StageState.PENDING, StageState.RUNNING):
             return False
         return self._satisfied_by_status(result.status)
 
     @classmethod
-    def on_success(cls, stage_name: str) -> "ExecutionOrderDependency":
+    def on_success(cls, stage_name: str) -> ExecutionOrderDependency:
         return cls(stage_name=stage_name, condition="success")
 
     @classmethod
-    def on_failure(cls, stage_name: str) -> "ExecutionOrderDependency":
+    def on_failure(cls, stage_name: str) -> ExecutionOrderDependency:
         return cls(stage_name=stage_name, condition="failure")
 
     @classmethod
-    def always_after(cls, stage_name: str) -> "ExecutionOrderDependency":
+    def always_after(cls, stage_name: str) -> ExecutionOrderDependency:
         return cls(stage_name=stage_name, condition="always")
 
 
 class StageTransitionRule(BaseModel):
     stage_name: str = Field(...)
-    execution_order_dependencies: List[ExecutionOrderDependency] = Field(
+    execution_order_dependencies: list[ExecutionOrderDependency] = Field(
         default_factory=list
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -88,23 +88,23 @@ class StageTransitionRule(BaseModel):
 class DAGTopology:
     """Encapsulates the static structure of the DAG."""
 
-    nodes: Dict[str, Stage]
-    edges: List[DataFlowEdge]
-    incoming_by_dest: Dict[str, List[DataFlowEdge]]
-    preds_by_dest: Dict[str, List[str]]
-    exec_rules: Dict[str, StageTransitionRule]
-    incoming_by_input: Dict[str, Dict[str, List[DataFlowEdge]]]
-    sorted_required_names: Dict[str, List[str]]
-    sorted_optional_names: Dict[str, List[str]]
+    nodes: dict[str, Stage]
+    edges: list[DataFlowEdge]
+    incoming_by_dest: dict[str, list[DataFlowEdge]]
+    preds_by_dest: dict[str, list[str]]
+    exec_rules: dict[str, StageTransitionRule]
+    incoming_by_input: dict[str, dict[str, list[DataFlowEdge]]]
+    sorted_required_names: dict[str, list[str]]
+    sorted_optional_names: dict[str, list[str]]
 
-    def declared_inputs(self, stage_name: str) -> Tuple[Set[str], Set[str]]:
+    def declared_inputs(self, stage_name: str) -> tuple[set[str], set[str]]:
         st = self.nodes[stage_name].__class__
         return set(st._required_names), set(st._optional_names)
 
-    def get_incoming_edges(self, stage_name: str) -> List[DataFlowEdge]:
+    def get_incoming_edges(self, stage_name: str) -> list[DataFlowEdge]:
         return self.incoming_by_dest.get(stage_name, [])
 
-    def get_stage_class(self, stage_name: str) -> Type[Stage]:
+    def get_stage_class(self, stage_name: str) -> type[Stage]:
         return self.nodes[stage_name].__class__
 
 
@@ -113,7 +113,7 @@ class DAGValidator:
 
     @staticmethod
     def validate_structure(
-        stage_classes: dict[str, Type[Stage]],
+        stage_classes: dict[str, type[Stage]],
         data_flow_edges: list[DataFlowEdge],
         execution_order_deps: dict[str, list[ExecutionOrderDependency]] | None = None,
     ) -> list[str]:
@@ -179,14 +179,14 @@ class DAGValidator:
 
     @staticmethod
     def _validate_types(
-        stage_classes: dict[str, Type[Stage]],
+        stage_classes: dict[str, type[Stage]],
         incoming_by_dest: dict[str, list[DataFlowEdge]],
     ) -> list[str]:
         errors = []
         for stage_name, stage_cls in stage_classes.items():
             incoming_edges = incoming_by_dest.get(stage_name, [])
             seen: set[str] = set()
-            dst_inputs_model: Type[StageIO] = stage_cls.InputsModel
+            dst_inputs_model: type[StageIO] = stage_cls.InputsModel
             declared = set(dst_inputs_model.model_fields.keys())
 
             for e in incoming_edges:
@@ -239,7 +239,7 @@ class DAGValidator:
 
     @staticmethod
     def _validate_cycles(
-        stage_classes: dict[str, Type[Stage]],
+        stage_classes: dict[str, type[Stage]],
         data_flow_edges: list[DataFlowEdge],
         execution_order_deps: dict[str, list[ExecutionOrderDependency]],
     ) -> list[str]:
@@ -286,7 +286,7 @@ class DAGAutomata(BaseModel):
 
     @dataclass(frozen=True)
     class StageStatus:
-        res: Optional[ProgramStageResult]
+        res: ProgramStageResult | None
         finalized: bool
         completed: bool
         finalized_this_run: bool
@@ -298,7 +298,7 @@ class DAGAutomata(BaseModel):
         nodes: dict[str, Stage],
         data_flow_edges: list[DataFlowEdge],
         execution_order_deps: dict[str, list[ExecutionOrderDependency]] | None = None,
-    ) -> "DAGAutomata":
+    ) -> DAGAutomata:
         # Validate that all nodes are Stage instances
         bad_nodes = [k for k, v in nodes.items() if not isinstance(v, Stage)]
         if bad_nodes:
@@ -368,7 +368,7 @@ class DAGAutomata(BaseModel):
 
     def _get_stage_status(
         self, program: Program, stage_name: str, finished_this_run: set[str]
-    ) -> "StageStatus":
+    ) -> StageStatus:
         assert self.topology is not None
         res = program.stage_results.get(stage_name)
         finalized = bool(res and res.status in FINAL_STATES)
@@ -391,7 +391,7 @@ class DAGAutomata(BaseModel):
         program: Program,
         dep: ExecutionOrderDependency,
         finished_this_run: set[str],
-    ) -> tuple["GateState", str]:
+    ) -> tuple[GateState, str]:
         """Check if an execution order dependency is satisfied."""
         status = self._get_stage_status(program, dep.stage_name, finished_this_run)
 
@@ -426,7 +426,7 @@ class DAGAutomata(BaseModel):
 
     def _check_dataflow_gate(
         self, program: Program, stage_name: str, finished_this_run: set[str]
-    ) -> tuple["GateState", list[str]]:
+    ) -> tuple[GateState, list[str]]:
         """Check if all data flow requirements are satisfied."""
         assert self.topology is not None
         reasons: list[str] = []
@@ -485,7 +485,7 @@ class DAGAutomata(BaseModel):
 
     def _diagnose_stage(
         self, program: Program, stage_name: str, finished_this_run: set[str]
-    ) -> tuple["GateState", list[str]]:
+    ) -> tuple[GateState, list[str]]:
         """Combine exec-order and data-flow checks."""
         rule = self.transition_rules.get(stage_name)
 

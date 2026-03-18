@@ -22,7 +22,7 @@ for as many runs as you want.
 import argparse
 import asyncio
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import Literal
 
 from loguru import logger
 import matplotlib
@@ -158,7 +158,7 @@ def _configure_plotting_style(use_latex: bool = False):
 def _parse_run_arg(arg: str, default_host: str, default_port: int) -> RedisRunConfig:
     """Parse --run argument of the form prefix@db[:label]."""
     # Accept optional label after ':' to keep '@' unambiguous for db
-    label: Optional[str] = None
+    label: str | None = None
     if ":" in arg:
         prefix_db, label = arg.split(":", 1)
     else:
@@ -341,7 +341,7 @@ def _aggregate_per_iteration(
 
 
 def plot_comparison(
-    prepared_dfs: List[Tuple[str, object]],
+    prepared_dfs: list[tuple[str, object]],
     *,
     output_folder: Path,
     save_plots: bool = True,
@@ -360,9 +360,9 @@ def plot_comparison(
     show_std_band: bool = True,
     show_frontier: bool = True,
     legend_location: str = "best",
-    title: Optional[str] = None,
-    xlabel: Optional[str] = None,
-    ylabel: Optional[str] = None,
+    title: str | None = None,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
     aggregate_iterations: bool = True,
     show: bool = False,
 ):
@@ -886,7 +886,7 @@ async def main():
     output_folder = Path(args.output_folder)
 
     # Parse run specs
-    run_configs: List[RedisRunConfig] = []
+    run_configs: list[RedisRunConfig] = []
     for run_arg in args.run:
         cfg = _parse_run_arg(run_arg, args.redis_host, args.redis_port)
         run_configs.append(cfg)
@@ -898,7 +898,7 @@ async def main():
     # Fetch data concurrently
     dfs = await _load_runs(run_configs)
 
-    prepared: List[Tuple[str, object]] = []
+    prepared: list[tuple[str, object]] = []
     for cfg, df in zip(run_configs, dfs):
         if df is None or df.empty:
             logger.warning(f"Run '{cfg.display_label()}': no data found")

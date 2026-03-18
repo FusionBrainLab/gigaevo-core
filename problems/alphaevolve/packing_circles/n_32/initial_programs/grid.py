@@ -8,7 +8,7 @@ def entrypoint() -> np.ndarray:
     radii = []
     grid_size_x = 6
     grid_size_y = 6
-    
+
     for i in range(grid_size_x):
         for j in range(grid_size_y):
             if len(centers) >= n:
@@ -21,9 +21,8 @@ def entrypoint() -> np.ndarray:
             radii.append(r)
         if len(centers) >= n:
             break
-    
+
     centers = np.array(centers, dtype=np.float32)
     radii = np.array(radii, dtype=np.float32)
     result = np.column_stack([centers, radii])
     return result
-

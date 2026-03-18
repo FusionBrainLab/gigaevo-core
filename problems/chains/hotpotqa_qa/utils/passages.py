@@ -35,8 +35,7 @@ def select_passages(
     context_titles = sample["context"]["title"]
     context_sentences = sample["context"]["sentences"]
     title_to_sentences = {
-        title: sentences
-        for title, sentences in zip(context_titles, context_sentences)
+        title: sentences for title, sentences in zip(context_titles, context_sentences)
     }
 
     golden_passages = []

@@ -1,8 +1,7 @@
+from helper import compute_c
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-from helper import compute_c
 
 
 def entrypoint() -> np.ndarray:
@@ -46,7 +45,9 @@ def entrypoint() -> np.ndarray:
 
         init_key, restart_key = jax.random.split(restart_key)
         sparsity = 0.95
-        u_mask = jax.random.bernoulli(init_key, p=(1 - sparsity), shape=(max_integer + 1,))
+        u_mask = jax.random.bernoulli(
+            init_key, p=(1 - sparsity), shape=(max_integer + 1,)
+        )
         u_mask = u_mask.at[0].set(True)
 
         current_loss = objective_fn(u_mask)

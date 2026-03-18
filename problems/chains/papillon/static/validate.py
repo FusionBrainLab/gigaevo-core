@@ -9,18 +9,18 @@ Leakage is judged by GPT-4o-mini (PII count in sanitized query).
 import asyncio
 from statistics import mean
 
-from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.papillon.shared_config import (
-    LLM_CONFIG,
     JUDGE_CONFIG,
+    LLM_CONFIG,
     load_context,
     outer_context_builder,
 )
 from problems.chains.papillon.static.config import STATIC_CHAIN_TOPOLOGY, load_baseline
 from problems.chains.papillon.utils.external_llm import make_external_llm_fn
-from problems.chains.papillon.utils.pipeline import judge_quality, judge_leakage
+from problems.chains.papillon.utils.pipeline import judge_leakage, judge_quality
 
 
 def validate(chain_spec: dict) -> dict:

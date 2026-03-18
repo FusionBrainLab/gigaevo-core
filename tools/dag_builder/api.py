@@ -15,8 +15,6 @@ import sys
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from typing import List, Optional
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -50,10 +48,10 @@ class StageInfoResponse(BaseModel):
     description: str
     class_name: str
     import_path: str
-    mandatory_inputs: List[str]
-    optional_inputs: List[str]
+    mandatory_inputs: list[str]
+    optional_inputs: list[str]
     input_types: dict  # Dict mapping input name to type string
-    output_fields: List[str]
+    output_fields: list[str]
     output_model_name: str
     cacheable: bool  # Whether this stage's results can be cached
 
@@ -72,32 +70,32 @@ class ExecutionDependencyRequest(BaseModel):
 
 class StageRequest(BaseModel):
     name: str
-    custom_name: Optional[str] = None
+    custom_name: str | None = None
     display_name: str
     description: str = ""
     notes: str = ""
 
 
 class DAGRequest(BaseModel):
-    stages: List[StageRequest]  # List of stage objects with metadata
-    data_flow_edges: List[DataFlowEdgeRequest]
-    execution_dependencies: List[ExecutionDependencyRequest]
+    stages: list[StageRequest]  # List of stage objects with metadata
+    data_flow_edges: list[DataFlowEdgeRequest]
+    execution_dependencies: list[ExecutionDependencyRequest]
 
 
 class DAGExportResponse(BaseModel):
     code: str
-    validation_errors: List[str]
+    validation_errors: list[str]
 
 
 class DAGValidationResponse(BaseModel):
     is_valid: bool
-    errors: List[str]
-    warnings: List[str]
+    errors: list[str]
+    warnings: list[str]
 
 
 class YAMLExportResponse(BaseModel):
     yaml: str
-    validation_errors: List[str]
+    validation_errors: list[str]
 
 
 class YAMLConfigInfo(BaseModel):
@@ -111,11 +109,11 @@ class LoadYAMLRequest(BaseModel):
 
 
 class LoadYAMLResponse(BaseModel):
-    stages: List[StageRequest]
-    data_flow_edges: List[DataFlowEdgeRequest]
-    execution_dependencies: List[ExecutionDependencyRequest]
-    errors: List[str]
-    warnings: List[str]
+    stages: list[StageRequest]
+    data_flow_edges: list[DataFlowEdgeRequest]
+    execution_dependencies: list[ExecutionDependencyRequest]
+    errors: list[str]
+    warnings: list[str]
 
 
 @app.get("/")
@@ -275,7 +273,7 @@ async def root():
     return HTMLResponse(content=html_content)
 
 
-@app.get("/api/stages", response_model=List[StageInfoResponse])
+@app.get("/api/stages", response_model=list[StageInfoResponse])
 async def get_stages():
     """Get all available stages."""
     stages = StageRegistry.get_all_stages()
@@ -444,7 +442,7 @@ async def export_yaml(dag_request: DAGRequest):
         raise HTTPException(status_code=500, detail=f"YAML export failed: {str(e)}")
 
 
-def validate_dag_structure(dag_request: DAGRequest) -> List[str]:
+def validate_dag_structure(dag_request: DAGRequest) -> list[str]:
     """Validate the DAG structure."""
     errors = []
 
@@ -817,7 +815,7 @@ def generate_yaml_config(dag_request: DAGRequest) -> str:
     return "\n".join(yaml_lines)
 
 
-@app.get("/api/yaml-configs", response_model=List[YAMLConfigInfo])
+@app.get("/api/yaml-configs", response_model=list[YAMLConfigInfo])
 async def list_yaml_configs():
     """List available Hydra YAML pipeline configs with dag_blueprint section."""
     try:
@@ -833,7 +831,7 @@ async def list_yaml_configs():
 
             # Check if this config has a dag_blueprint section
             try:
-                with open(yaml_file, "r") as f:
+                with open(yaml_file) as f:
                     config_data = yaml.safe_load(f)
 
                 # Only include configs that have dag_blueprint with nodes
@@ -874,7 +872,7 @@ async def load_yaml_config(request: LoadYAMLRequest):
             )
 
         # Load YAML
-        with open(yaml_path, "r") as f:
+        with open(yaml_path) as f:
             config = yaml.safe_load(f)
 
         errors = []
