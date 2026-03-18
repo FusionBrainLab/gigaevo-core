@@ -1,0 +1,37 @@
+# @package _global_
+# Ring topology — each run accepts migrants only from its predecessor.
+# Requires specifying all run_ids in order.
+#
+# Usage:
+#   python run.py migration_bus=ring migration_bus_ring_ids='["run@db0","run@db2","run@db3"]'
+
+migration_node:
+  _target_: gigaevo.evolution.bus.MigrationNode
+  run_id: "${problem.name}@db${redis.db}"
+  transport:
+    _target_: gigaevo.evolution.bus.RedisStreamTransport
+    run_id: "${problem.name}@db${redis.db}"
+    stream_key: "gigaevo:${problem.name}:migration_bus"
+    host: ${redis.host}
+    port: ${redis.port}
+    db: ${migration_bus_db}
+    max_stream_len: 1000
+    claim_ttl: 120
+  topology:
+    _target_: gigaevo.evolution.bus.RingTopology
+    run_ids: ${migration_bus_ring_ids}
+  max_buffer_size: 30
+  consume_interval: 3.0
+  max_consume_per_poll: 20
+
+# Single _target_ swap — everything else inherited from evolution/default.yaml
+evolution_engine:
+  _target_: gigaevo.evolution.bus.BusedEvolutionEngine
+  migration_node: ${migration_node}
+  max_imports_per_generation: 10
+
+# Dedicated Redis DB for bus transport (must not collide with run DBs)
+migration_bus_db: 15
+
+# Must be provided on command line
+migration_bus_ring_ids: ???

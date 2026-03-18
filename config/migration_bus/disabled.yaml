@@ -1,0 +1,3 @@
+# @package _global_
+# No bus — normal EvolutionEngine used.
+# This is the default; no migration_node or engine swap needed.
