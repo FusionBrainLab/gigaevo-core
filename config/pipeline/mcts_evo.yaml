@@ -31,7 +31,7 @@ dag_blueprint:
       score_key: fitness
       minimize: true
       n_trials: 30
-      eval_timeout: 300
+      eval_timeout: 600
       function_name: entrypoint
       validator_fn: validate
       python_path:
