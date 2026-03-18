@@ -21,7 +21,7 @@ def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
 class Evaluator(BaseEvaluator):
-    seeds = [random.randint(1, 10000) for _ in range(2)]
+    seeds = [random.randint(1, 10000) for _ in range(1)]
 
     def policy_mapping(self):
         init_rank = self.init_rank

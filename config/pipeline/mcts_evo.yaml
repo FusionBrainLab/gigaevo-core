@@ -22,7 +22,37 @@ dag_blueprint:
       timeout: ${stage_timeout}
       safe_mode: true
 
-    # Execution stages (runs the program)
+    # Optuna hyperparameter optimization (LLM-guided)
+    OptunaOptStage:
+      _target_: gigaevo.programs.stages.optimization.optuna.stage.OptunaOptimizationStage
+      _partial_: true
+      llm: ${llm}
+      validator_path: ${problem.dir}/validate.py
+      score_key: fitness
+      minimize: true
+      n_trials: 30
+      eval_timeout: 300
+      function_name: entrypoint
+      validator_fn: validate
+      python_path:
+        - ${problem.dir}
+      optimization_time_budget: ${optimization_time_budget}
+      task_description: ${ref:problem_context::task_description}
+      timeout: ${stage_timeout}
+
+    # Optuna payload bridge (extracts best program output)
+    OptunaPayloadBridge:
+      _target_: gigaevo.programs.stages.optimization.optuna.routing.OptunaPayloadBridge
+      _partial_: true
+      timeout: 60
+
+    # Payload resolver (picks Optuna or fallback path)
+    PayloadResolver:
+      _target_: gigaevo.programs.stages.optimization.optuna.routing.PayloadResolver
+      _partial_: true
+      timeout: 60
+
+    # Execution stages (fallback when Optuna fails)
     CallProgramFunction:
       _target_: gigaevo.programs.stages.python_executors.execution.CallProgramFunction
       _partial_: true
@@ -30,13 +60,6 @@ dag_blueprint:
       python_path:
         - ${problem.dir}
       timeout: ${stage_timeout}
-      
-    # AddContext:
-    #   _target_: gigaevo.programs.stages.python_executors.execution.CallFileFunction
-    #   _partial_: true
-    #   path: ${problem.dir}/context.py
-    #   function_name: build_context
-    #   timeout: 30
 
     # Validation stage (evaluates the output)
     CallValidatorFunction:
@@ -51,7 +74,7 @@ dag_blueprint:
       _target_: gigaevo.programs.stages.complexity.ComputeComplexityStage
       _partial_: true
       timeout: ${stage_timeout}
-      
+
     ComputeTimeStage:
       _target_: custom.additional_stages.ComputeTimeStage
       _partial_: true
@@ -176,7 +199,22 @@ dag_blueprint:
     #   destination_stage: CallValidatorFunction
     #   input_name: context
 
+    # Optuna routing: OptunaOptStage → Bridge → Resolver → Validator
+    - source_stage: OptunaOptStage
+      destination_stage: OptunaPayloadBridge
+      input_name: optuna_output
+
+    - source_stage: OptunaPayloadBridge
+      destination_stage: PayloadResolver
+      input_name: optuna_payload
+
+    # Fallback path: CallProgramFunction → Resolver
     - source_stage: CallProgramFunction
+      destination_stage: PayloadResolver
+      input_name: program_payload
+
+    # Resolver → Validator
+    - source_stage: PayloadResolver
       destination_stage: CallValidatorFunction
       input_name: payload
 
@@ -248,21 +286,23 @@ dag_blueprint:
     #   input_name: evolutionary_statistics
   # Execution order dependencies
   exec_order_deps:
-    # AddContext:
-    #   - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
-    #     stage_name: ValidateCodeStage
-    #     condition: success
+    # Optuna runs after validation succeeds
+    OptunaOptStage:
+      - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
+        stage_name: ValidateCodeStage
+        condition: success
 
-    # CallProgramFunction:
-    #   - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
-    #     stage_name: AddContext
-    #     condition: success
-        
+    # CallProgramFunction only runs when Optuna fails (fallback)
+    CallProgramFunction:
+      - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
+        stage_name: OptunaOptStage
+        condition: failure
+
     ComputeTimeStage:
       - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
         stage_name: CallValidatorFunction
         condition: always
-        
+
     InsightsStage:
       - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
         stage_name: EnsureMetricsStage

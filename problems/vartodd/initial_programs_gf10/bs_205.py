@@ -23,8 +23,9 @@ class Evaluator(BaseEvaluator):
     seeds = [random.randint(1, 10000) for _ in range(1)]
 
     def policy_mapping(self):
+        init_rank = self.init_rank
+        ranks = [0]
         eweigts = [self.map_par(_w_tanh, 0) for i in range(5)]
-        fweigts = [self.map_par(_w_tanh, 0) for i in range(6)]
 
         w_pool = [ExplorationScore(
             weights=eweigts,
@@ -32,29 +33,30 @@ class Evaluator(BaseEvaluator):
         )]
         
         w_final = [FinalizationScore(
-            weights=fweigts,
+            weights=[*eweigts, self.map_par(_w_tanh, 0)],
             pow=2
         )]
         
         self.set_pool_scores(w_pool)
         self.set_final_scores(w_final)
-        self.set_min_pool_size(2)
-        self.set_min_z_to_research(10 + 500*self.map_par(sigmoid,0)) 
-        self.set_temperature(0.7)
+        self.set_temperature(0.2)
+        self.set_min_z_to_research(350) 
         
-        self.set_num_samples(30)
-        self.set_max_pool_size((260, 0), (20, 100))
+        self.set_max_pool_size((250, 1), (1, 25))
+        self.set_min_pool_size(1)
+
         self.set_max_tohpe(6)
-        
         self.set_try_only_tohpe(1)
         
         self.set_max_reduction(10)
         self.set_min_reduction(1)
-        self.set_max_from_single_ns(2)
-        self.set_tohpe_num_best(1)
-        self.set_gen_part(0.8)
-        self.set_todd_width(2)  
-        self.set_beamsearch_width(3)  
+        self.set_tohpe_num_best(10)
+        self.set_max_from_single_ns(5)
+        self.set_num_samples(10)
+
+        self.set_gen_part(0.4)
+        self.set_todd_width((250, 1), (1, 25))  
+        self.set_beamsearch_width((250, 0), (1, 40))  
 
     def __call__(self, params: Iterable): 
         tcounts = self.run(params, self.seeds)
@@ -62,45 +64,31 @@ class Evaluator(BaseEvaluator):
         spread = float(np.std(tcounts)) if len(tcounts) > 1 else 0.0
         return bestish + 0.01 * spread
 
-def run_cma(fun, num_eval: int = 5, initial_sigma: float = 0.5) -> np.ndarray:
-    x0 = fun.extract_active()
-    n_params = len(x0)
-    bounds = [-2.0, 2.0]  # Lower and upper bounds for all dimensions
-    def objective_function(x):
-        if x.ndim == 1:
-            return float(fun(x))
-        else:
-            return np.array([fun(xi) for xi in x])
+def run_pso(fun: Evaluator, num_eval: int=5, options={ 'c1': 1.0, 'c2': 1.0, 'w': 0.9 }) -> Evaluator:
+    x = fun.extract_active()
+    n_params = len(x)
+    def objective_function(positions):
+        return np.array([fun(pos) for pos in positions])
     
-    options = {
-        'maxfevals': num_eval,
-        'popsize' : 6,
-        'bounds': bounds,
-        'verbose': 1,
-        'verb_disp': 1,
-        'tolfun': 1e-4,
-        'tolx': 1e-4,
-    }
-    
-    xopt, es = cma.fmin2(
-        objective_function,
-        x0,
-        initial_sigma,  
+    bounds = (np.array([-2.0] * n_params), np.array([2.0] * n_params))
+
+    optimizer = ps.single.GlobalBestPSO(
+        n_particles=4, 
+        dimensions=n_params,
         options=options,
-        restarts=0,
-        bipop=False
+        bounds=bounds
     )
-    
-    return np.array(xopt)
+
+    best_cost, best_position = optimizer.optimize(
+        objective_function, 
+        iters=num_eval,
+        verbose=False
+    )
+    return best_position
+        
 
 def entrypoint():
     fun = Evaluator(path_name="init", max_depth=250)
-    
-    xopt = run_cma(fun, 20)
-    # fun(xopt)
-    x_active = fun.set_up_new_init(0, rank_thr=270, xopt=xopt)
-    if x_active is not None and len(x_active) > 0:
-        xopt = run_cma(fun, 70)
-        fun(xopt)
+    xopt = run_pso(fun, 30)
     
     return fun.get_best()

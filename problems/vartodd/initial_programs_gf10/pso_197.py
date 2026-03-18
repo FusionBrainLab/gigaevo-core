@@ -1,9 +1,7 @@
 from typing import Iterable
 import cma
-import nlopt
-from pyswarm import pso
 import numpy as np
-from helper import get_matrix, BaseEvaluator, Matrix, ExplorationScore, FinalizationScore, get_matrix
+from helper import BaseEvaluator, Matrix, ExplorationScore, FinalizationScore
 import random
 import pyswarms as ps
 
@@ -20,7 +18,6 @@ def softmin(xs, beta=6.0):
 
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
-
 class Evaluator(BaseEvaluator):
     seeds = [random.randint(1, 10000) for _ in range(1)]
 
@@ -47,7 +44,7 @@ class Evaluator(BaseEvaluator):
         self.set_temperature(0.7)
         
         self.set_num_samples(30)
-        self.set_max_pool_size((460, 0), (20, 100))
+        self.set_max_pool_size((260, 0), (20, 100))
         self.set_max_tohpe(6)
         
         self.set_try_only_tohpe(1)
@@ -66,44 +63,36 @@ class Evaluator(BaseEvaluator):
         spread = float(np.std(tcounts)) if len(tcounts) > 1 else 0.0
         return bestish + 0.01 * spread
 
-def run_cma(fun, num_eval: int = 5, initial_sigma: float = 0.5) -> np.ndarray:
-    x0 = fun.extract_active()
-    n_params = len(x0)
-    bounds = [-2.0, 2.0]  # Lower and upper bounds for all dimensions
-    def objective_function(x):
-        if x.ndim == 1:
-            return float(fun(x))
-        else:
-            return np.array([fun(xi) for xi in x])
+def run_pso(fun: Evaluator, num_eval: int=5, options={ 'c1': 1.0, 'c2': 1.0, 'w': 0.9 }) -> Evaluator:
+    x = fun.extract_active()
+    n_params = len(x)
+    def objective_function(positions):
+        return np.array([fun(pos) for pos in positions])
     
-    options = {
-        'maxfevals': num_eval,
-        'popsize' : 6,
-        'bounds': bounds,
-        'verbose': 0,
-        'tolfun': 1e-4,
-        'tolx': 1e-4,
-    }
-    
-    xopt, es = cma.fmin2(
-        objective_function,
-        x0,
-        initial_sigma,  
-        options=options,
-        restarts=0,
-        bipop=False
-    )
-    
-    return np.array(xopt)
+    bounds = (np.array([-2.0] * n_params), np.array([2.0] * n_params))
 
-def entrypoint(mat):
-    fun = Evaluator(mat=mat, max_depth=200)
+    optimizer = ps.single.GlobalBestPSO(
+        n_particles=4, 
+        dimensions=n_params,
+        options=options,
+        bounds=bounds
+    )
+
+    best_cost, best_position = optimizer.optimize(
+        objective_function, 
+        iters=num_eval,
+        verbose=False
+    )
+    return best_position
+        
+
+def entrypoint():
+    fun = Evaluator(path_name="init", max_depth=250)
     
-    xopt = run_cma(fun, 30)
-    # fun(xopt)
-    x_active = fun.set_up_new_init(0, rank_thr=470, xopt=xopt)
+    xopt = run_pso(fun, 20)
+    x_active = fun.set_up_new_init(0, rank_thr=270, xopt=xopt)
     if x_active is not None and len(x_active) > 0:
-        xopt = run_cma(fun, 50)
+        xopt = run_pso(fun, 30)
         fun(xopt)
     
     return fun.get_best()

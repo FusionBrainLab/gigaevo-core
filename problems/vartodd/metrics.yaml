@@ -5,11 +5,11 @@ specs:
     decimals: 3
     is_primary: true
     higher_is_better: false
-    upper_bound: 230
-    lower_bound: 180
+    upper_bound: 420
+    lower_bound: 370
     include_in_prompts: true
     significant_change: 0.01
-    sentinel_value: 230
+    sentinel_value: 420
   runtime:
     description: Program runtime in seconds
     decimals: 0

@@ -1199,9 +1199,18 @@ class OptunaOptimizationStage(Stage):
             self.update_program_code,
         )
 
+        # Filter out non-numeric values (e.g. "aux info": <str>) that would
+        # fail Pydantic validation on dict[str, float].
+        float_scores = {}
+        for k, v in best_scores.items():
+            try:
+                float_scores[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+
         return OptunaOptimizationOutput(
             optimized_code=optimized_code,
-            best_scores=best_scores,
+            best_scores=float_scores,
             best_params=best_params,
             n_params=n,
             n_trials=n_complete,

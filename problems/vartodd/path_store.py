@@ -10,7 +10,7 @@ from copy import deepcopy
 import numpy as np
 
 from mcts_dao import Path as MctsPath, Dao
-from node import Node, Matrix
+from node import Node, Matrix, ActionInfo
 
 X0_LENGTH = 200
 
@@ -31,12 +31,14 @@ class PathStore:
         matrices_path = base / "matrices.npz"
         meta_path = base / "meta.json"
         daos_path = base / "daos.pkl"
+        incoming_path = base / "incoming.pkl"
 
         matrices: dict[str, np.ndarray] = {}
         meta = {
-            "version": 1,
+            "version": 2,
             "paths": [],
         }
+        incoming_payload: List[List[Optional[tuple]]] = []
 
         for p_idx, path in enumerate(paths):
             if path.final_node is None:
@@ -50,10 +52,15 @@ class PathStore:
             nodes.reverse()
 
             matrix_keys: List[str] = []
+            incoming_info: List[Optional[tuple]] = []
             for s_idx, node in enumerate(nodes):
                 key = f"p{p_idx}_s{s_idx}"
                 matrices[key] = node.state.to_numpy()
                 matrix_keys.append(key)
+                if node.incoming is None:
+                    incoming_info.append(None)
+                else:
+                    incoming_info.append((node.incoming.cand, node.incoming.global_info, node.incoming.source))
             x0s = [list(x0) for x0 in path.x0s]
             #TODO
             for x0 in x0s:
@@ -66,6 +73,7 @@ class PathStore:
                     "x0s": x0s,
                 }
             )
+            incoming_payload.append(incoming_info)
 
         np.savez_compressed(matrices_path, **matrices)
         with open(meta_path, "w", encoding="utf-8") as f:
@@ -75,6 +83,8 @@ class PathStore:
             daos_payload = [path.daos for path in paths]
             with open(daos_path, "wb") as f:
                 pickle.dump(daos_payload, f)
+        with open(incoming_path, "wb") as f:
+            pickle.dump(incoming_payload, f)
 
         return base
 
@@ -83,6 +93,7 @@ class PathStore:
         matrices_path = base / "matrices.npz"
         meta_path = base / "meta.json"
         daos_path = base / "daos.pkl"
+        incoming_path = base / "incoming.pkl"
 
         if not matrices_path.exists():
             raise FileNotFoundError(f"missing matrices file: {matrices_path}")
@@ -97,6 +108,14 @@ class PathStore:
             with open(daos_path, "rb") as f:
                 daos_payload = pickle.load(f)
 
+        incoming_payload: Optional[List[List[Optional[tuple]]]] = None
+        if incoming_path.exists():
+            try:
+                with open(incoming_path, "rb") as f:
+                    incoming_payload = pickle.load(f)
+            except Exception:
+                incoming_payload = None
+
         out: List[MctsPath] = []
         with np.load(matrices_path) as data:
             for idx, p in enumerate(meta.get("paths", [])):
@@ -106,11 +125,24 @@ class PathStore:
 
                 nodes: List[Node] = []
                 prev: Optional[Node] = None
+                incoming_entries: Optional[List[Optional[tuple]]] = None
+                if isinstance(incoming_payload, list) and idx < len(incoming_payload):
+                    per_path = incoming_payload[idx]
+                    if isinstance(per_path, list) and len(per_path) == len(keys):
+                        incoming_entries = per_path
                 for key in keys:
+                    incoming: Optional[ActionInfo] = None
+                    if incoming_entries is not None:
+                        entry = incoming_entries[len(nodes)]
+                        if isinstance(entry, ActionInfo):
+                            incoming = entry
+                        elif isinstance(entry, tuple) and len(entry) == 3:
+                            cand, global_info, source = entry
+                            incoming = ActionInfo(cand=cand, global_info=global_info, source=source)
                     if key not in data:
                         raise KeyError(f"matrix key not found in npz: {key}")
                     mat = Matrix.from_numpy(data[key])
-                    node = Node(state=mat, parent=prev, incoming=None, depth=0 if prev is None else prev.depth + 1)
+                    node = Node(state=mat, parent=prev, incoming=incoming, depth=0 if prev is None else prev.depth + 1)
                     nodes.append(node)
                     prev = node
 

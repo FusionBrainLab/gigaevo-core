@@ -1,31 +1,38 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence, Tuple, cast, Optional
+from typing import Any, cast
 
 from loguru import logger
 
-from gigaevo.exceptions import ValidationError
-from gigaevo.programs.program import Program
-from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.common import AnyContainer, Box
-
-from gigaevo.programs.stages.stage_registry import StageRegistry
-from gigaevo.evolution.mutation.context import MutationContext
-
-from gigaevo.programs.core_types import StageIO, VoidInput
-from gigaevo.programs.stages import Stage
-from gigaevo.programs.stages.python_executors import PythonCodeExecutor, ValidatorInput, CallValidatorFunction, ValidatorOutput
-from gigaevo.programs.stages.mutation_context import (
-    FloatDictContainer, StringContainer, 
-    MetricsMutationContext, InsightsMutationContext, 
-    TransitionAnalysis, TransitionAnalysisList, 
-    EvolutionaryStatistics, InsightsOutput,
-    MetricsContext, FamilyTreeMutationContext,
-    MUTATION_CONTEXT_METADATA_KEY, CompositeMutationContext,
-    EvolutionaryStatisticsMutationContext
-)
 from custom.metrics_formatter import BroaderMetricsFormatter
+from gigaevo.evolution.mutation.context import MutationContext
+from gigaevo.exceptions import ValidationError
+from gigaevo.programs.core_types import StageIO, VoidInput
+from gigaevo.programs.program import Program
+from gigaevo.programs.stages import Stage
+from gigaevo.programs.stages.common import Box
+from gigaevo.programs.stages.mutation_context import (
+    MUTATION_CONTEXT_METADATA_KEY,
+    CompositeMutationContext,
+    EvolutionaryStatistics,
+    EvolutionaryStatisticsMutationContext,
+    FamilyTreeMutationContext,
+    FloatDictContainer,
+    InsightsMutationContext,
+    InsightsOutput,
+    MetricsContext,
+    MetricsMutationContext,
+    StringContainer,
+    TransitionAnalysis,
+    TransitionAnalysisList,
+)
+from gigaevo.programs.stages.python_executors import (
+    PythonCodeExecutor,
+    ValidatorInput,
+)
+from gigaevo.programs.stages.stage_registry import StageRegistry
 
 
 class DictInput(StageIO):
@@ -35,6 +42,7 @@ class DictInput(StageIO):
 class StrDictInput(StageIO):
     data: Box[dict[str, str]]
 
+
 @StageRegistry.register(description="LLM insights for a single program")
 class ComputeTimeStage(Stage):
     InputsModel = VoidInput
@@ -42,8 +50,9 @@ class ComputeTimeStage(Stage):
     cacheable: bool = True
 
     async def compute(self, program: Program) -> StageIO:
-
-        time = {"runtime": program.stage_results['CallProgramFunction'].duration_seconds()} 
+        time = {
+            "runtime": program.stage_results["CallProgramFunction"].duration_seconds()
+        }
 
         logger.debug(
             "[TimeStage] Time of {}: {:.2} s",
@@ -59,6 +68,7 @@ class ComputeTimeStage(Stage):
 )
 class BroaderCallValidatorFunction(PythonCodeExecutor):
     """Loads validator file and calls function `validate(context?, program_output)`."""
+
     InputsModel = ValidatorInput
     OutputModel = Box[dict[str, float | str]]
 
@@ -89,9 +99,8 @@ class BroaderCallValidatorFunction(PythonCodeExecutor):
             context = None
         return ([context, payload] if context is not None else [payload]), {}
 
-@StageRegistry.register(
-    description="Distill numeric metrics from CallValidator"
-)
+
+@StageRegistry.register(description="Distill numeric metrics from CallValidator")
 class DistillMetrics(Stage):
     InputsModel = DictInput
     OutputModel = Box[dict[str, float]]
@@ -102,13 +111,13 @@ class DistillMetrics(Stage):
         for key, val in self.params.data.data.items():
             if isinstance(val, float):
                 metrics[key] = val
-        logger.debug(f"[DistillMetrics] stage completed with {len(metrics)} \n{self.params.data=}")
+        logger.debug(
+            f"[DistillMetrics] stage completed with {len(metrics)} \n{self.params.data=}"
+        )
         return Box[dict[str, float]](data=metrics)
-    
-    
-@StageRegistry.register(
-    description="Distill aux info from CallValidator"
-)
+
+
+@StageRegistry.register(description="Distill aux info from CallValidator")
 class DistillNonMetrics(Stage):
     InputsModel = DictInput
     OutputModel = Box[dict[str, str]]
@@ -120,16 +129,17 @@ class DistillNonMetrics(Stage):
         for key, val in params.data.data.items():
             if isinstance(val, str):
                 non_metrics[key] = val
-        logger.debug(f"[DistillNonMetrics] stage completed with {len(non_metrics)}\n{self.params.data=}")
+        logger.debug(
+            f"[DistillNonMetrics] stage completed with {len(non_metrics)}\n{self.params.data=}"
+        )
         return Box[dict[str, str]](data=non_metrics)
-    
 
-@StageRegistry.register(
-    description="Ensure non metrics and set formatter"
-)
+
+@StageRegistry.register(description="Ensure non metrics and set formatter")
 class EnsureNonMetricsStage(Stage):
     InputsModel = StrDictInput
     OutputModel = Box[dict[str, str]]
+
     async def compute(self, program: Program) -> StageIO:
         # logger.debug(f"[EnsureNonMetricsStage] {self.params.data.data["aux info"]=}")
         program.set_metadata("aux_info", self.params.data.data["aux info"])
@@ -145,12 +155,12 @@ class MutationContextInputs(StageIO):
       - lineage_descendants: TransitionAnalysisList (from collector+lineage stages on descendants)
     """
 
-    metrics: Optional[FloatDictContainer]
-    non_metrics: Optional[Box[dict[str, str]]]
-    insights: Optional[InsightsOutput]
-    lineage_ancestors: Optional[TransitionAnalysisList]
-    lineage_descendants: Optional[TransitionAnalysisList]
-    evolutionary_statistics: Optional[EvolutionaryStatistics]
+    metrics: FloatDictContainer | None
+    non_metrics: Box[dict[str, str]] | None
+    insights: InsightsOutput | None
+    lineage_ancestors: TransitionAnalysisList | None
+    lineage_descendants: TransitionAnalysisList | None
+    evolutionary_statistics: EvolutionaryStatistics | None
 
 
 class NonMetricsMutationContext(MutationContext):
@@ -162,11 +172,16 @@ class NonMetricsMutationContext(MutationContext):
         arbitrary_types_allowed = True
 
     def format(self) -> str:
-        lines = ["## Program execution aux info", ""]
-        for _, val in self.non_metrics.items():
-            lines.append(val)
-        logger.debug(f"[NonMetricsMutationContext] {lines=}")
-        return "\n".join(lines)
+        raw = "\n".join(val for val in self.non_metrics.values())
+        try:
+            from custom.vartodd_aux_formatter import format_vartodd_aux
+
+            formatted = format_vartodd_aux(raw)
+        except Exception:
+            # Fallback to raw output if formatter fails
+            formatted = "## Program execution aux info\n\n" + raw
+        logger.debug(f"[NonMetricsMutationContext] formatted {len(formatted)} chars")
+        return formatted
 
 
 @StageRegistry.register(
@@ -206,7 +221,7 @@ class MutationContextStage(Stage):
             aux_info = context.format()
             program.set_metadata("aux_info", aux_info)
             contexts.append(context)
-            
+
         if params.insights is not None:
             insights = params.insights.insights
             contexts.append(InsightsMutationContext(insights=insights))
@@ -235,10 +250,7 @@ class MutationContextStage(Stage):
                     metrics_context=self.metrics_context,
                 )
             )
-            logger.info(
-                "[{}] Evolutionary statistic data",
-                contexts[-1].format()
-            )
+            logger.info("[{}] Evolutionary statistic data", contexts[-1].format())
         if not contexts:
             logger.info(
                 "[{}] No upstream context available for {}",
@@ -249,4 +261,3 @@ class MutationContextStage(Stage):
         context = CompositeMutationContext(contexts=contexts).format()
         program.set_metadata(self.metadata_key, context)
         return StringContainer(data=context)
-    
