@@ -240,15 +240,15 @@ class TestPromptEvolutionPipelineDeps:
         stats = MagicMock(spec=PromptStatsProvider)
         bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
 
-        assert ("EnsureMetricsStage", "InsightsStage") in _edge_pairs(bp)
+        assert ("PromptFitnessStage", "InsightsStage") in _edge_pairs(bp)
 
     def test_lineage_after_metrics(self):
-        """LineageStage depends on EnsureMetricsStage via DataFlowEdge (fitness_metrics)."""
+        """LineageStage depends on PromptFitnessStage via DataFlowEdge (fitness_metrics)."""
         ctx = _make_ctx()
         stats = MagicMock(spec=PromptStatsProvider)
         bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
 
-        assert ("EnsureMetricsStage", "LineageStage") in _edge_pairs(bp)
+        assert ("PromptFitnessStage", "LineageStage") in _edge_pairs(bp)
         assert "LineageStage" in _dep_names(bp, "LineagesToDescendants")
         assert "LineageStage" in _dep_names(bp, "LineagesFromAncestors")
 
@@ -683,7 +683,7 @@ class TestPipelineDataFlowEdges:
     """Verify the fitness_metrics DataFlowEdges are correctly wired."""
 
     def test_insights_gets_fitness_metrics_edge(self):
-        """InsightsStage receives fitness_metrics from EnsureMetricsStage."""
+        """InsightsStage receives fitness_metrics from PromptFitnessStage."""
         ctx = _make_ctx()
         stats = MagicMock(spec=PromptStatsProvider)
         bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
@@ -695,10 +695,10 @@ class TestPipelineDataFlowEdges:
             and e.input_name == "fitness_metrics"
         ]
         assert len(fitness_edges) == 1
-        assert fitness_edges[0].source_stage == "EnsureMetricsStage"
+        assert fitness_edges[0].source_stage == "PromptFitnessStage"
 
     def test_lineage_gets_fitness_metrics_edge(self):
-        """LineageStage receives fitness_metrics from EnsureMetricsStage."""
+        """LineageStage receives fitness_metrics from PromptFitnessStage."""
         ctx = _make_ctx()
         stats = MagicMock(spec=PromptStatsProvider)
         bp = PromptEvolutionPipelineBuilder(ctx, stats).build_blueprint()
@@ -710,7 +710,7 @@ class TestPipelineDataFlowEdges:
             and e.input_name == "fitness_metrics"
         ]
         assert len(fitness_edges) == 1
-        assert fitness_edges[0].source_stage == "EnsureMetricsStage"
+        assert fitness_edges[0].source_stage == "PromptFitnessStage"
 
     def test_insights_node_is_prompt_subclass(self):
         """InsightsStage node factory creates PromptInsightsStage."""

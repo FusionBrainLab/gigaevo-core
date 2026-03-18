@@ -187,13 +187,16 @@ class PromptEvolutionPipelineBuilder:
             ),
             # Fitness-dependent cache invalidation: InsightsStage and LineageStage
             # re-run when metrics change (e.g., trials goes from 0 → N).
+            # Source from PromptFitnessStage (not EnsureMetricsStage) because
+            # EnsureMetricsStage filters to MetricsContext keys only, excluding
+            # 'trials' which is needed for the skip-at-zero-trials logic.
             DataFlowEdge.create(
-                source="EnsureMetricsStage",
+                source="PromptFitnessStage",
                 destination="InsightsStage",
                 input_name="fitness_metrics",
             ),
             DataFlowEdge.create(
-                source="EnsureMetricsStage",
+                source="PromptFitnessStage",
                 destination="LineageStage",
                 input_name="fitness_metrics",
             ),
@@ -237,7 +240,7 @@ class PromptEvolutionPipelineBuilder:
                 ExecutionOrderDependency.always_after("PromptExecutionStage"),
             ],
             # InsightsStage and LineageStage ordering is now implicit via
-            # DataFlowEdge from EnsureMetricsStage (fitness_metrics input).
+            # DataFlowEdge from PromptFitnessStage (fitness_metrics input).
             "LineagesToDescendants": [
                 ExecutionOrderDependency.always_after("LineageStage"),
             ],
