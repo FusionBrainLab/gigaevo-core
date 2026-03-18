@@ -187,7 +187,12 @@ if __name__ == "__main__":
         help="Test mode: 'baseline' runs baseline on a few samples, "
         "'redis' tests best evolved chain from Redis",
     )
-    parser.add_argument("--n-samples", type=int, default=3)
+    parser.add_argument(
+        "--n-samples",
+        type=int,
+        default=None,
+        help="Number of test samples (default: 3 for baseline, all for redis)",
+    )
     parser.add_argument("--redis-db", type=int, default=0)
     parser.add_argument("--redis-prefix", type=str, default="")
     parser.add_argument("--redis-host", default="localhost")
@@ -195,7 +200,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "baseline":
-        test_baseline(n_samples=args.n_samples)
+        test_baseline(n_samples=args.n_samples or 3)
     elif args.mode == "redis":
         test_best_chain(
             redis_db=args.redis_db,
