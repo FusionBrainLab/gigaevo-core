@@ -92,7 +92,7 @@ class TestPromptExecutionStage:
         """compute() raises when program has no entrypoint()."""
         stage = PromptExecutionStage(timeout=30.0)
         stage.attach_inputs({})
-        with pytest.raises(ValueError, match="no callable entrypoint"):
+        with pytest.raises(ValueError, match="def entrypoint"):
             await stage.compute(broken_prompt_program)
 
     @pytest.mark.asyncio

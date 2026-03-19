@@ -95,6 +95,10 @@ class PythonCodeExecutor[T](Stage):
                 args=args,
                 kwargs=kwargs,
                 python_path=self.python_path,
+                env_updates={
+                    "GIGAEVO_PROGRAM_ID": program.id,
+                    "GIGAEVO_PROGRAM_ID_SHORT": program.id[:8],
+                },
                 timeout=int(self.timeout),
                 max_memory_mb=self.max_memory_mb,
                 max_output_size=self.max_output_size,

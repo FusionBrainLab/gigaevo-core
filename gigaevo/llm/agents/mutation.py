@@ -35,7 +35,13 @@ class MutationStructuredOutput(BaseModel):
         default_factory=list,
         description="Flat list of insight strings that were acted on (verbatim from input)",
     )
-    code: str = Field(description="The mutated Python program code")
+    code: str = Field(
+        description=(
+            "The complete mutated Python source code. "
+            "Must be valid Python (imports, function definitions, etc). "
+            "NEVER put JSON or a response template here — only Python code."
+        )
+    )
 
 
 # Metadata key for storing structured mutation output
@@ -347,6 +353,13 @@ class MutationAgent(LangGraphAgent):
                 # If no code block markers found, use as-is
                 if final_code == code_from_llm.strip():
                     final_code = code_from_llm.strip()
+
+            # Guard: reject code that is a JSON template echoed back instead of Python
+            if "def " not in final_code and final_code.lstrip().startswith("{"):
+                raise ValueError(
+                    "LLM returned JSON template as code instead of Python. "
+                    f"Code starts with: {final_code[:80]!r}"
+                )
 
             state["final_code"] = final_code
 

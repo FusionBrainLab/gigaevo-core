@@ -54,6 +54,12 @@ class PromptExecutionStage(Stage):
 
     async def compute(self, program: Program) -> PromptExecutionOutput:
         code = program.code
+        if "def entrypoint" not in code:
+            raise ValueError(
+                "Prompt program must contain 'def entrypoint()'. "
+                "Got non-Python content (possibly JSON template). "
+                f"Code starts with: {code[:80]!r}"
+            )
         namespace: dict[str, Any] = {}
         try:
             exec(compile(code, "<prompt_program>", "exec"), namespace)  # noqa: S102

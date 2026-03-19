@@ -260,6 +260,7 @@ async def run_exec_runner(
     args: Sequence[Any] | None = None,
     kwargs: dict[str, Any] | None = None,
     python_path: Sequence[Path] | None = None,
+    env_updates: dict[str, Any] | None = None,
     timeout: int,
     max_memory_mb: int | None = None,
     max_output_size: int | None = None,
@@ -310,6 +311,7 @@ async def run_exec_runner(
         "python_path": [str(p) for p in (python_path or [])],
         "args": list(args or []),
         "kwargs": dict(kwargs or {}),
+        "env": dict(env_updates) if env_updates else {},
     }
     data = cloudpickle.dumps(payload, protocol=cloudpickle.DEFAULT_PROTOCOL)
 
