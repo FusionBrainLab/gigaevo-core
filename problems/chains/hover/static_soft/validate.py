@@ -10,7 +10,10 @@ from problems.chains.hover.shared_config import (
     load_context,
     outer_context_builder,
 )
-from problems.chains.hover.static_soft.config import STATIC_CHAIN_TOPOLOGY, load_baseline
+from problems.chains.hover.static_soft.config import (
+    STATIC_CHAIN_TOPOLOGY,
+    load_baseline,
+)
 from problems.chains.hover.utils.retrieval import make_retrieve_fn
 from problems.chains.hover.utils.utils import (
     extract_titles_from_passages,
