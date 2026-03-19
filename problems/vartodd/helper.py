@@ -13,7 +13,7 @@ from dataclasses import field
 from typing import Any
 
 from mcts_dao import Dao, Path, RankSchedule
-from node import ExplorationScore, FinalizationScore, Matrix, Node
+from node import ExplorationScore, FinalizationScore, Matrix, Node, Tensor3D
 from path_store import X0_LENGTH, PathStore
 from todd import Todd
 
