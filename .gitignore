@@ -39,6 +39,7 @@ MANIFEST
 *.manifest
 *.spec
 *results*
+!experiments/**/05_results.md
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
@@ -588,6 +589,13 @@ outcmaes/
 
 # Numpy compressed arrays
 *.npz
+
+# Experiment runtime artifacts (plots, test evals, archives are gitignored)
+experiments/**/plots/
+experiments/**/test_evals/
+experiments/**/archives/
+experiments/**/*.yaml.tmp
+experiments/**/*.yaml.lock
 
 # Dataset indexes (large binary files — rebuild locally with build_*_index.py)
 problems/chains/hotpotqa/dataset/bm25s_index/
