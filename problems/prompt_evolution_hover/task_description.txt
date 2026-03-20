@@ -1,0 +1,111 @@
+PROMPT META-OPTIMIZATION FOR HOVER CHAIN EVOLUTION
+
+You are evolving the mutation prompt used by an evolutionary algorithm to guide
+LLM-driven code mutations of HoVer multi-hop fact verification chains.
+
+Each candidate is a Python module exporting:
+    entrypoint() -> dict
+
+The returned dict has keys:
+    "system": the mutation system prompt template (str)
+    "user": the mutation user prompt template (str)
+
+────────────────────────────────────────────────────
+CONTRACTS — REQUIREMENTS FOR EVOLVED PROMPTS
+────────────────────────────────────────────────────
+
+The evolved prompt (system + user) must satisfy ALL of these contracts.
+Violating any contract causes the mutation pipeline to fail silently, wasting
+compute and hurting this prompt's fitness score.
+
+CONTRACT 1 — SYSTEM PROMPT PLACEHOLDERS:
+The system prompt MUST contain these exact placeholders (filled at runtime):
+    {task_description} — full HoVer chain task description (injected by framework)
+    {metrics_description} — fitness metrics and their optimization directions
+Without these, the mutation LLM receives no information about the downstream task.
+
+CONTRACT 2 — USER PROMPT PLACEHOLDER:
+The user prompt MUST contain this exact placeholder:
+    {parent_blocks} — parent program code, insights, lineage data, failure analysis
+Without this, the mutation LLM has no parent code to mutate.
+
+CONTRACT 3 — JSON OUTPUT FORMAT:
+The mutation LLM's response is parsed as JSON. The prompt (typically the user
+prompt) MUST instruct the mutation LLM to return a JSON object with these fields:
+    "code": str — complete mutated Python program (REQUIRED — raw code, no markdown)
+    "archetype": str — name of the mutation strategy used
+    "justification": str — reasoning linking insights to changes
+    "insights_used": list[str] — which insights were acted upon
+The "code" field is extracted and used as the child program. If the response is
+not valid JSON or lacks "code", the mutation fails entirely.
+
+CONTRACT 4 — PYTHON DOUBLE-BRACE ESCAPING:
+Since the prompt templates are Python strings processed with str.format(), any
+literal curly braces in the prompt text must be escaped as {{ and }}. For example,
+a JSON example block must use {{  }} not {  }. Unescaped braces cause KeyError
+at runtime.
+
+────────────────────────────────────────────────────
+DOWNSTREAM TASK: HOVER MULTI-HOP FACT VERIFICATION CHAIN
+────────────────────────────────────────────────────
+
+The mutation prompt you are evolving guides an LLM to mutate a 7-step prompt-chain
+for multi-hop fact verification over Wikipedia. Understanding this chain structure
+is essential to writing effective mutation prompts.
+
+CHAIN TOPOLOGY (fixed — mutations cannot add/remove/reorder steps):
+
+  Step 1 (TOOL, frozen): BM25 retrieve k=7 — claim → top-7 Wikipedia passages
+  Step 2 (LLM, evolvable): Summarize first-hop evidence from retrieved passages
+  Step 3 (LLM, evolvable): Generate second-hop BM25 search query
+  Step 4 (TOOL, frozen): BM25 retrieve k=7 — step 3 output → more passages
+  Step 5 (LLM, evolvable): Combine first-hop + second-hop evidence
+  Step 6 (LLM, evolvable): Generate third-hop BM25 search query
+  Step 7 (TOOL, frozen): BM25 retrieve_deep k=10 — step 6 output → final passages
+
+Each LLM step has structured fields that the mutation can modify:
+  - aim: step objective (required, 8-15 words ideal)
+  - stage_action: what the LLM should do (required)
+  - reasoning_questions: guiding questions (optional)
+  - example_reasoning: example thought process (optional, <120 words)
+Plus a chain-level system_prompt shared by all LLM steps.
+
+CRITICAL DOMAIN KNOWLEDGE:
+
+- This is a 3-HOP retrieval task — the chain must find ALL 3 gold Wikipedia
+  articles supporting or refuting a claim. Each hop adds one article.
+- BM25 is a fixed bag-of-words retrieval tool — NOT tunable. The only way to
+  improve retrieval is through better query generation in steps 3 and 6.
+- Steps 3 and 6 outputs are used VERBATIM as BM25 queries. Any prose, preamble,
+  or reasoning text will degrade retrieval.
+- BM25 rewards named entities and key attributes, not relation words or sentence
+  structure. Good: "Marie Curie nationality". Bad: "Find information about Marie
+  Curie's national origin."
+- system_prompt is prepended to ALL 4 LLM steps — every word costs context 4x.
+- Step 5 consolidates evidence from hops 1 and 2. Step 6 must generate a query
+  that finds the THIRD gold document based on what hops 1 and 2 revealed.
+- The third hop (step 6 → step 7) is the most challenging because the third gold
+  document is typically the most distantly related to the original claim.
+- Shorter instructions with explicit constraints outperform verbose prose.
+
+RUNTIME CONTEXT AVAILABLE TO MUTATION PROMPTS:
+
+The mutation prompt receives (via {parent_blocks} and other context):
+- Parent program code with all step definitions
+- Program insights: [category][tag](severity) with tags: beneficial/harmful/fragile/rigid
+- Lineage insights: historical mutation outcomes with strategy labels and measured deltas
+
+────────────────────────────────────────────────────
+FITNESS DEFINITION
+────────────────────────────────────────────────────
+
+A "successful" mutation = child chain achieves strictly higher soft retrieval
+coverage than parent. Soft retrieval coverage = fraction of 3 gold documents
+found (0/3=0.0, 1/3=0.333, 2/3=0.667, 3/3=1.0), averaged across 300 validation
+samples. This soft metric provides gradient signal from partial improvements.
+
+Prompt fitness = success_rate = fraction of mutations that achieved strict
+improvement, aggregated with Bayesian Beta(1,3) prior.
+
+The behavior descriptor is prompt_length (number of characters).
+The primary fitness metric is success_rate.
