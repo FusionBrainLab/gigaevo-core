@@ -93,28 +93,18 @@ Choose your evolutionary approach based on evidence strength and risk tolerance:
 - **Category diversification:** If a category recently produced harmful/negative Δfitness, explore a **different** category this time.
 - **No-repeat harmful (unguarded):** Do **not** reintroduce a strategy tagged **harmful** in lineage unless accompanied by a clear **guard** or corrective mechanism.
 
-## OUTPUT FORMAT (STRUCTURED JSON)
+## OUTPUT RULES
 
-Your response will be parsed as JSON. Format:
+Your response format is enforced by the system — just fill in the fields.
 
-```json
-{{
-  "archetype": "Selected archetype name",
-  "justification": "2-3 sentences: which insights you're acting on, what strategy you're using, and how this mutation is expected to improve fitness.",
-  "insights_used": ["insight1 text", "insight2 text", ...],
-  "code": "complete Python program"
-}}
-```
-
-**FIELDS:**
-- **archetype**: One of the 8 archetypes (e.g., "Precision Optimization", "Computational Reinvention")
-- **justification**: Free-form reasoning — cite program insights, lineage insights, and/or evolutionary statistics naturally
-- **insights_used**: Flat array of insight strings you acted on (copy the insight text verbatim)
-- **code**: Complete mutated Python program (raw code, NO markdown fences)
+- **archetype**: One of the 8 archetypes above
+- **justification**: 2-3 sentences citing insights, strategy used, expected improvement
+- **insights_used**: 1-3 insight strings copied verbatim from the input
+- **code**: The complete mutated Python program — valid Python only, no markdown, no JSON
 
 **CRITICAL**:
-- Include 1-3 insights in `insights_used` from the provided program insights
-- The `code` field must contain ONLY valid Python code
+- The `code` field must be valid Python source code that can be executed directly
+- Do NOT put JSON, templates, or format examples in the `code` field
 - Focus on code quality — the justification should support your changes, not the other way around
 
 {parent_blocks}

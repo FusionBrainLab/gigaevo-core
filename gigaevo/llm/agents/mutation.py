@@ -40,8 +40,9 @@ class MutationStructuredOutput(BaseModel):
     code: str = Field(
         description=(
             "The complete mutated Python source code. "
-            "Must be valid Python (imports, function definitions, etc). "
-            "NEVER put JSON or a response template here — only Python code."
+            "Must be valid Python starting with imports or def statements. "
+            "NEVER put JSON, format examples, or templates here. "
+            "Use actual newlines between lines, not literal backslash-n."
         )
     )
 
@@ -345,10 +346,10 @@ class MutationAgent(LangGraphAgent):
             # Get code from structured output
             code_from_llm = structured_output.code
 
-            # Fix double-escaped quotes from structured output JSON serialization.
-            # LLMs sometimes produce \" literals inside the code field when they
-            # confuse JSON escaping with Python syntax.
-            code_from_llm = self._fix_double_escaped_quotes(code_from_llm)
+            # Fix JSON-escaped sequences from structured output serialization.
+            # LLMs sometimes produce literal \n, \t, \" in the code field when
+            # they confuse JSON escaping with Python syntax.
+            code_from_llm = self._fix_json_escaped_code(code_from_llm)
 
             if state["mutation_mode"] == "diff":
                 # Apply diff to parent code
@@ -405,30 +406,36 @@ class MutationAgent(LangGraphAgent):
         return state
 
     @staticmethod
-    def _fix_double_escaped_quotes(code: str) -> str:
-        """Fix double-escaped quotes from structured output JSON serialization.
+    def _fix_json_escaped_code(code: str) -> str:
+        """Fix JSON-escaped sequences in code from structured output.
 
-        LLMs using structured output sometimes produce literal backslash-quote
-        sequences (``\\"``) in the code field, e.g.
-        ``return {\\"system\\": system}``.  This happens when the model
-        double-escapes quotes meant for the JSON envelope.
+        LLMs using structured output sometimes produce literal JSON escape
+        sequences in the code field instead of the actual characters:
+        - ``\\"`` instead of ``"`` (double-escaped quotes)
+        - ``\\n`` instead of actual newlines (escaped newlines)
+        - ``\\t`` instead of actual tabs (escaped tabs)
 
-        We only apply the fix when the original code fails to parse and the
-        unescaped version parses successfully — so legitimate uses of ``\\"``
-        (e.g. inside raw strings) are never altered.
+        This happens when the model confuses JSON string escaping with
+        the Python code content. We only apply the fix when the original
+        code fails to parse and the cleaned version parses successfully.
         """
-        if '\\"' not in code:
+        # Quick check: does code contain any JSON escape sequences?
+        if "\\n" not in code and '\\"' not in code and "\\t" not in code:
             return code
         try:
             ast.parse(code)
             return code  # Already valid — don't touch it
         except SyntaxError:
             pass
-        cleaned = code.replace('\\"', '"')
+
+        # Try unescaping JSON sequences
+        cleaned = code.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
         try:
             ast.parse(cleaned)
             logger.debug(
-                "[MutationAgent] Fixed double-escaped quotes in code ({} replacements)",
+                '[MutationAgent] Fixed JSON-escaped code (\\n={}, \\t={}, \\"={})',
+                code.count("\\n"),
+                code.count("\\t"),
                 code.count('\\"'),
             )
             return cleaned
