@@ -238,13 +238,17 @@ class EvolutionEngine:
             _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
         )
 
+        # Log generation summary for easy diagnosis
         step_elapsed = time.monotonic() - step_t0
+        archive_size = len(await self.strategy.get_program_ids())
         logger.info(
-            "[EvolutionEngine] gen={} done | elites={} mutants={} refreshed={} ({:.1f}s)",
+            "[EvolutionEngine] gen={} done | elites={} mutants={} refreshed={}"
+            " | archive={} ({:.1f}s)",
             gen,
             len(elites),
             created,
             refreshed,
+            archive_size,
             step_elapsed,
         )
 
@@ -331,8 +335,8 @@ class EvolutionEngine:
                 elif not self.config.program_acceptor.is_accepted(prog):
                     # rejected by basic checks
                     rej_valid += 1
-                    logger.debug(
-                        "[EvolutionEngine] Program {} rejected by acceptor (metrics={})",
+                    logger.info(
+                        "[EvolutionEngine] Program {} REJECTED by acceptor (metrics={})",
                         prog.short_id,
                         prog.metrics,
                     )

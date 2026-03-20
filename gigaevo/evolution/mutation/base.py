@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +16,11 @@ if TYPE_CHECKING:
 class MutationSpec(BaseModel):
     """Container for a single mutation result returned by a `MutationOperator`."""
 
+    # Canonical metadata key names — use these instead of bare strings.
+    META_MODEL: ClassVar[str] = "mutation_model"
+    META_OUTPUT: ClassVar[str] = "mutation_output"
+    META_PROMPT_ID: ClassVar[str] = "prompt_id"
+
     code: str = Field(description="The code of the mutated program")
     parents: list[Program] = Field(description="List of parent programs")
     name: str = Field(description="Description of the mutation")
@@ -24,6 +29,19 @@ class MutationSpec(BaseModel):
         description="Structured mutation metadata (archetype, justification, etc.)",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @property
+    def mutation_model(self) -> str | None:
+        """Model used to generate this mutation, or None."""
+        return self.metadata.get(self.META_MODEL)
+
+    @property
+    def mutation_archetype(self) -> str | None:
+        """Archetype label from structured LLM output, or None."""
+        output = self.metadata.get(self.META_OUTPUT)
+        if isinstance(output, dict):
+            return output.get("archetype")
+        return None
 
     def __iter__(self) -> Iterable:
         """Allow easy unpacking: ``code, parents, name = spec``."""

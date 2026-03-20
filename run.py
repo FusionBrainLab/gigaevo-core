@@ -40,6 +40,27 @@ async def run_experiment(cfg: DictConfig):
         evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
         writer: LogWriter = config_with_instances.writer
         logger.info("Step 1/5: Complete")
+
+        # Log resolved config for debugging
+        logger.info("--- Resolved configuration ---")
+        logger.info(
+            f"  Pipeline builder: {cfg.get('pipeline_builder', {}).get('_target_', '(default)')}"
+        )
+        logger.info(f"  Redis DB: {cfg.redis.db} at {cfg.redis.host}:{cfg.redis.port}")
+        _prompts_dir = cfg.get("evolution_context", {}).get("prompts_dir", None)
+        logger.info(f"  Prompts dir: {_prompts_dir or '(package defaults)'}")
+        logger.info(f"  Stage timeout: {cfg.get('stage_timeout', '(not set)')}s")
+        logger.info(f"  DAG timeout: {cfg.get('dag_timeout', '(not set)')}s")
+        logger.info(
+            f"  Max mutations/gen: {cfg.get('max_mutations_per_generation', '(not set)')}"
+        )
+        logger.info(
+            f"  Max elites/gen: {cfg.get('max_elites_per_generation', '(not set)')}"
+        )
+        logger.info(f"  Mutation mode: {cfg.get('mutation_mode', '(not set)')}")
+        _fetcher = cfg.get("prompt_fetcher", {}).get("_target_", "(default)")
+        logger.info(f"  Prompt fetcher: {_fetcher}")
+        logger.info("--- End configuration ---")
         logger.info("")
 
         logger.info("Step 2/5: Checking Redis database and acquiring instance lock...")

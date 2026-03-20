@@ -443,6 +443,7 @@ class TestStep:
         engine.strategy.get_program_ids.side_effect = [
             [],  # Phase 4: no archive yet
             [new_prog.id],  # Phase 5: now in archive
+            [new_prog.id],  # generation summary log
         ]
         engine.storage.mget.return_value = [new_prog]
 
@@ -497,7 +498,7 @@ class TestStep:
 
         engine.storage.get_all_by_status.side_effect = _by_status
         # Neither in archive
-        engine.strategy.get_program_ids.side_effect = [[], []]
+        engine.strategy.get_program_ids.side_effect = [[], [], []]
 
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",

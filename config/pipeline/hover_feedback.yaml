@@ -1,0 +1,30 @@
+# @package _global_
+# Feedback pipeline for HoVer static chain evolution.
+#
+# validate.py returns (metrics, failures); FetchArtifact extracts failures;
+# HoVerFeedbackFormatter renders per-hop retrieval diagnostics for the mutation LLM.
+#
+# Usage:
+#   python run.py problem.name=chains/hover/static pipeline=hover_feedback ...
+#
+# NEVER use pipeline=standard for chains/hover/static after this change —
+# validate.py now returns a tuple, and standard calls repr() on the artifact
+# (repr-contamination, see PR #67).
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+
+pipeline_builder:
+  _target_: problems.chains.hover.static.pipeline.HoVerFeedbackPipelineBuilder
+  ctx: ${evolution_context}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}

@@ -15,6 +15,7 @@ from problems.chains.hover.utils.retrieval import make_retrieve_fn
 from problems.chains.hover.utils.utils import (
     discrete_retrieval_eval,
     extract_titles_from_passages,
+    normalize_text,
 )
 
 
@@ -62,21 +63,48 @@ def validate(chain_spec: dict) -> dict:
     #    Collect passages from all 3 tool step outputs (steps 1, 4, 7 = indices 0, 3, 6).
     #    Indices are safe: static mode enforces exactly 7 steps with this topology.
     scores = []
+    failures = []
     for sample, result in zip(dataset, results):
-        all_passages = "\n".join(
-            [
-                result.step_outputs[0],  # Step 1 output
-                result.step_outputs[3],  # Step 4 output
-                result.step_outputs[6],  # Step 7 output
-            ]
-        )
+        hop_passages = [
+            result.step_outputs[0],  # Step 1 (hop 1)
+            result.step_outputs[3],  # Step 4 (hop 2)
+            result.step_outputs[6],  # Step 7 (hop 3)
+        ]
+        all_passages = "\n".join(hop_passages)
         found_titles = extract_titles_from_passages(all_passages)
         gold_titles = set(sample["supporting_facts"])
-        scores.append(discrete_retrieval_eval(gold_titles, found_titles))
+        normalized_gold = {normalize_text(t) for t in gold_titles}
+        score = discrete_retrieval_eval(gold_titles, found_titles)
+        scores.append(score)
+
+        if score == 0:
+            hop_titles = [extract_titles_from_passages(p) for p in hop_passages]
+            hop_queries = [
+                result.step_outputs[2] if len(result.step_outputs) > 2 else "",
+                result.step_outputs[5] if len(result.step_outputs) > 5 else "",
+            ]
+            failures.append(
+                {
+                    "claim": sample.get("claim", ""),
+                    "gold_titles": sorted(normalized_gold),
+                    "n_gold": len(normalized_gold),
+                    "hop1_found": sorted(normalized_gold & hop_titles[0]),
+                    "hop1_missing": sorted(normalized_gold - hop_titles[0]),
+                    "hop2_found": sorted(normalized_gold & hop_titles[1]),
+                    "hop2_missing": sorted(normalized_gold - hop_titles[1]),
+                    "hop3_found": sorted(normalized_gold & hop_titles[2]),
+                    "hop3_missing": sorted(normalized_gold - hop_titles[2]),
+                    "all_found": sorted(normalized_gold & found_titles),
+                    "all_missing": sorted(normalized_gold - found_titles),
+                    "hop2_query": hop_queries[0][:200],
+                    "hop3_query": hop_queries[1][:200],
+                }
+            )
 
     fitness = mean(scores) if scores else 0.0
-
-    return {
+    metrics = {
         "fitness": fitness,
         "is_valid": 1,
     }
+
+    return (metrics, failures)

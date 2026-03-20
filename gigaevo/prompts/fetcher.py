@@ -113,6 +113,10 @@ class FixedDirPromptFetcher(PromptFetcher):
     def __init__(self, prompts_dir: str | Path | None = None):
         self._prompts_dir = prompts_dir
         self._cache: dict[tuple[str, str], FetchedPrompt] = {}
+        logger.info(
+            "[FixedDirPromptFetcher] Initialized with prompts_dir={}",
+            prompts_dir or "(package defaults)",
+        )
 
     def fetch(self, agent_name: str, prompt_type: str) -> FetchedPrompt:
         key = (agent_name, prompt_type)

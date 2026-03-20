@@ -9,6 +9,8 @@ there, the package default directory is used.
 
 from pathlib import Path
 
+from loguru import logger
+
 _PROMPTS_DIR = Path(__file__).parent
 
 
@@ -39,14 +41,35 @@ def load_prompt(
     if prompts_dir is not None:
         custom_path = Path(prompts_dir) / agent_name / f"{prompt_type}.txt"
         if custom_path.exists():
-            return custom_path.read_text().strip()
-        # Fall back to package defaults if file missing in custom dir
+            text = custom_path.read_text().strip()
+            logger.debug(
+                "[prompts] Loaded {}/{} from custom dir: {} ({} chars)",
+                agent_name,
+                prompt_type,
+                custom_path,
+                len(text),
+            )
+            return text
+        logger.debug(
+            "[prompts] Custom {}/{} not found at {}, falling back to package defaults",
+            agent_name,
+            prompt_type,
+            custom_path,
+        )
     prompt_path = _PROMPTS_DIR / agent_name / f"{prompt_type}.txt"
     if not prompt_path.exists():
         raise FileNotFoundError(
             f"Prompt not found: {prompt_path}\nLooking in: {_PROMPTS_DIR / agent_name}"
         )
-    return prompt_path.read_text().strip()
+    text = prompt_path.read_text().strip()
+    logger.debug(
+        "[prompts] Loaded {}/{} from package defaults: {} ({} chars)",
+        agent_name,
+        prompt_type,
+        prompt_path,
+        len(text),
+    )
+    return text
 
 
 # Simple accessors for common prompts
