@@ -211,9 +211,14 @@ class MutationAgent(LangGraphAgent):
             state["llm_response"] = structured_response
             state["structured_output"] = structured_response
 
+            # Log model used (if LLM is a router)
+            model_used = None
+            if isinstance(self.llm, MultiModelRouter):
+                model_used = self.llm.get_last_model()
             logger.debug(
-                f"[MutationAgent] Received structured output with archetype: "
-                f"{structured_response.archetype}"
+                "[MutationAgent] Received structured output — archetype: {}, model: {}",
+                structured_response.archetype,
+                model_used or "(single model)",
             )
 
         except Exception as e:

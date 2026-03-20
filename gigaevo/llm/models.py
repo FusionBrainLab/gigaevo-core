@@ -91,9 +91,23 @@ class MultiModelRouter(Runnable):
         )
         self._langfuse = _create_langfuse_handler()
 
-        logger.info(
-            "[MultiModelRouter:{}] Initialized with {} models", name, len(models)
+        model_desc = ", ".join(
+            f"{n} ({p:.0%})" for n, p in zip(self.model_names, self.probabilities)
         )
+        logger.info(
+            "[MultiModelRouter:{}] Initialized with {} models: {}",
+            name,
+            len(models),
+            model_desc,
+        )
+        # Log base URLs for debugging server connectivity
+        for m in models:
+            # ChatOpenAI exposes base_url as a property (langchain 0.1+)
+            base_url = getattr(m, "base_url", None)
+            if base_url:
+                logger.info(
+                    "[MultiModelRouter:{}] Model {} at {}", name, m.model_name, base_url
+                )
 
     @staticmethod
     def _current_task_id() -> int | None:
