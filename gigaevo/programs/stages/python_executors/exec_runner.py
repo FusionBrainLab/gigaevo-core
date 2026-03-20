@@ -86,12 +86,35 @@ def _format_syntax_error(e: SyntaxError) -> str:
     return buf.getvalue()
 
 
+_ENV_MISSING = object()
+
+
+def _apply_env(env: dict[str, Any]) -> dict[str, Any]:
+    old: dict[str, Any] = {}
+    for k, v in env.items():
+        old[k] = os.environ.get(k, _ENV_MISSING)
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = str(v)
+    return old
+
+
+def _restore_env(old: dict[str, Any]) -> None:
+    for k, v in old.items():
+        if v is _ENV_MISSING:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
 def _run_one(payload: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None]:
     """
     Execute one payload. Returns (result, None) on success or (None, error_dict) on failure.
     error_dict has _error=True, stderr=str, returncode=int.
     """
     captured = io.StringIO()
+    old_env: dict[str, Any] | None = None
     try:
         _ensure_cwd_in_path()
 
@@ -100,6 +123,10 @@ def _run_one(payload: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None
         py_path: list[str] = payload.get("python_path", [])
         args: list[Any] = payload.get("args", [])
         kwargs: dict[str, Any] = payload.get("kwargs", {})
+        env_updates: dict[str, Any] = payload.get("env", {}) or {}
+
+        if env_updates:
+            old_env = _apply_env(env_updates)
 
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             raise TypeError("Payload must contain 'args': list and 'kwargs': dict")
@@ -142,6 +169,9 @@ def _run_one(payload: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None
         traceback.print_exception(type(e), e, e.__traceback__, file=buf)
         _write_code_context(e, out=buf)
         return (None, {"_error": True, "stderr": buf.getvalue(), "returncode": 1})
+    finally:
+        if old_env is not None:
+            _restore_env(old_env)
 
 
 def _worker_loop() -> None:

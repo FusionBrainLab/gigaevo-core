@@ -10,6 +10,7 @@ module-level singletons would conflict across problems.
 from collections.abc import Callable
 import gzip
 import json
+import pickle
 from pathlib import Path
 import threading
 
@@ -24,19 +25,14 @@ _init_lock = threading.Lock()
 _initialized = False
 
 
-def build_bm25s_index(
-    corpus_path: str | Path,
-    index_dir: str | Path,
-    *,
-    k1: float = 0.9,
-    b: float = 0.4,
-) -> None:
-    """Build bm25s index from corpus JSONL(.gz) and save to disk."""
+def load_corpus(corpus_path: str | Path) -> list[str]:
+    """Load corpus as list[str] from .pkl, .jsonl, or .jsonl.gz."""
     corpus_path = Path(corpus_path)
-    index_dir = Path(index_dir)
+    if corpus_path.suffix == ".pkl":
+        with open(corpus_path, "rb") as f:
+            return pickle.load(f)
 
     passages: list[str] = []
-
     opener = gzip.open if corpus_path.suffix == ".gz" else open
     with opener(corpus_path, "rt", encoding="utf-8") as f:
         for line in f:
@@ -46,6 +42,21 @@ def build_bm25s_index(
             title = doc.get("title", "")
             text = doc.get("text", "")
             passages.append(f"{title} | {text}")
+    return passages
+
+
+def build_bm25s_index(
+    corpus_path: str | Path,
+    index_dir: str | Path,
+    *,
+    k1: float = 0.9,
+    b: float = 0.4,
+) -> None:
+    """Build bm25s index from corpus and save to disk."""
+    corpus_path = Path(corpus_path)
+    index_dir = Path(index_dir)
+
+    passages = load_corpus(corpus_path)
 
     stemmer = Stemmer.Stemmer("english")
     corpus_tokens = bm25s.tokenize(
@@ -99,18 +110,7 @@ def _ensure_initialized(
                 raise FileNotFoundError(
                     "corpus_path is required to load formatted passages"
                 )
-            corpus_path = Path(corpus_path)
-            passages: list[str] = []
-            opener = gzip.open if corpus_path.suffix == ".gz" else open
-            with opener(corpus_path, "rt", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    doc = json.loads(line)
-                    title = doc.get("title", "")
-                    text = doc.get("text", "")
-                    passages.append(f"{title} | {text}")
-            _corpus = passages
+            _corpus = load_corpus(corpus_path)
 
             _initialized = True
         except Exception:

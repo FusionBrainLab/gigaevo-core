@@ -582,6 +582,13 @@ problems/*/*.json
 !tools/**/*.ipynb
 !demos/**/*.svg
 
+# Runtime data directories (binary artifacts, not for VCS)
+data/
+outcmaes/
+
+# Numpy compressed arrays
+*.npz
+
 # Dataset indexes (large binary files — rebuild locally with build_*_index.py)
 problems/chains/hotpotqa/dataset/bm25s_index/
 problems/chains/hotpotqa/dataset/colbert_index/

@@ -59,10 +59,10 @@ for i in range(0, len(rank_thresholds)):
 return values[-1]
 
 Example:
-rank_thresholds = [300, 200, 100], values = [A, B, C]
-- rank=250 -> B
-- rank=50 -> C
-- rank=350 -> A
+rank_thresholds = [500, 450, 420], values = [A, B, C]
+- rank=460 -> A
+- rank=430 -> B
+- rank=410 -> C
 
 ---
 ## Runtime notes
@@ -75,19 +75,20 @@ rank_thresholds = [300, 200, 100], values = [A, B, C]
 ---
 ## Reusing backed-up paths
 During initialization, choose path_name to load a path from previous evolutions.
-- "init" is reserved for pure runs without preloaded paths (use only during stagnation)
-- When path_name != "init", you MUST also pass init_rank_thr to select the init matrix from the loaded path.
+- "init" is reserved for pure runs without preloaded paths
+- When path_name != "init", you MUST also pass init_rank_thr to select the init matrix from the loaded path. init_rank_thr must be at least final_rank + 50
 - This load is only used to pick the starting matrix and record loaded_rank; the run itself behaves like "init".
 - Use other names you will see in evo path statistics
+- prefer using "init" or higher threshold with known path
 
 Example:
-  fun = Evaluator(path_name="i334_f207_e8asef0e843", init_rank_thr=220)  # choose init matrix at rank 220
-  fun = Evaluator(path_name="init",init_rank_thr={any_number})  # exploration (special keyword, no preload)
+  fun = Evaluator(path_name="init", init_rank_thr=0)  # start from scratch (recommended default)
+  fun = Evaluator(path_name="<name_from_evo_path_statistics>", init_rank_thr=450)  # reuse a saved path
 
 How to pick path_name:
 - Use names from "evo path statistics" in the latest report.
 - Prefer lower ranks first; break ties by choosing the newest hash.
-- Name format: "i<init_rank>_f<final_rank>_<hash>".
+- Name format: "i<init_rank>_m<init_rank_thr>_f<final_rank>_<hash>".
 - The keyword "init" is reserved for starting without preload.
 - Choose init_rank_thr to control how deep you jump into the loaded path (lower = deeper).
 - If stats are missing, the path may predate incoming-info saving; still valid but will show unavailable stats.
@@ -96,14 +97,14 @@ How to pick path_name:
 ## Evaluator interface (must follow)
 - Implement Evaluator.policy_mapping(), Evaluator.__call__(), and entrypoint() returning fun.get_best().
 - evaluator.policy_mapping(): set parameters for TODD search
-  - Use evaluator.map_par(fun=<callable>, rank_thr=<int>) to declare tunable parameters.
-    Each call returns fun(hidden_parameters[cur_idx]) and increments cur_idx
-    only if init rank > rank_thr; otherwise it returns zero and does not activate.
+  - Use evaluator.map_par(mapping=<callable>, thr=<int>) to declare tunable parameters.
+    Each call returns mapping(hidden_parameters[cur_idx]) and increments cur_idx
+    only if init rank > thr; otherwise it returns zero and does not activate.
   - evaluator.set_X(constant) — set a constant schedule
   - evaluator.set_X(ranks: List[int], values: List[Any]) — set a rank schedule
 - evaluator(params): evaluate loss for given parameters
   - evaluator.run(params, seeds) -> List[int] ranks per seed
-- evaluator.best_pathes: list of best paths found
+- evaluator.best_paths: list of best paths found
 - evaluator.best_rank: current best rank
 - evaluator.path_num: number of best paths available for reinitialization
 - evaluator.set_up_new_init(path_num, rank_thr, xopt) -> List[float] | None
@@ -112,25 +113,25 @@ How to pick path_name:
 - evaluator.extract_active(): return current active parameters
 
 ---
-## Example best path stats (not real)
+## Example best path stats (not real — gf16 scale)
 best_path_stat:
-328:r8/d-16/q0.07%;bd55/d0/m0;bs10/d-5;tha55/tda55/b0
+567:r8/d-16/q0.07%;bd55/d0/m0;bs10/d-5;tha55/tda55/b0
 ...
-194:r2/d+0/q0.00%;bd2/d0/m0;bs6/d-5;tha2/tda2/b1
-190:final
-rank 0.9q=249.0 rank 0.1q=197.0
+409:r2/d+0/q0.00%;bd2/d0/m0;bs6/d-5;tha2/tda2/b1
+405:final
+rank 0.9q=420.0 rank 0.1q=407.0
 best_policy:
-{'num_samples': [(330, 270, 220), (15, 7, 10)], ...}
+{'num_samples': [(500, 450, 420), (15, 7, 10)], ...}
 search_stats:
-Rank=302 at eval=2
-Rank=230 at eval=38
-Final Rank=189 at eval=190
+Rank=520 at eval=2
+Rank=430 at eval=38
+Final Rank=405 at eval=190
 total_eval=1000
 best_seen_times=131
 evo path statistics:
-best_paths=['i{init}_f{num}_{hash}', 'i{init}_f{num}_{hash}']
+best_paths=['i567_m430_f403_abc123', 'i567_m430_f405_def456']
 count_total=123
-this path name: i334_f117_979d82426430
+this path name: i567_m430_f411_ghi789
 
 ---
 ## Hints for path info
@@ -157,7 +158,7 @@ this path name: i334_f117_979d82426430
 - Must include Evaluator.policy_mapping, Evaluator.__call__, and entrypoint() returning fun.get_best().
 - Use self.map_par(fun=<callable>, rank_thr=<int>) to obtain tunable parameters.
 - The least rank threshold must be below the expected final rank.
-  Example: if final rank cannot be <190, then [220,200,190,0] wastes parameters vs [220,200,0].
+  Example: if final rank cannot be <405, then [430,415,405,0] wastes parameters vs [430,415,0].
 - Check rank scheduling for wasted thresholds.
   Example: observed ranks 567→407 but scheduling (410,405,390,0) is effectively (410,405).
 - Estimate the lowest possible rank based on current reached ranks.

@@ -1,7 +1,7 @@
 """Test the best evolved chain on the test dataset (static mode)."""
 
 import argparse
-from statistics import mean
+from statistics import mean, stdev
 
 from problems.chains.chain_runner import run_chain_on_dataset
 from problems.chains.chain_validation import validate_chain_spec
@@ -119,8 +119,13 @@ def test_best_chain(
     redis_host: str = "localhost",
     redis_port: int = 6379,
     n_samples: int | None = None,
+    n_repeats: int = 1,
 ):
-    """Extract best chain and evaluate on test dataset."""
+    """Extract best chain and evaluate on test dataset.
+
+    When n_repeats > 1, runs the full evaluation multiple times and
+    reports mean, std, and per-repeat scores.
+    """
     from tools.utils import RedisRunConfig
 
     config = RedisRunConfig(
@@ -164,16 +169,25 @@ def test_best_chain(
         ),
     }
 
-    results = run_chain_on_dataset(
-        chain, client, dataset, outer_context_builder, tool_registry
-    )
-
-    coverage = evaluate_retrieval_coverage(dataset, results)
+    coverages = []
+    for rep in range(1, n_repeats + 1):
+        results = run_chain_on_dataset(
+            chain, client, dataset, outer_context_builder, tool_registry
+        )
+        coverage = evaluate_retrieval_coverage(dataset, results)
+        coverages.append(coverage)
+        print(f"  Repeat {rep}/{n_repeats}: coverage = {coverage:.4f}")
 
     print("\n=== Test Results ===")
-    print(f"Retrieval Coverage: {coverage:.4f}")
+    mean_cov = mean(coverages)
+    print(f"Retrieval Coverage (mean): {mean_cov:.4f}")
+    if n_repeats > 1:
+        std_cov = stdev(coverages)
+        print(f"Retrieval Coverage (std):  {std_cov:.4f}")
+        print(f"Retrieval Coverage (all):  {[f'{c:.4f}' for c in coverages]}")
+        print(f"n_repeats: {n_repeats}")
 
-    return {"retrieval_coverage": coverage}
+    return {"retrieval_coverage_mean": mean_cov, "retrieval_coverage_all": coverages}
 
 
 if __name__ == "__main__":
@@ -187,15 +201,26 @@ if __name__ == "__main__":
         help="Test mode: 'baseline' runs baseline on a few samples, "
         "'redis' tests best evolved chain from Redis",
     )
-    parser.add_argument("--n-samples", type=int, default=3)
+    parser.add_argument(
+        "--n-samples",
+        type=int,
+        default=None,
+        help="Number of test samples (default: 3 for baseline, all for redis)",
+    )
     parser.add_argument("--redis-db", type=int, default=0)
     parser.add_argument("--redis-prefix", type=str, default="")
     parser.add_argument("--redis-host", default="localhost")
     parser.add_argument("--redis-port", type=int, default=6379)
+    parser.add_argument(
+        "--n-repeats",
+        type=int,
+        default=1,
+        help="Number of times to repeat the full test evaluation (default: 1)",
+    )
     args = parser.parse_args()
 
     if args.mode == "baseline":
-        test_baseline(n_samples=args.n_samples)
+        test_baseline(n_samples=args.n_samples or 3)
     elif args.mode == "redis":
         test_best_chain(
             redis_db=args.redis_db,
@@ -203,4 +228,5 @@ if __name__ == "__main__":
             redis_host=args.redis_host,
             redis_port=args.redis_port,
             n_samples=args.n_samples,
+            n_repeats=args.n_repeats,
         )

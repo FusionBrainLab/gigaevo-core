@@ -29,15 +29,16 @@ The user prompt MUST contain this exact placeholder:
     {parent_blocks} — parent program code, insights, lineage data, execution stats
 Without this, the mutation LLM has no parent code to mutate.
 
-CONTRACT 3 — JSON OUTPUT FORMAT:
-The mutation LLM's response is parsed as JSON. The prompt (typically the user
-prompt) MUST instruct the mutation LLM to return a JSON object with these fields:
-    "code": str — complete mutated Python program (REQUIRED — raw code, no markdown)
+CONTRACT 3 — STRUCTURED OUTPUT:
+The mutation LLM uses structured output (with_structured_output) which automatically
+enforces the response schema. The prompt does NOT need to describe JSON format or
+show JSON examples — doing so confuses the LLM and causes it to echo JSON templates
+as code. The structured output schema requires:
+    "code": str — complete mutated Python program (raw Python, not JSON)
     "archetype": str — name of the mutation strategy used
     "justification": str — reasoning linking insights to changes
     "insights_used": list[str] — which insights were acted upon
-The "code" field is extracted and used as the child program. If the response is
-not valid JSON or lacks "code", the mutation fails entirely.
+Focus the prompt on WHAT to mutate, not HOW to format the response.
 
 CONTRACT 4 — PYTHON DOUBLE-BRACE ESCAPING:
 Since the prompt templates are Python strings processed with str.format(), any
@@ -55,8 +56,8 @@ domain is essential to writing effective mutation prompts.
 
 WHAT THE EVOLVED CODE DOES:
 Each program defines an Evaluator class with:
-  - policy_mapping(): configures TODD search parameters using map_par() for
-    tunable params optimized by PSO/CMA-ES
+  - policy_mapping(): configures TODD search parameters using map_par(mapping=, thr=)
+    for tunable params optimized by PSO/CMA-ES
   - __call__(params): evaluates a parameter vector, returns loss
   - entrypoint(): runs the optimizer and returns fun.get_best()
 
@@ -83,7 +84,8 @@ KEY DOMAIN CONCEPTS:
 
 4. PATH REUSE — exploiting previous decomposition paths:
    - path_name selects a saved path from prior evolutions
-   - init_rank_thr picks the starting matrix from that path
+   - init_rank_thr picks the starting matrix from that path (must be >= final_rank + 50)
+   - Path name format: "i<init_rank>_m<init_rank_thr>_f<final_rank>_<hash>"
    - Loaded paths provide warm-starts; penalty if no improvement over loaded_rank
    - "init" keyword = fresh start without path reuse
 
