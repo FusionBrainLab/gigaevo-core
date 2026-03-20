@@ -11,7 +11,6 @@ from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.evolution.mutation.utils import _DocstringRemover
 from gigaevo.exceptions import MutationError
 from gigaevo.llm.agents.factories import create_mutation_agent
-from gigaevo.llm.agents.mutation import MUTATION_OUTPUT_METADATA_KEY
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.program import Program
@@ -23,8 +22,8 @@ if TYPE_CHECKING:
 
 MutationMode = Literal["rewrite", "diff"]
 
-#: Metadata key for storing the prompt tracking ID in program metadata
-PROMPT_ID_METADATA_KEY = "prompt_id"
+#: Re-export for backward compatibility
+PROMPT_ID_METADATA_KEY = MutationSpec.META_PROMPT_ID
 
 
 class LLMMutationOperator(MutationOperator):
@@ -146,15 +145,15 @@ class LLMMutationOperator(MutationOperator):
             structured_output = result.get("structured_output")
             mutation_metadata: dict[str, object] = {}
             if structured_output:
-                mutation_metadata[MUTATION_OUTPUT_METADATA_KEY] = structured_output
+                mutation_metadata[MutationSpec.META_OUTPUT] = structured_output
                 archetype = result.get("archetype", "unknown")
                 logger.debug("[LLMMutationOperator] Mutation archetype: {}", archetype)
             if model_name:
-                mutation_metadata["mutation_model"] = model_name
+                mutation_metadata[MutationSpec.META_MODEL] = model_name
             # Stamp prompt tracking ID if present
             prompt_id = result.get("prompt_id")
             if prompt_id is not None:
-                mutation_metadata[PROMPT_ID_METADATA_KEY] = prompt_id
+                mutation_metadata[MutationSpec.META_PROMPT_ID] = prompt_id
 
             mutation_spec = MutationSpec(
                 code=final_code,

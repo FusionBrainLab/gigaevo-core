@@ -3,6 +3,8 @@
 import random
 from typing import Any
 
+from loguru import logger
+
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.formatter import FormatterStage
 
@@ -23,9 +25,14 @@ class HoVerFeedbackFormatter(FormatterStage):
 
     def format_value(self, data: Any) -> str:
         if not data:
+            logger.debug("[HoVerFeedbackFormatter] No failure data to format")
             return ""
 
         failures = data if isinstance(data, list) else []
+        logger.info(
+            "[HoVerFeedbackFormatter] Formatting {} failure(s) (sampling up to 10)",
+            len(failures),
+        )
         sample = random.sample(failures, min(10, len(failures)))
         lines = [
             f"## Failure Analysis"

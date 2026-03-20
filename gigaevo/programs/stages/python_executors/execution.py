@@ -126,6 +126,13 @@ class PythonCodeExecutor[T](Stage):
                     else "Process ran out of memory"
                 )
 
+            logger.warning(
+                "[{}] {} FAILED for {}: {}",
+                stage_name,
+                error_type,
+                program.id[:8],
+                error_msg[:200],
+            )
             return ProgramStageResult.failure(
                 error=StageError(
                     type=error_type,
@@ -135,6 +142,12 @@ class PythonCodeExecutor[T](Stage):
                 )
             )
         except Exception as e:
+            logger.warning(
+                "[{}] Exception for {}: {}",
+                stage_name,
+                program.id[:8],
+                str(e)[:200],
+            )
             return ProgramStageResult.failure(
                 error=StageError.from_exception(e, stage=stage_name)
             )
@@ -283,7 +296,13 @@ class FetchMetrics(Stage):
 
     async def compute(self, program: Program) -> Box[dict[str, float]]:
         params = cast(ValidationResult, self.params)
-        return Box[dict[str, float]](data=params.validation_result.data[0])
+        metrics = params.validation_result.data[0]
+        logger.info(
+            "[FetchMetrics] {} metrics={}",
+            program.id[:8],
+            {k: f"{v:.4f}" if isinstance(v, float) else v for k, v in metrics.items()},
+        )
+        return Box[dict[str, float]](data=metrics)
 
 
 @StageRegistry.register(

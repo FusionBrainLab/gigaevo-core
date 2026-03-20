@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
@@ -44,8 +45,8 @@ class MutationStructuredOutput(BaseModel):
     )
 
 
-# Metadata key for storing structured mutation output
-MUTATION_OUTPUT_METADATA_KEY = "mutation_output"
+# Re-export from canonical location for backward compatibility
+MUTATION_OUTPUT_METADATA_KEY = MutationSpec.META_OUTPUT
 
 
 class MutationPromptFields(BaseModel):

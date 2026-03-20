@@ -76,12 +76,13 @@ async def generate_mutations(
                 program.set_metadata("iteration", iteration)
 
                 await storage.add(program)
-                logger.debug(
-                    "[mutation] Task {}: {} → {} (model={})",
+                logger.info(
+                    "[mutation] Task {}: {} → {} (model={}, archetype={})",
                     task_id,
                     [p.short_id for p in parents],
                     program.short_id,
-                    mutation_spec.metadata.get("mutation_model", "?"),
+                    mutation_spec.mutation_model or "?",
+                    mutation_spec.mutation_archetype or "?",
                 )
 
                 for parent in parents:
