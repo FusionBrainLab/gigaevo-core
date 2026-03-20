@@ -1,3 +1,4 @@
+import ast
 from datetime import UTC, datetime
 import os
 import re
@@ -344,6 +345,11 @@ class MutationAgent(LangGraphAgent):
             # Get code from structured output
             code_from_llm = structured_output.code
 
+            # Fix double-escaped quotes from structured output JSON serialization.
+            # LLMs sometimes produce \" literals inside the code field when they
+            # confuse JSON escaping with Python syntax.
+            code_from_llm = self._fix_double_escaped_quotes(code_from_llm)
+
             if state["mutation_mode"] == "diff":
                 # Apply diff to parent code
                 parents = state["input"]
@@ -397,6 +403,37 @@ class MutationAgent(LangGraphAgent):
             }
 
         return state
+
+    @staticmethod
+    def _fix_double_escaped_quotes(code: str) -> str:
+        """Fix double-escaped quotes from structured output JSON serialization.
+
+        LLMs using structured output sometimes produce literal backslash-quote
+        sequences (``\\"``) in the code field, e.g.
+        ``return {\\"system\\": system}``.  This happens when the model
+        double-escapes quotes meant for the JSON envelope.
+
+        We only apply the fix when the original code fails to parse and the
+        unescaped version parses successfully — so legitimate uses of ``\\"``
+        (e.g. inside raw strings) are never altered.
+        """
+        if '\\"' not in code:
+            return code
+        try:
+            ast.parse(code)
+            return code  # Already valid — don't touch it
+        except SyntaxError:
+            pass
+        cleaned = code.replace('\\"', '"')
+        try:
+            ast.parse(cleaned)
+            logger.debug(
+                "[MutationAgent] Fixed double-escaped quotes in code ({} replacements)",
+                code.count('\\"'),
+            )
+            return cleaned
+        except SyntaxError:
+            return code  # Unescaping didn't help — return original
 
     def _extract_code_block(self, text: str) -> str:
         """Extract outer fenced code block from LLM response.
