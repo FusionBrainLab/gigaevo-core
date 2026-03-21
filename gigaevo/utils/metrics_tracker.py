@@ -71,6 +71,8 @@ class MetricsTracker:
 
         # processed ids
         self._seen_ids: set[str] = set()
+        # last-seen fitness for change detection (handles NO_CACHE stages)
+        self._seen_fitness: dict[str, float] = {}
 
         # simple counters
         self._valid_count = 0
@@ -120,16 +122,63 @@ class MetricsTracker:
 
     async def _drain_once(self) -> None:
         all_ids: list[str] = await self._storage.get_all_program_ids()
+
+        # Process new programs (first time seen)
         new_ids = [pid for pid in all_ids if pid not in self._seen_ids]
-        if not new_ids:
+        if new_ids:
+            programs: list[Program] = await self._storage.mget(new_ids)
+            for prog in programs:
+                if not prog:
+                    continue
+                if await self._process_program(prog):
+                    self._seen_ids.add(prog.id)
+                    metrics = prog.metrics or {}
+                    metrics_hash = tuple(
+                        (k, v)
+                        for k, v in sorted(metrics.items())
+                        if isinstance(v, (int, float)) and k != VALIDITY_KEY
+                    )
+                    self._seen_fitness[prog.id] = metrics_hash
+
+        # Re-check already-seen programs for fitness changes
+        # (handles NO_CACHE stages like PromptFitnessStage that update
+        # metrics after archive refresh re-runs)
+        await self._refresh_changed_fitness()
+
+    async def _refresh_changed_fitness(self) -> None:
+        if not self._seen_fitness:
             return
 
-        programs: list[Program] = await self._storage.mget(new_ids)
+        programs = await self._storage.mget(list(self._seen_fitness.keys()))
+        frontier_improved = False
+
         for prog in programs:
-            if not prog:
+            if not prog or prog.state in INCOMPLETE_STATES:
                 continue
-            if await self._process_program(prog):
-                self._seen_ids.add(prog.id)
+            metrics = prog.metrics or {}
+
+            # Check if any numeric metric changed since last processing
+            metrics_hash = tuple(
+                (k, v)
+                for k, v in sorted(metrics.items())
+                if isinstance(v, (int, float)) and k != VALIDITY_KEY
+            )
+            old_hash = self._seen_fitness.get(prog.id)
+            if old_hash is not None and metrics_hash == old_hash:
+                continue
+
+            # Metrics changed — update stored value and re-check all frontiers
+            self._seen_fitness[prog.id] = metrics_hash
+            iteration = prog.metadata.get("iteration", 0)
+
+            for key, val in metrics.items():
+                if key == VALIDITY_KEY or not isinstance(val, (int, float)):
+                    continue
+                if self._maybe_update_frontier(key, float(val), iteration):
+                    frontier_improved = True
+
+        if frontier_improved:
+            self._write_valid_frontier()
 
     async def _process_program(self, program: Program) -> bool:
         """Process one program; returns True if metrics were written/updated."""
