@@ -21,7 +21,7 @@ pre_step_hook:
   port: ${redis.port}
   db: ${main_redis_db}
   prefix: ${main_redis_prefix}
-  timeout: 1800.0
+  timeout: 7200.0
   poll_interval: 5.0
 
 # Override behavior space: 2D MAP-Elites grid (fitness × prompt_length).
