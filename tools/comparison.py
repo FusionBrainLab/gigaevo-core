@@ -38,6 +38,7 @@ from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from tools.utils import (
     RedisRunConfig,
+    add_frontier_from_redis_to_dataframe,
     fetch_evolution_dataframe,
     prepare_iteration_dataframe,
 )
@@ -920,6 +921,19 @@ async def main():
                 f"Run '{cfg.display_label()}': no valid iteration/fitness data after filtering"
             )
             continue
+
+        # Try to fetch the authoritative frontier from Redis metrics history.
+        # This handles NO_CACHE stage re-evaluations correctly (metric changes).
+        prepared_df = add_frontier_from_redis_to_dataframe(
+            prepared_df,
+            redis_host=cfg.redis_host,
+            redis_port=cfg.redis_port,
+            redis_db=cfg.redis_db,
+            redis_prefix=cfg.redis_prefix,
+            metric_key=args.fitness_col,
+            iteration_col=args.iteration_col,
+        )
+
         prepared.append((cfg.display_label(), prepared_df))
 
     plot_comparison(

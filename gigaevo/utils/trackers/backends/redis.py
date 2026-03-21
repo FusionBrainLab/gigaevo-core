@@ -139,6 +139,18 @@ class RedisMetricsBackend(LoggerBackend):
         except Exception as e:
             logger.warning("[RedisMetricsBackend] Flush failed: {}", e)
 
+    def clear_series(self, tag: str) -> None:
+        """Delete the history list for *tag* so it can be rewritten."""
+        if not self._client:
+            return
+        try:
+            history_key = self._k_history(tag)
+            self._client.delete(history_key)
+        except Exception as e:
+            logger.warning(
+                "[RedisMetricsBackend] clear_series failed for {}: {}", tag, e
+            )
+
     # --------------------- Query Methods ---------------------
 
     def get_latest(self, tag: str | None = None) -> dict[str, Any]:
