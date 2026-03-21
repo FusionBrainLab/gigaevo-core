@@ -591,7 +591,6 @@ def plot_comparison(
 
     # Finalize layout
     fig.tight_layout()
-
     saved_paths: tuple[Path, Path] | None = None
     if save_plots:
         output_folder.mkdir(parents=True, exist_ok=True)
@@ -605,7 +604,6 @@ def plot_comparison(
 
         logger.info(f"Saved comparison plots: {png.name}, {pdf.name}, {svg.name}")
         saved_paths = (png, pdf)
-
     if show_plot:
         plt.show()
     plt.close(fig)
@@ -705,8 +703,6 @@ def _annotate_frontier_points(
             color=color,
             zorder=10,
         )
-
-
 async def export_run_plot(
     config: RedisRunConfig,
     *,
