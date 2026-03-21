@@ -12,7 +12,7 @@ import matplotlib.colors as mcolors
 # =========================
 # CONFIG: ONLY SET THIS
 # =========================
-INPUT_CSV = "outputs/algotune_markowitz.csv"
+INPUT_CSV = "outputs/algotune_algotune_lp_box_20260320_151717.csv"
 
 # Optional: if you still want the JSON written to disk for debugging / reuse
 WRITE_JSON_TO_DISK = False
