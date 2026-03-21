@@ -463,3 +463,70 @@ class TestLaunchConcurrencyGating:
                 await info.task
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+# ===================================================================
+# Category I: _run_one closure capture regression test (P1)
+# ===================================================================
+
+
+class TestClosureCaptureRegression:
+    """dag_runner.py L392: _run_one uses default args to capture loop vars.
+
+    async def _run_one(prog: Program = program, dag_inst: DAG = dag) -> None:
+
+    If someone removes the default args, all tasks would run the LAST
+    program in the loop — a classic Python closure bug. This test verifies
+    each launched task is bound to its own program."""
+
+    async def test_each_task_runs_its_own_program(self):
+        """Launch 3 programs, verify each DAG.run() receives a distinct program."""
+        progs = [_prog() for _ in range(3)]
+        storage = _mock_storage()
+        storage.get_ids_by_status = AsyncMock(
+            side_effect=lambda s: (
+                [p.id for p in progs] if s == ProgramState.QUEUED.value else []
+            )
+        )
+        storage.mget = AsyncMock(return_value=progs)
+
+        # Track which program each DAG.run() receives
+        programs_seen: list[str] = []
+        run_event = asyncio.Event()
+
+        async def record_run(program):
+            programs_seen.append(program.id)
+            if len(programs_seen) == 3:
+                run_event.set()
+
+        def make_dag():
+            dag = _mock_dag()
+            dag.run = AsyncMock(side_effect=record_run)
+            return dag
+
+        blueprint = MagicMock()
+        blueprint.build = MagicMock(side_effect=lambda *a, **kw: make_dag())
+
+        config = DagRunnerConfig(max_concurrent_dags=3)
+        runner = _runner(storage=storage, dag_blueprint=blueprint, config=config)
+
+        await runner._launch()
+
+        # Wait for all 3 tasks to call dag.run()
+        try:
+            await asyncio.wait_for(run_event.wait(), timeout=5.0)
+        except TimeoutError:
+            pass
+
+        # Each program should appear exactly once
+        expected_ids = {p.id for p in progs}
+        assert set(programs_seen) == expected_ids
+        assert len(programs_seen) == 3
+
+        # Cleanup
+        for info in list(runner._active.values()):
+            info.task.cancel()
+            try:
+                await info.task
+            except (asyncio.CancelledError, Exception):
+                pass

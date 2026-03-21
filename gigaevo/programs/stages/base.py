@@ -240,10 +240,10 @@ class Stage:
         t0 = time.monotonic()
         logger.info("[{}] Executing for {}", self.stage_name, program.id[:8])
 
-        # Compute inputs hash before execution (for cache handler)
-        self._current_inputs_hash = self.compute_inputs_hash()
-
         try:
+            # Compute inputs hash before execution (for cache handler)
+            self._current_inputs_hash = self.compute_inputs_hash()
+
             self._ensure_required_present()
             result = await asyncio.wait_for(self.compute(program), timeout=self.timeout)
 

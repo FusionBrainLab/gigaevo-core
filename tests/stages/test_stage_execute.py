@@ -919,3 +919,92 @@ class TestProgramStageResultTimestampBranches:
         assert duration is not None
         # Should be at least 50ms
         assert duration >= 0.03
+
+
+# ---------------------------------------------------------------------------
+# TestComputeInputsHashFailure (P0 bug fix)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeInputsHashFailure:
+    """Bug fix: compute_inputs_hash() raising must be caught by execute(),
+    not propagate as an unhandled exception. Before the fix, the call was
+    outside the try/except block, so a bad compute_hash override would crash
+    the entire DAG runner."""
+
+    async def test_hash_raises_returns_failure(self):
+        """compute_inputs_hash() raises -> FAILED result, not unhandled crash."""
+
+        class BadHashStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = MockOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> MockOutput:
+                return MockOutput(value=1)  # pragma: no cover
+
+            def compute_inputs_hash(self) -> str | None:
+                raise RuntimeError("hash computation exploded")
+
+        stage = BadHashStage(timeout=5.0)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.FAILED
+        assert "hash computation exploded" in result.error.message
+        assert result.error.stage == "BadHashStage"
+
+    async def test_hash_raises_cleanup_still_runs(self):
+        """After compute_inputs_hash() raises, _raw_inputs and _params_obj
+        are still cleared by the finally block."""
+
+        class BadHashStage2(Stage):
+            InputsModel = VoidInput
+            OutputModel = MockOutput
+            cache_handler = NO_CACHE
+
+            async def compute(self, program: Program) -> MockOutput:
+                return MockOutput(value=1)  # pragma: no cover
+
+            def compute_inputs_hash(self) -> str | None:
+                raise ValueError("bad hash")
+
+        stage = BadHashStage2(timeout=5.0)
+        stage.attach_inputs({})
+        await stage.execute(_prog())
+
+        assert stage._raw_inputs == {}
+        assert stage._params_obj is None
+        assert stage._current_inputs_hash is None
+
+    async def test_hash_raises_on_complete_still_called(self):
+        """Even when compute_inputs_hash() raises, on_complete is called
+        (with None hash) so cache handlers can record the failure."""
+        spy = SpyCacheHandler()
+
+        class BadHashSpyStage(Stage):
+            InputsModel = VoidInput
+            OutputModel = MockOutput
+            cache_handler = spy
+
+            async def compute(self, program: Program) -> MockOutput:
+                return MockOutput(value=1)  # pragma: no cover
+
+            def compute_inputs_hash(self) -> str | None:
+                raise TypeError("hash broken")
+
+        stage = BadHashSpyStage(timeout=5.0)
+        stage.attach_inputs({})
+        result = await stage.execute(_prog())
+
+        assert result.status == StageState.FAILED
+        assert len(spy.calls) == 1
+        call_result, call_hash = spy.calls[0]
+        assert call_result.status == StageState.FAILED
+        # Hash is None because compute_inputs_hash raised before setting it
+        assert call_hash is None
+
+
+# ---------------------------------------------------------------------------
+# TestCacheHandlerOnCompleteRaises
+# ---------------------------------------------------------------------------

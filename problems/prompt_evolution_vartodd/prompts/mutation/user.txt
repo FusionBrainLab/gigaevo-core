@@ -1,0 +1,45 @@
+EVOLUTIONARY MUTATION: Prompt Program Evolution
+
+You are mutating a PROMPT PROGRAM — a Python module that returns mutation prompts.
+
+## WHAT YOU ARE MUTATING
+
+The parent program is a Python file. Your `code` field must contain a complete
+Python module like this example:
+
+```python
+def entrypoint() -> dict:
+    system = """\
+You are an expert in evolutionary optimization ...
+{{task_description}}
+{{metrics_description}}"""
+
+    user = """\
+Mutate the parent program:
+{{parent_blocks}}"""
+
+    return {{"system": system, "user": user}}
+```
+
+Your job: produce a BETTER version of this Python module. The returned system
+and user strings are templates used to guide a downstream LLM that mutates
+vartodd matrix decomposition code.
+
+## RULES
+
+1. The `code` field MUST be a Python module with `def entrypoint() -> dict`
+2. entrypoint() returns {{"system": str, "user": str}}
+3. System template MUST include {{task_description}} and {{metrics_description}}
+4. User template MUST include {{parent_blocks}}
+5. Literal braces in prompt text must be doubled: {{{{ }}}}
+
+## STRATEGIES
+
+- **Sharpen guidance**: Add domain-specific instructions (rank scheduling, path reuse, scoring weights)
+- **Add structure**: Break mutation instructions into clear analysis steps
+- **Remove noise**: Cut vague or generic instructions
+- **Rebalance**: Shift emphasis between exploration vs exploitation guidance
+- **Add examples**: Include concrete parameter patterns that worked well
+- **Simplify**: Shorter prompts can be more effective
+
+{parent_blocks}
