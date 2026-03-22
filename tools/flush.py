@@ -2,8 +2,8 @@
 """
 Safely flush Redis DBs for a new experiment launch.
 
-Kills stale exec_runner workers first (they repopulate Redis immediately after
-flush if left alive), then flushes each DB, then verifies 0 keys remain.
+Kills stale exec_runner workers ONLY for the specified DBs (by matching
+parent run.py processes), then flushes each DB, then verifies 0 keys remain.
 
 Dry-run by default — shows what would happen. Pass --confirm to execute.
 
@@ -27,24 +27,86 @@ import time
 import redis as redis_lib
 
 
-def find_exec_runner_pids() -> list[int]:
-    """Find all running exec_runner worker PIDs."""
+def _find_run_pids_for_dbs(target_dbs: list[int]) -> set[int]:
+    """Find PIDs of run.py processes using any of the target DBs."""
     try:
-        result = subprocess.run(
-            ["ps", "aux"],
-            capture_output=True,
-            text=True,
-        )
-        pids = []
+        result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+        pids: set[int] = set()
         for line in result.stdout.splitlines():
-            if "exec_runner" in line and "grep" not in line:
+            if "run.py" not in line or "grep" in line:
+                continue
+            for db in target_dbs:
+                if f"redis.db={db}" in line:
+                    parts = line.split()
+                    if len(parts) > 1:
+                        try:
+                            pids.add(int(parts[1]))
+                        except ValueError:
+                            pass
+                    break
+        return pids
+    except Exception:
+        return set()
+
+
+def _find_all_run_pids() -> set[int]:
+    """Find PIDs of ALL run.py processes (any DB)."""
+    try:
+        result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+        pids: set[int] = set()
+        for line in result.stdout.splitlines():
+            if "run.py" in line and "redis.db=" in line and "grep" not in line:
                 parts = line.split()
                 if len(parts) > 1:
                     try:
-                        pids.append(int(parts[1]))
+                        pids.add(int(parts[1]))
                     except ValueError:
                         pass
         return pids
+    except Exception:
+        return set()
+
+
+def find_exec_runner_pids(target_dbs: list[int]) -> list[int]:
+    """Find exec_runner worker PIDs belonging to runs on the target DBs.
+
+    Only returns workers whose parent PID is a run.py process using one of
+    the specified DBs. Workers belonging to other experiments are left alone.
+
+    If no run.py processes exist at all (all runs finished/crashed), returns
+    all exec_runner workers as orphans safe to kill.
+    """
+    try:
+        run_pids_for_target = _find_run_pids_for_dbs(target_dbs)
+        all_run_pids = _find_all_run_pids()
+
+        result = subprocess.run(
+            ["ps", "-e", "-o", "pid,ppid,cmd", "--no-headers"],
+            capture_output=True,
+            text=True,
+        )
+        matched_pids = []
+        orphan_pids = []
+        for line in result.stdout.splitlines():
+            if "exec_runner.py" not in line or "grep" in line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[0])
+                ppid = int(parts[1])
+            except ValueError:
+                continue
+
+            if ppid in run_pids_for_target:
+                # Worker belongs to a run using one of the target DBs
+                matched_pids.append(pid)
+            elif ppid not in all_run_pids:
+                # Worker's parent is not any run.py — it's an orphan
+                orphan_pids.append(pid)
+
+        return matched_pids + orphan_pids
     except Exception as e:
         print(f"[warn] Could not scan for exec_runner workers: {e}")
         return []
@@ -53,10 +115,10 @@ def find_exec_runner_pids() -> list[int]:
 def kill_workers(pids: list[int], dry_run: bool) -> None:
     """Kill exec_runner workers."""
     if not pids:
-        print("[workers] No exec_runner workers found.")
+        print("[workers] No exec_runner workers found for target DBs.")
         return
 
-    print(f"[workers] Found {len(pids)} exec_runner worker(s): {pids}")
+    print(f"[workers] Found {len(pids)} exec_runner worker(s) for target DBs: {pids}")
     if dry_run:
         print(f"[workers] DRY-RUN — would kill: {pids}")
         return
@@ -157,9 +219,9 @@ def main():
     if dry_run:
         print("[flush] DRY-RUN mode — pass --confirm to execute\n")
 
-    # Step 1: Kill exec_runner workers
+    # Step 1: Kill exec_runner workers (only for target DBs)
     if not args.no_kill_workers:
-        pids = find_exec_runner_pids()
+        pids = find_exec_runner_pids(args.db)
         kill_workers(pids, dry_run)
     else:
         print("[workers] Skipping exec_runner cleanup (--no-kill-workers)")

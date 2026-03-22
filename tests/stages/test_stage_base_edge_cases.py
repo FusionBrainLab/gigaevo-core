@@ -369,22 +369,19 @@ class TestParamsPydanticValidationError:
 class TestEnsureRequiredPresent:
     """_ensure_required_present guards against missing required inputs.
 
-    compute_inputs_hash() is called on line 246 of execute(), which is BEFORE
-    the try/except block (try starts at line 248). When _raw_inputs is
-    completely empty and the InputsModel has required fields, params() raises
-    KeyError during compute_inputs_hash(), which propagates unhandled to the
-    caller.
+    compute_inputs_hash() is called inside the try/except block in execute().
+    When _raw_inputs is completely empty and the InputsModel has required
+    fields, params() raises KeyError during compute_inputs_hash(), which is
+    caught by the except handler and returned as a FAILED ProgramStageResult.
 
     When inputs are partially provided (enough for hash computation but missing
     some required fields), _ensure_required_present() inside the try block
     catches the gap and returns a FAILED ProgramStageResult."""
 
     async def test_execute_without_any_inputs_raises_key_error(self):
-        """execute() with NO inputs at all raises KeyError from
-        compute_inputs_hash() because that call happens outside the try block.
-
-        The caller gets an uncaught exception instead of a graceful FAILED
-        ProgramStageResult."""
+        """execute() with NO inputs at all returns FAILED from
+        compute_inputs_hash() because that call is inside the try block
+        and the KeyError is caught by the except handler."""
 
         class RequiredInputStage(Stage):
             InputsModel = RequiredInput
@@ -396,9 +393,10 @@ class TestEnsureRequiredPresent:
 
         stage = RequiredInputStage(timeout=5.0)
         # With no inputs at all, compute_inputs_hash() calls self.params which
-        # raises KeyError outside the try/except block in execute()
-        with pytest.raises(KeyError, match="Input validation failed"):
-            await stage.execute(_prog())
+        # raises KeyError inside the try/except block in execute()
+        result = await stage.execute(_prog())
+        assert result.status == StageState.FAILED
+        assert "Input validation failed" in result.error.message
 
     def test_ensure_required_present_raises_key_error_for_missing_fields(self):
         """_ensure_required_present raises KeyError naming missing fields."""
@@ -1422,10 +1420,10 @@ class TestMissingRequiredInputProducesFailure:
     """Missing required input produces FAILED (not uncaught exception) when
     the failure occurs inside the try block."""
 
-    async def test_missing_required_hash_fails_before_try(self):
-        """compute_inputs_hash() at line 246 is OUTSIDE the try block.
+    async def test_missing_required_hash_fails_inside_try(self):
+        """compute_inputs_hash() is INSIDE the try block.
         If _raw_inputs is empty, self.params raises KeyError which
-        propagates unhandled.
+        is caught and returned as FAILED.
         """
 
         class ReqStage(Stage):
@@ -1438,8 +1436,9 @@ class TestMissingRequiredInputProducesFailure:
         stage = ReqStage(timeout=5.0)
         stage._raw_inputs = {}  # Bypass attach_inputs to simulate missing input
 
-        with pytest.raises(KeyError, match="Input validation failed"):
-            await stage.execute(_prog_minimal())
+        result = await stage.execute(_prog_minimal())
+        assert result.status == StageState.FAILED
+        assert "Input validation failed" in result.error.message
 
     async def test_ensure_required_present_catches_inside_try(self):
         """_ensure_required_present (line 249) is inside the try.
@@ -1466,10 +1465,9 @@ class TestMissingRequiredInputProducesFailure:
         assert result.status == StageState.FAILED
         assert "Missing required inputs" in result.error.message
 
-    async def test_missing_required_propagates_before_on_complete(self):
-        """Hash computation failure (line 246, before try) means
-        on_complete is NEVER called — the exception propagates directly.
-        The finally block still cleans up.
+    async def test_missing_required_returns_failed_with_cleanup(self):
+        """Hash computation failure (inside try) returns FAILED result.
+        on_complete IS called (for cache handler). Finally block cleans up.
         """
 
         class HashReqStage(Stage):
@@ -1483,9 +1481,10 @@ class TestMissingRequiredInputProducesFailure:
         stage = HashReqStage(timeout=5.0)
         stage._raw_inputs = {}  # Missing 'x'
 
-        with pytest.raises(KeyError):
-            await stage.execute(_prog_minimal())
-        # finally block still runs even with uncaught exception
+        result = await stage.execute(_prog_minimal())
+        assert result.status == StageState.FAILED
+        assert "Input validation failed" in result.error.message
+        # finally block cleans up
         assert stage._raw_inputs == {}
         assert stage._params_obj is None
         assert stage._current_inputs_hash is None

@@ -28,7 +28,8 @@ bash tools/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
 
 | Task | Tool | Command |
 |---|---|---|
-| Live status | `status.py` | `PYTHONPATH=. python tools/status.py --run prefix@db:label ...` |
+| Live status (experiment) | `status.py` | `PYTHONPATH=. python tools/status.py --experiment task/name` |
+| Live status (single run) | `status.py` | `PYTHONPATH=. python tools/status.py --run prefix@db:label` |
 | Gen-by-gen trajectory | `trajectory.py` | `PYTHONPATH=. python tools/trajectory.py --run prefix@db:label` |
 | Top N programs | `top_programs.py` | `PYTHONPATH=. python tools/top_programs.py --run prefix@db:label -n 10` |
 | Evolutionary lineage | `lineage.py` | `PYTHONPATH=. python tools/lineage.py --run prefix@db:label --top-n 1` |
@@ -45,45 +46,43 @@ bash tools/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
 
 ### `status.py` — Live run status
 
-Shows generation, best val fitness, invalidity rate, validator timing, and PID liveness.
+Shows generation, all metrics from `metrics.yaml`, invalidity rate, validator timing, and PID liveness.
+Reads `metrics.yaml` from the problem directory to discover metric names and formatting (percentage vs raw value).
 
 ```bash
-# One run
+# From experiment manifest (recommended — auto-discovers runs, PIDs, watchdog, metrics)
+PYTHONPATH=. python tools/status.py --experiment hover/prompt_coevolution
+
+# Manual: one run (defaults to "fitness" metric)
 PYTHONPATH=. python tools/status.py --run chains/hotpotqa/static@4:O
 
-# Multiple runs with PID and watchdog check
+# Manual: multiple runs with PID and watchdog check
 PYTHONPATH=. python tools/status.py \
     --run chains/hotpotqa/static@4:O \
     --run chains/hotpotqa/static_r@7:R \
-    --run chains/hotpotqa/static_r@6:Q \
-    --run chains/hotpotqa/static_r@5:F \
-    --pid O:3054746 --pid R:3054747 --pid Q:3054748 --pid F:3054749 \
+    --pid O:3054746 --pid R:3054747 \
     --watchdog 3057704
 ```
 
-Output:
+Output (with `--experiment` — shows all metrics per problem):
 ```
-Run      DB    Gen    Best Val    Invalid%    Val dur(s)    Keys         PID  Status
-------------------------------------------------------------------------------------
-O         4     42      66.0%          6%        281/310    1234     3054746  ✓ ALIVE
-R         7     41      65.7%          8%        278/305    1198     3054747  ✓ ALIVE
-Q         6     43      70.7%         12%        285/320    1256     3054748  ✓ ALIVE
-F         5     40      67.7%          7%        279/312    1187     3054749  ✓ ALIVE
+Run       DB    Gen     Fitness  Prompt Length  Invalid%    Val dur(s)    Keys         PID  Status
+------------------------------------------------------------------------------------------------------
+C1         9      3      76.2%              ?        0%       639/980     157       49341  ALIVE
+C2        10      4      75.8%              ?       20%      654/1223     158       49342  ALIVE
+P1        11      4      25.0%          299.0        0%             ?     169       49343  ALIVE
+P2        12      4      25.0%          299.0        0%             ?     169       49344  ALIVE
 
-Watchdog PID 3057704: ✓ ALIVE
+Watchdog PID 50073: ALIVE
 ```
 
 Column notes:
-- **Best Val** — best frontier fitness optimized by this run (EM, F1, or other depending on config)
+- **Metric columns** — auto-discovered from `problems/{problem_name}/metrics.yaml`. Fractional metrics (upper_bound=1.0) show as percentages; others show raw values. Decimal precision from `metrics.yaml`.
 - **Invalid%** — fraction of programs that failed validation; >75% at gen 3+ = stage_timeout too short
 - **Val dur(s)** — validator stage mean/max duration in seconds (last 20 evaluations)
 
-**Per-experiment status script**: each experiment has `experiments/<task>/<name>/run_status.sh`
-with pre-filled args. Always use it — never reconstruct the invocation from scratch.
-
 **Watchdog**: each experiment has `experiments/<task>/<name>/run_watchdog.py`, launched at
-experiment start and kept alive throughout. Its PID appears in `run_status.sh` as
-`--watchdog <pid>`. The watchdog posts hourly PR comments and generates fitness plots.
+experiment start and kept alive throughout. The watchdog posts hourly PR comments.
 
 ---
 
@@ -312,6 +311,20 @@ Checks: all phase docs committed, `02_review.md` APPROVED, GitHub Release assets
 
 ---
 
+## Experiment Automation (`tools/experiment/`)
+
+Tools for the experiment lifecycle (used by Claude Code skills).
+
+| Tool | Purpose | Command |
+|---|---|---|
+| `manifest.py` | Load/update `experiment.yaml` programmatically | `from tools.experiment.manifest import load_manifest, update_manifest` |
+| `preflight_check.py` | 20-check validation gate before launch | `PYTHONPATH=. python tools/experiment/preflight_check.py --experiment task/name` |
+| `generate_launch.py` | Generate `launch.sh` from experiment.yaml | `PYTHONPATH=. python tools/experiment/generate_launch.py --experiment task/name` |
+| `record_pids.py` | Record launched PIDs into experiment.yaml | `PYTHONPATH=. python tools/experiment/record_pids.py --experiment task/name --pids-file pids.txt --labels R1 R2` |
+| `reset_status.py` | Force-reset experiment status (escape hatch) | `PYTHONPATH=. python tools/experiment/reset_status.py --experiment task/name --status implemented` |
+
+---
+
 ## Scaffolding
 
 ### `wizard` — Problem directory generator
@@ -348,12 +361,15 @@ Each metrics history key is a Redis **list**. Each entry is a JSON object:
 | What you want | Redis key (after prefix:metrics:history:program_metrics:) | How to read |
 |---|---|---|
 | **Current generation** | `{prefix}:run_state` (hash) | `hget … "engine:total_generations"` |
-| **Best val fitness** | `valid_frontier_fitness` | last entry `"v"` field |
-| **Per-gen mean fitness** | `valid_gen_fitness_mean` | entries with `"s"` == gen; last `"v"` = mean |
-| **n_valid per gen** | `valid_gen_fitness_mean` | count entries with `"s"` == gen |
+| **Best frontier value** | `valid_frontier_{metric}` | last entry `"v"` field |
+| **Per-gen mean** | `valid_gen_{metric}_mean` | entries with `"s"` == gen; last `"v"` = mean |
+| **n_valid per gen** | `valid_gen_{metric}_mean` | count entries with `"s"` == gen |
 | **Total programs (cumulative)** | `programs_total_count` | last entry `"v"` field |
 | **Valid programs (cumulative)** | `programs_valid_count` | last entry `"v"` field |
-| **Frontier improvements** | `valid_frontier_fitness` | list entries in order; `"s"` = iteration at improvement |
+| **Frontier improvements** | `valid_frontier_{metric}` | list entries in order; `"s"` = iteration at improvement |
+
+Where `{metric}` is the metric name from `problems/{problem_name}/metrics.yaml` (e.g. `fitness`, `prompt_length`).
+Use `status.py --experiment` to auto-discover all metrics.
 
 ### Rules
 
@@ -371,7 +387,7 @@ Each metrics history key is a Redis **list**. Each entry is a JSON object:
 `{prefix}:run_state` hash field `engine:total_generations` is the **canonical generation
 count** (commit `e7648ab`). Use `hget {prefix}:run_state engine:total_generations` in
 watchdogs, scripts, and status checks. Written by `EvolutionEngine` after every generation;
-survives restarts. See `tools/status.py` lines 60–68 for the reference implementation.
+survives restarts. See `tools/status.py` line ~99 for the reference implementation.
 
 `valid_iter_fitness_mean` last `"s"` is still useful for **trend analysis** (per-gen mean
 fitness curves) but should NOT be used as the canonical gen count — under high throughput

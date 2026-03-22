@@ -44,6 +44,13 @@ class CompositeLogger(LogWriter):
             except Exception:
                 pass
 
+    def clear_series(self, metric: str, **kwargs) -> None:
+        for logger in self._loggers:
+            try:
+                logger.clear_series(metric, **kwargs)
+            except Exception:
+                pass
+
     def close(self) -> None:
         for logger in self._loggers:
             try:
@@ -73,6 +80,10 @@ class BoundComposite(LogWriter):
     def text(self, tag: str, text: str, **kwargs) -> None:
         path = [*self._path, *kwargs.pop("path", [])]
         self._base.text(tag, text, path=path, **kwargs)
+
+    def clear_series(self, metric: str, **kwargs) -> None:
+        path = [*self._path, *kwargs.pop("path", [])]
+        self._base.clear_series(metric, path=path, **kwargs)
 
     def close(self) -> None:
         self._base.close()

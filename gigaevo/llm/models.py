@@ -84,6 +84,7 @@ class MultiModelRouter(Runnable):
         self.model_names = [m.model_name for m in models]
         self.probabilities = [p / sum(probabilities) for p in probabilities]
         self._task_model_map: dict[int, str] = {}
+        self._name = name
 
         self._tracker = TokenTracker(
             name=name,
@@ -107,6 +108,55 @@ class MultiModelRouter(Runnable):
             if base_url:
                 logger.info(
                     "[MultiModelRouter:{}] Model {} at {}", name, m.model_name, base_url
+                )
+
+        self._verify_models()
+
+    def _verify_models(self) -> None:
+        """Best-effort startup probe — verify configured models exist on servers."""
+        import json as _json
+        import urllib.request
+
+        checked: set[str] = set()
+        for model in self.models:
+            base_url = getattr(model, "base_url", None) or getattr(
+                model, "openai_api_base", None
+            )
+            if not base_url or base_url in checked:
+                continue
+            checked.add(base_url)
+            try:
+                url = f"{base_url}/models"
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+                    data = _json.loads(resp.read())
+                available = [d["id"] for d in data.get("data", [])]
+                for m in self.models:
+                    m_url = getattr(m, "base_url", None) or getattr(
+                        m, "openai_api_base", None
+                    )
+                    if m_url == base_url:
+                        if m.model_name in available:
+                            logger.info(
+                                "[MultiModelRouter:{}] Model {} verified on {}",
+                                self._name,
+                                m.model_name,
+                                base_url,
+                            )
+                        else:
+                            logger.warning(
+                                "[MultiModelRouter:{}] Model {} NOT FOUND on {}. Available: {}",
+                                self._name,
+                                m.model_name,
+                                base_url,
+                                available,
+                            )
+            except Exception as exc:
+                logger.warning(
+                    "[MultiModelRouter:{}] Cannot verify models at {}: {}",
+                    self._name,
+                    base_url,
+                    exc,
                 )
 
     @staticmethod

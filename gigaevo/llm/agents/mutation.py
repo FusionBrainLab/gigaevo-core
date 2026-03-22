@@ -1,3 +1,4 @@
+import ast
 from datetime import UTC, datetime
 import os
 import re
@@ -39,8 +40,9 @@ class MutationStructuredOutput(BaseModel):
     code: str = Field(
         description=(
             "The complete mutated Python source code. "
-            "Must be valid Python (imports, function definitions, etc). "
-            "NEVER put JSON or a response template here — only Python code."
+            "Must be valid Python starting with imports or def statements. "
+            "NEVER put JSON, format examples, or templates here. "
+            "Use actual newlines between lines, not literal backslash-n."
         )
     )
 
@@ -344,6 +346,11 @@ class MutationAgent(LangGraphAgent):
             # Get code from structured output
             code_from_llm = structured_output.code
 
+            # Fix JSON-escaped sequences from structured output serialization.
+            # LLMs sometimes produce literal \n, \t, \" in the code field when
+            # they confuse JSON escaping with Python syntax.
+            code_from_llm = self._fix_json_escaped_code(code_from_llm)
+
             if state["mutation_mode"] == "diff":
                 # Apply diff to parent code
                 parents = state["input"]
@@ -397,6 +404,43 @@ class MutationAgent(LangGraphAgent):
             }
 
         return state
+
+    @staticmethod
+    def _fix_json_escaped_code(code: str) -> str:
+        """Fix JSON-escaped sequences in code from structured output.
+
+        LLMs using structured output sometimes produce literal JSON escape
+        sequences in the code field instead of the actual characters:
+        - ``\\"`` instead of ``"`` (double-escaped quotes)
+        - ``\\n`` instead of actual newlines (escaped newlines)
+        - ``\\t`` instead of actual tabs (escaped tabs)
+
+        This happens when the model confuses JSON string escaping with
+        the Python code content. We only apply the fix when the original
+        code fails to parse and the cleaned version parses successfully.
+        """
+        # Quick check: does code contain any JSON escape sequences?
+        if "\\n" not in code and '\\"' not in code and "\\t" not in code:
+            return code
+        try:
+            ast.parse(code)
+            return code  # Already valid — don't touch it
+        except SyntaxError:
+            pass
+
+        # Try unescaping JSON sequences
+        cleaned = code.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+        try:
+            ast.parse(cleaned)
+            logger.debug(
+                '[MutationAgent] Fixed JSON-escaped code (\\n={}, \\t={}, \\"={})',
+                code.count("\\n"),
+                code.count("\\t"),
+                code.count('\\"'),
+            )
+            return cleaned
+        except SyntaxError:
+            return code  # Unescaping didn't help — return original
 
     def _extract_code_block(self, text: str) -> str:
         """Extract outer fenced code block from LLM response.

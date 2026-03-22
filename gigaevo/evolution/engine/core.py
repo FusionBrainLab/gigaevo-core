@@ -67,6 +67,14 @@ class EvolutionEngine:
         self._metrics_collector_task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
+        # ETA tracking — set at the start of run()
+        self._run_start_time: float | None = None
+        self._run_start_gen: int = 0
+
+        # Archive stagnation tracking
+        self._prev_archive_size: int = 0
+        self._stagnant_gens: int = 0
+
         self.metrics = EngineMetrics()
         self.state = ProgramStateManager(self.storage)
         self._metrics_tracker = metrics_tracker
@@ -140,8 +148,19 @@ class EvolutionEngine:
         return self._task
 
     async def run(self) -> None:
-        logger.info("[EvolutionEngine] Start")
+        logger.info(
+            "[EvolutionEngine] Start | max_generations={} strategy={} acceptor={}"
+            " | max_elites={} max_mutations={} loop_interval={}s",
+            self.config.max_generations,
+            type(self.strategy).__name__,
+            type(self.config.program_acceptor).__name__,
+            self.config.max_elites_per_generation,
+            self.config.max_mutations_per_generation,
+            self.config.loop_interval,
+        )
         self._running = True
+        self._run_start_time = time.monotonic()
+        self._run_start_gen = self.metrics.total_generations
         try:
             while self._running:
                 if self._paused:
@@ -241,15 +260,54 @@ class EvolutionEngine:
         # Log generation summary for easy diagnosis
         step_elapsed = time.monotonic() - step_t0
         archive_size = len(await self.strategy.get_program_ids())
+        best_str = self._metrics_tracker.format_best_summary()
+        eta_str = self._format_eta()
+
+        archive_delta = archive_size - self._prev_archive_size
+        self._prev_archive_size = archive_size
+        if archive_delta == 0:
+            self._stagnant_gens += 1
+        else:
+            self._stagnant_gens = 0
+
         logger.info(
             "[EvolutionEngine] gen={} done | elites={} mutants={} refreshed={}"
-            " | archive={} ({:.1f}s)",
+            " | archive={} ({:+d}){} ({:.1f}s){}",
             gen,
             len(elites),
             created,
             refreshed,
             archive_size,
+            archive_delta,
+            best_str,
             step_elapsed,
+            eta_str,
+        )
+
+        if self._stagnant_gens >= 5:
+            logger.warning(
+                "[EvolutionEngine] Archive stagnant for {} consecutive generations",
+                self._stagnant_gens,
+            )
+
+    def _format_eta(self) -> str:
+        """Return a compact ETA string based on elapsed time and generation progress."""
+        current_gen = self.metrics.total_generations
+        if (
+            not self.config.max_generations
+            or self._run_start_time is None
+            or current_gen <= self._run_start_gen
+        ):
+            return ""
+        elapsed_total = time.monotonic() - self._run_start_time
+        gens_done = current_gen - self._run_start_gen
+        avg_per_gen = elapsed_total / gens_done
+        remaining = self.config.max_generations - current_gen
+        eta_s = avg_per_gen * remaining
+        progress_pct = current_gen / self.config.max_generations * 100
+        return (
+            f" | progress={progress_pct:.0f}%"
+            f" ETA={eta_s / 60:.0f}min ({avg_per_gen:.1f}s/gen)"
         )
 
     async def _await_idle(self) -> None:

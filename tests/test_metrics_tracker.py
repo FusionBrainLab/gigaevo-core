@@ -381,8 +381,9 @@ class TestDrainOnce:
         # Second drain — same ids returned but already seen
         await tracker._drain_once()
         assert len(writer.scalars) == count_after_first
-        # mget must not be called for already-seen ids
-        assert storage.mget.call_count == 1
+        # mget is called: once for new ids in drain1, once for refresh in drain1,
+        # and once for refresh in drain2 (no new ids in drain2)
+        assert storage.mget.call_count == 3
 
     @pytest.mark.asyncio
     async def test_empty_storage(self) -> None:
@@ -686,3 +687,231 @@ class TestRunningStatsN2Boundary:
         assert rs.mean_value() == pytest.approx(15.0)
         # Sample std of [10, 20] = sqrt((10-15)^2 + (20-15)^2) / (2-1)) = sqrt(50) ≈ 7.071
         assert rs.std_value() == pytest.approx(math.sqrt(50.0))
+
+
+# ---------------------------------------------------------------------------
+# TestRecomputeAndWriteFrontier
+# ---------------------------------------------------------------------------
+
+
+class TestRecomputeAndWriteFrontier:
+    """Tests for full frontier recomputation (NO_CACHE metric changes)."""
+
+    def test_recompute_frontier_from_valid_programs(self) -> None:
+        """Basic recomputation produces correct frontier series."""
+        writer = RecordingWriter()
+        ctx = _make_metrics_context(higher_is_better=True)
+        tracker = MetricsTracker(
+            storage=_mock_storage([]), metrics_context=ctx, writer=writer
+        )
+        # Simulate three valid programs across iterations
+        tracker._valid_programs = {
+            "p1": (1, {"score": 10.0}),
+            "p2": (2, {"score": 20.0}),
+            "p3": (3, {"score": 15.0}),
+        }
+        tracker._recompute_and_write_frontier("score")
+
+        # Frontier series: iter1=10, iter2=20, iter3=20 (cummax)
+        frontier_writes = [
+            (v, kw.get("step"))
+            for t, v, kw in writer.scalars
+            if t == "valid/frontier/score"
+        ]
+        assert frontier_writes == [
+            (10.0, 1),
+            (20.0, 2),
+            (20.0, 3),
+        ]
+        assert tracker._best_valid["score"] == (20.0, 3)
+
+    def test_recompute_after_metric_decrease(self) -> None:
+        """When frontier holder's fitness decreases, frontier corrects."""
+        writer = RecordingWriter()
+        ctx = _make_metrics_context(higher_is_better=True)
+        tracker = MetricsTracker(
+            storage=_mock_storage([]), metrics_context=ctx, writer=writer
+        )
+        # Program p2 was the frontier at 0.60, but re-eval dropped it to 0.50
+        tracker._valid_programs = {
+            "p1": (1, {"score": 0.45}),
+            "p2": (2, {"score": 0.50}),  # was 0.60, re-evaluated lower
+            "p3": (3, {"score": 0.55}),
+        }
+        tracker._recompute_and_write_frontier("score")
+
+        frontier_writes = [
+            (v, kw.get("step"))
+            for t, v, kw in writer.scalars
+            if t == "valid/frontier/score"
+        ]
+        # Frontier: iter1=0.45, iter2=0.50, iter3=0.55
+        assert frontier_writes == [
+            (0.45, 1),
+            (0.50, 2),
+            (0.55, 3),
+        ]
+        assert tracker._best_valid["score"] == (0.55, 3)
+
+    def test_recompute_lower_is_better(self) -> None:
+        """Frontier recomputation works for minimization metrics."""
+        writer = RecordingWriter()
+        ctx = _make_metrics_context(higher_is_better=False)
+        tracker = MetricsTracker(
+            storage=_mock_storage([]), metrics_context=ctx, writer=writer
+        )
+        tracker._valid_programs = {
+            "p1": (1, {"score": 10.0}),
+            "p2": (2, {"score": 5.0}),
+            "p3": (3, {"score": 8.0}),
+        }
+        tracker._recompute_and_write_frontier("score")
+
+        frontier_writes = [
+            (v, kw.get("step"))
+            for t, v, kw in writer.scalars
+            if t == "valid/frontier/score"
+        ]
+        # Frontier (cummin): iter1=10, iter2=5, iter3=5
+        assert frontier_writes == [
+            (10.0, 1),
+            (5.0, 2),
+            (5.0, 3),
+        ]
+
+    def test_recompute_clears_series_before_writing(self) -> None:
+        """clear_series is called before rewriting frontier points."""
+        clear_calls: list[str] = []
+
+        class TrackingWriter(RecordingWriter):
+            def clear_series(self, metric: str, **kwargs: Any) -> None:
+                clear_calls.append(metric)
+
+        writer = TrackingWriter()
+        ctx = _make_metrics_context()
+        tracker = MetricsTracker(
+            storage=_mock_storage([]), metrics_context=ctx, writer=writer
+        )
+        tracker._valid_programs = {"p1": (1, {"score": 5.0})}
+        tracker._recompute_and_write_frontier("score")
+
+        assert "valid/frontier/score" in clear_calls
+
+    def test_recompute_empty_valid_programs(self) -> None:
+        """Recompute with no valid programs removes the frontier entry."""
+        writer = RecordingWriter()
+        ctx = _make_metrics_context()
+        tracker = MetricsTracker(
+            storage=_mock_storage([]), metrics_context=ctx, writer=writer
+        )
+        tracker._best_valid["score"] = (99.0, 1)
+        tracker._valid_programs = {}
+
+        tracker._recompute_and_write_frontier("score")
+
+        assert "score" not in tracker._best_valid
+        # No frontier writes
+        frontier_writes = [t for t, _, _ in writer.scalars if "frontier" in t]
+        assert frontier_writes == []
+
+
+class TestRefreshChangedFitnessFrontierRecompute:
+    """Integration: _refresh_changed_fitness triggers frontier recompute."""
+
+    @pytest.mark.asyncio
+    async def test_metric_decrease_triggers_recompute(self) -> None:
+        """When a program's fitness decreases, frontier is recomputed correctly."""
+        clear_calls: list[str] = []
+
+        class TrackingWriter(RecordingWriter):
+            def clear_series(self, metric: str, **kwargs: Any) -> None:
+                clear_calls.append(metric)
+
+        # Start: p1 has score=0.60 (the frontier), p2 has score=0.55
+        p1 = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.60},
+            iteration=1,
+            prog_id="p1",
+        )
+        p2 = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.55},
+            iteration=2,
+            prog_id="p2",
+        )
+        storage = _mock_storage([p1, p2])
+        writer = TrackingWriter()
+        ctx = _make_metrics_context()
+        tracker = MetricsTracker(storage=storage, metrics_context=ctx, writer=writer)
+
+        # First drain — processes both programs
+        await tracker._drain_once()
+        assert tracker._best_valid["score"] == (0.60, 1)
+
+        # Now simulate NO_CACHE re-eval: p1 fitness drops to 0.50
+        p1_updated = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.50},
+            iteration=1,
+            prog_id="p1",
+        )
+        storage.mget = AsyncMock(return_value=[p1_updated, p2])
+
+        # Second drain — refresh detects change, recomputes frontier
+        await tracker._drain_once()
+
+        # Frontier should now be p2's score (0.55), not p1's old 0.60
+        assert tracker._best_valid["score"] == (0.55, 2)
+
+        # clear_series was called for the rewrite
+        assert "valid/frontier/score" in clear_calls
+
+    @pytest.mark.asyncio
+    async def test_metric_increase_triggers_recompute(self) -> None:
+        """When a program's fitness increases, frontier is also recomputed."""
+        p1 = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.40},
+            iteration=1,
+            prog_id="p1",
+        )
+        p2 = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.50},
+            iteration=2,
+            prog_id="p2",
+        )
+        storage = _mock_storage([p1, p2])
+        writer = RecordingWriter()
+        ctx = _make_metrics_context()
+        tracker = MetricsTracker(storage=storage, metrics_context=ctx, writer=writer)
+
+        await tracker._drain_once()
+        assert tracker._best_valid["score"] == (0.50, 2)
+
+        # p1 increases to 0.70 after re-eval
+        p1_updated = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.70},
+            iteration=1,
+            prog_id="p1",
+        )
+        storage.mget = AsyncMock(return_value=[p1_updated, p2])
+
+        await tracker._drain_once()
+        assert tracker._best_valid["score"] == (0.70, 2)
+
+    @pytest.mark.asyncio
+    async def test_valid_programs_updated_on_process(self) -> None:
+        """_process_program populates _valid_programs for recomputation."""
+        prog = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 42.0},
+            iteration=3,
+            prog_id="px",
+        )
+        writer = RecordingWriter()
+        ctx = _make_metrics_context()
+        tracker = MetricsTracker(
+            storage=_mock_storage([]), metrics_context=ctx, writer=writer
+        )
+        await tracker._process_program(prog)
+
+        assert "px" in tracker._valid_programs
+        it, metrics = tracker._valid_programs["px"]
+        assert it == 3
+        assert metrics == {"score": 42.0}

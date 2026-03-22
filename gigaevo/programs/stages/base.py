@@ -240,10 +240,10 @@ class Stage:
         t0 = time.monotonic()
         logger.info("[{}] Executing for {}", self.stage_name, program.id[:8])
 
-        # Compute inputs hash before execution (for cache handler)
-        self._current_inputs_hash = self.compute_inputs_hash()
-
         try:
+            # Compute inputs hash before execution (for cache handler)
+            self._current_inputs_hash = self.compute_inputs_hash()
+
             self._ensure_required_present()
             result = await asyncio.wait_for(self.compute(program), timeout=self.timeout)
 
@@ -301,15 +301,17 @@ class Stage:
             dur = time.monotonic() - t0
             if isinstance(exc, asyncio.TimeoutError):
                 logger.warning(
-                    "[{stage}] TIMED OUT after {dur:.2f}s (timeout={to}s)",
+                    "[{stage}] {prog} TIMED OUT after {dur:.2f}s (timeout={to}s)",
                     stage=self.stage_name,
+                    prog=program.id[:8],
                     dur=dur,
                     to=self.timeout,
                 )
             else:
                 logger.exception(
-                    "[{stage}] Failed after {dur:.2f}s",
+                    "[{stage}] {prog} Failed after {dur:.2f}s",
                     stage=self.stage_name,
+                    prog=program.id[:8],
                     dur=dur,
                 )
             fail_result = ProgramStageResult.failure(

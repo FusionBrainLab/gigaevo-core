@@ -43,6 +43,9 @@ class LoggerBackend:
     def write_text(self, tag: str, text: str, step: int, wall_time: float) -> None:
         raise NotImplementedError
 
+    def clear_series(self, tag: str) -> None:
+        """Delete all history for *tag* so it can be rewritten."""
+
     def flush(self) -> None:
         raise NotImplementedError
 
@@ -109,6 +112,17 @@ class GenericLogger(LogWriter):
                 "text": text,
                 "step": kw.get("step"),
                 "t": kw.get("wall_time") or time.time(),
+                "path": kw.get("path") or [],
+            }
+        )
+
+    def clear_series(self, metric: str, **kw) -> None:
+        if self._closed:
+            return
+        self._offer(
+            {
+                "k": "clear_series",
+                "metric": metric,
                 "path": kw.get("path") or [],
             }
         )
@@ -192,6 +206,11 @@ class GenericLogger(LogWriter):
                 self.backend.write_text(tag, e.get("text", ""), step, wall_time)
             except Exception:
                 pass
+        elif kind == "clear_series":
+            try:
+                self.backend.clear_series(tag)
+            except Exception:
+                pass
 
     def _state(self, key: str) -> _SeriesState:
         st = self._series.get(key)
@@ -246,6 +265,10 @@ class BoundGeneric(LogWriter):
     def text(self, tag: str, text: str, **kw) -> None:
         path = [*self._path, *kw.pop("path", [])]
         self._base.text(tag, text, path=path, **kw)
+
+    def clear_series(self, metric: str, **kw) -> None:
+        path = [*self._path, *kw.pop("path", [])]
+        self._base.clear_series(metric, path=path, **kw)
 
     def close(self) -> None:
         self._base.close()

@@ -64,6 +64,14 @@ class MainRunSyncHook:
 
         self._redis_clients: dict[int, object] = {}
 
+        sources_desc = ", ".join(f"db={db} prefix={pfx!r}" for db, pfx in self._sources)
+        logger.info(
+            "[MainRunSyncHook] Init | sources=[{}] timeout={}s poll={}s",
+            sources_desc,
+            self._timeout,
+            self._poll_interval,
+        )
+
     def _get_redis(self, db: int) -> object:
         if db not in self._redis_clients:
             from redis import asyncio as aioredis
@@ -95,15 +103,19 @@ class MainRunSyncHook:
     async def __call__(self) -> None:
         """Poll until the minimum main run generation advances."""
         start = time.monotonic()
+        last_progress_log = start
 
         while True:
             min_gen = await self._get_min_gen()
 
             if min_gen > self._last_main_gen:
-                logger.debug(
-                    "[MainRunSyncHook] Main runs min gen {} (was {}, {} sources)",
+                elapsed = time.monotonic() - start
+                logger.info(
+                    "[MainRunSyncHook] Main runs advanced to gen {} "
+                    "(was {}, waited {:.1f}s, {} sources)",
                     min_gen,
                     self._last_main_gen,
+                    elapsed,
                     len(self._sources),
                 )
                 self._last_main_gen = min_gen
@@ -119,5 +131,15 @@ class MainRunSyncHook:
                     min_gen,
                 )
                 return
+
+            now = time.monotonic()
+            if (now - last_progress_log) >= 60.0:
+                logger.info(
+                    "[MainRunSyncHook] Waiting {:.0f}s for min gen > {} (current min={})",
+                    elapsed,
+                    self._last_main_gen,
+                    min_gen,
+                )
+                last_progress_log = now
 
             await asyncio.sleep(self._poll_interval)

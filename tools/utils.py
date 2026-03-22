@@ -7,6 +7,7 @@ from typing import Any, Literal
 from loguru import logger
 import numpy as np
 import pandas as pd
+import redis
 
 from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
@@ -453,3 +454,101 @@ def prepare_iteration_dataframe(
             "frontier_fitness",
         ]
     ]
+
+
+def fetch_frontier_from_redis(
+    redis_host: str, redis_port: int, redis_db: int, redis_prefix: str, metric_key: str
+) -> dict[int, float] | None:
+    """Fetch the authoritative frontier series from Redis metrics history.
+
+    When NO_CACHE stages re-evaluate programs, the frontier written to Redis is
+    the single source of truth. This function retrieves it directly.
+
+    Args:
+        redis_host: Redis server hostname
+        redis_port: Redis server port
+        redis_db: Redis database number
+        redis_prefix: Redis key prefix for the run
+        metric_key: Metric name (e.g., "fitness")
+
+    Returns:
+        dict mapping iteration -> frontier_value, or None if not available
+    """
+    import json
+
+    try:
+        r = redis.Redis(
+            host=redis_host, port=redis_port, db=redis_db, decode_responses=True
+        )
+        # Format: program_metrics:valid:frontier:{metric_key}
+        history_key = f"{redis_prefix}:metrics:history:program_metrics:valid/frontier/{metric_key}"
+        entries = r.lrange(history_key, 0, -1)
+        if not entries:
+            return None
+
+        # Each entry is JSON: {"s": step, "v": value, "t": wall_time, "k": "scalar"}
+        frontier: dict[int, float] = {}
+        for entry_json in entries:
+            try:
+                entry = json.loads(entry_json)
+                iteration = int(entry.get("s", 0))
+                value = float(entry.get("v", 0))
+                frontier[iteration] = value
+            except (json.JSONDecodeError, ValueError, TypeError):
+                logger.warning(
+                    f"Failed to parse frontier entry for {redis_prefix}/{metric_key}: {entry_json}"
+                )
+                continue
+
+        return frontier if frontier else None
+    except Exception as e:
+        logger.warning(
+            f"Failed to fetch frontier from Redis {redis_prefix}@{redis_db}:{metric_key}: {e}"
+        )
+        return None
+
+
+def add_frontier_from_redis_to_dataframe(
+    df: pd.DataFrame,
+    redis_host: str,
+    redis_port: int,
+    redis_db: int,
+    redis_prefix: str,
+    metric_key: str,
+    iteration_col: str = "metadata_iteration",
+) -> pd.DataFrame:
+    """Add the authoritative frontier column from Redis to a prepared dataframe.
+
+    Replaces the frontier_fitness column computed from program data with the
+    actual frontier series from MetricsTracker (which is correct even after
+    NO_CACHE metric re-evaluation).
+
+    Args:
+        df: Prepared dataframe from prepare_iteration_dataframe()
+        redis_host, redis_port, redis_db, redis_prefix: Redis connection details
+        metric_key: Metric name (e.g., "fitness")
+        iteration_col: Column name for iterations
+
+    Returns:
+        DataFrame with updated frontier_fitness column (or unchanged if fetch fails)
+    """
+    frontier_series = fetch_frontier_from_redis(
+        redis_host, redis_port, redis_db, redis_prefix, metric_key
+    )
+    if frontier_series is None:
+        logger.info(
+            f"Frontier not available in Redis for {redis_prefix}; using computed frontier"
+        )
+        return df
+
+    # Map iteration -> frontier value
+    df_copy = df.copy()
+    df_copy["frontier_fitness"] = df_copy[iteration_col].map(frontier_series)
+
+    # Forward-fill any missing iterations (should not happen if frontier is complete)
+    df_copy["frontier_fitness"] = df_copy["frontier_fitness"].fillna(method="ffill")
+
+    logger.info(
+        f"Loaded frontier from Redis for {redis_prefix}: {len(frontier_series)} iterations"
+    )
+    return df_copy

@@ -377,6 +377,238 @@ class TestWorkerPoolCountUnderflow:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# TestRunViaWorkerOutputSizeLimit (P1)
+# ---------------------------------------------------------------------------
+
+
+class TestRunViaWorkerOutputSizeLimit:
+    """wrapper.py L223: After reading the 4-byte length prefix, if the
+    declared response size exceeds max_output_size, raise ExecRunnerError
+    before reading the body."""
+
+    async def test_output_too_large_raises_before_reading_body(self) -> None:
+        """When the response length prefix exceeds max_output_size, raise immediately."""
+        import struct
+
+        import pytest
+
+        from gigaevo.programs.stages.python_executors.wrapper import _run_via_worker
+
+        proc = _make_mock_proc(returncode=None)
+
+        # Simulate worker writing a length prefix of 10MB
+        big_length = 10 * 1024 * 1024
+        len_bytes = struct.pack(">I", big_length)
+
+        # Mock stdout to return the length prefix
+        stdout_read = AsyncMock(side_effect=[len_bytes])
+        proc.stdout.readexactly = stdout_read
+
+        # Mock stdin
+        proc.stdin.write = MagicMock()
+        proc.stdin.drain = AsyncMock()
+
+        with pytest.raises(ExecRunnerError) as exc_info:
+            await _run_via_worker(
+                proc,
+                data=b"test",
+                timeout=10,
+                max_memory_mb=None,
+                max_output_size=1024,  # 1KB limit
+            )
+
+        # Check the stderr contains OutputTooLarge
+        assert "OutputTooLarge" in exc_info.value.stderr
+
+    async def test_output_within_limit_succeeds(self) -> None:
+        """When response size is within max_output_size, read the body normally."""
+        import struct
+
+        import cloudpickle
+
+        from gigaevo.programs.stages.python_executors.wrapper import _run_via_worker
+
+        proc = _make_mock_proc(returncode=None)
+
+        # Simulate a small response
+        payload = cloudpickle.dumps({"result": 42})
+        len_bytes = struct.pack(">I", len(payload))
+
+        read_calls = [len_bytes, payload]
+        proc.stdout.readexactly = AsyncMock(side_effect=read_calls)
+        proc.stdin.write = MagicMock()
+        proc.stdin.drain = AsyncMock()
+
+        value, stdout_bytes, stderr_text = await _run_via_worker(
+            proc,
+            data=b"test",
+            timeout=10,
+            max_memory_mb=None,
+            max_output_size=1024 * 1024,  # 1MB limit — plenty
+        )
+
+        assert value == {"result": 42}
+        assert stdout_bytes == b""
+
+
+# ---------------------------------------------------------------------------
+# TestRunExecRunnerFallback (P0)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_pool(worker_proc: MagicMock | None = None) -> MagicMock:
+    """Create a mock WorkerPool that returns a controllable worker process.
+    No real subprocesses are spawned."""
+    pool = MagicMock()
+    proc = worker_proc or _make_mock_proc(returncode=None)
+    pool.get_worker = AsyncMock(return_value=proc)
+    pool.return_worker = AsyncMock()
+    pool.discard_worker = AsyncMock()
+    pool._worker_proc = proc  # stash for assertion access
+    return pool
+
+
+class TestRunExecRunnerFallback:
+    """wrapper.py L333-399: When the worker pool path fails (timeout, broken pipe),
+    run_exec_runner falls back to a one-shot subprocess. This entire fallback
+    path previously had zero tests.
+
+    All tests use a fully mocked WorkerPool — no real subprocesses are spawned."""
+
+    async def test_worker_timeout_triggers_oneshot_fallback(self) -> None:
+        """When worker path raises TimeoutError, fallback to one-shot subprocess."""
+        import cloudpickle
+
+        from gigaevo.programs.stages.python_executors.wrapper import run_exec_runner
+
+        pool = _make_mock_pool()
+
+        result_payload = cloudpickle.dumps({"answer": 99})
+        mock_oneshot = AsyncMock()
+        mock_oneshot.communicate = AsyncMock(return_value=(result_payload, b""))
+        mock_oneshot.returncode = 0
+
+        with (
+            patch(
+                "gigaevo.programs.stages.python_executors.wrapper._run_via_worker",
+                new_callable=AsyncMock,
+                side_effect=TimeoutError("worker timed out"),
+            ),
+            patch(
+                "gigaevo.programs.stages.python_executors.wrapper.asyncio.create_subprocess_exec",
+                return_value=mock_oneshot,
+            ),
+        ):
+            value, stdout, stderr = await run_exec_runner(
+                code="def solve(): return 99",
+                function_name="solve",
+                timeout=10,
+                pool=pool,
+            )
+
+        assert value == {"answer": 99}
+        # Worker should have been discarded (not returned)
+        pool.discard_worker.assert_awaited_once()
+
+    async def test_oneshot_nonzero_exit_raises(self) -> None:
+        """One-shot fallback with non-zero exit code raises ExecRunnerError."""
+        import pytest
+
+        from gigaevo.programs.stages.python_executors.wrapper import run_exec_runner
+
+        pool = _make_mock_pool()
+
+        mock_oneshot = AsyncMock()
+        mock_oneshot.communicate = AsyncMock(return_value=(b"", b"Traceback: error\n"))
+        mock_oneshot.returncode = 1
+
+        with (
+            patch(
+                "gigaevo.programs.stages.python_executors.wrapper._run_via_worker",
+                new_callable=AsyncMock,
+                side_effect=BrokenPipeError("worker died"),
+            ),
+            patch(
+                "gigaevo.programs.stages.python_executors.wrapper.asyncio.create_subprocess_exec",
+                return_value=mock_oneshot,
+            ),
+        ):
+            with pytest.raises(ExecRunnerError, match="exec_runner failed"):
+                await run_exec_runner(
+                    code="def solve(): return 1",
+                    function_name="solve",
+                    timeout=10,
+                    pool=pool,
+                )
+
+    async def test_oneshot_output_too_large_raises(self) -> None:
+        """One-shot fallback enforces max_output_size on stdout."""
+        import pytest
+
+        from gigaevo.programs.stages.python_executors.wrapper import run_exec_runner
+
+        pool = _make_mock_pool()
+
+        big_output = b"x" * 10000
+        mock_oneshot = AsyncMock()
+        mock_oneshot.communicate = AsyncMock(return_value=(big_output, b""))
+        mock_oneshot.returncode = 0
+
+        with (
+            patch(
+                "gigaevo.programs.stages.python_executors.wrapper._run_via_worker",
+                new_callable=AsyncMock,
+                side_effect=ConnectionResetError("worker lost"),
+            ),
+            patch(
+                "gigaevo.programs.stages.python_executors.wrapper.asyncio.create_subprocess_exec",
+                return_value=mock_oneshot,
+            ),
+        ):
+            with pytest.raises(ExecRunnerError) as exc_info:
+                await run_exec_runner(
+                    code="def solve(): return 1",
+                    function_name="solve",
+                    timeout=10,
+                    max_output_size=100,
+                    pool=pool,
+                )
+            assert "OutputTooLarge" in exc_info.value.stderr
+
+    async def test_oneshot_cloudpickle_failure_raises(self) -> None:
+        """One-shot fallback: cloudpickle.loads() fails -> ExecRunnerError."""
+        import pytest
+
+        from gigaevo.programs.stages.python_executors.wrapper import run_exec_runner
+
+        pool = _make_mock_pool()
+
+        mock_oneshot = AsyncMock()
+        mock_oneshot.communicate = AsyncMock(return_value=(b"not-valid-pickle", b""))
+        mock_oneshot.returncode = 0
+
+        with (
+            patch(
+                "gigaevo.programs.stages.python_executors.wrapper._run_via_worker",
+                new_callable=AsyncMock,
+                side_effect=asyncio.IncompleteReadError(b"partial", 100),
+            ),
+            patch(
+                "gigaevo.programs.stages.python_executors.wrapper.asyncio.create_subprocess_exec",
+                return_value=mock_oneshot,
+            ),
+        ):
+            with pytest.raises(ExecRunnerError) as exc_info:
+                await run_exec_runner(
+                    code="def solve(): return 1",
+                    function_name="solve",
+                    timeout=10,
+                    pool=pool,
+                )
+            assert "Invalid cloudpickle" in exc_info.value.stderr
+
+
 class TestMonitorRssMultiPoll:
     async def test_rss_below_limit_loops_until_done(self) -> None:
         """When RSS stays below limit, monitor loops until process finishes."""
