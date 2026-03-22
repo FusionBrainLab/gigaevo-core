@@ -325,6 +325,50 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 
 ---
 
+## Visual Tools
+
+### `dag_builder/` — Visual DAG pipeline builder
+
+A React + FastAPI app for building execution pipelines visually. Drag-and-drop
+stages, connect data flow edges, export as Python code or Hydra YAML config.
+
+```bash
+# Start both backend (port 8081) and frontend (port 8082)
+bash tools/dag_builder/start.sh
+```
+
+See `tools/dag_builder/README.md` for full documentation.
+
+---
+
+## Benchmarking
+
+### `benchmark.py` — Throughput benchmark runner
+
+CLI wrapper that runs the benchmark test suite (`tests/benchmarks/`).
+
+```bash
+# Quick run with fakeredis
+PYTHONPATH=. python tools/benchmark.py
+
+# Full run with real Redis
+PYTHONPATH=. python tools/benchmark.py --redis-url redis://localhost:6379/15 --full
+
+# Also run profiler
+PYTHONPATH=. python tools/benchmark.py --profile
+```
+
+### `profiler.py` — Redis and DAG throughput profiler
+
+Measures throughput of Redis ops, program serialization, DAG construction,
+stage execution, and concurrent workloads.
+
+```bash
+PYTHONPATH=. python tools/profiler.py --redis-url redis://localhost:6379/15
+```
+
+---
+
 ## Scaffolding
 
 ### `wizard` — Problem directory generator

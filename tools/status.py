@@ -181,6 +181,7 @@ def get_run_status(
 
 def parse_run_arg(arg: str) -> tuple[str, int, str]:
     """Parse 'prefix@db[:label]' -> (prefix, db, label)."""
+    arg = arg.strip().strip('"').strip("'")
     label = None
     if ":" in arg:
         at_idx = arg.rfind("@")
@@ -199,10 +200,11 @@ def parse_run_arg(arg: str) -> tuple[str, int, str]:
 
 def parse_pid_arg(arg: str) -> tuple[str, int]:
     """Parse 'label:pid' -> (label, pid)."""
+    arg = arg.strip().strip('"').strip("'")
     if ":" not in arg:
         raise ValueError(f"--pid must be label:pid, got {arg!r}")
     label, pid_str = arg.split(":", 1)
-    return label, int(pid_str)
+    return label, int(pid_str.strip().strip('"').strip("'"))
 
 
 def runs_from_experiment(
