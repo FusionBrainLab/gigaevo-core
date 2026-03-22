@@ -108,7 +108,7 @@ keeps the two processes in lockstep.
 ### Bootstrap
 
 New prompts have zero trials, so `PromptFitnessStage` assigns `fitness = 0.01`
-(optimistic default) when `trials < min_trials` (default 5). This lets new
+(optimistic default) when `trials < min_trials` (default 3). This lets new
 prompts enter the archive and start accumulating data. Once enough trials are
 collected, real `success_rate` takes over.
 
@@ -239,12 +239,15 @@ redis-cli -n 4 keys "chains/hotpotqa/static_f1_600:prompt_stats:*"
 
 The co-evolution system is task-agnostic. To use it with a different problem:
 
-1. Keep the `prompt_evolution` problem and pipeline unchanged
+1. Create a task-specific prompt evolution problem directory (e.g.
+   `problems/prompt_evolution_hover/`) with its own seed programs, metrics,
+   and task description. Alternatively, reuse `problems/prompt_evolution/`.
 2. Change the main run's `problem.name` and `pipeline` to your task
 3. Add `prompt_fetcher=coevolved` and `prompt_fetcher.prompt_redis_db=N`
 4. Set `main_redis_prefix` on the prompt run to match your main run's prefix
-5. Optionally create task-specific seed prompts in
-   `problems/prompt_evolution/initial_programs/`
+5. **Important**: Set `prompt_fetcher.prompt_prefix` on the main run to match
+   the prompt run's Redis prefix. The default is `prompt_evolution`, which
+   only works for HotpotQA. For HoVer, use `prompt_evolution_hover`.
 
 The fitness signal (mutation success rate) is universal — it measures whether
 the prompt helps produce better programs regardless of the downstream task.

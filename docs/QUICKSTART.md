@@ -57,6 +57,9 @@ Open a new terminal:
 
 ```bash
 # Show current run status (fitness, gen count, invalidity, etc.)
+# Preferred: use --experiment mode (auto-discovers runs from experiment.yaml)
+PYTHONPATH=. python tools/status.py --experiment <task>/<name>
+# Or specify a single run directly:
 PYTHONPATH=. python tools/status.py --run heilbron@0:run-1
 
 # Show top N programs
@@ -81,8 +84,8 @@ After evolution completes:
 # Export to CSV
 PYTHONPATH=. python tools/redis2pd.py --run heilbron@0:run-1
 
-# Plot fitness curves
-PYTHONPATH=. python tools/comparison.py --run heilbron@0:run-1
+# Compare fitness curves across runs (pass multiple --run flags)
+PYTHONPATH=. python tools/comparison.py --run heilbron@0:run-1 --run heilbron@1:run-2
 
 # View top programs
 PYTHONPATH=. python tools/top_programs.py --run heilbron@0:run-1 -n 10
@@ -217,7 +220,9 @@ python run.py experiment=<experiment> problem.name=<problem>
 # Preview config (no execution)
 python run.py problem.name=<problem> --cfg job
 
-# Check run status
+# Check run status (--experiment mode preferred for managed experiments)
+PYTHONPATH=. python tools/status.py --experiment <task>/<name>
+# Or for a single run:
 PYTHONPATH=. python tools/status.py --run <prefix>@<db>:<label>
 
 # View top programs

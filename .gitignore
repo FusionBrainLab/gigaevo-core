@@ -1,6 +1,9 @@
 # GigaEvo .gitignore
 # Comprehensive ignore patterns for evolutionary computation project
 
+# MkDocs build output
+site/
+
 # =============================================================================
 # Python
 # =============================================================================
