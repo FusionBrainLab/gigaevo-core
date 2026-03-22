@@ -5,6 +5,7 @@ import asyncio
 from typing import Any
 
 from gigaevo.programs.program import Program
+from gigaevo.programs.program_state import ProgramState
 
 
 class PopulationSnapshot:
@@ -150,6 +151,35 @@ class ProgramStorage(ABC):
             True if renewal succeeded, False if lock was lost
         """
         ...
+
+    async def fast_state_transition(
+        self, program: Program, old_state: str, new_state: str
+    ) -> None:
+        """Fast state transition: 2 RT (INCR + pipeline) instead of ~5 RT.
+
+        Safe only when the caller holds exclusive ownership (per-program lock).
+        Default falls back to atomic_state_transition.
+        """
+        await self.atomic_state_transition(program, old_state, new_state)
+
+    async def batch_transition_state(
+        self,
+        programs: list[Program],
+        old_state: str,
+        new_state: str,
+    ) -> int:
+        """Batch-transition programs between states.
+
+        Default implementation falls back to individual transitions.
+        Subclasses may override with pipelined operations.
+        Returns the number of programs transitioned.
+        """
+        count = 0
+        for prog in programs:
+            prog.state = ProgramState(new_state)
+            await self.atomic_state_transition(prog, old_state, new_state)
+            count += 1
+        return count
 
     async def wait_for_activity(self, timeout: float) -> None:
         """

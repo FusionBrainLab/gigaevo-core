@@ -45,6 +45,8 @@ def _mock_storage():
     storage.publish_status_event = AsyncMock()
     storage.transition_status = AsyncMock()
     storage.atomic_state_transition = AsyncMock()
+    storage.fast_state_transition = AsyncMock()
+    storage.batch_transition_state = AsyncMock(return_value=0)
     return storage
 
 
@@ -134,8 +136,8 @@ class TestMaintainTOCTOU:
         assert prog.id not in runner._active
         assert runner._metrics.dag_timeouts == 1
         # DISCARDED state should have been set
-        storage.atomic_state_transition.assert_called()
-        call_args = storage.atomic_state_transition.call_args
+        storage.fast_state_transition.assert_called()
+        call_args = storage.fast_state_transition.call_args
         assert call_args[0][2] == ProgramState.DISCARDED.value
 
     async def test_timed_out_storage_get_returns_none(self):
@@ -180,6 +182,9 @@ class TestLaunchBuildStateFailureCascade:
         storage.mget = AsyncMock(return_value=[prog])
         # Make the DISCARD state transition fail
         storage.atomic_state_transition = AsyncMock(
+            side_effect=RuntimeError("Redis down")
+        )
+        storage.fast_state_transition = AsyncMock(
             side_effect=RuntimeError("Redis down")
         )
 
@@ -282,6 +287,9 @@ class TestLaunchOrphanDiscardFailure:
         storage.mget = AsyncMock(return_value=[prog])
         # State transition fails
         storage.atomic_state_transition = AsyncMock(
+            side_effect=RuntimeError("state fail")
+        )
+        storage.fast_state_transition = AsyncMock(
             side_effect=RuntimeError("state fail")
         )
 
@@ -392,8 +400,8 @@ class TestExecuteDagCleanup:
         assert mock_dag._stage_sema is None
 
         # State should be DISCARDED (due to error)
-        storage.atomic_state_transition.assert_called()
-        call_args = storage.atomic_state_transition.call_args
+        storage.fast_state_transition.assert_called()
+        call_args = storage.fast_state_transition.call_args
         assert call_args[0][2] == ProgramState.DISCARDED.value
 
 

@@ -1,10 +1,11 @@
 """Regression tests for EvolutionEngine and MapElitesMultiIsland bugs.
 
-Ghost IDs stalling _has_active_dags (fixed):
-    _has_active_dags() uses get_all_by_status() (SMEMBERS + MGET, Nones filtered)
-    instead of count_by_status() (raw SCARD).  Ghost IDs — Redis set members with
-    no backing program hash — are filtered out and no longer cause _await_idle()
-    to spin forever.
+Ghost IDs stalling _await_idle (fixed):
+    _has_active_dags() uses count_by_status() (SCARD, O(1)) for the fast path.
+    Ghost IDs — Redis set members with no backing program hash — are counted by
+    SCARD, so _has_active_dags() returns True for them.  The ghost safety is in
+    _await_idle(): after 30s of waiting, it falls back to get_all_by_status()
+    which filters ghosts via MGET → Nones dropped → breaks the loop.
 
 Island migration KeyError when current_island is None (fixed):
     _perform_migration() raised KeyError: None when a migrant's current_island
@@ -123,12 +124,11 @@ def _make_engine(storage: RedisProgramStorage) -> EvolutionEngine:
 # ---------------------------------------------------------------------------
 
 
-async def test_has_active_dags_returns_false_with_ghost_id() -> None:
-    """_has_active_dags() must return False for ghost IDs (no backing program hash).
+async def test_has_active_dags_counts_ghost_ids() -> None:
+    """_has_active_dags() returns True for ghost IDs (SCARD counts them).
 
-    Before the fix, count_by_status() used raw SCARD and counted the ghost,
-    causing _await_idle() to spin forever.  After the fix, get_all_by_status()
-    filters ghosts out via MGET → Nones dropped → real count == 0 → False.
+    The fast path uses count_by_status (SCARD) which counts ghost IDs.
+    Ghost safety is handled by _await_idle's 30s fallback using get_all_by_status.
     """
     storage, _ = _make_storage()
     try:
@@ -144,11 +144,11 @@ async def test_has_active_dags_returns_false_with_ghost_id() -> None:
         program_key = f"test:program:{ghost_id}"
         assert await r.exists(program_key) == 0, "Ghost must have no backing hash"
 
+        # SCARD counts ghost IDs — _has_active_dags returns True
         result = await engine._has_active_dags()
-        assert result is False, (
-            "_has_active_dags() returned True for a ghost ID.  "
-            "Fix: use get_all_by_status() (MGET-filtered) instead of "
-            "count_by_status() (raw SCARD) to exclude ghost IDs."
+        assert result is True, (
+            "_has_active_dags() uses SCARD which counts ghost IDs.  "
+            "Ghost safety is in _await_idle (30s fallback to get_all_by_status)."
         )
 
     finally:

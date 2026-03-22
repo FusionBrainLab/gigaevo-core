@@ -106,7 +106,14 @@ class ProgramStateManager:
 
             program.state = new_state
             old = old_state.value if old_state else None
-            await self.storage.atomic_state_transition(program, old, new_state.value)
+            # Use fast path (2 RT) when old state is known — safe because
+            # per-program asyncio.Lock above prevents concurrent writes.
+            if old is not None:
+                await self.storage.fast_state_transition(program, old, new_state.value)
+            else:
+                await self.storage.atomic_state_transition(
+                    program, old, new_state.value
+                )
 
             logger.debug(
                 "[ProgramStateManager] {} {} → {}",
