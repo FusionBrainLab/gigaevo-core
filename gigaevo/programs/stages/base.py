@@ -301,15 +301,17 @@ class Stage:
             dur = time.monotonic() - t0
             if isinstance(exc, asyncio.TimeoutError):
                 logger.warning(
-                    "[{stage}] TIMED OUT after {dur:.2f}s (timeout={to}s)",
+                    "[{stage}] {prog} TIMED OUT after {dur:.2f}s (timeout={to}s)",
                     stage=self.stage_name,
+                    prog=program.id[:8],
                     dur=dur,
                     to=self.timeout,
                 )
             else:
                 logger.exception(
-                    "[{stage}] Failed after {dur:.2f}s",
+                    "[{stage}] {prog} Failed after {dur:.2f}s",
                     stage=self.stage_name,
+                    prog=program.id[:8],
                     dur=dur,
                 )
             fail_result = ProgramStageResult.failure(

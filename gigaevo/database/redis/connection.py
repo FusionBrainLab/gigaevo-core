@@ -71,8 +71,20 @@ class RedisConnection:
                 return await fn(await self.get())
             except Exception as e:
                 if attempt == self.config.max_retries or self._closing:
-                    logger.debug("[RedisConnection] {} failed: {}", name, e)
+                    logger.warning(
+                        "[RedisConnection] {} failed after {} attempts: {}",
+                        name,
+                        self.config.max_retries,
+                        e,
+                    )
                     raise StorageError(f"Redis op {name} failed: {e}") from e
+                logger.warning(
+                    "[RedisConnection] {} retry {}/{}: {}",
+                    name,
+                    attempt,
+                    self.config.max_retries,
+                    e,
+                )
                 await asyncio.sleep(min(delay, 1.0))
                 delay *= 2
 

@@ -212,6 +212,23 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
 
         self._fetch_errors: int = 0
         self._cache_hits: int = 0
+        self._using_archive: bool = False
+        self._empty_refresh_count: int = 0
+        self._system_fetch_count: int = 0
+
+        logger.info(
+            "[GigaEvoArchivePromptFetcher] Init | prompt_db={} prompt_prefix={!r} "
+            "archive_prefix={!r} main_prefix={!r} main_db={} fitness_key={!r} "
+            "cache_ttl={}s fallback={}",
+            self._prompt_redis_db,
+            self._prompt_prefix,
+            self._archive_prefix,
+            self._main_redis_prefix,
+            main_redis_db,
+            self._fitness_key,
+            self._cache_ttl,
+            fallback_prompts_dir or "(package defaults)",
+        )
 
     def _get_sync_redis(self) -> Any:
         """Lazy-create synchronous Redis client for archive reads."""
@@ -246,9 +263,16 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             archive_key = f"{self._archive_prefix}:archive"
             program_ids = list(r.hvals(archive_key))
             if not program_ids:
-                logger.debug(
-                    "[GigaEvoArchivePromptFetcher] Archive empty, using fallback"
-                )
+                self._empty_refresh_count += 1
+                if (
+                    self._empty_refresh_count == 1
+                    or self._empty_refresh_count % 10 == 0
+                ):
+                    logger.info(
+                        "[GigaEvoArchivePromptFetcher] Archive empty (check #{}) "
+                        "— using fallback",
+                        self._empty_refresh_count,
+                    )
                 return None
 
             import json
@@ -401,6 +425,17 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
 
         # Sample fresh on "system" (first call per mutation), reuse on "user"
         if prompt_type == "system":
+            self._system_fetch_count += 1
+            if self._system_fetch_count % 50 == 0:
+                logger.info(
+                    "[GigaEvoArchivePromptFetcher] Health | fetches={} archive_hits={} "
+                    "errors={} candidates={} using_archive={}",
+                    self._system_fetch_count,
+                    self._cache_hits,
+                    self._fetch_errors,
+                    len(self._cached_candidates) if self._cached_candidates else 0,
+                    self._using_archive,
+                )
             pack = self._sample_prompt()
             if pack is not None:
                 self._current_pack = pack
@@ -408,6 +443,12 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         pack = self._current_pack
 
         if pack is not None:
+            if not self._using_archive:
+                self._using_archive = True
+                logger.info(
+                    "[GigaEvoArchivePromptFetcher] TRANSITION: first champion "
+                    "available, switching from fallback to co-evolved prompts",
+                )
             self._cache_hits += 1
             if prompt_type == "system":
                 return FetchedPrompt(
@@ -422,6 +463,11 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             # user prompt not co-evolved yet — fall through to fallback
 
         # No champion yet or no user in pack: use fallback
+        if self._using_archive and prompt_type == "system":
+            logger.warning(
+                "[GigaEvoArchivePromptFetcher] Archive lost — reverting to fallback",
+            )
+            self._using_archive = False
         return self._fallback.fetch(agent_name, prompt_type)
 
     def record_outcome(
