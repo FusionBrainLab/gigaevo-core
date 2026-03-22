@@ -6,7 +6,7 @@ from loguru import logger
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.mutation.base import MutationOperator
+from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.programs.program import Program
 
@@ -76,13 +76,15 @@ async def generate_mutations(
                 program.set_metadata("iteration", iteration)
 
                 await storage.add(program)
+                prompt_id = mutation_spec.metadata.get(MutationSpec.META_PROMPT_ID, "")
                 logger.info(
-                    "[mutation] Task {}: {} → {} (model={}, archetype={})",
+                    "[mutation] Task {}: {} → {} (model={}, archetype={}, prompt_id={})",
                     task_id,
                     [p.short_id for p in parents],
                     program.short_id,
                     mutation_spec.mutation_model or "?",
                     mutation_spec.mutation_archetype or "?",
+                    prompt_id or "default",
                 )
 
                 for parent in parents:

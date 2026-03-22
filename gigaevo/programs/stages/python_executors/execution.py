@@ -106,6 +106,13 @@ class PythonCodeExecutor[T](Stage):
 
             value_parsed = self.parse_output(value)
 
+            logger.debug(
+                "[{}] {} ok | result_type={}",
+                stage_name,
+                program.id[:8],
+                type(value_parsed).__name__,
+            )
+
             del stdout_bytes
             del stderr_text
 

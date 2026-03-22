@@ -8,7 +8,11 @@ from loguru import logger
 from pydantic import BaseModel
 
 from gigaevo.database.program_storage import ProgramStorage
-from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
+from gigaevo.programs.metrics.context import (
+    DEFAULT_DECIMALS,
+    VALIDITY_KEY,
+    MetricsContext,
+)
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import INCOMPLETE_STATES
 from gigaevo.utils.trackers.base import LogWriter
@@ -92,6 +96,28 @@ class MetricsTracker:
         self._iter_stats: dict[int, dict[str, _RunningStats]] = {}
         #   generation -> metric_key -> RunningStats
         self._gen_stats: dict[int, dict[str, _RunningStats]] = {}
+
+    @property
+    def metrics_context(self) -> MetricsContext:
+        """Expose MetricsContext for formatting (e.g. gen summary logging)."""
+        return self._ctx
+
+    def format_best_summary(self) -> str:
+        """Return a compact string of best frontier values for log lines.
+
+        Uses MetricsContext for decimal precision. Reads from the in-memory
+        ``_best_valid`` cache — no Redis fetch required. Gracefully handles
+        metric keys not in the context specs.
+        """
+        if not self._best_valid:
+            return ""
+        parts = []
+        for key in sorted(self._best_valid):
+            best_val, _ = self._best_valid[key]
+            spec = self._ctx.specs.get(key)
+            decimals = spec.decimals if spec else DEFAULT_DECIMALS
+            parts.append(f"{key}={best_val:.{decimals}f}")
+        return " best=[" + ", ".join(parts) + "]"
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """Schedule tracker task on the provided loop."""

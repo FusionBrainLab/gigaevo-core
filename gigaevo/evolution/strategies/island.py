@@ -136,19 +136,23 @@ class MapElitesIsland:
             return False
 
         if current_elite:
-            logger.debug(
-                "Island {}: program {} replaced {} in cell {}",
+            logger.info(
+                "Island {}: FRONTIER IMPROVED | {} replaced {} in cell {}"
+                " | old_metrics={} new_metrics={}",
                 self.config.island_id,
-                program.id,
-                current_elite.id,
+                program.short_id,
+                current_elite.short_id,
                 cell,
+                current_elite.metrics,
+                program.metrics,
             )
         else:
-            logger.debug(
-                "Island {}: program {} filled empty cell {}",
+            logger.info(
+                "Island {}: FRONTIER NEW CELL | {} filled cell {} (metrics={})",
                 self.config.island_id,
-                program.id,
+                program.short_id,
                 cell,
+                program.metrics,
             )
 
         program.metadata.setdefault(METADATA_KEY_HOME_ISLAND, self.config.island_id)
