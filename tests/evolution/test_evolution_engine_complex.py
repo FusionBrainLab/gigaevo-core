@@ -375,6 +375,21 @@ class TestRefreshBatchTransition:
             [done_prog], ProgramState.DONE.value, ProgramState.QUEUED.value
         )
 
+    async def test_refresh_handles_batch_transition_error(self):
+        """_refresh_archive_programs doesn't crash when batch_transition_state raises."""
+        engine = _engine()
+
+        progs = [_prog(ProgramState.DONE) for _ in range(3)]
+        engine.strategy.get_program_ids.return_value = [p.id for p in progs]
+        engine.storage.mget.return_value = progs
+        engine.storage.batch_transition_state.side_effect = RuntimeError(
+            "Redis timeout"
+        )
+
+        # Should not raise — returns 0 gracefully
+        count = await engine._refresh_archive_programs()
+        assert count == 0
+
 
 # ===================================================================
 # Category G: run() step timeout

@@ -5,7 +5,7 @@ import asyncio
 from typing import Any
 
 from gigaevo.programs.program import Program
-from gigaevo.programs.program_state import ProgramState
+from gigaevo.programs.program_state import ProgramState, validate_transition
 
 
 class PopulationSnapshot:
@@ -157,7 +157,9 @@ class ProgramStorage(ABC):
     ) -> None:
         """Fast state transition: 2 RT (INCR + pipeline) instead of ~5 RT.
 
-        Safe only when the caller holds exclusive ownership (per-program lock).
+        Safe only when the caller holds exclusive single-process ownership
+        (e.g., asyncio.Lock in ProgramStateManager). Does NOT provide cross-process
+        safety — assumes each program is processed by exactly one engine instance.
         Default falls back to atomic_state_transition.
         """
         await self.atomic_state_transition(program, old_state, new_state)
@@ -174,12 +176,18 @@ class ProgramStorage(ABC):
         Subclasses may override with pipelined operations.
         Returns the number of programs transitioned.
         """
+        old_enum = ProgramState(old_state)
+        new_enum = ProgramState(new_state)
         count = 0
         for prog in programs:
-            prog.state = ProgramState(new_state)
+            validate_transition(old_enum, new_enum)
+            prog.state = new_enum
             await self.atomic_state_transition(prog, old_state, new_state)
             count += 1
         return count
+
+    async def remove_ids_from_status_set(self, status: str, ids: list[str]) -> None:
+        """Remove specific IDs from a status set. No-op by default."""
 
     async def wait_for_activity(self, timeout: float) -> None:
         """

@@ -22,7 +22,7 @@ from gigaevo.database.redis import (
 )
 from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
-from gigaevo.programs.program_state import ProgramState
+from gigaevo.programs.program_state import ProgramState, validate_transition
 from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
 from gigaevo.utils.trackers.base import LogWriter
@@ -452,8 +452,9 @@ class RedisProgramStorage(ProgramStorage):
     ) -> None:
         """Fast state transition: 2 RT (INCR + pipeline) instead of ~5 RT.
 
-        Safe only when the caller holds exclusive ownership of this program
-        (e.g., DagRunner with per-program asyncio.Lock).
+        Safe only when the caller holds exclusive single-process ownership
+        (e.g., asyncio.Lock in ProgramStateManager). Does NOT provide cross-process
+        safety — assumes each program is processed by exactly one engine instance.
         Unlike atomic_state_transition, does not WATCH/GET/MERGE.
         """
         self._check_write_allowed("fast_state_transition")
@@ -497,6 +498,11 @@ class RedisProgramStorage(ProgramStorage):
         if not programs:
             return 0
 
+        old_enum = ProgramState(old_state)
+        new_enum = ProgramState(new_state)
+        for prog in programs:
+            validate_transition(old_enum, new_enum)
+
         async def _batch(r: aioredis.Redis) -> int:
             old_set_key = self._keys.status_set(old_state)
             new_set_key = self._keys.status_set(new_state)
@@ -532,6 +538,17 @@ class RedisProgramStorage(ProgramStorage):
             return count
 
         return await self._conn.execute("batch_transition_state", _batch)
+
+    async def remove_ids_from_status_set(self, status: str, ids: list[str]) -> None:
+        """Remove specific IDs from a status set using SREM."""
+        if not ids:
+            return
+        self._check_write_allowed("remove_ids_from_status_set")
+
+        async def _srem(r: aioredis.Redis) -> None:
+            await r.srem(self._keys.status_set(status), *ids)
+
+        await self._conn.execute("remove_ids_from_status_set", _srem)
 
     # --------------------- Run State (resume support) ---------------------
 

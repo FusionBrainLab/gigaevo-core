@@ -336,9 +336,27 @@ class EvolutionEngine:
                     await self.storage.get_all_by_status(ProgramState.RUNNING.value)
                 )
                 if real_q == 0 and real_r == 0:
+                    # Clean up ghost IDs from status sets
+                    queued_ids = await self.storage.get_ids_by_status(
+                        ProgramState.QUEUED.value
+                    )
+                    running_ids = await self.storage.get_ids_by_status(
+                        ProgramState.RUNNING.value
+                    )
+                    if queued_ids:
+                        await self.storage.remove_ids_from_status_set(
+                            ProgramState.QUEUED.value, queued_ids
+                        )
+                    if running_ids:
+                        await self.storage.remove_ids_from_status_set(
+                            ProgramState.RUNNING.value, running_ids
+                        )
+                    ghost_count = len(queued_ids) + len(running_ids)
                     logger.warning(
                         "[EvolutionEngine] Ghost IDs detected — SCARD says active "
-                        "but no real programs found. Breaking idle wait."
+                        "but no real programs found. Cleaned {} ghost ID(s) from "
+                        "status sets. Breaking idle wait.",
+                        ghost_count,
                     )
                     break
             await asyncio.sleep(self.config.loop_interval)
@@ -503,11 +521,19 @@ class EvolutionEngine:
         if not done_programs:
             return 0
 
-        count = await self.storage.batch_transition_state(
-            done_programs,
-            ProgramState.DONE.value,
-            ProgramState.QUEUED.value,
-        )
+        try:
+            count = await self.storage.batch_transition_state(
+                done_programs,
+                ProgramState.DONE.value,
+                ProgramState.QUEUED.value,
+            )
+        except Exception as e:
+            logger.error(
+                "[EvolutionEngine] gen={} batch_transition_state failed: {}",
+                self.metrics.total_generations,
+                e,
+            )
+            return 0
 
         if count:
             logger.info(
