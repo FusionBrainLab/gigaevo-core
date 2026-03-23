@@ -95,11 +95,19 @@ class IdeaTracker:
                 memory_write_cfg.get("enabled", False),
                 default=False,
             )
+            best_programs_percent = self._to_float(
+                memory_write_cfg.get("best_programs_percent")
+            )
         else:
             self.memory_write_pipeline_enabled = self._to_bool(
                 memory_write_cfg,
                 default=False,
             )
+            best_programs_percent = None
+        self.memory_write_best_programs_percent = max(
+            0.0,
+            best_programs_percent if best_programs_percent is not None else 5.0,
+        )
 
         usage_tracking_cfg = self.config.get("usage_tracking", {"enabled": True})
         if isinstance(usage_tracking_cfg, dict):
@@ -131,6 +139,7 @@ class IdeaTracker:
             top_k_fitness=self.top_k_fitness,
             list_max_ideas=list_max_ideas,
             memory_write_pipeline_enabled=self.memory_write_pipeline_enabled,
+            memory_write_best_programs_percent=self.memory_write_best_programs_percent,
             memory_usage_tracking_enabled=self.memory_usage_tracking_enabled,
         )
 
@@ -451,6 +460,14 @@ class IdeaTracker:
             cache[task_text] = summary
         return summary
 
+    def _get_task_description_summary(self) -> str:
+        cached = getattr(self, "_task_description_summary_cache", None)
+        if isinstance(cached, str) and cached:
+            return cached
+        summary = self._summarize_task_description(self.task_description)
+        self._task_description_summary_cache = summary
+        return summary
+
     def _build_memory_usage_updates(self, programs_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
         required_columns = {
             "program_id",
@@ -470,7 +487,7 @@ class IdeaTracker:
             if fitness is not None:
                 fitness_by_program_id[program_id] = fitness
 
-        task_summary = self._summarize_task_description(self.task_description)
+        task_summary = self._get_task_description_summary()
         if not task_summary:
             task_summary = "Task summary unavailable"
 
@@ -555,6 +572,8 @@ class IdeaTracker:
                 category="",
                 strategy=mutation_metadata["archetype"],
                 task_description=self.task_description,
+                task_description_summary=self._get_task_description_summary(),
+                code=str(program.get("code") or ""),
             )
             programs_processed.append(new_program)
             self.programs_ids.add(program["program_id"])
@@ -713,6 +732,10 @@ class IdeaTracker:
                 "parents": prog.parents,
                 "insights": prog.insights,
                 "improvements": prog.improvements,
+                "strategy": prog.strategy,
+                "task_description": prog.task_description,
+                "task_description_summary": prog.task_description_summary,
+                "code": prog.code,
             }
             for prog in self.programs_card
         ]
@@ -932,6 +955,9 @@ class IdeaTracker:
             "MEMORY_BANKS_PATH": str(banks_path),
             "MEMORY_BEST_IDEAS_PATH": str(best_ideas_path),
         }
+        programs_path = self.logger.programs_file
+        if programs_path is not None and programs_path.exists():
+            env_overrides["MEMORY_PROGRAMS_PATH"] = str(programs_path)
         usage_updates_path = self.logger.memory_usage_updates_file
         if (
             self.memory_usage_tracking_enabled
@@ -950,12 +976,29 @@ class IdeaTracker:
             snapshot = memory_write_module.main()
             if isinstance(snapshot, dict):
                 stats = snapshot.get("stats", {})
+                stats_by_card_type = snapshot.get("stats_by_card_type", {})
+                ideas_stats = (
+                    stats_by_card_type.get("ideas", {})
+                    if isinstance(stats_by_card_type, dict)
+                    else {}
+                )
+                programs_stats = (
+                    stats_by_card_type.get("programs", {})
+                    if isinstance(stats_by_card_type, dict)
+                    else {}
+                )
                 if isinstance(stats, dict):
                     print(
                         "Memory write pipeline stats: "
                         f"processed={stats.get('processed', 0)}, "
+                        f"ideas_processed={ideas_stats.get('processed', 0)}, "
+                        f"programs_processed={programs_stats.get('processed', 0)}, "
                         f"added={stats.get('added', 0)}, "
+                        f"ideas_added={ideas_stats.get('added', 0)}, "
+                        f"programs_added={programs_stats.get('added', 0)}, "
                         f"updated={stats.get('updated', 0)}, "
+                        f"ideas_updated={ideas_stats.get('updated', 0)}, "
+                        f"programs_updated={programs_stats.get('updated', 0)}, "
                         f"rejected={stats.get('rejected', 0)}"
                     )
         finally:

@@ -22,6 +22,8 @@ class ProgramRecord:
     category: str = ""
     strategy: str = ""
     task_description: str = ""
+    task_description_summary: str = ""
+    code: str = ""
 
 
 @dataclass

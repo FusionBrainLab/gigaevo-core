@@ -123,6 +123,7 @@ ideas_tracker:
   # Optional: write current run's best ideas into memory DB pipeline.
   memory_write_pipeline:
     enabled: true
+    best_programs_percent: 5.0
 
   # Track memory-card usage (selected memory IDs + per-use fitness deltas)
   # and write it back into card `usage.used` during memory write pipeline.
