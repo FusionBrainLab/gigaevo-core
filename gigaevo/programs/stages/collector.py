@@ -360,8 +360,11 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
 
+    #: Fields the collector never accesses — skip during deserialization.
+    _EXCLUDE = frozenset({"stage_results"})
+
     async def _collect_programs(self, program: Program) -> list[Program]:
-        return await self.storage.snapshot.get_all(self.storage)
+        return await self.storage.snapshot.get_all(self.storage, exclude=self._EXCLUDE)
 
     async def _process(
         self, program: Program, programs: list[Program]

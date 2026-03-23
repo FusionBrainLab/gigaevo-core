@@ -28,14 +28,19 @@ class PopulationSnapshot:
         """Increment the epoch, invalidating the cached snapshot."""
         self._epoch += 1
 
-    async def get_all(self, storage: ProgramStorage) -> list[Program]:
+    async def get_all(
+        self,
+        storage: ProgramStorage,
+        *,
+        exclude: frozenset[str] | None = None,
+    ) -> list[Program]:
         """Return cached programs if epoch matches, else fetch + cache."""
         if self._cached_epoch == self._epoch:
             return self._cached
         async with self._lock:
             if self._cached_epoch == self._epoch:
                 return self._cached
-            programs = await storage.get_all()
+            programs = await storage.get_all(exclude=exclude)
             self._cached = programs
             self._cached_epoch = self._epoch
             return programs
@@ -79,7 +84,15 @@ class ProgramStorage(ABC):
     ) -> None: ...
 
     @abstractmethod
-    async def get_all(self) -> list[Program]: ...
+    async def get_all(self, *, exclude: frozenset[str] | None = None) -> list[Program]:
+        """Return all programs.
+
+        Args:
+            exclude: Optional set of field names to skip during deserialization.
+                Excluded fields get their Pydantic defaults. Implementations
+                that don't support projection may ignore this parameter.
+        """
+        ...
 
     @abstractmethod
     async def get_all_by_status(self, status: str) -> list[Program]: ...
