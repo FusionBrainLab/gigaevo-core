@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from loguru import logger
+import yaml
 
 from gigaevo.entrypoint.constants import (
     DEFAULT_DAG_CONCURRENCY,
@@ -40,6 +41,7 @@ from gigaevo.programs.stages.optimization.optuna import (
     OptunaPayloadBridge,
     PayloadResolver,
 )
+from gigaevo.programs.stages.runtime_metrics import RuntimeFitnessStage
 from gigaevo.programs.stages.python_executors.execution import (
     CallFileFunction,
     CallProgramFunction,
@@ -419,6 +421,51 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
 
         self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
         self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+
+
+class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
+    """Context pipeline variant using execution speed as the primary fitness."""
+
+    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
+        super().__init__(ctx, dag_timeout=dag_timeout)
+        self._add_runtime_fitness_stage()
+
+    def _load_runtime_evaluation_config(self) -> tuple[int, int]:
+        metrics_path = self.ctx.problem_ctx.problem_dir / "metrics.yaml"
+        try:
+            data = yaml.safe_load(metrics_path.read_text()) or {}
+        except Exception:
+            return 1, 0
+        runtime_cfg = data.get("runtime_evaluation", {})
+        repetitions = runtime_cfg.get("timing_repetitions", 1)
+        warmups = runtime_cfg.get("warmup_repetitions", 0)
+        try:
+            repetitions_int = int(repetitions)
+        except Exception:
+            repetitions_int = 1
+        try:
+            warmups_int = int(warmups)
+        except Exception:
+            warmups_int = 0
+        return max(1, repetitions_int), max(0, warmups_int)
+
+    def _add_runtime_fitness_stage(self) -> None:
+        repetitions, warmups = self._load_runtime_evaluation_config()
+        problem_dir = self.ctx.problem_ctx.problem_dir
+        self.add_stage(
+            "RuntimeFitnessStage",
+            lambda: RuntimeFitnessStage(
+                source_stage_name="CallProgramFunction",
+                problem_dir=problem_dir,
+                timing_repetitions=repetitions,
+                warmup_repetitions=warmups,
+                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+            ),
+        )
+        self.remove_data_flow_edge("FetchMetrics", "MergeMetricsStage")
+        self.add_data_flow_edge("FetchMetrics", "RuntimeFitnessStage", "candidate")
+        self.add_data_flow_edge("AddContext", "RuntimeFitnessStage", "context")
+        self.add_data_flow_edge("RuntimeFitnessStage", "MergeMetricsStage", "first")
 
 
 class CMAOptPipelineBuilder(DefaultPipelineBuilder):

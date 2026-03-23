@@ -1,0 +1,91 @@
+TASK DEFINITION - ADAPTED ALGOTUNE FEEDBACK_CONTROLLER_DESIGN
+
+This problem adapts the AlgoTune `feedback_controller_design` task into
+gigaevo's standard problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of discrete-time
+feedback-controller design cases.
+
+Each case represents a linear time-invariant system:
+`x[k + 1] = A x[k] + B u[k]`
+
+Your program must determine whether the system is stabilizable and, when it is,
+provide a static state-feedback matrix `K` and a positive definite matrix `P`
+such that the closed-loop system:
+`x[k + 1] = (A + B K) x[k]`
+is asymptotically stable and satisfies:
+`(A + B K)^T P (A + B K) - P < 0`
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: state dimension
+- `random_seed`: seed used to deterministically generate the system
+
+For each case:
+- set `n = max(n, 2)`
+- set `m = floor(n / 2)`
+- create the RNG with `np.random.default_rng(seed)`
+- generate `A` with `rng.standard_normal((n, n))`
+- generate `B` with `rng.standard_normal((n, m))` using the same RNG state
+  immediately after `A`
+
+DETERMINISM REQUIREMENT
+This task is extremely sensitive to the exact matrix generation procedure.
+
+- `np.random.RandomState(seed)` is not equivalent to
+  `np.random.default_rng(seed)` and will generate different matrices
+- any alternate RNG API, extra random draws, reordered draws, or hand-written
+  replacement for the benchmark generation logic will be treated as solving the
+  wrong problem instance
+- if you import helper functions from this problem package, preserve their
+  semantics exactly
+
+OUTPUT
+Return a list of dictionaries, in the same order as `context["cases"]`.
+
+Each output dictionary must contain:
+- `is_stabilizable`: boolean
+- `K`: either `None` for non-stabilizable systems, or an `m x n` numeric
+  matrix for stabilizable systems
+- `P`: either `None` for non-stabilizable systems, or an `n x n` numeric
+  matrix for stabilizable systems
+
+The validator accepts any correct stabilizing controller and Lyapunov
+certificate. `K` and `P` do not need to match a unique reference solution.
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full fixed-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `exact_case_fraction`: diagnostic metric for how many cases were solved
+  exactly
+
+RULES
+- Keep the case order unchanged
+- Do not use randomness beyond the deterministic problem generation
+- Do not change the deterministic generation contract described above
+- Return finite numeric matrices only
+- `P` must be symmetric positive definite for stabilizable systems
+- `(A + B K)^T P (A + B K) - P` must be negative definite for stabilizable
+  systems
+- `K` and `P` must both be `None` for non-stabilizable systems
+- You may use NumPy and SciPy
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/feedback_controller_design/feedback_controller_design.py`

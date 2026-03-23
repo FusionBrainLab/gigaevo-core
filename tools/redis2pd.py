@@ -4,6 +4,7 @@ sys.path.append("../gigaevo-core-internal")
 import argparse
 import asyncio
 import json
+from pathlib import Path
 
 import pandas as pd
 
@@ -32,6 +33,23 @@ def _serialize_complex_columns(df: pd.DataFrame) -> pd.DataFrame:
                 else x
             )
     return df
+
+
+async def export_redis_run_to_csv(
+    config: RedisRunConfig,
+    output_file: str | Path,
+    *,
+    add_stage_results: bool = False,
+) -> Path:
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    df: pd.DataFrame = await fetch_evolution_dataframe(
+        config, add_stage_results=add_stage_results
+    )
+    df = _serialize_complex_columns(df)
+    df.to_csv(output_path, index=False)
+    return output_path
 
 
 async def main():

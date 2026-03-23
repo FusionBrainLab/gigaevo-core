@@ -646,3 +646,5 @@ bm25s_index/
 wiki17_abstracts.jsonl.gz
 task_bm25s_index
 check_openrouter_key.py
+experiments.txt
+AlgoTune-main/

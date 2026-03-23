@@ -1,0 +1,83 @@
+TASK DEFINITION - ADAPTED ALGOTUNE BATTERY_SCHEDULING
+
+This problem adapts the AlgoTune `battery_scheduling` task into gigaevo's
+standard problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of battery-scheduling
+problems.
+
+Each case optimizes the charging and discharging schedule of one battery over a
+multi-day hourly horizon to minimize electricity cost.
+
+With hourly price vector `p`, demand vector `u`, battery charge `q`, charge
+rate `c_in`, discharge rate `c_out`, and net charging `c = c_in - c_out`, the
+constraints are:
+- battery dynamics with efficiency losses
+- cyclic end-of-horizon state of charge
+- `0 <= q <= Q`
+- `0 <= c_in <= C`
+- `0 <= c_out <= D`
+- `u + c >= 0`
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: number of days in the horizon
+- `random_seed`: seed used to deterministically generate the schedule instance
+
+For each case:
+- set `T = 24 * max(1, n)`
+- generate hourly electricity prices and demands with the same daily patterns,
+  per-day perturbations, and Gaussian noise used in AlgoTune
+- use one battery with fixed parameters `Q = 25`, `C = 4`, `D = 4`,
+  `efficiency = 0.9`
+- set `deg_cost = 0` and `num_batteries = 1`
+
+OUTPUT
+Return a list of dictionaries, in the same order as `context["cases"]`.
+
+Each output dictionary must contain the same core fields used by AlgoTune:
+- `optimal`: boolean set to `True`
+- `battery_results`: a one-element list containing `q`, `c`, `c_in`, `c_out`,
+  and `cost`
+- `total_charging`: the net charging profile
+- `cost_without_battery`: baseline energy cost with no battery
+- `cost_with_battery`: optimized energy cost
+- `savings`: difference between the two costs
+
+The baseline also includes `status` and `savings_percent`, which are accepted.
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full fixed-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `exact_case_fraction`: diagnostic metric for how many cases were solved
+  exactly
+
+RULES
+- Keep the case order unchanged
+- Do not use randomness beyond the deterministic problem generation
+- Return only finite numeric values
+- The returned schedule must satisfy all battery, cyclic, and grid constraints
+  within numerical tolerance
+- Reported costs and savings must match the returned schedule
+- `cost_with_battery` must be optimal within validator tolerance
+- You may use NumPy and SciPy
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/battery_scheduling/battery_scheduling.py`

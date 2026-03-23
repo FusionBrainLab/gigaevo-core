@@ -1,0 +1,51 @@
+TASK DEFINITION - ADAPTED ALGOTUNE PDE_HEAT1D
+
+This problem adapts the AlgoTune `pde_heat1d` task into gigaevo's standard
+problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of one-dimensional
+heat-equation instances and returns the final interior temperature profile for
+each one.
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: spatial resolution scale factor
+- `random_seed`: seed used to deterministically generate the PDE parameters and
+  initial condition
+
+For each case, the generated problem contains:
+- `t0 = 0.0`
+- `t1 = 2.0`
+- `y0`: the interior temperature grid values
+- `params`: `alpha`, `dx`, `num_points`
+- zero Dirichlet boundary conditions are implied at both ends
+
+OUTPUT
+Return a list of one-dimensional numeric arrays/lists, in the same order as
+`context["cases"]`.
+
+Each output must equal the final state produced by the reference RK45
+method-of-lines solve of the generated heat equation.
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full 5-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `avg_relative_error`: diagnostic metric for exactness
+- `exact_case_fraction`: diagnostic metric for how many cases matched exactly
+
+RULES
+- Keep the case order unchanged
+- Return numeric finite arrays only
+- Do not use randomness
+- You may use NumPy and SciPy
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/pde_heat1d/pde_heat1d.py`

@@ -1,0 +1,68 @@
+TASK DEFINITION - ADAPTED ALGOTUNE MARKOWITZ
+
+This problem adapts the AlgoTune `markowitz` task into gigaevo's standard
+problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of long-only
+Markowitz portfolio optimization problems.
+
+Each case maximizes:
+`mu^T w - gamma * w^T sigma w`
+
+subject to:
+- `sum(w) = 1`
+- `w >= 0`
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: number of assets
+- `random_seed`: seed used to deterministically generate the portfolio instance
+
+For each case:
+- draw `mu` from a normal distribution, then scale and shift it as
+  `0.1 * z + 0.05`
+- draw `Z` from a normal distribution and scale it by `1 / sqrt(n)`
+- form `sigma = Z^T Z + 1e-4 * I`
+- set `gamma = 1.0`
+
+OUTPUT
+Return a list of dictionaries, in the same order as `context["cases"]`.
+
+Each output dictionary must contain:
+- `w`: a numeric vector with length `n`
+- `objective`: the optimal portfolio objective value at that solution
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full fixed-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `exact_case_fraction`: diagnostic metric for how many cases were solved
+  exactly
+
+RULES
+- Keep the case order unchanged
+- Do not use randomness beyond the deterministic problem generation
+- Return only finite numeric values
+- `w` must lie on the probability simplex within numerical tolerance
+- `objective` must match the returned portfolio
+- The returned objective must be optimal within validator tolerance
+- You may use NumPy and SciPy
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/markowitz/markowitz.py`
