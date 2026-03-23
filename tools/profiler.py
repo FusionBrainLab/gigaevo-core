@@ -820,6 +820,141 @@ def print_results(title: str, results: list[BenchmarkResult]) -> None:
     print()
 
 
+async def run_metrics_tracker_benchmarks(
+    iterations: int = 500,
+) -> list[BenchmarkResult]:
+    """Benchmark MetricsTracker frontier recomputation (no Redis needed)."""
+    from unittest.mock import MagicMock
+
+    from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
+    from gigaevo.utils.metrics_tracker import MetricsTracker
+
+    results: list[BenchmarkResult] = []
+
+    def _make_tracker(n: int) -> MetricsTracker:
+        mock_storage = MagicMock()
+        writer = MagicMock()
+        writer.bind.return_value = writer
+        ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="Fitness",
+                    is_primary=True,
+                    higher_is_better=True,
+                ),
+            }
+        )
+        tracker = MetricsTracker(
+            storage=mock_storage, metrics_context=ctx, writer=writer, interval=999.0
+        )
+        for i in range(n):
+            pid = f"prog_{i:06d}"
+            fitness = 0.5 + (i / n) * 0.5
+            tracker._valid_programs[pid] = (i, {"fitness": fitness})
+            tracker._best_valid["fitness"] = (fitness, i)
+            tracker._valid_count += 1
+        return tracker
+
+    for n in [500, 2000, 5000]:
+        tracker = _make_tracker(n)
+
+        async def recompute():
+            tracker._recompute_and_write_frontier("fitness")
+
+        result = await benchmark(
+            f"MetricsTracker: recompute frontier N={n}",
+            recompute,
+            iterations=iterations,
+        )
+        results.append(result)
+
+    return results
+
+
+async def run_strategy_benchmarks(
+    redis_url: str, iterations: int = 50
+) -> list[BenchmarkResult]:
+    """Benchmark MAP-Elites strategy operations."""
+    from gigaevo.evolution.strategies.island import IslandConfig
+    from gigaevo.evolution.strategies.models import (
+        BehaviorSpace,
+        LinearBinning,
+        RandomMigrantSelector,
+        ScalarTournamentEliteSelector,
+        SumArchiveSelector,
+    )
+    from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
+
+    results: list[BenchmarkResult] = []
+
+    config = RedisProgramStorageConfig(
+        redis_url=redis_url,
+        key_prefix=f"profiler_strategy_{uuid.uuid4().hex[:8]}",
+        read_only=False,
+    )
+    storage = RedisProgramStorage(config)
+    await storage._conn.get()
+
+    island_config = IslandConfig(
+        island_id="main",
+        behavior_space=BehaviorSpace(
+            bins={
+                "x": LinearBinning(
+                    min_val=0.0, max_val=10.0, num_bins=10, type="linear"
+                )
+            }
+        ),
+        archive_selector=SumArchiveSelector(fitness_keys=["fitness"]),
+        archive_remover=None,
+        elite_selector=ScalarTournamentEliteSelector(
+            fitness_key="fitness", fitness_key_higher_is_better=True, tournament_size=99
+        ),
+        migrant_selector=RandomMigrantSelector(),
+    )
+    strategy = MapElitesMultiIsland(
+        island_configs=[island_config], program_storage=storage
+    )
+    island = strategy.islands["main"]
+
+    try:
+        # Pre-populate with 500 programs
+        for i in range(500):
+            p = Program(
+                code=f"def run_code(): return {i}",
+                metrics={"fitness": float(i), "x": float(i % 10)},
+            )
+            await storage.add(p)
+            await island.add(p)
+
+        # select_elites
+        async def select():
+            await strategy.select_elites(total=3)
+
+        result = await benchmark("Strategy: select_elites(3) N=500", select, iterations)
+        results.append(result)
+
+        # reindex_archive
+        async def reindex():
+            await island.reindex_archive()
+
+        result = await benchmark(
+            "Strategy: reindex_archive N=500", reindex, iterations // 5
+        )
+        results.append(result)
+
+    finally:
+
+        async def cleanup(r):
+            keys = [k async for k in r.scan_iter(f"{config.key_prefix}:*")]
+            if keys:
+                await r.delete(*keys)
+
+        await storage._conn.execute("cleanup", cleanup)
+        await storage.close()
+
+    return results
+
+
 async def main(redis_url: str, skip_redis: bool = False) -> None:
     """Run all benchmarks."""
     print("\n" + "=" * 100)
@@ -835,6 +970,11 @@ async def main(redis_url: str, skip_redis: bool = False) -> None:
     print("\nRunning Python executor benchmarks (minimal code 1+1)...")
     executor_results = await run_python_executor_benchmarks(iterations=50)
     print_results("Python Executor Benchmarks", executor_results)
+
+    # MetricsTracker benchmarks (no Redis needed)
+    print("\nRunning MetricsTracker benchmarks...")
+    mt_results = await run_metrics_tracker_benchmarks(iterations=500)
+    print_results("MetricsTracker Benchmarks", mt_results)
 
     if not skip_redis:
         # Redis benchmarks
@@ -863,6 +1003,11 @@ async def main(redis_url: str, skip_redis: bool = False) -> None:
             print("\nRunning DAG benchmarks...")
             dag_results = await run_dag_benchmarks(redis_url, iterations=20)
             print_results("DAG Benchmarks", dag_results)
+
+            # Strategy benchmarks
+            print("\nRunning strategy benchmarks...")
+            strategy_results = await run_strategy_benchmarks(redis_url, iterations=50)
+            print_results("Strategy Benchmarks", strategy_results)
 
             # Throughput simulation
             print("\nRunning throughput simulation (5 seconds)...")
@@ -897,6 +1042,8 @@ async def main(redis_url: str, skip_redis: bool = False) -> None:
     print("  - Concurrent operations: check for lock contention")
     print("  - DAG run time: dominated by stage execution + Redis state updates")
     print("  - Throughput simulation: realistic mixed workload performance")
+    print("  - MetricsTracker frontier recompute: scales with archive size")
+    print("  - Strategy select/reindex: per-generation overhead")
     print()
 
 

@@ -336,3 +336,36 @@ class BenchmarkTimer:
 
     def __exit__(self, *args):
         self.elapsed_ms = (time.perf_counter() - self._start) * 1000
+
+
+# ---------------------------------------------------------------------------
+# Realistic code generator
+# ---------------------------------------------------------------------------
+
+# Reusable code snippets that compose into valid Python of varying sizes.
+_CODE_BLOCKS = [
+    "def helper_{i}(data):\n    return [x * {i} + 1 for x in data if x > 0]\n\n",
+    "def transform_{i}(items):\n    result = {{}}\n    for idx, val in enumerate(items):\n        if val is not None:\n            result[f'k_{{idx}}'] = val ** 2\n    return result\n\n",
+    "class Handler_{i}:\n    def __init__(self, threshold={i}):\n        self.threshold = threshold\n        self._cache = {{}}\n\n    def process(self, values):\n        out = []\n        for v in values:\n            if v > self.threshold:\n                out.append(v - self.threshold)\n            else:\n                out.append(0)\n        self._cache[len(out)] = out\n        return out\n\n",
+    "def analyze_{i}(matrix):\n    rows = len(matrix)\n    if rows == 0:\n        return []\n    cols = len(matrix[0])\n    totals = [0.0] * cols\n    for r in range(rows):\n        for c in range(cols):\n            totals[c] += matrix[r][c]\n    return [t / rows for t in totals]\n\n",
+    "def search_{i}(haystack, needle):\n    lo, hi = 0, len(haystack) - 1\n    while lo <= hi:\n        mid = (lo + hi) // 2\n        if haystack[mid] == needle:\n            return mid\n        elif haystack[mid] < needle:\n            lo = mid + 1\n        else:\n            hi = mid - 1\n    return -1\n\n",
+]
+
+
+def make_realistic_code(target_bytes: int) -> str:
+    """Generate valid Python code of approximately *target_bytes* size.
+
+    Uses composable function/class blocks that look like real evolved code
+    rather than random strings. The result always parses as valid Python.
+    Stops adding blocks once *target_bytes* is reached (never truncates mid-block).
+    """
+    header = "def run_code():\n    return 42\n\n"
+    parts = [header]
+    current_size = len(header)
+    idx = 0
+    while current_size < target_bytes:
+        block = _CODE_BLOCKS[idx % len(_CODE_BLOCKS)].format(i=idx)
+        parts.append(block)
+        current_size += len(block)
+        idx += 1
+    return "".join(parts)
