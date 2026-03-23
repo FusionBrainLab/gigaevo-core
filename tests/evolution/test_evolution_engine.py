@@ -58,12 +58,13 @@ class TestRefreshArchivePrograms:
 
         engine.strategy.get_program_ids.return_value = [done_prog.id, queued_prog.id]
         engine.storage.mget.return_value = [done_prog, queued_prog]
+        engine.storage.batch_transition_state.return_value = 1
 
         count = await engine._refresh_archive_programs()
 
         assert count == 1
-        engine.state.set_program_state.assert_called_once_with(
-            done_prog, ProgramState.QUEUED
+        engine.storage.batch_transition_state.assert_called_once_with(
+            [done_prog], ProgramState.DONE.value, ProgramState.QUEUED.value
         )
 
     async def test_all_done_programs_are_transitioned(self) -> None:
@@ -72,11 +73,14 @@ class TestRefreshArchivePrograms:
         progs = [_prog(ProgramState.DONE) for _ in range(3)]
         engine.strategy.get_program_ids.return_value = [p.id for p in progs]
         engine.storage.mget.return_value = progs
+        engine.storage.batch_transition_state.return_value = 3
 
         count = await engine._refresh_archive_programs()
 
         assert count == 3
-        assert engine.state.set_program_state.call_count == 3
+        engine.storage.batch_transition_state.assert_called_once_with(
+            progs, ProgramState.DONE.value, ProgramState.QUEUED.value
+        )
 
     async def test_empty_archive_returns_zero(self) -> None:
         """No archive programs → no transitions, returns 0."""
@@ -86,7 +90,7 @@ class TestRefreshArchivePrograms:
         count = await engine._refresh_archive_programs()
 
         assert count == 0
-        engine.state.set_program_state.assert_not_called()
+        engine.storage.batch_transition_state.assert_not_called()
 
     async def test_no_done_programs_returns_zero(self) -> None:
         """Archive has programs but none are DONE → returns 0, no transitions."""
@@ -98,7 +102,7 @@ class TestRefreshArchivePrograms:
         count = await engine._refresh_archive_programs()
 
         assert count == 0
-        engine.state.set_program_state.assert_not_called()
+        engine.storage.batch_transition_state.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +115,7 @@ class TestIngestCompletedPrograms:
         """Programs already in the archive are skipped — strategy.add not called."""
         engine = _make_engine()
         archive_prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [archive_prog]
+        engine.storage.get_ids_by_status.return_value = [archive_prog.id]
         engine.strategy.get_program_ids.return_value = [archive_prog.id]
 
         await engine._ingest_completed_programs()
@@ -127,7 +131,8 @@ class TestIngestCompletedPrograms:
         engine.strategy.add.return_value = True
 
         new_prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [new_prog]
+        engine.storage.get_ids_by_status.return_value = [new_prog.id]
+        engine.storage.mget.return_value = [new_prog]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -142,7 +147,8 @@ class TestIngestCompletedPrograms:
         engine.config.program_acceptor.is_accepted.return_value = False
 
         rej_prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [rej_prog]
+        engine.storage.get_ids_by_status.return_value = [rej_prog.id]
+        engine.storage.mget.return_value = [rej_prog]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -160,7 +166,8 @@ class TestIngestCompletedPrograms:
         engine.strategy.add.return_value = False
 
         rej_prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [rej_prog]
+        engine.storage.get_ids_by_status.return_value = [rej_prog.id]
+        engine.storage.mget.return_value = [rej_prog]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -172,7 +179,7 @@ class TestIngestCompletedPrograms:
     async def test_empty_done_set_returns_early(self) -> None:
         """No DONE programs → strategy.get_program_ids never called."""
         engine = _make_engine()
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.get_ids_by_status.return_value = []
 
         await engine._ingest_completed_programs()
 
@@ -188,7 +195,8 @@ class TestIngestCompletedPrograms:
         archive_prog = _prog(ProgramState.DONE)
         new_prog = _prog(ProgramState.DONE)
 
-        engine.storage.get_all_by_status.return_value = [archive_prog, new_prog]
+        engine.storage.get_ids_by_status.return_value = [archive_prog.id, new_prog.id]
+        engine.storage.mget.return_value = [new_prog]
         engine.strategy.get_program_ids.return_value = [archive_prog.id]
 
         await engine._ingest_completed_programs()
@@ -209,7 +217,8 @@ class TestIngestCompletedPrograms:
         engine.strategy.add.side_effect = RuntimeError("archive full")
 
         prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [prog]
+        engine.storage.get_ids_by_status.return_value = [prog.id]
+        engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
 
         # Must NOT raise — per-item exception handler catches it and discards the program
@@ -227,7 +236,8 @@ class TestIngestCompletedPrograms:
         engine.config.program_acceptor.is_accepted.return_value = False
 
         prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [prog]
+        engine.storage.get_ids_by_status.return_value = [prog.id]
+        engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
         # Make the discard state transition fail
         engine.state.set_program_state.side_effect = RuntimeError("Redis timeout")
@@ -248,7 +258,8 @@ class TestIngestCompletedPrograms:
         engine.strategy.add.return_value = True
 
         prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [prog]
+        engine.storage.get_ids_by_status.return_value = [prog.id]
+        engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -267,7 +278,8 @@ class TestIngestCompletedPrograms:
         engine.strategy.add.return_value = False
 
         prog = _prog(ProgramState.DONE)
-        engine.storage.get_all_by_status.return_value = [prog]
+        engine.storage.get_ids_by_status.return_value = [prog.id]
+        engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -286,54 +298,47 @@ class TestAwaitIdle:
     async def test_returns_immediately_when_idle(self) -> None:
         """_await_idle returns at once when no QUEUED or RUNNING programs."""
         engine = _make_engine()
-        # get_all_by_status filters ghost IDs; return empty lists → idle
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.count_by_status.return_value = 0
 
         await engine._await_idle()
 
         # Two calls per poll: once for QUEUED, once for RUNNING (via asyncio.gather)
-        assert engine.storage.get_all_by_status.call_count == 2
+        assert engine.storage.count_by_status.call_count == 2
 
     async def test_blocks_then_returns_when_counts_drop(self) -> None:
         """_await_idle blocks while programs are active, returns once counts drop to zero."""
         engine = _make_engine()
         engine.config.loop_interval = 0.01  # fast for tests
 
-        fake_prog = _prog(ProgramState.QUEUED)
-        # First gather: [queued=[prog], running=[]] → active
-        # Second gather: [queued=[], running=[]] → idle
-        engine.storage.get_all_by_status.side_effect = [
-            [fake_prog],
-            [],  # first poll: QUEUED=[prog], RUNNING=[]
-            [],
-            [],  # second poll: QUEUED=[], RUNNING=[]
+        # First gather: [queued=3, running=0] → active
+        # Second gather: [queued=0, running=0] → idle
+        engine.storage.count_by_status.side_effect = [
+            3,
+            0,  # first poll: QUEUED=3, RUNNING=0
+            0,
+            0,  # second poll: QUEUED=0, RUNNING=0
         ]
 
         await engine._await_idle()
 
         # Must have polled at least twice (2 calls per poll × 2 polls = 4 calls)
-        assert engine.storage.get_all_by_status.call_count >= 4
+        assert engine.storage.count_by_status.call_count >= 4
 
     async def test_has_active_dags_true_when_queued(self) -> None:
         engine = _make_engine()
-        fake_prog = _prog(ProgramState.QUEUED)
-        engine.storage.get_all_by_status.side_effect = [
-            [fake_prog, fake_prog, fake_prog],
-            [],
-        ]
+        engine.storage.count_by_status.side_effect = [3, 0]
 
         assert await engine._has_active_dags() is True
 
     async def test_has_active_dags_true_when_running(self) -> None:
         engine = _make_engine()
-        fake_prog = _prog(ProgramState.RUNNING)
-        engine.storage.get_all_by_status.side_effect = [[], [fake_prog, fake_prog]]
+        engine.storage.count_by_status.side_effect = [0, 2]
 
         assert await engine._has_active_dags() is True
 
     async def test_has_active_dags_false_when_all_zero(self) -> None:
         engine = _make_engine()
-        engine.storage.get_all_by_status.side_effect = [[], []]
+        engine.storage.count_by_status.side_effect = [0, 0]
 
         assert await engine._has_active_dags() is False
 
@@ -399,7 +404,7 @@ class TestCreateMutants:
             # because step() checks: `if elites else 0`
             engine.strategy.select_elites.return_value = []
             engine.storage.count_by_status.return_value = 0
-            engine.storage.get_all_by_status.return_value = []
+            engine.storage.get_ids_by_status.return_value = []
             engine.strategy.get_program_ids.return_value = []
 
             await engine.step()
@@ -428,16 +433,11 @@ class TestStep:
         engine.strategy.add.return_value = True
         new_prog = _prog(ProgramState.DONE)
 
-        # _await_idle (Phase 1,3,6) calls get_all_by_status(QUEUED) + get_all_by_status(RUNNING)
-        # → must return [] so _await_idle exits immediately.
-        # _ingest_completed_programs (Phase 4) calls get_all_by_status(DONE) → [new_prog].
-        # Use a side_effect function that dispatches by status value.
-        def _by_status(status: str):
-            if status == ProgramState.DONE.value:
-                return [new_prog]
-            return []  # QUEUED and RUNNING → idle
-
-        engine.storage.get_all_by_status.side_effect = _by_status
+        # _await_idle uses count_by_status (returns 0 → idle immediately)
+        engine.storage.count_by_status.return_value = 0
+        # _ingest_completed_programs uses get_ids_by_status + mget
+        engine.storage.get_ids_by_status.return_value = [new_prog.id]
+        engine.storage.mget.return_value = [new_prog]
 
         # Phase 5: refresh → archive has the added program
         engine.strategy.get_program_ids.side_effect = [
@@ -445,7 +445,7 @@ class TestStep:
             [new_prog.id],  # Phase 5: now in archive
             [new_prog.id],  # generation summary log
         ]
-        engine.storage.mget.return_value = [new_prog]
+        engine.storage.batch_transition_state.return_value = 1
 
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
@@ -463,7 +463,7 @@ class TestStep:
         engine = _make_engine()
         engine.storage.count_by_status.return_value = 0
         engine.strategy.select_elites.return_value = []
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.get_ids_by_status.return_value = []
         engine.strategy.get_program_ids.return_value = []
 
         with patch(
@@ -489,14 +489,11 @@ class TestStep:
         engine.config.program_acceptor.is_accepted.side_effect = [False, True]
         engine.strategy.add.return_value = True
 
-        # _await_idle calls get_all_by_status(QUEUED/RUNNING) → must return [] to stay non-blocking.
-        # _ingest calls get_all_by_status(DONE) → returns the two test programs.
-        def _by_status(status: str):
-            if status == ProgramState.DONE.value:
-                return [bad_prog, good_prog]
-            return []
-
-        engine.storage.get_all_by_status.side_effect = _by_status
+        # _await_idle uses count_by_status (returns 0 → idle immediately)
+        engine.storage.count_by_status.return_value = 0
+        # _ingest uses get_ids_by_status + mget
+        engine.storage.get_ids_by_status.return_value = [bad_prog.id, good_prog.id]
+        engine.storage.mget.return_value = [bad_prog, good_prog]
         # Neither in archive
         engine.strategy.get_program_ids.side_effect = [[], [], []]
 
@@ -527,7 +524,7 @@ class TestRunLoop:
         # Make step() a fast no-op
         engine.storage.count_by_status.return_value = 0
         engine.strategy.select_elites.return_value = []
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.get_ids_by_status.return_value = []
         engine.strategy.get_program_ids.return_value = []
 
         with patch(
@@ -548,7 +545,7 @@ class TestRunLoop:
 
         engine.storage.count_by_status.return_value = 0
         engine.strategy.select_elites.return_value = []
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.get_ids_by_status.return_value = []
         engine.strategy.get_program_ids.return_value = []
 
         call_count = 0
@@ -638,7 +635,7 @@ class TestRunLoop:
 
         engine.storage.count_by_status.return_value = 0
         engine.strategy.select_elites.return_value = []
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.get_ids_by_status.return_value = []
         engine.strategy.get_program_ids.return_value = []
 
         with patch(

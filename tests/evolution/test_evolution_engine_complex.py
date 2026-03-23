@@ -7,7 +7,6 @@ Covers:
 - _refresh_archive_programs with gather exception handling
 - run() with generation_timeout triggering TimeoutError mid-step
 - step() with pre_step_hook that raises
-- _has_active_dags ghost filtering (uses get_all_by_status not count_by_status)
 - _has_active_dags log throttling (only logs when counts change)
 """
 
@@ -67,7 +66,8 @@ class TestPreStepHook:
             hook_calls.append("called")
 
         engine = _engine(pre_step_hook=hook)
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.count_by_status.return_value = 0
+        engine.storage.get_ids_by_status.return_value = []
         engine.strategy.select_elites.return_value = []
         engine.strategy.get_program_ids.return_value = []
 
@@ -117,7 +117,8 @@ class TestPreStepHook:
     async def test_no_hook_no_error(self):
         """When pre_step_hook is None, step() works normally."""
         engine = _engine()
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.count_by_status.return_value = 0
+        engine.storage.get_ids_by_status.return_value = []
         engine.strategy.select_elites.return_value = []
         engine.strategy.get_program_ids.return_value = []
 
@@ -193,7 +194,8 @@ class TestIngestMultiProgramIsolation:
             True,
         ]
 
-        engine.storage.get_all_by_status.return_value = [prog_bad, prog_good]
+        engine.storage.get_ids_by_status.return_value = [prog_bad.id, prog_good.id]
+        engine.storage.mget.return_value = [prog_bad, prog_good]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -216,7 +218,8 @@ class TestIngestMultiProgramIsolation:
         engine.strategy.add.side_effect = RuntimeError("always fails")
 
         progs = [_prog() for _ in range(3)]
-        engine.storage.get_all_by_status.return_value = progs
+        engine.storage.get_ids_by_status.return_value = [p.id for p in progs]
+        engine.storage.mget.return_value = progs
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -239,7 +242,8 @@ class TestIngestMutationOutcomeCallbacks:
         engine.config.program_acceptor.is_accepted.return_value = False
 
         prog = _prog()
-        engine.storage.get_all_by_status.return_value = [prog]
+        engine.storage.get_ids_by_status.return_value = [prog.id]
+        engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -255,7 +259,8 @@ class TestIngestMutationOutcomeCallbacks:
         engine.strategy.add.return_value = True
 
         prog = _prog()
-        engine.storage.get_all_by_status.return_value = [prog]
+        engine.storage.get_ids_by_status.return_value = [prog.id]
+        engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -271,7 +276,8 @@ class TestIngestMutationOutcomeCallbacks:
         engine.strategy.add.return_value = False
 
         prog = _prog()
-        engine.storage.get_all_by_status.return_value = [prog]
+        engine.storage.get_ids_by_status.return_value = [prog.id]
+        engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
 
         await engine._ingest_completed_programs()
@@ -292,16 +298,15 @@ class TestHasActiveDagsLogThrottle:
     async def test_repeated_same_counts_dont_update_cached(self):
         """When counts are the same twice, _last_pending_dags_counts stays."""
         engine = _engine()
-        fake = _prog(ProgramState.QUEUED)
 
-        # First call: QUEUED has 1 program
-        engine.storage.get_all_by_status.side_effect = [[fake], []]
+        # First call: QUEUED=1, RUNNING=0
+        engine.storage.count_by_status.side_effect = [1, 0]
         result1 = await engine._has_active_dags()
         assert result1 is True
         assert engine._last_pending_dags_counts == (1, 0)
 
         # Second call: same counts
-        engine.storage.get_all_by_status.side_effect = [[fake], []]
+        engine.storage.count_by_status.side_effect = [1, 0]
         result2 = await engine._has_active_dags()
         assert result2 is True
         assert engine._last_pending_dags_counts == (1, 0)
@@ -309,14 +314,12 @@ class TestHasActiveDagsLogThrottle:
     async def test_counts_change_updates_cached(self):
         """When counts change, cached value is updated."""
         engine = _engine()
-        fake1 = _prog(ProgramState.QUEUED)
-        fake2 = _prog(ProgramState.RUNNING)
 
-        engine.storage.get_all_by_status.side_effect = [[fake1], []]
+        engine.storage.count_by_status.side_effect = [1, 0]
         await engine._has_active_dags()
         assert engine._last_pending_dags_counts == (1, 0)
 
-        engine.storage.get_all_by_status.side_effect = [[], [fake2]]
+        engine.storage.count_by_status.side_effect = [0, 1]
         await engine._has_active_dags()
         assert engine._last_pending_dags_counts == (0, 1)
 
@@ -325,7 +328,7 @@ class TestHasActiveDagsLogThrottle:
         engine = _engine()
         engine._last_pending_dags_counts = (2, 3)
 
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.count_by_status.side_effect = [0, 0]
         result = await engine._has_active_dags()
         assert result is False
         assert engine._last_pending_dags_counts is None
@@ -336,31 +339,23 @@ class TestHasActiveDagsLogThrottle:
 # ===================================================================
 
 
-class TestRefreshGatherExceptionHandling:
-    """core.py L356-357: gather with return_exceptions=True for refresh transitions."""
+class TestRefreshBatchTransition:
+    """_refresh_archive_programs uses batch_transition_state for all DONE programs."""
 
-    async def test_refresh_state_failure_doesnt_crash(self):
-        """If one program's state transition fails, others still complete."""
+    async def test_refresh_batch_called_with_done_programs(self):
+        """batch_transition_state is called with only DONE programs."""
         engine = _engine()
 
         progs = [_prog(ProgramState.DONE) for _ in range(3)]
         engine.strategy.get_program_ids.return_value = [p.id for p in progs]
         engine.storage.mget.return_value = progs
-
-        # Make the second state transition fail
-        call_count = 0
-
-        async def flaky_set_state(prog, state):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise RuntimeError("Redis timeout")
-
-        engine.state.set_program_state = flaky_set_state
+        engine.storage.batch_transition_state.return_value = 3
 
         count = await engine._refresh_archive_programs()
-        assert count == 3  # All were submitted
-        assert call_count == 3  # All attempted (gather doesn't short-circuit)
+        assert count == 3
+        engine.storage.batch_transition_state.assert_called_once_with(
+            progs, ProgramState.DONE.value, ProgramState.QUEUED.value
+        )
 
     async def test_refresh_only_done_not_queued(self):
         """Only DONE programs get refreshed, not QUEUED ones."""
@@ -371,13 +366,29 @@ class TestRefreshGatherExceptionHandling:
 
         engine.strategy.get_program_ids.return_value = [done_prog.id, queued_prog.id]
         engine.storage.mget.return_value = [done_prog, queued_prog]
+        engine.storage.batch_transition_state.return_value = 1
 
         count = await engine._refresh_archive_programs()
 
         assert count == 1  # Only DONE program
-        engine.state.set_program_state.assert_called_once_with(
-            done_prog, ProgramState.QUEUED
+        engine.storage.batch_transition_state.assert_called_once_with(
+            [done_prog], ProgramState.DONE.value, ProgramState.QUEUED.value
         )
+
+    async def test_refresh_handles_batch_transition_error(self):
+        """_refresh_archive_programs doesn't crash when batch_transition_state raises."""
+        engine = _engine()
+
+        progs = [_prog(ProgramState.DONE) for _ in range(3)]
+        engine.strategy.get_program_ids.return_value = [p.id for p in progs]
+        engine.storage.mget.return_value = progs
+        engine.storage.batch_transition_state.side_effect = RuntimeError(
+            "Redis timeout"
+        )
+
+        # Should not raise — returns 0 gracefully
+        count = await engine._refresh_archive_programs()
+        assert count == 0
 
 
 # ===================================================================
@@ -420,7 +431,8 @@ class TestStepGenerationPersistence:
 
     async def test_generation_counter_saved_after_step(self):
         engine = _engine()
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.count_by_status.return_value = 0
+        engine.storage.get_ids_by_status.return_value = []
         engine.strategy.select_elites.return_value = []
         engine.strategy.get_program_ids.return_value = []
 
@@ -437,7 +449,8 @@ class TestStepGenerationPersistence:
 
     async def test_generation_counter_increments_each_step(self):
         engine = _engine()
-        engine.storage.get_all_by_status.return_value = []
+        engine.storage.count_by_status.return_value = 0
+        engine.storage.get_ids_by_status.return_value = []
         engine.strategy.select_elites.return_value = []
         engine.strategy.get_program_ids.return_value = []
 
@@ -475,8 +488,15 @@ class TestIngestMixedBatch:
         rej_acceptor_prog = _prog()
         rej_strategy_prog = _prog()
 
-        engine.storage.get_all_by_status.return_value = [
-            archive_prog,
+        all_ids = [
+            archive_prog.id,
+            accepted_prog.id,
+            rej_acceptor_prog.id,
+            rej_strategy_prog.id,
+        ]
+        engine.storage.get_ids_by_status.return_value = all_ids
+        # mget only returns non-archive programs (archive filtered out by ID)
+        engine.storage.mget.return_value = [
             accepted_prog,
             rej_acceptor_prog,
             rej_strategy_prog,

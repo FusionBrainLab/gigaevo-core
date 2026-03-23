@@ -313,7 +313,12 @@ class EvolutionEngine:
     async def _await_idle(self) -> None:
         """Block until there are no programs in QUEUED or RUNNING."""
         t0 = time.monotonic()
-        while await self._has_active_dags():
+        ghost_checked = False
+        while True:
+            has_active = await self._has_active_dags()
+            if not has_active:
+                break
+
             elapsed = time.monotonic() - t0
             if elapsed > 30 and int(elapsed) % 60 < self.config.loop_interval:
                 logger.info(
@@ -321,6 +326,39 @@ class EvolutionEngine:
                     self.metrics.total_generations,
                     elapsed,
                 )
+            # Ghost safety: after 30s, verify counts with full fetch (once)
+            if elapsed > 30 and not ghost_checked:
+                ghost_checked = True
+                real_q = len(
+                    await self.storage.get_all_by_status(ProgramState.QUEUED.value)
+                )
+                real_r = len(
+                    await self.storage.get_all_by_status(ProgramState.RUNNING.value)
+                )
+                if real_q == 0 and real_r == 0:
+                    # Clean up ghost IDs from status sets
+                    queued_ids = await self.storage.get_ids_by_status(
+                        ProgramState.QUEUED.value
+                    )
+                    running_ids = await self.storage.get_ids_by_status(
+                        ProgramState.RUNNING.value
+                    )
+                    if queued_ids:
+                        await self.storage.remove_ids_from_status_set(
+                            ProgramState.QUEUED.value, queued_ids
+                        )
+                    if running_ids:
+                        await self.storage.remove_ids_from_status_set(
+                            ProgramState.RUNNING.value, running_ids
+                        )
+                    ghost_count = len(queued_ids) + len(running_ids)
+                    logger.warning(
+                        "[EvolutionEngine] Ghost IDs detected — SCARD says active "
+                        "but no real programs found. Cleaned {} ghost ID(s) from "
+                        "status sets. Breaking idle wait.",
+                        ghost_count,
+                    )
+                    break
             await asyncio.sleep(self.config.loop_interval)
 
     async def _select_elites_for_mutation(self) -> list[Program]:
@@ -359,18 +397,40 @@ class EvolutionEngine:
         Programs already in the archive stay DONE (they arrived from a refresh DAG).
         New programs are added if accepted, otherwise discarded.
         """
-        completed = await self.storage.get_all_by_status(ProgramState.DONE.value)
-        if not completed:
+        # Fetch only IDs first (SMEMBERS — no deserialization), then filter
+        # out archive programs before doing the expensive mget+deserialize.
+        done_ids = await self.storage.get_ids_by_status(ProgramState.DONE.value)
+        if not done_ids:
             logger.debug(
                 "[EvolutionEngine] gen={} No completed programs to ingest",
                 self.metrics.total_generations,
             )
             return
 
+        archive_program_ids = set(await self.strategy.get_program_ids())
+        new_ids = [pid for pid in done_ids if pid not in archive_program_ids]
+
+        if not new_ids:
+            logger.debug(
+                "[EvolutionEngine] gen={} {} DONE programs all in archive, skipping",
+                self.metrics.total_generations,
+                len(done_ids),
+            )
+            return
+
+        # Only deserialize the new (non-archive) programs
+        completed = await self.storage.mget(new_ids)
+        # Filter to actual DONE state (mget may return stale status)
+        completed = [p for p in completed if p.state == ProgramState.DONE]
+
+        if not completed:
+            return
+
         logger.info(
-            "[EvolutionEngine] gen={} Ingest {} program(s)",
+            "[EvolutionEngine] gen={} Ingest {} program(s) ({} in archive skipped)",
             self.metrics.total_generations,
             len(completed),
+            len(done_ids) - len(new_ids),
         )
         logger.debug(
             "[EvolutionEngine] Program IDs: {}",
@@ -383,14 +443,10 @@ class EvolutionEngine:
         rej_strategy = 0
 
         state_tasks: list[asyncio.Task] = []
-        archive_program_ids = set(await self.strategy.get_program_ids())
 
         for prog in completed:
             try:
-                if prog.id in archive_program_ids:
-                    # already in archive (arrived from a refresh DAG) — stays DONE
-                    continue
-                elif not self.config.program_acceptor.is_accepted(prog):
+                if not self.config.program_acceptor.is_accepted(prog):
                     # rejected by basic checks
                     rej_valid += 1
                     logger.info(
@@ -460,18 +516,25 @@ class EvolutionEngine:
             return 0
 
         programs_to_refresh = await self.storage.mget(program_ids_to_refresh)
+        done_programs = [p for p in programs_to_refresh if p.state == ProgramState.DONE]
 
-        tasks: list[asyncio.Task] = []
-        for program in programs_to_refresh:
-            if program.state == ProgramState.DONE:
-                tasks.append(
-                    asyncio.create_task(self._set_state(program, ProgramState.QUEUED))
-                )
+        if not done_programs:
+            return 0
 
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            count = await self.storage.batch_transition_state(
+                done_programs,
+                ProgramState.DONE.value,
+                ProgramState.QUEUED.value,
+            )
+        except Exception as e:
+            logger.error(
+                "[EvolutionEngine] gen={} batch_transition_state failed: {}",
+                self.metrics.total_generations,
+                e,
+            )
+            return 0
 
-        count = len(tasks)
         if count:
             logger.info(
                 "[EvolutionEngine] gen={} Submitted {} program(s) for refresh",
@@ -484,16 +547,14 @@ class EvolutionEngine:
     async def _has_active_dags(self) -> bool:
         """True if any programs are QUEUED or RUNNING (i.e., engine not idle).
 
-        Uses get_all_by_status (SMEMBERS + MGET) rather than count_by_status
-        (raw SCARD) so that ghost IDs — set members with no backing program
-        data — are filtered out and cannot permanently stall _await_idle().
+        Uses count_by_status (SCARD, O(1)) for the fast path.  Falls back to
+        the expensive get_all_by_status after 30s of continuous waiting to
+        detect ghost IDs that would otherwise stall _await_idle forever.
         """
-        queued_progs, running_progs = await asyncio.gather(
-            self.storage.get_all_by_status(ProgramState.QUEUED.value),
-            self.storage.get_all_by_status(ProgramState.RUNNING.value),
+        queued, running = await asyncio.gather(
+            self.storage.count_by_status(ProgramState.QUEUED.value),
+            self.storage.count_by_status(ProgramState.RUNNING.value),
         )
-        queued = len(queued_progs)
-        running = len(running_progs)
 
         if queued or running:
             current_counts = (queued, running)

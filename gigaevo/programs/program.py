@@ -15,6 +15,28 @@ from gigaevo.programs.program_state import (
 )
 from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
 
+try:
+    import orjson as _orjson
+
+    def _metadata_is_json_native(value: dict[str, Any]) -> bool:
+        """Fast check: can orjson serialize this dict without pickle?"""
+        try:
+            _orjson.dumps(value)
+            return True
+        except (TypeError, ValueError):
+            return False
+
+except ModuleNotFoundError:
+    import json as _json_fallback
+
+    def _metadata_is_json_native(value: dict[str, Any]) -> bool:
+        try:
+            _json_fallback.dumps(value)
+            return True
+        except (TypeError, ValueError):
+            return False
+
+
 if TYPE_CHECKING:
     from gigaevo.evolution.mutation.base import MutationSpec
 
@@ -128,7 +150,12 @@ class Program(BaseModel):
         return s
 
     @field_serializer("metadata", when_used="json")
-    def _serialize_metadata(self, value: dict[str, Any]) -> str:
+    def _serialize_metadata(self, value: dict[str, Any]) -> str | dict[str, Any]:
+        # Fast path: return dict directly for JSON-native metadata (avoids
+        # cloudpickle+base64 round-trip: ~0.06ms serialize + ~0.17ms deserialize).
+        # Falls back to pickle+b64 string for non-JSON-serializable values.
+        if _metadata_is_json_native(value):
+            return value
         return pickle_b64_serialize(value)
 
     def to_dict(self) -> dict[str, Any]:

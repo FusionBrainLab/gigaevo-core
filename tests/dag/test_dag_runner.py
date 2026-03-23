@@ -200,6 +200,8 @@ def _make_mock_storage():
     storage.publish_status_event = AsyncMock()
     storage.transition_status = AsyncMock()
     storage.atomic_state_transition = AsyncMock()
+    storage.fast_state_transition = AsyncMock()
+    storage.batch_transition_state = AsyncMock(return_value=0)
     return storage
 
 
@@ -336,9 +338,9 @@ class TestDagRunnerLaunch:
 
         assert runner._metrics.orphaned_programs_discarded == 1
         assert runner._metrics.dag_errors == 1
-        # atomic_state_transition should have been called to discard with DISCARDED state
-        storage.atomic_state_transition.assert_called()
-        call_args = storage.atomic_state_transition.call_args
+        # fast_state_transition should have been called to discard with DISCARDED state
+        storage.fast_state_transition.assert_called()
+        call_args = storage.fast_state_transition.call_args
         assert call_args[0][2] == ProgramState.DISCARDED.value
 
     async def test_mark_running_failure_cancels_task_and_removes_from_active(self):
@@ -351,6 +353,9 @@ class TestDagRunnerLaunch:
         storage.mget = AsyncMock(return_value=[prog])
         # Make the RUNNING state transition fail
         storage.atomic_state_transition = AsyncMock(
+            side_effect=RuntimeError("Redis timeout")
+        )
+        storage.fast_state_transition = AsyncMock(
             side_effect=RuntimeError("Redis timeout")
         )
 
@@ -464,8 +469,8 @@ class TestDagRunnerMaintain:
         assert runner._metrics.dag_timeouts == 1
         assert runner._metrics.dag_errors == 1
         # Verify DISCARDED state was set on the program
-        storage.atomic_state_transition.assert_called()
-        call_args = storage.atomic_state_transition.call_args
+        storage.fast_state_transition.assert_called()
+        call_args = storage.fast_state_transition.call_args
         assert call_args[0][2] == ProgramState.DISCARDED.value
 
     async def test_unharvested_done_tasks_block_capacity(self):
@@ -574,8 +579,8 @@ class TestDagRunnerExecuteDag:
         # set_program_state should be called with DONE
         # It's called via _state_manager which wraps storage
         # Check that atomic_state_transition was called
-        storage.atomic_state_transition.assert_called()
-        call_args = storage.atomic_state_transition.call_args
+        storage.fast_state_transition.assert_called()
+        call_args = storage.fast_state_transition.call_args
         assert call_args[0][2] == ProgramState.DONE.value
 
     async def test_failure_sets_discarded(self):
@@ -589,8 +594,8 @@ class TestDagRunnerExecuteDag:
         await runner._execute_dag(mock_dag, prog)
 
         mock_dag.run.assert_awaited_once_with(prog)
-        storage.atomic_state_transition.assert_called()
-        call_args = storage.atomic_state_transition.call_args
+        storage.fast_state_transition.assert_called()
+        call_args = storage.fast_state_transition.call_args
         assert call_args[0][2] == ProgramState.DISCARDED.value
 
     async def test_execute_dag_cleanup_after_crash(self):
@@ -630,6 +635,9 @@ class TestDagRunnerExecuteDag:
         storage = _make_mock_storage()
         # Make the state transition fail after DAG run
         storage.atomic_state_transition = AsyncMock(
+            side_effect=RuntimeError("Redis down")
+        )
+        storage.fast_state_transition = AsyncMock(
             side_effect=RuntimeError("Redis down")
         )
         runner = _make_runner(storage=storage)

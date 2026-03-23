@@ -22,7 +22,7 @@ from gigaevo.database.redis import (
 )
 from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
-from gigaevo.programs.program_state import ProgramState
+from gigaevo.programs.program_state import ProgramState, validate_transition
 from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
 from gigaevo.utils.trackers.base import LogWriter
@@ -446,6 +446,109 @@ class RedisProgramStorage(ProgramStorage):
                     continue
 
         await self._conn.execute("atomic_state_transition", _atomic)
+
+    async def fast_state_transition(
+        self, program: Program, old_state: str, new_state: str
+    ) -> None:
+        """Fast state transition: 2 RT (INCR + pipeline) instead of ~5 RT.
+
+        Safe only when the caller holds exclusive single-process ownership
+        (e.g., asyncio.Lock in ProgramStateManager). Does NOT provide cross-process
+        safety — assumes each program is processed by exactly one engine instance.
+        Unlike atomic_state_transition, does not WATCH/GET/MERGE.
+        """
+        self._check_write_allowed("fast_state_transition")
+
+        async def _fast(r: aioredis.Redis) -> None:
+            key = self._keys.program(program.id)
+            counter = await r.incr(self._keys.timestamp())
+            data = program.to_dict()
+            data["atomic_counter"] = int(counter)
+
+            pipe = r.pipeline(transaction=False)
+            pipe.set(key, _dumps(data))
+            if old_state != new_state:
+                pipe.srem(self._keys.status_set(old_state), program.id)
+            pipe.sadd(self._keys.status_set(new_state), program.id)
+            pipe.xadd(
+                self._keys.status_stream(),
+                {"id": program.id, "status": new_state, "event": "transition"},
+                maxlen=STREAM_MAX_LEN,
+                approximate=True,
+            )
+            await pipe.execute()
+
+        await self._conn.execute("fast_state_transition", _fast)
+
+    async def batch_transition_state(
+        self,
+        programs: list[Program],
+        old_state: str,
+        new_state: str,
+    ) -> int:
+        """Batch-transition programs between states using pipelined ops.
+
+        Much faster than individual atomic_state_transition calls for large
+        batches (e.g., refresh phase with 5000 programs). Assumes exclusive
+        ownership — no WATCH/MERGE needed.
+
+        Returns the number of programs transitioned.
+        """
+        self._check_write_allowed("batch_transition_state")
+        if not programs:
+            return 0
+
+        old_enum = ProgramState(old_state)
+        new_enum = ProgramState(new_state)
+        for prog in programs:
+            validate_transition(old_enum, new_enum)
+
+        async def _batch(r: aioredis.Redis) -> int:
+            old_set_key = self._keys.status_set(old_state)
+            new_set_key = self._keys.status_set(new_state)
+            stream_key = self._keys.status_stream()
+            ts_key = self._keys.timestamp()
+
+            count = 0
+            for chunk in self._chunks(programs, MGET_CHUNK_SIZE):
+                n = len(chunk)
+                # Reserve N counters in one call
+                end_counter = await r.incrby(ts_key, n)
+                start_counter = end_counter - n + 1
+
+                pipe = r.pipeline(transaction=False)
+                for i, prog in enumerate(chunk):
+                    prog.state = ProgramState(new_state)
+                    data = prog.to_dict()
+                    data["atomic_counter"] = int(start_counter + i)
+
+                    pipe.set(self._keys.program(prog.id), _dumps(data))
+                    pipe.srem(old_set_key, prog.id)
+                    pipe.sadd(new_set_key, prog.id)
+
+                pipe.xadd(
+                    stream_key,
+                    {"id": "batch", "status": new_state, "event": "batch_transition"},
+                    maxlen=STREAM_MAX_LEN,
+                    approximate=True,
+                )
+                await pipe.execute()
+                count += n
+
+            return count
+
+        return await self._conn.execute("batch_transition_state", _batch)
+
+    async def remove_ids_from_status_set(self, status: str, ids: list[str]) -> None:
+        """Remove specific IDs from a status set using SREM."""
+        if not ids:
+            return
+        self._check_write_allowed("remove_ids_from_status_set")
+
+        async def _srem(r: aioredis.Redis) -> None:
+            await r.srem(self._keys.status_set(status), *ids)
+
+        await self._conn.execute("remove_ids_from_status_set", _srem)
 
     # --------------------- Run State (resume support) ---------------------
 

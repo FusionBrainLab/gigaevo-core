@@ -5,6 +5,7 @@ import asyncio
 from typing import Any
 
 from gigaevo.programs.program import Program
+from gigaevo.programs.program_state import ProgramState, validate_transition
 
 
 class PopulationSnapshot:
@@ -150,6 +151,43 @@ class ProgramStorage(ABC):
             True if renewal succeeded, False if lock was lost
         """
         ...
+
+    async def fast_state_transition(
+        self, program: Program, old_state: str, new_state: str
+    ) -> None:
+        """Fast state transition: 2 RT (INCR + pipeline) instead of ~5 RT.
+
+        Safe only when the caller holds exclusive single-process ownership
+        (e.g., asyncio.Lock in ProgramStateManager). Does NOT provide cross-process
+        safety — assumes each program is processed by exactly one engine instance.
+        Default falls back to atomic_state_transition.
+        """
+        await self.atomic_state_transition(program, old_state, new_state)
+
+    async def batch_transition_state(
+        self,
+        programs: list[Program],
+        old_state: str,
+        new_state: str,
+    ) -> int:
+        """Batch-transition programs between states.
+
+        Default implementation falls back to individual transitions.
+        Subclasses may override with pipelined operations.
+        Returns the number of programs transitioned.
+        """
+        old_enum = ProgramState(old_state)
+        new_enum = ProgramState(new_state)
+        count = 0
+        for prog in programs:
+            validate_transition(old_enum, new_enum)
+            prog.state = new_enum
+            await self.atomic_state_transition(prog, old_state, new_state)
+            count += 1
+        return count
+
+    async def remove_ids_from_status_set(self, status: str, ids: list[str]) -> None:
+        """Remove specific IDs from a status set. No-op by default."""
 
     async def wait_for_activity(self, timeout: float) -> None:
         """
