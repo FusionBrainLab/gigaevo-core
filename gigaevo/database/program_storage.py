@@ -14,13 +14,21 @@ class PopulationSnapshot:
     Shared across all collector instances via ``storage.snapshot``.
     Call :meth:`bump` at phase boundaries to invalidate; collectors that
     see a stale epoch will re-fetch exactly once (others piggyback).
+
+    Single-slot cache keyed on ``(epoch, exclude)``. Works correctly when all
+    callers within an epoch use the same exclude value (which is true in practice:
+    EvolutionaryStatisticsCollector always uses exclude={"stage_results"}, all
+    other callers use exclude=None). If a new caller with a different exclude
+    value is added, the cache will thrash with no benefits -- a latent hazard
+    that would require a dict-based multi-slot cache to fully address.
     """
 
-    __slots__ = ("_epoch", "_cached_epoch", "_cached", "_lock")
+    __slots__ = ("_epoch", "_cached_epoch", "_cached_exclude", "_cached", "_lock")
 
     def __init__(self) -> None:
         self._epoch: int = 0
         self._cached_epoch: int = -1
+        self._cached_exclude: frozenset[str] | None = None
         self._cached: list[Program] = []
         self._lock = asyncio.Lock()
 
@@ -34,22 +42,15 @@ class PopulationSnapshot:
         *,
         exclude: frozenset[str] | None = None,
     ) -> list[Program]:
-        """Return cached programs if epoch matches, else fetch + cache.
-
-        When exclude is not None, always fetch fresh data (do not use cache)
-        to prevent cross-caller data corruption if different exclude sets are
-        used within the same epoch.
-        """
-        if exclude is not None:
-            return await storage.get_all(exclude=exclude)
-
-        if self._cached_epoch == self._epoch:
+        """Return cached programs if epoch+exclude matches, else fetch + cache."""
+        if self._cached_epoch == self._epoch and self._cached_exclude == exclude:
             return self._cached
         async with self._lock:
-            if self._cached_epoch == self._epoch:
+            if self._cached_epoch == self._epoch and self._cached_exclude == exclude:
                 return self._cached
-            programs = await storage.get_all(exclude=None)
+            programs = await storage.get_all(exclude=exclude)
             self._cached = programs
+            self._cached_exclude = exclude
             self._cached_epoch = self._epoch
             return programs
 
