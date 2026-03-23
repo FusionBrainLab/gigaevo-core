@@ -34,13 +34,21 @@ class PopulationSnapshot:
         *,
         exclude: frozenset[str] | None = None,
     ) -> list[Program]:
-        """Return cached programs if epoch matches, else fetch + cache."""
+        """Return cached programs if epoch matches, else fetch + cache.
+
+        When exclude is not None, always fetch fresh data (do not use cache)
+        to prevent cross-caller data corruption if different exclude sets are
+        used within the same epoch.
+        """
+        if exclude is not None:
+            return await storage.get_all(exclude=exclude)
+
         if self._cached_epoch == self._epoch:
             return self._cached
         async with self._lock:
             if self._cached_epoch == self._epoch:
                 return self._cached
-            programs = await storage.get_all(exclude=exclude)
+            programs = await storage.get_all(exclude=None)
             self._cached = programs
             self._cached_epoch = self._epoch
             return programs
@@ -95,7 +103,9 @@ class ProgramStorage(ABC):
         ...
 
     @abstractmethod
-    async def get_all_by_status(self, status: str) -> list[Program]: ...
+    async def get_all_by_status(
+        self, status: str, *, exclude: frozenset[str] | None = None
+    ) -> list[Program]: ...
 
     @abstractmethod
     async def get_ids_by_status(self, status: str) -> list[str]:

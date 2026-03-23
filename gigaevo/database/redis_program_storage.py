@@ -357,14 +357,18 @@ class RedisProgramStorage(ProgramStorage):
 
         await self._conn.execute("publish_status_event", _event)
 
-    async def get_all_by_status(self, status: str) -> list[Program]:
+    async def get_all_by_status(
+        self, status: str, *, exclude: frozenset[str] | None = None
+    ) -> list[Program]:
         ids = await self._ids_for_status(status)
         if not ids:
             return []
 
         async def _by_status(r: aioredis.Redis) -> list[Program]:
             keys = [self._keys.program(pid) for pid in ids]
-            programs = await self._mget_by_keys(r, keys, f"get_all_by_status:{status}")
+            programs = await self._mget_by_keys(
+                r, keys, f"get_all_by_status:{status}", exclude=exclude
+            )
             return [p for p in programs if p.state.value == status]
 
         return await self._conn.execute("get_all_by_status", _by_status)
