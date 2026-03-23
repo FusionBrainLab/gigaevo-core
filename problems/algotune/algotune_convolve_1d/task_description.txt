@@ -1,0 +1,56 @@
+TASK DEFINITION - ADAPTED ALGOTUNE CONVOLVE_1D
+
+This problem adapts the AlgoTune `convolve_1d` task into gigaevo's standard
+problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of one-dimensional
+discrete convolution cases.
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: scale factor for the arrays
+- `random_seed`: seed used to deterministically generate the arrays
+
+For each case:
+- `a` has length `30 * n`
+- `b` has length `8 * n`
+- the required convolution mode is `"full"`
+
+OUTPUT
+Return a list of one-dimensional arrays, in the same order as
+`context["cases"]`.
+
+Each output array must equal the full convolution of the generated `a` and `b`
+for that case. The expected output length is `38 * n - 1`.
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: average runtime of the full 5-case batch
+- `timing_repetitions`: number of repeated batch timings used in the average
+- `avg_relative_error`: diagnostic metric for exactness
+- `exact_case_fraction`: diagnostic metric for how many cases matched exactly
+
+RULES
+- Keep the case order unchanged
+- Return numeric finite arrays only
+- Do not use randomness
+- You may use NumPy and SciPy
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/convolve_1d/convolve_1d.py`

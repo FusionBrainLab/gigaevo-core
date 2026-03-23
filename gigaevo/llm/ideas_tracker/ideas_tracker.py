@@ -283,6 +283,48 @@ class IdeaTracker:
         return out
 
     @staticmethod
+    def _parse_json_like(value: Any) -> Any:
+        """Parse JSON-ish strings from CSV back to Python objects when possible."""
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return value
+        if text[0] not in "[{":
+            return value
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            try:
+                return ast.literal_eval(text)
+            except Exception:
+                return value
+
+    @classmethod
+    def _coerce_bool_series(cls, series: pd.Series) -> pd.Series:
+        """Coerce CSV-backed truthy/falsy values into a bool series."""
+        if series.dtype == bool:
+            return series
+        normalized = series.astype(str).str.strip().str.lower()
+        return normalized.map(
+            {"true": True, "false": False, "1": True, "0": False}
+        ).fillna(False)
+
+    @classmethod
+    def normalize_dataframe(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize Redis/CSV data into the shape expected by IdeaTracker."""
+        result = df.copy()
+
+        if "is_root" in result.columns:
+            result["is_root"] = cls._coerce_bool_series(result["is_root"])
+
+        for col in ("parent_ids", "children_ids", "metadata_mutation_output"):
+            if col in result.columns:
+                result[col] = result[col].apply(cls._parse_json_like)
+
+        return result
+
+    @staticmethod
     def _median_or_none(values: list[float]) -> float | None:
         if not values:
             return None
@@ -939,6 +981,26 @@ class IdeaTracker:
                 raise ValueError(f"Invalid database file: {path_to_database}")
         else:
             df = asyncio.run(self.load_database())
+
+        df = self.normalize_dataframe(df)
+        if df.empty:
+            print("Ideas tracker skipped: no programs found in the selected source.")
+            return
+
+        required_columns = {
+            "program_id",
+            "metric_fitness",
+            "generation",
+            "is_root",
+            "parent_ids",
+            "metadata_mutation_output",
+        }
+        missing_columns = sorted(required_columns.difference(df.columns))
+        if missing_columns:
+            raise ValueError(
+                "Ideas tracker input is missing required columns: "
+                + ", ".join(missing_columns)
+            )
 
         if self.memory_usage_tracking_enabled:
             self.memory_usage_updates_by_card = self._build_memory_usage_updates(df)

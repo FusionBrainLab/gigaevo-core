@@ -1,0 +1,100 @@
+TASK DEFINITION - ADAPTED ALGOTUNE KALMAN FILTER
+
+This problem adapts the AlgoTune `kalman_filter` task into gigaevo's standard
+problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of Kalman
+filtering/smoothing cases posed as convex quadratic programs.
+
+This task is for exact speed optimization. Prefer returning the same optimal
+solution faster rather than inventing a different approximate filtering method.
+
+Each case minimizes:
+`sum_{t=0}^{N-1} (||w_t||_2^2 + tau ||v_t||_2^2)`
+
+subject to:
+`x_{t+1} = A x_t + B w_t`
+`y_t = C x_t + v_t`
+with initial state `x_0 = x_initial`
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: state, process-noise, and measurement dimension
+- `random_seed`: seed used to deterministically generate the instance
+
+For each case:
+- set `N = 2 * n`, `p = n`, `m = n`, and `tau = 1.0`
+- generate `A_raw` with standard normal entries of shape `(n, n)`
+- scale `A = A_raw / (max(abs(eigvals(A_raw))) + 1e-3)` to keep the dynamics stable
+- generate `B = 0.5 * standard_normal((n, p))`
+- generate `C = standard_normal((m, n))`
+- generate `x_initial` as a standard normal vector of length `n`
+- generate hidden process noise `w_true = 0.1 * standard_normal((N, p))`
+- generate hidden measurement noise `v_true = 0.1 * standard_normal((N, m))`
+- simulate measurements with:
+  `x_{t+1} = A x_t + B w_true[t]`
+  `y_t = C x_t + v_true[t]`
+
+OUTPUT
+Return a list of dictionaries, in the same order as `context["cases"]`.
+
+Each output dictionary must contain:
+- `x_hat`: numeric array of shape `(N + 1, n)`
+- `w_hat`: numeric array of shape `(N, p)`
+- `v_hat`: numeric array of shape `(N, m)`
+
+The validator accepts any feasible solution whose objective value matches the
+optimal value within numerical tolerance.
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full fixed-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `exact_case_fraction`: diagnostic metric for how many cases are feasible and
+  objective-optimal
+- `avg_relative_objective_error`: mean relative objective error across the fixed
+  suite
+
+RULES
+- Keep the case order unchanged
+- Do not use randomness beyond the deterministic problem generation
+- Return finite numeric arrays only
+- Respect the exact output shapes described above
+- You may use NumPy and SciPy
+- Preserve exact feasibility and optimality; approximate filters, heuristic
+  smoothing, truncated iterative methods, or changed objectives are not valid
+  substitutes here.
+
+TASK-SPECIFIC OPTIMIZATION GUIDANCE
+- Favor local runtime optimizations over algorithmic reinvention.
+- The fixed-suite structure is predictable: `tau = 1.0`, `N = 2 * n`, and
+  `p = m = n`.
+- The most promising optimizations are usually:
+  - reducing repeated array conversions and temporary allocations
+  - streamlining construction of the measurement system / normal equations
+  - reusing deterministic intermediates such as matrix powers or repeated
+    matrix products
+  - simplifying recovery of `x_hat`, `w_hat`, and `v_hat` after solving for the
+    optimal process-noise vector
+- Do not replace the exact least-squares formulation with a different control
+  or estimation method unless it is mathematically equivalent and preserves the
+  same optimal objective value.
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/kalman_filter/kalman_filter.py`

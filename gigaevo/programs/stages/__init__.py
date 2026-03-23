@@ -10,6 +10,7 @@ from gigaevo.programs.stages import (
     metrics,
     optimization,
     python_executors,
+    runtime_metrics,
     validation,
 )
 from gigaevo.programs.stages.base import Stage
@@ -45,4 +46,5 @@ from gigaevo.programs.stages.python_executors import (
     CallValidatorFunction,
     execution,
 )
+from gigaevo.programs.stages.runtime_metrics import RuntimeFitnessStage
 from gigaevo.programs.stages.validation import ValidateCodeStage

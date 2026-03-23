@@ -134,6 +134,21 @@ def test_build_dedup_queries_include_combined_fields() -> None:
     ]
 
 
+def test_build_dedup_queries_skip_full_task_description_fallback() -> None:
+    card = {
+        "description": "Apply adaptive clipping",
+        "task_description": "Very long shared task boilerplate that should not enter dedup queries",
+        "task_description_summary": "",
+        "explanation": {
+            "summary": "outlier clipping",
+        },
+    }
+
+    queries = build_dedup_queries(card)
+
+    assert queries[QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY] == "IDEA_DESCRIPTION: Apply adaptive clipping"
+
+
 def test_merge_usage_payloads_accumulates_per_task_and_total() -> None:
     existing_usage = {
         "used": {

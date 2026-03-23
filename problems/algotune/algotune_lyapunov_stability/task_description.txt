@@ -1,0 +1,71 @@
+TASK DEFINITION - ADAPTED ALGOTUNE LYAPUNOV_STABILITY
+
+This problem adapts the AlgoTune `lyapunov_stability` task into gigaevo's
+standard problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of discrete-time
+Lyapunov stability cases.
+
+Each case represents a linear time-invariant system:
+`x[k + 1] = A x[k]`
+
+Your program must determine whether the system is asymptotically stable and,
+when it is stable, provide a positive definite matrix `P` such that:
+`A^T P A - P < 0`
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: dimension of the square system matrix
+- `random_seed`: seed used to deterministically generate the system
+
+For each case:
+- generate `A` with standard normal entries using the given seed
+- draw one extra random number from the same RNG
+- if that random draw is below `0.7`, scale `A` so its spectral radius becomes
+  `0.8`
+- otherwise leave `A` unchanged
+
+OUTPUT
+Return a list of dictionaries, in the same order as `context["cases"]`.
+
+Each output dictionary must contain:
+- `is_stable`: boolean
+- `P`: either `None` for unstable systems, or an `n x n` numeric matrix for
+  stable systems
+
+The validator accepts any correct Lyapunov certificate. `P` does not need to
+match a unique reference matrix.
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full fixed-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `exact_case_fraction`: diagnostic metric for how many cases were solved
+  exactly
+
+RULES
+- Keep the case order unchanged
+- Do not use randomness beyond the deterministic problem generation
+- Return finite numeric matrices only
+- `P` must be symmetric positive definite for stable systems
+- `A^T P A - P` must be negative definite for stable systems
+- You may use NumPy and SciPy
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/lyapunov_stability/lyapunov_stability.py`

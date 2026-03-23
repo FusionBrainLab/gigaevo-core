@@ -31,6 +31,7 @@ matplotlib.use("Agg")  # headless by default; override with --show or MPLBACKEND
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
+import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 import seaborn as sns
@@ -361,10 +362,12 @@ def _select_frontier_improvements(df, iteration_col: str, minimize: bool):
 
 
 def plot_comparison(
-    prepared_dfs: list[tuple[str, object]],
+    prepared_dfs: list[tuple[str, pd.DataFrame]],
     *,
     output_folder: Path,
     save_plots: bool = True,
+    output_stem: str = "evolution_runs_comparison",
+    show_plot: bool = True,
     smooth_window: int = 0,
     smooth_method: SmoothingMethod = "lowess",
     lowess_frac: float | None = None,
@@ -384,17 +387,19 @@ def plot_comparison(
     xlabel: str | None = None,
     ylabel: str | None = None,
     aggregate_iterations: bool = True,
-    show: bool = False,
     original_memory_score: float | None = None,
     y_min: float | None = None,
     y_max: float | None = None,
-):
+    smooth_frontier_window: int = 0,
+) -> tuple[Path, Path] | None:
     """Plot comparison of multiple evolution runs with publication-quality styling.
 
     Args:
         prepared_dfs: List of (label, dataframe) tuples.
         output_folder: Directory for saving plots.
         save_plots: Whether to save plots to disk.
+        output_stem: Base filename used for saved plots.
+        show_plot: Whether to show the plot interactively.
         smooth_window: Smoothing window for mean/std curves.
         smooth_method: Smoothing algorithm (for mean/std only; frontier is never smoothed). Options:
             - "lowess": LOWESS smoothing (RECOMMENDED - very smooth, no artifacts)
@@ -425,7 +430,7 @@ def plot_comparison(
     """
     if not prepared_dfs:
         logger.error("No prepared data to plot")
-        return
+        return None
 
     _configure_plotting_style(use_latex=use_latex)
 
@@ -587,21 +592,24 @@ def plot_comparison(
     # Finalize layout
     fig.tight_layout()
 
+    saved_paths: tuple[Path, Path] | None = None
     if save_plots:
         output_folder.mkdir(parents=True, exist_ok=True)
-        png = output_folder / "evolution_runs_comparison.png"
-        pdf = output_folder / "evolution_runs_comparison.pdf"
-        svg = output_folder / "evolution_runs_comparison.svg"
+        png = output_folder / f"{output_stem}.png"
+        pdf = output_folder / f"{output_stem}.pdf"
+        svg = output_folder / f"{output_stem}.svg"
 
         fig.savefig(png, dpi=300, bbox_inches="tight", facecolor="white")
         fig.savefig(pdf, bbox_inches="tight", facecolor="white")
         fig.savefig(svg, bbox_inches="tight", facecolor="white")
 
         logger.info(f"Saved comparison plots: {png.name}, {pdf.name}, {svg.name}")
+        saved_paths = (png, pdf)
 
-    if show:
+    if show_plot:
         plt.show()
-    return fig, ax
+    plt.close(fig)
+    return saved_paths
 
 
 def _annotate_frontier_points(
@@ -697,6 +705,71 @@ def _annotate_frontier_points(
             color=color,
             zorder=10,
         )
+
+
+async def export_run_plot(
+    config: RedisRunConfig,
+    *,
+    output_folder: Path,
+    output_stem: str,
+    iteration_rolling_window: int = 5,
+    remove_outliers: bool = True,
+    outlier_method: str = "percentile",
+    outlier_multiplier: float | None = None,
+    outlier_lower_percentile: float = 5.0,
+    outlier_upper_percentile: float = 95.0,
+    smooth_window: int = 0,
+    smooth_frontier_window: int = 0,
+    annotate_frontier: bool = False,
+    frontier_annotations_max: int = 15,
+    fitness_col: str = "metric_fitness",
+    iteration_col: str = "metadata_iteration",
+    minimize: bool = False,
+    original_memory_score: float | None = None,
+    y_min: float | None = None,
+    y_max: float | None = None,
+) -> tuple[Path, Path] | None:
+    df = await fetch_evolution_dataframe(config, add_stage_results=False)
+    if df.empty:
+        logger.warning("Run '{}' has no data for plotting", config.display_label())
+        return None
+
+    prepared_df = prepare_iteration_dataframe(
+        df,
+        iteration_rolling_window=iteration_rolling_window,
+        remove_outliers=remove_outliers,
+        outlier_method=outlier_method,
+        outlier_multiplier=outlier_multiplier,
+        outlier_lower_percentile=outlier_lower_percentile,
+        outlier_upper_percentile=outlier_upper_percentile,
+        fitness_col=fitness_col,
+        iteration_col=iteration_col,
+        minimize=minimize,
+    )
+    if prepared_df.empty:
+        logger.warning(
+            "Run '{}' has no plottable iteration data after filtering",
+            config.display_label(),
+        )
+        return None
+
+    return plot_comparison(
+        [(config.display_label(), prepared_df)],
+        output_folder=output_folder,
+        save_plots=True,
+        output_stem=output_stem,
+        show_plot=False,
+        smooth_window=smooth_window,
+        annotate_frontier=annotate_frontier,
+        frontier_annotations_max=frontier_annotations_max,
+        fitness_col=fitness_col,
+        iteration_col=iteration_col,
+        minimize=minimize,
+        original_memory_score=original_memory_score,
+        y_min=y_min,
+        y_max=y_max,
+        smooth_frontier_window=smooth_frontier_window,
+    )
 
 
 async def main():
@@ -1002,7 +1075,7 @@ async def main():
         xlabel=args.xlabel,
         ylabel=args.ylabel,
         aggregate_iterations=not args.no_aggregate,
-        show=args.show,
+        show_plot=args.show,
     )
 
 

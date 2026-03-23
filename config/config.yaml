@@ -16,3 +16,23 @@ ideas_tracker: false
 # final memory write when ideas_tracker.memory_write_pipeline.enabled=true.
 # Example: checkpoint_dir=outputs/custom_memory_checkpoint
 checkpoint_dir: null
+
+# Optional per-generation CSV and plot exports.
+# Enable with: tracking.enabled=true
+tracking:
+  enabled: false
+  outputs_dir: outputs
+  plot_dir: outputs/run_plots
+  iteration_rolling_window: 5
+  outlier_method: percentile
+  outlier_multiplier: null
+  outlier_lower_percentile: 5.0
+  outlier_upper_percentile: 95.0
+  remove_outliers: true
+  smooth_window: 0
+  smooth_frontier_window: 0
+  annotate_frontier: true
+  frontier_annotations_max: 15
+  fitness_col: metric_fitness
+  iteration_col: metadata_iteration
+  minimize: false
