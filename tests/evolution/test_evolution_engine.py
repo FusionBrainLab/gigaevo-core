@@ -138,8 +138,10 @@ class TestIngestCompletedPrograms:
         await engine._ingest_completed_programs()
 
         engine.strategy.add.assert_not_called()
-        engine.state.set_program_state.assert_called_once_with(
-            rej_prog, ProgramState.DISCARDED
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            [rej_prog.id],
+            ProgramState.DONE.value,
+            ProgramState.DISCARDED.value,
         )
 
     async def test_rejected_by_strategy_is_discarded(self) -> None:
@@ -156,8 +158,10 @@ class TestIngestCompletedPrograms:
 
         await engine._ingest_completed_programs()
 
-        engine.state.set_program_state.assert_called_once_with(
-            rej_prog, ProgramState.DISCARDED
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            [rej_prog.id],
+            ProgramState.DONE.value,
+            ProgramState.DISCARDED.value,
         )
 
     async def test_empty_done_set_returns_early(self) -> None:
@@ -208,13 +212,15 @@ class TestIngestCompletedPrograms:
         # Must NOT raise — per-item exception handler catches it and discards the program
         await engine._ingest_completed_programs()
 
-        # The failed program must be scheduled for DISCARDED state
-        engine.state.set_program_state.assert_called_once_with(
-            prog, ProgramState.DISCARDED
+        # The failed program must be batch-transitioned to DISCARDED
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            [prog.id],
+            ProgramState.DONE.value,
+            ProgramState.DISCARDED.value,
         )
 
-    async def test_rejected_discard_gather_swallows_exceptions(self) -> None:
-        """State discard task fails inside gather(return_exceptions=True) → doesn't crash."""
+    async def test_rejected_discard_batch_swallows_exceptions(self) -> None:
+        """Batch discard fails → exception caught, metrics still recorded."""
         engine = _make_engine()
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = False
@@ -223,10 +229,12 @@ class TestIngestCompletedPrograms:
         engine.storage.get_ids_by_status.return_value = [prog.id]
         engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
-        # Make the discard state transition fail
-        engine.state.set_program_state.side_effect = RuntimeError("Redis timeout")
+        # Make the batch discard fail
+        engine.storage.batch_transition_by_ids.side_effect = RuntimeError(
+            "Redis timeout"
+        )
 
-        # gather(return_exceptions=True) should swallow the exception
+        # Exception should be caught and logged, not crash
         await engine._ingest_completed_programs()
 
         # Metrics should still be recorded

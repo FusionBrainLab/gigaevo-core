@@ -448,7 +448,9 @@ class EvolutionEngine:
         rej_valid = 0
         rej_strategy = 0
 
-        state_tasks: list[asyncio.Task] = []
+        # Collect IDs of rejected programs for a single batch transition
+        # at the end, instead of one Redis write per reject.
+        reject_ids: list[str] = []
 
         for prog in completed:
             try:
@@ -461,11 +463,7 @@ class EvolutionEngine:
                         prog.metrics,
                     )
                     await self._notify_hook(prog, MutationOutcome.REJECTED_ACCEPTOR)
-                    state_tasks.append(
-                        asyncio.create_task(
-                            self._set_state(prog, ProgramState.DISCARDED)
-                        )
-                    )
+                    reject_ids.append(prog.id)
                 elif await self.strategy.add(prog):
                     # accepted by strategy — stays DONE until next refresh
                     added += 1
@@ -484,11 +482,7 @@ class EvolutionEngine:
                         prog.metrics,
                     )
                     await self._notify_hook(prog, MutationOutcome.REJECTED_STRATEGY)
-                    state_tasks.append(
-                        asyncio.create_task(
-                            self._set_state(prog, ProgramState.DISCARDED)
-                        )
-                    )
+                    reject_ids.append(prog.id)
             except Exception as e:
                 # Isolate per-program failures: log and discard the offending program
                 # so the remaining programs in this batch are still processed.
@@ -497,12 +491,22 @@ class EvolutionEngine:
                     prog.short_id,
                     e,
                 )
-                state_tasks.append(
-                    asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
-                )
+                reject_ids.append(prog.id)
 
-        if state_tasks:
-            await asyncio.gather(*state_tasks, return_exceptions=True)
+        # Batch DONE → DISCARDED (raw JSON patch, no Pydantic serialization)
+        if reject_ids:
+            try:
+                await self.storage.batch_transition_by_ids(
+                    reject_ids,
+                    ProgramState.DONE.value,
+                    ProgramState.DISCARDED.value,
+                )
+            except Exception as e:
+                logger.error(
+                    "[EvolutionEngine] batch discard failed for {} programs: {}",
+                    len(reject_ids),
+                    e,
+                )
 
         self.metrics.programs_processed += added
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)

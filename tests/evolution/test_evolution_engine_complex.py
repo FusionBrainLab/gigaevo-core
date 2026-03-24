@@ -216,13 +216,12 @@ class TestIngestMultiProgramIsolation:
 
         # Bad program discarded, good program accepted
         assert engine.metrics.added == 1
-        # state.set_program_state called for discarding bad program
-        discard_calls = [
-            c
-            for c in engine.state.set_program_state.call_args_list
-            if c[0][1] == ProgramState.DISCARDED
-        ]
-        assert len(discard_calls) >= 1
+        # batch_transition_by_ids called to discard bad program
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            [prog_bad.id],
+            ProgramState.DONE.value,
+            ProgramState.DISCARDED.value,
+        )
 
     async def test_all_programs_fail_none_added(self):
         """All programs fail during ingestion -> none added, all discarded."""
