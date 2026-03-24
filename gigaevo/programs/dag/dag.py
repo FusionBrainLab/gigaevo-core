@@ -79,6 +79,15 @@ class DAG:
             logger.error("[DAG][{}] DAG run timed out after {}s", pid, self.dag_timeout)
             self._writer.scalar("dag_timeout", 1)
             raise
+        finally:
+            # Flush all accumulated stage results to Redis in one write.
+            # Per-stage writes are deferred (in-memory only) to save (N-1)
+            # round trips for an N-stage DAG.  This flush runs even on
+            # timeout so partial results are preserved for debugging.
+            try:
+                await self.state_manager.write_exclusive(program)
+            except Exception:
+                logger.debug("[DAG][{}] Final flush failed (non-critical)", pid)
 
     def _pid(self, program: Program) -> str:
         return program.short_id
@@ -95,10 +104,9 @@ class DAG:
                 name, ProgramStageResult(status=StageState.PENDING)
             )
 
-        # NOTE: No initial persist here — the first update_stage_result() or
-        # fast_state_transition (at DAG completion) writes the full program,
-        # including these PENDING entries.  Skipping saves one to_dict() +
-        # 2 Redis RT per program (significant during refresh of N programs).
+        # NOTE: No initial persist here — stage results accumulate in-memory
+        # and are flushed to Redis once at the end (see the finally block).
+        # This saves (N-1) write_exclusive calls for an N-stage DAG.
 
         running: set[str] = set()
         launched_this_run: set[str] = set()
@@ -407,7 +415,9 @@ class DAG:
         self, program: Program, stage_name: str, result: ProgramStageResult
     ) -> None:
         await self._write_stage_status(stage_name, result)
-        await self.state_manager.update_stage_result(program, stage_name, result)
+        # Update in-memory only — deferred to a single write_exclusive at the
+        # end of _run_internal (saves N-1 Redis round trips for N stages).
+        program.stage_results[stage_name] = result
 
     async def _write_stage_status(
         self, stage_name: str, result: ProgramStageResult
