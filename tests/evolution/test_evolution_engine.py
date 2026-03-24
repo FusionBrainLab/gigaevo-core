@@ -26,6 +26,14 @@ def _make_engine() -> EvolutionEngine:
     writer.bind.return_value = writer
     metrics_tracker = MagicMock()
 
+    # Safe defaults for ALL status-query methods so _has_active_dags returns
+    # False (idle) regardless of implementation.  Without these, changing
+    # _has_active_dags from count_by_status to get_all_by_status would make
+    # _await_idle loop forever (unmocked AsyncMock returns truthy MagicMock).
+    storage.count_by_status.return_value = 0
+    storage.get_all_by_status.return_value = []
+    storage.get_ids_by_status.return_value = []
+
     engine = EvolutionEngine(
         storage=storage,
         strategy=strategy,
