@@ -48,6 +48,7 @@ class DAG:
         max_parallel_stages: int = 8,
         dag_timeout: float | None = 3600.0,
         writer: LogWriter,
+        caller_handles_persist: bool = False,
     ) -> None:
         self.automata = DAGAutomata.build(nodes, data_flow_edges, execution_order_deps)
         self.state_manager = state_manager
@@ -61,11 +62,13 @@ class DAG:
         )
         self._previous_launched_hash = None
         self._writer: LogWriter = writer.bind(path=["dag", "internals"])
+        self._caller_handles_persist = caller_handles_persist
 
     async def run(self, program: Program) -> None:
         pid = self._pid(program)
         logger.debug("[DAG][{}] Run started", pid)
 
+        _ok = False
         try:
             if self.dag_timeout is not None:
                 await asyncio.wait_for(
@@ -75,19 +78,21 @@ class DAG:
                 await self._run_internal(program)
 
             self._writer.scalar("dag_timeout", 0)
+            _ok = True
         except TimeoutError:
             logger.error("[DAG][{}] DAG run timed out after {}s", pid, self.dag_timeout)
             self._writer.scalar("dag_timeout", 1)
             raise
         finally:
-            # Flush all accumulated stage results to Redis in one write.
-            # Per-stage writes are deferred (in-memory only) to save (N-1)
-            # round trips for an N-stage DAG.  This flush runs even on
-            # timeout so partial results are preserved for debugging.
-            try:
-                await self.state_manager.write_exclusive(program)
-            except Exception:
-                logger.debug("[DAG][{}] Final flush failed (non-critical)", pid)
+            # Flush accumulated stage results to Redis.  When the caller
+            # handles persistence (DagRunner via set_program_state), skip
+            # on success — the state transition writes the full program.
+            # On error/timeout, always flush so partial results survive.
+            if not (self._caller_handles_persist and _ok):
+                try:
+                    await self.state_manager.write_exclusive(program)
+                except Exception:
+                    logger.debug("[DAG][{}] Final flush failed (non-critical)", pid)
 
     def _pid(self, program: Program) -> str:
         return program.short_id

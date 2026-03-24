@@ -28,7 +28,13 @@ class DAGBlueprint(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def build(self, state_manager: ProgramStateManager, writer: LogWriter) -> DAG:
+    def build(
+        self,
+        state_manager: ProgramStateManager,
+        writer: LogWriter,
+        *,
+        caller_handles_persist: bool = False,
+    ) -> DAG:
         return DAG(
             nodes={name: factory() for name, factory in self.nodes.items()},
             data_flow_edges=self.data_flow_edges,
@@ -37,4 +43,5 @@ class DAGBlueprint(BaseModel):
             max_parallel_stages=self.max_parallel_stages,
             dag_timeout=self.dag_timeout,
             writer=writer,
+            caller_handles_persist=caller_handles_persist,
         )

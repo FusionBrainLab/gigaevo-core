@@ -381,7 +381,9 @@ class DagRunner:
 
             try:
                 dag: DAG = self._dag_blueprint.build(
-                    self._state_manager, writer=self._writer
+                    self._state_manager,
+                    writer=self._writer,
+                    caller_handles_persist=True,
                 )
             except Exception as e:
                 import traceback
