@@ -424,8 +424,11 @@ class EvolutionEngine:
             )
             return
 
-        # Only deserialize the new (non-archive) programs
-        completed = await self.storage.mget(new_ids)
+        # Only deserialize the new (non-archive) programs.
+        # Exclude stage_results (~10% of payload) — ingestion only needs
+        # metrics, state, metadata, and lineage.  The merge strategy in
+        # storage.update() preserves existing stage_results from Redis.
+        completed = await self.storage.mget(new_ids, exclude=EXCLUDE_STAGE_RESULTS)
         # Filter to actual DONE state (mget may return stale status)
         completed = [p for p in completed if p.state == ProgramState.DONE]
 
