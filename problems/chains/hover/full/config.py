@@ -5,7 +5,7 @@ from pathlib import Path
 # --- Full Chain Validation Config ---
 
 FULL_CHAIN_CONFIG = {
-    "max_steps": 15,
+    "max_steps": 10,
     "allowed_step_types": ["llm", "tool"],
     "available_tools": ["retrieve", "retrieve_deep"],
     "require_final_llm": False,

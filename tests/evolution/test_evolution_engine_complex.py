@@ -5,7 +5,7 @@ Covers:
 - restore_state from storage
 - _ingest_completed_programs with per-program exception isolation (multi-program batch)
 - _refresh_archive_programs with gather exception handling
-- run() with generation_timeout triggering TimeoutError mid-step
+- generation_timeout is deprecated (no-op, field accepted but ignored)
 - step() with pre_step_hook that raises
 - _has_active_dags log throttling (only logs when counts change)
 """
@@ -385,33 +385,29 @@ class TestRefreshBatchTransition:
 
 
 # ===================================================================
-# Category G: run() step timeout
+# Category G: generation_timeout is deprecated (no-op)
 # ===================================================================
 
 
 class TestRunStepTimeout:
-    """core.py L157-167: generation_timeout wraps step() with wait_for."""
+    """generation_timeout is deprecated and ignored. Individual program
+    timeouts are handled by dag_timeout / stage_timeout."""
 
-    async def test_timeout_doesnt_crash_loop(self):
-        """Step timeout is caught, loop continues to next generation."""
-        engine = _engine(max_generations=3, generation_timeout=0.001)
+    async def test_generation_timeout_field_accepted_but_ignored(self):
+        """Setting generation_timeout doesn't crash — it's just ignored."""
+        engine = _engine(max_generations=2, generation_timeout=0.001)
         engine.config.loop_interval = 0.01
 
-        call_count = 0
-
-        async def slow_then_fast_step():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                await asyncio.sleep(10)  # Triggers timeout
+        async def fast_step():
+            await asyncio.sleep(0.1)  # Longer than generation_timeout
             engine.metrics.total_generations += 1
 
-        engine.step = slow_then_fast_step
+        engine.step = fast_step
 
         await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
 
-        # First step timed out, subsequent steps completed
-        assert engine.metrics.total_generations >= 2
+        # Both generations complete despite generation_timeout=0.001
+        assert engine.metrics.total_generations == 2
 
 
 # ===================================================================

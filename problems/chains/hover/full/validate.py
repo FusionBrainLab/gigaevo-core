@@ -66,6 +66,12 @@ def validate(chain_spec: dict) -> dict:
 
     Returns a plain dict (no failure artifact) -- uses pipeline=standard.
     """
+    # 0. Early step-count check (reject before expensive chain eval)
+    steps = chain_spec.get("steps", [])
+    max_steps = FULL_CHAIN_CONFIG["max_steps"]
+    if len(steps) > max_steps:
+        return {"fitness": 0.0, "is_valid": 0, "n_steps": len(steps), "n_tool_steps": 0}
+
     # 1. Structural validation (full_chain mode)
     chain = validate_chain_spec(
         chain_spec,
