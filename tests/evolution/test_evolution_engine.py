@@ -17,6 +17,12 @@ from gigaevo.programs.program_state import ProgramState
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Every engine call that touches _await_idle must have a timeout.
+# Without this, a refactoring of _has_active_dags (e.g., switching from
+# count_by_status to get_all_by_status) can make _await_idle loop forever
+# on unmocked AsyncMock methods, silently hanging the test suite.
+ENGINE_TEST_TIMEOUT = 5.0  # seconds
+
 
 def _make_engine() -> EvolutionEngine:
     """Build a minimal EvolutionEngine with all external dependencies mocked."""
@@ -25,6 +31,14 @@ def _make_engine() -> EvolutionEngine:
     writer = MagicMock()
     writer.bind.return_value = writer
     metrics_tracker = MagicMock()
+
+    # Safe defaults for ALL status-query methods so _has_active_dags returns
+    # False (idle) regardless of implementation.  Without these, changing
+    # _has_active_dags from count_by_status to get_all_by_status would make
+    # _await_idle loop forever (unmocked AsyncMock returns truthy MagicMock).
+    storage.count_by_status.return_value = 0
+    storage.get_all_by_status.return_value = []
+    storage.get_ids_by_status.return_value = []
 
     engine = EvolutionEngine(
         storage=storage,
@@ -300,7 +314,7 @@ class TestAwaitIdle:
         engine = _make_engine()
         engine.storage.count_by_status.return_value = 0
 
-        await engine._await_idle()
+        await asyncio.wait_for(engine._await_idle(), timeout=ENGINE_TEST_TIMEOUT)
 
         # Two calls per poll: once for QUEUED, once for RUNNING (via asyncio.gather)
         assert engine.storage.count_by_status.call_count == 2
@@ -319,7 +333,7 @@ class TestAwaitIdle:
             0,  # second poll: QUEUED=0, RUNNING=0
         ]
 
-        await engine._await_idle()
+        await asyncio.wait_for(engine._await_idle(), timeout=ENGINE_TEST_TIMEOUT)
 
         # Must have polled at least twice (2 calls per poll × 2 polls = 4 calls)
         assert engine.storage.count_by_status.call_count >= 4
@@ -407,7 +421,7 @@ class TestCreateMutants:
             engine.storage.get_ids_by_status.return_value = []
             engine.strategy.get_program_ids.return_value = []
 
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         mock_gen.assert_not_called()
 
@@ -452,7 +466,7 @@ class TestStep:
             new_callable=AsyncMock,
             return_value=1,
         ):
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert engine.metrics.total_generations == 1
         assert engine.metrics.mutations_created == 1
@@ -471,7 +485,7 @@ class TestStep:
             new_callable=AsyncMock,
             return_value=0,
         ):
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert engine.metrics.total_generations == 1
 
@@ -502,7 +516,7 @@ class TestStep:
             new_callable=AsyncMock,
             return_value=0,
         ):
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         # Check on_program_ingested calls
         calls = engine.mutation_operator.on_program_ingested.call_args_list
@@ -532,7 +546,7 @@ class TestRunLoop:
             new_callable=AsyncMock,
             return_value=0,
         ):
-            await engine.run()
+            await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert engine.metrics.total_generations == 2
         assert engine._running is False
@@ -598,7 +612,7 @@ class TestRunLoop:
 
         engine.step = flaky_step
 
-        await engine.run()
+        await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
 
         # 1st call fails (no gen increment), 2nd and 3rd succeed → 2 generations
         # But cap is 3 so loop runs: fail, gen=1, gen=2, gen=3... let me check
@@ -624,7 +638,7 @@ class TestRunLoop:
 
         engine.step = slow_step
 
-        await engine.run()
+        await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert engine.metrics.total_generations >= 1
 
@@ -842,7 +856,7 @@ class TestStepPhaseOrdering:
         engine._ingest_completed_programs = tracked_ingest
         engine._refresh_archive_programs = tracked_refresh
 
-        await engine.step()
+        await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         # Expected phase order:
         # Phase 1: await_idle
@@ -887,7 +901,7 @@ class TestStepPhaseOrdering:
         engine._ingest_completed_programs = tracked_ingest
         engine._refresh_archive_programs = tracked_refresh
 
-        await engine.step()
+        await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         # Phase 6 await_idle should NOT appear because refresh returned 0
         assert call_log == [
@@ -932,7 +946,7 @@ class TestStepPhaseOrdering:
             new_callable=AsyncMock,
             return_value=2,
         ) as mock_gen:
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         # Phase 2 should now have generate_mutations called
         assert call_log == [

@@ -31,6 +31,14 @@ def _make_engine(migration_node=None, max_imports=10) -> BusedEvolutionEngine:
     if migration_node is None:
         migration_node = _mock_node()
 
+    # Safe defaults for ALL status-query methods so _has_active_dags returns
+    # False (idle) regardless of implementation.  Without these, changing
+    # _has_active_dags from count_by_status to get_all_by_status would make
+    # _await_idle loop forever (unmocked AsyncMock returns truthy MagicMock).
+    storage.count_by_status.return_value = 0
+    storage.get_all_by_status.return_value = []
+    storage.get_ids_by_status.return_value = []
+
     engine = BusedEvolutionEngine(
         migration_node=migration_node,
         max_imports_per_generation=max_imports,
