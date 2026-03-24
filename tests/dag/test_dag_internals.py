@@ -12,7 +12,7 @@ indirectly:
   - compute_hash_from_inputs exception falls back to re-execution
   - _diagnose_stage with combined exec-order + data-flow WAIT gates
   - DAGValidator rejects malformed structure (unknown stages, cycles)
-  - write_exclusive is called exactly once at DAG start
+  - write_exclusive is NOT called at DAG start (deferred to first stage persist)
   - mark_stage_running updates memory only, never writes to Redis
   - newly_cached stages reset the progress timer (no spurious stall)
 """
@@ -848,13 +848,14 @@ class TestDAGValidator:
 
 
 class TestDAGInitialPersistence:
-    """The DAG calls state_manager.write_exclusive exactly once at startup
-    (_run_internal line 101) — not per stage and not at shutdown."""
+    """The DAG does NOT call write_exclusive at startup — only
+    update_stage_result persists (via write_exclusive under the hood).
+    This avoids one to_dict() + 2 Redis RT per program."""
 
-    async def test_write_exclusive_called_once_for_three_stage_dag(
+    async def test_write_exclusive_not_called_at_startup_three_stage_dag(
         self, state_manager, make_program
     ):
-        """A 3-stage DAG calls write_exclusive exactly once."""
+        """A 3-stage DAG never calls write_exclusive directly (only via update_stage_result)."""
         dag = _make_dag(
             {
                 "a": FastStage(timeout=5.0),
@@ -877,12 +878,12 @@ class TestDAGInitialPersistence:
         with patch.object(state_manager, "write_exclusive", side_effect=counting_write):
             await dag.run(prog)
 
-        assert call_count == 1
+        assert call_count == 0
 
-    async def test_write_exclusive_called_once_for_single_stage_dag(
+    async def test_write_exclusive_not_called_at_startup_single_stage_dag(
         self, state_manager, make_program
     ):
-        """A single-stage DAG also calls write_exclusive exactly once."""
+        """A single-stage DAG also never calls write_exclusive directly."""
         dag = _make_dag({"only": FastStage(timeout=5.0)}, [], state_manager)
         prog = make_program()
 
@@ -897,7 +898,7 @@ class TestDAGInitialPersistence:
         with patch.object(state_manager, "write_exclusive", side_effect=counting_write):
             await dag.run(prog)
 
-        assert call_count == 1
+        assert call_count == 0
 
 
 # ===========================================================================

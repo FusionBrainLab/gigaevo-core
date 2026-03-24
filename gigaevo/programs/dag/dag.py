@@ -95,12 +95,10 @@ class DAG:
                 name, ProgramStageResult(status=StageState.PENDING)
             )
 
-        # Persist initial state (PENDING stages) for monitoring/crash recovery.
-        # Uses write_exclusive (2 RT) — the DAG holds exclusive ownership here.
-        # Further snapshots are NOT needed because update_stage_result()
-        # persists the ENTIRE program object after each stage completes,
-        # including any changes to metrics, metadata, etc.
-        await self.state_manager.write_exclusive(program)
+        # NOTE: No initial persist here — the first update_stage_result() or
+        # fast_state_transition (at DAG completion) writes the full program,
+        # including these PENDING entries.  Skipping saves one to_dict() +
+        # 2 Redis RT per program (significant during refresh of N programs).
 
         running: set[str] = set()
         launched_this_run: set[str] = set()
