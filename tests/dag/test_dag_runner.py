@@ -202,6 +202,9 @@ def _make_mock_storage():
     storage.atomic_state_transition = AsyncMock()
     storage.fast_state_transition = AsyncMock()
     storage.batch_transition_state = AsyncMock(return_value=0)
+    storage.batch_transition_by_ids = AsyncMock(
+        side_effect=lambda ids, *a, **kw: len(ids)
+    )
     return storage
 
 
@@ -280,7 +283,7 @@ class TestDagRunnerLaunch:
         blueprint = MagicMock()
         blueprint.build = MagicMock(return_value=mock_dag)
 
-        config = DagRunnerConfig(max_concurrent_dags=1)
+        config = DagRunnerConfig(max_concurrent_dags=1, prefetch_factor=1)
         runner = _make_runner(storage=storage, dag_blueprint=blueprint, config=config)
         await runner._launch()
 
@@ -344,18 +347,15 @@ class TestDagRunnerLaunch:
         assert call_args[0][2] == ProgramState.DISCARDED.value
 
     async def test_mark_running_failure_cancels_task_and_removes_from_active(self):
-        """If set_program_state(RUNNING) raises after task creation, task is cancelled."""
+        """If batch_transition_by_ids raises after task creation, tasks are cancelled."""
         prog = _make_test_program(state=ProgramState.QUEUED)
         storage = _make_mock_storage()
         storage.get_ids_by_status = AsyncMock(
             side_effect=lambda s: [prog.id] if s == ProgramState.QUEUED.value else []
         )
         storage.mget = AsyncMock(return_value=[prog])
-        # Make the RUNNING state transition fail
-        storage.atomic_state_transition = AsyncMock(
-            side_effect=RuntimeError("Redis timeout")
-        )
-        storage.fast_state_transition = AsyncMock(
+        # Make the batch RUNNING transition fail
+        storage.batch_transition_by_ids = AsyncMock(
             side_effect=RuntimeError("Redis timeout")
         )
 
@@ -486,7 +486,7 @@ class TestDagRunnerMaintain:
         await task1
         await task2
 
-        config = DagRunnerConfig(max_concurrent_dags=2)
+        config = DagRunnerConfig(max_concurrent_dags=2, prefetch_factor=1)
         runner = _make_runner(storage=storage, config=config)
 
         runner._active["p1"] = TaskInfo(

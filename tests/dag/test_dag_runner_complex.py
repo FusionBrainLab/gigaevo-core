@@ -47,6 +47,9 @@ def _mock_storage():
     storage.atomic_state_transition = AsyncMock()
     storage.fast_state_transition = AsyncMock()
     storage.batch_transition_state = AsyncMock(return_value=0)
+    storage.batch_transition_by_ids = AsyncMock(
+        side_effect=lambda ids, *a, **kw: len(ids)
+    )
     return storage
 
 
@@ -456,7 +459,7 @@ class TestLaunchConcurrencyGating:
         blueprint = MagicMock()
         blueprint.build = MagicMock(return_value=mock_dag)
 
-        config = DagRunnerConfig(max_concurrent_dags=2)
+        config = DagRunnerConfig(max_concurrent_dags=2, prefetch_factor=1)
         runner = _runner(storage=storage, dag_blueprint=blueprint, config=config)
 
         await runner._launch()
