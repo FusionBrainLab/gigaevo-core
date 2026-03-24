@@ -61,6 +61,11 @@ DEFERRABLE_FIELDS: frozenset[str] = frozenset(
     {"stage_results", "metadata", "metrics", "name"}
 )
 
+# Pre-built exclude set for callers that only need metrics/lineage/state.
+# Skipping stage_results avoids ~56% of from_dict cost on heavy programs
+# (8 stages × pickle_b64_deserialize).
+EXCLUDE_STAGE_RESULTS: frozenset[str] = frozenset({"stage_results"})
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)

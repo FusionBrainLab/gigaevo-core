@@ -79,7 +79,20 @@ class ProgramStorage(ABC):
     async def get(self, program_id: str) -> Program | None: ...
 
     @abstractmethod
-    async def mget(self, program_ids: list[str]) -> list[Program]: ...
+    async def mget(
+        self,
+        program_ids: list[str],
+        *,
+        exclude: frozenset[str] | None = None,
+    ) -> list[Program]:
+        """Return programs for the given IDs (skipping missing keys).
+
+        Args:
+            exclude: Optional set of field names to skip during deserialization.
+                Excluded fields get their Pydantic defaults. Same semantics as
+                :meth:`get_all` ``exclude``.
+        """
+        ...
 
     @abstractmethod
     async def exists(self, program_id: str) -> bool: ...

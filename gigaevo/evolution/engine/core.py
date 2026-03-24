@@ -19,7 +19,7 @@ from gigaevo.evolution.mutation.mutation_operator import (
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
 from gigaevo.utils.metrics_tracker import MetricsTracker
@@ -330,10 +330,16 @@ class EvolutionEngine:
             if elapsed > 30 and not ghost_checked:
                 ghost_checked = True
                 real_q = len(
-                    await self.storage.get_all_by_status(ProgramState.QUEUED.value)
+                    await self.storage.get_all_by_status(
+                        ProgramState.QUEUED.value,
+                        exclude=EXCLUDE_STAGE_RESULTS,
+                    )
                 )
                 real_r = len(
-                    await self.storage.get_all_by_status(ProgramState.RUNNING.value)
+                    await self.storage.get_all_by_status(
+                        ProgramState.RUNNING.value,
+                        exclude=EXCLUDE_STAGE_RESULTS,
+                    )
                 )
                 if real_q == 0 and real_r == 0:
                     # Clean up ghost IDs from status sets

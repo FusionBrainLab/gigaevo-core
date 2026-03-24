@@ -257,13 +257,18 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("exists", _exists)
 
-    async def mget(self, program_ids: list[str]) -> list[Program]:
+    async def mget(
+        self,
+        program_ids: list[str],
+        *,
+        exclude: frozenset[str] | None = None,
+    ) -> list[Program]:
         if not program_ids:
             return []
 
         async def _mget(r: aioredis.Redis) -> list[Program]:
             keys = [self._keys.program(pid) for pid in program_ids]
-            return await self._mget_by_keys(r, keys, "mget")
+            return await self._mget_by_keys(r, keys, "mget", exclude=exclude)
 
         return await self._conn.execute("mget", _mget)
 
