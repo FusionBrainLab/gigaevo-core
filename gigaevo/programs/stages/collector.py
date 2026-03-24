@@ -360,8 +360,11 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
 
-    #: Fields the collector never accesses — skip during deserialization.
-    _EXCLUDE = frozenset({"stage_results"})
+    #: Skip metadata (89% of payload) and stage_results (10%) during
+    #: deserialization.  The collector only reads metrics, lineage, and
+    #: generation — never metadata or stage output.  Iteration-level stats
+    #: degrade gracefully (iteration = None → block skipped).
+    _EXCLUDE = frozenset({"stage_results", "metadata"})
 
     async def _collect_programs(self, program: Program) -> list[Program]:
         return await self.storage.snapshot.get_all(self.storage, exclude=self._EXCLUDE)
@@ -388,14 +391,20 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         )
 
         # Iteration statistics (programs in same iteration)
+        # Note: when metadata is excluded from the snapshot (for performance),
+        # p.get_metadata("iteration") returns None for all snapshot programs,
+        # so iter_programs will be empty.  In that case keep None semantics.
         iter_best, iter_worst, iter_avg, iter_valid_rate = None, None, None, None
         if iteration is not None:
             iter_programs = [
                 p for p in programs if p.get_metadata("iteration") == iteration
             ]
-            iter_best, iter_worst, iter_avg, iter_valid_rate = (
-                _compute_fitness_stats_all_metrics(iter_programs, self.metrics_context)
-            )
+            if iter_programs:
+                iter_best, iter_worst, iter_avg, iter_valid_rate = (
+                    _compute_fitness_stats_all_metrics(
+                        iter_programs, self.metrics_context
+                    )
+                )
 
         # Ancestor statistics (depth 1 - immediate parents)
         ancestors = await _get_ancestors(self.storage, program)

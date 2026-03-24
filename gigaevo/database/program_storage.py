@@ -17,7 +17,7 @@ class PopulationSnapshot:
 
     Single-slot cache keyed on ``(epoch, exclude)``. Works correctly when all
     callers within an epoch use the same exclude value (which is true in practice:
-    EvolutionaryStatisticsCollector always uses exclude={"stage_results"}, all
+    EvolutionaryStatisticsCollector always uses exclude={"stage_results", "metadata"}, all
     other callers use exclude=None). If a new caller with a different exclude
     value is added, the cache will thrash with no benefits -- a latent hazard
     that would require a dict-based multi-slot cache to fully address.
