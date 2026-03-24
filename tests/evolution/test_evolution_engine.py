@@ -64,36 +64,18 @@ def _prog(state: ProgramState = ProgramState.DONE) -> Program:
 
 
 class TestRefreshArchivePrograms:
-    async def test_only_done_programs_are_transitioned(self) -> None:
-        """Programs already QUEUED in the archive are skipped; only DONE ones are re-queued."""
+    async def test_calls_batch_transition_by_ids(self) -> None:
+        """_refresh_archive_programs passes all archive IDs to batch_transition_by_ids."""
         engine = _make_engine()
-        done_prog = _prog(ProgramState.DONE)
-        queued_prog = _prog(ProgramState.QUEUED)  # e.g. crash mid-refresh
-
-        engine.strategy.get_program_ids.return_value = [done_prog.id, queued_prog.id]
-        engine.storage.mget.return_value = [done_prog, queued_prog]
-        engine.storage.batch_transition_state.return_value = 1
+        ids = ["id1", "id2", "id3"]
+        engine.strategy.get_program_ids.return_value = ids
+        engine.storage.batch_transition_by_ids.return_value = 2
 
         count = await engine._refresh_archive_programs()
 
-        assert count == 1
-        engine.storage.batch_transition_state.assert_called_once_with(
-            [done_prog], ProgramState.DONE.value, ProgramState.QUEUED.value
-        )
-
-    async def test_all_done_programs_are_transitioned(self) -> None:
-        """When the entire archive is DONE, all programs are re-queued."""
-        engine = _make_engine()
-        progs = [_prog(ProgramState.DONE) for _ in range(3)]
-        engine.strategy.get_program_ids.return_value = [p.id for p in progs]
-        engine.storage.mget.return_value = progs
-        engine.storage.batch_transition_state.return_value = 3
-
-        count = await engine._refresh_archive_programs()
-
-        assert count == 3
-        engine.storage.batch_transition_state.assert_called_once_with(
-            progs, ProgramState.DONE.value, ProgramState.QUEUED.value
+        assert count == 2
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            ids, ProgramState.DONE.value, ProgramState.QUEUED.value
         )
 
     async def test_empty_archive_returns_zero(self) -> None:
@@ -104,19 +86,7 @@ class TestRefreshArchivePrograms:
         count = await engine._refresh_archive_programs()
 
         assert count == 0
-        engine.storage.batch_transition_state.assert_not_called()
-
-    async def test_no_done_programs_returns_zero(self) -> None:
-        """Archive has programs but none are DONE → returns 0, no transitions."""
-        engine = _make_engine()
-        running_prog = _prog(ProgramState.RUNNING)
-        engine.strategy.get_program_ids.return_value = [running_prog.id]
-        engine.storage.mget.return_value = [running_prog]
-
-        count = await engine._refresh_archive_programs()
-
-        assert count == 0
-        engine.storage.batch_transition_state.assert_not_called()
+        engine.storage.batch_transition_by_ids.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

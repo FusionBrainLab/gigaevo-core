@@ -560,6 +560,75 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("batch_transition_state", _batch)
 
+    async def batch_transition_by_ids(
+        self,
+        program_ids: list[str],
+        old_state: str,
+        new_state: str,
+    ) -> int:
+        """Batch-transition programs by ID using raw JSON patching.
+
+        Much faster than batch_transition_state for large batches because it
+        skips Pydantic deserialization/reserialization entirely. Reads raw JSON
+        blobs, patches the ``state`` field in-place, and writes back.
+
+        Only transitions programs whose current state matches ``old_state``.
+        Returns the number of programs actually transitioned.
+        """
+        self._check_write_allowed("batch_transition_by_ids")
+        if not program_ids:
+            return 0
+
+        validate_transition(ProgramState(old_state), ProgramState(new_state))
+
+        async def _batch_raw(r: aioredis.Redis) -> int:
+            old_set_key = self._keys.status_set(old_state)
+            new_set_key = self._keys.status_set(new_state)
+            stream_key = self._keys.status_stream()
+            ts_key = self._keys.timestamp()
+
+            count = 0
+            for id_chunk in self._chunks(program_ids, MGET_CHUNK_SIZE):
+                keys = [self._keys.program(pid) for pid in id_chunk]
+                blobs = await r.mget(*keys)
+
+                # Filter: only patch programs that exist and are in old_state
+                to_patch: list[tuple[str, str, dict]] = []  # (key, pid, parsed)
+                for key, pid, raw in zip(keys, id_chunk, blobs):
+                    if not raw:
+                        continue
+                    parsed = _loads(raw)
+                    if parsed.get("state") == old_state:
+                        to_patch.append((key, pid, parsed))
+
+                if not to_patch:
+                    continue
+
+                n = len(to_patch)
+                end_counter = await r.incrby(ts_key, n)
+                start_counter = end_counter - n + 1
+
+                pipe = r.pipeline(transaction=False)
+                for i, (key, pid, parsed) in enumerate(to_patch):
+                    parsed["state"] = new_state
+                    parsed["atomic_counter"] = int(start_counter + i)
+                    pipe.set(key, _dumps(parsed))
+                    pipe.srem(old_set_key, pid)
+                    pipe.sadd(new_set_key, pid)
+
+                pipe.xadd(
+                    stream_key,
+                    {"id": "batch", "status": new_state, "event": "batch_transition"},
+                    maxlen=STREAM_MAX_LEN,
+                    approximate=True,
+                )
+                await pipe.execute()
+                count += n
+
+            return count
+
+        return await self._conn.execute("batch_transition_by_ids", _batch_raw)
+
     async def remove_ids_from_status_set(self, status: str, ids: list[str]) -> None:
         """Remove specific IDs from a status set using SREM."""
         if not ids:

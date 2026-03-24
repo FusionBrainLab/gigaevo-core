@@ -1211,3 +1211,93 @@ class TestRecoverStrandedGhostId:
         assert ghost_id not in ids
         queued = await fakeredis_storage.get_ids_by_status(ProgramState.QUEUED.value)
         assert prog.id in queued
+
+
+# ===================================================================
+# Category P: batch_transition_by_ids — raw JSON patching fast path
+# ===================================================================
+
+
+class TestBatchTransitionByIds:
+    async def test_transitions_matching_programs(
+        self, fakeredis_storage, make_program
+    ) -> None:
+        """Programs in old_state are transitioned; others are left alone."""
+        done1 = make_program(state=ProgramState.DONE)
+        done2 = make_program(state=ProgramState.DONE)
+        queued = make_program(state=ProgramState.QUEUED)
+
+        for p in [done1, done2, queued]:
+            await fakeredis_storage.add(p)
+
+        count = await fakeredis_storage.batch_transition_by_ids(
+            [done1.id, done2.id, queued.id],
+            ProgramState.DONE.value,
+            ProgramState.QUEUED.value,
+        )
+
+        assert count == 2
+
+        for pid in [done1.id, done2.id]:
+            p = await fakeredis_storage.get(pid)
+            assert p.state == ProgramState.QUEUED
+
+    async def test_preserves_program_data(
+        self, fakeredis_storage, make_program
+    ) -> None:
+        """Program code, metrics, metadata survive the raw JSON patch."""
+        prog = make_program(state=ProgramState.DONE)
+        prog.add_metrics({"fitness": 0.95, "x": 1.5})
+        prog.set_metadata("test_key", "test_value")
+        await fakeredis_storage.add(prog)
+
+        await fakeredis_storage.batch_transition_by_ids(
+            [prog.id],
+            ProgramState.DONE.value,
+            ProgramState.QUEUED.value,
+        )
+
+        fetched = await fakeredis_storage.get(prog.id)
+        assert fetched.state == ProgramState.QUEUED
+        assert fetched.code == prog.code
+        assert fetched.metrics["fitness"] == 0.95
+        assert fetched.get_metadata("test_key") == "test_value"
+
+    async def test_updates_status_sets(self, fakeredis_storage, make_program) -> None:
+        """Status sets are updated: removed from old, added to new."""
+        prog = make_program(state=ProgramState.DONE)
+        await fakeredis_storage.add(prog)
+
+        await fakeredis_storage.batch_transition_by_ids(
+            [prog.id],
+            ProgramState.DONE.value,
+            ProgramState.QUEUED.value,
+        )
+
+        done_ids = await fakeredis_storage.get_ids_by_status(ProgramState.DONE.value)
+        queued_ids = await fakeredis_storage.get_ids_by_status(
+            ProgramState.QUEUED.value
+        )
+        assert prog.id not in done_ids
+        assert prog.id in queued_ids
+
+    async def test_empty_ids_returns_zero(self, fakeredis_storage) -> None:
+        """No IDs returns 0."""
+        count = await fakeredis_storage.batch_transition_by_ids(
+            [],
+            ProgramState.DONE.value,
+            ProgramState.QUEUED.value,
+        )
+        assert count == 0
+
+    async def test_missing_ids_skipped(self, fakeredis_storage, make_program) -> None:
+        """IDs not in Redis are silently skipped."""
+        prog = make_program(state=ProgramState.DONE)
+        await fakeredis_storage.add(prog)
+
+        count = await fakeredis_storage.batch_transition_by_ids(
+            [prog.id, "nonexistent-id"],
+            ProgramState.DONE.value,
+            ProgramState.QUEUED.value,
+        )
+        assert count == 1

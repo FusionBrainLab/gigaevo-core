@@ -18,6 +18,7 @@ from gigaevo.programs.program_state import ProgramState
 from tests.benchmarks.conftest import (
     BenchmarkTimer,
     cleanup_storage,
+    make_heavy_program,
     make_storage,
 )
 
@@ -130,5 +131,71 @@ class TestCountByStatusUnderLoad:
         print(
             f"BENCHMARK: count_by_status x3 ({backend}): "
             f"{avg_ms:.3f}ms/round ({t.elapsed_ms:.0f}ms for {k} rounds)"
+        )
+        await cleanup_storage(storage)
+
+
+class TestBatchTransitionByIds:
+    """Compare batch_transition_by_ids (raw JSON patch) vs batch_transition_state."""
+
+    @pytest.fixture(params=[100, 500, 2000])
+    def batch_size(self, request):
+        return request.param
+
+    async def test_batch_by_ids_heavy(
+        self, batch_size: int, redis_url: str | None
+    ) -> None:
+        """batch_transition_by_ids on heavy programs (the refresh path)."""
+        server = None if redis_url else fakeredis.FakeServer()
+        storage = make_storage(server=server, redis_url=redis_url)
+
+        ids = []
+        for i in range(batch_size):
+            p = make_heavy_program(float(i), float(i % 10))
+            p.state = ProgramState.DONE
+            await storage.add(p)
+            ids.append(p.id)
+
+        with BenchmarkTimer() as t:
+            count = await storage.batch_transition_by_ids(
+                ids,
+                ProgramState.DONE.value,
+                ProgramState.QUEUED.value,
+            )
+
+        assert count == batch_size
+        backend = "redis" if redis_url else "fakeredis"
+        print(
+            f"BENCHMARK: batch_by_ids_heavy N={batch_size} ({backend}): "
+            f"{t.elapsed_ms:.1f}ms"
+        )
+        await cleanup_storage(storage)
+
+    async def test_batch_state_heavy(
+        self, batch_size: int, redis_url: str | None
+    ) -> None:
+        """batch_transition_state on heavy programs (the old path)."""
+        server = None if redis_url else fakeredis.FakeServer()
+        storage = make_storage(server=server, redis_url=redis_url)
+
+        programs = []
+        for i in range(batch_size):
+            p = make_heavy_program(float(i), float(i % 10))
+            p.state = ProgramState.DONE
+            await storage.add(p)
+            programs.append(p)
+
+        with BenchmarkTimer() as t:
+            count = await storage.batch_transition_state(
+                programs,
+                ProgramState.DONE.value,
+                ProgramState.QUEUED.value,
+            )
+
+        assert count == batch_size
+        backend = "redis" if redis_url else "fakeredis"
+        print(
+            f"BENCHMARK: batch_state_heavy N={batch_size} ({backend}): "
+            f"{t.elapsed_ms:.1f}ms"
         )
         await cleanup_storage(storage)

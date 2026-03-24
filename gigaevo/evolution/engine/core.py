@@ -515,21 +515,15 @@ class EvolutionEngine:
         if not program_ids_to_refresh:
             return 0
 
-        programs_to_refresh = await self.storage.mget(program_ids_to_refresh)
-        done_programs = [p for p in programs_to_refresh if p.state == ProgramState.DONE]
-
-        if not done_programs:
-            return 0
-
         try:
-            count = await self.storage.batch_transition_state(
-                done_programs,
+            count = await self.storage.batch_transition_by_ids(
+                program_ids_to_refresh,
                 ProgramState.DONE.value,
                 ProgramState.QUEUED.value,
             )
         except Exception as e:
             logger.error(
-                "[EvolutionEngine] gen={} batch_transition_state failed: {}",
+                "[EvolutionEngine] gen={} batch_transition_by_ids failed: {}",
                 self.metrics.total_generations,
                 e,
             )

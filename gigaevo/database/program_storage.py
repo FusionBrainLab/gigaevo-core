@@ -210,6 +210,25 @@ class ProgramStorage(ABC):
             count += 1
         return count
 
+    async def batch_transition_by_ids(
+        self,
+        program_ids: list[str],
+        old_state: str,
+        new_state: str,
+    ) -> int:
+        """Batch-transition programs by ID.
+
+        Default implementation falls back to mget + batch_transition_state.
+        Subclasses may override with optimized raw-blob patching.
+        """
+        if not program_ids:
+            return 0
+        programs = await self.mget(program_ids)
+        matching = [p for p in programs if p.state.value == old_state]
+        if not matching:
+            return 0
+        return await self.batch_transition_state(matching, old_state, new_state)
+
     async def remove_ids_from_status_set(self, status: str, ids: list[str]) -> None:
         """Remove specific IDs from a status set. No-op by default."""
 
