@@ -220,6 +220,9 @@ class RedisArchiveStorage(ArchiveStorage):
                     return True
 
                 except WatchError:
+                    # Invalidate cache for this cell — Redis state may
+                    # have changed under us.  Next iteration re-reads.
+                    self._cache_remove_field(field)
                     continue
 
         ok = await self._storage.with_redis("archive:add_elite", _op)
