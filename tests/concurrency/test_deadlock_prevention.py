@@ -18,6 +18,8 @@ import pytest
 
 from gigaevo.database.program_storage import PopulationSnapshot, ProgramStorage
 from gigaevo.database.redis import RedisProgramStorageConfig
+from gigaevo.database.redis.config import RedisConnectionConfig
+from gigaevo.database.redis.connection import RedisConnection
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.engine.config import EngineConfig
@@ -33,6 +35,7 @@ from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
+from gigaevo.runner.dag_runner import DagRunner, DagRunnerConfig, TaskInfo
 
 # ---------------------------------------------------------------------------
 # Timeout for all tests — if anything hangs, fail fast
@@ -957,5 +960,522 @@ class TestAwaitIdleRealPrograms:
 
             for p in programs:
                 assert p.state == ProgramState.DONE
+        finally:
+            await storage.close()
+
+
+# ===========================================================================
+# 11. DagRunner semaphore saturation and timeout recovery
+# ===========================================================================
+
+
+class TestDagRunnerSemaphore:
+    """DagRunner._sema limits concurrent DAGs. If all slots are taken by
+    hanging tasks, new programs queue behind the semaphore. The dag_timeout
+    in _maintain() and _cancel_task (2s timeout) are the escape hatches.
+    """
+
+    async def test_semaphore_does_not_deadlock_under_saturation(self) -> None:
+        """Fill all semaphore slots with slow tasks, then verify new tasks
+        can proceed once slots free up.
+        """
+        sema = asyncio.Semaphore(2)
+        completed = {"n": 0}
+
+        async def slow_work(delay: float):
+            async with sema:
+                await asyncio.sleep(delay)
+                completed["n"] += 1
+
+        # Launch 4 tasks through 2-slot semaphore
+        tasks = [
+            asyncio.create_task(slow_work(0.05)),
+            asyncio.create_task(slow_work(0.05)),
+            asyncio.create_task(slow_work(0.05)),
+            asyncio.create_task(slow_work(0.05)),
+        ]
+
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=HANG_TIMEOUT)
+        assert completed["n"] == 4
+
+    async def test_cancel_task_does_not_hang_on_stuck_task(self) -> None:
+        """DagRunner._cancel_task uses wait_for(timeout=2.0).
+        If a task ignores cancellation, the 2s timeout must fire.
+        """
+        import contextlib
+
+        async def uncancellable():
+            """Task that catches CancelledError and continues."""
+            try:
+                while True:
+                    await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                # Deliberately swallow and continue
+                await asyncio.sleep(10)
+
+        task = asyncio.create_task(uncancellable())
+        await asyncio.sleep(0.01)  # let it start
+
+        info = TaskInfo(task=task, program_id="test-prog", started_at=0.0)
+
+        # _cancel_task should complete within 2s + overhead
+        storage = _make_storage()
+        try:
+            writer = MagicMock()
+            writer.bind.return_value = writer
+            runner = DagRunner(
+                storage=storage,
+                dag_blueprint=MagicMock(),
+                config=DagRunnerConfig(poll_interval=0.5, max_concurrent_dags=2),
+                writer=writer,
+            )
+            await asyncio.wait_for(runner._cancel_task(info), timeout=HANG_TIMEOUT)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await storage.close()
+
+    async def test_semaphore_with_cancelled_tasks_frees_slots(self) -> None:
+        """Cancelled tasks must release their semaphore slot."""
+        import contextlib
+
+        sema = asyncio.Semaphore(1)
+        entered = asyncio.Event()
+
+        async def blocking_work():
+            async with sema:
+                entered.set()
+                await asyncio.sleep(999)
+
+        # Start a task that holds the semaphore
+        task1 = asyncio.create_task(blocking_work())
+        await entered.wait()
+
+        # Cancel it — slot should be freed
+        task1.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task1
+
+        # New task should be able to acquire the semaphore
+        acquired = {"done": False}
+
+        async def quick_work():
+            async with sema:
+                acquired["done"] = True
+
+        await asyncio.wait_for(quick_work(), timeout=HANG_TIMEOUT)
+        assert acquired["done"]
+
+
+# ===========================================================================
+# 12. RedisConnection lock contention
+# ===========================================================================
+
+
+class TestRedisConnectionLock:
+    """RedisConnection uses asyncio.Lock for lazy initialization.
+    Multiple concurrent callers must not deadlock.
+    """
+
+    async def test_concurrent_get_does_not_deadlock(self) -> None:
+        """Multiple concurrent .get() calls should not deadlock —
+        only one creates the connection, others piggyback.
+        """
+        storage = _make_storage()
+        try:
+            conn = storage._conn
+
+            async def get_redis():
+                return await conn.get()
+
+            tasks = [asyncio.create_task(get_redis()) for _ in range(20)]
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks), timeout=HANG_TIMEOUT
+            )
+
+            # All should get the same connection
+            assert all(r is results[0] for r in results)
+        finally:
+            await storage.close()
+
+    async def test_get_after_close_raises_not_hangs(self) -> None:
+        """After close(), get() must raise StorageError, not hang."""
+        storage = _make_storage()
+        conn = storage._conn
+        await conn.close()
+
+        from gigaevo.exceptions import StorageError
+
+        with pytest.raises(StorageError):
+            await asyncio.wait_for(conn.get(), timeout=HANG_TIMEOUT)
+
+    async def test_execute_retry_does_not_hang(self) -> None:
+        """RedisConnection.execute with retries must complete in bounded time,
+        even if all retries fail.
+        """
+        config = RedisConnectionConfig(
+            redis_url="redis://nonexistent:6379/0",
+            max_retries=2,
+            retry_delay=0.01,
+        )
+        conn = RedisConnection(config)
+        # Pre-set a fake redis that always raises
+        conn._redis = MagicMock()
+
+        async def failing_op(r):
+            raise ConnectionError("fake connection error")
+
+        from gigaevo.exceptions import StorageError
+
+        with pytest.raises(StorageError):
+            await asyncio.wait_for(
+                conn.execute("test_op", failing_op), timeout=HANG_TIMEOUT
+            )
+
+
+# ===========================================================================
+# 13. DagRunner maintain/launch interaction
+# ===========================================================================
+
+
+class TestDagRunnerMaintainLaunch:
+    """The DagRunner._maintain and _launch methods run sequentially in _run,
+    but interact with shared state (_active dict). Test that timeouts and
+    harvesting don't cause lost programs or hangs.
+    """
+
+    async def test_timed_out_dag_is_cleaned_up(self) -> None:
+        """A DAG that exceeds dag_timeout must be cancelled and removed from _active."""
+        storage = _make_storage()
+        try:
+            writer = MagicMock()
+            writer.bind.return_value = writer
+            runner = DagRunner(
+                storage=storage,
+                dag_blueprint=MagicMock(),
+                config=DagRunnerConfig(
+                    poll_interval=0.5, max_concurrent_dags=4, dag_timeout=0.01
+                ),
+                writer=writer,
+            )
+
+            # Create a hanging task and add to _active
+            async def hanging():
+                await asyncio.sleep(999)
+
+            task = asyncio.create_task(hanging())
+            prog = _make_program(ProgramState.RUNNING)
+            await storage.add(prog)
+            runner._active[prog.id] = TaskInfo(
+                task=task, program_id=prog.id, started_at=0.0
+            )
+
+            # _maintain should detect the timeout and clean up
+            await asyncio.wait_for(runner._maintain(), timeout=HANG_TIMEOUT)
+
+            assert prog.id not in runner._active
+        finally:
+            # Clean up any remaining tasks
+            for info in list(runner._active.values()):
+                info.task.cancel()
+            await storage.close()
+
+    async def test_finished_task_harvested(self) -> None:
+        """A completed task is removed from _active by _maintain."""
+        storage = _make_storage()
+        try:
+            writer = MagicMock()
+            writer.bind.return_value = writer
+            runner = DagRunner(
+                storage=storage,
+                dag_blueprint=MagicMock(),
+                config=DagRunnerConfig(poll_interval=0.5, max_concurrent_dags=4),
+                writer=writer,
+            )
+
+            async def quick():
+                pass
+
+            task = asyncio.create_task(quick())
+            await task  # let it complete
+
+            prog = _make_program(ProgramState.RUNNING)
+            await storage.add(prog)
+            runner._active[prog.id] = TaskInfo(
+                task=task,
+                program_id=prog.id,
+                started_at=__import__("time").monotonic(),
+            )
+
+            await asyncio.wait_for(runner._maintain(), timeout=HANG_TIMEOUT)
+            assert prog.id not in runner._active
+        finally:
+            await storage.close()
+
+    async def test_orphaned_running_program_discarded(self) -> None:
+        """A RUNNING program not in _active (orphan) must be discarded by _launch."""
+        storage = _make_storage()
+        try:
+            writer = MagicMock()
+            writer.bind.return_value = writer
+            runner = DagRunner(
+                storage=storage,
+                dag_blueprint=MagicMock(),
+                config=DagRunnerConfig(poll_interval=0.5, max_concurrent_dags=4),
+                writer=writer,
+            )
+
+            # Add a RUNNING program that is not in _active (orphan)
+            sm = ProgramStateManager(storage)
+            prog = _make_program(ProgramState.QUEUED)
+            await storage.add(prog)
+            await sm.set_program_state(prog, ProgramState.RUNNING)
+
+            # _launch should detect the orphan and discard it
+            await asyncio.wait_for(runner._launch(), timeout=HANG_TIMEOUT)
+
+            # Verify it was discarded
+            stored = await storage.get(prog.id)
+            assert stored is not None
+            assert stored.state == ProgramState.DISCARDED
+        finally:
+            await storage.close()
+
+
+# ===========================================================================
+# 14. Multiple ProgramStateManagers on same storage (Engine + DagRunner)
+# ===========================================================================
+
+
+class TestMultipleStateManagers:
+    """In production, both Engine and DagRunner create their own ProgramStateManager
+    instances on the same storage. Their per-program locks are independent (no
+    cross-instance coordination). Verify this doesn't cause hangs.
+    """
+
+    async def test_two_state_managers_same_program_no_deadlock(self) -> None:
+        """Two independent ProgramStateManagers transitioning the same program
+        concurrently must not deadlock. The per-program lock is per-instance,
+        so they don't block each other.
+        """
+        storage = _make_storage()
+        try:
+            sm1 = ProgramStateManager(storage)
+            sm2 = ProgramStateManager(storage)
+
+            prog = _make_program(ProgramState.QUEUED)
+            await storage.add(prog)
+
+            # sm1 transitions QUEUED -> RUNNING
+            await asyncio.wait_for(
+                sm1.set_program_state(prog, ProgramState.RUNNING),
+                timeout=HANG_TIMEOUT,
+            )
+
+            # sm2 does a write_exclusive on the same program
+            prog.set_metadata("sm2_write", True)
+            await asyncio.wait_for(
+                sm2.write_exclusive(prog),
+                timeout=HANG_TIMEOUT,
+            )
+
+            # sm1 transitions RUNNING -> DONE
+            await asyncio.wait_for(
+                sm1.set_program_state(prog, ProgramState.DONE),
+                timeout=HANG_TIMEOUT,
+            )
+
+            assert prog.state == ProgramState.DONE
+        finally:
+            await storage.close()
+
+    async def test_concurrent_state_managers_different_programs(self) -> None:
+        """Two state managers each processing different programs concurrently."""
+        storage = _make_storage()
+        try:
+            sm1 = ProgramStateManager(storage)
+            sm2 = ProgramStateManager(storage)
+
+            progs1 = []
+            progs2 = []
+            for _ in range(10):
+                p1 = _make_program(ProgramState.QUEUED)
+                p2 = _make_program(ProgramState.QUEUED)
+                await storage.add(p1)
+                await storage.add(p2)
+                progs1.append(p1)
+                progs2.append(p2)
+
+            async def sm1_work():
+                for p in progs1:
+                    await sm1.set_program_state(p, ProgramState.RUNNING)
+                    await sm1.set_program_state(p, ProgramState.DONE)
+
+            async def sm2_work():
+                for p in progs2:
+                    await sm2.set_program_state(p, ProgramState.RUNNING)
+                    await sm2.set_program_state(p, ProgramState.DONE)
+
+            await asyncio.wait_for(
+                asyncio.gather(sm1_work(), sm2_work()),
+                timeout=HANG_TIMEOUT,
+            )
+
+            for p in progs1 + progs2:
+                assert p.state == ProgramState.DONE
+        finally:
+            await storage.close()
+
+
+# ===========================================================================
+# 15. Mixed QUEUED/RUNNING/DONE programs — _await_idle precision
+# ===========================================================================
+
+
+class TestAwaitIdleMixedStates:
+    """_await_idle must correctly detect idle state when programs are
+    in mixed states — some DONE, some being transitioned.
+    """
+
+    async def test_idle_with_mixed_done_and_discarded(self) -> None:
+        """DONE + DISCARDED programs = idle (only QUEUED/RUNNING are active)."""
+        storage = _make_storage()
+        try:
+            engine = _make_engine(storage)
+            sm = ProgramStateManager(storage)
+
+            # Create programs in various terminal states
+            for state_path in [
+                [ProgramState.RUNNING, ProgramState.DONE],
+                [ProgramState.RUNNING, ProgramState.DISCARDED],
+                [ProgramState.RUNNING, ProgramState.DONE],
+            ]:
+                p = _make_program(ProgramState.QUEUED)
+                await storage.add(p)
+                for s in state_path:
+                    await sm.set_program_state(p, s)
+
+            # Should be idle — no QUEUED or RUNNING
+            await asyncio.wait_for(engine._await_idle(), timeout=HANG_TIMEOUT)
+
+        finally:
+            await storage.close()
+
+    async def test_single_queued_among_many_done_blocks_idle(self) -> None:
+        """Even one QUEUED program among many DONE should block _await_idle."""
+        storage = _make_storage()
+        try:
+            engine = _make_engine(storage)
+            sm = ProgramStateManager(storage)
+
+            # 10 DONE programs
+            for _ in range(10):
+                p = _make_program(ProgramState.QUEUED)
+                await storage.add(p)
+                await sm.set_program_state(p, ProgramState.RUNNING)
+                await sm.set_program_state(p, ProgramState.DONE)
+
+            # 1 QUEUED program (blocks idle)
+            blocker = _make_program(ProgramState.QUEUED)
+            await storage.add(blocker)
+
+            assert await engine._has_active_dags() is True
+
+            # Complete the blocker in background
+            async def unblock():
+                await asyncio.sleep(0.05)
+                await sm.set_program_state(blocker, ProgramState.RUNNING)
+                await sm.set_program_state(blocker, ProgramState.DONE)
+
+            task = asyncio.create_task(unblock())
+            await asyncio.wait_for(engine._await_idle(), timeout=HANG_TIMEOUT)
+            await task
+
+        finally:
+            await storage.close()
+
+
+# ===========================================================================
+# 16. Storage batch operations under contention
+# ===========================================================================
+
+
+class TestStorageBatchContention:
+    """Concurrent batch operations on Redis must not deadlock."""
+
+    async def test_concurrent_batch_transitions(self) -> None:
+        """Two concurrent batch_transition_state calls on different programs."""
+        storage = _make_storage()
+        try:
+            sm = ProgramStateManager(storage)
+
+            batch_a = []
+            batch_b = []
+            for _ in range(20):
+                pa = _make_program(ProgramState.QUEUED)
+                pb = _make_program(ProgramState.QUEUED)
+                await storage.add(pa)
+                await storage.add(pb)
+                await sm.set_program_state(pa, ProgramState.RUNNING)
+                await sm.set_program_state(pa, ProgramState.DONE)
+                await sm.set_program_state(pb, ProgramState.RUNNING)
+                await sm.set_program_state(pb, ProgramState.DONE)
+                batch_a.append(pa)
+                batch_b.append(pb)
+
+            async def transition_batch(programs):
+                return await storage.batch_transition_state(
+                    programs, ProgramState.DONE.value, ProgramState.QUEUED.value
+                )
+
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    transition_batch(batch_a),
+                    transition_batch(batch_b),
+                ),
+                timeout=HANG_TIMEOUT,
+            )
+
+            assert results[0] == 20
+            assert results[1] == 20
+        finally:
+            await storage.close()
+
+    async def test_get_all_by_status_during_transitions(self) -> None:
+        """get_all_by_status must return consistent results even while
+        programs are being transitioned concurrently.
+        """
+        storage = _make_storage()
+        try:
+            sm = ProgramStateManager(storage)
+
+            programs = []
+            for _ in range(20):
+                p = _make_program(ProgramState.QUEUED)
+                await storage.add(p)
+                programs.append(p)
+
+            async def transition_all():
+                for p in programs:
+                    await sm.set_program_state(p, ProgramState.RUNNING)
+                    await sm.set_program_state(p, ProgramState.DONE)
+
+            async def poll_status():
+                for _ in range(50):
+                    queued = await storage.get_all_by_status(ProgramState.QUEUED.value)
+                    running = await storage.get_all_by_status(
+                        ProgramState.RUNNING.value
+                    )
+                    done = await storage.get_all_by_status(ProgramState.DONE.value)
+                    # Total should be <= 20 (some may be in-flight between states)
+                    total = len(queued) + len(running) + len(done)
+                    assert total <= 20, f"Got {total} programs, expected <= 20"
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(
+                asyncio.gather(transition_all(), poll_status()),
+                timeout=HANG_TIMEOUT,
+            )
         finally:
             await storage.close()
