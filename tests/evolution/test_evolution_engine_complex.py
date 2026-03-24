@@ -23,6 +23,12 @@ from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
+# Every engine call that touches _await_idle must have a timeout.
+# Without this, a refactoring of _has_active_dags (e.g., switching from
+# count_by_status to get_all_by_status) can make _await_idle loop forever
+# on unmocked AsyncMock methods, silently hanging the test suite.
+ENGINE_TEST_TIMEOUT = 5.0  # seconds
+
 
 def _engine(**overrides) -> EvolutionEngine:
     storage = AsyncMock()
@@ -84,7 +90,7 @@ class TestPreStepHook:
             new_callable=AsyncMock,
             return_value=0,
         ):
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert hook_calls == ["called"]
         assert engine.metrics.total_generations == 1
@@ -117,7 +123,7 @@ class TestPreStepHook:
         engine._ingest_completed_programs = tracked_ingest
         engine._refresh_archive_programs = tracked_refresh
 
-        await engine.step()
+        await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         # Hook must be first
         assert call_order[0] == "hook"
@@ -135,7 +141,7 @@ class TestPreStepHook:
             new_callable=AsyncMock,
             return_value=0,
         ):
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert engine.metrics.total_generations == 1
 
@@ -149,7 +155,7 @@ class TestPreStepHook:
         engine = _engine(pre_step_hook=bad_hook)
 
         with pytest.raises(RuntimeError, match="hook failed"):
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
 
 # ===================================================================
@@ -423,7 +429,7 @@ class TestRunStepTimeout:
 
         engine.step = slow_then_fast_step
 
-        await engine.run()
+        await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
 
         # First step timed out, subsequent steps completed
         assert engine.metrics.total_generations >= 2
@@ -449,7 +455,7 @@ class TestStepGenerationPersistence:
             new_callable=AsyncMock,
             return_value=0,
         ):
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         engine.storage.save_run_state.assert_called_once_with(
             "engine:total_generations", 1
@@ -467,9 +473,9 @@ class TestStepGenerationPersistence:
             new_callable=AsyncMock,
             return_value=0,
         ):
-            await engine.step()
-            await engine.step()
-            await engine.step()
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert engine.metrics.total_generations == 3
         # Last call should save generation 3
