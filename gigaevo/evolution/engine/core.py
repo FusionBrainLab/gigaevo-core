@@ -493,8 +493,13 @@ class EvolutionEngine:
                 )
                 reject_ids.append(prog.id)
 
-        # Batch DONE → DISCARDED (raw JSON patch, no Pydantic serialization)
+        # Batch DONE → DISCARDED (raw JSON patch, no Pydantic serialization).
+        # Also update in-memory state so any downstream code sees DISCARDED.
         if reject_ids:
+            reject_set = set(reject_ids)
+            for prog in completed:
+                if prog.id in reject_set:
+                    prog.state = ProgramState.DISCARDED
             try:
                 await self.storage.batch_transition_by_ids(
                     reject_ids,
