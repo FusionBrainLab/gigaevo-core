@@ -98,22 +98,32 @@ class RedisProgramStorage(ProgramStorage):
             yield batch
 
     @staticmethod
-    def _safe_deserialize(raw: str, ctx: str) -> Program | None:
+    def _safe_deserialize(
+        raw: str,
+        ctx: str,
+        *,
+        exclude: frozenset[str] | None = None,
+    ) -> Program | None:
         try:
-            return Program.from_dict(_loads(raw))
+            return Program.from_dict(_loads(raw), exclude=exclude)
         except Exception as e:
             logger.warning("[RedisProgramStorage] Corrupt data in {}: {}", ctx, e)
             return None
 
     async def _mget_by_keys(
-        self, r: aioredis.Redis, keys: list[str], ctx: str
+        self,
+        r: aioredis.Redis,
+        keys: list[str],
+        ctx: str,
+        *,
+        exclude: frozenset[str] | None = None,
     ) -> list[Program]:
         out: list[Program] = []
         for batch in self._chunks(keys, MGET_CHUNK_SIZE):
             blobs = await r.mget(*batch)
             for raw in blobs:
                 if raw:
-                    p = self._safe_deserialize(raw, ctx)
+                    p = self._safe_deserialize(raw, ctx, exclude=exclude)
                     if p is not None:
                         out.append(p)
         return out
@@ -270,8 +280,15 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("size", _size)
 
-    async def get_all(self) -> list[Program]:
-        """Get all programs using SCAN + chunked MGET."""
+    async def get_all(self, *, exclude: frozenset[str] | None = None) -> list[Program]:
+        """Get all programs using SCAN + chunked MGET.
+
+        Args:
+            exclude: Optional set of field names to skip during deserialization
+                (passed through to :meth:`Program.from_dict`). Excluded fields
+                get their Pydantic defaults. Example: ``exclude=frozenset({"stage_results"})``
+                saves ~33% deserialization cost for analytics callers.
+        """
 
         async def _scan_then_mget(r: aioredis.Redis) -> list[Program]:
             keys: list[str] = []
@@ -281,7 +298,7 @@ class RedisProgramStorage(ProgramStorage):
                 keys.append(key)
             if not keys:
                 return []
-            return await self._mget_by_keys(r, keys, "get_all")
+            return await self._mget_by_keys(r, keys, "get_all", exclude=exclude)
 
         return await self._conn.execute("get_all", _scan_then_mget)
 
@@ -340,14 +357,18 @@ class RedisProgramStorage(ProgramStorage):
 
         await self._conn.execute("publish_status_event", _event)
 
-    async def get_all_by_status(self, status: str) -> list[Program]:
+    async def get_all_by_status(
+        self, status: str, *, exclude: frozenset[str] | None = None
+    ) -> list[Program]:
         ids = await self._ids_for_status(status)
         if not ids:
             return []
 
         async def _by_status(r: aioredis.Redis) -> list[Program]:
             keys = [self._keys.program(pid) for pid in ids]
-            programs = await self._mget_by_keys(r, keys, f"get_all_by_status:{status}")
+            programs = await self._mget_by_keys(
+                r, keys, f"get_all_by_status:{status}", exclude=exclude
+            )
             return [p for p in programs if p.state.value == status]
 
         return await self._conn.execute("get_all_by_status", _by_status)

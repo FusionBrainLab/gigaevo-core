@@ -14,13 +14,21 @@ class PopulationSnapshot:
     Shared across all collector instances via ``storage.snapshot``.
     Call :meth:`bump` at phase boundaries to invalidate; collectors that
     see a stale epoch will re-fetch exactly once (others piggyback).
+
+    Single-slot cache keyed on ``(epoch, exclude)``. Works correctly when all
+    callers within an epoch use the same exclude value (which is true in practice:
+    EvolutionaryStatisticsCollector always uses exclude={"stage_results"}, all
+    other callers use exclude=None). If a new caller with a different exclude
+    value is added, the cache will thrash with no benefits -- a latent hazard
+    that would require a dict-based multi-slot cache to fully address.
     """
 
-    __slots__ = ("_epoch", "_cached_epoch", "_cached", "_lock")
+    __slots__ = ("_epoch", "_cached_epoch", "_cached_exclude", "_cached", "_lock")
 
     def __init__(self) -> None:
         self._epoch: int = 0
         self._cached_epoch: int = -1
+        self._cached_exclude: frozenset[str] | None = None
         self._cached: list[Program] = []
         self._lock = asyncio.Lock()
 
@@ -28,15 +36,21 @@ class PopulationSnapshot:
         """Increment the epoch, invalidating the cached snapshot."""
         self._epoch += 1
 
-    async def get_all(self, storage: ProgramStorage) -> list[Program]:
-        """Return cached programs if epoch matches, else fetch + cache."""
-        if self._cached_epoch == self._epoch:
+    async def get_all(
+        self,
+        storage: ProgramStorage,
+        *,
+        exclude: frozenset[str] | None = None,
+    ) -> list[Program]:
+        """Return cached programs if epoch+exclude matches, else fetch + cache."""
+        if self._cached_epoch == self._epoch and self._cached_exclude == exclude:
             return self._cached
         async with self._lock:
-            if self._cached_epoch == self._epoch:
+            if self._cached_epoch == self._epoch and self._cached_exclude == exclude:
                 return self._cached
-            programs = await storage.get_all()
+            programs = await storage.get_all(exclude=exclude)
             self._cached = programs
+            self._cached_exclude = exclude
             self._cached_epoch = self._epoch
             return programs
 
@@ -79,10 +93,20 @@ class ProgramStorage(ABC):
     ) -> None: ...
 
     @abstractmethod
-    async def get_all(self) -> list[Program]: ...
+    async def get_all(self, *, exclude: frozenset[str] | None = None) -> list[Program]:
+        """Return all programs.
+
+        Args:
+            exclude: Optional set of field names to skip during deserialization.
+                Excluded fields get their Pydantic defaults. Implementations
+                that don't support projection may ignore this parameter.
+        """
+        ...
 
     @abstractmethod
-    async def get_all_by_status(self, status: str) -> list[Program]: ...
+    async def get_all_by_status(
+        self, status: str, *, exclude: frozenset[str] | None = None
+    ) -> list[Program]: ...
 
     @abstractmethod
     async def get_ids_by_status(self, status: str) -> list[str]:

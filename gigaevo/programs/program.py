@@ -54,6 +54,13 @@ OPTIMIZATION_STAGES: frozenset[str] = frozenset(
     }
 )
 
+# Fields safe to exclude in Program.from_dict: have safe Pydantic defaults.
+# code is required (no default), id generates new UUIDs, state resets to
+# QUEUED — none of those are safe to silently default.
+DEFERRABLE_FIELDS: frozenset[str] = frozenset(
+    {"stage_results", "metadata", "metrics", "name"}
+)
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -162,8 +169,34 @@ class Program(BaseModel):
         return self.model_dump(mode="json")
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Program:
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        *,
+        exclude: frozenset[str] | None = None,
+    ) -> Program:
+        """Deserialize a Program from a dict (e.g. JSON-decoded Redis blob).
+
+        Args:
+            data: Dict as produced by :meth:`to_dict`.
+            exclude: Optional set of field names to skip during deserialization.
+                Excluded fields get their Pydantic defaults (e.g. ``{}`` for
+                ``stage_results``). Works like Django ORM's ``defer()`` —
+                callers that only need metrics/lineage can skip expensive fields
+                such as ``stage_results`` to avoid reconstruction cost.
+        """
+        if exclude:
+            bad = exclude - DEFERRABLE_FIELDS
+            if bad:
+                raise ValueError(
+                    f"Cannot exclude field(s): {bad}. "
+                    f"Only {DEFERRABLE_FIELDS} may be excluded."
+                )
+
         d = dict(data)
+        if exclude:
+            for field in exclude:
+                d.pop(field, None)
         if "metadata" in d and isinstance(d["metadata"], str):
             d["metadata"] = pickle_b64_deserialize(d["metadata"])
         if "stage_results" in d and isinstance(d["stage_results"], dict):
