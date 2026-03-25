@@ -1,4 +1,4 @@
-from tools.utils import RedisRunConfig
+from gigaevo.utils.redis import RedisRunConfig
 
 
 def create_redis_config(config: dict[str, str]) -> RedisRunConfig:

@@ -35,7 +35,7 @@ from gigaevo.llm.ideas_tracker.utils.records_converter import (
 from gigaevo.llm.ideas_tracker.utils.task_description_loader import (
     _load_task_description,
 )
-from tools.utils import fetch_evolution_dataframe
+from gigaevo.utils.redis import fetch_evolution_dataframe
 
 
 class IdeaTracker:
