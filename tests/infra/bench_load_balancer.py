@@ -301,6 +301,107 @@ async def scenario_balanced(
     return total
 
 
+async def scenario_staggered_static(
+    endpoints: list[str],
+    model: str,
+    system: str,
+    user: str,
+    n_runs: int,
+    calls_per_run: int,
+    stagger_secs: float,
+    label: str,
+) -> float:
+    """Staggered: runs start mutation at different times (static assignment).
+
+    Simulates production: run 0 starts mutating, then run 1 starts stagger_secs
+    later, etc.  Each run is pinned to one server.
+    """
+
+    async def run_batch(run_id: int) -> list[float]:
+        await asyncio.sleep(run_id * stagger_secs)
+        ep = endpoints[run_id % len(endpoints)]
+        client = ChatOpenAI(
+            model=model,
+            base_url=ep,
+            api_key="none",
+            temperature=0,
+            max_tokens=1024,
+            request_timeout=120,
+        )
+        logger.info(
+            f"[{label}-static-r{run_id}] START (stagger={run_id * stagger_secs:.0f}s) → {ep}"
+        )
+        return await asyncio.gather(
+            *[
+                _call_llm(client, system, user, f"{label}-static-r{run_id}-m{i}")
+                for i in range(calls_per_run)
+            ]
+        )
+
+    t0 = time.perf_counter()
+    await asyncio.gather(*[run_batch(i) for i in range(n_runs)])
+    total = time.perf_counter() - t0
+    return total
+
+
+async def scenario_staggered_balanced(
+    endpoints: list[str],
+    model: str,
+    system: str,
+    user: str,
+    n_runs: int,
+    calls_per_run: int,
+    stagger_secs: float,
+    label: str,
+    redis_url: str,
+) -> float:
+    """Staggered: runs start mutation at different times (balanced pool).
+
+    Same stagger pattern, but all runs share all servers.  When run 0 finishes
+    mutating and run 1 starts, run 1 can use ALL servers (including run 0's).
+    """
+    pool_name = f"bench_{label}_stag"
+    await _clean_redis(pool_name, endpoints, redis_url)
+
+    clients = [
+        BalancedChatOpenAI(
+            model=model,
+            endpoints=endpoints,
+            pool_name=pool_name,
+            redis_url=redis_url,
+            api_key="none",
+            temperature=0,
+            max_tokens=1024,
+            request_timeout=120,
+        )
+        for _ in range(n_runs)
+    ]
+
+    async def run_batch(run_id: int) -> list[float]:
+        await asyncio.sleep(run_id * stagger_secs)
+        logger.info(
+            f"[{label}-balanced-r{run_id}] START (stagger={run_id * stagger_secs:.0f}s)"
+        )
+        return await asyncio.gather(
+            *[
+                _call_llm(
+                    clients[run_id], system, user, f"{label}-balanced-r{run_id}-m{i}"
+                )
+                for i in range(calls_per_run)
+            ]
+        )
+
+    t0 = time.perf_counter()
+    await asyncio.gather(*[run_batch(i) for i in range(n_runs)])
+    total = time.perf_counter() - t0
+
+    stats = await clients[0]._pool.get_stats()
+    dist = {ep.split("//")[1].split("/")[0]: s["requests"] for ep, s in stats.items()}
+    print(f"  Distribution: {dist}")
+
+    return total
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -445,6 +546,50 @@ async def main():
 
         speedup = t_static / t_balanced if t_balanced > 0 else 0
         print(f"\n  → Chain speedup: {speedup:.2f}x {'✓' if speedup > 1 else '✗'}")
+
+    # --- Staggered benchmark (production-realistic) ---
+    stagger = float(os.environ.get("STAGGER_SECS", "5"))
+    if len(mutation_eps) >= 2:
+        print(f"\n{'=' * 70}")
+        print(f"STAGGERED MUTATION: {total_calls} calls, {stagger:.0f}s between runs")
+        print("(Simulates production: runs enter mutation phase at different times)")
+        print(f"{'=' * 70}")
+
+        print("\n[A] Static (each run pinned to 1 server):")
+        t_static = await scenario_staggered_static(
+            mutation_eps,
+            mutation_model,
+            _MUTATION_SYSTEM,
+            _MUTATION_USER,
+            n_runs,
+            mutants_per_run,
+            stagger,
+            "stag_mut",
+        )
+        print(
+            f"  Total: {t_static:.1f}s | Per-call avg: {t_static * 1000 / total_calls:.0f}ms"
+        )
+
+        print("\n[B] Balanced (all runs share all servers):")
+        t_balanced = await scenario_staggered_balanced(
+            mutation_eps,
+            mutation_model,
+            _MUTATION_SYSTEM,
+            _MUTATION_USER,
+            n_runs,
+            mutants_per_run,
+            stagger,
+            "stag_mut",
+            redis_url,
+        )
+        print(
+            f"  Total: {t_balanced:.1f}s | Per-call avg: {t_balanced * 1000 / total_calls:.0f}ms"
+        )
+
+        speedup = t_static / t_balanced if t_balanced > 0 else 0
+        print(
+            f"\n  → Staggered mutation speedup: {speedup:.2f}x {'✓' if speedup > 1 else '✗'}"
+        )
 
     print(f"\n{'=' * 70}")
     print("Done")
