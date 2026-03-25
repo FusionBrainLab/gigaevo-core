@@ -272,16 +272,24 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("mget", _mget)
 
+    async def _all_program_ids_from_sets(self, r: aioredis.Redis) -> list[str]:
+        """Get all program IDs via SUNION of status sets.
+
+        Faster than SCAN because it reads pre-indexed sets directly instead of
+        iterating the entire keyspace with pattern matching.  Every program is
+        in exactly one status set (invariant maintained by add/transition ops).
+        """
+        set_keys = [self._keys.status_set(s.value) for s in ProgramState]
+        return list(await r.sunion(*set_keys))
+
     async def size(self) -> int:
-        """Count programs using SCAN (non-blocking)."""
+        """Count programs by summing SCARD across status sets (O(1) per set)."""
 
         async def _size(r: aioredis.Redis) -> int:
-            count = 0
-            async for _ in r.scan_iter(
-                match=self._keys.program_pattern(), count=SCAN_BATCH_SIZE
-            ):
-                count += 1
-            return count
+            total = 0
+            for s in ProgramState:
+                total += await r.scard(self._keys.status_set(s.value))
+            return total
 
         return await self._conn.execute("size", _size)
 
@@ -308,24 +316,20 @@ class RedisProgramStorage(ProgramStorage):
         return await self._conn.execute("get_all", _scan_then_mget)
 
     async def get_all_program_ids(self) -> list[str]:
-        """Return program IDs (not full Redis keys) using SCAN."""
+        """Return program IDs (not full Redis keys) via status-set SUNION."""
 
         async def _get_all_ids(r: aioredis.Redis) -> list[str]:
-            ids: list[str] = []
-            async for key in r.scan_iter(
-                match=self._keys.program_pattern(), count=SCAN_BATCH_SIZE
-            ):
-                ids.append(key.split(":")[-1])
-            return ids
+            return await self._all_program_ids_from_sets(r)
 
         return await self._conn.execute("get_all_program_ids", _get_all_ids)
 
     async def has_data(self) -> bool:
-        """Check if database has any programs."""
+        """Check if database has any programs (fast: SCARD on status sets)."""
 
         async def _check(r: aioredis.Redis) -> bool:
-            async for _ in r.scan_iter(match=self._keys.program_pattern(), count=1):
-                return True
+            for s in ProgramState:
+                if await r.scard(self._keys.status_set(s.value)) > 0:
+                    return True
             return False
 
         return await self._conn.execute("has_data", _check)
