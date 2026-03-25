@@ -1,4 +1,4 @@
-"""Memory selector backed by evo_memory_agent_api red search agent."""
+"""Memory selector backed by gigaevo.memory red search agent."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.programs.program import Program
 
 try:
-    from evo_memory_agent_api.runtime_config import (
+    from gigaevo.memory.runtime_config import (
         deep_get,
         load_settings,
         resolve_local_path,
@@ -26,7 +26,7 @@ try:
         to_list,
         to_str,
     )
-    from evo_memory_agent_api.shared_memory.memory import AmemGamMemory
+    from gigaevo.memory.shared_memory.memory import AmemGamMemory
 except Exception as exc:
     AmemGamMemory = None  # type: ignore[assignment]
     _BACKEND_IMPORT_ERROR: Exception | None = exc
@@ -41,7 +41,7 @@ class MemorySelection:
 
 
 class MemorySelectorAgent:
-    """Select relevant memory ideas via the evo_memory_agent_api red agent."""
+    """Select relevant memory ideas via the gigaevo.memory red agent."""
 
     _RESULT_CHAR_LIMIT = 6000
 
@@ -53,7 +53,7 @@ class MemorySelectorAgent:
     def _create_memory_backend(self) -> Any | None:
         if AmemGamMemory is None:
             message = (
-                "evo_memory_agent_api is unavailable"
+                "gigaevo.memory is unavailable"
                 f"{': ' + str(_BACKEND_IMPORT_ERROR) if _BACKEND_IMPORT_ERROR else ''}"
             )
             self._backend_error = message
@@ -62,7 +62,7 @@ class MemorySelectorAgent:
 
         try:
             repo_root = Path(__file__).resolve().parents[3]
-            memory_api_root = repo_root / "evo_memory_agent_api"
+            memory_api_root = repo_root / "gigaevo.memory"
             load_dotenv(dotenv_path=repo_root / ".env", override=True)
 
             settings_path = resolve_settings_path()
@@ -148,7 +148,7 @@ class MemorySelectorAgent:
                 gam_pipeline_mode=gam_pipeline_mode,
             )
             logger.info(
-                "[MemorySelectorAgent] Using evo_memory_agent_api backend "
+                "[MemorySelectorAgent] Using gigaevo.memory backend "
                 "(use_api={}, namespace={}, channel={}, checkpoint={})",
                 use_api,
                 namespace,

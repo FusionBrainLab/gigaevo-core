@@ -687,7 +687,7 @@ class IdeaTracker:
             )
             return
 
-        # memory_write_example resolves relative paths against evo_memory_agent_api/,
+        # memory_write_example resolves relative paths against gigaevo.memory/,
         # so we must pass absolute paths here.
         env_overrides = {
             "MEMORY_BANKS_PATH": str(banks_path.resolve()),
@@ -708,7 +708,7 @@ class IdeaTracker:
         try:
             os.environ.update(env_overrides)
             memory_write_module = importlib.import_module(
-                "evo_memory_agent_api.memory_write_example"
+                "gigaevo.memory.memory_write_example"
             )
             memory_write_module = importlib.reload(memory_write_module)
             snapshot = memory_write_module.main()

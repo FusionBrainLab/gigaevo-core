@@ -1,6 +1,6 @@
 # Unified configuration for memory backend and ideas tracker.
 #
-# Top-level sections are used by evo_memory_agent_api and MemorySelectorAgent.
+# Top-level sections are used by gigaevo.memory and MemorySelectorAgent.
 # The ideas_tracker section is used by gigaevo.llm.ideas_tracker.IdeaTracker.
 
 paths:
@@ -79,7 +79,7 @@ card_update_dedup:
   llm:
     max_retries: 2
 
-# OpenRouter reasoning controls for evo_memory_agent_api/config.py.
+# OpenRouter reasoning controls for gigaevo.memory/config.py.
 reasoning:
   effort: "minimal"
 
