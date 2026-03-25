@@ -17,6 +17,7 @@ import numpy as np
 from openai import AsyncOpenAI
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
+from tqdm import tqdm
 
 from gigaevo.llm.ideas_tracker.components.data_components import (
     ClusterCard,
@@ -159,6 +160,16 @@ class IdeaAnalyzerFast:
                 model_name=self.model,
             )
 
+    def call_llm(self, step_name: str, prompt_content: str) -> str:
+        """
+        Synchronous chat completion for code paths that use the sync API (e.g. enrichment).
+
+        :class:`~gigaevo.llm.ideas_tracker.components.analyzer.IdeaAnalyzer` exposes the same
+        method; without it, :meth:`IdeaTracker.enrich_ideas` fails silently and leaves
+        keywords/summaries empty.
+        """
+        return asyncio.run(self._call_llm_async(step_name, prompt_content))
+
     def ingest_programs(
         self, programs: list[ProgramRecord]
     ) -> list[RecordCardEmbedding]:
@@ -297,7 +308,13 @@ class IdeaAnalyzerFast:
         }
         if self._is_openrouter and self.reasoning:
             request_kwargs["extra_body"] = {"reasoning": self.reasoning}
-        response = await self.llm_async.chat.completions.create(**request_kwargs)
+        if self._is_openrouter and self.model.startswith("google/"):
+            request_kwargs["extra_body"] = {"provider": {"order": ["google-ai-studio"]}}
+        try:
+            response = await self.llm_async.chat.completions.create(**request_kwargs)
+        except Exception as e:
+            print(f"Error calling LLM: {e}")
+            return ""
         content = response.choices[0].message.content
         return content or ""
 
@@ -453,6 +470,7 @@ class IdeaAnalyzerFast:
         until stable or :attr:`max_rounds`. Clusters with ``has_changed`` False (no rejects
         in the last refine) are skipped.
         """
+        pbar = tqdm(total=self.max_rounds, desc="Refinement rounds")
         for step in range(self.max_rounds):
             for c in clusters:
                 c.prune_stale_members()
@@ -466,9 +484,9 @@ class IdeaAnalyzerFast:
             round_result = self._apply_refine_round(clusters, pairs)
             if not round_result.has_changed:
                 break
-
-            print(f"Refinement round {step + 1} / {self.max_rounds} completed")
-            print(f"Clusters count: {len(clusters)}")
+            pbar.update(1)
+            pbar.set_postfix(clusters_count=len(clusters))
+        pbar.close()
 
     async def build_record_extended_async(
         self, cluster: ClusterCard, program_by_id: dict[str, ProgramRecord]

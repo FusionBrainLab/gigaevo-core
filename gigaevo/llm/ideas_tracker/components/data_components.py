@@ -289,6 +289,13 @@ class RecordListV2:
         self.ideas.append(new_idea)
         self.num_ideas = len(self.ideas)
 
+    def add_idea_forced(self, idea_card: RecordCardExtended) -> None:
+        """Append a new idea from a RecordCardExtended. Raises if list is full."""
+        if self.num_ideas >= self.max_ideas:
+            raise ValueError("Can't add new idea to list since it full")
+        self.ideas.append(idea_card)
+        self.num_ideas = len(self.ideas)
+
     def find_idea_index(self, idea_id: str) -> int | None:
         """Return index of idea with given id, or None if not found."""
         for index, idea in enumerate(self.ideas):
@@ -583,14 +590,26 @@ class RecordBank:
                 generated = True
         return new_uuid
 
-    def _append_record_list(self, idea_data: dict[str, Any]) -> None:
+    def _append_record_list(
+        self, idea_data: dict[str, Any] | RecordCardExtended, is_forced: bool = False
+    ) -> None:
         """Append idea to first non-full list, or create a new RecordList and append there."""
         for index, record_list in enumerate(self.ideas_lists):
             if not record_list.is_full():
-                self.ideas_lists[index].add_idea(idea_data)
+                if is_forced and isinstance(idea_data, RecordCardExtended):
+                    self.ideas_lists[index].add_idea_forced(idea_data)
+                elif not is_forced and isinstance(idea_data, dict[str, Any]):
+                    self.ideas_lists[index].add_idea(idea_data)
+                else:
+                    raise ValueError(f"Invalid idea data type: {type(idea_data)}")
                 return
         new_list = RecordListV2(max_ideas=self.list_max_ideas)
-        new_list.add_idea(idea_data)
+        if is_forced and isinstance(idea_data, RecordCardExtended):
+            new_list.add_idea_forced(idea_data)
+        elif not is_forced and isinstance(idea_data, dict[str, Any]):
+            new_list.add_idea(idea_data)
+        else:
+            raise ValueError(f"Invalid idea data type: {type(idea_data)}")
         self.ideas_lists.append(new_list)
         self.num_lists += 1
         return
@@ -681,15 +700,20 @@ class RecordBank:
         idea_dict["linked_programs"] = list(idea_dict["linked_programs"])
         self._append_record_list(idea_dict)
 
-    def import_idea_extended(self, new_idea: RecordCardExtended) -> None:
+    def import_idea_extended(
+        self, new_idea: RecordCardExtended, is_forced: bool = False
+    ) -> None:
         """Append an existing RecordCardExtended; assign new id if its id already exists in the bank."""
         if new_idea.id in self.uuids:
             new_uuid = self._unique_id_pair()
             new_idea.id = new_uuid
         self.uuids.append(new_idea.id)
-        idea_dict = asdict(new_idea)
-        idea_dict["programs"] = list(idea_dict["programs"])
-        self._append_record_list(idea_dict)
+        if is_forced:
+            self._append_record_list(new_idea, is_forced=is_forced)
+        else:
+            idea_dict = asdict(new_idea)
+            idea_dict["programs"] = list(idea_dict["programs"])
+            self._append_record_list(idea_dict, is_forced=is_forced)
 
     def get_idea(self, idea_id: str) -> RecordCard:
         """Return the RecordCard with the given id. Raises ValueError if not found."""
