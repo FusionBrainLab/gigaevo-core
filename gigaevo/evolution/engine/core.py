@@ -235,7 +235,11 @@ class EvolutionEngine:
         await self._ingest_completed_programs(mutation_ids=mutation_ids)
         logger.debug("[EvolutionEngine] gen={} Phase 4: Ingestion done", gen)
 
-        self.storage.snapshot.bump()
+        # Incremental bump: ingestion only changes program states (DONE→DISCARDED)
+        # and set membership — not the data fields the collector reads (metrics,
+        # lineage, generation).  Allows the snapshot to reuse cached Program
+        # objects and only fetch newly added/removed IDs.
+        self.storage.snapshot.bump(incremental=True)
 
         # Phase 5: refresh all archive programs (to re-run lineage/descendant-aware stages)
         refreshed = await self._refresh_archive_programs()
