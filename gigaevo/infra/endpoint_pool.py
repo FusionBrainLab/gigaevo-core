@@ -35,36 +35,54 @@ _DEFAULT_COOLDOWN_SECS = 60
 # KEYS[1] = inflight hash key
 # ARGV = list of endpoint URLs followed by their cooldown keys
 # Layout: ARGV[1..N] = endpoint URLs, ARGV[N+1..2N] = cooldown keys
+# Lua script: atomically select the best endpoint using a weighted score
+# that combines inflight count and EMA latency (recent throughput proxy).
+#
+# Score = inflight * LATENCY_WEIGHT + ema_latency_ms
+#
+# EMA latency adapts quickly: a server that slows down (e.g., test eval
+# running) gets penalized within 3-5 requests; one that speeds up recovers
+# equally fast.  This maximizes dynamic tok/sec throughput.
+#
+# KEYS[1] = inflight hash key
+# ARGV layout: [ep1..epN, cd_key1..cd_keyN, stats_key1..stats_keyN, latency_weight]
 _LUA_ACQUIRE = """
 local inflight_key = KEYS[1]
-local n = #ARGV / 2
-local best_load = math.huge
+local n = (#ARGV - 1) / 3
+local latency_weight = tonumber(ARGV[#ARGV])
+
+local best_score = math.huge
 local candidates = {}
 
 for i = 1, n do
     local ep = ARGV[i]
     local cd_key = ARGV[n + i]
+    local stats_key = ARGV[2 * n + i]
     if redis.call('EXISTS', cd_key) == 0 then
-        local load = tonumber(redis.call('HGET', inflight_key, ep) or '0')
-        if load < best_load then
-            best_load = load
+        local inflight = tonumber(redis.call('HGET', inflight_key, ep) or '0')
+        local ema = tonumber(redis.call('HGET', stats_key, 'ema_latency_ms') or '0')
+        local score = inflight * latency_weight + ema
+        if score < best_score then
+            best_score = score
             candidates = {ep}
-        elseif load == best_load then
+        elseif score == best_score then
             candidates[#candidates + 1] = ep
         end
     end
 end
 
--- Fallback: if all in cooldown, consider all endpoints
+-- Fallback: if all in cooldown, ignore cooldowns
 if #candidates == 0 then
-    best_load = math.huge
     for i = 1, n do
         local ep = ARGV[i]
-        local load = tonumber(redis.call('HGET', inflight_key, ep) or '0')
-        if load < best_load then
-            best_load = load
+        local stats_key = ARGV[2 * n + i]
+        local inflight = tonumber(redis.call('HGET', inflight_key, ep) or '0')
+        local ema = tonumber(redis.call('HGET', stats_key, 'ema_latency_ms') or '0')
+        local score = inflight * latency_weight + ema
+        if score < best_score then
+            best_score = score
             candidates = {ep}
-        elseif load == best_load then
+        elseif score == best_score then
             candidates[#candidates + 1] = ep
         end
     end
@@ -75,6 +93,11 @@ local best_ep = candidates[math.random(#candidates)]
 redis.call('HINCRBY', inflight_key, best_ep, 1)
 return best_ep
 """
+
+# Default: 1 extra inflight ≈ 1000ms extra latency penalty
+_DEFAULT_LATENCY_WEIGHT = 1000.0
+# EMA smoothing factor: 0.3 means last ~3 requests dominate
+_DEFAULT_EMA_ALPHA = 0.3
 
 
 def _url_hash(url: str) -> str:
@@ -101,6 +124,7 @@ class EndpointPool:
         endpoints: list[str],
         redis_url: str = _DEFAULT_REDIS_URL,
         cooldown_secs: int = _DEFAULT_COOLDOWN_SECS,
+        latency_weight: float = _DEFAULT_LATENCY_WEIGHT,
     ) -> None:
         if not endpoints:
             raise ValueError("endpoints must be non-empty")
@@ -112,9 +136,15 @@ class EndpointPool:
         # Keys
         self._inflight_key = f"llm_pool:{pool_name}:inflight"
         self._cooldown_keys = [self._cooldown_key(ep) for ep in endpoints]
+        self._stats_keys = [self._stats_key(ep) for ep in endpoints]
 
-        # Lua script args: [ep1, ep2, ..., cd_key1, cd_key2, ...]
-        self._lua_argv = list(endpoints) + self._cooldown_keys
+        # Lua script args: [ep1..N, cd_key1..N, stats_key1..N, latency_weight]
+        self._lua_argv = (
+            list(endpoints)
+            + self._cooldown_keys
+            + self._stats_keys
+            + [str(latency_weight)]
+        )
 
         # Lazy-init Redis clients
         self._sync_redis: redis.Redis | None = None
@@ -157,6 +187,23 @@ class EndpointPool:
             self._lua_sha = r.script_load(_LUA_ACQUIRE)
         return self._lua_sha
 
+    def _update_ema(self, endpoint: str, latency_ms: float) -> None:
+        """Update exponential moving average of latency for an endpoint.
+
+        EMA = alpha * new + (1 - alpha) * old.  With alpha=0.3, last ~3
+        requests dominate — fast adaptation to changing server conditions.
+        """
+        r = self._get_sync()
+        stats_key = self._stats_key(endpoint)
+        old_ema = float(r.hget(stats_key, "ema_latency_ms") or "0")
+        if old_ema == 0:
+            new_ema = latency_ms  # first observation
+        else:
+            new_ema = (
+                _DEFAULT_EMA_ALPHA * latency_ms + (1 - _DEFAULT_EMA_ALPHA) * old_ema
+            )
+        r.hset(stats_key, "ema_latency_ms", str(new_ema))
+
     # ------------------------------------------------------------------
     # Core selection (sync — used by both sync and async paths)
     # ------------------------------------------------------------------
@@ -185,14 +232,16 @@ class EndpointPool:
         return self._acquire_via_lua()
 
     async def release(self, endpoint: str, latency_ms: float = 0.0) -> None:
-        """Decrement in-flight count and update stats."""
+        """Decrement in-flight count and update stats with EMA latency."""
         r = self._get_async()
+        stats_key = self._stats_key(endpoint)
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
-        stats_key = self._stats_key(endpoint)
         pipe.hincrby(stats_key, "requests", 1)
         pipe.hincrbyfloat(stats_key, "total_latency_ms", latency_ms)
         await pipe.execute()
+        # Update EMA latency (atomic read-modify-write via sync Redis)
+        self._update_ema(endpoint, latency_ms)
 
     async def mark_unhealthy(self, endpoint: str) -> None:
         """Decrement inflight, set cooldown, record error."""
@@ -258,6 +307,7 @@ class EndpointPool:
         pipe.hincrby(stats_key, "requests", 1)
         pipe.hincrbyfloat(stats_key, "total_latency_ms", latency_ms)
         pipe.execute()
+        self._update_ema(endpoint, latency_ms)
 
     def mark_unhealthy_sync(self, endpoint: str) -> None:
         """Sync version of mark_unhealthy."""
