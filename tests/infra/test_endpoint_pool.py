@@ -43,29 +43,30 @@ def _make_pool(
 class TestAcquireRelease:
     async def test_acquire_returns_endpoint(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
+        pool._get_async()
         ep = await pool.acquire()
         assert ep in ENDPOINTS
 
     async def test_acquire_increments_inflight(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
-        ep = await pool.acquire()
         r = pool._get_async()
+        ep = await pool.acquire()
         count = await r.hget(pool._inflight_key, ep)
         assert int(count) == 1
 
     async def test_release_decrements_inflight(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
+        r = pool._get_async()
         ep = await pool.acquire()
         await pool.release(ep, latency_ms=10.0)
-        r = pool._get_async()
         count = await r.hget(pool._inflight_key, ep)
         assert int(count) == 0
 
     async def test_release_updates_stats(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
+        r = pool._get_async()
         ep = await pool.acquire()
         await pool.release(ep, latency_ms=42.5)
-        r = pool._get_async()
         stats = await r.hgetall(pool._stats_key(ep))
         assert int(stats["requests"]) == 1
         assert float(stats["total_latency_ms"]) == pytest.approx(42.5)
@@ -74,17 +75,11 @@ class TestAcquireRelease:
 class TestLeastLoaded:
     async def test_selects_least_loaded(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
-        r = pool._get_async()
 
-        # Pre-load: server-a has 5, server-b has 2, server-c has 0
-        await r.hset(
-            pool._inflight_key,
-            mapping={
-                ENDPOINTS[0]: 5,
-                ENDPOINTS[1]: 2,
-                ENDPOINTS[2]: 0,
-            },
-        )
+        # Pre-load local state: server-a has 5, server-b has 2, server-c has 0
+        pool._local_inflight[ENDPOINTS[0]] = 5
+        pool._local_inflight[ENDPOINTS[1]] = 2
+        pool._local_inflight[ENDPOINTS[2]] = 0
 
         ep = await pool.acquire()
         assert ep == ENDPOINTS[2]  # server-c has 0
@@ -118,14 +113,9 @@ class TestCooldown:
         pool = _make_pool(fake_server, cooldown_secs=60)
 
         # Mark server-a and server-b as unhealthy
-        # First acquire them so mark_unhealthy can decrement
-        await pool._get_async().hset(
-            pool._inflight_key,
-            mapping={
-                ENDPOINTS[0]: 1,
-                ENDPOINTS[1]: 1,
-            },
-        )
+        # Set local inflight so mark_unhealthy can decrement
+        pool._local_inflight[ENDPOINTS[0]] = 1
+        pool._local_inflight[ENDPOINTS[1]] = 1
         await pool.mark_unhealthy(ENDPOINTS[0])
         await pool.mark_unhealthy(ENDPOINTS[1])
 

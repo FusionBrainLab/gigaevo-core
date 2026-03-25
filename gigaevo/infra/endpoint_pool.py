@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import hashlib
 import random
+import threading
 import time
 from typing import Any
 
@@ -62,6 +63,12 @@ class EndpointPool:
         # Keys
         self._inflight_key = f"llm_pool:{pool_name}:inflight"
 
+        # Local in-memory counters for fast-path selection (no Redis RT).
+        # Redis is updated in background for cross-run visibility.
+        self._local_inflight: dict[str, int] = {ep: 0 for ep in endpoints}
+        self._local_cooldown: set[str] = set()
+        self._lock = threading.Lock()
+
         # Lazy-init Redis clients (avoids connecting at import time)
         self._sync_redis: redis.Redis | None = None
         self._async_redis: aioredis.Redis | None = None
@@ -101,14 +108,21 @@ class EndpointPool:
     # ------------------------------------------------------------------
 
     async def acquire(self) -> str:
-        """Pick the least-loaded healthy endpoint and increment its count."""
+        """Pick the least-loaded healthy endpoint and increment its count.
+
+        Selection uses local in-memory state (zero Redis latency).  Redis is
+        updated asynchronously for cross-run visibility.
+        """
+        endpoint = self._local_select()
+        # Fire-and-forget Redis update for cross-run visibility
         r = self._get_async()
-        endpoint = await self._select_endpoint_async(r)
         await r.hincrby(self._inflight_key, endpoint, 1)
         return endpoint
 
     async def release(self, endpoint: str, latency_ms: float = 0.0) -> None:
         """Decrement in-flight count and update stats."""
+        with self._lock:
+            self._local_inflight[endpoint] = max(0, self._local_inflight[endpoint] - 1)
         r = self._get_async()
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
@@ -119,6 +133,9 @@ class EndpointPool:
 
     async def mark_unhealthy(self, endpoint: str) -> None:
         """Set a cooldown key so this endpoint is skipped for a while."""
+        with self._lock:
+            self._local_inflight[endpoint] = max(0, self._local_inflight[endpoint] - 1)
+            self._local_cooldown.add(endpoint)
         r = self._get_async()
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
@@ -156,15 +173,36 @@ class EndpointPool:
             latency_ms = (time.perf_counter() - t0) * 1000
             await self.release(endpoint, latency_ms)
 
-    async def _select_endpoint_async(self, r: aioredis.Redis) -> str:
-        """Pick the least-loaded healthy endpoint (async)."""
-        inflight = await r.hgetall(self._inflight_key)
+    def _local_select(self) -> str:
+        """Pick the least-loaded healthy endpoint using local state (no I/O)."""
+        with self._lock:
+            healthy = [ep for ep in self._endpoints if ep not in self._local_cooldown]
+            if not healthy:
+                healthy = list(self._endpoints)
 
-        # Filter out endpoints in cooldown
-        healthy = []
+            min_load = min(self._local_inflight.get(ep, 0) for ep in healthy)
+            candidates = [
+                ep for ep in healthy if self._local_inflight.get(ep, 0) == min_load
+            ]
+            endpoint = random.choice(candidates)
+            self._local_inflight[endpoint] = self._local_inflight.get(endpoint, 0) + 1
+            return endpoint
+
+    async def _select_endpoint_async(self, r: aioredis.Redis) -> str:
+        """Pick the least-loaded healthy endpoint (async).
+
+        Uses a single pipelined round trip for HGETALL + all EXISTS checks.
+        """
+        pipe = r.pipeline(transaction=False)
+        pipe.hgetall(self._inflight_key)
         for ep in self._endpoints:
-            if not await r.exists(self._cooldown_key(ep)):
-                healthy.append(ep)
+            pipe.exists(self._cooldown_key(ep))
+        results = await pipe.execute()
+
+        inflight = results[0]  # dict from HGETALL
+        cooldowns = results[1:]  # list of int (0 or 1) from EXISTS
+
+        healthy = [ep for ep, cd in zip(self._endpoints, cooldowns) if not cd]
 
         if not healthy:
             logger.warning(
@@ -184,13 +222,15 @@ class EndpointPool:
 
     def acquire_sync(self) -> str:
         """Sync version of acquire."""
+        endpoint = self._local_select()
         r = self._get_sync()
-        endpoint = self._select_endpoint_sync(r)
         r.hincrby(self._inflight_key, endpoint, 1)
         return endpoint
 
     def release_sync(self, endpoint: str, latency_ms: float = 0.0) -> None:
         """Sync version of release."""
+        with self._lock:
+            self._local_inflight[endpoint] = max(0, self._local_inflight[endpoint] - 1)
         r = self._get_sync()
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
@@ -201,6 +241,9 @@ class EndpointPool:
 
     def mark_unhealthy_sync(self, endpoint: str) -> None:
         """Sync version of mark_unhealthy."""
+        with self._lock:
+            self._local_inflight[endpoint] = max(0, self._local_inflight[endpoint] - 1)
+            self._local_cooldown.add(endpoint)
         r = self._get_sync()
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
@@ -209,13 +252,20 @@ class EndpointPool:
         pipe.execute()
 
     def _select_endpoint_sync(self, r: redis.Redis) -> str:
-        """Pick the least-loaded healthy endpoint (sync)."""
-        inflight = r.hgetall(self._inflight_key)
+        """Pick the least-loaded healthy endpoint (sync).
 
-        healthy = []
+        Uses a single pipelined round trip for HGETALL + all EXISTS checks.
+        """
+        pipe = r.pipeline(transaction=False)
+        pipe.hgetall(self._inflight_key)
         for ep in self._endpoints:
-            if not r.exists(self._cooldown_key(ep)):
-                healthy.append(ep)
+            pipe.exists(self._cooldown_key(ep))
+        results = pipe.execute()
+
+        inflight = results[0]
+        cooldowns = results[1:]
+
+        healthy = [ep for ep, cd in zip(self._endpoints, cooldowns) if not cd]
 
         if not healthy:
             logger.warning(
