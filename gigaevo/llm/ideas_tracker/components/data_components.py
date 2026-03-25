@@ -598,7 +598,7 @@ class RecordBank:
             if not record_list.is_full():
                 if is_forced and isinstance(idea_data, RecordCardExtended):
                     self.ideas_lists[index].add_idea_forced(idea_data)
-                elif not is_forced and isinstance(idea_data, dict[str, Any]):
+                elif not is_forced and isinstance(idea_data, dict):
                     self.ideas_lists[index].add_idea(idea_data)
                 else:
                     raise ValueError(f"Invalid idea data type: {type(idea_data)}")
@@ -606,7 +606,7 @@ class RecordBank:
         new_list = RecordListV2(max_ideas=self.list_max_ideas)
         if is_forced and isinstance(idea_data, RecordCardExtended):
             new_list.add_idea_forced(idea_data)
-        elif not is_forced and isinstance(idea_data, dict[str, Any]):
+        elif not is_forced and isinstance(idea_data, dict):
             new_list.add_idea(idea_data)
         else:
             raise ValueError(f"Invalid idea data type: {type(idea_data)}")

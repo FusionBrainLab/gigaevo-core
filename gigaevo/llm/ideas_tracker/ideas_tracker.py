@@ -11,7 +11,6 @@ from typing import Any, Optional
 
 import pandas as pd
 import tqdm
-import yaml
 
 sys.path.append("../gigaevo-core-internal")
 from gigaevo.llm.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
@@ -24,9 +23,18 @@ from gigaevo.llm.ideas_tracker.components.fabrics.fabric_redis import (
     create_redis_config,
 )
 from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
-
+from gigaevo.llm.ideas_tracker.components.statistics import (
+    compute_evolutionary_statistics,
+)
+from gigaevo.llm.ideas_tracker.components.summary import _summarize_task_description
+from gigaevo.llm.ideas_tracker.utils.cfg_loader import _load_config
 from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
-from gigaevo.llm.ideas_tracker.utils.selected_ideas_6 import compute_origin_analysis
+from gigaevo.llm.ideas_tracker.utils.records_converter import (
+    convert_programs_to_records,
+)
+from gigaevo.llm.ideas_tracker.utils.task_description_loader import (
+    _load_task_description,
+)
 from tools.utils import fetch_evolution_dataframe
 
 
@@ -49,7 +57,7 @@ class IdeaTracker:
             config_path: Optional path to configuration YAML file. If None, uses
                 default config/memory.yaml from project root (ideas_tracker section).
         """
-        self.config = self._load_config(config_path)
+        self.config = _load_config(config_path, Path(__file__).resolve())
         self.logger = IdeasTrackerLogger(Path(__file__).resolve())
 
         list_max_ideas = int(self.config.get("list_max_ideas", 5))
@@ -70,7 +78,9 @@ class IdeaTracker:
 
         self.redis_config = create_redis_config(self.config.get("redis", {}))
 
-        self.task_description: str = self._load_task_description()
+        self.task_description: str = _load_task_description(
+            self.redis_config.redis_prefix, Path(__file__).resolve()
+        )
 
         self.description_rewriting = self.config.get("description_rewriting", False)
         if hasattr(self.analyzer, "description_rewriting"):
@@ -117,6 +127,8 @@ class IdeaTracker:
         self.ideas_manager.logger = self.logger
         self.analyzer.logger = self.logger  # type: ignore[assignment]
 
+        self._get_task_description_summary()
+
         self.logger.log_init(
             component="IdeaTracker",
             model_name=self.analyzer.model,
@@ -135,98 +147,6 @@ class IdeaTracker:
             memory_write_best_programs_percent=self.memory_write_best_programs_percent,
             memory_usage_tracking_enabled=self.memory_usage_tracking_enabled,
         )
-
-    def _load_config(self, config_path: Optional[str | Path]) -> dict[str, Any]:
-        """
-        Load IdeaTracker configuration from YAML file.
-
-        Resolves project root (3 levels up from this file) to find default config
-        at config/memory.yaml when no path is provided.
-        If the loaded file contains an ``ideas_tracker`` section, that section is used.
-        Otherwise, the full file payload is treated as legacy IdeaTracker config.
-
-        Args:
-            config_path: Path to configuration file, or None to use default location.
-
-        Returns:
-            Dictionary containing configuration values with keys: gen_delta, model, redis.
-            Returns default configuration if file is missing.
-        """
-        default_config: dict[str, Any] = {
-            "gen_delta": 100000,
-            "list_max_ideas": 5,
-            "model": "deepseek/deepseek-v3.2",
-            "base_url": "https://openrouter.ai/api/v1",
-            "redis": {
-                "redis_host": "localhost",
-                "redis_port": 6379,
-                "redis_db": 0,
-                "redis_prefix": "heilbron",
-                "label": "",
-            },
-            "memory_write_pipeline": {"enabled": False},
-            "usage_tracking": {"enabled": True},
-        }
-
-        if config_path is None:
-            project_root = Path(__file__).resolve().parents[3]
-            path_obj = project_root / "config" / "memory.yaml"
-        else:
-            path_obj = Path(config_path)
-
-        if not path_obj.is_file():
-            return default_config
-
-        with path_obj.open("r", encoding="utf-8") as f:
-            payload = yaml.safe_load(f) or {}
-
-        if not isinstance(payload, dict):
-            return default_config
-
-        # Unified config format stores tracker settings under ideas_tracker.
-        ideas_tracker_cfg = payload.get("ideas_tracker")
-        if isinstance(ideas_tracker_cfg, dict):
-            return ideas_tracker_cfg
-
-        # Backward-compatible fallback: treat the whole payload as tracker config.
-        return payload
-
-    def _load_task_description(self) -> str:
-        """
-        Load human-readable task description for the current experiment.
-
-        Searches problems/ directory tree for a leaf directory matching redis_prefix
-        and loads task_description.txt from it. Returns placeholder if not found.
-
-        Returns:
-            Task description text from matching directory, or "No description available".
-        """
-        prefix_value = getattr(self.redis_config, "redis_prefix", "") or ""
-        if not prefix_value:
-            return "No description available"
-        prefix_value = prefix_value.replace("/", "_")
-
-        project_root = Path(__file__).resolve().parents[3]
-        problems_root = project_root / "problems"
-
-        try:
-            # Walk the problems tree and collect all leaf directories.
-            leaf_dirs: list[Path] = []
-            for root, dirs, _files in os.walk(problems_root):
-                if "initial_programs" in dirs:
-                    leaf_dirs.append(Path(root))
-
-            for leaf in leaf_dirs:
-                split_index = leaf.parts.index("problems") + 1
-                true_name = "_".join(leaf.parts[split_index:])
-                if true_name == prefix_value:
-                    candidate_file = leaf / "task_description.txt"
-                    if candidate_file.is_file():
-                        return candidate_file.read_text(encoding="utf-8").strip()
-        except Exception:
-            return "No description available"
-
-        return "No description available"
 
     @staticmethod
     def _to_bool(value: Any, default: bool = False) -> bool:
@@ -432,36 +352,11 @@ class IdeaTracker:
         )["used"]
         return merged_usage
 
-    def _summarize_task_description(
-        self, task_description: str, cache: dict[str, str] | None = None
-    ) -> str:
-        task_text = str(task_description or "").strip()
-        if not task_text:
-            return ""
-        if cache is not None and task_text in cache:
-            return cache[task_text]
-
-        summary = ""
-        try:
-            task_sum_response = self.analyzer.call_llm(
-                "task_description_summary", task_text
-            )
-            task_sum_parsed = json.loads(task_sum_response)
-            summary = str(task_sum_parsed.get("summary", "")).strip()
-        except Exception:
-            summary = ""
-        if not summary:
-            summary = task_text[:240].strip()
-
-        if cache is not None:
-            cache[task_text] = summary
-        return summary
-
     def _get_task_description_summary(self) -> str:
         cached = getattr(self, "_task_description_summary_cache", None)
         if isinstance(cached, str) and cached:
             return cached
-        summary = self._summarize_task_description(self.task_description)
+        summary = _summarize_task_description(self.analyzer, self.task_description)
         self._task_description_summary_cache = summary
         return summary
 
@@ -551,34 +446,12 @@ class IdeaTracker:
         Returns:
             List of ProgramRecord instances created from the DataFrame.
         """
-        programs_processed = []
-
-        for _, program in programs.iterrows():
-            mutation_metadata = program["metadata_mutation_output"]
-            if isinstance(mutation_metadata, str):
-                mutation_metadata = json.loads(mutation_metadata)
-            parent_ids = program["parent_ids"]
-            if isinstance(parent_ids, str):
-                try:
-                    parent_ids = json.loads(parent_ids)
-                except (json.JSONDecodeError, TypeError):
-                    parent_ids = []
-            new_program = ProgramRecord(
-                id=program["program_id"],
-                fitness=program["metric_fitness"],
-                generation=program["generation"],
-                parents=parent_ids,
-                insights=mutation_metadata["insights_used"],
-                improvements=mutation_metadata["changes"],
-                category="",
-                strategy=mutation_metadata["archetype"],
-                task_description=self.task_description,
-                task_description_summary=self._get_task_description_summary(),
-                code=str(program.get("code") or ""),
-            )
-            programs_processed.append(new_program)
-            self.programs_ids.add(program["program_id"])
+        task_description_summary = self._get_task_description_summary()
+        programs_processed, programs_ids = convert_programs_to_records(
+            programs, self.task_description, task_description_summary
+        )
         self.programs_card.extend(programs_processed)
+        self.programs_ids.update(programs_ids)
         return programs_processed
 
     async def load_database(self) -> pd.DataFrame:
@@ -752,7 +625,8 @@ class IdeaTracker:
 
             # --- Task description summary ---
             task_description = str(getattr(idea, "task_description", "") or "").strip()
-            task_description_summary = self._summarize_task_description(
+            task_description_summary = _summarize_task_description(
+                self.analyzer,
                 task_description,
                 cache=task_summary_cache,
             )
@@ -765,74 +639,6 @@ class IdeaTracker:
             )
             pbar.update(1)
         pbar.close()
-
-    def compute_evolutionary_statistics(self) -> None:
-        """
-        Run origin-based evolutionary statistics on saved banks/programs JSONs
-        and inject per-idea metrics into banks.json under 'evolution_statistics'.
-
-        Requires that dump_final_state and log_programs have already been called
-        so that banks.json and programs.json exist in the session directory.
-        """
-        banks_path = self.logger.banks_file
-        programs_path = self.logger.programs_file
-
-        if banks_path is None or programs_path is None:
-            return
-        if not banks_path.exists() or not programs_path.exists():
-            return
-
-        try:
-            df_summary, df_best_ideas = compute_origin_analysis(
-                banks_path=str(banks_path),
-                programs_path=str(programs_path),
-            )
-        except RuntimeError as exc:
-            if (
-                str(exc)
-                == "No valid programs with numeric generation and fitness found."
-            ):
-                return
-            raise
-
-        if df_summary.empty:
-            return
-
-        best_ideas_records = df_best_ideas.to_dict(orient="records")
-        sanitized: list[dict[str, Any]] = []
-        for rec in best_ideas_records:
-            sanitized.append({k: (v if pd.notna(v) else None) for k, v in rec.items()})
-        self.logger.log_best_ideas({"best_ideas": sanitized})
-
-        stats_by_idea: dict[str, dict[str, Any]] = {}
-        for _, row in df_summary.iterrows():
-            idea_id = row["idea_id"]
-            quartile = row["quartile"]
-            metrics = row.drop(["idea_id", "quartile", "description"]).to_dict()
-            metrics = {k: (v if pd.notna(v) else None) for k, v in metrics.items()}
-            if idea_id not in stats_by_idea:
-                stats_by_idea[idea_id] = {}
-            stats_by_idea[idea_id][quartile] = metrics
-
-        with open(banks_path, "r", encoding="utf-8") as f:
-            banks_data = json.load(f)
-
-        for snapshot in banks_data:
-            if not isinstance(snapshot, dict):
-                continue
-            for bank_key in ("active_bank", "inactive_bank"):
-                bank = snapshot.get(bank_key, [])
-                if not isinstance(bank, list):
-                    continue
-                for idea in bank:
-                    if not isinstance(idea, dict):
-                        continue
-                    idea_id = idea.get("id", "")
-                    if idea_id in stats_by_idea:
-                        idea["evolution_statistics"] = stats_by_idea[idea_id]
-
-        with open(banks_path, "w", encoding="utf-8") as f:
-            json.dump(banks_data, f, indent=4)
 
     def _has_best_ideas_snapshot(self, best_ideas_path: Path) -> bool:
         """
@@ -948,7 +754,6 @@ class IdeaTracker:
         processed_programs = asyncio.run(self.analyzer.run(new_programs))
         for prog in processed_programs:
             self.ideas_manager.record_bank.import_idea_extended(prog, is_forced=True)
-        self.enrich_ideas()
 
     def run(self, path_to_database: Optional[str | Path] = None) -> None:
         """
@@ -1010,7 +815,7 @@ class IdeaTracker:
         self.logger.log_programs(self._programs_to_dicts())
 
         # --- Evolutionary statistics (origin analysis) ---
-        self.compute_evolutionary_statistics()
+        compute_evolutionary_statistics(self.logger)
 
         # --- Optional memory DB write for best ideas ---
         self.run_memory_write_pipeline()
