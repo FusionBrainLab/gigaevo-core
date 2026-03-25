@@ -46,7 +46,12 @@ class IdeaTracker:
     and maintains rankings of ideas based on their impact on program fitness.
     """
 
-    def __init__(self, config_path: Optional[str | Path] = None) -> None:
+    def __init__(
+        self,
+        config_path: Optional[str | Path] = None,
+        *,
+        logs_dir: str | Path | None = None,
+    ) -> None:
         """
         Initialize IdeaTracker with configuration from YAML file.
 
@@ -58,7 +63,7 @@ class IdeaTracker:
                 default config/memory.yaml from project root (ideas_tracker section).
         """
         self.config = _load_config(config_path, Path(__file__).resolve())
-        self.logger = IdeasTrackerLogger(Path(__file__).resolve())
+        self.logger = IdeasTrackerLogger(Path(__file__).resolve(), logs_dir=logs_dir)
 
         list_max_ideas = int(self.config.get("list_max_ideas", 5))
         self.ideas_manager = RecordManager(list_max_ideas=list_max_ideas)
@@ -682,20 +687,22 @@ class IdeaTracker:
             )
             return
 
+        # memory_write_example resolves relative paths against evo_memory_agent_api/,
+        # so we must pass absolute paths here.
         env_overrides = {
-            "MEMORY_BANKS_PATH": str(banks_path),
-            "MEMORY_BEST_IDEAS_PATH": str(best_ideas_path),
+            "MEMORY_BANKS_PATH": str(banks_path.resolve()),
+            "MEMORY_BEST_IDEAS_PATH": str(best_ideas_path.resolve()),
         }
         programs_path = self.logger.programs_file
         if programs_path is not None and programs_path.exists():
-            env_overrides["MEMORY_PROGRAMS_PATH"] = str(programs_path)
+            env_overrides["MEMORY_PROGRAMS_PATH"] = str(programs_path.resolve())
         usage_updates_path = self.logger.memory_usage_updates_file
         if (
             self.memory_usage_tracking_enabled
             and usage_updates_path is not None
             and usage_updates_path.exists()
         ):
-            env_overrides["MEMORY_USAGE_UPDATES_PATH"] = str(usage_updates_path)
+            env_overrides["MEMORY_USAGE_UPDATES_PATH"] = str(usage_updates_path.resolve())
         previous_env = {key: os.environ.get(key) for key in env_overrides}
 
         try:

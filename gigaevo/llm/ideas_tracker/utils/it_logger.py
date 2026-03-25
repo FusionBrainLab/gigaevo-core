@@ -21,7 +21,7 @@ class IdeasTrackerLogger:
     timestamped directory with log.txt and JSON snapshot files.
     """
 
-    def __init__(self, ideas_tracker_path: str | Path):
+    def __init__(self, ideas_tracker_path: str | Path, *, logs_dir: str | Path | None = None):
         """
         Initialize logger with timestamped session directory.
 
@@ -29,7 +29,7 @@ class IdeasTrackerLogger:
             ideas_tracker_path: Path to ideas_tracker.py file (parent becomes logs root).
         """
         self.ideas_tracker_path = Path(ideas_tracker_path)
-        self.logs_dir = self.ideas_tracker_path.parent / "logs"
+        self.logs_dir = Path(logs_dir) if logs_dir is not None else (self.ideas_tracker_path.parent / "logs")
         self.session_dir: Optional[Path] = None
         self.log_file: Optional[Path] = None
         self.rankings_file: Optional[Path] = None
