@@ -609,3 +609,5 @@ problems/chains/hotpotqa/dataset/colbert_index/
 CLAUDE.md
 .gitnexus
 AGENTS.md
+snapshots/
+.claude/perf-sprint-*.md
