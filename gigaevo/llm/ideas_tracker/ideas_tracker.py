@@ -682,43 +682,6 @@ class IdeaTracker:
         """
         self.ideas_manager.move_inactive(current_generation, self.gen_delta)
 
-    def get_rankings(self) -> list[dict[str, Any]]:
-        """
-        Get ideas ranking from main bank with fitness statistics.
-
-        Calculates average fitness for programs with and without each idea,
-        and computes impact as the difference between these averages.
-
-        Returns:
-            List of dictionaries containing idea rankings with keys:
-            - id: Idea UUID
-            - description: Idea description
-            - programs: List of program IDs using this idea
-            - fitness: List of fitness values for programs with this idea
-            - an_fitness: List of fitness values for programs without this idea
-            - avg_score_with: Average fitness with this idea
-            - avg_score_without: Average fitness without this idea
-            - impact: Difference between avg_score_with and avg_score_without
-        """
-        programs_rk_stats = self.ideas_manager.get_rankings()
-        for program in self.programs_card:
-            for index, idea in enumerate(programs_rk_stats):
-                if program.id in idea["programs"]:
-                    programs_rk_stats[index]["fitness"].append(program.fitness)
-                else:
-                    programs_rk_stats[index]["an_fitness"].append(program.fitness)
-        for index, idea in enumerate(programs_rk_stats):
-            programs_rk_stats[index]["avg_score_with"] = avg_score(idea["fitness"])
-            programs_rk_stats[index]["avg_score_without"] = avg_score(
-                idea["an_fitness"]
-            )
-            programs_rk_stats[index]["impact"] = delta_impact(
-                idea["fitness"], idea["an_fitness"]
-            )
-
-        self.logger.log_rankings(programs_rk_stats)
-        return programs_rk_stats
-
     def _programs_to_dicts(self) -> list[dict[str, Any]]:
         """
         Convert stored ProgramRecord instances into plain dictionaries
@@ -1067,9 +1030,6 @@ class IdeaTracker:
 
         self.logger.dump_final_state(self.ideas_manager)
         self.logger.log_programs(self._programs_to_dicts())
-
-        self.get_rankings()
-        # self.logger.log_best_ideas(self.top_ideas())  # deprecated: handled by compute_evolutionary_statistics
 
         # --- Evolutionary statistics (origin analysis) ---
         self.compute_evolutionary_statistics()
