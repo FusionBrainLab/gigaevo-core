@@ -317,6 +317,7 @@ async def run_exec_runner(
 
     worker_pool = pool if pool is not None else default_exec_runner_pool()
     worker = await worker_pool.get_worker(script, env, cwd_str)
+    returned = False
     try:
         result = await _run_via_worker(
             worker,
@@ -326,9 +327,11 @@ async def run_exec_runner(
             max_output_size=max_output_size,
         )
         await worker_pool.return_worker(worker)
+        returned = True
         return result
     except ExecRunnerError:
         await worker_pool.return_worker(worker)
+        returned = True
         raise
     except (
         TimeoutError,
@@ -337,6 +340,12 @@ async def run_exec_runner(
         ConnectionResetError,
     ):
         await worker_pool.discard_worker(worker)
+        returned = True
+    finally:
+        if not returned:
+            # CancelledError or any other unexpected exception — discard the
+            # worker so it doesn't leak and exhaust the pool.
+            await worker_pool.discard_worker(worker)
 
     # One-shot: spawn subprocess for this call only.
     proc = await asyncio.create_subprocess_exec(
