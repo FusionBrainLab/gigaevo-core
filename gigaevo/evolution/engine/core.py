@@ -175,16 +175,7 @@ class EvolutionEngine:
                     break
 
                 try:
-                    timeout = self.config.generation_timeout
-                    if timeout:
-                        await asyncio.wait_for(self.step(), timeout=timeout)
-                    else:
-                        await self.step()
-                except TimeoutError:
-                    # One step took too long; log and continue the loop.
-                    logger.warning(
-                        "[EvolutionEngine] step() timed out after {}s", timeout
-                    )
+                    await self.step()
                 except asyncio.CancelledError:
                     # Propagate so shutdown stays clean.
                     raise

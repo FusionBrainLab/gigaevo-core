@@ -602,27 +602,23 @@ class TestRunLoop:
         # call 4 → gen=3 → cap reached. So call_count = 4
         assert engine.metrics.total_generations >= 2
 
-    async def test_step_timeout_is_caught(self) -> None:
-        """A TimeoutError from step() is logged and the loop continues."""
+    async def test_generation_timeout_deprecated_and_ignored(self) -> None:
+        """generation_timeout is deprecated — setting it has no effect."""
         engine = _make_engine()
         engine.config.max_generations = 2
         engine.config.generation_timeout = 0.001
         engine.config.loop_interval = 0.01
 
-        call_count = 0
-
         async def slow_step():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                await asyncio.sleep(10)  # will trigger timeout
+            await asyncio.sleep(0.1)  # Longer than generation_timeout
             engine.metrics.total_generations += 1
 
         engine.step = slow_step
 
         await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
 
-        assert engine.metrics.total_generations >= 1
+        # Both generations complete — timeout is not enforced
+        assert engine.metrics.total_generations == 2
 
     async def test_stop_cancels_run(self) -> None:
         """stop() cancels the run() task gracefully."""
