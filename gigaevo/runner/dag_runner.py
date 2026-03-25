@@ -103,6 +103,17 @@ class DagRunnerConfig(BaseModel):
         le=1000,
         description="Maximum number of DAGs to run concurrently",
     )
+    prefetch_factor: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description=(
+            "How many batches of max_concurrent_dags to pre-create as tasks. "
+            "The semaphore still limits actual concurrency; prefetched tasks "
+            "wait on the semaphore and start immediately when a slot opens, "
+            "eliminating poll-interval latency between consecutive DAGs."
+        ),
+    )
     metrics_collection_interval: float = Field(
         default=1.0, gt=0, description="Interval in seconds for metrics collection"
     )
@@ -148,7 +159,12 @@ class DagRunner:
 
         self._task: asyncio.Task | None = None
         self._stopping = False
-        self._last_gc_time: float = 0.0
+        self._last_gc_time: float = time.monotonic()
+
+        # Batch queue: completed DAGs queue their RUNNING→DONE transition
+        # here instead of writing individually.  _maintain flushes with
+        # batch_transition_state (bulk SREM/SADD — 2 commands instead of 2N).
+        self._done_queue: list[Program] = []
 
         # async metrics collector task (no threads)
         self._metrics_collector_task: asyncio.Task | None = None
@@ -192,6 +208,9 @@ class DagRunner:
         for info in list(self._active.values()):
             await self._cancel_task(info)
         self._active.clear()
+
+        # flush any remaining DONE transitions
+        await self._flush_done_queue()
 
         # cancel metrics collector task
         if self._metrics_collector_task:
@@ -290,6 +309,9 @@ class DagRunner:
             finally:
                 del info
 
+        # Flush any remaining RUNNING→DONE transitions
+        await self._flush_done_queue()
+
         if finished or timed_out:
             now = time.monotonic()
             if now - self._last_gc_time > 30.0:
@@ -342,7 +364,11 @@ class DagRunner:
                 logger.error("[DagScheduler] orphan fetch failed: {}", e)
 
         # Phase 3: launch fresh programs up to capacity (fetch only what we need)
-        capacity = self._config.max_concurrent_dags - len(self._active)
+        # Prefetch: create up to max_concurrent_dags * prefetch_factor tasks.
+        # The semaphore limits actual concurrency; extra tasks wait on the
+        # semaphore and start immediately when a slot opens — no poll delay.
+        max_active = self._config.max_concurrent_dags * self._config.prefetch_factor
+        capacity = max_active - len(self._active)
         if capacity <= 0:
             return
 
@@ -358,15 +384,17 @@ class DagRunner:
             logger.error("[DagScheduler] mget for launch failed: {}", e)
             return
 
+        launched: list[Program] = []
+        allowed_ids = set(to_launch_ids)
         for program in [p for p in fresh if p is not None]:
-            if capacity <= 0:
-                break
-            if program.id in self._active:
+            if program.id in self._active or program.id not in allowed_ids:
                 continue
 
             try:
                 dag: DAG = self._dag_blueprint.build(
-                    self._state_manager, writer=self._writer
+                    self._state_manager,
+                    writer=self._writer,
+                    caller_handles_persist=True,
                 )
             except Exception as e:
                 import traceback
@@ -395,20 +423,30 @@ class DagRunner:
 
             task = asyncio.create_task(_run_one(), name=f"dag-{program.short_id}")
             self._active[program.id] = TaskInfo(task, program.id, time.monotonic())
-            capacity -= 1
+            launched.append(program)
 
+        # Batch transition QUEUED → RUNNING (3 RT instead of 2N RT)
+        if launched:
+            launched_ids = [p.id for p in launched]
             try:
-                await self._state_manager.set_program_state(
-                    program, ProgramState.RUNNING
+                count = await self._storage.batch_transition_by_ids(
+                    launched_ids,
+                    ProgramState.QUEUED.value,
+                    ProgramState.RUNNING.value,
                 )
-                self._metrics.increment_dag_runs_started()
-                logger.info("[DagScheduler] launched {}", program.short_id)
+                # Update in-memory state to match Redis so _execute_dag
+                # sees RUNNING (not stale QUEUED) when transitioning to DONE.
+                for prog in launched:
+                    prog.state = ProgramState.RUNNING
+                self._metrics.dag_runs_started += count
+                logger.info("[DagScheduler] launched {} programs", count)
             except Exception as e:
-                logger.error(
-                    "[DagScheduler] mark-started failed for {}: {}", program.short_id, e
-                )
-                task.cancel()
-                self._active.pop(program.id, None)
+                logger.error("[DagScheduler] batch mark-started failed: {}", e)
+                # Cancel tasks whose state transition failed
+                for pid in launched_ids:
+                    info = self._active.pop(pid, None)
+                    if info and not info.task.done():
+                        info.task.cancel()
 
     async def _execute_dag(self, dag: DAG, program: Program) -> None:
         ok = True
@@ -427,20 +465,50 @@ class DagRunner:
             dag._writer = None
             dag._stage_sema = None
 
-        try:
-            new_state = ProgramState.DONE if ok else ProgramState.DISCARDED
-            await self._state_manager.set_program_state(program, new_state)
-
-            # Log completion immediately when state is updated
-            if ok:
-                logger.debug(
-                    "[DagScheduler] DAG completed for {} (state updated)",
-                    program.short_id,
+        if ok:
+            # Queue for batch RUNNING→DONE transition
+            # (bulk SREM/SADD — 2 commands instead of 2N).
+            self._done_queue.append(program)
+            # Flush when batch reaches concurrency limit to avoid latency
+            if len(self._done_queue) >= self._config.max_concurrent_dags:
+                await self._flush_done_queue()
+            logger.debug(
+                "[DagScheduler] DAG completed for {} (queued for batch)",
+                program.short_id,
+            )
+        else:
+            try:
+                await self._state_manager.set_program_state(
+                    program, ProgramState.DISCARDED
                 )
-        except Exception as se:
-            self._metrics.record_state_update_failure()
+            except Exception as se:
+                self._metrics.record_state_update_failure()
+                logger.error(
+                    "[DagScheduler] state update failed for {}: {}",
+                    program.short_id,
+                    se,
+                )
+
+    async def _flush_done_queue(self) -> None:
+        """Batch-transition queued DONE programs to Redis."""
+        if not self._done_queue:
+            return
+        batch = self._done_queue[:]
+        self._done_queue.clear()
+        try:
+            await self._storage.batch_transition_state(
+                batch,
+                ProgramState.RUNNING.value,
+                ProgramState.DONE.value,
+            )
+            logger.debug(
+                "[DagScheduler] batch RUNNING→DONE for {} programs", len(batch)
+            )
+        except Exception as e:
             logger.error(
-                "[DagScheduler] state update failed for {}: {}", program.short_id, se
+                "[DagScheduler] batch RUNNING→DONE failed for {} programs: {}",
+                len(batch),
+                e,
             )
 
     async def _cancel_task(self, info: TaskInfo) -> None:

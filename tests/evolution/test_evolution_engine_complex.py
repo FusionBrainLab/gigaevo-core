@@ -88,7 +88,7 @@ class TestPreStepHook:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -111,7 +111,7 @@ class TestPreStepHook:
             call_order.append("select")
             return []
 
-        async def tracked_ingest():
+        async def tracked_ingest(**kwargs):
             call_order.append("ingest")
 
         async def tracked_refresh():
@@ -139,7 +139,7 @@ class TestPreStepHook:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -216,13 +216,12 @@ class TestIngestMultiProgramIsolation:
 
         # Bad program discarded, good program accepted
         assert engine.metrics.added == 1
-        # state.set_program_state called for discarding bad program
-        discard_calls = [
-            c
-            for c in engine.state.set_program_state.call_args_list
-            if c[0][1] == ProgramState.DISCARDED
-        ]
-        assert len(discard_calls) >= 1
+        # batch_transition_by_ids called to discard bad program
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            [prog_bad.id],
+            ProgramState.DONE.value,
+            ProgramState.DISCARDED.value,
+        )
 
     async def test_all_programs_fail_none_added(self):
         """All programs fail during ingestion -> none added, all discarded."""
@@ -354,49 +353,28 @@ class TestHasActiveDagsLogThrottle:
 
 
 class TestRefreshBatchTransition:
-    """_refresh_archive_programs uses batch_transition_state for all DONE programs."""
+    """_refresh_archive_programs uses batch_transition_by_ids for efficiency."""
 
-    async def test_refresh_batch_called_with_done_programs(self):
-        """batch_transition_state is called with only DONE programs."""
+    async def test_refresh_passes_ids_to_batch_transition(self):
+        """batch_transition_by_ids is called with all archive IDs."""
         engine = _engine()
 
-        progs = [_prog(ProgramState.DONE) for _ in range(3)]
-        engine.strategy.get_program_ids.return_value = [p.id for p in progs]
-        engine.storage.mget.return_value = progs
-        engine.storage.batch_transition_state.return_value = 3
+        ids = ["p1", "p2", "p3"]
+        engine.strategy.get_program_ids.return_value = ids
+        engine.storage.batch_transition_by_ids.return_value = 3
 
         count = await engine._refresh_archive_programs()
         assert count == 3
-        engine.storage.batch_transition_state.assert_called_once_with(
-            progs, ProgramState.DONE.value, ProgramState.QUEUED.value
-        )
-
-    async def test_refresh_only_done_not_queued(self):
-        """Only DONE programs get refreshed, not QUEUED ones."""
-        engine = _engine()
-
-        done_prog = _prog(ProgramState.DONE)
-        queued_prog = _prog(ProgramState.QUEUED)
-
-        engine.strategy.get_program_ids.return_value = [done_prog.id, queued_prog.id]
-        engine.storage.mget.return_value = [done_prog, queued_prog]
-        engine.storage.batch_transition_state.return_value = 1
-
-        count = await engine._refresh_archive_programs()
-
-        assert count == 1  # Only DONE program
-        engine.storage.batch_transition_state.assert_called_once_with(
-            [done_prog], ProgramState.DONE.value, ProgramState.QUEUED.value
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            ids, ProgramState.DONE.value, ProgramState.QUEUED.value
         )
 
     async def test_refresh_handles_batch_transition_error(self):
-        """_refresh_archive_programs doesn't crash when batch_transition_state raises."""
+        """_refresh_archive_programs doesn't crash when batch_transition_by_ids raises."""
         engine = _engine()
 
-        progs = [_prog(ProgramState.DONE) for _ in range(3)]
-        engine.strategy.get_program_ids.return_value = [p.id for p in progs]
-        engine.storage.mget.return_value = progs
-        engine.storage.batch_transition_state.side_effect = RuntimeError(
+        engine.strategy.get_program_ids.return_value = ["p1", "p2"]
+        engine.storage.batch_transition_by_ids.side_effect = RuntimeError(
             "Redis timeout"
         )
 
@@ -453,7 +431,7 @@ class TestStepGenerationPersistence:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -471,7 +449,7 @@ class TestStepGenerationPersistence:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)

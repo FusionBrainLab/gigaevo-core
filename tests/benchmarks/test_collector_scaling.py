@@ -11,6 +11,7 @@ import fakeredis
 import pytest
 
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
+from gigaevo.programs.program import EXCLUDE_FOR_ANALYTICS
 from gigaevo.programs.stages.collector import EvolutionaryStatisticsCollector
 from tests.benchmarks.conftest import (
     BenchmarkTimer,
@@ -51,6 +52,26 @@ class TestGetAllScaling:
         assert len(result) == archive_size
         backend = "redis" if redis_url else "fakeredis"
         print(f"BENCHMARK: get_all N={archive_size} ({backend}): {t.elapsed_ms:.1f}ms")
+        await cleanup_storage(storage)
+
+
+class TestGetAllExcludeScaling:
+    """Time storage.get_all(exclude=EXCLUDE_FOR_ANALYTICS) — the production path."""
+
+    async def test_get_all_exclude_scaling(
+        self, archive_size: int, redis_url: str | None
+    ) -> None:
+        storage, strategy, programs = await _setup(archive_size, redis_url)
+
+        with BenchmarkTimer() as t:
+            result = await storage.get_all(exclude=EXCLUDE_FOR_ANALYTICS)
+
+        assert len(result) == archive_size
+        backend = "redis" if redis_url else "fakeredis"
+        print(
+            f"BENCHMARK: get_all_exclude N={archive_size} ({backend}): "
+            f"{t.elapsed_ms:.1f}ms"
+        )
         await cleanup_storage(storage)
 
 

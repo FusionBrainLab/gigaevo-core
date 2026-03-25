@@ -160,7 +160,7 @@ class TestGatherExceptionCounting:
             iteration=0,
         )
 
-        assert count == 3
+        assert len(count) == 3
         assert storage.add.call_count == 3
 
     async def test_all_mutations_fail_returns_zero(self) -> None:
@@ -180,7 +180,7 @@ class TestGatherExceptionCounting:
             iteration=0,
         )
 
-        assert count == 0
+        assert len(count) == 0
         storage.add.assert_not_called()
 
     async def test_inner_exception_handler_returns_false(self) -> None:
@@ -207,7 +207,7 @@ class TestGatherExceptionCounting:
         )
 
         # Both tasks fail internally → False → count = 0
-        assert count == 0
+        assert len(count) == 0
         storage.add.assert_not_called()
 
     async def test_storage_add_exception_returns_false(self) -> None:
@@ -228,7 +228,7 @@ class TestGatherExceptionCounting:
             iteration=0,
         )
 
-        assert count == 0
+        assert len(count) == 0
 
     async def test_partial_failure_counts_only_successes(self) -> None:
         """With 3 parent selections: first succeeds, second mutator raises, third succeeds.
@@ -265,5 +265,5 @@ class TestGatherExceptionCounting:
             iteration=0,
         )
 
-        assert count == 2
+        assert len(count) == 2
         assert storage.add.call_count == 2

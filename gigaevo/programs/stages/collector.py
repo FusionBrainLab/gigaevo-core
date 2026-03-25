@@ -14,7 +14,7 @@ from gigaevo.programs.core_types import (
     VoidOutput,
 )
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import EXCLUDE_FOR_ANALYTICS, Program
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
@@ -344,12 +344,12 @@ def _compute_main_metric_stats(
 
 async def _get_ancestors(storage: ProgramStorage, program: Program) -> list[Program]:
     """Get immediate parent programs (depth 1)."""
-    return await storage.mget(program.lineage.parents)
+    return await storage.mget(program.lineage.parents, exclude=EXCLUDE_FOR_ANALYTICS)
 
 
 async def _get_descendants(storage: ProgramStorage, program: Program) -> list[Program]:
     """Get immediate child programs (depth 1)."""
-    return await storage.mget(program.lineage.children)
+    return await storage.mget(program.lineage.children, exclude=EXCLUDE_FOR_ANALYTICS)
 
 
 @StageRegistry.register(description="Evolutionary statistics collector")
@@ -359,61 +359,101 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
     def __init__(self, *, metrics_context: MetricsContext, **kwargs: Any):
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
+        # Population-level stats cache (keyed on list identity from snapshot).
+        # Within a single snapshot epoch, all programs see the same population,
+        # so global stats, per-generation stats, and generation history are
+        # identical.  Computing them once instead of N times reduces O(N²) to O(N).
+        self._cached_related_pop_id: int = -1
+        self._related_cache: dict[str, Program] = {}
+        self._cached_pop_id: int = -1
+        self._cached_global: (
+            tuple[
+                dict[str, float],
+                dict[str, float],
+                dict[str, float],
+                float,
+                float,
+                int,
+                int,
+            ]
+            | None
+        ) = None
+        self._cached_gen_stats: (
+            dict[
+                int, tuple[dict[str, float], dict[str, float], dict[str, float], float]
+            ]
+            | None
+        ) = None
+        self._cached_gen_history: dict[int, GenerationMetrics] | None = None
 
-    #: Fields the collector never accesses — skip during deserialization.
-    _EXCLUDE = frozenset({"stage_results"})
+    #: Skip metadata (89% of payload) and stage_results (10%) during
+    #: deserialization.  The collector only reads metrics, lineage, and
+    #: generation — never metadata or stage output.  Iteration-level stats
+    #: degrade gracefully (iteration = None → block skipped).
+    _EXCLUDE = EXCLUDE_FOR_ANALYTICS
 
     async def _collect_programs(self, program: Program) -> list[Program]:
         return await self.storage.snapshot.get_all(self.storage, exclude=self._EXCLUDE)
 
-    async def _process(
-        self, program: Program, programs: list[Program]
-    ) -> EvolutionaryStatistics:
-        # Global statistics (all programs)
+    async def _ensure_related_cache(self, programs: list[Program]) -> None:
+        """Build ancestor/descendant lookup from the population, fetching only misses.
+
+        Most parents/children are already in ``programs`` (the population
+        snapshot).  This method indexes the population by ID and only hits
+        Redis for IDs not found in the population (e.g. programs evicted from
+        the MAP-Elites archive).  Eliminates ~N individual mget calls.
+
+        Uses ``EXCLUDE_FOR_ANALYTICS`` for any fallback fetches — must NOT be
+        shared with stages that need full program objects.
+        """
+        pop_id = id(programs)
+        if pop_id == self._cached_related_pop_id:
+            return
+
+        # Index population by ID (O(N), ~0.2ms for N=5000)
+        pop_by_id: dict[str, Program] = {p.id: p for p in programs}
+
+        # Collect all needed parent/child IDs
+        all_ids: set[str] = set()
+        for p in programs:
+            all_ids.update(p.lineage.parents)
+            all_ids.update(p.lineage.children)
+
+        # Only fetch IDs not already in the population
+        missing_ids = all_ids - pop_by_id.keys()
+        if missing_ids:
+            fetched = await self.storage.mget(
+                list(missing_ids), exclude=EXCLUDE_FOR_ANALYTICS
+            )
+            for p in fetched:
+                pop_by_id[p.id] = p
+
+        self._related_cache = pop_by_id
+        self._cached_related_pop_id = pop_id
+
+    def _ensure_population_cache(self, programs: list[Program]) -> None:
+        """Compute and cache population-level stats if not already cached."""
+        pop_id = id(programs)
+        if pop_id == self._cached_pop_id:
+            return
+
         best, worst, avg, valid_rate = _compute_fitness_stats_all_metrics(
             programs, self.metrics_context
         )
         global_avg_children, global_max_children, total_count = (
             _compute_num_children_stats(programs)
         )
-
-        # Program's generation
-        generation = program.generation
-        iteration = program.get_metadata("iteration")
-
-        # Generation statistics (programs in same generation)
-        gen_programs = [p for p in programs if p.generation == generation]
-        gen_best, gen_worst, gen_avg, gen_valid_rate = (
-            _compute_fitness_stats_all_metrics(gen_programs, self.metrics_context)
+        self._cached_global = (
+            best,
+            worst,
+            avg,
+            valid_rate,
+            global_avg_children,
+            global_max_children,
+            total_count,
         )
 
-        # Iteration statistics (programs in same iteration)
-        iter_best, iter_worst, iter_avg, iter_valid_rate = None, None, None, None
-        if iteration is not None:
-            iter_programs = [
-                p for p in programs if p.get_metadata("iteration") == iteration
-            ]
-            iter_best, iter_worst, iter_avg, iter_valid_rate = (
-                _compute_fitness_stats_all_metrics(iter_programs, self.metrics_context)
-            )
-
-        # Ancestor statistics (depth 1 - immediate parents)
-        ancestors = await _get_ancestors(self.storage, program)
-        anc_best, anc_worst, anc_avg, anc_valid_rate = (
-            _compute_fitness_stats_all_metrics(ancestors, self.metrics_context)
-        )
-
-        # Descendant statistics (depth 1 - immediate children)
-        descendants = await _get_descendants(self.storage, program)
-        desc_best, desc_worst, desc_avg, desc_valid_rate = (
-            _compute_fitness_stats_all_metrics(descendants, self.metrics_context)
-        )
-
-        # Generation history (main metric only, across all generations)
-        main_metric = self.metrics_context.get_primary_key()
-        higher_is_better = self.metrics_context.is_higher_better(main_metric)
-
-        # Group programs by generation
+        # Group by generation
         programs_by_gen: dict[int, list[Program]] = {}
         for p in programs:
             gen = p.generation
@@ -421,12 +461,92 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
                 programs_by_gen[gen] = []
             programs_by_gen[gen].append(p)
 
-        # Compute main metric stats for each generation
+        # Per-generation fitness stats
+        gen_stats: dict[
+            int, tuple[dict[str, float], dict[str, float], dict[str, float], float]
+        ] = {}
+        for gen_num, gen_progs in programs_by_gen.items():
+            gen_stats[gen_num] = _compute_fitness_stats_all_metrics(
+                gen_progs, self.metrics_context
+            )
+        self._cached_gen_stats = gen_stats
+
+        # Generation history (main metric)
+        main_metric = self.metrics_context.get_primary_key()
+        higher_is_better = self.metrics_context.is_higher_better(main_metric)
         generation_history: dict[int, GenerationMetrics] = {}
         for gen_num, gen_progs in sorted(programs_by_gen.items()):
             generation_history[gen_num] = _compute_main_metric_stats(
                 gen_progs, main_metric, higher_is_better
             )
+        self._cached_gen_history = generation_history
+
+        self._cached_pop_id = pop_id
+
+    async def _process(
+        self, program: Program, programs: list[Program]
+    ) -> EvolutionaryStatistics:
+        # Pre-fetch all ancestors/descendants in one batch (cached per epoch)
+        await self._ensure_related_cache(programs)
+        # Population-level stats (cached per snapshot epoch)
+        self._ensure_population_cache(programs)
+        assert self._cached_global is not None
+        assert self._cached_gen_stats is not None
+        assert self._cached_gen_history is not None
+        (
+            best,
+            worst,
+            avg,
+            valid_rate,
+            global_avg_children,
+            global_max_children,
+            total_count,
+        ) = self._cached_global
+
+        # Program's generation
+        generation = program.generation
+        iteration = program.get_metadata("iteration")
+
+        # Generation statistics (cached)
+        gen_best, gen_worst, gen_avg, gen_valid_rate = self._cached_gen_stats.get(
+            generation, ({}, {}, {}, 0.0)
+        )
+
+        # Iteration statistics (programs in same iteration)
+        # Note: when metadata is excluded from the snapshot (for performance),
+        # p.get_metadata("iteration") returns None for all snapshot programs,
+        # so iter_programs will be empty.  In that case keep None semantics.
+        iter_best, iter_worst, iter_avg, iter_valid_rate = None, None, None, None
+        if iteration is not None:
+            iter_programs = [
+                p for p in programs if p.get_metadata("iteration") == iteration
+            ]
+            if iter_programs:
+                iter_best, iter_worst, iter_avg, iter_valid_rate = (
+                    _compute_fitness_stats_all_metrics(
+                        iter_programs, self.metrics_context
+                    )
+                )
+
+        # Ancestor statistics (depth 1 - immediate parents, from batch cache)
+        ancestors = [
+            self._related_cache[pid]
+            for pid in program.lineage.parents
+            if pid in self._related_cache
+        ]
+        anc_best, anc_worst, anc_avg, anc_valid_rate = (
+            _compute_fitness_stats_all_metrics(ancestors, self.metrics_context)
+        )
+
+        # Descendant statistics (depth 1 - immediate children, from batch cache)
+        descendants = [
+            self._related_cache[cid]
+            for cid in program.lineage.children
+            if cid in self._related_cache
+        ]
+        desc_best, desc_worst, desc_avg, desc_valid_rate = (
+            _compute_fitness_stats_all_metrics(descendants, self.metrics_context)
+        )
 
         return EvolutionaryStatistics(
             # Program statistics
@@ -464,5 +584,5 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             average_fitness_in_descendants=desc_avg,
             valid_rate_in_descendants=desc_valid_rate,
             # Generation history
-            generation_history=generation_history,
+            generation_history=self._cached_gen_history,
         )

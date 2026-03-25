@@ -12,7 +12,7 @@ indirectly:
   - compute_hash_from_inputs exception falls back to re-execution
   - _diagnose_stage with combined exec-order + data-flow WAIT gates
   - DAGValidator rejects malformed structure (unknown stages, cycles)
-  - write_exclusive is called exactly once at DAG start
+  - write_exclusive is called exactly once at end of DAG (deferred persistence)
   - mark_stage_running updates memory only, never writes to Redis
   - newly_cached stages reset the progress timer (no spurious stall)
 """
@@ -847,14 +847,15 @@ class TestDAGValidator:
 # ===========================================================================
 
 
-class TestDAGInitialPersistence:
-    """The DAG calls state_manager.write_exclusive exactly once at startup
-    (_run_internal line 101) — not per stage and not at shutdown."""
+class TestDAGDeferredPersistence:
+    """The DAG defers all stage-result writes to a single write_exclusive
+    at the end of _run_internal. No per-stage writes, no startup write.
+    Saves (N-1) Redis round trips for an N-stage DAG."""
 
-    async def test_write_exclusive_called_once_for_three_stage_dag(
+    async def test_single_write_exclusive_three_stage_dag(
         self, state_manager, make_program
     ):
-        """A 3-stage DAG calls write_exclusive exactly once."""
+        """A 3-stage DAG calls write_exclusive exactly once (the final flush)."""
         dag = _make_dag(
             {
                 "a": FastStage(timeout=5.0),
@@ -879,7 +880,7 @@ class TestDAGInitialPersistence:
 
         assert call_count == 1
 
-    async def test_write_exclusive_called_once_for_single_stage_dag(
+    async def test_single_write_exclusive_single_stage_dag(
         self, state_manager, make_program
     ):
         """A single-stage DAG also calls write_exclusive exactly once."""

@@ -111,6 +111,49 @@ class TestComplexityScaling:
         )
 
 
+class TestMgetExcludeStageResults:
+    """Head-to-head: mget with vs without exclude=stage_results on heavy programs."""
+
+    @pytest.fixture(params=[100, 500])
+    def mget_size(self, request):
+        return request.param
+
+    async def test_mget_full_vs_exclude(
+        self, mget_size: int, redis_url: str | None
+    ) -> None:
+        from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
+        from tests.benchmarks.conftest import make_heavy_program
+
+        server = None if redis_url else fakeredis.FakeServer()
+        storage = make_storage(server=server, redis_url=redis_url)
+
+        ids = []
+        for i in range(mget_size):
+            p = make_heavy_program(float(i), float(i % 10))
+            await storage.add(p)
+            ids.append(p.id)
+
+        k = 10
+        with BenchmarkTimer() as t_full:
+            for _ in range(k):
+                await storage.mget(ids)
+
+        with BenchmarkTimer() as t_excl:
+            for _ in range(k):
+                await storage.mget(ids, exclude=EXCLUDE_STAGE_RESULTS)
+
+        full_avg = t_full.elapsed_ms / k
+        excl_avg = t_excl.elapsed_ms / k
+        speedup = full_avg / excl_avg if excl_avg > 0 else 0
+        backend = "redis" if redis_url else "fakeredis"
+        print(
+            f"BENCHMARK: mget_exclude N={mget_size} ({backend}): "
+            f"full={full_avg:.1f}ms excl_stages={excl_avg:.1f}ms "
+            f"({speedup:.2f}x speedup)"
+        )
+        await cleanup_storage(storage)
+
+
 class TestBatchMgetScaling:
     """mget() cost with large code — simulates get_all_by_status."""
 

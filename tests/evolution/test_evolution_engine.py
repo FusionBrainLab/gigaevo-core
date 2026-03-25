@@ -64,36 +64,18 @@ def _prog(state: ProgramState = ProgramState.DONE) -> Program:
 
 
 class TestRefreshArchivePrograms:
-    async def test_only_done_programs_are_transitioned(self) -> None:
-        """Programs already QUEUED in the archive are skipped; only DONE ones are re-queued."""
+    async def test_calls_batch_transition_by_ids(self) -> None:
+        """_refresh_archive_programs passes all archive IDs to batch_transition_by_ids."""
         engine = _make_engine()
-        done_prog = _prog(ProgramState.DONE)
-        queued_prog = _prog(ProgramState.QUEUED)  # e.g. crash mid-refresh
-
-        engine.strategy.get_program_ids.return_value = [done_prog.id, queued_prog.id]
-        engine.storage.mget.return_value = [done_prog, queued_prog]
-        engine.storage.batch_transition_state.return_value = 1
+        ids = ["id1", "id2", "id3"]
+        engine.strategy.get_program_ids.return_value = ids
+        engine.storage.batch_transition_by_ids.return_value = 2
 
         count = await engine._refresh_archive_programs()
 
-        assert count == 1
-        engine.storage.batch_transition_state.assert_called_once_with(
-            [done_prog], ProgramState.DONE.value, ProgramState.QUEUED.value
-        )
-
-    async def test_all_done_programs_are_transitioned(self) -> None:
-        """When the entire archive is DONE, all programs are re-queued."""
-        engine = _make_engine()
-        progs = [_prog(ProgramState.DONE) for _ in range(3)]
-        engine.strategy.get_program_ids.return_value = [p.id for p in progs]
-        engine.storage.mget.return_value = progs
-        engine.storage.batch_transition_state.return_value = 3
-
-        count = await engine._refresh_archive_programs()
-
-        assert count == 3
-        engine.storage.batch_transition_state.assert_called_once_with(
-            progs, ProgramState.DONE.value, ProgramState.QUEUED.value
+        assert count == 2
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            ids, ProgramState.DONE.value, ProgramState.QUEUED.value
         )
 
     async def test_empty_archive_returns_zero(self) -> None:
@@ -104,19 +86,7 @@ class TestRefreshArchivePrograms:
         count = await engine._refresh_archive_programs()
 
         assert count == 0
-        engine.storage.batch_transition_state.assert_not_called()
-
-    async def test_no_done_programs_returns_zero(self) -> None:
-        """Archive has programs but none are DONE → returns 0, no transitions."""
-        engine = _make_engine()
-        running_prog = _prog(ProgramState.RUNNING)
-        engine.strategy.get_program_ids.return_value = [running_prog.id]
-        engine.storage.mget.return_value = [running_prog]
-
-        count = await engine._refresh_archive_programs()
-
-        assert count == 0
-        engine.storage.batch_transition_state.assert_not_called()
+        engine.storage.batch_transition_by_ids.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +138,10 @@ class TestIngestCompletedPrograms:
         await engine._ingest_completed_programs()
 
         engine.strategy.add.assert_not_called()
-        engine.state.set_program_state.assert_called_once_with(
-            rej_prog, ProgramState.DISCARDED
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            [rej_prog.id],
+            ProgramState.DONE.value,
+            ProgramState.DISCARDED.value,
         )
 
     async def test_rejected_by_strategy_is_discarded(self) -> None:
@@ -186,8 +158,10 @@ class TestIngestCompletedPrograms:
 
         await engine._ingest_completed_programs()
 
-        engine.state.set_program_state.assert_called_once_with(
-            rej_prog, ProgramState.DISCARDED
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            [rej_prog.id],
+            ProgramState.DONE.value,
+            ProgramState.DISCARDED.value,
         )
 
     async def test_empty_done_set_returns_early(self) -> None:
@@ -238,13 +212,15 @@ class TestIngestCompletedPrograms:
         # Must NOT raise — per-item exception handler catches it and discards the program
         await engine._ingest_completed_programs()
 
-        # The failed program must be scheduled for DISCARDED state
-        engine.state.set_program_state.assert_called_once_with(
-            prog, ProgramState.DISCARDED
+        # The failed program must be batch-transitioned to DISCARDED
+        engine.storage.batch_transition_by_ids.assert_called_once_with(
+            [prog.id],
+            ProgramState.DONE.value,
+            ProgramState.DISCARDED.value,
         )
 
-    async def test_rejected_discard_gather_swallows_exceptions(self) -> None:
-        """State discard task fails inside gather(return_exceptions=True) → doesn't crash."""
+    async def test_rejected_discard_batch_swallows_exceptions(self) -> None:
+        """Batch discard fails → exception caught, metrics still recorded."""
         engine = _make_engine()
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = False
@@ -253,10 +229,12 @@ class TestIngestCompletedPrograms:
         engine.storage.get_ids_by_status.return_value = [prog.id]
         engine.storage.mget.return_value = [prog]
         engine.strategy.get_program_ids.return_value = []
-        # Make the discard state transition fail
-        engine.state.set_program_state.side_effect = RuntimeError("Redis timeout")
+        # Make the batch discard fail
+        engine.storage.batch_transition_by_ids.side_effect = RuntimeError(
+            "Redis timeout"
+        )
 
-        # gather(return_exceptions=True) should swallow the exception
+        # Exception should be caught and logged, not crash
         await engine._ingest_completed_programs()
 
         # Metrics should still be recorded
@@ -393,15 +371,16 @@ class TestCreateMutants:
     async def test_calls_generate_mutations(self) -> None:
         engine = _make_engine()
         elites = [_prog() for _ in range(2)]
+        new_ids = [f"mut-{i}" for i in range(5)]
 
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=5,
+            return_value=new_ids,
         ) as mock_gen:
-            created = await engine._create_mutants(elites)
+            result = await engine._create_mutants(elites)
 
-        assert created == 5
+        assert set(result) == set(new_ids)
         mock_gen.assert_called_once()
         assert engine.metrics.mutations_created == 5
 
@@ -412,7 +391,7 @@ class TestCreateMutants:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ) as mock_gen:
             # Directly test: _create_mutants is not called when elites is empty
             # because step() checks: `if elites else 0`
@@ -464,7 +443,7 @@ class TestStep:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=1,
+            return_value=[new_prog.id],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -483,7 +462,7 @@ class TestStep:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -493,7 +472,10 @@ class TestStep:
         """on_program_ingested is called with correct outcome for each program."""
         engine = _make_engine()
         engine.config.loop_interval = 0.01
-        engine.strategy.select_elites.return_value = []
+
+        # Two elites so _create_mutants is called
+        elites = [_prog() for _ in range(2)]
+        engine.strategy.select_elites.return_value = elites
 
         # One rejected by acceptor, one accepted
         engine.config.program_acceptor = MagicMock()
@@ -508,13 +490,13 @@ class TestStep:
         # _ingest uses get_ids_by_status + mget
         engine.storage.get_ids_by_status.return_value = [bad_prog.id, good_prog.id]
         engine.storage.mget.return_value = [bad_prog, good_prog]
-        # Neither in archive
+        # Neither in archive (Phase 4), then for refresh + summary
         engine.strategy.get_program_ids.side_effect = [[], [], []]
 
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[bad_prog.id, good_prog.id],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -544,7 +526,7 @@ class TestRunLoop:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -580,7 +562,7 @@ class TestRunLoop:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             # Run for a bit then resume
             task = asyncio.create_task(engine.run())
@@ -655,7 +637,7 @@ class TestRunLoop:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             task = asyncio.create_task(engine.run())
             await asyncio.sleep(0.05)
@@ -717,7 +699,7 @@ class TestGenerateMutations:
             iteration=0,
         )
 
-        assert count == 3
+        assert len(count) == 3
         assert storage.add.call_count == 3
         # Parent lineage updated for each mutation
         assert state_manager.update_program.call_count == 3
@@ -744,14 +726,14 @@ class TestGenerateMutations:
             iteration=0,
         )
 
-        assert count == 0
+        assert len(count) == 0
         storage.add.assert_not_called()
 
-    async def test_empty_elites_returns_zero(self) -> None:
+    async def test_empty_elites_returns_empty(self) -> None:
         from gigaevo.evolution.engine.mutation import generate_mutations
         from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
 
-        count = await generate_mutations(
+        result = await generate_mutations(
             [],
             mutator=AsyncMock(),
             storage=AsyncMock(),
@@ -761,13 +743,13 @@ class TestGenerateMutations:
             iteration=0,
         )
 
-        assert count == 0
+        assert result == []
 
-    async def test_limit_zero_returns_zero(self) -> None:
+    async def test_limit_zero_returns_empty(self) -> None:
         from gigaevo.evolution.engine.mutation import generate_mutations
         from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
 
-        count = await generate_mutations(
+        result = await generate_mutations(
             [_prog()],
             mutator=AsyncMock(),
             storage=AsyncMock(),
@@ -777,7 +759,7 @@ class TestGenerateMutations:
             iteration=0,
         )
 
-        assert count == 0
+        assert result == []
 
     async def test_mutation_exception_doesnt_crash(self) -> None:
         """A failing mutator call is caught; other mutations can still succeed."""
@@ -812,7 +794,7 @@ class TestGenerateMutations:
         )
 
         # One succeeded, one failed
-        assert count == 1
+        assert len(count) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -841,9 +823,9 @@ class TestStepPhaseOrdering:
 
         async def tracked_create(elites):
             call_log.append("create_mutants")
-            return 0
+            return []
 
-        async def tracked_ingest():
+        async def tracked_ingest(**kwargs):
             call_log.append("ingest")
 
         async def tracked_refresh():
@@ -889,7 +871,7 @@ class TestStepPhaseOrdering:
             call_log.append("select_elites")
             return []
 
-        async def tracked_ingest():
+        async def tracked_ingest(**kwargs):
             call_log.append("ingest")
 
         async def tracked_refresh():
@@ -929,7 +911,7 @@ class TestStepPhaseOrdering:
             call_log.append("select_elites")
             return elites
 
-        async def tracked_ingest():
+        async def tracked_ingest(**kwargs):
             call_log.append("ingest")
 
         async def tracked_refresh():
@@ -941,10 +923,12 @@ class TestStepPhaseOrdering:
         engine._ingest_completed_programs = tracked_ingest
         engine._refresh_archive_programs = tracked_refresh
 
+        new_ids = ["mut-0", "mut-1"]
+
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=2,
+            return_value=new_ids,
         ) as mock_gen:
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -997,7 +981,7 @@ class TestChildLineageVerification:
             iteration=0,
         )
 
-        assert count == 1
+        assert len(count) == 1
         # Verify storage.add was called with a Program whose lineage references the parent
         stored_program = storage.add.call_args[0][0]
         assert parent.id in stored_program.lineage.parents

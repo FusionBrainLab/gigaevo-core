@@ -829,14 +829,15 @@ class TestStatePersistenceCorrectness:
         assert fetched is not None
         assert fetched.metrics.get("persisted_key") == 42.0
 
-    async def test_stage_results_persisted_per_stage_not_only_at_end(
+    async def test_stage_results_persisted_at_dag_completion(
         self, state_manager, fakeredis_storage, make_program
     ):
         """3-stage DAG: A (succeeds), B (fails), C (mandatory dep on B -> SKIPPED).
 
         Fetches program from Redis after DAG completes and verifies all three
-        stage results are persisted with correct statuses. This confirms
-        update_stage_result is called per-stage, not just at the end.
+        stage results are persisted with correct statuses. Stage results are
+        accumulated in-memory during DAG execution and flushed to Redis once
+        at the end of _run_internal (deferred persistence).
 
         Topology:
           A (ProduceOne, independent, succeeds)

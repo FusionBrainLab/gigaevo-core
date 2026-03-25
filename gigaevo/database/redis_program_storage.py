@@ -257,26 +257,39 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("exists", _exists)
 
-    async def mget(self, program_ids: list[str]) -> list[Program]:
+    async def mget(
+        self,
+        program_ids: list[str],
+        *,
+        exclude: frozenset[str] | None = None,
+    ) -> list[Program]:
         if not program_ids:
             return []
 
         async def _mget(r: aioredis.Redis) -> list[Program]:
             keys = [self._keys.program(pid) for pid in program_ids]
-            return await self._mget_by_keys(r, keys, "mget")
+            return await self._mget_by_keys(r, keys, "mget", exclude=exclude)
 
         return await self._conn.execute("mget", _mget)
 
+    async def _all_program_ids_from_sets(self, r: aioredis.Redis) -> list[str]:
+        """Get all program IDs via SUNION of status sets.
+
+        Faster than SCAN because it reads pre-indexed sets directly instead of
+        iterating the entire keyspace with pattern matching.  Every program is
+        in exactly one status set (invariant maintained by add/transition ops).
+        """
+        set_keys = [self._keys.status_set(s.value) for s in ProgramState]
+        return list(await r.sunion(*set_keys))
+
     async def size(self) -> int:
-        """Count programs using SCAN (non-blocking)."""
+        """Count programs by summing SCARD across status sets (O(1) per set)."""
 
         async def _size(r: aioredis.Redis) -> int:
-            count = 0
-            async for _ in r.scan_iter(
-                match=self._keys.program_pattern(), count=SCAN_BATCH_SIZE
-            ):
-                count += 1
-            return count
+            total = 0
+            for s in ProgramState:
+                total += await r.scard(self._keys.status_set(s.value))
+            return total
 
         return await self._conn.execute("size", _size)
 
@@ -303,24 +316,20 @@ class RedisProgramStorage(ProgramStorage):
         return await self._conn.execute("get_all", _scan_then_mget)
 
     async def get_all_program_ids(self) -> list[str]:
-        """Return program IDs (not full Redis keys) using SCAN."""
+        """Return program IDs (not full Redis keys) via status-set SUNION."""
 
         async def _get_all_ids(r: aioredis.Redis) -> list[str]:
-            ids: list[str] = []
-            async for key in r.scan_iter(
-                match=self._keys.program_pattern(), count=SCAN_BATCH_SIZE
-            ):
-                ids.append(key.split(":")[-1])
-            return ids
+            return await self._all_program_ids_from_sets(r)
 
         return await self._conn.execute("get_all_program_ids", _get_all_ids)
 
     async def has_data(self) -> bool:
-        """Check if database has any programs."""
+        """Check if database has any programs (fast: SCARD on status sets)."""
 
         async def _check(r: aioredis.Redis) -> bool:
-            async for _ in r.scan_iter(match=self._keys.program_pattern(), count=1):
-                return True
+            for s in ProgramState:
+                if await r.scard(self._keys.status_set(s.value)) > 0:
+                    return True
             return False
 
         return await self._conn.execute("has_data", _check)
@@ -538,15 +547,18 @@ class RedisProgramStorage(ProgramStorage):
                 start_counter = end_counter - n + 1
 
                 pipe = r.pipeline(transaction=False)
+                chunk_ids = []
                 for i, prog in enumerate(chunk):
                     prog.state = ProgramState(new_state)
                     data = prog.to_dict()
                     data["atomic_counter"] = int(start_counter + i)
 
                     pipe.set(self._keys.program(prog.id), _dumps(data))
-                    pipe.srem(old_set_key, prog.id)
-                    pipe.sadd(new_set_key, prog.id)
+                    chunk_ids.append(prog.id)
 
+                # Bulk SREM/SADD: one command per chunk instead of per program
+                pipe.srem(old_set_key, *chunk_ids)
+                pipe.sadd(new_set_key, *chunk_ids)
                 pipe.xadd(
                     stream_key,
                     {"id": "batch", "status": new_state, "event": "batch_transition"},
@@ -560,6 +572,78 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("batch_transition_state", _batch)
 
+    async def batch_transition_by_ids(
+        self,
+        program_ids: list[str],
+        old_state: str,
+        new_state: str,
+    ) -> int:
+        """Batch-transition programs by ID using raw JSON patching.
+
+        Much faster than batch_transition_state for large batches because it
+        skips Pydantic deserialization/reserialization entirely. Reads raw JSON
+        blobs, patches the ``state`` field in-place, and writes back.
+
+        Only transitions programs whose current state matches ``old_state``.
+        Returns the number of programs actually transitioned.
+        """
+        self._check_write_allowed("batch_transition_by_ids")
+        if not program_ids:
+            return 0
+
+        validate_transition(ProgramState(old_state), ProgramState(new_state))
+
+        async def _batch_raw(r: aioredis.Redis) -> int:
+            old_set_key = self._keys.status_set(old_state)
+            new_set_key = self._keys.status_set(new_state)
+            stream_key = self._keys.status_stream()
+            ts_key = self._keys.timestamp()
+
+            count = 0
+            for id_chunk in self._chunks(program_ids, MGET_CHUNK_SIZE):
+                keys = [self._keys.program(pid) for pid in id_chunk]
+                blobs = await r.mget(*keys)
+
+                # Filter: only patch programs that exist and are in old_state
+                to_patch: list[tuple[str, str, dict]] = []  # (key, pid, parsed)
+                for key, pid, raw in zip(keys, id_chunk, blobs):
+                    if not raw:
+                        continue
+                    parsed = _loads(raw)
+                    if parsed.get("state") == old_state:
+                        to_patch.append((key, pid, parsed))
+
+                if not to_patch:
+                    continue
+
+                n = len(to_patch)
+                end_counter = await r.incrby(ts_key, n)
+                start_counter = end_counter - n + 1
+
+                pipe = r.pipeline(transaction=False)
+                patch_ids = []
+                for i, (key, pid, parsed) in enumerate(to_patch):
+                    parsed["state"] = new_state
+                    parsed["atomic_counter"] = int(start_counter + i)
+                    pipe.set(key, _dumps(parsed))
+                    patch_ids.append(pid)
+
+                # Bulk SREM/SADD: one command per chunk instead of per program
+                pipe.srem(old_set_key, *patch_ids)
+                pipe.sadd(new_set_key, *patch_ids)
+                pipe.xadd(
+                    stream_key,
+                    {"id": "batch", "status": new_state, "event": "batch_transition"},
+                    maxlen=STREAM_MAX_LEN,
+                    approximate=True,
+                )
+                await pipe.execute()
+                count += n
+
+            return count
+
+        return await self._conn.execute("batch_transition_by_ids", _batch_raw)
+
     async def remove_ids_from_status_set(self, status: str, ids: list[str]) -> None:
         """Remove specific IDs from a status set using SREM."""
         if not ids:
@@ -570,6 +654,44 @@ class RedisProgramStorage(ProgramStorage):
             await r.srem(self._keys.status_set(status), *ids)
 
         await self._conn.execute("remove_ids_from_status_set", _srem)
+
+    async def batch_move_status_sets(
+        self,
+        program_ids: list[str],
+        from_status: str,
+        to_status: str,
+    ) -> None:
+        """Move IDs between status sets WITHOUT modifying program data blobs.
+
+        Much faster than batch_transition_by_ids for transitions to terminal
+        states (e.g. DISCARDED) because it skips MGET/parse/patch/serialize.
+        Only does SREM + SADD + XADD in a single pipeline.
+        """
+        if not program_ids:
+            return
+        self._check_write_allowed("batch_move_status_sets")
+
+        async def _move(r: aioredis.Redis) -> None:
+            from_key = self._keys.status_set(from_status)
+            to_key = self._keys.status_set(to_status)
+            stream_key = self._keys.status_stream()
+
+            pipe = r.pipeline(transaction=False)
+            pipe.srem(from_key, *program_ids)
+            pipe.sadd(to_key, *program_ids)
+            pipe.xadd(
+                stream_key,
+                {
+                    "id": "batch_move",
+                    "status": to_status,
+                    "event": "batch_move_status",
+                },
+                maxlen=STREAM_MAX_LEN,
+                approximate=True,
+            )
+            await pipe.execute()
+
+        await self._conn.execute("batch_move_status_sets", _move)
 
     # --------------------- Run State (resume support) ---------------------
 

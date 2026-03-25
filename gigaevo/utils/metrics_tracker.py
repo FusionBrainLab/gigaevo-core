@@ -13,7 +13,7 @@ from gigaevo.programs.metrics.context import (
     VALIDITY_KEY,
     MetricsContext,
 )
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import INCOMPLETE_STATES
 from gigaevo.utils.trackers.base import LogWriter
 
@@ -159,7 +159,9 @@ class MetricsTracker:
         # Process new programs (first time seen)
         new_ids = [pid for pid in all_ids if pid not in self._seen_ids]
         if new_ids:
-            programs: list[Program] = await self._storage.mget(new_ids)
+            programs: list[Program] = await self._storage.mget(
+                new_ids, exclude=EXCLUDE_STAGE_RESULTS
+            )
             for prog in programs:
                 if not prog:
                     continue
@@ -182,7 +184,9 @@ class MetricsTracker:
         if not self._seen_fitness:
             return
 
-        programs = await self._storage.mget(list(self._seen_fitness.keys()))
+        programs = await self._storage.mget(
+            list(self._seen_fitness.keys()), exclude=EXCLUDE_STAGE_RESULTS
+        )
         changed_keys: set[str] = set()
 
         for prog in programs:

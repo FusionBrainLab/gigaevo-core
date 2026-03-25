@@ -20,7 +20,7 @@ async def generate_mutations(
     parent_selector: ParentSelector,
     limit: int,
     iteration: int,
-) -> int:
+) -> list[str]:
     """Generate at most *limit* mutations from *elites* and persist them immediately.
 
     This function now uses parallel execution for efficient mutation generation
@@ -34,10 +34,10 @@ async def generate_mutations(
         limit: Maximum number of mutations to generate
         iteration: Current iteration number
     Returns:
-        Number of persisted mutations.
+        List of program IDs for persisted mutations.
     """
     if not elites or limit <= 0:
-        return 0
+        return []
 
     try:
         parent_iterator = parent_selector.create_parent_iterator(elites)
@@ -50,7 +50,7 @@ async def generate_mutations(
 
         if not parent_selections:
             logger.info("[mutation] No valid parent selections available")
-            return 0
+            return []
 
         logger.info(
             "[mutation] Generated {} parent selections for parallel mutation",
@@ -59,8 +59,8 @@ async def generate_mutations(
 
         async def generate_and_persist_mutation(
             parents: list[Program], task_id: int
-        ) -> bool:
-            """Generate a single mutation and persist it. Returns True if successful."""
+        ) -> str | None:
+            """Generate a single mutation and persist it. Returns program ID if successful."""
             try:
                 mutation_spec = await mutator.mutate_single(parents)
 
@@ -70,7 +70,7 @@ async def generate_mutations(
                         task_id,
                         [p.short_id for p in parents],
                     )
-                    return False
+                    return None
 
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
@@ -93,7 +93,7 @@ async def generate_mutations(
                         fresh_parent.lineage.add_child(program.id)
                         await state_manager.update_program(fresh_parent)
 
-                return True
+                return program.id
 
             except Exception as exc:
                 logger.error(
@@ -101,7 +101,7 @@ async def generate_mutations(
                     task_id,
                     exc,
                 )
-                return False
+                return None
 
         tasks = [
             generate_and_persist_mutation(parents, i)
@@ -109,14 +109,14 @@ async def generate_mutations(
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        persisted = sum(1 for result in results if result is True)
+        mutation_ids = [r for r in results if isinstance(r, str)]
 
         logger.info(
             "[mutation] Created {} mutations in parallel (immediately persisted)",
-            persisted,
+            len(mutation_ids),
         )
-        return persisted
+        return mutation_ids
 
     except Exception as exc:  # pragma: no cover
         logger.error("[mutation] Mutation generation failed: {}", exc)
-        return 0
+        return []

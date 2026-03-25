@@ -19,7 +19,7 @@ from gigaevo.evolution.mutation.mutation_operator import (
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
 from gigaevo.utils.metrics_tracker import MetricsTracker
@@ -218,9 +218,11 @@ class EvolutionEngine:
 
         # Phase 2: select elites & create mutants
         elites = await self._select_elites_for_mutation()
-        created = await self._create_mutants(elites) if elites else 0
+        mutation_ids = await self._create_mutants(elites) if elites else None
         logger.debug(
-            "[EvolutionEngine] gen={} Phase 2: Created {} mutant(s)", gen, created
+            "[EvolutionEngine] gen={} Phase 2: Created {} mutant(s)",
+            gen,
+            len(mutation_ids) if mutation_ids is not None else 0,
         )
 
         # Phase 3: wait for the mutants' DAGs to finish
@@ -230,10 +232,14 @@ class EvolutionEngine:
         )
 
         # Phase 4: ingest newly completed programs (typically the mutants)
-        await self._ingest_completed_programs()
+        await self._ingest_completed_programs(mutation_ids=mutation_ids)
         logger.debug("[EvolutionEngine] gen={} Phase 4: Ingestion done", gen)
 
-        self.storage.snapshot.bump()
+        # Incremental bump: ingestion only changes program states (DONE→DISCARDED)
+        # and set membership — not the data fields the collector reads (metrics,
+        # lineage, generation).  Allows the snapshot to reuse cached Program
+        # objects and only fetch newly added/removed IDs.
+        self.storage.snapshot.bump(incremental=True)
 
         # Phase 5: refresh all archive programs (to re-run lineage/descendant-aware stages)
         refreshed = await self._refresh_archive_programs()
@@ -275,7 +281,7 @@ class EvolutionEngine:
             " | archive={} ({:+d}){} ({:.1f}s){}",
             gen,
             len(elites),
-            created,
+            len(mutation_ids) if mutation_ids is not None else 0,
             refreshed,
             archive_size,
             archive_delta,
@@ -330,10 +336,16 @@ class EvolutionEngine:
             if elapsed > 30 and not ghost_checked:
                 ghost_checked = True
                 real_q = len(
-                    await self.storage.get_all_by_status(ProgramState.QUEUED.value)
+                    await self.storage.get_all_by_status(
+                        ProgramState.QUEUED.value,
+                        exclude=EXCLUDE_STAGE_RESULTS,
+                    )
                 )
                 real_r = len(
-                    await self.storage.get_all_by_status(ProgramState.RUNNING.value)
+                    await self.storage.get_all_by_status(
+                        ProgramState.RUNNING.value,
+                        exclude=EXCLUDE_STAGE_RESULTS,
+                    )
                 )
                 if real_q == 0 and real_r == 0:
                     # Clean up ghost IDs from status sets
@@ -373,13 +385,14 @@ class EvolutionEngine:
         self.metrics.record_elite_selection_metrics(len(elites), 0)
         return elites
 
-    async def _create_mutants(self, elites: list[Program]) -> int:
+    async def _create_mutants(self, elites: list[Program]) -> list[str]:
+        """Create mutants and return their program IDs."""
         logger.debug(
             "[EvolutionEngine] gen={} Mutate from {} elite(s)",
             self.metrics.total_generations,
             len(elites),
         )
-        created = await generate_mutations(
+        mutation_ids = await generate_mutations(
             elites,
             mutator=self.mutation_operator,
             storage=self.storage,
@@ -388,14 +401,26 @@ class EvolutionEngine:
             limit=self.config.max_mutations_per_generation,
             iteration=self.metrics.total_generations,
         )
-        self.metrics.record_mutation_metrics(created, 0)
-        return created
+        self.metrics.record_mutation_metrics(len(mutation_ids), 0)
+        return mutation_ids
 
-    async def _ingest_completed_programs(self) -> None:
+    async def _ingest_completed_programs(
+        self,
+        *,
+        mutation_ids: list[str] | None = None,
+    ) -> None:
         """
         Validate and hand over any DONE programs to the strategy.
         Programs already in the archive stay DONE (they arrived from a refresh DAG).
         New programs are added if accepted, otherwise discarded.
+
+        Args:
+            mutation_ids: IDs of programs created during this generation's mutation
+                phase.  When None (mutation was skipped), all non-archive DONE programs
+                are deserialized and validated normally.  When a list (mutation ran),
+                non-archive DONE programs that are NOT in this set are batch-discarded
+                without deserialization — they are stale leftovers from previous
+                generations or initial population.
         """
         # Fetch only IDs first (SMEMBERS — no deserialization), then filter
         # out archive programs before doing the expensive mget+deserialize.
@@ -408,9 +433,9 @@ class EvolutionEngine:
             return
 
         archive_program_ids = set(await self.strategy.get_program_ids())
-        new_ids = [pid for pid in done_ids if pid not in archive_program_ids]
+        non_archive_ids = [pid for pid in done_ids if pid not in archive_program_ids]
 
-        if not new_ids:
+        if not non_archive_ids:
             logger.debug(
                 "[EvolutionEngine] gen={} {} DONE programs all in archive, skipping",
                 self.metrics.total_generations,
@@ -418,8 +443,42 @@ class EvolutionEngine:
             )
             return
 
-        # Only deserialize the new (non-archive) programs
-        completed = await self.storage.mget(new_ids)
+        # Fast path: when mutation_ids are known, batch-discard stale DONE
+        # programs (those not created this generation) without deserializing
+        # them.  This avoids O(N) mget + from_dict on the initial population.
+        if mutation_ids is not None:
+            mutation_id_set = set(mutation_ids)
+            stale_ids = [pid for pid in non_archive_ids if pid not in mutation_id_set]
+            new_ids = [pid for pid in non_archive_ids if pid in mutation_id_set]
+            if stale_ids:
+                logger.info(
+                    "[EvolutionEngine] gen={} Fast-discard {} stale DONE program(s)",
+                    self.metrics.total_generations,
+                    len(stale_ids),
+                )
+                try:
+                    await self.storage.batch_move_status_sets(
+                        stale_ids,
+                        ProgramState.DONE.value,
+                        ProgramState.DISCARDED.value,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[EvolutionEngine] gen={} stale batch discard failed: {}",
+                        self.metrics.total_generations,
+                        e,
+                    )
+        else:
+            new_ids = non_archive_ids
+
+        if not new_ids:
+            return
+
+        # Only deserialize the new (non-archive) programs.
+        # Exclude stage_results (~10% of payload) — ingestion only needs
+        # metrics, state, metadata, and lineage.  The merge strategy in
+        # storage.update() preserves existing stage_results from Redis.
+        completed = await self.storage.mget(new_ids, exclude=EXCLUDE_STAGE_RESULTS)
         # Filter to actual DONE state (mget may return stale status)
         completed = [p for p in completed if p.state == ProgramState.DONE]
 
@@ -442,7 +501,9 @@ class EvolutionEngine:
         rej_valid = 0
         rej_strategy = 0
 
-        state_tasks: list[asyncio.Task] = []
+        # Collect IDs of rejected programs for a single batch transition
+        # at the end, instead of one Redis write per reject.
+        reject_ids: list[str] = []
 
         for prog in completed:
             try:
@@ -455,11 +516,7 @@ class EvolutionEngine:
                         prog.metrics,
                     )
                     await self._notify_hook(prog, MutationOutcome.REJECTED_ACCEPTOR)
-                    state_tasks.append(
-                        asyncio.create_task(
-                            self._set_state(prog, ProgramState.DISCARDED)
-                        )
-                    )
+                    reject_ids.append(prog.id)
                 elif await self.strategy.add(prog):
                     # accepted by strategy — stays DONE until next refresh
                     added += 1
@@ -478,11 +535,7 @@ class EvolutionEngine:
                         prog.metrics,
                     )
                     await self._notify_hook(prog, MutationOutcome.REJECTED_STRATEGY)
-                    state_tasks.append(
-                        asyncio.create_task(
-                            self._set_state(prog, ProgramState.DISCARDED)
-                        )
-                    )
+                    reject_ids.append(prog.id)
             except Exception as e:
                 # Isolate per-program failures: log and discard the offending program
                 # so the remaining programs in this batch are still processed.
@@ -491,12 +544,27 @@ class EvolutionEngine:
                     prog.short_id,
                     e,
                 )
-                state_tasks.append(
-                    asyncio.create_task(self._set_state(prog, ProgramState.DISCARDED))
-                )
+                reject_ids.append(prog.id)
 
-        if state_tasks:
-            await asyncio.gather(*state_tasks, return_exceptions=True)
+        # Batch DONE → DISCARDED (raw JSON patch, no Pydantic serialization).
+        # Also update in-memory state so any downstream code sees DISCARDED.
+        if reject_ids:
+            reject_set = set(reject_ids)
+            for prog in completed:
+                if prog.id in reject_set:
+                    prog.state = ProgramState.DISCARDED
+            try:
+                await self.storage.batch_transition_by_ids(
+                    reject_ids,
+                    ProgramState.DONE.value,
+                    ProgramState.DISCARDED.value,
+                )
+            except Exception as e:
+                logger.error(
+                    "[EvolutionEngine] batch discard failed for {} programs: {}",
+                    len(reject_ids),
+                    e,
+                )
 
         self.metrics.programs_processed += added
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
@@ -515,21 +583,15 @@ class EvolutionEngine:
         if not program_ids_to_refresh:
             return 0
 
-        programs_to_refresh = await self.storage.mget(program_ids_to_refresh)
-        done_programs = [p for p in programs_to_refresh if p.state == ProgramState.DONE]
-
-        if not done_programs:
-            return 0
-
         try:
-            count = await self.storage.batch_transition_state(
-                done_programs,
+            count = await self.storage.batch_transition_by_ids(
+                program_ids_to_refresh,
                 ProgramState.DONE.value,
                 ProgramState.QUEUED.value,
             )
         except Exception as e:
             logger.error(
-                "[EvolutionEngine] gen={} batch_transition_state failed: {}",
+                "[EvolutionEngine] gen={} batch_transition_by_ids failed: {}",
                 self.metrics.total_generations,
                 e,
             )

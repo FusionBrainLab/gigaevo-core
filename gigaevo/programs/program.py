@@ -61,6 +61,17 @@ DEFERRABLE_FIELDS: frozenset[str] = frozenset(
     {"stage_results", "metadata", "metrics", "name"}
 )
 
+# Pre-built exclude set for callers that only need metrics/lineage/state.
+# Skipping stage_results avoids ~56% of from_dict cost on heavy programs
+# (8 stages × pickle_b64_deserialize).
+EXCLUDE_STAGE_RESULTS: frozenset[str] = frozenset({"stage_results"})
+
+# Aggressive exclude for analytics-only callers (e.g. collector) that need
+# metrics + lineage but never read metadata or stage_results.
+# Saves ~99% of deserialization cost on production-weight programs
+# (metadata=89%, stage_results=10% of payload).
+EXCLUDE_FOR_ANALYTICS: frozenset[str] = frozenset({"stage_results", "metadata"})
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)

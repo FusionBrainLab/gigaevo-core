@@ -202,6 +202,9 @@ def _make_mock_storage():
     storage.atomic_state_transition = AsyncMock()
     storage.fast_state_transition = AsyncMock()
     storage.batch_transition_state = AsyncMock(return_value=0)
+    storage.batch_transition_by_ids = AsyncMock(
+        side_effect=lambda ids, *a, **kw: len(ids)
+    )
     return storage
 
 
@@ -280,7 +283,7 @@ class TestDagRunnerLaunch:
         blueprint = MagicMock()
         blueprint.build = MagicMock(return_value=mock_dag)
 
-        config = DagRunnerConfig(max_concurrent_dags=1)
+        config = DagRunnerConfig(max_concurrent_dags=1, prefetch_factor=1)
         runner = _make_runner(storage=storage, dag_blueprint=blueprint, config=config)
         await runner._launch()
 
@@ -344,18 +347,15 @@ class TestDagRunnerLaunch:
         assert call_args[0][2] == ProgramState.DISCARDED.value
 
     async def test_mark_running_failure_cancels_task_and_removes_from_active(self):
-        """If set_program_state(RUNNING) raises after task creation, task is cancelled."""
+        """If batch_transition_by_ids raises after task creation, tasks are cancelled."""
         prog = _make_test_program(state=ProgramState.QUEUED)
         storage = _make_mock_storage()
         storage.get_ids_by_status = AsyncMock(
             side_effect=lambda s: [prog.id] if s == ProgramState.QUEUED.value else []
         )
         storage.mget = AsyncMock(return_value=[prog])
-        # Make the RUNNING state transition fail
-        storage.atomic_state_transition = AsyncMock(
-            side_effect=RuntimeError("Redis timeout")
-        )
-        storage.fast_state_transition = AsyncMock(
+        # Make the batch RUNNING transition fail
+        storage.batch_transition_by_ids = AsyncMock(
             side_effect=RuntimeError("Redis timeout")
         )
 
@@ -486,7 +486,7 @@ class TestDagRunnerMaintain:
         await task1
         await task2
 
-        config = DagRunnerConfig(max_concurrent_dags=2)
+        config = DagRunnerConfig(max_concurrent_dags=2, prefetch_factor=1)
         runner = _make_runner(storage=storage, config=config)
 
         runner._active["p1"] = TaskInfo(
@@ -566,7 +566,7 @@ class TestDagRunnerMaintain:
 
 class TestDagRunnerExecuteDag:
     async def test_success_sets_done(self):
-        """Mock DAG.run() to succeed, verify state becomes DONE."""
+        """Mock DAG.run() to succeed, verify program is queued for batch DONE."""
         prog = _make_test_program(state=ProgramState.RUNNING)
         storage = _make_mock_storage()
         runner = _make_runner(storage=storage)
@@ -576,12 +576,10 @@ class TestDagRunnerExecuteDag:
         await runner._execute_dag(mock_dag, prog)
 
         mock_dag.run.assert_awaited_once_with(prog)
-        # set_program_state should be called with DONE
-        # It's called via _state_manager which wraps storage
-        # Check that atomic_state_transition was called
-        storage.fast_state_transition.assert_called()
-        call_args = storage.fast_state_transition.call_args
-        assert call_args[0][2] == ProgramState.DONE.value
+        # Successful DAGs queue for batch RUNNING→DONE in _maintain
+        assert prog in runner._done_queue
+        # fast_state_transition should NOT be called (batched instead)
+        storage.fast_state_transition.assert_not_called()
 
     async def test_failure_sets_discarded(self):
         """Mock DAG.run() to raise, verify state becomes DISCARDED."""
@@ -630,10 +628,10 @@ class TestDagRunnerExecuteDag:
         assert mock_dag._stage_sema is None
 
     async def test_execute_dag_state_update_failure_logged(self):
-        """When set_program_state fails, state_update_failures metric increments."""
+        """When DAG fails and set_program_state fails, state_update_failures increments."""
         prog = _make_test_program(state=ProgramState.RUNNING)
         storage = _make_mock_storage()
-        # Make the state transition fail after DAG run
+        # Make the state transition fail after a failing DAG run
         storage.atomic_state_transition = AsyncMock(
             side_effect=RuntimeError("Redis down")
         )
@@ -642,7 +640,9 @@ class TestDagRunnerExecuteDag:
         )
         runner = _make_runner(storage=storage)
 
-        mock_dag = _make_mock_dag()  # run() succeeds
+        # DAG must FAIL so _execute_dag uses per-program set_program_state
+        # (successful DAGs queue for batch and never call set_program_state)
+        mock_dag = _make_mock_dag(run_side_effect=RuntimeError("dag failed"))
 
         await runner._execute_dag(mock_dag, prog)
 
