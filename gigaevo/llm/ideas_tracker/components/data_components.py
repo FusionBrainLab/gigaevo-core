@@ -42,6 +42,97 @@ class RecordCard:
 
 
 @dataclass
+class RecordCardEmbedding:
+    """
+    Represents a tracked idea with embedding vector.
+    """
+
+    id: str = ""
+    description: str = ""
+    embedding: list[float] = field(default_factory=list)
+    source_program_id: str = ""
+    cluster_id: str = ""
+    change_motivation: str = ""
+
+
+@dataclass
+class ClusterCard:
+    """
+    A cluster of RecordCardEmbedding instances for embedding/LLM grouping.
+
+    Members share references with the global card list; cluster_id on each card
+    should match this cluster's cluster_id when the card belongs here.
+    """
+
+    cluster_id: str = ""
+    center: list[float] = field(default_factory=list)
+    members: list[RecordCardEmbedding] = field(default_factory=list)
+    index_to_card: dict[int, RecordCardEmbedding] = field(default_factory=dict)
+    #: When ``False``, refinement loop skips this cluster (eligible only if ``True``).
+    has_changed: bool = True
+
+    @property
+    def size(self) -> int:
+        return len(self.members)
+
+    def rebuild_index_to_card(self) -> None:
+        self.index_to_card = {i + 1: card for i, card in enumerate(self.members)}
+
+    def prune_stale_members(self) -> None:
+        """Remove members whose cluster_id does not match this cluster."""
+        self.members = [c for c in self.members if c.cluster_id == self.cluster_id]
+        self.rebuild_index_to_card()
+
+    def numbered_ideas_text(self) -> str:
+        """Numbered descriptions (same shape as IncomingIdeas.get_list_of_ideas)."""
+        lines: list[str] = []
+        for i, card in enumerate(self.members, start=1):
+            lines.append(f"{i}) {card.description} \n")
+        return "".join(lines)
+
+    def numbered_idea_groups(self, subgroup_size: int = 20) -> list[str]:
+        """
+        Split the cluster into fixed-size subgroups (last group may be short).
+
+        Each returned string uses the same line format as :meth:`numbered_ideas_text`,
+        with **continuous global** 1-based indices across groups (first group 1..k,
+        next k+1.., etc.).
+        """
+        if subgroup_size < 1:
+            raise ValueError("subgroup_size must be >= 1")
+        n = len(self.members)
+        if n == 0:
+            return []
+        groups: list[str] = []
+        for i in range(0, n, subgroup_size):
+            chunk = self.members[i : i + subgroup_size]
+            lines: list[str] = []
+            for j, card in enumerate(chunk):
+                g = i + j + 1
+                lines.append(f"{g}) {card.description} \n")
+            groups.append("".join(lines))
+        return groups
+
+    def add_member(self, card: RecordCardEmbedding) -> None:
+        """Append a card and set its cluster_id to this cluster."""
+        card.cluster_id = self.cluster_id
+        self.members.append(card)
+        self.rebuild_index_to_card()
+
+    def remove_member(self, card: RecordCardEmbedding) -> None:
+        """Remove a card by identity; does not clear card.cluster_id (caller updates)."""
+        self.members = [c for c in self.members if c is not card]
+        self.rebuild_index_to_card()
+
+
+@dataclass
+class RefinementRoundResult:
+    """Aggregate result of one refinement round."""
+
+    has_changed: bool = False
+
+
+@dataclass
 class RecordCardExtended:
     """
     Extended idea record with comprehensive metadata and evolution tracking.
@@ -602,6 +693,16 @@ class RecordBank:
         self.uuids.append(new_idea.id)
         idea_dict = asdict(new_idea)
         idea_dict["linked_programs"] = list(idea_dict["linked_programs"])
+        self._append_record_list(idea_dict)
+
+    def import_idea_extended(self, new_idea: RecordCardExtended) -> None:
+        """Append an existing RecordCardExtended; assign new id if its id already exists in the bank."""
+        if new_idea.id in self.uuids:
+            new_uuid = self._unique_id_pair()
+            new_idea.id = new_uuid
+        self.uuids.append(new_idea.id)
+        idea_dict = asdict(new_idea)
+        idea_dict["programs"] = list(idea_dict["programs"])
         self._append_record_list(idea_dict)
 
     def get_idea(self, idea_id: str) -> RecordCard:

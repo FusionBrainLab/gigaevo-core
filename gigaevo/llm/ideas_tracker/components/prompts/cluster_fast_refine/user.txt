@@ -1,0 +1,3 @@
+CLUSTER REFINEMENT — **Minimize** `included`. Expansion passes ≠ init sampling ≠ `ftol`/epsilon ≠ radius scaling (see system Example C). Use the **same** line indices as below in your JSON:
+
+<INSERT>

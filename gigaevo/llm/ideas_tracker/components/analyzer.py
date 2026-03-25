@@ -26,6 +26,7 @@ class IdeaAnalyzer:
         model: str = "deepseek/deepseek-v3.2",
         reasoning: dict[str, Any] | None = None,
         base_url: str | None = None,
+        description_rewriting: bool = False,
     ) -> None:
         """
         Initialize IdeaAnalyzer with LLM model.
@@ -34,13 +35,16 @@ class IdeaAnalyzer:
             model: Name of the LLM model to use for classification.
             reasoning: Optional OpenRouter reasoning settings, e.g. {"effort": "low"}.
             base_url: Optional OpenAI-compatible base URL from config.
+            description_rewriting: If True, use ``classify_ext`` (IDs as ``shortId:seq``).
+                If False, use ``classify`` (bare short IDs only; incompatible with
+                :meth:`_extract_ideas_v2` without extra handling).
         """
         self.model = model
         self.reasoning = reasoning or {}
         self.base_url = str(base_url).strip() if base_url is not None else None
         self._is_openrouter = False
         self.logger: IdeasTrackerLogger | None = None
-        self.description_rewriting: bool = False
+        self.description_rewriting = description_rewriting
         self._init_analyzer()
 
     def _init_analyzer(self) -> None:
@@ -167,10 +171,19 @@ class IdeaAnalyzer:
                 return idea["id"]
         return ""
 
-    def _split_id(self, id: str) -> tuple[str, int]:
-        idea_short_id, idea_sequence_number = id.split(":")
-        idea_short_id = idea_short_id.strip("[]")
-        idea_sequence_number = int(idea_sequence_number.strip("[]"))
+    def _split_id(self, idea_ref: str) -> tuple[str, int]:
+        """
+        Parse ``shortId:sequence`` from ``classify_ext`` output (or ``classify`` bare ID).
+
+        If the model omits ``:sequence``, returns sequence ``1`` (best-effort; may be
+        wrong when several incoming ideas are classified in one call).
+        """
+        raw = idea_ref.strip()
+        if ":" not in raw:
+            return raw.strip("[]"), 1
+        left, right = raw.split(":", 1)
+        idea_short_id = left.strip("[]")
+        idea_sequence_number = int(right.strip("[]"))
         return idea_short_id, idea_sequence_number
 
     def _extract_ideas_v2(
