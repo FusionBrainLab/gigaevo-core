@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import random
 
 # --- Squid Proxy Fix (CRITICAL) ---
 # The system Squid proxy intercepts Python HTTP to internal IPs.
@@ -24,9 +25,12 @@ os.environ["no_proxy"] = _no_proxy
 # --- LLM Configuration ---
 
 # HOVER_CHAIN_URL overrides the chain-execution endpoint at runtime.
-# Each run should get its own endpoint to avoid contention:
-#   export HOVER_CHAIN_URL="http://localhost:8000/v1"
-_CHAIN_URL = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
+# Supports comma-separated URLs for load balancing across chain servers:
+#   export HOVER_CHAIN_URL="http://localhost:8000/v1,http://10.225.185.235:8001/v1"
+# Each worker process picks a random URL at import time.
+_CHAIN_URLS_STR = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
+_CHAIN_URLS = [u.strip() for u in _CHAIN_URLS_STR.split(",") if u.strip()]
+_CHAIN_URL = random.choice(_CHAIN_URLS)
 
 LLM_CONFIG = {
     "model": "Qwen/Qwen3-8B",
