@@ -14,7 +14,7 @@ from gigaevo.programs.core_types import (
     VoidOutput,
 )
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import EXCLUDE_FOR_ANALYTICS, Program
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
@@ -344,12 +344,12 @@ def _compute_main_metric_stats(
 
 async def _get_ancestors(storage: ProgramStorage, program: Program) -> list[Program]:
     """Get immediate parent programs (depth 1)."""
-    return await storage.mget(program.lineage.parents)
+    return await storage.mget(program.lineage.parents, exclude=EXCLUDE_FOR_ANALYTICS)
 
 
 async def _get_descendants(storage: ProgramStorage, program: Program) -> list[Program]:
     """Get immediate child programs (depth 1)."""
-    return await storage.mget(program.lineage.children)
+    return await storage.mget(program.lineage.children, exclude=EXCLUDE_FOR_ANALYTICS)
 
 
 @StageRegistry.register(description="Evolutionary statistics collector")
@@ -388,7 +388,7 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
     #: deserialization.  The collector only reads metrics, lineage, and
     #: generation — never metadata or stage output.  Iteration-level stats
     #: degrade gracefully (iteration = None → block skipped).
-    _EXCLUDE = frozenset({"stage_results", "metadata"})
+    _EXCLUDE = EXCLUDE_FOR_ANALYTICS
 
     async def _collect_programs(self, program: Program) -> list[Program]:
         return await self.storage.snapshot.get_all(self.storage, exclude=self._EXCLUDE)
