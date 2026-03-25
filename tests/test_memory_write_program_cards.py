@@ -1,7 +1,7 @@
 import json
 
-from evo_memory_agent_api.memory_write_example import load_memory_cards
-from evo_memory_agent_api.shared_memory.memory import AmemGamMemory, normalize_memory_card
+from gigaevo.memory.memory_write_example import load_memory_cards
+from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
 
 
 def _write_json(path, payload):

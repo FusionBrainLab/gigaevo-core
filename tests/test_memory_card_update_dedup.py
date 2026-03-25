@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from evo_memory_agent_api.shared_memory.card_update_dedup import (
+from gigaevo.memory.shared_memory.card_update_dedup import (
     QUERY_DESCRIPTION,
     QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
     QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY,
