@@ -383,20 +383,6 @@ class RecordListV2:
                 self.remove_idea(exc_idea_id)
         return excluded_ideas
 
-    def rankings(self) -> list[dict[str, str | list[str] | int]]:
-        """Return a short representation of each idea: [{"id", "description", "programs", "count"}, ...]."""
-        ideas = []
-        for idea in self.ideas:
-            ideas.append(
-                {
-                    "id": idea.id,
-                    "description": idea.description,
-                    "programs": idea.programs,
-                    "count": len(idea.programs),
-                }
-            )
-        return ideas
-
     def all_ideas_short(self) -> list[dict[str, str]]:
         """
         Return short representation of all ideas.
