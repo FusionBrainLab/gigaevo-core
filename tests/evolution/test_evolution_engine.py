@@ -371,15 +371,19 @@ class TestCreateMutants:
     async def test_calls_generate_mutations(self) -> None:
         engine = _make_engine()
         elites = [_prog() for _ in range(2)]
+        new_ids = [f"mut-{i}" for i in range(5)]
+
+        # Simulate: before mutation no extra IDs, after mutation 5 new IDs
+        engine.storage.get_all_program_ids.side_effect = [[], new_ids]
 
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
             return_value=5,
         ) as mock_gen:
-            created = await engine._create_mutants(elites)
+            result = await engine._create_mutants(elites)
 
-        assert created == 5
+        assert set(result) == set(new_ids)
         mock_gen.assert_called_once()
         assert engine.metrics.mutations_created == 5
 
@@ -427,6 +431,8 @@ class TestStep:
 
         # _await_idle uses count_by_status (returns 0 → idle immediately)
         engine.storage.count_by_status.return_value = 0
+        # _create_mutants uses get_all_program_ids before/after mutation
+        engine.storage.get_all_program_ids.side_effect = [[], [new_prog.id]]
         # _ingest_completed_programs uses get_ids_by_status + mget
         engine.storage.get_ids_by_status.return_value = [new_prog.id]
         engine.storage.mget.return_value = [new_prog]
@@ -471,7 +477,10 @@ class TestStep:
         """on_program_ingested is called with correct outcome for each program."""
         engine = _make_engine()
         engine.config.loop_interval = 0.01
-        engine.strategy.select_elites.return_value = []
+
+        # Two elites so _create_mutants is called
+        elites = [_prog() for _ in range(2)]
+        engine.strategy.select_elites.return_value = elites
 
         # One rejected by acceptor, one accepted
         engine.config.program_acceptor = MagicMock()
@@ -483,16 +492,21 @@ class TestStep:
 
         # _await_idle uses count_by_status (returns 0 → idle immediately)
         engine.storage.count_by_status.return_value = 0
+        # _create_mutants: before mutation empty, after mutation has both IDs
+        engine.storage.get_all_program_ids.side_effect = [
+            [],
+            [bad_prog.id, good_prog.id],
+        ]
         # _ingest uses get_ids_by_status + mget
         engine.storage.get_ids_by_status.return_value = [bad_prog.id, good_prog.id]
         engine.storage.mget.return_value = [bad_prog, good_prog]
-        # Neither in archive
+        # Neither in archive (Phase 4), then for refresh + summary
         engine.strategy.get_program_ids.side_effect = [[], [], []]
 
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=2,
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -819,9 +833,9 @@ class TestStepPhaseOrdering:
 
         async def tracked_create(elites):
             call_log.append("create_mutants")
-            return 0
+            return []
 
-        async def tracked_ingest():
+        async def tracked_ingest(**kwargs):
             call_log.append("ingest")
 
         async def tracked_refresh():
@@ -867,7 +881,7 @@ class TestStepPhaseOrdering:
             call_log.append("select_elites")
             return []
 
-        async def tracked_ingest():
+        async def tracked_ingest(**kwargs):
             call_log.append("ingest")
 
         async def tracked_refresh():
@@ -907,7 +921,7 @@ class TestStepPhaseOrdering:
             call_log.append("select_elites")
             return elites
 
-        async def tracked_ingest():
+        async def tracked_ingest(**kwargs):
             call_log.append("ingest")
 
         async def tracked_refresh():
@@ -918,6 +932,10 @@ class TestStepPhaseOrdering:
         engine._select_elites_for_mutation = tracked_select
         engine._ingest_completed_programs = tracked_ingest
         engine._refresh_archive_programs = tracked_refresh
+
+        # _create_mutants calls get_all_program_ids before and after mutation
+        new_ids = ["mut-0", "mut-1"]
+        engine.storage.get_all_program_ids.side_effect = [[], new_ids]
 
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",

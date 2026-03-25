@@ -218,9 +218,11 @@ class EvolutionEngine:
 
         # Phase 2: select elites & create mutants
         elites = await self._select_elites_for_mutation()
-        created = await self._create_mutants(elites) if elites else 0
+        mutation_ids = await self._create_mutants(elites) if elites else None
         logger.debug(
-            "[EvolutionEngine] gen={} Phase 2: Created {} mutant(s)", gen, created
+            "[EvolutionEngine] gen={} Phase 2: Created {} mutant(s)",
+            gen,
+            len(mutation_ids) if mutation_ids is not None else 0,
         )
 
         # Phase 3: wait for the mutants' DAGs to finish
@@ -230,7 +232,7 @@ class EvolutionEngine:
         )
 
         # Phase 4: ingest newly completed programs (typically the mutants)
-        await self._ingest_completed_programs()
+        await self._ingest_completed_programs(mutation_ids=mutation_ids)
         logger.debug("[EvolutionEngine] gen={} Phase 4: Ingestion done", gen)
 
         self.storage.snapshot.bump()
@@ -275,7 +277,7 @@ class EvolutionEngine:
             " | archive={} ({:+d}){} ({:.1f}s){}",
             gen,
             len(elites),
-            created,
+            len(mutation_ids) if mutation_ids is not None else 0,
             refreshed,
             archive_size,
             archive_delta,
@@ -379,12 +381,14 @@ class EvolutionEngine:
         self.metrics.record_elite_selection_metrics(len(elites), 0)
         return elites
 
-    async def _create_mutants(self, elites: list[Program]) -> int:
+    async def _create_mutants(self, elites: list[Program]) -> list[str]:
+        """Create mutants and return their program IDs."""
         logger.debug(
             "[EvolutionEngine] gen={} Mutate from {} elite(s)",
             self.metrics.total_generations,
             len(elites),
         )
+        pre_ids = set(await self.storage.get_all_program_ids())
         created = await generate_mutations(
             elites,
             mutator=self.mutation_operator,
@@ -394,14 +398,28 @@ class EvolutionEngine:
             limit=self.config.max_mutations_per_generation,
             iteration=self.metrics.total_generations,
         )
+        post_ids = set(await self.storage.get_all_program_ids())
+        mutation_ids = list(post_ids - pre_ids)
         self.metrics.record_mutation_metrics(created, 0)
-        return created
+        return mutation_ids
 
-    async def _ingest_completed_programs(self) -> None:
+    async def _ingest_completed_programs(
+        self,
+        *,
+        mutation_ids: list[str] | None = None,
+    ) -> None:
         """
         Validate and hand over any DONE programs to the strategy.
         Programs already in the archive stay DONE (they arrived from a refresh DAG).
         New programs are added if accepted, otherwise discarded.
+
+        Args:
+            mutation_ids: IDs of programs created during this generation's mutation
+                phase.  When None (mutation was skipped), all non-archive DONE programs
+                are deserialized and validated normally.  When a list (mutation ran),
+                non-archive DONE programs that are NOT in this set are batch-discarded
+                without deserialization — they are stale leftovers from previous
+                generations or initial population.
         """
         # Fetch only IDs first (SMEMBERS — no deserialization), then filter
         # out archive programs before doing the expensive mget+deserialize.
@@ -414,14 +432,45 @@ class EvolutionEngine:
             return
 
         archive_program_ids = set(await self.strategy.get_program_ids())
-        new_ids = [pid for pid in done_ids if pid not in archive_program_ids]
+        non_archive_ids = [pid for pid in done_ids if pid not in archive_program_ids]
 
-        if not new_ids:
+        if not non_archive_ids:
             logger.debug(
                 "[EvolutionEngine] gen={} {} DONE programs all in archive, skipping",
                 self.metrics.total_generations,
                 len(done_ids),
             )
+            return
+
+        # Fast path: when mutation_ids are known, batch-discard stale DONE
+        # programs (those not created this generation) without deserializing
+        # them.  This avoids O(N) mget + from_dict on the initial population.
+        if mutation_ids is not None:
+            mutation_id_set = set(mutation_ids)
+            stale_ids = [pid for pid in non_archive_ids if pid not in mutation_id_set]
+            new_ids = [pid for pid in non_archive_ids if pid in mutation_id_set]
+            if stale_ids:
+                logger.info(
+                    "[EvolutionEngine] gen={} Fast-discard {} stale DONE program(s)",
+                    self.metrics.total_generations,
+                    len(stale_ids),
+                )
+                try:
+                    await self.storage.batch_transition_by_ids(
+                        stale_ids,
+                        ProgramState.DONE.value,
+                        ProgramState.DISCARDED.value,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[EvolutionEngine] gen={} stale batch discard failed: {}",
+                        self.metrics.total_generations,
+                        e,
+                    )
+        else:
+            new_ids = non_archive_ids
+
+        if not new_ids:
             return
 
         # Only deserialize the new (non-archive) programs.

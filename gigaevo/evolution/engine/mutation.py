@@ -59,8 +59,8 @@ async def generate_mutations(
 
         async def generate_and_persist_mutation(
             parents: list[Program], task_id: int
-        ) -> bool:
-            """Generate a single mutation and persist it. Returns True if successful."""
+        ) -> str | None:
+            """Generate a single mutation and persist it. Returns program ID if successful."""
             try:
                 mutation_spec = await mutator.mutate_single(parents)
 
@@ -70,7 +70,7 @@ async def generate_mutations(
                         task_id,
                         [p.short_id for p in parents],
                     )
-                    return False
+                    return None
 
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
@@ -93,7 +93,7 @@ async def generate_mutations(
                         fresh_parent.lineage.add_child(program.id)
                         await state_manager.update_program(fresh_parent)
 
-                return True
+                return program.id
 
             except Exception as exc:
                 logger.error(
@@ -101,7 +101,7 @@ async def generate_mutations(
                     task_id,
                     exc,
                 )
-                return False
+                return None
 
         tasks = [
             generate_and_persist_mutation(parents, i)
@@ -109,7 +109,7 @@ async def generate_mutations(
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        persisted = sum(1 for result in results if result is True)
+        persisted = sum(1 for r in results if isinstance(r, str))
 
         logger.info(
             "[mutation] Created {} mutations in parallel (immediately persisted)",

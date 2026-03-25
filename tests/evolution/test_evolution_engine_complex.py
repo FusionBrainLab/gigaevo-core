@@ -111,7 +111,7 @@ class TestPreStepHook:
             call_order.append("select")
             return []
 
-        async def tracked_ingest():
+        async def tracked_ingest(**kwargs):
             call_order.append("ingest")
 
         async def tracked_refresh():
