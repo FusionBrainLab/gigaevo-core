@@ -909,6 +909,42 @@ def compute_origin_analysis(
         )
 
     df_events = pd.DataFrame(event_rows)
+    # When there are no intro/origin events (e.g. very small runs, no detected idea introductions),
+    # pandas builds an empty frame with no columns, which breaks downstream column access.
+    if df_events.empty and "idea_id" not in df_events.columns:
+        df_events = pd.DataFrame(
+            columns=[
+                "idea_id",
+                "quartile",
+                "child_id",
+                "child_gen",
+                "child_fit",
+                "best_parent_fit",
+                "mean_parent_fit",
+                "IntroGain_best",
+                "IntroGain_best_rel",
+                "IntroGain_mean",
+                "IntroGain_percentile_in_quartile",
+                "IntroGain_percentile_overall",
+                "IntroGain_z_in_quartile",
+                "IntroGain_z_overall",
+                "SiblingWin",
+                "SiblingPercentile",
+                "SiblingDelta",
+                "SiblingWin_allgens",
+                "SiblingPercentile_allgens",
+                "SiblingDelta_allgens",
+                "DescMaxLift_k_best",
+                "ReachesElite_k",
+                "TimeToElite_k",
+                "LineageReachesFinal",
+                "DescendantCount_k",
+                "BranchingFactor",
+                "TimeToPeak_k",
+                "ParentFitnessPercentile_within_gen",
+                "BornInElite",
+            ]
+        )
 
     # -----------------------------
     # Build the ONE output table with 5 rows per idea: Q1..Q4 + ALL
