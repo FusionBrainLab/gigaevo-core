@@ -20,7 +20,7 @@ async def generate_mutations(
     parent_selector: ParentSelector,
     limit: int,
     iteration: int,
-) -> int:
+) -> list[str]:
     """Generate at most *limit* mutations from *elites* and persist them immediately.
 
     This function now uses parallel execution for efficient mutation generation
@@ -34,10 +34,10 @@ async def generate_mutations(
         limit: Maximum number of mutations to generate
         iteration: Current iteration number
     Returns:
-        Number of persisted mutations.
+        List of program IDs for persisted mutations.
     """
     if not elites or limit <= 0:
-        return 0
+        return []
 
     try:
         parent_iterator = parent_selector.create_parent_iterator(elites)
@@ -50,7 +50,7 @@ async def generate_mutations(
 
         if not parent_selections:
             logger.info("[mutation] No valid parent selections available")
-            return 0
+            return []
 
         logger.info(
             "[mutation] Generated {} parent selections for parallel mutation",
@@ -109,14 +109,14 @@ async def generate_mutations(
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        persisted = sum(1 for r in results if isinstance(r, str))
+        mutation_ids = [r for r in results if isinstance(r, str)]
 
         logger.info(
             "[mutation] Created {} mutations in parallel (immediately persisted)",
-            persisted,
+            len(mutation_ids),
         )
-        return persisted
+        return mutation_ids
 
     except Exception as exc:  # pragma: no cover
         logger.error("[mutation] Mutation generation failed: {}", exc)
-        return 0
+        return []

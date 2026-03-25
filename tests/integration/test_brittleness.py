@@ -185,7 +185,7 @@ class TestLineageRace:
             iteration=1,
         )
 
-        assert created == 3, f"Expected 3 mutations, got {created}"
+        assert len(created) == 3, f"Expected 3 mutations, got {len(created)}"
 
         # Re-fetch parent from storage to see final lineage
         fresh_parent = await storage.get(parent.id)
@@ -397,7 +397,7 @@ class TestEngineEdgeCases:
             iteration=1,
         )
 
-        assert created == 0
+        assert len(created) == 0
         await storage.close()
 
     async def test_mutation_operator_raises_gracefully(self) -> None:
@@ -424,7 +424,7 @@ class TestEngineEdgeCases:
             iteration=1,
         )
 
-        assert created == 0, "Crashing mutator should produce 0 mutations"
+        assert len(created) == 0, "Crashing mutator should produce 0 mutations"
         await storage.close()
 
     async def test_generate_mutations_empty_elites(self) -> None:
@@ -447,7 +447,7 @@ class TestEngineEdgeCases:
             iteration=1,
         )
 
-        assert created == 0
+        assert len(created) == 0
         await storage.close()
 
 

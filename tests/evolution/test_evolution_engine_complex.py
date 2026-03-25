@@ -88,7 +88,7 @@ class TestPreStepHook:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -139,7 +139,7 @@ class TestPreStepHook:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -431,7 +431,7 @@ class TestStepGenerationPersistence:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -449,7 +449,7 @@ class TestStepGenerationPersistence:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)

@@ -392,8 +392,7 @@ class EvolutionEngine:
             self.metrics.total_generations,
             len(elites),
         )
-        pre_ids = set(await self.storage.get_all_program_ids())
-        created = await generate_mutations(
+        mutation_ids = await generate_mutations(
             elites,
             mutator=self.mutation_operator,
             storage=self.storage,
@@ -402,9 +401,7 @@ class EvolutionEngine:
             limit=self.config.max_mutations_per_generation,
             iteration=self.metrics.total_generations,
         )
-        post_ids = set(await self.storage.get_all_program_ids())
-        mutation_ids = list(post_ids - pre_ids)
-        self.metrics.record_mutation_metrics(created, 0)
+        self.metrics.record_mutation_metrics(len(mutation_ids), 0)
         return mutation_ids
 
     async def _ingest_completed_programs(

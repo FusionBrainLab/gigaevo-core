@@ -373,13 +373,10 @@ class TestCreateMutants:
         elites = [_prog() for _ in range(2)]
         new_ids = [f"mut-{i}" for i in range(5)]
 
-        # Simulate: before mutation no extra IDs, after mutation 5 new IDs
-        engine.storage.get_all_program_ids.side_effect = [[], new_ids]
-
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=5,
+            return_value=new_ids,
         ) as mock_gen:
             result = await engine._create_mutants(elites)
 
@@ -394,7 +391,7 @@ class TestCreateMutants:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ) as mock_gen:
             # Directly test: _create_mutants is not called when elites is empty
             # because step() checks: `if elites else 0`
@@ -431,8 +428,6 @@ class TestStep:
 
         # _await_idle uses count_by_status (returns 0 → idle immediately)
         engine.storage.count_by_status.return_value = 0
-        # _create_mutants uses get_all_program_ids before/after mutation
-        engine.storage.get_all_program_ids.side_effect = [[], [new_prog.id]]
         # _ingest_completed_programs uses get_ids_by_status + mget
         engine.storage.get_ids_by_status.return_value = [new_prog.id]
         engine.storage.mget.return_value = [new_prog]
@@ -448,7 +443,7 @@ class TestStep:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=1,
+            return_value=[new_prog.id],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -467,7 +462,7 @@ class TestStep:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -492,11 +487,6 @@ class TestStep:
 
         # _await_idle uses count_by_status (returns 0 → idle immediately)
         engine.storage.count_by_status.return_value = 0
-        # _create_mutants: before mutation empty, after mutation has both IDs
-        engine.storage.get_all_program_ids.side_effect = [
-            [],
-            [bad_prog.id, good_prog.id],
-        ]
         # _ingest uses get_ids_by_status + mget
         engine.storage.get_ids_by_status.return_value = [bad_prog.id, good_prog.id]
         engine.storage.mget.return_value = [bad_prog, good_prog]
@@ -506,7 +496,7 @@ class TestStep:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=2,
+            return_value=[bad_prog.id, good_prog.id],
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -536,7 +526,7 @@ class TestRunLoop:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -572,7 +562,7 @@ class TestRunLoop:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             # Run for a bit then resume
             task = asyncio.create_task(engine.run())
@@ -647,7 +637,7 @@ class TestRunLoop:
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=[],
         ):
             task = asyncio.create_task(engine.run())
             await asyncio.sleep(0.05)
@@ -709,7 +699,7 @@ class TestGenerateMutations:
             iteration=0,
         )
 
-        assert count == 3
+        assert len(count) == 3
         assert storage.add.call_count == 3
         # Parent lineage updated for each mutation
         assert state_manager.update_program.call_count == 3
@@ -736,14 +726,14 @@ class TestGenerateMutations:
             iteration=0,
         )
 
-        assert count == 0
+        assert len(count) == 0
         storage.add.assert_not_called()
 
-    async def test_empty_elites_returns_zero(self) -> None:
+    async def test_empty_elites_returns_empty(self) -> None:
         from gigaevo.evolution.engine.mutation import generate_mutations
         from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
 
-        count = await generate_mutations(
+        result = await generate_mutations(
             [],
             mutator=AsyncMock(),
             storage=AsyncMock(),
@@ -753,13 +743,13 @@ class TestGenerateMutations:
             iteration=0,
         )
 
-        assert count == 0
+        assert result == []
 
-    async def test_limit_zero_returns_zero(self) -> None:
+    async def test_limit_zero_returns_empty(self) -> None:
         from gigaevo.evolution.engine.mutation import generate_mutations
         from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
 
-        count = await generate_mutations(
+        result = await generate_mutations(
             [_prog()],
             mutator=AsyncMock(),
             storage=AsyncMock(),
@@ -769,7 +759,7 @@ class TestGenerateMutations:
             iteration=0,
         )
 
-        assert count == 0
+        assert result == []
 
     async def test_mutation_exception_doesnt_crash(self) -> None:
         """A failing mutator call is caught; other mutations can still succeed."""
@@ -804,7 +794,7 @@ class TestGenerateMutations:
         )
 
         # One succeeded, one failed
-        assert count == 1
+        assert len(count) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -933,14 +923,12 @@ class TestStepPhaseOrdering:
         engine._ingest_completed_programs = tracked_ingest
         engine._refresh_archive_programs = tracked_refresh
 
-        # _create_mutants calls get_all_program_ids before and after mutation
         new_ids = ["mut-0", "mut-1"]
-        engine.storage.get_all_program_ids.side_effect = [[], new_ids]
 
         with patch(
             "gigaevo.evolution.engine.core.generate_mutations",
             new_callable=AsyncMock,
-            return_value=2,
+            return_value=new_ids,
         ) as mock_gen:
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
@@ -993,7 +981,7 @@ class TestChildLineageVerification:
             iteration=0,
         )
 
-        assert count == 1
+        assert len(count) == 1
         # Verify storage.add was called with a Program whose lineage references the parent
         stored_program = storage.add.call_args[0][0]
         assert parent.id in stored_program.lineage.parents
