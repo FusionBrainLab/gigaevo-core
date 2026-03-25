@@ -24,10 +24,7 @@ from gigaevo.llm.ideas_tracker.components.fabrics.fabric_redis import (
     create_redis_config,
 )
 from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
-from gigaevo.llm.ideas_tracker.utils.ideas_stats import (
-    top_delta_ideas,
-    top_fitness_ideas,
-)
+
 from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 from gigaevo.llm.ideas_tracker.utils.selected_ideas_6 import compute_origin_analysis
 from tools.utils import fetch_evolution_dataframe
@@ -706,48 +703,6 @@ class IdeaTracker:
             }
             for prog in self.programs_card
         ]
-
-    def top_ideas(self) -> dict[str, Any]:
-        """
-        Calculate top ideas based on configured statistics mode.
-
-        Returns:
-            Dictionary containing top ideas according to statistics_mode
-            (top_k, top_fitness, or delta_fitness). Empty dict if statistics disabled.
-        """
-        if not self.statistics_enabled:
-            return {}
-        active_ideas_card = [
-            idea for idea in self.ideas_manager.record_bank.all_ideas_cards()
-        ]
-        inactive_ideas_card = [
-            idea for idea in self.ideas_manager.inactive_record_bank.all_ideas_cards()
-        ]
-        all_ideas_card = active_ideas_card + inactive_ideas_card
-        if self.statistics_mode == "top_k":
-            statistics = {
-                "top_fitness_ideas": top_fitness_ideas(
-                    self.programs_card, all_ideas_card, self.top_k_fitness
-                ),
-                "top_delta_ideas": top_delta_ideas(
-                    self.programs_card, all_ideas_card, self.top_k_delta_fitness
-                ),
-            }
-        elif self.statistics_mode == "top_fitness":
-            statistics = {
-                "top_fitness_ideas": top_fitness_ideas(
-                    self.programs_card, all_ideas_card, self.top_k_fitness
-                )
-            }
-        elif self.statistics_mode == "delta_fitness":
-            statistics = {
-                "top_delta_ideas": top_delta_ideas(
-                    self.programs_card, all_ideas_card, self.top_k_delta_fitness
-                )
-            }
-        else:
-            raise ValueError(f"Invalid statistics mode: {self.statistics_mode}")
-        return statistics
 
     def enrich_ideas(self) -> None:
         """
