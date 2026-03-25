@@ -456,7 +456,7 @@ class EvolutionEngine:
                     len(stale_ids),
                 )
                 try:
-                    await self.storage.batch_transition_by_ids(
+                    await self.storage.batch_move_status_sets(
                         stale_ids,
                         ProgramState.DONE.value,
                         ProgramState.DISCARDED.value,

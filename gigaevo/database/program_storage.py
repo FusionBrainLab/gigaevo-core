@@ -245,6 +245,29 @@ class ProgramStorage(ABC):
     async def remove_ids_from_status_set(self, status: str, ids: list[str]) -> None:
         """Remove specific IDs from a status set. No-op by default."""
 
+    async def batch_move_status_sets(
+        self,
+        program_ids: list[str],
+        from_status: str,
+        to_status: str,
+    ) -> None:
+        """Move IDs between status sets WITHOUT modifying program data blobs.
+
+        This is a lightweight alternative to ``batch_transition_by_ids`` for
+        transitions to terminal states (e.g. DISCARDED) where the stored program
+        blob is never read again.  Skips MGET/parse/patch/serialize — only does
+        SREM from *from_status* set + SADD to *to_status* set.
+
+        .. warning::
+            After this call the blob's ``state`` field will still contain the old
+            state value.  Only use this when: (1) the target state is terminal,
+            and (2) no production code reads the blob of programs in that state.
+
+        Default implementation falls back to ``batch_transition_by_ids``.
+        """
+        if program_ids:
+            await self.batch_transition_by_ids(program_ids, from_status, to_status)
+
     async def wait_for_activity(self, timeout: float) -> None:
         """
         Block up to `timeout` seconds until storage observes activity (e.g., new

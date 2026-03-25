@@ -651,6 +651,44 @@ class RedisProgramStorage(ProgramStorage):
 
         await self._conn.execute("remove_ids_from_status_set", _srem)
 
+    async def batch_move_status_sets(
+        self,
+        program_ids: list[str],
+        from_status: str,
+        to_status: str,
+    ) -> None:
+        """Move IDs between status sets WITHOUT modifying program data blobs.
+
+        Much faster than batch_transition_by_ids for transitions to terminal
+        states (e.g. DISCARDED) because it skips MGET/parse/patch/serialize.
+        Only does SREM + SADD + XADD in a single pipeline.
+        """
+        if not program_ids:
+            return
+        self._check_write_allowed("batch_move_status_sets")
+
+        async def _move(r: aioredis.Redis) -> None:
+            from_key = self._keys.status_set(from_status)
+            to_key = self._keys.status_set(to_status)
+            stream_key = self._keys.status_stream()
+
+            pipe = r.pipeline(transaction=False)
+            pipe.srem(from_key, *program_ids)
+            pipe.sadd(to_key, *program_ids)
+            pipe.xadd(
+                stream_key,
+                {
+                    "id": "batch_move",
+                    "status": to_status,
+                    "event": "batch_move_status",
+                },
+                maxlen=STREAM_MAX_LEN,
+                approximate=True,
+            )
+            await pipe.execute()
+
+        await self._conn.execute("batch_move_status_sets", _move)
+
     # --------------------- Run State (resume support) ---------------------
 
     async def save_run_state(self, field: str, value: int) -> None:
