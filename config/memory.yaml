@@ -92,18 +92,30 @@ models:
 ideas_tracker:
   gen_delta: 100000
 
+
+
   # Number of known ideas bundled into one RecordList.
   list_max_ideas: 20
 
   # LLM model used by IdeaAnalyzer.
-  model: "google/gemini-3-flash-preview"
-  base_url: "https://openrouter.ai/api/v1"
+  analyzer:
+    type: "default" # options: default, fast
+    model: "google/gemini-3-flash-preview"
+    base_url: "https://openrouter.ai/api/v1"
+    reasoning:
+      effort: "minimal"
+    description_rewriting: true
 
-  reasoning:
-    effort: "minimal"
-
-  # Description rewriting settings.
-  description_rewriting: true
+  analyzer_fast_settings:
+    embeddings_model: "sentence-transformers/all-mpnet-base-v2"
+    batch_size: 32
+    min_samples_for_dbscan: 4
+    dbscan_eps: 0.25
+    dbscan_min_samples: 2
+    max_attempts: 10
+    max_rounds: 20
+    recompute_center: false
+    refine_subgroup_size: 20
 
   # Connection settings for RedisRunConfig.
   redis:

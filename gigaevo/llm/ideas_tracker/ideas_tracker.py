@@ -1,5 +1,5 @@
-import asyncio
 import ast
+import asyncio
 import importlib
 import json
 import math
@@ -14,20 +14,23 @@ import tqdm
 import yaml
 
 sys.path.append("../gigaevo-core-internal")
-from gigaevo.llm.ideas_tracker.components.analyzer import IdeaAnalyzer
+from gigaevo.llm.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
 from gigaevo.llm.ideas_tracker.components.data_components import (
     IncomingIdeas,
     ProgramRecord,
+)
+from gigaevo.llm.ideas_tracker.components.fabrics.analyzer_fabric import create_analyzer
+from gigaevo.llm.ideas_tracker.components.fabrics.fabric_redis import (
+    create_redis_config,
 )
 from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
 from gigaevo.llm.ideas_tracker.utils.ideas_stats import (
     top_delta_ideas,
     top_fitness_ideas,
 )
-from gigaevo.llm.ideas_tracker.utils.impact_metrics import avg_score, delta_impact
 from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 from gigaevo.llm.ideas_tracker.utils.selected_ideas_6 import compute_origin_analysis
-from tools.utils import RedisRunConfig, fetch_evolution_dataframe
+from tools.utils import fetch_evolution_dataframe
 
 
 class IdeaTracker:
@@ -55,33 +58,26 @@ class IdeaTracker:
         list_max_ideas = int(self.config.get("list_max_ideas", 5))
         self.ideas_manager = RecordManager(list_max_ideas=list_max_ideas)
 
-        model_name = self.config.get("model") or "deepseek/deepseek-v3.2"
-        base_url = self.config.get("base_url")
-        reasoning_cfg = self.config.get("reasoning", {}) or {}
-        self.analyzer = IdeaAnalyzer(
-            model_name,
-            reasoning=reasoning_cfg,
-            base_url=base_url,
+        analyzer_cfg = self.config.get("analyzer", {})
+        analyzer_cfg["analyzer_fast_settings"] = self.config.get(
+            "analyzer_fast_settings", {}
         )
+        self.analyzer = create_analyzer(analyzer_cfg)
+        self.analyzer_pipeline_type = analyzer_cfg.get("type", "default")
+
         self.programs_card: list[ProgramRecord] = []
         self.programs_ids: set[str] = set()
         self.memory_usage_updates_by_card: dict[str, dict[str, Any]] = {}
 
         self.gen_delta: int = int(self.config.get("gen_delta", 100000))
 
-        redis_cfg = self.config.get("redis", {}) or {}
-        self.redis_config = RedisRunConfig(
-            redis_host=redis_cfg.get("redis_host", "localhost"),
-            redis_port=int(redis_cfg.get("redis_port", 6379)),
-            redis_db=int(redis_cfg.get("redis_db", 0)),
-            redis_prefix=redis_cfg.get("redis_prefix", ""),
-            label=redis_cfg.get("label", ""),
-        )
+        self.redis_config = create_redis_config(self.config.get("redis", {}))
 
         self.task_description: str = self._load_task_description()
 
         self.description_rewriting = self.config.get("description_rewriting", False)
-        self.analyzer.description_rewriting = self.description_rewriting
+        if hasattr(self.analyzer, "description_rewriting"):
+            self.analyzer.description_rewriting = self.description_rewriting
 
         statistics_config = self.config.get("statistics", {}) or {}
         self.top_k_delta_fitness = statistics_config.get("top_k_delta_fitness", 5)
@@ -126,7 +122,7 @@ class IdeaTracker:
 
         self.logger.log_init(
             component="IdeaTracker",
-            model_name=model_name,
+            model_name=self.analyzer.model,
             gen_delta=self.gen_delta,
             redis_host=self.redis_config.redis_host,
             redis_port=self.redis_config.redis_port,
@@ -409,7 +405,9 @@ class IdeaTracker:
         }
 
     @staticmethod
-    def _merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, Any]:
+    def _merge_usage_payloads(
+        existing_usage: Any, incoming_usage: Any
+    ) -> dict[str, Any]:
         existing_task_deltas = IdeaTracker._extract_usage_task_deltas(existing_usage)
         incoming_task_deltas = IdeaTracker._extract_usage_task_deltas(incoming_usage)
         if not existing_task_deltas and not incoming_task_deltas:
@@ -448,7 +446,9 @@ class IdeaTracker:
 
         summary = ""
         try:
-            task_sum_response = self.analyzer.call_llm("task_description_summary", task_text)
+            task_sum_response = self.analyzer.call_llm(
+                "task_description_summary", task_text
+            )
             task_sum_parsed = json.loads(task_sum_response)
             summary = str(task_sum_parsed.get("summary", "")).strip()
         except Exception:
@@ -468,7 +468,9 @@ class IdeaTracker:
         self._task_description_summary_cache = summary
         return summary
 
-    def _build_memory_usage_updates(self, programs_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    def _build_memory_usage_updates(
+        self, programs_df: pd.DataFrame
+    ) -> dict[str, dict[str, Any]]:
         required_columns = {
             "program_id",
             "metric_fitness",
@@ -493,7 +495,9 @@ class IdeaTracker:
 
         usage_by_card: dict[str, dict[str, list[float]]] = {}
         for _, row in programs_df.iterrows():
-            selected_ids = self._as_string_list(row.get("metadata_memory_selected_idea_ids"))
+            selected_ids = self._as_string_list(
+                row.get("metadata_memory_selected_idea_ids")
+            )
             if not selected_ids:
                 continue
 
@@ -829,7 +833,10 @@ class IdeaTracker:
                 programs_path=str(programs_path),
             )
         except RuntimeError as exc:
-            if str(exc) == "No valid programs with numeric generation and fitness found.":
+            if (
+                str(exc)
+                == "No valid programs with numeric generation and fitness found."
+            ):
                 return
             raise
 
@@ -971,6 +978,23 @@ class IdeaTracker:
                 else:
                     os.environ[key] = value
 
+    def default_analyzer_pipeline(self, new_programs: list[ProgramRecord]) -> None:
+        pbar = tqdm.tqdm(total=len(new_programs), leave=False)
+        for prog in new_programs:
+            self.process_program(prog)
+            pbar.update(1)
+        pbar.close()
+
+    def fast_analyzer_pipeline(self, new_programs: list[ProgramRecord]) -> None:
+        if not isinstance(self.analyzer, IdeaAnalyzerFast):
+            raise TypeError(
+                "fast_analyzer_pipeline requires analyzer config type 'fast' (IdeaAnalyzerFast)"
+            )
+        processed_programs = asyncio.run(self.analyzer.run(new_programs))
+        for prog in processed_programs:
+            self.ideas_manager.record_bank.import_idea_extended(prog, is_forced=True)
+        self.enrich_ideas()
+
     def run(self, path_to_database: Optional[str | Path] = None) -> None:
         """
         Main execution method: load database, process new programs, and update banks.
@@ -1017,11 +1041,10 @@ class IdeaTracker:
         last_gen = df["generation"].max()
         new_programs = self.get_new_programs(df)
         new_programs_processed = self.wrap_data(new_programs)
-        pbar = tqdm.tqdm(total=len(new_programs), leave=False)
-        for prog in new_programs_processed:
-            self.process_program(prog)
-            pbar.update(1)
-        pbar.close()
+        if self.analyzer_pipeline_type == "default":
+            self.default_analyzer_pipeline(new_programs_processed)
+        else:
+            self.fast_analyzer_pipeline(new_programs_processed)
         self.refresh_main_bank(last_gen)
         if self.memory_usage_tracking_enabled:
             self._apply_memory_usage_updates_to_idea_banks()
@@ -1039,6 +1062,6 @@ class IdeaTracker:
 
 
 if __name__ == "__main__":
-    p = Path(__file__).resolve().parent / "heilbron_gemini_flash.csv"
+    p = Path(__file__).resolve().parent / "test.csv"
     itd = IdeaTracker()
-    itd.run()
+    itd.run(p)
