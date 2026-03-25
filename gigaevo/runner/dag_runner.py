@@ -159,7 +159,12 @@ class DagRunner:
 
         self._task: asyncio.Task | None = None
         self._stopping = False
-        self._last_gc_time: float = 0.0
+        self._last_gc_time: float = time.monotonic()
+
+        # Batch queue: completed DAGs queue their RUNNING→DONE transition
+        # here instead of writing individually.  _maintain flushes with
+        # batch_transition_state (bulk SREM/SADD — 2 commands instead of 2N).
+        self._done_queue: list[Program] = []
 
         # async metrics collector task (no threads)
         self._metrics_collector_task: asyncio.Task | None = None
@@ -203,6 +208,9 @@ class DagRunner:
         for info in list(self._active.values()):
             await self._cancel_task(info)
         self._active.clear()
+
+        # flush any remaining DONE transitions
+        await self._flush_done_queue()
 
         # cancel metrics collector task
         if self._metrics_collector_task:
@@ -300,6 +308,9 @@ class DagRunner:
                 )
             finally:
                 del info
+
+        # Flush any remaining RUNNING→DONE transitions
+        await self._flush_done_queue()
 
         if finished or timed_out:
             now = time.monotonic()
@@ -454,20 +465,50 @@ class DagRunner:
             dag._writer = None
             dag._stage_sema = None
 
-        try:
-            new_state = ProgramState.DONE if ok else ProgramState.DISCARDED
-            await self._state_manager.set_program_state(program, new_state)
-
-            # Log completion immediately when state is updated
-            if ok:
-                logger.debug(
-                    "[DagScheduler] DAG completed for {} (state updated)",
-                    program.short_id,
+        if ok:
+            # Queue for batch RUNNING→DONE transition
+            # (bulk SREM/SADD — 2 commands instead of 2N).
+            self._done_queue.append(program)
+            # Flush when batch reaches concurrency limit to avoid latency
+            if len(self._done_queue) >= self._config.max_concurrent_dags:
+                await self._flush_done_queue()
+            logger.debug(
+                "[DagScheduler] DAG completed for {} (queued for batch)",
+                program.short_id,
+            )
+        else:
+            try:
+                await self._state_manager.set_program_state(
+                    program, ProgramState.DISCARDED
                 )
-        except Exception as se:
-            self._metrics.record_state_update_failure()
+            except Exception as se:
+                self._metrics.record_state_update_failure()
+                logger.error(
+                    "[DagScheduler] state update failed for {}: {}",
+                    program.short_id,
+                    se,
+                )
+
+    async def _flush_done_queue(self) -> None:
+        """Batch-transition queued DONE programs to Redis."""
+        if not self._done_queue:
+            return
+        batch = self._done_queue[:]
+        self._done_queue.clear()
+        try:
+            await self._storage.batch_transition_state(
+                batch,
+                ProgramState.RUNNING.value,
+                ProgramState.DONE.value,
+            )
+            logger.debug(
+                "[DagScheduler] batch RUNNING→DONE for {} programs", len(batch)
+            )
+        except Exception as e:
             logger.error(
-                "[DagScheduler] state update failed for {}: {}", program.short_id, se
+                "[DagScheduler] batch RUNNING→DONE failed for {} programs: {}",
+                len(batch),
+                e,
             )
 
     async def _cancel_task(self, info: TaskInfo) -> None:
