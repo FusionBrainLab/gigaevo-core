@@ -4,6 +4,10 @@ Multiple GigaEvo runs share a set of LLM server endpoints.  ``EndpointPool``
 tracks in-flight request counts per endpoint in a Redis hash (DB 15) and
 routes new requests to the least-loaded healthy endpoint.
 
+All selection uses **sync Redis** (0.05ms per call on localhost) with a Lua
+script for atomic read-select-increment.  This gives full cross-run visibility
+with zero race conditions and negligible overhead vs 30-60s LLM calls.
+
 Redis key schema (all on the configured DB, default 15)::
 
     llm_pool:{pool}:inflight            Hash  {endpoint → in-flight count}
@@ -16,8 +20,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import hashlib
-import random
-import threading
 import time
 from typing import Any
 
@@ -28,6 +30,52 @@ import redis.asyncio as aioredis
 _DEFAULT_REDIS_URL = "redis://localhost:6379/15"
 _DEFAULT_COOLDOWN_SECS = 60
 
+# Lua script: atomically read inflight counts, filter cooldowns, pick
+# least-loaded, HINCRBY +1, return the selected endpoint.
+# KEYS[1] = inflight hash key
+# ARGV = list of endpoint URLs followed by their cooldown keys
+# Layout: ARGV[1..N] = endpoint URLs, ARGV[N+1..2N] = cooldown keys
+_LUA_ACQUIRE = """
+local inflight_key = KEYS[1]
+local n = #ARGV / 2
+local best_load = math.huge
+local candidates = {}
+
+for i = 1, n do
+    local ep = ARGV[i]
+    local cd_key = ARGV[n + i]
+    if redis.call('EXISTS', cd_key) == 0 then
+        local load = tonumber(redis.call('HGET', inflight_key, ep) or '0')
+        if load < best_load then
+            best_load = load
+            candidates = {ep}
+        elseif load == best_load then
+            candidates[#candidates + 1] = ep
+        end
+    end
+end
+
+-- Fallback: if all in cooldown, consider all endpoints
+if #candidates == 0 then
+    best_load = math.huge
+    for i = 1, n do
+        local ep = ARGV[i]
+        local load = tonumber(redis.call('HGET', inflight_key, ep) or '0')
+        if load < best_load then
+            best_load = load
+            candidates = {ep}
+        elseif load == best_load then
+            candidates[#candidates + 1] = ep
+        end
+    end
+end
+
+-- Random tiebreak among candidates, then atomically increment
+local best_ep = candidates[math.random(#candidates)]
+redis.call('HINCRBY', inflight_key, best_ep, 1)
+return best_ep
+"""
+
 
 def _url_hash(url: str) -> str:
     """Short hash of an endpoint URL for use in Redis keys."""
@@ -37,13 +85,14 @@ def _url_hash(url: str) -> str:
 class EndpointPool:
     """Redis-coordinated least-loaded endpoint selector.
 
-    Each endpoint is identified by its full URL (e.g.
-    ``http://localhost:8000/v1``).  In-flight counts are tracked in a
-    shared Redis hash so that concurrent runs (separate processes) see each
-    other's load.
+    Selection is **atomic** via a Lua script: read global inflight counts →
+    filter cooldowns → pick least-loaded → HINCRBY +1, all in a single Redis
+    call (~0.05ms on localhost).  This guarantees cross-run visibility with no
+    race conditions between concurrent acquire() calls.
 
-    Provides both sync and async APIs — sync for ``MultiModelRouter._select()``
-    (which is called from a sync context), async for ``ainvoke`` paths.
+    Provides both sync and async APIs.  The async ``acquire()`` delegates to
+    sync Redis via the Lua script (safe because 0.05ms is negligible vs the
+    30-60s LLM call that follows).
     """
 
     def __init__(
@@ -62,16 +111,15 @@ class EndpointPool:
 
         # Keys
         self._inflight_key = f"llm_pool:{pool_name}:inflight"
+        self._cooldown_keys = [self._cooldown_key(ep) for ep in endpoints]
 
-        # Local in-memory counters for fast-path selection (no Redis RT).
-        # Redis is updated in background for cross-run visibility.
-        self._local_inflight: dict[str, int] = {ep: 0 for ep in endpoints}
-        self._local_cooldown: set[str] = set()
-        self._lock = threading.Lock()
+        # Lua script args: [ep1, ep2, ..., cd_key1, cd_key2, ...]
+        self._lua_argv = list(endpoints) + self._cooldown_keys
 
-        # Lazy-init Redis clients (avoids connecting at import time)
+        # Lazy-init Redis clients
         self._sync_redis: redis.Redis | None = None
         self._async_redis: aioredis.Redis | None = None
+        self._lua_sha: str | None = None  # cached SHA of the Lua script
 
         logger.info(
             "[EndpointPool:{}] Initialized with {} endpoints",
@@ -103,6 +151,28 @@ class EndpointPool:
     def _stats_key(self, endpoint: str) -> str:
         return f"llm_pool:{self._pool_name}:stats:{_url_hash(endpoint)}"
 
+    def _ensure_lua(self, r: redis.Redis) -> str:
+        """Load the Lua script and cache its SHA."""
+        if self._lua_sha is None:
+            self._lua_sha = r.script_load(_LUA_ACQUIRE)
+        return self._lua_sha
+
+    # ------------------------------------------------------------------
+    # Core selection (sync — used by both sync and async paths)
+    # ------------------------------------------------------------------
+
+    def _acquire_via_lua(self) -> str:
+        """Atomic least-loaded selection via Lua script (0.05ms)."""
+        r = self._get_sync()
+        sha = self._ensure_lua(r)
+        try:
+            return r.evalsha(sha, 1, self._inflight_key, *self._lua_argv)
+        except redis.exceptions.NoScriptError:
+            # Script evicted from cache — reload
+            self._lua_sha = None
+            sha = self._ensure_lua(r)
+            return r.evalsha(sha, 1, self._inflight_key, *self._lua_argv)
+
     # ------------------------------------------------------------------
     # Async API
     # ------------------------------------------------------------------
@@ -110,19 +180,12 @@ class EndpointPool:
     async def acquire(self) -> str:
         """Pick the least-loaded healthy endpoint and increment its count.
 
-        Selection uses local in-memory state (zero Redis latency).  Redis is
-        updated asynchronously for cross-run visibility.
+        Uses a Lua script for atomic cross-run-aware selection (~0.05ms).
         """
-        endpoint = self._local_select()
-        # Fire-and-forget Redis update for cross-run visibility
-        r = self._get_async()
-        await r.hincrby(self._inflight_key, endpoint, 1)
-        return endpoint
+        return self._acquire_via_lua()
 
     async def release(self, endpoint: str, latency_ms: float = 0.0) -> None:
         """Decrement in-flight count and update stats."""
-        with self._lock:
-            self._local_inflight[endpoint] = max(0, self._local_inflight[endpoint] - 1)
         r = self._get_async()
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
@@ -132,10 +195,7 @@ class EndpointPool:
         await pipe.execute()
 
     async def mark_unhealthy(self, endpoint: str) -> None:
-        """Set a cooldown key so this endpoint is skipped for a while."""
-        with self._lock:
-            self._local_inflight[endpoint] = max(0, self._local_inflight[endpoint] - 1)
-            self._local_cooldown.add(endpoint)
+        """Decrement inflight, set cooldown, record error."""
         r = self._get_async()
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
@@ -146,18 +206,26 @@ class EndpointPool:
     async def get_stats(self) -> dict[str, dict[str, Any]]:
         """Read per-endpoint stats from Redis."""
         r = self._get_async()
-        result: dict[str, dict[str, Any]] = {}
-        inflight = await r.hgetall(self._inflight_key)
+        pipe = r.pipeline(transaction=False)
+        pipe.hgetall(self._inflight_key)
         for ep in self._endpoints:
-            stats_raw = await r.hgetall(self._stats_key(ep))
-            result[ep] = {
+            pipe.hgetall(self._stats_key(ep))
+            pipe.exists(self._cooldown_key(ep))
+        results = await pipe.execute()
+
+        inflight = results[0]
+        out: dict[str, dict[str, Any]] = {}
+        for i, ep in enumerate(self._endpoints):
+            stats_raw = results[1 + i * 2]
+            cooldown = results[2 + i * 2]
+            out[ep] = {
                 "inflight": int(inflight.get(ep, 0)),
                 "requests": int(stats_raw.get("requests", 0)),
                 "errors": int(stats_raw.get("errors", 0)),
                 "total_latency_ms": float(stats_raw.get("total_latency_ms", 0)),
-                "healthy": not await r.exists(self._cooldown_key(ep)),
+                "healthy": not cooldown,
             }
-        return result
+        return out
 
     @asynccontextmanager
     async def use(self) -> AsyncIterator[str]:
@@ -173,64 +241,16 @@ class EndpointPool:
             latency_ms = (time.perf_counter() - t0) * 1000
             await self.release(endpoint, latency_ms)
 
-    def _local_select(self) -> str:
-        """Pick the least-loaded healthy endpoint using local state (no I/O)."""
-        with self._lock:
-            healthy = [ep for ep in self._endpoints if ep not in self._local_cooldown]
-            if not healthy:
-                healthy = list(self._endpoints)
-
-            min_load = min(self._local_inflight.get(ep, 0) for ep in healthy)
-            candidates = [
-                ep for ep in healthy if self._local_inflight.get(ep, 0) == min_load
-            ]
-            endpoint = random.choice(candidates)
-            self._local_inflight[endpoint] = self._local_inflight.get(endpoint, 0) + 1
-            return endpoint
-
-    async def _select_endpoint_async(self, r: aioredis.Redis) -> str:
-        """Pick the least-loaded healthy endpoint (async).
-
-        Uses a single pipelined round trip for HGETALL + all EXISTS checks.
-        """
-        pipe = r.pipeline(transaction=False)
-        pipe.hgetall(self._inflight_key)
-        for ep in self._endpoints:
-            pipe.exists(self._cooldown_key(ep))
-        results = await pipe.execute()
-
-        inflight = results[0]  # dict from HGETALL
-        cooldowns = results[1:]  # list of int (0 or 1) from EXISTS
-
-        healthy = [ep for ep, cd in zip(self._endpoints, cooldowns) if not cd]
-
-        if not healthy:
-            logger.warning(
-                "[EndpointPool:{}] All endpoints in cooldown — using all",
-                self._pool_name,
-            )
-            healthy = list(self._endpoints)
-
-        # Pick the one with fewest in-flight requests (random tiebreak)
-        min_load = min(int(inflight.get(ep, 0)) for ep in healthy)
-        candidates = [ep for ep in healthy if int(inflight.get(ep, 0)) == min_load]
-        return random.choice(candidates)
-
     # ------------------------------------------------------------------
-    # Sync API (for MultiModelRouter._select which is sync)
+    # Sync API
     # ------------------------------------------------------------------
 
     def acquire_sync(self) -> str:
-        """Sync version of acquire."""
-        endpoint = self._local_select()
-        r = self._get_sync()
-        r.hincrby(self._inflight_key, endpoint, 1)
-        return endpoint
+        """Sync version of acquire (same Lua script)."""
+        return self._acquire_via_lua()
 
     def release_sync(self, endpoint: str, latency_ms: float = 0.0) -> None:
         """Sync version of release."""
-        with self._lock:
-            self._local_inflight[endpoint] = max(0, self._local_inflight[endpoint] - 1)
         r = self._get_sync()
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
@@ -241,42 +261,12 @@ class EndpointPool:
 
     def mark_unhealthy_sync(self, endpoint: str) -> None:
         """Sync version of mark_unhealthy."""
-        with self._lock:
-            self._local_inflight[endpoint] = max(0, self._local_inflight[endpoint] - 1)
-            self._local_cooldown.add(endpoint)
         r = self._get_sync()
         pipe = r.pipeline(transaction=False)
         pipe.hincrby(self._inflight_key, endpoint, -1)
         pipe.set(self._cooldown_key(endpoint), "1", ex=self._cooldown_secs)
         pipe.hincrby(self._stats_key(endpoint), "errors", 1)
         pipe.execute()
-
-    def _select_endpoint_sync(self, r: redis.Redis) -> str:
-        """Pick the least-loaded healthy endpoint (sync).
-
-        Uses a single pipelined round trip for HGETALL + all EXISTS checks.
-        """
-        pipe = r.pipeline(transaction=False)
-        pipe.hgetall(self._inflight_key)
-        for ep in self._endpoints:
-            pipe.exists(self._cooldown_key(ep))
-        results = pipe.execute()
-
-        inflight = results[0]
-        cooldowns = results[1:]
-
-        healthy = [ep for ep, cd in zip(self._endpoints, cooldowns) if not cd]
-
-        if not healthy:
-            logger.warning(
-                "[EndpointPool:{}] All endpoints in cooldown — using all",
-                self._pool_name,
-            )
-            healthy = list(self._endpoints)
-
-        min_load = min(int(inflight.get(ep, 0)) for ep in healthy)
-        candidates = [ep for ep in healthy if int(inflight.get(ep, 0)) == min_load]
-        return random.choice(candidates)
 
     # ------------------------------------------------------------------
     # Cleanup

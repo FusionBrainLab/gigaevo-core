@@ -32,7 +32,7 @@ def _make_pool(
         endpoints=endpoints or ENDPOINTS,
         cooldown_secs=cooldown_secs,
     )
-    # Replace Redis clients with fakeredis
+    # Replace Redis clients with fakeredis (sync used by Lua acquire path)
     pool._sync_redis = fakeredis.FakeRedis(server=fake_server, decode_responses=True)
     pool._async_redis = fakeredis.aioredis.FakeRedis(
         server=fake_server, decode_responses=True
@@ -43,7 +43,6 @@ def _make_pool(
 class TestAcquireRelease:
     async def test_acquire_returns_endpoint(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
-        pool._get_async()
         ep = await pool.acquire()
         assert ep in ENDPOINTS
 
@@ -75,18 +74,24 @@ class TestAcquireRelease:
 class TestLeastLoaded:
     async def test_selects_least_loaded(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
+        r = pool._get_sync()
 
-        # Pre-load local state: server-a has 5, server-b has 2, server-c has 0
-        pool._local_inflight[ENDPOINTS[0]] = 5
-        pool._local_inflight[ENDPOINTS[1]] = 2
-        pool._local_inflight[ENDPOINTS[2]] = 0
+        # Pre-load Redis inflight: server-a has 5, server-b has 2, server-c has 0
+        r.hset(
+            pool._inflight_key,
+            mapping={
+                ENDPOINTS[0]: 5,
+                ENDPOINTS[1]: 2,
+                ENDPOINTS[2]: 0,
+            },
+        )
 
         ep = await pool.acquire()
-        assert ep == ENDPOINTS[2]  # server-c has 0
+        assert ep == ENDPOINTS[2]  # server-c has 0 (lowest)
 
     async def test_random_tiebreak(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
-        # All at 0 → should pick randomly from all
+        # All at 0 → should pick from all endpoints
         selected = set()
         for _ in range(50):
             ep = await pool.acquire()
@@ -104,20 +109,26 @@ class TestLeastLoaded:
         for _ in range(3):
             ep = await pool.acquire()
             eps.append(ep)
-        # All 3 endpoints should be used (each has 0 initially, then 1)
+        # Lua selects least-loaded atomically, so all 3 should go to different servers
         assert len(set(eps)) == 3
 
 
 class TestCooldown:
     async def test_unhealthy_endpoint_skipped(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server, cooldown_secs=60)
+        r = pool._get_sync()
 
-        # Mark server-a and server-b as unhealthy
-        # Set local inflight so mark_unhealthy can decrement
-        pool._local_inflight[ENDPOINTS[0]] = 1
-        pool._local_inflight[ENDPOINTS[1]] = 1
-        await pool.mark_unhealthy(ENDPOINTS[0])
-        await pool.mark_unhealthy(ENDPOINTS[1])
+        # Pre-set inflight so mark_unhealthy can decrement
+        r.hset(
+            pool._inflight_key,
+            mapping={
+                ENDPOINTS[0]: 1,
+                ENDPOINTS[1]: 1,
+            },
+        )
+        # Mark server-a and server-b as unhealthy via sync API
+        pool.mark_unhealthy_sync(ENDPOINTS[0])
+        pool.mark_unhealthy_sync(ENDPOINTS[1])
 
         # Only server-c should be selected
         for _ in range(10):
@@ -129,13 +140,13 @@ class TestCooldown:
         self, fake_server: fakeredis.FakeServer
     ):
         pool = _make_pool(fake_server, cooldown_secs=60)
-        r = pool._get_async()
+        r = pool._get_sync()
 
         # Mark all unhealthy
         for ep in ENDPOINTS:
-            await r.set(pool._cooldown_key(ep), "1", ex=60)
+            r.set(pool._cooldown_key(ep), "1", ex=60)
 
-        # Should still return something (fallback to all)
+        # Should still return something (fallback to least-loaded)
         ep = await pool.acquire()
         assert ep in ENDPOINTS
 
@@ -144,7 +155,8 @@ class TestCooldown:
     ):
         pool = _make_pool(fake_server)
         r = pool._get_async()
-        await r.hset(pool._inflight_key, ENDPOINTS[0], 1)
+        # Set inflight first
+        pool._get_sync().hset(pool._inflight_key, ENDPOINTS[0], 1)
         await pool.mark_unhealthy(ENDPOINTS[0])
         stats = await r.hgetall(pool._stats_key(ENDPOINTS[0]))
         assert int(stats["errors"]) == 1
@@ -195,7 +207,9 @@ class TestSyncAPI:
 
     def test_mark_unhealthy_sync(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server)
+        pool.acquire_sync()  # sets inflight=1 for some endpoint
         r = pool._get_sync()
+        # Mark a specific endpoint
         r.hset(pool._inflight_key, ENDPOINTS[0], 1)
         pool.mark_unhealthy_sync(ENDPOINTS[0])
         assert r.exists(pool._cooldown_key(ENDPOINTS[0]))
@@ -239,3 +253,47 @@ class TestEdgeCases:
         h1 = _url_hash("http://server-a:8777/v1")
         h2 = _url_hash("http://server-b:8777/v1")
         assert h1 != h2
+
+
+class TestCrossRunVisibility:
+    """Test that multiple pools (simulating multiple runs) see each other's state."""
+
+    async def test_two_pools_see_shared_inflight(
+        self, fake_server: fakeredis.FakeServer
+    ):
+        pool_a = _make_pool(fake_server, pool_name="shared")
+        pool_b = _make_pool(fake_server, pool_name="shared")
+
+        # Pool A acquires — should increment in Redis
+        ep_a = await pool_a.acquire()
+
+        # Pool B should see pool A's inflight and pick a different endpoint
+        await pool_b.acquire()
+
+        # With 3 endpoints and 1 already taken, pool B picks one of the other 2
+        # (both at 0, so random — but NOT the one with inflight=1)
+        r = pool_a._get_async()
+        inflight = await r.hgetall(pool_a._inflight_key)
+        assert int(inflight[ep_a]) >= 1  # pool A's acquire
+        total = sum(int(v) for v in inflight.values())
+        assert total == 2  # both acquires tracked
+
+    async def test_four_pools_distribute_evenly(
+        self, fake_server: fakeredis.FakeServer
+    ):
+        """Simulate 4 runs each acquiring 2 endpoints — should distribute across all 3."""
+        pools = [_make_pool(fake_server, pool_name="shared4") for _ in range(4)]
+
+        selected = []
+        for pool in pools:
+            for _ in range(2):
+                ep = await pool.acquire()
+                selected.append(ep)
+
+        # With atomic Lua selection, 8 acquires across 3 endpoints should be
+        # roughly even: ~3, ~3, ~2
+        from collections import Counter
+
+        counts = Counter(selected)
+        assert max(counts.values()) <= 4  # no single endpoint gets more than 4 of 8
+        assert len(counts) == 3  # all endpoints used
