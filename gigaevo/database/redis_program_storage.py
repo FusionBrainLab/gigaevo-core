@@ -543,15 +543,18 @@ class RedisProgramStorage(ProgramStorage):
                 start_counter = end_counter - n + 1
 
                 pipe = r.pipeline(transaction=False)
+                chunk_ids = []
                 for i, prog in enumerate(chunk):
                     prog.state = ProgramState(new_state)
                     data = prog.to_dict()
                     data["atomic_counter"] = int(start_counter + i)
 
                     pipe.set(self._keys.program(prog.id), _dumps(data))
-                    pipe.srem(old_set_key, prog.id)
-                    pipe.sadd(new_set_key, prog.id)
+                    chunk_ids.append(prog.id)
 
+                # Bulk SREM/SADD: one command per chunk instead of per program
+                pipe.srem(old_set_key, *chunk_ids)
+                pipe.sadd(new_set_key, *chunk_ids)
                 pipe.xadd(
                     stream_key,
                     {"id": "batch", "status": new_state, "event": "batch_transition"},
@@ -614,13 +617,16 @@ class RedisProgramStorage(ProgramStorage):
                 start_counter = end_counter - n + 1
 
                 pipe = r.pipeline(transaction=False)
+                patch_ids = []
                 for i, (key, pid, parsed) in enumerate(to_patch):
                     parsed["state"] = new_state
                     parsed["atomic_counter"] = int(start_counter + i)
                     pipe.set(key, _dumps(parsed))
-                    pipe.srem(old_set_key, pid)
-                    pipe.sadd(new_set_key, pid)
+                    patch_ids.append(pid)
 
+                # Bulk SREM/SADD: one command per chunk instead of per program
+                pipe.srem(old_set_key, *patch_ids)
+                pipe.sadd(new_set_key, *patch_ids)
                 pipe.xadd(
                     stream_key,
                     {"id": "batch", "status": new_state, "event": "batch_transition"},
