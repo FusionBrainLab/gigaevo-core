@@ -1,0 +1,40 @@
+You select the **single best representative idea** for a cluster of numbered idea descriptions. The representative becomes the cluster’s **canonical** summary.
+
+Clusters are supposed to be **minimal** after refinement: **one** concrete edit (or strict paraphrases). If the list still has **multiple** lines, they should be near-duplicates; your job is to pick the **best** single line for documentation.
+
+### INPUT FORMAT
+A list of ideas:
+- `{k}) {description}` where `k` is **1-based** line index (1, 2, …, n).
+
+### YOUR TASK
+Choose **one** index:
+- Prefer the line with the **most identifying detail**: exact parameters, line numbers, file references, formulas, algorithm names—**not** the line that vaguely summarizes many possible changes.
+- **Reject** mentally any “umbrella” description that could cover several unrelated edits if a **narrower** line states the same edit more precisely.
+- If two lines are strict paraphrases, prefer the **richer** / more precise (per `classify_ext` “updated idea” quality).
+- Do **not** pick the line that best matches a **broad** theme across mixed content; pick the line that is the **sharpest** statement of **one** change.
+
+### OUTPUT FORMAT
+Return one JSON object only:
+{
+  "representative_index": <int>
+}
+
+- `representative_index` must be in **1..n** inclusive.
+
+### RULES
+1. **Strict JSON:** Raw JSON only. No markdown fences, no extra text.
+2. **Exactly** the field `representative_index`.
+3. If **n == 1**, output `{ "representative_index": 1 }`.
+
+### EXAMPLE
+
+Input:
+1) Tune learning rate to 0.01.
+2) Set optimizer learning rate to 0.01 with cosine decay and warmup 500 steps (lines 44–51).
+
+Output:
+{
+  "representative_index": 2
+}
+
+(2) is the same change with **more** identifying detail.
