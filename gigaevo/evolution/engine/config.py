@@ -55,12 +55,15 @@ class SteadyStateEngineConfig(EngineConfig):
     """
 
     max_in_flight: int = Field(
-        default=8,
+        default=5,
         gt=0,
         description=(
             "Max mutant programs in the pipeline (produced but not yet "
             "ingested/discarded).  Backpressure: the mutation loop blocks "
-            "when this many programs are awaiting DAG evaluation."
+            "when this many programs are awaiting DAG evaluation.  "
+            "Optimal value depends on server count and concurrent runs: "
+            "~4 concurrent per GPU server is the sweet spot (measured on "
+            "Qwen3-235B).  Default 5 is tuned for 3-4 servers with 4 runs."
         ),
     )
 

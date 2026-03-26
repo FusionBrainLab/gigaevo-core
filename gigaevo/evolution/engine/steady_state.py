@@ -27,7 +27,6 @@ import time
 
 from loguru import logger
 
-from gigaevo.evolution.engine.adaptive_semaphore import AdaptiveSemaphore
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.core import (
     _RUN_STATE_TOTAL_GENERATIONS,
@@ -64,11 +63,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             )
         self._ss_config = cfg
 
-        # Backpressure — adaptive concurrency (starts at ceiling, backs off)
+        # Backpressure
         self._in_flight: set[str] = set()
-        self._in_flight_sema = AdaptiveSemaphore(
-            ceiling=cfg.max_in_flight, floor=min(2, cfg.max_in_flight)
-        )
+        self._in_flight_sema = asyncio.Semaphore(cfg.max_in_flight)
         self._in_flight_lock = asyncio.Lock()
 
         # Epoch refresh gating
@@ -223,15 +220,11 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 self._in_flight_sema.release()
                 return
 
-            t0 = time.monotonic()
             mutation_ids = await self._create_single_mutant(elites)
-            llm_latency = time.monotonic() - t0
-
             if mutation_ids:
                 async with self._in_flight_lock:
                     self._in_flight.update(mutation_ids)
                 self._epoch_mutants += len(mutation_ids)
-                self._in_flight_sema.report_latency(llm_latency)
             else:
                 self._in_flight_sema.release()
 
