@@ -39,3 +39,32 @@ class EngineConfig(BaseModel):
         description="Acceptor for determining if programs should be accepted for evolution",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class SteadyStateEngineConfig(EngineConfig):
+    """Extra knobs for :class:`SteadyStateEvolutionEngine`.
+
+    Inherits all ``EngineConfig`` fields.  Their meanings in steady-state:
+
+    * ``max_mutations_per_generation`` — **epoch size**.  An epoch refresh is
+      triggered after this many programs have been processed (ingested or
+      discarded).  This is the closest analog to "generation size" — one epoch
+      ≈ one generation's worth of work, but without the idle barrier.
+    * ``max_generations`` — maximum number of *epochs* (None = unlimited).
+    * ``max_elites_per_generation`` — passed to ``select_elites()`` each call.
+    """
+
+    max_in_flight: int = Field(
+        default=8,
+        gt=0,
+        description=(
+            "Max mutant programs in the pipeline (produced but not yet "
+            "ingested/discarded).  Backpressure: the mutation loop blocks "
+            "when this many programs are awaiting DAG evaluation."
+        ),
+    )
+
+    @property
+    def epoch_trigger_count(self) -> int:
+        """Epoch size = ``max_mutations_per_generation`` (reused, not a new knob)."""
+        return self.max_mutations_per_generation

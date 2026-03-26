@@ -1,0 +1,29 @@
+# @package _global_
+#
+# Steady-state evolution engine: continuous mutation/evaluation interleaving.
+# Opt-in via:  python run.py evolution=steady_state ...
+
+defaults:
+  - default
+
+# Override engine config with steady-state tunables
+engine_config:
+  _target_: gigaevo.evolution.engine.SteadyStateEngineConfig
+  loop_interval: ${loop_interval}
+  max_elites_per_generation: ${max_elites_per_generation}
+  max_mutations_per_generation: ${max_mutations_per_generation}
+  max_generations: ${max_generations}
+  program_acceptor: ${program_acceptor}
+  parent_selector: ${parent_selector}
+  max_in_flight: 8
+
+# Override engine target
+evolution_engine:
+  _target_: gigaevo.evolution.engine.SteadyStateEvolutionEngine
+  storage: ${ref:redis_storage}
+  strategy: ${evolution_strategy}
+  mutation_operator: ${mutation_operator}
+  config: ${engine_config}
+  writer: ${writer}
+  metrics_tracker: ${metrics_tracker}
+  pre_step_hook: null
