@@ -12,7 +12,7 @@ from problems.chains.hover.shared_config import (
     BM25S_INDEX_DIR,
     CORPUS_PATH,
     DATASET_CONFIG,
-    LLM_CONFIG,
+    get_llm_config,
     load_jsonl,
     outer_context_builder,
     preprocess_sample,
@@ -76,7 +76,7 @@ def test_baseline(n_samples: int = 3):
     context = load_test_context(n_samples=n_samples)
     dataset = context["test_dataset"]
 
-    client = LLMClient(**LLM_CONFIG)
+    client = LLMClient(**get_llm_config())
     tool_registry = {
         "retrieve": make_retrieve_fn(
             context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]
@@ -167,7 +167,7 @@ def test_best_chain(
     context = load_test_context(n_samples=n_samples)
     dataset = context["test_dataset"]
 
-    client = LLMClient(**LLM_CONFIG)
+    client = LLMClient(**get_llm_config())
     tool_registry = {
         "retrieve": make_retrieve_fn(
             context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]

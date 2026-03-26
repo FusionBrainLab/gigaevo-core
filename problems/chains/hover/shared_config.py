@@ -27,12 +27,11 @@ os.environ["no_proxy"] = _no_proxy
 # HOVER_CHAIN_URL overrides the chain-execution endpoint at runtime.
 # Supports comma-separated URLs for load balancing across chain servers:
 #   export HOVER_CHAIN_URL="http://localhost:8000/v1,http://10.225.185.235:8001/v1"
-# Each worker process picks a random URL at import time.
+# Each LLMClient creation picks a random URL (per-call load balancing).
 _CHAIN_URLS_STR = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
 _CHAIN_URLS = [u.strip() for u in _CHAIN_URLS_STR.split(",") if u.strip()]
-_CHAIN_URL = random.choice(_CHAIN_URLS)
 
-LLM_CONFIG = {
+_LLM_CONFIG_BASE = {
     "model": "Qwen/Qwen3-8B",
     "max_cost": 10.0,
     "model_pricing": {
@@ -46,11 +45,23 @@ LLM_CONFIG = {
             "top_k": 20,
         },
     },
-    "client_kwargs": {
-        "api_key": "None",
-        "base_url": _CHAIN_URL,
-    },
 }
+
+
+def get_llm_config() -> dict:
+    """Return LLM config with a random chain server URL (per-call load balancing)."""
+    return {
+        **_LLM_CONFIG_BASE,
+        "client_kwargs": {
+            "api_key": "None",
+            "base_url": random.choice(_CHAIN_URLS),
+        },
+    }
+
+
+# Backward compat: LLM_CONFIG still works but picks URL at import time.
+# Prefer get_llm_config() for per-call balancing.
+LLM_CONFIG = get_llm_config()
 
 # --- Dataset Configuration ---
 

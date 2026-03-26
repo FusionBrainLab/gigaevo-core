@@ -13,7 +13,7 @@ from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.hover.full.config import FULL_CHAIN_CONFIG
 from problems.chains.hover.shared_config import (
-    LLM_CONFIG,
+    get_llm_config,
     load_context,
     outer_context_builder,
 )
@@ -84,7 +84,7 @@ def validate(chain_spec: dict) -> dict:
     dataset = context["train_dataset"]
 
     # 3. Create LLM client
-    client = LLMClient(**LLM_CONFIG)
+    client = LLMClient(**get_llm_config())
 
     # 4. Build tool registry: two retrieve tools with different k
     tool_registry = {
