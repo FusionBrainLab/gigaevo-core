@@ -504,32 +504,42 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 )
                 await self._drain_scoped(drain_set, timeout_sec=600.0)
 
-            # 2. Gate mutation loop for the brief refresh window
+            # 3. Gate mutation loop for the brief refresh window
             self._mutation_gate.clear()
 
-            # 3. Pre-step hook (called once per epoch, mirrors parent's per-step call)
+            # 4. Pre-step hook (called once per epoch, mirrors parent's per-step call)
             if self._pre_step_hook:
                 await self._pre_step_hook()
 
-            # 4. Full snapshot bump
+            # 5. Snapshot bump + incremental bump
             self.storage.snapshot.bump()
-
-            # 5. Incremental bump
             self.storage.snapshot.bump(incremental=True)
 
             # 6. Refresh archive (DONE -> QUEUED for lineage/insights stages)
             refreshed = await self._refresh_archive_programs()
+
+            # 7. Reopen mutation gate BEFORE waiting for refresh DAGs.
+            #    First few mutations may see slightly stale population stats
+            #    in their mutation context (from previous epoch's collector).
+            #    This is acceptable: stats change slowly between epochs.
+            self._draining = False
+            self._processed_since_epoch = 0
+            self._epoch_mutants = 0
+            self._cached_elites = None
+            self._mutation_gate.set()
+
+            # 8. Wait for refresh DAGs + reindex (mutations continue)
             if refreshed:
                 await self._await_idle()
                 await self.strategy.reindex_archive()
 
-            # 7. Increment epoch counter
+            # 9. Increment epoch counter
             self.metrics.total_generations += 1
             await self.storage.save_run_state(
                 _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
             )
 
-            # 8. Log epoch summary
+            # 10. Log epoch summary
             epoch_elapsed = time.monotonic() - epoch_t0
             archive_size = len(await self.strategy.get_program_ids())
             archive_delta = archive_size - self._prev_archive_size
@@ -561,12 +571,14 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     self._stagnant_gens,
                 )
         finally:
-            # Reset epoch bookkeeping, invalidate elite cache, resume mutation
+            # Safety net: ensure gate is always reopened on exception.
+            # Normal path reopens gate at step 7 above.
             self._draining = False
-            self._processed_since_epoch = 0
-            self._epoch_mutants = 0
-            self._cached_elites = None  # force fresh selection next epoch
-            self._mutation_gate.set()
+            if not self._mutation_gate.is_set():
+                self._processed_since_epoch = 0
+                self._epoch_mutants = 0
+                self._cached_elites = None
+                self._mutation_gate.set()
 
     # ------------------------------------------------------------------
     # Drain in-flight
