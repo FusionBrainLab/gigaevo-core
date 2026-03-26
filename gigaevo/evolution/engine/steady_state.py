@@ -71,6 +71,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # Epoch refresh gating
         self._mutation_gate = asyncio.Event()
         self._mutation_gate.set()  # open by default
+        self._draining = False  # True during scoped drain (suppress epoch trigger)
 
         # Epoch bookkeeping
         self._processed_since_epoch = 0
@@ -465,34 +466,40 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
     # ------------------------------------------------------------------
 
     def _should_trigger_epoch(self) -> bool:
+        if self._draining:
+            return False  # suppress epoch trigger during scoped drain
         return self._processed_since_epoch >= self._ss_config.epoch_trigger_count
 
     async def _epoch_refresh(self) -> None:
         """Periodic synchronization: drain in-flight, refresh archive, bump epoch.
 
-        Uses **scoped drain**: mutations continue producing during the drain
-        phase.  Only the programs that were in-flight when the epoch triggered
-        need to finish before the archive is refreshed.  New mutations produced
-        during drain are tracked separately and will be ingested in the next
-        epoch — they never enter the archive during refresh.
+        Uses **scoped drain**: both mutation and ingestion continue during the
+        drain phase.  Only the programs in-flight when the epoch triggered need
+        to finish before the archive is refreshed.  New mutations produced and
+        ingested during drain are counted toward the *next* epoch.
 
-        The mutation gate is only closed for the brief refresh window (snapshot
-        bump + archive refresh + reindex), NOT during the entire drain.
+        ``_draining`` flag suppresses ``_should_trigger_epoch`` so the
+        ingestion loop can keep running without triggering a nested refresh.
+        The mutation gate is only closed for the brief refresh window.
         """
         epoch = self.metrics.total_generations
         epoch_t0 = time.monotonic()
         logger.info("[SteadyState] ---- Epoch {} refresh ----", epoch)
 
         try:
-            # 1. Snapshot the drain set — these are the programs that MUST finish
-            #    before we can refresh.  Mutations continue; new in-flight IDs are
-            #    NOT in drain_set and won't block the drain.
+            # 1. Enter drain mode — suppresses _should_trigger_epoch so the
+            #    ingestion loop (which is our caller) won't re-enter here.
+            self._draining = True
+
+            # 2. Snapshot the drain set.  Mutations and ingestion continue;
+            #    new in-flight IDs are NOT in drain_set.
             async with self._in_flight_lock:
                 drain_set = set(self._in_flight)
 
             if drain_set:
                 logger.info(
-                    "[SteadyState] Draining {} in-flight programs (mutations continue)",
+                    "[SteadyState] Draining {} in-flight programs "
+                    "(mutations + ingestion continue)",
                     len(drain_set),
                 )
                 await self._drain_scoped(drain_set, timeout_sec=600.0)
@@ -555,6 +562,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 )
         finally:
             # Reset epoch bookkeeping, invalidate elite cache, resume mutation
+            self._draining = False
             self._processed_since_epoch = 0
             self._epoch_mutants = 0
             self._cached_elites = None  # force fresh selection next epoch
@@ -667,6 +675,10 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                             self._in_flight.discard(pid)
                             self._in_flight_sema.release()
                 break
+
+            # Also ingest non-drain-set DONE programs to free semaphore slots.
+            # This keeps the mutation loop flowing during long drains.
+            await self._poll_and_ingest()
 
             if elapsed > 30 and int(elapsed) % 60 < _DRAIN_POLL_S:
                 logger.info(
