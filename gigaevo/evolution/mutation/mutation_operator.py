@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal
 from loguru import logger
 
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
-from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.evolution.mutation.utils import _DocstringRemover
 from gigaevo.exceptions import MutationError
 from gigaevo.llm.agents.factories import create_mutation_agent

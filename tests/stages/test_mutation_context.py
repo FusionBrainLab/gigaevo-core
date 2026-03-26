@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.programs.core_types import StageState
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program

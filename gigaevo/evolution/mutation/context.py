@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
-if TYPE_CHECKING:
-    from gigaevo.llm.agents.insights import ProgramInsights
-    from gigaevo.llm.agents.lineage import TransitionAnalysis
-    from gigaevo.programs.metrics.context import MetricsContext
-    from gigaevo.programs.metrics.formatter import MetricsFormatter
-    from gigaevo.programs.stages.collector import EvolutionaryStatistics
-
-MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
+from gigaevo.llm.agents.insights import ProgramInsights
+from gigaevo.llm.agents.lineage import TransitionAnalysis
+from gigaevo.programs.metrics.context import MetricsContext
+from gigaevo.programs.metrics.formatter import MetricsFormatter
+from gigaevo.programs.stages.collector import EvolutionaryStatistics
 
 
 class MutationContext(BaseModel, ABC):
@@ -256,41 +253,3 @@ class CompositeMutationContext(MutationContext):
         non_empty = [part for part in formatted_parts if part.strip()]
         # Use a clear separator between different context types
         return "\n\n---\n\n".join(non_empty) if non_empty else "No context available."
-
-
-def _rebuild_models() -> None:
-    """Resolve forward references after all imports are available.
-
-    Called lazily on first use of models that reference TYPE_CHECKING-only types.
-    """
-    from gigaevo.llm.agents.insights import ProgramInsights  # noqa: F811
-    from gigaevo.llm.agents.lineage import TransitionAnalysis  # noqa: F811
-    from gigaevo.programs.metrics.context import MetricsContext  # noqa: F811
-    from gigaevo.programs.metrics.formatter import MetricsFormatter  # noqa: F811
-    from gigaevo.programs.stages.collector import EvolutionaryStatistics  # noqa: F811
-
-    ns = {
-        "ProgramInsights": ProgramInsights,
-        "TransitionAnalysis": TransitionAnalysis,
-        "MetricsContext": MetricsContext,
-        "MetricsFormatter": MetricsFormatter,
-        "EvolutionaryStatistics": EvolutionaryStatistics,
-    }
-    for cls in (
-        MetricsMutationContext,
-        InsightsMutationContext,
-        FamilyTreeMutationContext,
-        EvolutionaryStatisticsMutationContext,
-    ):
-        cls.model_rebuild(_types_namespace=ns)
-
-
-_models_rebuilt = False
-
-
-def ensure_models_rebuilt() -> None:
-    """Call once before constructing any context model with forward-ref fields."""
-    global _models_rebuilt
-    if not _models_rebuilt:
-        _rebuild_models()
-        _models_rebuilt = True

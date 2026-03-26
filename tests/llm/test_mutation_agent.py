@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.llm.agents.mutation import (
     MutationAgent,
     MutationPromptFields,

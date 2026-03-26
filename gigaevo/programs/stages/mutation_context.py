@@ -5,15 +5,14 @@ from typing import Any
 
 from loguru import logger
 
+from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.evolution.mutation.context import (
-    MUTATION_CONTEXT_METADATA_KEY,
     CompositeMutationContext,
     EvolutionaryStatisticsMutationContext,
     FamilyTreeMutationContext,
     InsightsMutationContext,
     MetricsMutationContext,
     PreformattedMutationContext,
-    ensure_models_rebuilt,
 )
 from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.programs.metrics.context import MetricsContext
@@ -70,7 +69,6 @@ class MutationContextStage(Stage):
         self.metadata_key = MUTATION_CONTEXT_METADATA_KEY
 
     async def compute(self, program: Program) -> StageIO:
-        ensure_models_rebuilt()
         contexts: list[CompositeMutationContext] = []
         params: MutationContextInputs = self.params
 

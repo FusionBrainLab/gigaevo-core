@@ -11,7 +11,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from gigaevo.evolution.mutation.base import MutationSpec
-from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.program import Program

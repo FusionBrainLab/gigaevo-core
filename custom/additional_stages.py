@@ -7,14 +7,14 @@ from typing import Any, cast
 from loguru import logger
 
 from custom.metrics_formatter import BroaderMetricsFormatter
-from gigaevo.evolution.mutation.context import MutationContext, ensure_models_rebuilt
+from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.context import MutationContext
 from gigaevo.exceptions import ValidationError
 from gigaevo.programs.core_types import StageIO, VoidInput
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages import Stage
 from gigaevo.programs.stages.common import Box
 from gigaevo.programs.stages.mutation_context import (
-    MUTATION_CONTEXT_METADATA_KEY,
     CompositeMutationContext,
     EvolutionaryStatistics,
     EvolutionaryStatisticsMutationContext,
@@ -207,7 +207,6 @@ class MutationContextStage(Stage):
         self.metadata_key = MUTATION_CONTEXT_METADATA_KEY
 
     async def compute(self, program: Program) -> StageIO:
-        ensure_models_rebuilt()
         contexts: list = []
         params: MutationContextInputs = self.params
 

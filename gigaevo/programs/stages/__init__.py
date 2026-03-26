@@ -8,7 +8,6 @@ from gigaevo.programs.stages import (
     json_processing,
     llm_score,
     metrics,
-    mutation_context,
     optimization,
     python_executors,
     validation,
@@ -33,7 +32,6 @@ from gigaevo.programs.stages.json_processing import (
 )
 from gigaevo.programs.stages.llm_score import LLMScoreStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage, NormalizeMetricsStage
-from gigaevo.programs.stages.mutation_context import MutationContextStage
 from gigaevo.programs.stages.optimization import (
     CMANumericalOptimizationStage,
     CMAOptimizationOutput,

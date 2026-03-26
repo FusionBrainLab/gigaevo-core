@@ -10,7 +10,6 @@ from gigaevo.evolution.mutation.context import (
     InsightsMutationContext,
     MetricsMutationContext,
     PreformattedMutationContext,
-    ensure_models_rebuilt,
 )
 from gigaevo.llm.agents.insights import ProgramInsight, ProgramInsights
 from gigaevo.llm.agents.lineage import (
@@ -24,8 +23,6 @@ from gigaevo.programs.stages.collector import (
     EvolutionaryStatistics,
     GenerationMetrics,
 )
-
-ensure_models_rebuilt()
 
 
 def _make_ctx() -> MetricsContext:

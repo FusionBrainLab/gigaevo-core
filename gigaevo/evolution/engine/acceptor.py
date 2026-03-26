@@ -5,7 +5,7 @@ from collections.abc import Set
 
 from loguru import logger
 
-from gigaevo.evolution.mutation.context import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
