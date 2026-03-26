@@ -240,6 +240,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         """Poll for completed in-flight programs and ingest them.
 
         Returns the number of programs processed (ingested + rejected).
+        Only releases semaphore slots for programs that were confirmed DONE
+        by ``_ingest_batch`` (avoids over-release if a program's state changed
+        between ``get_ids_by_status`` and ``mget``).
         """
         done_ids = await self.storage.get_ids_by_status(ProgramState.DONE.value)
         if not done_ids:
@@ -252,28 +255,34 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         if not ingestable:
             return 0
 
-        count = await self._ingest_batch(ingestable)
+        added, handled_ids = await self._ingest_batch(ingestable)
 
-        # Release semaphore slots and remove from in-flight
+        # Only release slots for programs that were actually processed
         async with self._in_flight_lock:
-            for pid in ingestable:
+            for pid in handled_ids:
                 if pid in self._in_flight:
                     self._in_flight.discard(pid)
                     self._in_flight_sema.release()
 
-        self._processed_since_epoch += len(ingestable)
-        return count
+        self._processed_since_epoch += len(handled_ids)
+        return added
 
-    async def _ingest_batch(self, program_ids: list[str]) -> int:
-        """Ingest specific completed programs. Returns count of accepted."""
+    async def _ingest_batch(self, program_ids: list[str]) -> tuple[int, list[str]]:
+        """Ingest specific completed programs.
+
+        Returns ``(added_count, handled_ids)`` where *handled_ids* is the list
+        of program IDs that were confirmed DONE and processed (accepted or
+        rejected).  IDs whose state changed between the status query and
+        ``mget`` are excluded — their semaphore slots must NOT be released.
+        """
         if not program_ids:
-            return 0
+            return 0, []
 
         completed = await self.storage.mget(program_ids, exclude=EXCLUDE_STAGE_RESULTS)
         completed = [p for p in completed if p.state == ProgramState.DONE]
 
         if not completed:
-            return 0
+            return 0, []
 
         added = 0
         rej_valid = 0
@@ -334,7 +343,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
         self.metrics.programs_processed += added
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
-        return added
+        handled = [p.id for p in completed]
+        return added, handled
 
     # ------------------------------------------------------------------
     # Sweep for leaked semaphore slots
@@ -467,29 +477,61 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
     async def _drain_in_flight(self) -> None:
         """Wait for all in-flight mutants to finish DAG evaluation, then ingest.
 
+        Uses **scoped** state checks (``mget`` on ``_in_flight`` IDs only)
+        rather than the global ``_has_active_dags()`` to avoid hanging when
+        non-in-flight programs (e.g. archive refresh) are also QUEUED/RUNNING.
+
         Relies on existing ``dag_timeout``/``stage_timeout`` for stuck programs.
-        Ghost detection after 30s mirrors parent's ``_await_idle`` logic to
-        handle stale Redis status sets.
         """
         t0 = time.monotonic()
-        ghost_checked = False
 
         while True:
             async with self._in_flight_lock:
                 if not self._in_flight:
                     break
-                remaining = len(self._in_flight)
+                candidates = list(self._in_flight)
+                remaining = len(candidates)
 
-            has_active = await self._has_active_dags()
-            if not has_active:
-                # All DAGs finished — ingest remaining DONE programs
-                done_ids = await self.storage.get_ids_by_status(ProgramState.DONE.value)
+            # Scoped check: fetch actual state of only OUR in-flight programs
+            programs = await self.storage.mget(
+                candidates, exclude=EXCLUDE_STAGE_RESULTS
+            )
+            found_ids = {p.id for p in programs if p is not None}
+
+            done_ids: list[str] = []
+            gone_ids: list[str] = []
+            still_active = 0
+
+            for prog in programs:
+                if prog is None:
+                    continue
+                if prog.state == ProgramState.DONE:
+                    done_ids.append(prog.id)
+                elif prog.state in (ProgramState.QUEUED, ProgramState.RUNNING):
+                    still_active += 1
+                else:
+                    gone_ids.append(prog.id)  # DISCARDED or unexpected
+
+            # IDs that vanished entirely from Redis
+            for pid in candidates:
+                if pid not in found_ids:
+                    gone_ids.append(pid)
+
+            # Ingest DONE programs
+            if done_ids:
+                await self._ingest_batch(done_ids)
+
+            # Release slots for all resolved programs (DONE + gone)
+            resolved = set(done_ids) | set(gone_ids)
+            if resolved:
                 async with self._in_flight_lock:
-                    remaining_done = [pid for pid in done_ids if pid in self._in_flight]
-                if remaining_done:
-                    await self._ingest_batch(remaining_done)
+                    for pid in resolved:
+                        if pid in self._in_flight:
+                            self._in_flight.discard(pid)
+                            self._in_flight_sema.release()
 
-                # Clear all in-flight state and release all slots
+            # If nothing still active among OUR programs, we're done
+            if still_active == 0:
                 async with self._in_flight_lock:
                     for pid in list(self._in_flight):
                         self._in_flight.discard(pid)
@@ -497,12 +539,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 break
 
             elapsed = time.monotonic() - t0
-
-            # Ghost detection after 30s (mirrors parent's _await_idle logic)
-            if elapsed > 30 and not ghost_checked:
-                ghost_checked = True
-                await self._clean_ghost_ids(remaining)
-
             if elapsed > 30 and int(elapsed) % 60 < self.config.loop_interval:
                 logger.info(
                     "[SteadyState] Draining: {} in-flight ({:.0f}s)",
@@ -510,47 +546,3 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     elapsed,
                 )
             await asyncio.sleep(self.config.loop_interval)
-
-    async def _clean_ghost_ids(self, remaining: int) -> None:
-        """Detect and clean stale IDs from Redis status sets.
-
-        Mirrors the ghost detection in parent's ``_await_idle()``.
-        """
-        real_q = len(
-            await self.storage.get_all_by_status(
-                ProgramState.QUEUED.value, exclude=EXCLUDE_STAGE_RESULTS
-            )
-        )
-        real_r = len(
-            await self.storage.get_all_by_status(
-                ProgramState.RUNNING.value, exclude=EXCLUDE_STAGE_RESULTS
-            )
-        )
-        if real_q > 0 or real_r > 0:
-            return  # Real programs exist — not ghosts
-
-        logger.warning(
-            "[SteadyState] Ghost IDs detected — SCARD says active but no "
-            "real programs found. Cleaning {} ghost ID(s).",
-            remaining,
-        )
-        queued_ids = await self.storage.get_ids_by_status(ProgramState.QUEUED.value)
-        running_ids = await self.storage.get_ids_by_status(ProgramState.RUNNING.value)
-        if queued_ids:
-            await self.storage.remove_ids_from_status_set(
-                ProgramState.QUEUED.value, queued_ids
-            )
-        if running_ids:
-            await self.storage.remove_ids_from_status_set(
-                ProgramState.RUNNING.value, running_ids
-            )
-        # Ingest any DONE and clear in-flight
-        done_ids = await self.storage.get_ids_by_status(ProgramState.DONE.value)
-        async with self._in_flight_lock:
-            remaining_done = [pid for pid in done_ids if pid in self._in_flight]
-        if remaining_done:
-            await self._ingest_batch(remaining_done)
-        async with self._in_flight_lock:
-            for pid in list(self._in_flight):
-                self._in_flight.discard(pid)
-                self._in_flight_sema.release()

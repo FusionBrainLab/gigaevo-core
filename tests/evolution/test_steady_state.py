@@ -292,17 +292,19 @@ class TestIngestBatch:
         engine.strategy.add.return_value = True
         engine.storage.batch_transition_by_ids.return_value = 1
 
-        count = await engine._ingest_batch([accepted.id, rejected.id])
+        count, handled = await engine._ingest_batch([accepted.id, rejected.id])
 
         assert count == 1
+        assert set(handled) == {accepted.id, rejected.id}
         engine.strategy.add.assert_called_once_with(accepted)
         engine.storage.batch_transition_by_ids.assert_called_once()
 
     async def test_empty_ids(self) -> None:
         """_ingest_batch with empty list returns 0."""
         engine = _make_ss_engine()
-        count = await engine._ingest_batch([])
+        count, handled = await engine._ingest_batch([])
         assert count == 0
+        assert handled == []
         engine.storage.mget.assert_not_called()
 
 
@@ -325,15 +327,7 @@ class TestDrainInFlight:
         engine._in_flight.add(prog.id)
         await engine._in_flight_sema.acquire()  # consume a slot
 
-        # Storage says idle (no QUEUED/RUNNING) and prog is DONE
-        engine.storage.count_by_status.return_value = 0
-
-        def status_side_effect(status_val):
-            if status_val == ProgramState.DONE.value:
-                return [prog.id]
-            return []
-
-        engine.storage.get_ids_by_status.side_effect = status_side_effect
+        # mget returns the program as DONE (scoped check)
         engine.storage.mget.return_value = [prog]
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = True
