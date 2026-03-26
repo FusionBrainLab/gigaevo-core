@@ -133,21 +133,15 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                         logger.error("[SteadyState] Loop failed: {}", exc)
                         raise exc
 
-            # Final epoch to capture any stragglers (with timeout to avoid
-            # hanging during shutdown when DagRunner may also be stopping)
+            # Final epoch to capture any stragglers (120s timeout for shutdown)
             if self._in_flight:
                 try:
                     await asyncio.wait_for(self._epoch_refresh(), timeout=120.0)
                 except TimeoutError:
                     logger.warning(
-                        "[SteadyState] Final drain timed out with {} in-flight, "
-                        "releasing remaining slots",
+                        "[SteadyState] Final drain timed out with {} in-flight",
                         len(self._in_flight),
                     )
-                    async with self._in_flight_lock:
-                        for pid in list(self._in_flight):
-                            self._in_flight.discard(pid)
-                            self._in_flight_sema.release()
 
         except asyncio.CancelledError:
             logger.debug("[SteadyState] run() cancelled")
@@ -184,8 +178,17 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     mutation_ids = await self._create_single_mutant(elites)
                     if mutation_ids:
                         # We pre-acquired 1 slot; acquire extras if >1 ID returned
-                        for _ in range(len(mutation_ids) - 1):
-                            await self._in_flight_sema.acquire()
+                        extra_needed = len(mutation_ids) - 1
+                        extra_acquired = 0
+                        try:
+                            for _ in range(extra_needed):
+                                await self._in_flight_sema.acquire()
+                                extra_acquired += 1
+                        except asyncio.CancelledError:
+                            # If cancelled mid-loop, release the extras we already acquired
+                            for _ in range(extra_acquired):
+                                self._in_flight_sema.release()
+                            raise
                         async with self._in_flight_lock:
                             self._in_flight.update(mutation_ids)
                         self._epoch_mutants += len(mutation_ids)
@@ -280,7 +283,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     self._in_flight_sema.release()
 
         self._processed_since_epoch += len(handled_ids)
-        return added
+        # Return count of handled programs (accepted + rejected), not just accepted.
+        # This ensures adaptive sleep triggers even when all programs were rejected.
+        return len(handled_ids)
 
     async def _ingest_batch(self, program_ids: list[str]) -> tuple[int, list[str]]:
         """Ingest specific completed programs.
@@ -421,8 +426,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # Gate mutation loop — try/finally ensures it always reopens
         self._mutation_gate.clear()
         try:
-            # 1. Drain all in-flight mutants
-            await self._drain_in_flight()
+            # 1. Drain all in-flight mutants (with timeout to prevent hangs if DagRunner dies)
+            # Use a generous 600s (10min) for normal operation; final shutdown uses 120s
+            await self._drain_in_flight(timeout_sec=600.0)
 
             # 2. Pre-step hook (called once per epoch, mirrors parent's per-step call)
             if self._pre_step_hook:
@@ -489,7 +495,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
     # Drain in-flight
     # ------------------------------------------------------------------
 
-    async def _drain_in_flight(self) -> None:
+    async def _drain_in_flight(self, timeout_sec: float | None = None) -> None:
         """Wait for all in-flight mutants to finish DAG evaluation, then ingest.
 
         Uses **scoped** state checks (``mget`` on ``_in_flight`` IDs only)
@@ -497,6 +503,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         non-in-flight programs (e.g. archive refresh) are also QUEUED/RUNNING.
 
         Relies on existing ``dag_timeout``/``stage_timeout`` for stuck programs.
+        If timeout_sec is exceeded, force-releases remaining slots with a warning.
         """
         t0 = time.monotonic()
 
@@ -557,6 +564,21 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 break
 
             elapsed = time.monotonic() - t0
+
+            # Check timeout
+            if timeout_sec is not None and elapsed > timeout_sec:
+                logger.warning(
+                    "[SteadyState] Drain timeout ({:.0f}s) with {} in-flight; "
+                    "force-releasing slots",
+                    elapsed,
+                    remaining,
+                )
+                async with self._in_flight_lock:
+                    for pid in list(self._in_flight):
+                        self._in_flight.discard(pid)
+                        self._in_flight_sema.release()
+                break
+
             if elapsed > 30 and int(elapsed) % 60 < self.config.loop_interval:
                 logger.info(
                     "[SteadyState] Draining: {} in-flight ({:.0f}s)",

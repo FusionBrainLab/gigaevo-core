@@ -87,11 +87,23 @@ async def generate_mutations(
                     prompt_id or "default",
                 )
 
-                for parent in parents:
-                    fresh_parent = await storage.get(parent.id)
-                    if fresh_parent:
-                        fresh_parent.lineage.add_child(program.id)
-                        await state_manager.update_program(fresh_parent)
+                # Update parent lineages. Failures here are non-critical — the
+                # program is already persisted and will be evaluated by DagRunner.
+                # If parent no longer exists or lineage update fails, we still
+                # return the program ID so steady-state engine can track it.
+                try:
+                    for parent in parents:
+                        fresh_parent = await storage.get(parent.id)
+                        if fresh_parent:
+                            fresh_parent.lineage.add_child(program.id)
+                            await state_manager.update_program(fresh_parent)
+                except Exception as lineage_exc:
+                    logger.warning(
+                        "[mutation] Task {}: Lineage update failed (program {} still valid): {}",
+                        task_id,
+                        program.short_id,
+                        lineage_exc,
+                    )
 
                 return program.id
 
