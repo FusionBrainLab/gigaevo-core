@@ -3,16 +3,16 @@
 Instead of the generational barrier (produce N mutants -> wait for ALL DAGs ->
 ingest -> refresh -> repeat), this engine runs two concurrent async loops:
 
-* **Mutation loop** — continuously selects elites and produces one mutant at a
-  time.  Backpressure is enforced by an ``asyncio.Semaphore(max_in_flight)``:
-  the loop blocks when that many programs are in the pipeline.
+* **Mutation loop** — spawns up to ``max_in_flight`` concurrent mutation tasks.
+  Each task acquires one semaphore slot, calls the LLM, and deposits the result.
+  Backpressure is enforced by ``asyncio.Semaphore(max_in_flight)``.
 
 * **Ingestion loop** — polls for DONE programs, ingests each immediately, and
-  releases a semaphore slot so the mutation loop can proceed.  Triggers an
+  releases a semaphore slot so mutation tasks can proceed.  Triggers an
   *epoch refresh* every ``max_mutations_per_generation`` processed programs.
 
-An **epoch refresh** is the only synchronization point: mutation is briefly
-paused, all in-flight programs are drained, the archive is refreshed (so
+An **epoch refresh** is the only synchronization point: new mutation tasks are
+blocked, all in-flight programs are drained, the archive is refreshed (so
 NO_CACHE stages see a consistent population snapshot), and
 ``total_generations`` is incremented.
 
@@ -36,6 +36,9 @@ from gigaevo.evolution.engine.mutation import generate_mutations
 from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
+
+# Minimum interval between _sweep_discarded calls (seconds)
+_SWEEP_INTERVAL = 5.0
 
 
 class SteadyStateEvolutionEngine(EvolutionEngine):
@@ -72,6 +75,13 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # Epoch bookkeeping
         self._processed_since_epoch = 0
         self._epoch_mutants = 0  # mutants produced in current epoch (for logging)
+
+        # Cached elites (refreshed at epoch boundaries)
+        self._cached_elites: list[Program] | None = None
+        self._elite_cache_lock = asyncio.Lock()
+
+        # Sweep throttle
+        self._last_sweep_time = 0.0
 
         # Child tasks
         self._mutation_task: asyncio.Task | None = None
@@ -151,11 +161,17 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             logger.info("[SteadyState] Stopped")
 
     # ------------------------------------------------------------------
-    # Mutation loop (producer)
+    # Mutation loop (producer) — concurrent task spawner
     # ------------------------------------------------------------------
 
     async def _mutation_loop(self) -> None:
+        """Spawn concurrent mutation tasks, gated by the semaphore.
+
+        Each spawned task owns exactly one semaphore slot from creation
+        to either ``_in_flight.add()`` or explicit ``release()``.
+        """
         logger.info("[SteadyState] Mutation loop started")
+        active_tasks: set[asyncio.Task] = set()
         try:
             while self._running and not self._reached_generation_cap():
                 # Respect epoch refresh pause
@@ -168,44 +184,70 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     self._in_flight_sema.release()
                     break
 
-                try:
-                    elites = await self._select_elites_for_mutation()
-                    if not elites:
-                        self._in_flight_sema.release()
-                        await asyncio.sleep(self.config.loop_interval)
-                        continue
-
-                    mutation_ids = await self._create_single_mutant(elites)
-                    if mutation_ids:
-                        # We pre-acquired 1 slot; acquire extras if >1 ID returned
-                        extra_needed = len(mutation_ids) - 1
-                        extra_acquired = 0
-                        try:
-                            for _ in range(extra_needed):
-                                await self._in_flight_sema.acquire()
-                                extra_acquired += 1
-                        except asyncio.CancelledError:
-                            # If cancelled mid-loop, release the extras we already acquired
-                            for _ in range(extra_acquired):
-                                self._in_flight_sema.release()
-                            raise
-                        async with self._in_flight_lock:
-                            self._in_flight.update(mutation_ids)
-                        self._epoch_mutants += len(mutation_ids)
-                    else:
-                        self._in_flight_sema.release()
-
-                except asyncio.CancelledError:
+                # Re-check gate after semaphore acquisition — the gate may
+                # have closed while we were waiting for a slot.
+                if not self._mutation_gate.is_set():
                     self._in_flight_sema.release()
-                    raise
-                except Exception as e:
-                    logger.exception("[SteadyState] Mutation loop error: {}", e)
-                    self._in_flight_sema.release()
-                    await asyncio.sleep(1.0)
+                    continue
+
+                # Spawn a concurrent mutation task (owns the acquired slot)
+                task = asyncio.create_task(
+                    self._produce_one_mutant(),
+                    name=f"ss-mutate-{self._epoch_mutants}",
+                )
+                active_tasks.add(task)
+                task.add_done_callback(active_tasks.discard)
+
         except asyncio.CancelledError:
             raise
         finally:
+            # Cancel any still-running mutation tasks on shutdown
+            for t in active_tasks:
+                t.cancel()
+            if active_tasks:
+                await asyncio.gather(*active_tasks, return_exceptions=True)
             logger.info("[SteadyState] Mutation loop stopped")
+
+    async def _produce_one_mutant(self) -> None:
+        """Single mutation task. Owns one semaphore slot on entry.
+
+        Invariant: every exit path either adds the program to ``_in_flight``
+        (transferring slot ownership) or releases the semaphore slot.
+        """
+        try:
+            elites = await self._get_cached_elites()
+            if not elites:
+                self._in_flight_sema.release()
+                return
+
+            mutation_ids = await self._create_single_mutant(elites)
+            if mutation_ids:
+                async with self._in_flight_lock:
+                    self._in_flight.update(mutation_ids)
+                self._epoch_mutants += len(mutation_ids)
+            else:
+                self._in_flight_sema.release()
+
+        except asyncio.CancelledError:
+            self._in_flight_sema.release()
+            raise
+        except Exception as e:
+            logger.exception("[SteadyState] Mutation task failed: {}", e)
+            self._in_flight_sema.release()
+
+    async def _get_cached_elites(self) -> list[Program]:
+        """Return cached elites, refreshing on cache miss (epoch boundary).
+
+        Uses a lock to prevent thundering herd: after epoch refresh clears
+        the cache, only one task fetches fresh elites; others wait and reuse.
+        """
+        if self._cached_elites is not None:
+            return self._cached_elites
+        async with self._elite_cache_lock:
+            # Double-check after acquiring lock
+            if self._cached_elites is None:
+                self._cached_elites = await self._select_elites_for_mutation()
+            return self._cached_elites
 
     async def _create_single_mutant(self, elites: list[Program]) -> list[str]:
         """Create a single mutant from *elites*. Returns 0 or 1 IDs."""
@@ -232,8 +274,11 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             while self._running:
                 ingested = await self._poll_and_ingest()
 
-                # Sweep for leaked slots (DagRunner timeouts / discards)
-                await self._sweep_discarded()
+                # Sweep for leaked slots — throttled to avoid excessive mget
+                now = time.monotonic()
+                if now - self._last_sweep_time >= _SWEEP_INTERVAL:
+                    await self._sweep_discarded()
+                    self._last_sweep_time = now
 
                 # Check epoch trigger
                 if self._should_trigger_epoch():
@@ -486,9 +531,10 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     self._stagnant_gens,
                 )
         finally:
-            # Reset epoch bookkeeping and resume mutation — even on error
+            # Reset epoch bookkeeping, invalidate elite cache, resume mutation
             self._processed_since_epoch = 0
             self._epoch_mutants = 0
+            self._cached_elites = None  # force fresh selection next epoch
             self._mutation_gate.set()
 
     # ------------------------------------------------------------------
