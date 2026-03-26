@@ -227,10 +227,21 @@ class GigaEvoMemoryBase:
 
 
 class _ConceptApiClient:
-    """Small HTTP client around concept endpoints from the main API service."""
+    """Small HTTP client around Memory API entity endpoints.
+
+    NOTE: despite the class name, this client now targets the newer Memory API
+    entity model:
+    - memory cards: `/v1/memory-cards`
+    - search: `/v1/search/batch`
+    """
 
     def __init__(self, base_url: str, timeout: float = 30.0):
-        self._http = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout)
+        base = base_url.rstrip("/")
+        # Accept both "http://host:port" and "http://host:port/..." inputs.
+        # If the caller accidentally points at the service root (e.g. :15010),
+        # we keep it; if they point at an older reverse-proxy path, the relative
+        # URLs below still work.
+        self._http = httpx.Client(base_url=base, timeout=timeout)
 
     def close(self) -> None:
         self._http.close()
@@ -283,18 +294,42 @@ class _ConceptApiClient:
             "content": content,
         }
         if entity_id:
-            result = self._request("PUT", f"/v1/concepts/{entity_id}", json=body)
+            result = self._request("PUT", f"/v1/memory-cards/{entity_id}", json=body)
         else:
-            result = self._request("POST", "/v1/concepts", json=body)
+            result = self._request("POST", "/v1/memory-cards", json=body)
         if not isinstance(result, dict):
             raise RuntimeError("Unexpected empty response from concept save")
         return result
 
     def get_concept(self, entity_id: str, channel: str = "latest") -> dict[str, Any]:
-        result = self._request("GET", f"/v1/concepts/{entity_id}", params={"channel": channel})
+        result = self._request(
+            "GET",
+            f"/v1/memory-cards/{entity_id}",
+            params={"channel": channel},
+        )
         if not isinstance(result, dict):
             raise RuntimeError("Unexpected empty response from concept get")
         return result
+
+    def list_memory_cards(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+        channel: str = "latest",
+    ) -> list[dict[str, Any]]:
+        result = self._request(
+            "GET",
+            "/v1/memory-cards",
+            params={"limit": int(limit), "offset": int(offset), "channel": channel},
+        )
+        if not isinstance(result, list):
+            return []
+        items: list[dict[str, Any]] = []
+        for row in result:
+            if isinstance(row, dict):
+                items.append(row)
+        return items
 
     def search_concepts(
         self,
@@ -304,26 +339,38 @@ class _ConceptApiClient:
         namespace: str | None,
         offset: int = 0,
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "entity_type": "concept",
-            "limit": limit,
-            "offset": offset,
+        query_text = str(query or "").strip()
+        if not query_text:
+            # The new API doesn't support "list everything" via search; use list_memory_cards().
+            return {"hits": [], "total": 0}
+
+        # New API: POST /v1/search/batch
+        payload: dict[str, Any] = {
+            "queries": [query_text],
+            "top_k": int(limit),
+            "entity_type": "memory_card",
+            "channel": "latest",
+            "search_type": "bm25",
         }
         if namespace:
-            params["namespace"] = namespace
-        query_text = str(query or "").strip()
-        if query_text:
-            params["q"] = query_text
-        result = self._request("GET", "/v1/search", params=params) or {}
+            payload["namespace"] = namespace
+
+        result = self._request("POST", "/v1/search/batch", json=payload) or {}
         if not isinstance(result, dict):
             return {"hits": [], "total": 0}
-        return {
-            "hits": list(result.get("hits", [])),
-            "total": int(result.get("total", 0) or 0),
-        }
+
+        results = result.get("results")
+        if not isinstance(results, list) or not results:
+            return {"hits": [], "total": 0}
+        first = results[0]
+        if not isinstance(first, list):
+            return {"hits": [], "total": 0}
+
+        hits: list[dict[str, Any]] = [h for h in first if isinstance(h, dict)]
+        return {"hits": hits, "total": len(hits)}
 
     def delete_concept(self, entity_id: str) -> None:
-        self._request("DELETE", f"/v1/concepts/{entity_id}")
+        self._request("DELETE", f"/v1/memory-cards/{entity_id}")
 
 
 class AmemGamMemory(GigaEvoMemoryBase):
@@ -858,21 +905,30 @@ class AmemGamMemory(GigaEvoMemoryBase):
         hits: list[dict[str, Any]] = []
         offset = 0
         while True:
-            payload = self.api.search_concepts(
-                query=None,
+            # New API: list memory cards via `/v1/memory-cards` and filter by namespace client-side.
+            rows = self.api.list_memory_cards(
                 limit=self.sync_batch_size,
                 offset=offset,
-                namespace=self.namespace,
+                channel=self.channel,
             )
-            page_hits = list(payload.get("hits", []))
-            total = int(payload.get("total", 0) or 0)
-            if not page_hits:
+            if not rows:
                 break
+
+            page_hits: list[dict[str, Any]] = []
+            for row in rows:
+                meta = row.get("meta") if isinstance(row, dict) else None
+                row_namespace = None
+                if isinstance(meta, dict):
+                    row_namespace = meta.get("namespace")
+                if self.namespace and row_namespace not in (None, "", self.namespace):
+                    continue
+                page_hits.append(row)
+
+            # Advance offset by raw rows count to preserve pagination even with filtering.
+            offset += len(rows)
             hits.extend(page_hits)
-            offset += len(page_hits)
-            if total and offset >= total:
-                break
-            if len(page_hits) < self.sync_batch_size:
+
+            if len(rows) < self.sync_batch_size:
                 break
         return hits
 
