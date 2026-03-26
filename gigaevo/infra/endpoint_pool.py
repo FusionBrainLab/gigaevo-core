@@ -280,6 +280,37 @@ class EndpointPool:
         pipe.execute()
 
     # ------------------------------------------------------------------
+    # Time-series stats snapshot
+    # ------------------------------------------------------------------
+
+    def snapshot_stats(self, max_history: int = 10080) -> None:
+        """Append a timestamped stats snapshot to a Redis list.
+
+        Call periodically (e.g. from watchdog) to build a time-series of
+        pool utilization.  Each entry is JSON::
+
+            {"t": unix_ts, "endpoints": {"url": {"inflight": N, "requests": N, "errors": N}}}
+
+        Key: ``llm_pool:{pool_name}:snapshots`` (trimmed to *max_history*).
+        """
+        import json as _json
+
+        r = self._get_sync()
+        inflight = r.hgetall(self._inflight_key)
+        ep_data = {}
+        for ep in self._endpoints:
+            stats_raw = r.hgetall(self._stats_key(ep))
+            ep_data[ep] = {
+                "inflight": int(inflight.get(ep, 0)),
+                "requests": int(stats_raw.get("requests", 0)),
+                "errors": int(stats_raw.get("errors", 0)),
+            }
+        entry = _json.dumps({"t": time.time(), "endpoints": ep_data})
+        key = f"llm_pool:{self._pool_name}:snapshots"
+        r.rpush(key, entry)
+        r.ltrim(key, -max_history, -1)
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
