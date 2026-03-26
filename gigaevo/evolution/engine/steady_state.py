@@ -133,9 +133,21 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                         logger.error("[SteadyState] Loop failed: {}", exc)
                         raise exc
 
-            # Final epoch to capture any stragglers
+            # Final epoch to capture any stragglers (with timeout to avoid
+            # hanging during shutdown when DagRunner may also be stopping)
             if self._in_flight:
-                await self._epoch_refresh()
+                try:
+                    await asyncio.wait_for(self._epoch_refresh(), timeout=120.0)
+                except TimeoutError:
+                    logger.warning(
+                        "[SteadyState] Final drain timed out with {} in-flight, "
+                        "releasing remaining slots",
+                        len(self._in_flight),
+                    )
+                    async with self._in_flight_lock:
+                        for pid in list(self._in_flight):
+                            self._in_flight.discard(pid)
+                            self._in_flight_sema.release()
 
         except asyncio.CancelledError:
             logger.debug("[SteadyState] run() cancelled")
@@ -171,6 +183,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
                     mutation_ids = await self._create_single_mutant(elites)
                     if mutation_ids:
+                        # We pre-acquired 1 slot; acquire extras if >1 ID returned
+                        for _ in range(len(mutation_ids) - 1):
+                            await self._in_flight_sema.acquire()
                         async with self._in_flight_lock:
                             self._in_flight.update(mutation_ids)
                         self._epoch_mutants += len(mutation_ids)
@@ -387,7 +402,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 if pid in self._in_flight:
                     self._in_flight.discard(pid)
                     self._in_flight_sema.release()
-                    self._processed_since_epoch += 1
+                    # Do NOT count ghosts in _processed_since_epoch — they were
+                    # never ingested, so shouldn't trigger premature epoch refresh
 
     # ------------------------------------------------------------------
     # Epoch refresh
@@ -415,25 +431,24 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # 3. Full snapshot bump
             self.storage.snapshot.bump()
 
-            # 4. Ingest any remaining DONE programs (stragglers)
-            await self._ingest_completed_programs(mutation_ids=None)
-
-            # 5. Incremental bump after ingestion
+            # 4. Incremental bump (drain already ingested all DONE in-flight programs;
+            #    no need to call _ingest_completed_programs which would re-fetch ALL
+            #    DONE programs globally, bypassing steady-state bookkeeping)
             self.storage.snapshot.bump(incremental=True)
 
-            # 6. Refresh archive (DONE -> QUEUED for lineage/insights stages)
+            # 5. Refresh archive (DONE -> QUEUED for lineage/insights stages)
             refreshed = await self._refresh_archive_programs()
             if refreshed:
                 await self._await_idle()
                 await self.strategy.reindex_archive()
 
-            # 7. Increment epoch counter
+            # 6. Increment epoch counter
             self.metrics.total_generations += 1
             await self.storage.save_run_state(
                 _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
             )
 
-            # 8. Log epoch summary
+            # 7. Log epoch summary
             epoch_elapsed = time.monotonic() - epoch_t0
             archive_size = len(await self.strategy.get_program_ids())
             archive_delta = archive_size - self._prev_archive_size
@@ -530,12 +545,15 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                             self._in_flight.discard(pid)
                             self._in_flight_sema.release()
 
-            # If nothing still active among OUR programs, we're done
+            # If nothing still active among OUR programs, we're done.
+            # IMPORTANT: only clean up IDs from the original `candidates` snapshot,
+            # NOT anything newly added by a mutation loop that slipped past the gate.
             if still_active == 0:
                 async with self._in_flight_lock:
-                    for pid in list(self._in_flight):
-                        self._in_flight.discard(pid)
-                        self._in_flight_sema.release()
+                    for pid in candidates:
+                        if pid in self._in_flight:
+                            self._in_flight.discard(pid)
+                            self._in_flight_sema.release()
                 break
 
             elapsed = time.monotonic() - t0
