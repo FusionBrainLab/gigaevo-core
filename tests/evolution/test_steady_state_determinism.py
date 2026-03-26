@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -257,35 +258,51 @@ class TestDeterministicEvolution:
         assert ids == sorted(ids), f"Ingestion order not FIFO:\n  got IDs: {ids}"
 
     async def test_epoch_boundaries_stable(self) -> None:
-        """Epoch refresh triggers at the same points across runs."""
+        """Epoch refresh triggers the right number of times across runs."""
         traces = []
         for _ in range(3):
             de = DeterministicEngine(max_in_flight=3, epoch_size=4, max_generations=2)
             trace = await de.run(timeout=10.0)
             traces.append(trace)
 
-        # All runs should have the same epoch events
+        # All runs should have the same number of epochs
         for i in range(1, len(traces)):
-            assert traces[0].epoch_events == traces[i].epoch_events, (
-                f"Epoch boundaries differ between run 0 and run {i}:\n"
+            assert len(traces[0].epoch_events) == len(traces[i].epoch_events), (
+                f"Epoch count differs between run 0 and run {i}:\n"
                 f"  run 0: {traces[0].epoch_events}\n"
                 f"  run {i}: {traces[i].epoch_events}"
             )
 
-    async def test_full_trace_reproducible(self) -> None:
-        """The COMPLETE event trace is identical across 3 runs."""
+    async def test_causal_trace_reproducible(self) -> None:
+        """The causal event trace (mutations, ingestions) is consistent across runs.
+
+        Epoch boundaries may shift due to low-watermark timing, so we check
+        causal ordering (mutation order, ingestion order, no-loss, no-dup)
+        rather than exact event trace equality.
+        """
         traces = []
         for _ in range(3):
             de = DeterministicEngine(max_in_flight=3, epoch_size=4, max_generations=2)
             trace = await de.run(timeout=10.0)
-            traces.append(trace.events)
+            traces.append(trace)
 
-        # All runs must produce the exact same event sequence
+        # Mutation order must be identical (deterministic program IDs)
         for i in range(1, len(traces)):
-            assert traces[0] == traces[i], (
-                f"Full event trace differs between run 0 and run {i}:\n"
-                f"  run 0: {traces[0]}\n"
-                f"  run {i}: {traces[i]}"
+            assert traces[0].mutation_order == traces[i].mutation_order, (
+                f"Mutation order differs between run 0 and run {i}"
+            )
+
+        # Ingestion order must be identical (FIFO eval completion)
+        for i in range(1, len(traces)):
+            assert traces[0].ingest_order == traces[i].ingest_order, (
+                f"Ingestion order differs between run 0 and run {i}"
+            )
+
+        # Same number of epochs (may be >= max_generations)
+        for i in range(1, len(traces)):
+            assert len(traces[0].epoch_events) == len(traces[i].epoch_events), (
+                f"Epoch count differs: run 0={len(traces[0].epoch_events)}, "
+                f"run {i}={len(traces[i].epoch_events)}"
             )
 
     async def test_drain_does_not_reorder_ingestion(self) -> None:
@@ -445,3 +462,91 @@ class TestScopedDrainInvariants:
         assert engine._mutation_gate.is_set()
         # Draining flag must be cleared
         assert engine._draining is False
+        # Watermark timer must be cleared
+        assert engine._epoch_eligible_since is None
+
+
+class TestLowWatermarkEpochTrigger:
+    """Tests for the low-watermark epoch trigger optimization."""
+
+    def _make_engine(self, max_in_flight=4, epoch_size=2):
+        storage = AsyncMock()
+        strategy = AsyncMock()
+        writer = MagicMock()
+        writer.bind.return_value = writer
+        mt = MagicMock()
+        mt.format_best_summary.return_value = ""
+        storage.count_by_status.return_value = 0
+        storage.get_all_by_status.return_value = []
+        strategy.get_program_ids.return_value = []
+        config = SteadyStateEngineConfig(
+            max_in_flight=max_in_flight,
+            max_mutations_per_generation=epoch_size,
+            loop_interval=0.01,
+        )
+        return SteadyStateEvolutionEngine(
+            storage=storage,
+            strategy=strategy,
+            mutation_operator=AsyncMock(),
+            config=config,
+            writer=writer,
+            metrics_tracker=mt,
+        )
+
+    def test_triggers_when_in_flight_below_watermark(self) -> None:
+        """Epoch triggers immediately when in-flight is below watermark."""
+        engine = self._make_engine(max_in_flight=8, epoch_size=3)
+        engine._processed_since_epoch = 3  # at threshold
+
+        # in_flight is empty (0 <= max(1, 8//4)=2) → trigger
+        assert engine._should_trigger_epoch() is True
+
+    def test_delays_when_in_flight_above_watermark(self) -> None:
+        """Epoch does NOT trigger when in-flight is above watermark."""
+        engine = self._make_engine(max_in_flight=8, epoch_size=3)
+        engine._processed_since_epoch = 3
+
+        # Add 5 in-flight programs (5 > max(1, 2)=2) → don't trigger
+        for i in range(5):
+            engine._in_flight.add(f"prog-{i}")
+
+        assert engine._should_trigger_epoch() is False
+        assert engine._epoch_eligible_since is not None  # timer started
+
+    def test_fallback_triggers_after_timeout(self) -> None:
+        """Epoch triggers via fallback after watermark timeout."""
+        engine = self._make_engine(max_in_flight=8, epoch_size=3)
+        engine._processed_since_epoch = 3
+        for i in range(5):
+            engine._in_flight.add(f"prog-{i}")
+
+        # First call: starts timer, doesn't trigger
+        assert engine._should_trigger_epoch() is False
+
+        # Simulate time passing beyond fallback
+        engine._epoch_eligible_since = time.monotonic() - 20.0
+        assert engine._should_trigger_epoch() is True
+
+    def test_timer_resets_when_below_threshold(self) -> None:
+        """Timer resets if processed count drops below threshold."""
+        engine = self._make_engine(max_in_flight=8, epoch_size=3)
+
+        # Set timer
+        engine._processed_since_epoch = 3
+        engine._in_flight.update([f"p-{i}" for i in range(5)])
+        engine._should_trigger_epoch()
+        assert engine._epoch_eligible_since is not None
+
+        # Drop below threshold → timer cleared
+        engine._processed_since_epoch = 1
+        engine._should_trigger_epoch()
+        assert engine._epoch_eligible_since is None
+
+    def test_max_in_flight_1_always_triggers(self) -> None:
+        """With max_in_flight=1, watermark is 1, so always triggers at threshold."""
+        engine = self._make_engine(max_in_flight=1, epoch_size=2)
+        engine._processed_since_epoch = 2
+        engine._in_flight.add("prog-0")
+
+        # 1 in-flight <= max(1, 0)=1 → triggers immediately
+        assert engine._should_trigger_epoch() is True

@@ -76,6 +76,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # Epoch bookkeeping
         self._processed_since_epoch = 0
         self._epoch_mutants = 0  # mutants produced in current epoch (for logging)
+        self._epoch_eligible_since: float | None = None  # low-watermark fallback timer
 
         # Cached elites (refreshed at epoch boundaries)
         self._cached_elites: list[Program] | None = None
@@ -465,10 +466,38 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
     # Epoch refresh
     # ------------------------------------------------------------------
 
+    # Fallback: if in-flight stays above watermark for this long, trigger anyway
+    _EPOCH_WATERMARK_FALLBACK_S = 15.0
+
     def _should_trigger_epoch(self) -> bool:
         if self._draining:
             return False  # suppress epoch trigger during scoped drain
-        return self._processed_since_epoch >= self._ss_config.epoch_trigger_count
+        if self._processed_since_epoch < self._ss_config.epoch_trigger_count:
+            self._epoch_eligible_since = None  # reset if not yet eligible
+            return False
+
+        # Count threshold met.  Opportunistic: wait for a natural valley in
+        # in-flight count so the subsequent drain is fast.
+        # Skip watermark for small max_in_flight (drain is already fast).
+        mif = self._ss_config.max_in_flight
+        if mif <= 3:
+            return True
+        watermark = mif // 4
+        if len(self._in_flight) <= watermark:
+            return True
+
+        # Start fallback timer on first poll where count is met but in-flight is high
+        if self._epoch_eligible_since is None:
+            self._epoch_eligible_since = time.monotonic()
+
+        # Fallback: don't wait forever (15s is ~1% of a 25-min eval)
+        if (
+            time.monotonic() - self._epoch_eligible_since
+            > self._EPOCH_WATERMARK_FALLBACK_S
+        ):
+            return True
+
+        return False
 
     async def _epoch_refresh(self) -> None:
         """Periodic synchronization: drain in-flight, refresh archive, bump epoch.
@@ -525,6 +554,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             self._draining = False
             self._processed_since_epoch = 0
             self._epoch_mutants = 0
+            self._epoch_eligible_since = None  # reset watermark timer
             self._cached_elites = None
             self._mutation_gate.set()
 
@@ -574,6 +604,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # Safety net: ensure gate is always reopened on exception.
             # Normal path reopens gate at step 7 above.
             self._draining = False
+            self._epoch_eligible_since = None
             if not self._mutation_gate.is_set():
                 self._processed_since_epoch = 0
                 self._epoch_mutants = 0
