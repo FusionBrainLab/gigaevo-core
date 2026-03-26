@@ -172,8 +172,9 @@ class BalancedChatOpenAI(ChatOpenAI):
         self, schema: Any, **kwargs: Any
     ) -> _BalancedStructuredOutput:
         """Return a balanced wrapper around per-endpoint structured output chains."""
+        kwargs.setdefault("include_raw", True)
         chains = {
-            ep: client.with_structured_output(schema, include_raw=True, **kwargs)
+            ep: client.with_structured_output(schema, **kwargs)
             for ep, client in self._clients.items()
         }
         return _BalancedStructuredOutput(

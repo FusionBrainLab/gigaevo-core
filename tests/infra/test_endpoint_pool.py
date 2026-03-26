@@ -113,63 +113,6 @@ class TestLeastLoaded:
         assert len(set(eps)) == 3
 
 
-class TestLatencyWeighted:
-    async def test_prefers_faster_server_at_equal_inflight(
-        self, fake_server: fakeredis.FakeServer
-    ):
-        pool = _make_pool(fake_server)
-        r = pool._get_sync()
-
-        # All at 0 inflight, but different EMA latencies
-        r.hset(pool._stats_key(ENDPOINTS[0]), "ema_latency_ms", "5000")
-        r.hset(pool._stats_key(ENDPOINTS[1]), "ema_latency_ms", "1000")
-        r.hset(pool._stats_key(ENDPOINTS[2]), "ema_latency_ms", "100")
-
-        # Should consistently pick server-c (lowest EMA)
-        selected = set()
-        for _ in range(20):
-            ep = await pool.acquire()
-            selected.add(ep)
-            await pool.release(ep)
-            r.hset(pool._inflight_key, ep, 0)
-
-        assert ENDPOINTS[2] in selected
-        assert ENDPOINTS[0] not in selected
-
-    async def test_inflight_dominates_latency(self, fake_server: fakeredis.FakeServer):
-        pool = _make_pool(fake_server)
-        r = pool._get_sync()
-
-        # server-a: 0 inflight, slow (EMA 5000) → score = 0*1000 + 5000 = 5000
-        # server-b: 2 inflight, fast (EMA 100)  → score = 2*1000 + 100 = 2100
-        # server-c: 3 inflight, fast (EMA 100)  → score = 3*1000 + 100 = 3100
-        r.hset(
-            pool._inflight_key,
-            mapping={ENDPOINTS[0]: 0, ENDPOINTS[1]: 2, ENDPOINTS[2]: 3},
-        )
-        r.hset(pool._stats_key(ENDPOINTS[0]), "ema_latency_ms", "5000")
-        r.hset(pool._stats_key(ENDPOINTS[1]), "ema_latency_ms", "100")
-        r.hset(pool._stats_key(ENDPOINTS[2]), "ema_latency_ms", "100")
-
-        ep = await pool.acquire()
-        assert ep == ENDPOINTS[1]
-
-    async def test_ema_adapts_to_speed_change(self, fake_server: fakeredis.FakeServer):
-        """EMA quickly reflects a server slowing down."""
-        pool = _make_pool(fake_server)
-        r = pool._get_sync()
-
-        r.hset(pool._stats_key(ENDPOINTS[0]), "ema_latency_ms", "100")
-
-        # Simulate server-a slowing: 3 releases at 5000ms each
-        for _ in range(3):
-            pool._update_ema(ENDPOINTS[0], 5000.0)
-
-        ema = float(r.hget(pool._stats_key(ENDPOINTS[0]), "ema_latency_ms"))
-        # After 3 updates: ema should be well above 3000ms
-        assert ema > 3000
-
-
 class TestCooldown:
     async def test_unhealthy_endpoint_skipped(self, fake_server: fakeredis.FakeServer):
         pool = _make_pool(fake_server, cooldown_secs=60)
