@@ -54,7 +54,6 @@ if len(_CHAIN_URLS) > 1:
     _chain_pool = EndpointPool(
         pool_name="chain_hover",
         endpoints=_CHAIN_URLS,
-        latency_weight=1e9,  # pure occupancy — EMA is irrelevant
     )
 
 
