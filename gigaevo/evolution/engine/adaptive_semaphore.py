@@ -110,10 +110,10 @@ class AdaptiveSemaphore:
             self._calibration_samples.append(latency)
             if len(self._calibration_samples) >= _CALIBRATION_COUNT:
                 baseline = statistics.median(self._calibration_samples)
-                # Minimum 1s threshold — below this, contention is negligible
-                # and AIMD would oscillate on noise.  In production LLM calls
-                # are 5-90s; only mocks/tests produce sub-second latencies.
-                self._latency_threshold = max(1.0, baseline * _TARGET_MULTIPLIER)
+                # Small epsilon floor prevents oscillation when baseline ≈ 0
+                # (pure mocks with no sleep).  Any real LLM call (even with
+                # TIMESCALE compression) produces latencies >> 0.001s.
+                self._latency_threshold = max(0.001, baseline * _TARGET_MULTIPLIER)
                 logger.info(
                     "[AdaptiveSema] Calibrated: baseline={:.1f}s, "
                     "threshold={:.1f}s ({}x, min=1.0s)",
