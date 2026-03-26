@@ -191,6 +191,38 @@ class TestSweepDiscarded:
 
 
 # ---------------------------------------------------------------------------
+# Drain timeout
+# ---------------------------------------------------------------------------
+
+
+class TestDrainTimeout:
+    async def test_drain_timeout_force_releases_slots(self) -> None:
+        """_drain_in_flight timeout force-releases in-flight slots."""
+        engine = _make_ss_engine(max_in_flight=4)
+
+        # Simulate: 3 programs in-flight but stuck RUNNING (never complete)
+        prog1 = _prog(ProgramState.RUNNING)
+        prog2 = _prog(ProgramState.RUNNING)
+        prog3 = _prog(ProgramState.RUNNING)
+        engine._in_flight.update([prog1.id, prog2.id, prog3.id])
+        for _ in range(3):
+            await engine._in_flight_sema.acquire()
+
+        # mget always returns them as RUNNING (never DONE)
+        engine.storage.mget.return_value = [prog1, prog2, prog3]
+
+        # Drain with very short timeout (0.1s)
+        await engine._drain_in_flight(timeout_sec=0.1)
+
+        # All slots should have been force-released
+        assert len(engine._in_flight) == 0
+        # Semaphore should be free (all 4 slots available)
+        for _ in range(4):
+            await asyncio.wait_for(engine._in_flight_sema.acquire(), timeout=0.1)
+            engine._in_flight_sema.release()
+
+
+# ---------------------------------------------------------------------------
 # Epoch triggers
 # ---------------------------------------------------------------------------
 
