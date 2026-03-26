@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
+from gigaevo.programs.metrics.formatter import MetricsFormatter
+
 
 class BroaderMetricsFormatter(MetricsFormatter):
     pass
