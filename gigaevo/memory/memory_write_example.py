@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 from datetime import datetime, timezone
 import json
@@ -32,11 +34,6 @@ except ImportError:  # pragma: no cover - direct script execution fallback
     )
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=True)
-
-try:
-    from .shared_memory.memory import AmemGamMemory
-except ImportError:  # pragma: no cover - direct script execution fallback
-    from shared_memory.memory import AmemGamMemory
 
 
 THIS_DIR = Path(__file__).resolve().parent
@@ -161,6 +158,24 @@ BEST_PROGRAMS_PERCENT = max(
         or 0.0
     ),
 )
+
+
+def _resolve_memory_backend_class(use_api: bool):
+    if use_api:
+        try:
+            from gigaevo.memory_platform import AmemGamMemory as platform_backend
+        except Exception as exc:  # pragma: no cover - runtime dependency issue
+            raise RuntimeError(
+                "api.use_api=true selected the platform-backed memory backend, "
+                "but gigaevo.memory_platform could not be imported."
+            ) from exc
+        return platform_backend
+
+    try:
+        from .shared_memory.memory import AmemGamMemory as legacy_backend
+    except ImportError:  # pragma: no cover - direct script execution fallback
+        from shared_memory.memory import AmemGamMemory as legacy_backend
+    return legacy_backend
 
 
 def _load_json(path: Path) -> Any:
@@ -672,7 +687,8 @@ def _write_memory_write_stats(
 
 
 def main() -> dict[str, Any] | None:
-    memory = AmemGamMemory(
+    memory_backend_cls = _resolve_memory_backend_class(USE_API)
+    memory = memory_backend_cls(
         checkpoint_path=str(MEMORY_DIR),
         base_url=MEMORY_API_URL,
         use_api=USE_API,
