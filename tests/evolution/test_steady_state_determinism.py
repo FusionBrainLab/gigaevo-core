@@ -544,6 +544,74 @@ class TestProgramLossGrid:
         )
 
 
+class TestNoDoubleIngestion:
+    """Verify drain-set programs are never ingested twice."""
+
+    async def test_drain_set_excluded_from_poll_during_drain(self) -> None:
+        """_poll_and_ingest with exclude_ids skips drain-set programs."""
+        from tests.evolution.test_steady_state import _make_ss_engine, _prog
+
+        engine = _make_ss_engine(max_in_flight=4)
+
+        drain_prog = _prog(ProgramState.DONE)
+        other_prog = _prog(ProgramState.DONE)
+
+        engine._in_flight.update([drain_prog.id, other_prog.id])
+        await engine._in_flight_sema.acquire()
+        await engine._in_flight_sema.acquire()
+
+        engine.storage.mget.return_value = [other_prog]
+        engine.config.program_acceptor = MagicMock()
+        engine.config.program_acceptor.is_accepted.return_value = True
+        engine.strategy.add.return_value = True
+
+        # Poll excluding drain_prog — should only process other_prog
+        count = await engine._poll_and_ingest(exclude_ids={drain_prog.id})
+
+        assert count == 1
+        assert other_prog.id not in engine._in_flight
+        assert drain_prog.id in engine._in_flight  # NOT removed
+
+    async def test_no_double_add_in_grid(self) -> None:
+        """Over the full grid of timing configs, strategy.add is never called
+        twice for the same program ID."""
+        for mutation_delay, eval_delay, mif in [
+            (0.002, 0.02, 3),
+            (0.002, 0.15, 3),
+            (0.05, 0.02, 5),
+            (0.005, 0.3, 2),
+        ]:
+            de = DeterministicEngine(
+                max_in_flight=mif,
+                epoch_size=3,
+                max_generations=2,
+                mutation_delay=mutation_delay,
+                eval_delay=eval_delay,
+            )
+
+            add_calls: list[str] = []
+            orig_run = de.run
+
+            async def tracked_run():
+                async def tracked_add(prog):
+                    add_calls.append(prog.id)
+                    return True
+
+                de.engine.strategy.add = tracked_add
+                return await orig_run(timeout=15.0)
+
+            await tracked_run()
+
+            from collections import Counter
+
+            counts = Counter(add_calls)
+            doubles = {pid: n for pid, n in counts.items() if n > 1}
+            assert not doubles, (
+                f"[mut={mutation_delay} eval={eval_delay} mif={mif}] "
+                f"Double ingestion: {doubles}"
+            )
+
+
 class TestScopedDrainInvariants:
     """Test invariants specific to the scoped drain optimization."""
 
