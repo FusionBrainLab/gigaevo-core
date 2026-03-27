@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
+from gigaevo.evolution.scheduling.prioritizer import FIFOPrioritizer, ProgramPrioritizer
 from gigaevo.programs.dag.dag import DAG
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -146,6 +147,8 @@ class DagRunner:
         dag_blueprint: DAGBlueprint,
         config: DagRunnerConfig,
         writer: LogWriter,
+        *,
+        prioritizer: ProgramPrioritizer | None = None,
     ) -> None:
         self._storage = storage
         self._dag_blueprint = dag_blueprint
@@ -153,6 +156,7 @@ class DagRunner:
         self._metrics = DagRunnerMetrics()
         self._config = config
         self._writer = writer.bind(path=["dag_runner"])
+        self._prioritizer = prioritizer or FIFOPrioritizer()
 
         self._active: dict[str, TaskInfo] = {}
         self._sema = asyncio.Semaphore(self._config.max_concurrent_dags)
@@ -386,7 +390,9 @@ class DagRunner:
 
         launched: list[Program] = []
         allowed_ids = set(to_launch_ids)
-        for program in [p for p in fresh if p is not None]:
+        candidates = [p for p in fresh if p is not None]
+        candidates = self._prioritizer.prioritize(candidates)
+        for program in candidates:
             if program.id in self._active or program.id not in allowed_ids:
                 continue
 
@@ -450,6 +456,7 @@ class DagRunner:
 
     async def _execute_dag(self, dag: DAG, program: Program) -> None:
         ok = True
+        eval_start = time.monotonic()
         try:
             await dag.run(program)
         except Exception as exc:
@@ -464,6 +471,14 @@ class DagRunner:
             dag.state_manager = None
             dag._writer = None
             dag._stage_sema = None
+
+        # Update scheduling predictor with actual eval duration (even for
+        # failures — duration-until-failure is informative and avoids
+        # survivorship bias where complex programs are underestimated)
+        predictor = self._prioritizer.predictor
+        if predictor is not None:
+            eval_duration = time.monotonic() - eval_start
+            predictor.update(program, eval_duration)
 
         if ok:
             # Queue for batch RUNNING→DONE transition
