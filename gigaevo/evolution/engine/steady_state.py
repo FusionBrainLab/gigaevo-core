@@ -503,8 +503,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             #    ingestion loop (which is our caller) won't re-enter here.
             self._draining = True
 
-            # 2. Snapshot the drain set.  Mutations and ingestion continue;
-            #    new in-flight IDs are NOT in drain_set.
+            # 2. Snapshot the drain set and processed count (for carry-forward).
+            pre_drain_count = self._processed_since_epoch
             async with self._in_flight_lock:
                 drain_set = set(self._in_flight)
 
@@ -538,7 +538,11 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             #    in their mutation context (from previous epoch's collector).
             #    This is acceptable: stats change slowly between epochs.
             self._draining = False
-            self._processed_since_epoch = 0
+            # Carry forward programs ingested during drain (by _poll_and_ingest
+            # inside _drain_scoped).  Without this, those programs "don't count"
+            # toward the next epoch trigger, systematically delaying it.
+            drain_phase_count = self._processed_since_epoch - pre_drain_count
+            self._processed_since_epoch = max(0, drain_phase_count)
             self._epoch_mutants = 0
             self._epoch_eligible_since = None  # reset watermark timer
             # Pre-warm elite cache so mutation tasks don't thundering-herd
@@ -682,12 +686,30 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
             # All drain-set programs resolved?
             if still_active == 0:
-                # Clean up any remaining drain-set IDs still in _in_flight
-                async with self._in_flight_lock:
-                    for pid in list(remaining_ids):
-                        if pid in self._in_flight:
-                            self._in_flight.discard(pid)
-                            self._in_flight_sema.release()
+                # Retry ingestion for any remaining DONE programs that weren't
+                # handled due to TOCTOU (state changed between mgets).
+                retry_done = [pid for pid in remaining_ids if pid in set(done_ids)]
+                if retry_done:
+                    _, retry_handled = await self._ingest_batch(retry_done)
+                    async with self._in_flight_lock:
+                        for pid in retry_handled:
+                            if pid in self._in_flight:
+                                self._in_flight.discard(pid)
+                                self._in_flight_sema.release()
+                    remaining_ids -= set(retry_handled)
+
+                # Force-release anything truly unresolvable (vanished between mgets)
+                if remaining_ids:
+                    logger.warning(
+                        "[SteadyState] {} drain-set programs unresolvable, "
+                        "force-releasing slots",
+                        len(remaining_ids),
+                    )
+                    async with self._in_flight_lock:
+                        for pid in list(remaining_ids):
+                            if pid in self._in_flight:
+                                self._in_flight.discard(pid)
+                                self._in_flight_sema.release()
                 break
 
             elapsed = time.monotonic() - t0
