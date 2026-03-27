@@ -3,35 +3,19 @@
 import json
 import os
 from pathlib import Path
-import random
 
-# --- Squid Proxy Fix (CRITICAL) ---
-# The system Squid proxy intercepts Python HTTP to internal IPs.
-# Must bypass before any HTTP imports.
-_no_proxy = os.environ.get("NO_PROXY", "")
-for _ip in [
-    "INTERNAL_IP",
-    "10.225.185.235",
-    "INTERNAL_IP",
-    "INTERNAL_IP",
-    "INTERNAL_IP",
-    "10.225.51.251",
-]:
-    if _ip not in _no_proxy:
-        _no_proxy = ",".join(filter(None, [_no_proxy, _ip]))
-os.environ["NO_PROXY"] = _no_proxy
-os.environ["no_proxy"] = _no_proxy
+from tools.no_proxy import ensure_no_proxy
+
+ensure_no_proxy()
 
 # --- LLM Configuration ---
+# All chain requests go through the LiteLLM proxy (INTERNAL_IP:4000),
+# which load-balances across backend servers defined in infrastructure.yaml.
+# Start the proxy with: bash tools/litellm.sh --background
 
-# HOVER_CHAIN_URL overrides the chain-execution endpoint at runtime.
-# Supports comma-separated URLs for load balancing across chain servers:
-#   export HOVER_CHAIN_URL="http://localhost:8000/v1,http://10.225.185.235:8001/v1"
-# Each LLMClient creation picks a random URL (per-call load balancing).
-_CHAIN_URLS_STR = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
-_CHAIN_URLS = [u.strip() for u in _CHAIN_URLS_STR.split(",") if u.strip()]
+_CHAIN_URL = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
 
-_LLM_CONFIG_BASE = {
+LLM_CONFIG = {
     "model": "Qwen/Qwen3-8B",
     "max_cost": 10.0,
     "model_pricing": {
@@ -45,23 +29,21 @@ _LLM_CONFIG_BASE = {
             "top_k": 20,
         },
     },
+    "client_kwargs": {
+        "api_key": "sk-gigaevo",
+        "base_url": _CHAIN_URL,
+    },
 }
 
 
 def get_llm_config() -> dict:
-    """Return LLM config with a random chain server URL (per-call load balancing)."""
-    return {
-        **_LLM_CONFIG_BASE,
-        "client_kwargs": {
-            "api_key": "None",
-            "base_url": random.choice(_CHAIN_URLS),
-        },
-    }
+    """Return LLM config. Load balancing is handled by litellm proxy."""
+    return dict(LLM_CONFIG)
 
 
-# Backward compat: LLM_CONFIG still works but picks URL at import time.
-# Prefer get_llm_config() for per-call balancing.
-LLM_CONFIG = get_llm_config()
+def release_chain_endpoint(url: str, *, success: bool = True) -> None:
+    """No-op — load balancing is handled by litellm proxy."""
+    pass
 
 # --- Dataset Configuration ---
 

@@ -1,0 +1,15 @@
+# @package _global_
+
+# LPT scheduling with Ridge regression predictor.
+# Uses ChainFeatureExtractor for richer features (n_steps, string length,
+# deep retrieval count, etc.). Requires sklearn.
+prioritizer:
+  _target_: gigaevo.evolution.scheduling.LPTPrioritizer
+  eval_predictor:
+    _target_: gigaevo.evolution.scheduling.RidgePredictor
+    feature_extractor:
+      _target_: gigaevo.evolution.scheduling.ChainFeatureExtractor
+    buffer_size: 500
+    min_samples: 10
+    default_prediction: 300.0
+    alpha: 1.0

@@ -604,6 +604,12 @@ experiments/**/*.yaml.lock
 problems/chains/hotpotqa/dataset/bm25s_index/
 problems/chains/hotpotqa/dataset/colbert_index/
 
+# LiteLLM proxy (generated config, DB, logs, pidfile)
+tools/.litellm_config.yaml
+tools/.litellm.db
+tools/.litellm.log
+tools/.litellm.pid
+
 # Claude Code local configuration (machine-specific, not for sharing)
 .claude/
 CLAUDE.md
