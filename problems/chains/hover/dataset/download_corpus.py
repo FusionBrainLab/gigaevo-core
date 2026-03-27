@@ -106,6 +106,37 @@ def process_archive():
     print(f"Done! Processed {doc_count:,} documents → {OUTPUT_PATH}")
 
 
+def build_pkl():
+    """Convert .jsonl.gz corpus to .passages.pkl for faster loading."""
+    pkl_path = OUTPUT_DIR / "wiki17_abstracts.jsonl.passages.pkl"
+    if pkl_path.exists():
+        print(f"Pickle already exists: {pkl_path}")
+        return
+
+    if not OUTPUT_PATH.exists():
+        print(f"Corpus not found at {OUTPUT_PATH}. Run download and process first.")
+        return
+
+    import pickle
+
+    print(f"Building pickle from {OUTPUT_PATH}...")
+    passages: list[str] = []
+    opener = gzip.open if OUTPUT_PATH.suffix == ".gz" else open
+    with opener(OUTPUT_PATH, "rt", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            doc = json.loads(line)
+            title = doc.get("title", "")
+            text = doc.get("text", "")
+            passages.append(f"{title} | {text}")
+
+    with open(pkl_path, "wb") as f:
+        pickle.dump(passages, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print(f"Saved {len(passages):,} passages to {pkl_path} ({pkl_path.stat().st_size / 1e6:.0f}MB)")
+
+
 def build_index():
     """Build BM25s index from processed corpus."""
     if BM25S_INDEX_DIR.exists():
@@ -125,6 +156,7 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     download_archive()
     process_archive()
+    build_pkl()
     build_index()
 
     if ARCHIVE_PATH.exists() and OUTPUT_PATH.exists():
