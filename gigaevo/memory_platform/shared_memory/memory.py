@@ -922,7 +922,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
         effective_query = query.strip()
         if memory_state:
             effective_query = f"{effective_query}\n{memory_state.strip()}"
-        search_type = SearchType.HYBRID if self.remote_vector_search_type == "hybrid" else SearchType.BM25
+        remote_search_type = str(self.remote_vector_search_type or "vector").strip().lower()
+        if remote_search_type == "hybrid":
+            search_type = SearchType.HYBRID
+        elif remote_search_type == "bm25":
+            search_type = SearchType.BM25
+        else:
+            search_type = SearchType.VECTOR
         hits = self.client.search_hits(
             query=effective_query,
             search_type=search_type,
