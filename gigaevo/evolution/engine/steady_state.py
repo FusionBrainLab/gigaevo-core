@@ -502,9 +502,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     "(mutations + ingestion continue)",
                     len(drain_set),
                 )
-                # No timeout: DAG eval takes ~25 min; a fixed timeout would
-                # routinely force-release programs still evaluating, losing results.
-                # Stuck programs are handled by dag_timeout/stage_timeout in DagRunner.
+                # No timeout: DAG eval duration is problem-dependent and can
+                # exceed any fixed limit.  Stuck programs are handled by
+                # dag_timeout / stage_timeout in DagRunner.
                 await self._drain_scoped(drain_set, timeout_sec=None)
 
             # 3. Gate mutation loop for the brief refresh window
