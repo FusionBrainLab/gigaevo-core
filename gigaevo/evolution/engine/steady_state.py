@@ -37,9 +37,6 @@ from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 
-# Minimum interval between _sweep_discarded calls (seconds)
-_SWEEP_INTERVAL = 5.0
-
 
 class SteadyStateEvolutionEngine(EvolutionEngine):
     """Evolution engine with continuous mutation/evaluation interleaving.
@@ -71,17 +68,16 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # Epoch refresh gating
         self._mutation_gate = asyncio.Event()
         self._mutation_gate.set()  # open by default
+        self._draining = False  # True during scoped drain (suppress epoch trigger)
 
         # Epoch bookkeeping
         self._processed_since_epoch = 0
         self._epoch_mutants = 0  # mutants produced in current epoch (for logging)
+        self._epoch_eligible_since: float | None = None  # low-watermark fallback timer
 
         # Cached elites (refreshed at epoch boundaries)
         self._cached_elites: list[Program] | None = None
         self._elite_cache_lock = asyncio.Lock()
-
-        # Sweep throttle
-        self._last_sweep_time = 0.0
 
         # Child tasks
         self._mutation_task: asyncio.Task | None = None
@@ -135,23 +131,24 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 with contextlib.suppress(asyncio.CancelledError):
                     await t
 
-            # Re-raise exceptions from completed tasks so callers see them
+            # Capture exception from completed tasks (will re-raise after drain)
+            loop_exc = None
             for t in done:
                 if not t.cancelled():
                     exc = t.exception()
                     if exc and not isinstance(exc, asyncio.CancelledError):
                         logger.error("[SteadyState] Loop failed: {}", exc)
-                        raise exc
+                        loop_exc = exc
 
-            # Final epoch to capture any stragglers (120s timeout for shutdown)
+            # Final epoch to capture any stragglers.
+            # No timeout: DAG eval duration is problem-dependent; a fixed timeout
+            # would silently drop programs still mid-evaluation.
+            # Stuck programs are handled by dag_timeout/stage_timeout in DagRunner.
             if self._in_flight:
-                try:
-                    await asyncio.wait_for(self._epoch_refresh(), timeout=120.0)
-                except TimeoutError:
-                    logger.warning(
-                        "[SteadyState] Final drain timed out with {} in-flight",
-                        len(self._in_flight),
-                    )
+                await self._epoch_refresh()
+
+            if loop_exc is not None:
+                raise loop_exc
 
         except asyncio.CancelledError:
             logger.debug("[SteadyState] run() cancelled")
@@ -222,6 +219,15 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
             mutation_ids = await self._create_single_mutant(elites)
             if mutation_ids:
+                if len(mutation_ids) > 1:
+                    # Defensive: 1 semaphore slot acquired but >1 ID returned.
+                    # Only track the first; release would over-release otherwise.
+                    logger.warning(
+                        "[SteadyState] generate_mutations(limit=1) returned {} IDs; "
+                        "tracking only the first",
+                        len(mutation_ids),
+                    )
+                    mutation_ids = mutation_ids[:1]
                 async with self._in_flight_lock:
                     self._in_flight.update(mutation_ids)
                 self._epoch_mutants += len(mutation_ids)
@@ -274,12 +280,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             while self._running:
                 ingested = await self._poll_and_ingest()
 
-                # Sweep for leaked slots — throttled to avoid excessive mget
-                now = time.monotonic()
-                if now - self._last_sweep_time >= _SWEEP_INTERVAL:
-                    await self._sweep_discarded()
-                    self._last_sweep_time = now
-
                 # Check epoch trigger
                 if self._should_trigger_epoch():
                     await self._epoch_refresh()
@@ -287,50 +287,84 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 if self._reached_generation_cap():
                     break
 
-                # Adaptive polling: sleep less when there's active work
-                interval = (
-                    self.config.loop_interval * 0.25
-                    if ingested
-                    else self.config.loop_interval
-                )
+                # Adaptive polling: tighter when pipeline is saturated
+                # (slot release is the critical path when all slots are full)
+                if len(self._in_flight) >= self._ss_config.max_in_flight:
+                    interval = self.config.loop_interval * 0.25
+                elif ingested:
+                    interval = self.config.loop_interval * 0.25
+                else:
+                    interval = self.config.loop_interval
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
             raise
         finally:
             logger.info("[SteadyState] Ingestion loop stopped")
 
-    async def _poll_and_ingest(self) -> int:
-        """Poll for completed in-flight programs and ingest them.
+    async def _poll_and_ingest(self, *, exclude_ids: set[str] | None = None) -> int:
+        """Poll for completed in-flight programs, ingest them, and sweep leaks.
 
-        Returns the number of programs processed (ingested + rejected).
-        Only releases semaphore slots for programs that were confirmed DONE
-        by ``_ingest_batch`` (avoids over-release if a program's state changed
-        between ``get_ids_by_status`` and ``mget``).
+        Returns the number of programs processed (ingested + rejected + swept).
+        Combines ingestion and leak detection in a single pass: fetches DONE IDs,
+        then mgets ALL in-flight programs to find both completions and leaks.
+
+        *exclude_ids*: IDs to skip (used by ``_drain_scoped`` to prevent
+        double-ingestion of drain-set programs).
         """
-        done_ids = await self.storage.get_ids_by_status(ProgramState.DONE.value)
-        if not done_ids:
-            return 0
-
         async with self._in_flight_lock:
-            in_flight_snapshot = set(self._in_flight)
+            if not self._in_flight:
+                return 0
+            candidates = set(self._in_flight)
+            if exclude_ids:
+                candidates -= exclude_ids
+            if not candidates:
+                return 0
+            in_flight_snapshot = list(candidates)
 
-        ingestable = [pid for pid in done_ids if pid in in_flight_snapshot]
-        if not ingestable:
-            return 0
+        # Single mget for ALL in-flight programs: detect DONE + leaked in one pass
+        programs = await self.storage.mget(
+            in_flight_snapshot, exclude=EXCLUDE_STAGE_RESULTS
+        )
+        found_ids = {p.id for p in programs if p is not None}
 
-        added, handled_ids = await self._ingest_batch(ingestable)
+        done_ids: list[str] = []
+        leaked_ids: list[str] = []
 
-        # Only release slots for programs that were actually processed
-        async with self._in_flight_lock:
-            for pid in handled_ids:
-                if pid in self._in_flight:
-                    self._in_flight.discard(pid)
-                    self._in_flight_sema.release()
+        for prog in programs:
+            if prog is None:
+                continue
+            if prog.state == ProgramState.DONE:
+                done_ids.append(prog.id)
+            elif prog.state == ProgramState.DISCARDED:
+                leaked_ids.append(prog.id)
+            # QUEUED/RUNNING → still active, skip
+
+        # Programs that vanished from Redis entirely
+        for pid in in_flight_snapshot:
+            if pid not in found_ids:
+                leaked_ids.append(pid)
+
+        # Ingest DONE programs
+        handled_ids: list[str] = []
+        if done_ids:
+            _, handled_ids = await self._ingest_batch(done_ids)
+
+        # Release slots for ingested + leaked programs
+        released = set(handled_ids) | set(leaked_ids)
+        if released:
+            if leaked_ids:
+                logger.warning(
+                    "[SteadyState] Sweeping {} leaked in-flight programs",
+                    len(leaked_ids),
+                )
+            async with self._in_flight_lock:
+                for pid in released:
+                    if pid in self._in_flight:
+                        self._in_flight.discard(pid)
+                        self._in_flight_sema.release()
 
         self._processed_since_epoch += len(handled_ids)
-        # Return count of handled programs (accepted + rejected), not just accepted.
-        # This ensures adaptive sleep triggers even when all programs were rejected.
-        return len(handled_ids)
+        return len(handled_ids) + len(leaked_ids)
 
     async def _ingest_batch(self, program_ids: list[str]) -> tuple[int, list[str]]:
         """Ingest specific completed programs.
@@ -412,94 +446,122 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         return added, handled
 
     # ------------------------------------------------------------------
-    # Sweep for leaked semaphore slots
-    # ------------------------------------------------------------------
-
-    async def _sweep_discarded(self) -> None:
-        """Release slots for in-flight programs that DagRunner discarded.
-
-        Uses ``mget`` to fetch the actual program state atomically, avoiding
-        the TOCTOU race of checking multiple status sets sequentially.
-        """
-        async with self._in_flight_lock:
-            if not self._in_flight:
-                return
-            candidates = list(self._in_flight)
-
-        # Atomic check: fetch actual state of each candidate in one MGET
-        programs = await self.storage.mget(candidates, exclude=EXCLUDE_STAGE_RESULTS)
-        # Build a map of id -> state; programs that don't exist return None
-        state_by_id: dict[str, ProgramState | None] = {}
-        for prog in programs:
-            if prog is not None:
-                state_by_id[prog.id] = prog.state
-
-        # A program is leaked if it's DISCARDED or completely gone from Redis
-        leaked = [
-            pid
-            for pid in candidates
-            if pid not in state_by_id or state_by_id[pid] == ProgramState.DISCARDED
-        ]
-        if not leaked:
-            return
-
-        logger.warning(
-            "[SteadyState] Sweeping {} leaked in-flight programs (DISCARDED or vanished)",
-            len(leaked),
-        )
-        async with self._in_flight_lock:
-            for pid in leaked:
-                if pid in self._in_flight:
-                    self._in_flight.discard(pid)
-                    self._in_flight_sema.release()
-                    # Do NOT count ghosts in _processed_since_epoch — they were
-                    # never ingested, so shouldn't trigger premature epoch refresh
-
-    # ------------------------------------------------------------------
     # Epoch refresh
     # ------------------------------------------------------------------
 
+    # Fallback: if in-flight stays above watermark for this long, trigger anyway
+    _EPOCH_WATERMARK_FALLBACK_S = 15.0
+
     def _should_trigger_epoch(self) -> bool:
-        return self._processed_since_epoch >= self._ss_config.epoch_trigger_count
+        if self._draining:
+            return False  # suppress epoch trigger during scoped drain
+        if self._processed_since_epoch < self._ss_config.epoch_trigger_count:
+            self._epoch_eligible_since = None  # reset if not yet eligible
+            return False
+
+        # Count threshold met.  Opportunistic: wait for a natural valley in
+        # in-flight count so the subsequent drain is fast.
+        # Skip watermark for small max_in_flight (drain is already fast).
+        mif = self._ss_config.max_in_flight
+        if mif <= 3:
+            return True
+        watermark = mif // 4
+        if len(self._in_flight) <= watermark:
+            return True
+
+        # Start fallback timer on first poll where count is met but in-flight is high
+        if self._epoch_eligible_since is None:
+            self._epoch_eligible_since = time.monotonic()
+
+        # Fallback: don't wait forever (15s is ~1% of a 25-min eval)
+        if (
+            time.monotonic() - self._epoch_eligible_since
+            > self._EPOCH_WATERMARK_FALLBACK_S
+        ):
+            return True
+
+        return False
 
     async def _epoch_refresh(self) -> None:
-        """Periodic synchronization: drain in-flight, refresh archive, bump epoch."""
+        """Periodic synchronization: drain in-flight, refresh archive, bump epoch.
+
+        Uses **scoped drain**: both mutation and ingestion continue during the
+        drain phase.  Only the programs in-flight when the epoch triggered need
+        to finish before the archive is refreshed.  New mutations produced and
+        ingested during drain are counted toward the *next* epoch.
+
+        ``_draining`` flag suppresses ``_should_trigger_epoch`` so the
+        ingestion loop can keep running without triggering a nested refresh.
+        The mutation gate is only closed for the brief refresh window.
+        """
         epoch = self.metrics.total_generations
         epoch_t0 = time.monotonic()
         logger.info("[SteadyState] ---- Epoch {} refresh ----", epoch)
 
-        # Gate mutation loop — try/finally ensures it always reopens
-        self._mutation_gate.clear()
         try:
-            # 1. Drain all in-flight mutants (with timeout to prevent hangs if DagRunner dies)
-            # Use a generous 600s (10min) for normal operation; final shutdown uses 120s
-            await self._drain_in_flight(timeout_sec=600.0)
+            # 1. Enter drain mode — suppresses _should_trigger_epoch so the
+            #    ingestion loop (which is our caller) won't re-enter here.
+            self._draining = True
 
-            # 2. Pre-step hook (called once per epoch, mirrors parent's per-step call)
+            # 2. Snapshot the drain set and processed count (for carry-forward).
+            pre_drain_count = self._processed_since_epoch
+            async with self._in_flight_lock:
+                drain_set = set(self._in_flight)
+
+            if drain_set:
+                logger.info(
+                    "[SteadyState] Draining {} in-flight programs "
+                    "(mutations + ingestion continue)",
+                    len(drain_set),
+                )
+                # No timeout: DAG eval duration is problem-dependent and can
+                # exceed any fixed limit.  Stuck programs are handled by
+                # dag_timeout / stage_timeout in DagRunner.
+                await self._drain_scoped(drain_set, timeout_sec=None)
+
+            # 3. Gate mutation loop for the brief refresh window
+            self._mutation_gate.clear()
+
+            # 4. Pre-step hook (called once per epoch, mirrors parent's per-step call)
             if self._pre_step_hook:
                 await self._pre_step_hook()
 
-            # 3. Full snapshot bump
+            # 5. Snapshot bump + incremental bump
             self.storage.snapshot.bump()
-
-            # 4. Incremental bump (drain already ingested all DONE in-flight programs;
-            #    no need to call _ingest_completed_programs which would re-fetch ALL
-            #    DONE programs globally, bypassing steady-state bookkeeping)
             self.storage.snapshot.bump(incremental=True)
 
-            # 5. Refresh archive (DONE -> QUEUED for lineage/insights stages)
+            # 6. Refresh archive (DONE -> QUEUED for lineage/insights stages)
             refreshed = await self._refresh_archive_programs()
+
+            # 7. Reopen mutation gate BEFORE waiting for refresh DAGs.
+            #    First few mutations may see slightly stale population stats
+            #    in their mutation context (from previous epoch's collector).
+            #    This is acceptable: stats change slowly between epochs.
+            self._draining = False
+            # Carry forward programs ingested during drain (by _poll_and_ingest
+            # inside _drain_scoped).  Without this, those programs "don't count"
+            # toward the next epoch trigger, systematically delaying it.
+            drain_phase_count = self._processed_since_epoch - pre_drain_count
+            self._processed_since_epoch = max(0, drain_phase_count)
+            self._epoch_mutants = 0
+            self._epoch_eligible_since = None  # reset watermark timer
+            # Pre-warm elite cache so mutation tasks don't thundering-herd
+            # behind _elite_cache_lock when the gate opens.
+            self._cached_elites = await self._select_elites_for_mutation()
+            self._mutation_gate.set()
+
+            # 8. Wait for refresh DAGs + reindex (mutations continue)
             if refreshed:
                 await self._await_idle()
                 await self.strategy.reindex_archive()
 
-            # 6. Increment epoch counter
+            # 9. Increment epoch counter
             self.metrics.total_generations += 1
             await self.storage.save_run_state(
                 _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
             )
 
-            # 7. Log epoch summary
+            # 10. Log epoch summary
             epoch_elapsed = time.monotonic() - epoch_t0
             archive_size = len(await self.strategy.get_program_ids())
             archive_delta = archive_size - self._prev_archive_size
@@ -531,11 +593,15 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     self._stagnant_gens,
                 )
         finally:
-            # Reset epoch bookkeeping, invalidate elite cache, resume mutation
-            self._processed_since_epoch = 0
-            self._epoch_mutants = 0
-            self._cached_elites = None  # force fresh selection next epoch
-            self._mutation_gate.set()
+            # Safety net: ensure gate is always reopened on exception.
+            # Normal path reopens gate at step 7 above.
+            self._draining = False
+            self._epoch_eligible_since = None
+            if not self._mutation_gate.is_set():
+                self._processed_since_epoch = 0
+                self._epoch_mutants = 0
+                self._cached_elites = None
+                self._mutation_gate.set()
 
     # ------------------------------------------------------------------
     # Drain in-flight
@@ -544,23 +610,40 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
     async def _drain_in_flight(self, timeout_sec: float | None = None) -> None:
         """Wait for all in-flight mutants to finish DAG evaluation, then ingest.
 
-        Uses **scoped** state checks (``mget`` on ``_in_flight`` IDs only)
-        rather than the global ``_has_active_dags()`` to avoid hanging when
-        non-in-flight programs (e.g. archive refresh) are also QUEUED/RUNNING.
-
-        Relies on existing ``dag_timeout``/``stage_timeout`` for stuck programs.
-        If timeout_sec is exceeded, force-releases remaining slots with a warning.
+        Closes the mutation gate and drains everything.  Used for final shutdown.
+        For epoch refresh, prefer :meth:`_drain_scoped` which allows mutations
+        to continue during the drain.
         """
+        self._mutation_gate.clear()
+        async with self._in_flight_lock:
+            drain_set = set(self._in_flight)
+        if drain_set:
+            await self._drain_scoped(drain_set, timeout_sec=timeout_sec)
+
+    async def _drain_scoped(
+        self, drain_set: set[str], timeout_sec: float | None = None
+    ) -> None:
+        """Wait for a specific set of program IDs to finish evaluation, then ingest.
+
+        Unlike :meth:`_drain_in_flight`, this does NOT close the mutation gate.
+        New mutations can continue in parallel — their IDs are tracked in
+        ``_in_flight`` but are not part of *drain_set* and do not block this
+        method.
+
+        Programs in *drain_set* that reach DONE are ingested and their semaphore
+        slots released.  Programs that are DISCARDED or vanish have their slots
+        force-released.
+        """
+        # Drain polling interval: tighter than ingestion loop for faster drain
+        _DRAIN_POLL_S = 0.5
+
         t0 = time.monotonic()
+        remaining_ids = set(drain_set)
 
-        while True:
-            async with self._in_flight_lock:
-                if not self._in_flight:
-                    break
-                candidates = list(self._in_flight)
-                remaining = len(candidates)
+        while remaining_ids:
+            candidates = list(remaining_ids)
 
-            # Scoped check: fetch actual state of only OUR in-flight programs
+            # Scoped check: fetch actual state of only drain-set programs
             programs = await self.storage.mget(
                 candidates, exclude=EXCLUDE_STAGE_RESULTS
             )
@@ -585,28 +668,48 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 if pid not in found_ids:
                     gone_ids.append(pid)
 
-            # Ingest DONE programs
+            # Ingest DONE programs — use handled_ids (not done_ids) to avoid
+            # losing programs whose state changed between drain mget and ingest mget
+            handled: list[str] = []
             if done_ids:
-                await self._ingest_batch(done_ids)
+                _, handled = await self._ingest_batch(done_ids)
 
-            # Release slots for all resolved programs (DONE + gone)
-            resolved = set(done_ids) | set(gone_ids)
+            # Release slots for actually-handled programs + gone programs
+            resolved = set(handled) | set(gone_ids)
             if resolved:
                 async with self._in_flight_lock:
                     for pid in resolved:
                         if pid in self._in_flight:
                             self._in_flight.discard(pid)
                             self._in_flight_sema.release()
+                remaining_ids -= resolved
 
-            # If nothing still active among OUR programs, we're done.
-            # IMPORTANT: only clean up IDs from the original `candidates` snapshot,
-            # NOT anything newly added by a mutation loop that slipped past the gate.
+            # All drain-set programs resolved?
             if still_active == 0:
-                async with self._in_flight_lock:
-                    for pid in candidates:
-                        if pid in self._in_flight:
-                            self._in_flight.discard(pid)
-                            self._in_flight_sema.release()
+                # Retry ingestion for any remaining DONE programs that weren't
+                # handled due to TOCTOU (state changed between mgets).
+                retry_done = [pid for pid in remaining_ids if pid in set(done_ids)]
+                if retry_done:
+                    _, retry_handled = await self._ingest_batch(retry_done)
+                    async with self._in_flight_lock:
+                        for pid in retry_handled:
+                            if pid in self._in_flight:
+                                self._in_flight.discard(pid)
+                                self._in_flight_sema.release()
+                    remaining_ids -= set(retry_handled)
+
+                # Force-release anything truly unresolvable (vanished between mgets)
+                if remaining_ids:
+                    logger.warning(
+                        "[SteadyState] {} drain-set programs unresolvable, "
+                        "force-releasing slots",
+                        len(remaining_ids),
+                    )
+                    async with self._in_flight_lock:
+                        for pid in list(remaining_ids):
+                            if pid in self._in_flight:
+                                self._in_flight.discard(pid)
+                                self._in_flight_sema.release()
                 break
 
             elapsed = time.monotonic() - t0
@@ -614,21 +717,27 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # Check timeout
             if timeout_sec is not None and elapsed > timeout_sec:
                 logger.warning(
-                    "[SteadyState] Drain timeout ({:.0f}s) with {} in-flight; "
+                    "[SteadyState] Drain timeout ({:.0f}s) with {} drain-set remaining; "
                     "force-releasing slots",
                     elapsed,
-                    remaining,
+                    len(remaining_ids),
                 )
                 async with self._in_flight_lock:
-                    for pid in list(self._in_flight):
-                        self._in_flight.discard(pid)
-                        self._in_flight_sema.release()
+                    for pid in list(remaining_ids):
+                        if pid in self._in_flight:
+                            self._in_flight.discard(pid)
+                            self._in_flight_sema.release()
                 break
 
-            if elapsed > 30 and int(elapsed) % 60 < self.config.loop_interval:
+            # Also ingest non-drain-set DONE programs to free semaphore slots.
+            # Exclude drain-set IDs to prevent double-ingestion.
+            await self._poll_and_ingest(exclude_ids=drain_set)
+
+            if elapsed > 30 and int(elapsed) % 60 < _DRAIN_POLL_S:
                 logger.info(
-                    "[SteadyState] Draining: {} in-flight ({:.0f}s)",
-                    remaining,
+                    "[SteadyState] Draining: {}/{} remaining ({:.0f}s)",
+                    len(remaining_ids),
+                    len(drain_set),
                     elapsed,
                 )
-            await asyncio.sleep(self.config.loop_interval)
+            await asyncio.sleep(_DRAIN_POLL_S)
