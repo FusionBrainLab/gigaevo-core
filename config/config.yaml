@@ -17,6 +17,11 @@ ideas_tracker: false
 # Example: checkpoint_dir=outputs/custom_memory_checkpoint
 checkpoint_dir: null
 
+# Optional override for api.namespace in config/memory.yaml.
+# Used by memory_platform / API-backed memory when api.use_api=true.
+# Example: namespace=exp9
+namespace: null
+
 # Optional per-generation CSV and plot exports.
 # Enable with: tracking.enabled=true
 tracking:
