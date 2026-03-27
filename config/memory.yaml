@@ -10,7 +10,7 @@ paths:
 api:
   base_url: http://localhost:8000
   namespace: exp9
-  use_api: false
+  use_api: true
   channel: latest
   author: null
 

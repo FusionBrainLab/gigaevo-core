@@ -26,12 +26,10 @@ try:
         to_list,
         to_str,
     )
-    from gigaevo.memory.shared_memory.memory import AmemGamMemory
 except Exception as exc:
-    AmemGamMemory = None  # type: ignore[assignment]
-    _BACKEND_IMPORT_ERROR: Exception | None = exc
+    _RUNTIME_IMPORT_ERROR: Exception | None = exc
 else:
-    _BACKEND_IMPORT_ERROR = None
+    _RUNTIME_IMPORT_ERROR = None
 
 
 @dataclass
@@ -50,11 +48,22 @@ class MemorySelectorAgent:
         self._backend_error: str | None = None
         self.memory = self._create_memory_backend()
 
+    @staticmethod
+    def _resolve_memory_backend_class(use_api: bool) -> type[Any]:
+        if use_api:
+            from gigaevo.memory_platform import AmemGamMemory as platform_backend
+
+            return platform_backend
+
+        from gigaevo.memory.shared_memory.memory import AmemGamMemory as legacy_backend
+
+        return legacy_backend
+
     def _create_memory_backend(self) -> Any | None:
-        if AmemGamMemory is None:
+        if _RUNTIME_IMPORT_ERROR is not None:
             message = (
                 "gigaevo.memory is unavailable"
-                f"{': ' + str(_BACKEND_IMPORT_ERROR) if _BACKEND_IMPORT_ERROR else ''}"
+                f"{': ' + str(_RUNTIME_IMPORT_ERROR) if _RUNTIME_IMPORT_ERROR else ''}"
             )
             self._backend_error = message
             logger.warning("[MemorySelectorAgent] {}", message)
@@ -127,8 +136,9 @@ class MemorySelectorAgent:
                 to_int(deep_get(settings, "runtime.sync_batch_size"), default=100),
             )
             sync_on_init = to_bool(deep_get(settings, "runtime.sync_on_init"), default=True)
+            memory_backend_cls = self._resolve_memory_backend_class(use_api)
 
-            memory = AmemGamMemory(
+            memory = memory_backend_cls(
                 checkpoint_path=str(memory_dir),
                 base_url=memory_api_url,
                 use_api=use_api,
@@ -148,8 +158,9 @@ class MemorySelectorAgent:
                 gam_pipeline_mode=gam_pipeline_mode,
             )
             logger.info(
-                "[MemorySelectorAgent] Using gigaevo.memory backend "
-                "(use_api={}, namespace={}, channel={}, checkpoint={})",
+                "[MemorySelectorAgent] Using memory backend "
+                "(class={}, use_api={}, namespace={}, channel={}, checkpoint={})",
+                memory_backend_cls.__module__,
                 use_api,
                 namespace,
                 channel,
