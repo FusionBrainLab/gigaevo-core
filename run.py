@@ -1,6 +1,13 @@
 import asyncio
 from datetime import UTC, datetime
+import os
 import time
+
+# Remove HTTP(S) proxy vars early — before any subprocess inherits them.
+# Internal LLM traffic must bypass the Squid proxy. NO_PROXY alone is
+# unreliable with httpx; removing the vars is the only safe approach.
+for _proxy_key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+    os.environ.pop(_proxy_key, None)
 
 from dotenv import load_dotenv
 import hydra

@@ -25,6 +25,7 @@ LLM_CONFIG = {
     "generation_kwargs": {
         "temperature": 0.6,
         "top_p": 0.95,
+        "max_tokens": 8192,
         "extra_body": {
             "top_k": 20,
         },
