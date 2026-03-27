@@ -411,13 +411,22 @@ def _resolve_checkpoint_dir_arg(cfg: DictConfig, runtime_cwd: Path) -> Path | No
     return candidate.resolve()
 
 
+def _resolve_namespace_arg(cfg: DictConfig) -> str | None:
+    raw_namespace = cfg.get("namespace")
+    if raw_namespace is None:
+        return None
+    text = str(raw_namespace).strip()
+    return text or None
+
+
 def _build_runtime_memory_config(
     cfg: DictConfig,
     output_dir: Path,
     requested_checkpoint_dir: Path | None,
+    requested_namespace: str | None,
     *,
     checkpoint_override_policy: str,
-) -> tuple[Path, bool, Path | None]:
+) -> tuple[Path, bool, Path | None, str | None]:
     project_root = Path(__file__).resolve().parent
     default_memory_config_path = project_root / "config" / "memory.yaml"
     runtime_memory_config_path = output_dir / "memory.runtime.yaml"
@@ -437,6 +446,12 @@ def _build_runtime_memory_config(
     redis_cfg["redis_db"] = int(cfg.redis.db)
     redis_cfg["redis_prefix"] = str(cfg.problem.name)
 
+    applied_namespace: str | None = None
+    if requested_namespace is not None:
+        api_cfg = _ensure_mapping(payload, "api")
+        api_cfg["namespace"] = requested_namespace
+        applied_namespace = requested_namespace
+
     applied_checkpoint_dir: Path | None = None
     should_apply_checkpoint_override = (
         requested_checkpoint_dir is not None
@@ -455,16 +470,23 @@ def _build_runtime_memory_config(
         applied_checkpoint_dir = requested_checkpoint_dir
 
     _write_memory_config(runtime_memory_config_path, payload)
-    return runtime_memory_config_path, memory_write_enabled, applied_checkpoint_dir
+    return (
+        runtime_memory_config_path,
+        memory_write_enabled,
+        applied_checkpoint_dir,
+        applied_namespace,
+    )
 
 
 def run_ideas_tracker(cfg: DictConfig, output_dir: Path, runtime_cwd: Path) -> None:
     requested_checkpoint_dir = _resolve_checkpoint_dir_arg(cfg, runtime_cwd)
-    runtime_memory_config_path, memory_write_enabled, applied_checkpoint_dir = (
+    requested_namespace = _resolve_namespace_arg(cfg)
+    runtime_memory_config_path, memory_write_enabled, applied_checkpoint_dir, applied_namespace = (
         _build_runtime_memory_config(
             cfg,
             output_dir,
             requested_checkpoint_dir,
+            requested_namespace,
             checkpoint_override_policy="memory_write_only",
         )
     )
@@ -486,6 +508,8 @@ def run_ideas_tracker(cfg: DictConfig, output_dir: Path, runtime_cwd: Path) -> N
             "checkpoint_dir was provided but ignored because "
             "ideas_tracker.memory_write_pipeline.enabled=false for ideas tracker final write."
         )
+    if applied_namespace is not None:
+        logger.info("Memory namespace override: {}", applied_namespace)
 
     try:
         from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
@@ -521,15 +545,17 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Log file: {log_file_path}")
 
     requested_checkpoint_dir = _resolve_checkpoint_dir_arg(cfg, hydra_runtime_cwd)
+    requested_namespace = _resolve_namespace_arg(cfg)
     memory_enabled = _to_bool(cfg.get("memory_enabled", False))
 
     previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
     configured_memory_env = False
     if memory_enabled and requested_checkpoint_dir is not None:
-        runtime_memory_config_path, _, applied_checkpoint_dir = _build_runtime_memory_config(
+        runtime_memory_config_path, _, applied_checkpoint_dir, applied_namespace = _build_runtime_memory_config(
             cfg,
             hydra_output_dir,
             requested_checkpoint_dir,
+            requested_namespace,
             checkpoint_override_policy="always",
         )
         os.environ["EVO_MEMORY_CONFIG_PATH"] = str(runtime_memory_config_path)
@@ -539,6 +565,8 @@ def main(cfg: DictConfig) -> None:
                 "Memory GAM checkpoint directory override: {}",
                 applied_checkpoint_dir,
             )
+        if applied_namespace is not None:
+            logger.info("Memory namespace override: {}", applied_namespace)
 
     try:
         asyncio.run(
