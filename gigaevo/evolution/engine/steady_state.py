@@ -140,16 +140,12 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                         logger.error("[SteadyState] Loop failed: {}", exc)
                         loop_exc = exc
 
-            # Final epoch to capture any stragglers (120s timeout for shutdown)
-            # Runs even if a loop raised — don't lose in-flight program results.
+            # Final epoch to capture any stragglers.
+            # No timeout: DAG eval duration is problem-dependent; a fixed timeout
+            # would silently drop programs still mid-evaluation.
+            # Stuck programs are handled by dag_timeout/stage_timeout in DagRunner.
             if self._in_flight:
-                try:
-                    await asyncio.wait_for(self._epoch_refresh(), timeout=120.0)
-                except TimeoutError:
-                    logger.warning(
-                        "[SteadyState] Final drain timed out with {} in-flight",
-                        len(self._in_flight),
-                    )
+                await self._epoch_refresh()
 
             if loop_exc is not None:
                 raise loop_exc
@@ -223,6 +219,15 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
             mutation_ids = await self._create_single_mutant(elites)
             if mutation_ids:
+                if len(mutation_ids) > 1:
+                    # Defensive: 1 semaphore slot acquired but >1 ID returned.
+                    # Only track the first; release would over-release otherwise.
+                    logger.warning(
+                        "[SteadyState] generate_mutations(limit=1) returned {} IDs; "
+                        "tracking only the first",
+                        len(mutation_ids),
+                    )
+                    mutation_ids = mutation_ids[:1]
                 async with self._in_flight_lock:
                     self._in_flight.update(mutation_ids)
                 self._epoch_mutants += len(mutation_ids)
@@ -296,18 +301,25 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         finally:
             logger.info("[SteadyState] Ingestion loop stopped")
 
-    async def _poll_and_ingest(self) -> int:
+    async def _poll_and_ingest(self, *, exclude_ids: set[str] | None = None) -> int:
         """Poll for completed in-flight programs, ingest them, and sweep leaks.
 
         Returns the number of programs processed (ingested + rejected + swept).
         Combines ingestion and leak detection in a single pass: fetches DONE IDs,
         then mgets ALL in-flight programs to find both completions and leaks.
-        This eliminates the separate ``_sweep_discarded`` call and its extra mget.
+
+        *exclude_ids*: IDs to skip (used by ``_drain_scoped`` to prevent
+        double-ingestion of drain-set programs).
         """
         async with self._in_flight_lock:
             if not self._in_flight:
                 return 0
-            in_flight_snapshot = list(self._in_flight)
+            candidates = set(self._in_flight)
+            if exclude_ids:
+                candidates -= exclude_ids
+            if not candidates:
+                return 0
+            in_flight_snapshot = list(candidates)
 
         # Single mget for ALL in-flight programs: detect DONE + leaked in one pass
         programs = await self.storage.mget(
@@ -696,8 +708,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 break
 
             # Also ingest non-drain-set DONE programs to free semaphore slots.
-            # This keeps the mutation loop flowing during long drains.
-            await self._poll_and_ingest()
+            # Exclude drain-set IDs to prevent double-ingestion.
+            await self._poll_and_ingest(exclude_ids=drain_set)
 
             if elapsed > 30 and int(elapsed) % 60 < _DRAIN_POLL_S:
                 logger.info(
