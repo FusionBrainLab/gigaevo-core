@@ -550,7 +550,9 @@ def main(cfg: DictConfig) -> None:
 
     previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
     configured_memory_env = False
-    if memory_enabled and requested_checkpoint_dir is not None:
+    if memory_enabled and (
+        requested_checkpoint_dir is not None or requested_namespace is not None
+    ):
         runtime_memory_config_path, _, applied_checkpoint_dir, applied_namespace = _build_runtime_memory_config(
             cfg,
             hydra_output_dir,
