@@ -192,7 +192,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     _validate_args(args, parser)
 
-    from gigaevo.llm.ideas_tracker.ideas_tracker import IdeaTracker
+    from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
     config_path = Path(args.config_path) if args.config_path else None
     runtime_payload = _build_runtime_memory_payload(config_path)

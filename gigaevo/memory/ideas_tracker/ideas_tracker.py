@@ -13,26 +13,26 @@ import pandas as pd
 import tqdm
 
 sys.path.append("../gigaevo-core-internal")
-from gigaevo.llm.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
-from gigaevo.llm.ideas_tracker.components.data_components import (
+from gigaevo.memory.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
+from gigaevo.memory.ideas_tracker.components.data_components import (
     IncomingIdeas,
     ProgramRecord,
 )
-from gigaevo.llm.ideas_tracker.components.fabrics.analyzer_fabric import create_analyzer
-from gigaevo.llm.ideas_tracker.components.fabrics.fabric_redis import (
+from gigaevo.memory.ideas_tracker.components.fabrics.analyzer_fabric import create_analyzer
+from gigaevo.memory.ideas_tracker.components.fabrics.fabric_redis import (
     create_redis_config,
 )
-from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
-from gigaevo.llm.ideas_tracker.components.statistics import (
+from gigaevo.memory.ideas_tracker.components.records_manager import RecordManager
+from gigaevo.memory.ideas_tracker.components.statistics import (
     compute_evolutionary_statistics,
 )
-from gigaevo.llm.ideas_tracker.components.summary import _summarize_task_description
-from gigaevo.llm.ideas_tracker.utils.cfg_loader import _load_config
-from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
-from gigaevo.llm.ideas_tracker.utils.records_converter import (
+from gigaevo.memory.ideas_tracker.components.summary import _summarize_task_description
+from gigaevo.memory.ideas_tracker.utils.cfg_loader import _load_config
+from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
+from gigaevo.memory.ideas_tracker.utils.records_converter import (
     convert_programs_to_records,
 )
-from gigaevo.llm.ideas_tracker.utils.task_description_loader import (
+from gigaevo.memory.ideas_tracker.utils.task_description_loader import (
     _load_task_description,
 )
 from gigaevo.utils.redis import fetch_evolution_dataframe

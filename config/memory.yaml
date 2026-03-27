@@ -1,11 +1,11 @@
 # Unified configuration for memory backend and ideas tracker.
 #
 # Top-level sections are used by gigaevo.memory and MemorySelectorAgent.
-# The ideas_tracker section is used by gigaevo.llm.ideas_tracker.IdeaTracker.
+# The ideas_tracker section is used by gigaevo.memory.ideas_tracker.IdeaTracker.
 
 paths:
   checkpoint_dir: memory_usage_store/api_exp4
-  banks_dir: ../gigaevo/llm/ideas_tracker/logs/2026-02-19_19-51-02
+  banks_dir: ../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02
 
 api:
   base_url: http://localhost:8000

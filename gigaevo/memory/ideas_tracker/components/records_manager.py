@@ -1,7 +1,7 @@
 from typing import Any
 
-from gigaevo.llm.ideas_tracker.components.data_components import RecordBank
-from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
+from gigaevo.memory.ideas_tracker.components.data_components import RecordBank
+from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 
 
 class RecordManager:

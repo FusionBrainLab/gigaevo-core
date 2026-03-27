@@ -2,7 +2,7 @@ import json
 
 import pandas as pd
 
-from gigaevo.llm.ideas_tracker.components.data_components import ProgramRecord
+from gigaevo.memory.ideas_tracker.components.data_components import ProgramRecord
 
 
 def convert_programs_to_records(
