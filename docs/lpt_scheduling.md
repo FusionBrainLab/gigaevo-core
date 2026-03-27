@@ -72,31 +72,45 @@ class FeatureExtractor(Protocol):
 
 Structural subtyping — implement the method, no inheritance required.
 
-**Built-in**: `CodeFeatureExtractor` — extracts `code_length`, `num_lines`,
-`num_function_defs`, `num_loop_constructs` from `program.code`.
+**Built-in extractors**:
 
-**Custom example** (HoVer-specific):
+| Extractor | Features | Use case |
+|---|---|---|
+| `CodeFeatureExtractor` | `code_length`, `num_lines`, `num_function_defs`, `num_loop_constructs` | Any problem (generic) |
+| `ChainFeatureExtractor` | `n_tool_steps`, `n_llm_steps`, `n_total_steps`, `total_string_content`, `n_deep_retrieval`, `n_examples`, `has_system_prompt`, `max_dependency_fan_in` | Chain-based problems (HoVer, HotpotQA, etc.) |
+
+`ChainFeatureExtractor` works on real chain-definition programs — the Python
+functions returning dicts with `system_prompt` and `steps`.  Tested against
+actual HoVer and HotpotQA baselines:
 
 ```python
-class HoVerFeatureExtractor:
+# HoVer baseline: 3 tool + 4 LLM steps, 1 deep retrieval, max fan-in 2
+# HotpotQA baseline: 2 tool + 4 LLM steps, 0 deep retrieval, max fan-in 2
+```
+
+**Custom example** (problem-specific features):
+
+```python
+class MyChainExtractor:
     def extract(self, program: Program) -> dict[str, float]:
         code = program.code
         return {
-            "code_length": float(len(code)),
-            "n_retrieval_calls": float(code.count("retrieve(")),
-            "n_verify_calls": float(code.count("verify(")),
-            "max_hop_depth": float(code.count("for ") + code.count("while ")),
+            "n_or_operators": float(code.count(" OR ")),  # query expansion
+            "has_contradiction_check": float("CONTRADICTION" in code),
         }
 ```
 
 **Composing extractors**:
 
 ```python
-from gigaevo.evolution.scheduling import CompositeFeatureExtractor
+from gigaevo.evolution.scheduling import (
+    ChainFeatureExtractor,
+    CompositeFeatureExtractor,
+)
 
 extractor = CompositeFeatureExtractor([
-    CodeFeatureExtractor(),
-    HoVerFeatureExtractor(),
+    ChainFeatureExtractor(),     # chain structure features
+    MyChainExtractor(),          # problem-specific features
 ])
 ```
 

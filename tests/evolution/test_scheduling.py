@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from gigaevo.evolution.scheduling.feature_extractor import (
+    ChainFeatureExtractor,
     CodeFeatureExtractor,
     CompositeFeatureExtractor,
 )
@@ -101,6 +102,136 @@ class TestCompositeFeatureExtractor:
 
         comp = CompositeFeatureExtractor([Ext1(), Ext2()])
         assert comp.extract(_prog())["shared"] == 2.0
+
+
+# ---------------------------------------------------------------------------
+# ChainFeatureExtractor tests (real chain programs)
+# ---------------------------------------------------------------------------
+
+# Real HoVer baseline (7 steps: 3 tool + 4 LLM, empty system_prompt)
+_HOVER_BASELINE = open(
+    "problems/chains/hover/static_soft/initial_programs/baseline.py"
+).read()
+
+# Real HotpotQA baseline (6 steps: 2 tool + 4 LLM, empty system_prompt)
+_HOTPOTQA_BASELINE = open(
+    "problems/chains/hotpotqa/static/initial_programs/baseline.py"
+).read()
+
+
+class TestChainFeatureExtractor:
+    def test_hover_baseline_step_counts(self) -> None:
+        """HoVer baseline has 3 tool steps and 4 LLM steps."""
+        ext = ChainFeatureExtractor()
+        features = ext.extract(_prog(_HOVER_BASELINE))
+        assert features["n_tool_steps"] == 3.0
+        assert features["n_llm_steps"] == 4.0
+        assert features["n_total_steps"] == 7.0
+
+    def test_hotpotqa_baseline_step_counts(self) -> None:
+        """HotpotQA baseline has 2 tool steps and 4 LLM steps."""
+        ext = ChainFeatureExtractor()
+        features = ext.extract(_prog(_HOTPOTQA_BASELINE))
+        assert features["n_tool_steps"] == 2.0
+        assert features["n_llm_steps"] == 4.0
+        assert features["n_total_steps"] == 6.0
+
+    def test_hover_baseline_no_system_prompt(self) -> None:
+        """HoVer baseline has empty system_prompt."""
+        ext = ChainFeatureExtractor()
+        features = ext.extract(_prog(_HOVER_BASELINE))
+        assert features["has_system_prompt"] == 0.0
+
+    def test_hover_baseline_deep_retrieval(self) -> None:
+        """HoVer baseline uses retrieve_deep for the third hop."""
+        ext = ChainFeatureExtractor()
+        features = ext.extract(_prog(_HOVER_BASELINE))
+        assert features["n_deep_retrieval"] == 1.0
+
+    def test_hotpotqa_no_deep_retrieval(self) -> None:
+        """HotpotQA baseline has no retrieve_deep."""
+        ext = ChainFeatureExtractor()
+        features = ext.extract(_prog(_HOTPOTQA_BASELINE))
+        assert features["n_deep_retrieval"] == 0.0
+
+    def test_hover_baseline_no_examples(self) -> None:
+        """HoVer baseline has no few-shot examples."""
+        ext = ChainFeatureExtractor()
+        features = ext.extract(_prog(_HOVER_BASELINE))
+        assert features["n_examples"] == 0.0
+
+    def test_evolved_program_has_more_string_content(self) -> None:
+        """An evolved program with long prompts should have higher string content."""
+        ext = ChainFeatureExtractor()
+        baseline_feat = ext.extract(_prog(_HOVER_BASELINE))
+
+        # Simulate evolved program: add verbose stage_action + examples
+        evolved = _HOVER_BASELINE.replace(
+            '"stage_action": (\n'
+            '                    "Read all retrieved passages and identify facts '
+            'that are relevant "\n'
+            '                    "to verifying the claim. Summarize the most '
+            'important evidence found."\n'
+            "                )",
+            '"stage_action": (\n'
+            '                    "Read all retrieved passages carefully. For each passage, '
+            "extract specific entities, dates, numerical values, and key relationships. "
+            "Cross-reference facts across passages. Identify contradictions. "
+            "Format as structured bullet points. Include passage numbers as citations. "
+            'Omit general background not relevant to the claim."\n'
+            "                )",
+        )
+        evolved_feat = ext.extract(_prog(evolved))
+
+        assert (
+            evolved_feat["total_string_content"] > baseline_feat["total_string_content"]
+        )
+
+    def test_evolved_with_system_prompt(self) -> None:
+        """Evolved program with non-empty system_prompt detected."""
+        ext = ChainFeatureExtractor()
+        evolved = _HOVER_BASELINE.replace(
+            '"system_prompt": ""',
+            '"system_prompt": "You are an evidence retrieval assistant."',
+        )
+        features = ext.extract(_prog(evolved))
+        assert features["has_system_prompt"] == 1.0
+
+    def test_evolved_with_examples(self) -> None:
+        """Evolved program with few-shot examples detected."""
+        ext = ChainFeatureExtractor()
+        evolved = _HOVER_BASELINE.replace(
+            '"example_reasoning": "<none>"',
+            '"example_reasoning": "Example 1:\\nClaim: ...\\nExample 2:\\nClaim: ..."',
+            1,  # replace only first occurrence
+        )
+        features = ext.extract(_prog(evolved))
+        assert features["n_examples"] == 2.0
+
+    def test_dependency_fan_in(self) -> None:
+        """Max dependency fan-in detected from dependencies lists."""
+        ext = ChainFeatureExtractor()
+        # HoVer step 5 depends on [2, 4] — fan-in of 2
+        features = ext.extract(_prog(_HOVER_BASELINE))
+        assert features["max_dependency_fan_in"] == 2.0
+
+    def test_hover_more_complex_than_hotpotqa(self) -> None:
+        """HoVer has more steps and deep retrieval => higher predicted complexity."""
+        ext = ChainFeatureExtractor()
+        hover = ext.extract(_prog(_HOVER_BASELINE))
+        hotpotqa = ext.extract(_prog(_HOTPOTQA_BASELINE))
+
+        assert hover["n_total_steps"] > hotpotqa["n_total_steps"]
+        assert hover["n_deep_retrieval"] > hotpotqa["n_deep_retrieval"]
+        assert hover["code_length"] > hotpotqa["code_length"]
+
+    def test_non_chain_code_graceful(self) -> None:
+        """ChainFeatureExtractor handles non-chain code without crashing."""
+        ext = ChainFeatureExtractor()
+        features = ext.extract(_prog("def solve(): return 42"))
+        assert features["n_total_steps"] == 0.0
+        assert features["n_examples"] == 0.0
+        assert features["has_system_prompt"] == 0.0
 
 
 # ---------------------------------------------------------------------------

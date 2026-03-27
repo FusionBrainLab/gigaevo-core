@@ -21,6 +21,7 @@ Quick start::
 """
 
 from gigaevo.evolution.scheduling.feature_extractor import (
+    ChainFeatureExtractor,
     CodeFeatureExtractor,
     CompositeFeatureExtractor,
     FeatureExtractor,
@@ -39,6 +40,7 @@ from gigaevo.evolution.scheduling.prioritizer import (
 )
 
 __all__ = [
+    "ChainFeatureExtractor",
     "CodeFeatureExtractor",
     "CompositeFeatureExtractor",
     "ConstantPredictor",
