@@ -37,9 +37,6 @@ from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 
-# Minimum interval between _sweep_discarded calls (seconds)
-_SWEEP_INTERVAL = 5.0
-
 
 class SteadyStateEvolutionEngine(EvolutionEngine):
     """Evolution engine with continuous mutation/evaluation interleaving.
@@ -81,9 +78,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # Cached elites (refreshed at epoch boundaries)
         self._cached_elites: list[Program] | None = None
         self._elite_cache_lock = asyncio.Lock()
-
-        # Sweep throttle
-        self._last_sweep_time = 0.0
 
         # Child tasks
         self._mutation_task: asyncio.Task | None = None
@@ -281,12 +275,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             while self._running:
                 ingested = await self._poll_and_ingest()
 
-                # Sweep for leaked slots — throttled to avoid excessive mget
-                now = time.monotonic()
-                if now - self._last_sweep_time >= _SWEEP_INTERVAL:
-                    await self._sweep_discarded()
-                    self._last_sweep_time = now
-
                 # Check epoch trigger
                 if self._should_trigger_epoch():
                     await self._epoch_refresh()
@@ -294,12 +282,14 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 if self._reached_generation_cap():
                     break
 
-                # Adaptive polling: sleep less when there's active work
-                interval = (
-                    self.config.loop_interval * 0.25
-                    if ingested
-                    else self.config.loop_interval
-                )
+                # Adaptive polling: tighter when pipeline is saturated
+                # (slot release is the critical path when all slots are full)
+                if len(self._in_flight) >= self._ss_config.max_in_flight:
+                    interval = self.config.loop_interval * 0.25
+                elif ingested:
+                    interval = self.config.loop_interval * 0.25
+                else:
+                    interval = self.config.loop_interval
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
             raise
@@ -307,37 +297,62 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             logger.info("[SteadyState] Ingestion loop stopped")
 
     async def _poll_and_ingest(self) -> int:
-        """Poll for completed in-flight programs and ingest them.
+        """Poll for completed in-flight programs, ingest them, and sweep leaks.
 
-        Returns the number of programs processed (ingested + rejected).
-        Only releases semaphore slots for programs that were confirmed DONE
-        by ``_ingest_batch`` (avoids over-release if a program's state changed
-        between ``get_ids_by_status`` and ``mget``).
+        Returns the number of programs processed (ingested + rejected + swept).
+        Combines ingestion and leak detection in a single pass: fetches DONE IDs,
+        then mgets ALL in-flight programs to find both completions and leaks.
+        This eliminates the separate ``_sweep_discarded`` call and its extra mget.
         """
-        done_ids = await self.storage.get_ids_by_status(ProgramState.DONE.value)
-        if not done_ids:
-            return 0
-
         async with self._in_flight_lock:
-            in_flight_snapshot = set(self._in_flight)
+            if not self._in_flight:
+                return 0
+            in_flight_snapshot = list(self._in_flight)
 
-        ingestable = [pid for pid in done_ids if pid in in_flight_snapshot]
-        if not ingestable:
-            return 0
+        # Single mget for ALL in-flight programs: detect DONE + leaked in one pass
+        programs = await self.storage.mget(
+            in_flight_snapshot, exclude=EXCLUDE_STAGE_RESULTS
+        )
+        found_ids = {p.id for p in programs if p is not None}
 
-        added, handled_ids = await self._ingest_batch(ingestable)
+        done_ids: list[str] = []
+        leaked_ids: list[str] = []
 
-        # Only release slots for programs that were actually processed
-        async with self._in_flight_lock:
-            for pid in handled_ids:
-                if pid in self._in_flight:
-                    self._in_flight.discard(pid)
-                    self._in_flight_sema.release()
+        for prog in programs:
+            if prog is None:
+                continue
+            if prog.state == ProgramState.DONE:
+                done_ids.append(prog.id)
+            elif prog.state == ProgramState.DISCARDED:
+                leaked_ids.append(prog.id)
+            # QUEUED/RUNNING → still active, skip
+
+        # Programs that vanished from Redis entirely
+        for pid in in_flight_snapshot:
+            if pid not in found_ids:
+                leaked_ids.append(pid)
+
+        # Ingest DONE programs
+        handled_ids: list[str] = []
+        if done_ids:
+            _, handled_ids = await self._ingest_batch(done_ids)
+
+        # Release slots for ingested + leaked programs
+        released = set(handled_ids) | set(leaked_ids)
+        if released:
+            if leaked_ids:
+                logger.warning(
+                    "[SteadyState] Sweeping {} leaked in-flight programs",
+                    len(leaked_ids),
+                )
+            async with self._in_flight_lock:
+                for pid in released:
+                    if pid in self._in_flight:
+                        self._in_flight.discard(pid)
+                        self._in_flight_sema.release()
 
         self._processed_since_epoch += len(handled_ids)
-        # Return count of handled programs (accepted + rejected), not just accepted.
-        # This ensures adaptive sleep triggers even when all programs were rejected.
-        return len(handled_ids)
+        return len(handled_ids) + len(leaked_ids)
 
     async def _ingest_batch(self, program_ids: list[str]) -> tuple[int, list[str]]:
         """Ingest specific completed programs.
@@ -417,50 +432,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
         handled = [p.id for p in completed]
         return added, handled
-
-    # ------------------------------------------------------------------
-    # Sweep for leaked semaphore slots
-    # ------------------------------------------------------------------
-
-    async def _sweep_discarded(self) -> None:
-        """Release slots for in-flight programs that DagRunner discarded.
-
-        Uses ``mget`` to fetch the actual program state atomically, avoiding
-        the TOCTOU race of checking multiple status sets sequentially.
-        """
-        async with self._in_flight_lock:
-            if not self._in_flight:
-                return
-            candidates = list(self._in_flight)
-
-        # Atomic check: fetch actual state of each candidate in one MGET
-        programs = await self.storage.mget(candidates, exclude=EXCLUDE_STAGE_RESULTS)
-        # Build a map of id -> state; programs that don't exist return None
-        state_by_id: dict[str, ProgramState | None] = {}
-        for prog in programs:
-            if prog is not None:
-                state_by_id[prog.id] = prog.state
-
-        # A program is leaked if it's DISCARDED or completely gone from Redis
-        leaked = [
-            pid
-            for pid in candidates
-            if pid not in state_by_id or state_by_id[pid] == ProgramState.DISCARDED
-        ]
-        if not leaked:
-            return
-
-        logger.warning(
-            "[SteadyState] Sweeping {} leaked in-flight programs (DISCARDED or vanished)",
-            len(leaked),
-        )
-        async with self._in_flight_lock:
-            for pid in leaked:
-                if pid in self._in_flight:
-                    self._in_flight.discard(pid)
-                    self._in_flight_sema.release()
-                    # Do NOT count ghosts in _processed_since_epoch — they were
-                    # never ingested, so shouldn't trigger premature epoch refresh
 
     # ------------------------------------------------------------------
     # Epoch refresh
@@ -555,7 +526,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             self._processed_since_epoch = 0
             self._epoch_mutants = 0
             self._epoch_eligible_since = None  # reset watermark timer
-            self._cached_elites = None
+            # Pre-warm elite cache so mutation tasks don't thundering-herd
+            # behind _elite_cache_lock when the gate opens.
+            self._cached_elites = await self._select_elites_for_mutation()
             self._mutation_gate.set()
 
             # 8. Wait for refresh DAGs + reindex (mutations continue)

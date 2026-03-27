@@ -172,17 +172,18 @@ class TestInFlightTracking:
 
 class TestSweepDiscarded:
     async def test_leaked_slot_recovered(self) -> None:
-        """Programs that vanish from all status sets get swept and slots freed."""
+        """Programs that vanish from Redis get swept and slots freed via _poll_and_ingest."""
         engine = _make_ss_engine(max_in_flight=4)
 
         # Simulate: program is in-flight but disappeared (DagRunner discarded it)
         engine._in_flight.add("ghost-id")
         await engine._in_flight_sema.acquire()
 
-        # Storage returns empty for mget → ghost not found in Redis
+        # mget returns empty → ghost not found in Redis (vanished)
         engine.storage.mget.return_value = []
 
-        await engine._sweep_discarded()
+        # _poll_and_ingest now handles sweep as part of the unified poll
+        await engine._poll_and_ingest()
 
         assert "ghost-id" not in engine._in_flight
         # Slot should be recovered
