@@ -1,4 +1,4 @@
-from gigaevo.llm.ideas_tracker.cli import main
+from gigaevo.memory.ideas_tracker.cli import main
 
 
 if __name__ == "__main__":

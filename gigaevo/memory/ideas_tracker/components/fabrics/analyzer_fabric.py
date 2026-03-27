@@ -1,5 +1,5 @@
-from gigaevo.llm.ideas_tracker.components.analyzer import IdeaAnalyzer
-from gigaevo.llm.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
+from gigaevo.memory.ideas_tracker.components.analyzer import IdeaAnalyzer
+from gigaevo.memory.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
 
 
 def create_analyzer(config: dict[str, str]) -> IdeaAnalyzer | IdeaAnalyzerFast:

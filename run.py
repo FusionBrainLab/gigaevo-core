@@ -488,7 +488,7 @@ def run_ideas_tracker(cfg: DictConfig, output_dir: Path, runtime_cwd: Path) -> N
         )
 
     try:
-        from gigaevo.llm.ideas_tracker.ideas_tracker import IdeaTracker
+        from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
         tracker = IdeaTracker(config_path=runtime_memory_config_path)
         tracker.run()

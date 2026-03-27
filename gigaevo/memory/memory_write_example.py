@@ -46,7 +46,7 @@ SETTINGS = load_settings(SETTINGS_PATH)
 _BANKS_DIR = resolve_local_path(
     THIS_DIR,
     deep_get(SETTINGS, "paths.banks_dir"),
-    default_relative="../gigaevo/llm/ideas_tracker/logs/2026-02-19_19-51-02",
+    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02",
 )
 
 MEMORY_DIR = resolve_local_path(
@@ -61,7 +61,7 @@ BANKS_PATH = resolve_local_path(
         or deep_get(SETTINGS, "paths.banks_path")
         or str(_BANKS_DIR / "banks.json")
     ),
-    default_relative="../gigaevo/llm/ideas_tracker/logs/2026-02-19_19-51-02/banks.json",
+    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/banks.json",
 )
 BEST_IDEAS_PATH = resolve_local_path(
     THIS_DIR,
@@ -70,7 +70,7 @@ BEST_IDEAS_PATH = resolve_local_path(
         or deep_get(SETTINGS, "paths.best_ideas_path")
         or str(_BANKS_DIR / "best_ideas.json")
     ),
-    default_relative="../gigaevo/llm/ideas_tracker/logs/2026-02-19_19-51-02/best_ideas.json",
+    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/best_ideas.json",
 )
 PROGRAMS_PATH = resolve_local_path(
     THIS_DIR,
@@ -79,7 +79,7 @@ PROGRAMS_PATH = resolve_local_path(
         or deep_get(SETTINGS, "paths.programs_path")
         or str(BANKS_PATH.parent / "programs.json")
     ),
-    default_relative="../gigaevo/llm/ideas_tracker/logs/2026-02-19_19-51-02/programs.json",
+    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/programs.json",
 )
 ENABLE_USAGE_TRACKING = to_bool(
     deep_get(SETTINGS, "ideas_tracker.usage_tracking.enabled"),
@@ -97,7 +97,7 @@ USAGE_UPDATES_PATH = (
     resolve_local_path(
         THIS_DIR,
         _USAGE_UPDATES_RAW_PATH,
-        default_relative="../gigaevo/llm/ideas_tracker/logs/2026-02-19_19-51-02/memory_usage_updates.json",
+        default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/memory_usage_updates.json",
     )
     if _USAGE_UPDATES_RAW_PATH
     else None

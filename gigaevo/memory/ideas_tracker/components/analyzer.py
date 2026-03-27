@@ -6,9 +6,9 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from gigaevo.llm.ideas_tracker.components.data_components import IncomingIdeas
-from gigaevo.llm.ideas_tracker.components.prompt_manager import PromptManager
-from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
+from gigaevo.memory.ideas_tracker.components.data_components import IncomingIdeas
+from gigaevo.memory.ideas_tracker.components.prompt_manager import PromptManager
+from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 
 load_dotenv()
 

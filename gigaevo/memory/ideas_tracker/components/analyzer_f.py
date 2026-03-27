@@ -1,6 +1,6 @@
 """
 Fast idea clustering: sentence embeddings, DBSCAN (or single-cluster fallback),
-and async LLM refinement into :class:`~gigaevo.llm.ideas_tracker.components.data_components.RecordCardExtended` records.
+and async LLM refinement into :class:`~gigaevo.memory.ideas_tracker.components.data_components.RecordCardExtended` records.
 """
 
 from __future__ import annotations
@@ -19,15 +19,15 @@ from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
 from tqdm import tqdm
 
-from gigaevo.llm.ideas_tracker.components.data_components import (
+from gigaevo.memory.ideas_tracker.components.data_components import (
     ClusterCard,
     ProgramRecord,
     RecordCardEmbedding,
     RecordCardExtended,
     RefinementRoundResult,
 )
-from gigaevo.llm.ideas_tracker.components.prompt_manager import PromptManager
-from gigaevo.llm.ideas_tracker.utils.it_logger import IdeasTrackerLogger
+from gigaevo.memory.ideas_tracker.components.prompt_manager import PromptManager
+from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 
 load_dotenv()
 
@@ -70,7 +70,7 @@ class IdeaAnalyzerFast:
 
     Expands each program's improvements into embedding cards, clusters them, splits
     mixed clusters via the refine prompt (optionally in fixed-size index subgroups),
-    then builds one :class:`~gigaevo.llm.ideas_tracker.components.data_components.RecordCardExtended`
+    then builds one :class:`~gigaevo.memory.ideas_tracker.components.data_components.RecordCardExtended`
     per surviving cluster (representative description, other members in ``aliases``).
     """
 
@@ -164,7 +164,7 @@ class IdeaAnalyzerFast:
         """
         Synchronous chat completion for code paths that use the sync API (e.g. enrichment).
 
-        :class:`~gigaevo.llm.ideas_tracker.components.analyzer.IdeaAnalyzer` exposes the same
+        :class:`~gigaevo.memory.ideas_tracker.components.analyzer.IdeaAnalyzer` exposes the same
         method; without it, :meth:`IdeaTracker.enrich_ideas` fails silently and leaves
         keywords/summaries empty.
         """
@@ -371,7 +371,7 @@ class IdeaAnalyzerFast:
         """
         Return a 1-based ``representative_index`` for the cluster, or ``None`` if parsing fails.
 
-        Uses the full :meth:`~gigaevo.llm.ideas_tracker.components.data_components.ClusterCard.numbered_ideas_text`.
+        Uses the full :meth:`~gigaevo.memory.ideas_tracker.components.data_components.ClusterCard.numbered_ideas_text`.
         """
         text = cluster.numbered_ideas_text()
         n = cluster.size
@@ -492,7 +492,7 @@ class IdeaAnalyzerFast:
         self, cluster: ClusterCard, program_by_id: dict[str, ProgramRecord]
     ) -> RecordCardExtended:
         """
-        Build a :class:`~gigaevo.llm.ideas_tracker.components.data_components.RecordCardExtended` for one cluster.
+        Build a :class:`~gigaevo.memory.ideas_tracker.components.data_components.RecordCardExtended` for one cluster.
 
         Chooses a representative idea (LLM for multi-member clusters), sets metadata from its program,
         unions program ids, aggregates explanations, and stores non-representative descriptions under ``aliases``.
@@ -570,7 +570,7 @@ class IdeaAnalyzerFast:
         End-to-end pipeline: ingest → embed → cluster → refine → one extended record per cluster.
 
         Returns:
-            One :class:`~gigaevo.llm.ideas_tracker.components.data_components.RecordCardExtended` per non-empty cluster.
+            One :class:`~gigaevo.memory.ideas_tracker.components.data_components.RecordCardExtended` per non-empty cluster.
         """
         cards = self.ingest_programs(programs)
         if not cards:

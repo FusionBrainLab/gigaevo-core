@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from gigaevo.llm.ideas_tracker.components.data_components import (
+    from gigaevo.memory.ideas_tracker.components.data_components import (
         RecordCard,
         RecordCardExtended,
     )
-    from gigaevo.llm.ideas_tracker.components.records_manager import RecordManager
+    from gigaevo.memory.ideas_tracker.components.records_manager import RecordManager
 
 
 class IdeasTrackerLogger:

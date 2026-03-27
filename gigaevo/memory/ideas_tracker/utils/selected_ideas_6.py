@@ -1156,8 +1156,8 @@ def compute_origin_analysis(
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ideas", default="gigaevo/llm/ideas_tracker/logs/2026-02-17_13-46-22/banks.json")
-    ap.add_argument("--programs", default="gigaevo/llm/ideas_tracker/logs/2026-02-17_13-46-22/programs.json")
+    ap.add_argument("--ideas", default="gigaevo/memory/ideas_tracker/logs/2026-02-17_13-46-22/banks.json")
+    ap.add_argument("--programs", default="gigaevo/memory/ideas_tracker/logs/2026-02-17_13-46-22/programs.json")
     ap.add_argument("--output_dir", default="selected_ideas/idea_origin_analysis_out")
     ap.add_argument("--output_name", default="idea_origin_quartile_summary6.csv")
 
