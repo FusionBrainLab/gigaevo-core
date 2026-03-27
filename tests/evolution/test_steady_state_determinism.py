@@ -400,6 +400,150 @@ class TestDeterministicEvolution:
             )
 
 
+class TestNoProgramLoss:
+    """Verify that slow DAG evaluations are never silently dropped."""
+
+    async def test_slow_eval_not_dropped_by_drain(self) -> None:
+        """Programs with long eval times must be waited for, not force-released.
+
+        This test catches the class of bug where a drain timeout is shorter
+        than the DAG eval duration, causing programs to be silently dropped.
+        """
+        de = DeterministicEngine(
+            max_in_flight=3,
+            epoch_size=3,
+            max_generations=1,
+            mutation_delay=0.005,
+            eval_delay=0.2,  # "slow" eval — longer than typical test sleeps
+        )
+        trace = await de.run(timeout=15.0)
+
+        mutated = set(trace.mutation_order)
+        ingested_pids = set(e.split(":")[0] for e in trace.ingest_order)
+
+        # CRITICAL: every mutated program that completed eval must be ingested.
+        # If drain force-released a slot, the program vanishes from _in_flight
+        # but was never ingested — a silent loss of compute work.
+        eval_done = {pid for ev, pid in trace.events if ev == "EVAL_DONE"}
+        lost = eval_done - ingested_pids
+        assert not lost, (
+            f"Programs completed eval but were NEVER ingested (dropped by drain?): {lost}\n"
+            f"  mutated: {sorted(mutated)}\n"
+            f"  eval_done: {sorted(eval_done)}\n"
+            f"  ingested: {sorted(ingested_pids)}"
+        )
+
+    async def test_all_completed_programs_ingested_across_epochs(self) -> None:
+        """Over multiple epochs, every program that finishes eval is ingested."""
+        de = DeterministicEngine(
+            max_in_flight=4,
+            epoch_size=3,
+            max_generations=3,
+            mutation_delay=0.005,
+            eval_delay=0.08,
+        )
+        trace = await de.run(timeout=15.0)
+
+        eval_done = {pid for ev, pid in trace.events if ev == "EVAL_DONE"}
+        ingested_pids = set(e.split(":")[0] for e in trace.ingest_order)
+
+        lost = eval_done - ingested_pids
+        assert not lost, (
+            f"{len(lost)} programs completed eval but were never ingested: {sorted(lost)}"
+        )
+
+    async def test_program_success_rate(self) -> None:
+        """Track the ratio of ingested/mutated as a health metric.
+
+        In a healthy engine, the ingestion rate should approach the mutation
+        rate over time (all mutated programs eventually get ingested).
+        Programs still in-flight at shutdown are acceptable losses.
+        """
+        de = DeterministicEngine(
+            max_in_flight=3,
+            epoch_size=4,
+            max_generations=2,
+            mutation_delay=0.005,
+            eval_delay=0.05,
+        )
+        trace = await de.run(timeout=10.0)
+
+        n_mutated = len(trace.mutation_order)
+        n_ingested = len(trace.ingest_order)
+        n_eval_done = sum(1 for ev, _ in trace.events if ev == "EVAL_DONE")
+
+        # Every completed eval must be ingested (0% drop rate)
+        assert n_ingested >= n_eval_done, (
+            f"Ingested ({n_ingested}) < eval_done ({n_eval_done}): "
+            f"programs are being dropped!"
+        )
+
+        # Ingestion rate should be reasonable (at least 50% of mutations)
+        # The gap is programs still in eval at shutdown — not dropped.
+        assert n_ingested >= n_mutated * 0.5, (
+            f"Ingestion rate too low: {n_ingested}/{n_mutated} = "
+            f"{n_ingested / n_mutated:.0%}. Possible systematic loss."
+        )
+
+
+class TestProgramLossGrid:
+    """Grid test: verify no program loss across all combinations of
+    fast/slow mutation and fast/slow DAG evaluation."""
+
+    @pytest.mark.parametrize(
+        "mutation_delay,eval_delay,mif,epoch_size",
+        [
+            # Fast mutation, fast eval
+            (0.002, 0.02, 3, 3),
+            (0.002, 0.02, 5, 4),
+            # Fast mutation, slow eval (pipeline fills up, backpressure)
+            (0.002, 0.15, 3, 3),
+            (0.002, 0.15, 5, 4),
+            # Slow mutation, fast eval (pipeline drains quickly)
+            (0.05, 0.02, 3, 3),
+            (0.05, 0.02, 5, 4),
+            # Slow mutation, slow eval (realistic production-like)
+            (0.05, 0.15, 3, 3),
+            (0.05, 0.15, 5, 4),
+            # Extreme: very slow eval with small pipeline
+            (0.005, 0.3, 2, 2),
+            # Extreme: very fast everything with large pipeline
+            (0.001, 0.01, 8, 6),
+        ],
+    )
+    async def test_no_loss_grid(
+        self,
+        mutation_delay: float,
+        eval_delay: float,
+        mif: int,
+        epoch_size: int,
+    ) -> None:
+        """Every program that completes eval is ingested. No silent drops."""
+        de = DeterministicEngine(
+            max_in_flight=mif,
+            epoch_size=epoch_size,
+            max_generations=2,
+            mutation_delay=mutation_delay,
+            eval_delay=eval_delay,
+        )
+        trace = await de.run(timeout=15.0)
+
+        eval_done = {pid for ev, pid in trace.events if ev == "EVAL_DONE"}
+        ingested_pids = set(e.split(":")[0] for e in trace.ingest_order)
+
+        lost = eval_done - ingested_pids
+        assert not lost, (
+            f"[mut={mutation_delay}s eval={eval_delay}s mif={mif} epoch={epoch_size}] "
+            f"{len(lost)} programs dropped: {sorted(lost)}"
+        )
+
+        # No duplicates
+        ingest_list = [e.split(":")[0] for e in trace.ingest_order]
+        assert len(ingest_list) == len(set(ingest_list)), (
+            "Duplicate ingestions detected"
+        )
+
+
 class TestScopedDrainInvariants:
     """Test invariants specific to the scoped drain optimization."""
 
