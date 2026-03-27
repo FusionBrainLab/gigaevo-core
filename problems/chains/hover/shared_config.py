@@ -56,7 +56,9 @@ DATASET_CONFIG = {
 
 # --- Corpus Configuration ---
 
-CORPUS_PATH = str(_BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.passages.pkl")
+_CORPUS_PKL = _BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.passages.pkl"
+_CORPUS_GZ = _BASE_DIR / "dataset" / "wiki17_abstracts.jsonl.gz"
+CORPUS_PATH = str(_CORPUS_PKL if _CORPUS_PKL.exists() else _CORPUS_GZ)
 BM25S_INDEX_DIR = str(_BASE_DIR / "dataset" / "bm25s_index")
 
 
