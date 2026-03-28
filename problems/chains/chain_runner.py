@@ -214,13 +214,29 @@ async def _run_chain_on_dataset_async(
     Returns:
         Ordered list of ChainResult (one per sample)
     """
+    import sys as _sys
+    import time as _time
+
+    def _log(msg: str) -> None:
+        _sys.__stderr__.write(f"[chain] {msg}\n")
+        _sys.__stderr__.flush()
+
     n = len(dataset)
+    total_steps = len(chain.steps)
     outer_contexts = [outer_context_builder(s) for s in dataset]
     all_step_outputs: list[list[str]] = [[] for _ in range(n)]
     all_histories: list[list[str]] = [[] for _ in range(n)]
     semaphore = asyncio.Semaphore(max_concurrent)
+    chain_t0 = _time.time()
 
-    for step in chain.steps:
+    for step_idx, step in enumerate(chain.steps):
+        step_t0 = _time.time()
+        step_type = "tool" if isinstance(step, ToolStep) else "llm"
+        _log(
+            f"step {step_idx + 1}/{total_steps} "
+            f"({step_type}) '{step.title}' — {n} samples"
+        )
+
         if isinstance(step, ToolStep):
             if tool_registry is None:
                 raise ValueError(
@@ -247,6 +263,15 @@ async def _run_chain_on_dataset_async(
             )
         else:
             raise ValueError(f"Unknown step type: {type(step).__name__}")
+
+        elapsed = _time.time() - step_t0
+        total_elapsed = _time.time() - chain_t0
+        remaining_steps = total_steps - step_idx - 1
+        eta = (total_elapsed / (step_idx + 1)) * remaining_steps
+        _log(
+            f"step {step_idx + 1}/{total_steps} done in {elapsed:.1f}s "
+            f"(total {total_elapsed:.1f}s, ETA ~{eta:.0f}s)"
+        )
 
         for i in range(n):
             all_step_outputs[i].append(results[i])
