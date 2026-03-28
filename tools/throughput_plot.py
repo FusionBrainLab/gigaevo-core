@@ -71,24 +71,34 @@ def main():
         "treatment": {"V3": "#d62728", "V4": "#ff9896"},
     }
 
-    # Plot 1: Cumulative programs evaluated over wall time
+    # Downsample: keep 1 point per minute to avoid huge arrays
+    def downsample(series, interval=60):
+        if not series:
+            return series
+        result = [series[0]]
+        for t, v in series[1:]:
+            if t - result[-1][0] >= interval:
+                result.append((t, v))
+        if series[-1] != result[-1]:
+            result.append(series[-1])
+        return result
+
+    # Plot 1: Programs processed + mutations created over wall time
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
     ax = axes[0]
     for label, data in sorted(run_data.items()):
         cond = data["condition"]
         c = colors.get(cond, {}).get(label, "gray")
-        times = [t / 3600 for t, _ in data["completed"]]
-        cumulative = []
-        total = 0
-        for _, v in data["completed"]:
-            total += (v if v else 0)
-            cumulative.append(total)
-        if times:
-            ax.plot(times, cumulative, label=f"{label} ({cond})", color=c, linewidth=2)
+        # mutations_created is a running total (not incremental)
+        pts = downsample(data["mutations"])
+        if pts:
+            times = [t / 3600 for t, _ in pts]
+            values = [v for _, v in pts]
+            ax.plot(times, values, label=f"{label} ({cond})", color=c, linewidth=2)
     ax.set_xlabel("Wall time (hours)")
-    ax.set_ylabel("Cumulative programs evaluated")
-    ax.set_title("Throughput: Programs evaluated over time")
+    ax.set_ylabel("Mutations created (total)")
+    ax.set_title("Mutation rate: Steady-state vs Generational")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
@@ -109,7 +119,7 @@ def main():
             ax.plot(times, running_max, label=f"{label} ({cond})", color=c, linewidth=2)
     ax.set_xlabel("Wall time (hours)")
     ax.set_ylabel("Best fitness (%)")
-    ax.set_title("Fitness over wall time (LOCF)")
+    ax.set_title("Best fitness over wall time")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
@@ -119,26 +129,24 @@ def main():
     print(f"Saved: {path}")
     plt.close()
 
-    # Plot 3: Mutations created over time
+    # Plot 3: Programs processed over time
     fig, ax = plt.subplots(figsize=(10, 6))
     for label, data in sorted(run_data.items()):
         cond = data["condition"]
         c = colors.get(cond, {}).get(label, "gray")
-        if data["mutations"]:
-            times = [t / 3600 for t, _ in data["mutations"]]
-            cumulative = []
-            total = 0
-            for _, v in data["mutations"]:
-                total += (v if v else 0)
-                cumulative.append(total)
-            ax.plot(times, cumulative, label=f"{label} ({cond})", color=c, linewidth=2)
+        # programs_processed is also a running total
+        pts = downsample(data["completed"])
+        if pts:
+            times = [t / 3600 for t, _ in pts]
+            values = [v for _, v in pts]
+            ax.plot(times, values, label=f"{label} ({cond})", color=c, linewidth=2)
     ax.set_xlabel("Wall time (hours)")
-    ax.set_ylabel("Cumulative mutations created")
-    ax.set_title("Mutation rate: Steady-state vs Generational")
+    ax.set_ylabel("Programs evaluated (total)")
+    ax.set_title("Throughput: Programs evaluated over time")
     ax.legend()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    path = out_dir / "mutation_rate.png"
+    path = out_dir / "mutation_rate.png"  # keep same filename for watchdog
     plt.savefig(path, dpi=150)
     print(f"Saved: {path}")
     plt.close()
