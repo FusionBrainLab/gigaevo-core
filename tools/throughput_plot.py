@@ -128,20 +128,28 @@ def main():
         total_count = get_time_series(r, run.prefix, "program_metrics:programs_total_count")
         valid_count = get_time_series(r, run.prefix, "program_metrics:programs_valid_count")
         if completed or frontier:
-            # Each metric uses its own first timestamp as t0
-            def _self_rel(series):
+            # Shared t0 from first frontier entry (earliest data point)
+            all_ts = [s[0][0] for s in [frontier, completed, mutations, per_program, total_count, valid_count] if s]
+            t0 = min(all_ts) if all_ts else 0
+
+            def _rel(series):
+                return [(t - t0, v) for t, v in series]
+
+            # For cumulative counters, subtract initial value to start at 0
+            def _rel_zeroed(series):
                 if not series:
                     return []
-                t0 = series[0][0]
-                return [(t - t0, v) for t, v in series]
+                v0 = series[0][1]
+                return [(t - t0, v - v0) for t, v in series]
+
             run_data[run.label] = {
                 "condition": run.condition,
-                "completed": _self_rel(completed),
-                "mutations": _self_rel(mutations),
-                "frontier": _self_rel(frontier),
-                "per_program": _self_rel(per_program),
-                "total_count": _self_rel(total_count),
-                "valid_count": _self_rel(valid_count),
+                "completed": _rel_zeroed(completed),
+                "mutations": _rel_zeroed(mutations),
+                "frontier": _rel(frontier),
+                "per_program": _rel(per_program),
+                "total_count": _rel(total_count),
+                "valid_count": _rel(valid_count),
             }
 
     if not run_data:
