@@ -203,43 +203,26 @@ def main():
     ax.grid(True, alpha=0.3)
 
     # ── Panel (0,2): Best Fitness (Frontier) vs Wall Time ──
+    # valid_frontier_fitness is already the running best — just plot it directly
     ax = axes[0, 2]
     all_frontier_vals = []
-    endpoint_annotations = []  # (x, y, label, color) for end-of-line labels
     for label, data in sorted(run_data.items()):
-        if data["frontier"]:
-            ft = [t / 3600 for t, _ in data["frontier"]]
-            ff = [v * 100 for _, v in data["frontier"]]
-            # Compute running best
-            best = []
-            b = 0
-            for f in ff:
-                b = max(b, f)
-                best.append(b)
-            all_frontier_vals.extend(best)
-            ax.step(ft, best, where="post",
+        pts = data["frontier"]
+        if pts:
+            times = [t / 3600 for t, _ in pts]
+            vals = [v * 100 for _, v in pts]
+            all_frontier_vals.extend(vals)
+            ax.step(times, vals, where="post",
                     color=_color(label), linestyle=_ls(label), linewidth=2.5)
-            # Record endpoint for annotation
-            endpoint_annotations.append((ft[-1], best[-1], label, _color(label)))
-    # Annotate final frontier value for each run (right side of line)
-    used_y = []
-    for x, y, label, color in sorted(endpoint_annotations, key=lambda a: -a[1]):
-        # Stagger if too close to previous annotation
-        y_offset = 0
-        for prev_y in used_y:
-            if abs(y + y_offset - prev_y) < 0.8:
-                y_offset -= 1.2
-        used_y.append(y + y_offset)
-        ax.annotate(
-            f"{label}: {y:.1f}%", xy=(x, y),
-            xytext=(6, y_offset * 5), textcoords="offset points",
-            fontsize=8, fontweight="bold", color=color, va="center",
-        )
-    # Baseline reference line
+            # Annotate endpoint with current best
+            ax.annotate(
+                f"{label}: {vals[-1]:.1f}%", xy=(times[-1], vals[-1]),
+                xytext=(6, 0), textcoords="offset points",
+                fontsize=8, fontweight="bold", color=_color(label), va="center",
+            )
     if baseline:
         ax.axhline(y=baseline, color="#555555", linestyle=":", linewidth=1.5, alpha=0.7,
                     label=f"baseline ({baseline:.1f}%)")
-    # Zoomed y-axis (NOT starting at 0)
     if all_frontier_vals:
         y_min = min(all_frontier_vals)
         y_max = max(all_frontier_vals)
@@ -331,13 +314,8 @@ def main():
             fr_times = np.array([t for t, _ in frontier_pts])
             fr_fits = np.array([v * 100 for _, v in frontier_pts])
             fr_evals = np.interp(fr_times, comp_times, comp_vals)
-            # Running best from frontier
-            best = []
-            b = 0
-            for f in fr_fits:
-                b = max(b, f)
-                best.append(b)
-            ax.step(fr_evals, best, where="post",
+            # Frontier is already running best — plot directly
+            ax.step(fr_evals, fr_fits, where="post",
                     color=_color(label), linestyle=_ls(label),
                     linewidth=2, alpha=0.9)
     if baseline:
