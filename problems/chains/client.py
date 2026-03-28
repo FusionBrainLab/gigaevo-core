@@ -30,7 +30,7 @@ def get_async_client(
         base_url=base_url,
         http_client=httpx.AsyncClient(
             limits=httpx.Limits(
-                max_connections=150,
+                max_connections=32,
                 max_keepalive_connections=0,
             ),
             timeout=httpx.Timeout(timeout=120.0, connect=10.0),

@@ -191,7 +191,7 @@ async def _run_chain_on_dataset_async(
     dataset: list[dict],
     outer_context_builder: Callable[[dict], str],
     tool_registry: dict[str, Callable] | None = None,
-    max_concurrent: int = 150,
+    max_concurrent: int = 32,
 ) -> list[ChainResult]:
     """Step-batched execution: all samples process each step together.
 
@@ -274,7 +274,7 @@ def run_chain_on_dataset(
     dataset: list[dict],
     outer_context_builder: Callable[[dict], str],
     tool_registry: dict[str, Callable] | None = None,
-    max_concurrent: int = 150,
+    max_concurrent: int = 32,
 ) -> list[ChainResult]:
     """Run chain on dataset using step-batched execution (sync wrapper).
 
@@ -315,7 +315,7 @@ async def _run_chain_on_dataset_stepwise(
     tool_registry: dict[str, Callable] | None = None,
     batch_tool_registry: dict[str, Callable] | None = None,
     step_max_tokens: dict[int, int] | None = None,
-    max_concurrent: int = 150,
+    max_concurrent: int = 32,
 ) -> list[ChainResult]:
     """Step-batched execution: all samples process each step together.
 
@@ -451,7 +451,7 @@ def run_chain_on_dataset_stepwise(
     tool_registry: dict[str, Callable] | None = None,
     batch_tool_registry: dict[str, Callable] | None = None,
     step_max_tokens: dict[int, int] | None = None,
-    max_concurrent: int = 150,
+    max_concurrent: int = 32,
 ) -> list[ChainResult]:
     """Run chain on dataset using step-batched execution (sync wrapper).
 
