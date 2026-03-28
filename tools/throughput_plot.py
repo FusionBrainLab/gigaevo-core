@@ -127,19 +127,21 @@ def main():
         per_program = get_time_series(r, run.prefix, "program_metrics:valid_iter_fitness_mean")
         total_count = get_time_series(r, run.prefix, "program_metrics:programs_total_count")
         valid_count = get_time_series(r, run.prefix, "program_metrics:programs_valid_count")
-        if completed:
-            t0 = completed[0][0]
-            # Drop events before t0 (they predate the run start)
-            def _rel(series):
-                return [(t - t0, v) for t, v in series if t >= t0]
+        if completed or frontier:
+            # Each metric uses its own first timestamp as t0
+            def _self_rel(series):
+                if not series:
+                    return []
+                t0 = series[0][0]
+                return [(t - t0, v) for t, v in series]
             run_data[run.label] = {
                 "condition": run.condition,
-                "completed": _rel(completed),
-                "mutations": _rel(mutations),
-                "frontier": _rel(frontier),
-                "per_program": _rel(per_program),
-                "total_count": _rel(total_count),
-                "valid_count": _rel(valid_count),
+                "completed": _self_rel(completed),
+                "mutations": _self_rel(mutations),
+                "frontier": _self_rel(frontier),
+                "per_program": _self_rel(per_program),
+                "total_count": _self_rel(total_count),
+                "valid_count": _self_rel(valid_count),
             }
 
     if not run_data:
