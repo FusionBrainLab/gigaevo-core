@@ -99,18 +99,16 @@ def main():
         "treatment": {"V3": "#d62728", "V4": "#fc9272"},
     }
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(2, 3, figsize=(24, 12))
 
     # ── Plot 1: Mutations created over wall time ──
-    ax = axes[0][0]
+    ax = axes[0, 0]
     for label, data in sorted(run_data.items()):
-        cond = data["condition"]
-        c = colors.get(cond, {}).get(label, "gray")
+        c = colors.get(data["condition"], {}).get(label, "gray")
         pts = downsample(data["mutations"])
         if pts:
-            times = [t / 3600 for t, _ in pts]
-            values = [v for _, v in pts]
-            ax.plot(times, values, label=f"{label} ({cond})", color=c, linewidth=2)
+            ax.plot([t / 3600 for t, _ in pts], [v for _, v in pts],
+                    label=f"{label} ({data['condition']})", color=c, linewidth=2)
     ax.set_xlabel("Wall time (hours)")
     ax.set_ylabel("Total mutations created")
     ax.set_title("Mutation rate")
@@ -118,63 +116,128 @@ def main():
     ax.grid(True, alpha=0.3)
 
     # ── Plot 2: Programs evaluated over wall time ──
-    ax = axes[0][1]
+    ax = axes[0, 1]
     for label, data in sorted(run_data.items()):
-        cond = data["condition"]
-        c = colors.get(cond, {}).get(label, "gray")
+        c = colors.get(data["condition"], {}).get(label, "gray")
         pts = downsample(data["completed"])
         if pts:
-            times = [t / 3600 for t, _ in pts]
-            values = [v for _, v in pts]
-            ax.plot(times, values, label=f"{label} ({cond})", color=c, linewidth=2)
+            ax.plot([t / 3600 for t, _ in pts], [v for _, v in pts],
+                    label=f"{label} ({data['condition']})", color=c, linewidth=2)
     ax.set_xlabel("Wall time (hours)")
     ax.set_ylabel("Total programs evaluated")
     ax.set_title("Evaluation throughput")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # ── Plot 3: Fitness frontier over wall time ──
-    ax = axes[1][0]
+    # ── Plot 3: Fitness distribution (violin) by condition ──
+    ax = axes[0, 2]
+    ctrl_fits, treat_fits = [], []
+    for label, data in run_data.items():
+        fits = [v * 100 for _, v in data["per_program"] if v > 0]
+        if data["condition"] == "control":
+            ctrl_fits.extend(fits)
+        else:
+            treat_fits.extend(fits)
+    violin_data = []
+    violin_labels = []
+    if ctrl_fits:
+        violin_data.append(ctrl_fits)
+        violin_labels.append(f"Control\n(n={len(ctrl_fits)})")
+    if treat_fits:
+        violin_data.append(treat_fits)
+        violin_labels.append(f"Treatment\n(n={len(treat_fits)})")
+    if violin_data:
+        parts = ax.violinplot(violin_data, showmeans=True, showmedians=True)
+        for i, pc in enumerate(parts.get("bodies", [])):
+            pc.set_facecolor(["#1f77b4", "#d62728"][i])
+            pc.set_alpha(0.4)
+        ax.set_xticks(range(1, len(violin_labels) + 1))
+        ax.set_xticklabels(violin_labels)
+        # Add individual run box plots overlaid
+        for i, (label, data) in enumerate(sorted(run_data.items())):
+            fits = [v * 100 for _, v in data["per_program"] if v > 0]
+            if not fits:
+                continue
+            cond_idx = 1 if data["condition"] == "control" else 2
+            c = colors.get(data["condition"], {}).get(label, "gray")
+            offset = -0.15 if label in ("V1", "V3") else 0.15
+            bp = ax.boxplot(
+                [fits], positions=[cond_idx + offset], widths=0.12,
+                patch_artist=True, showfliers=False,
+            )
+            bp["boxes"][0].set_facecolor(c)
+            bp["boxes"][0].set_alpha(0.6)
+            bp["medians"][0].set_color("black")
+    ax.set_ylabel("Fitness (%)")
+    ax.set_title("Fitness distribution by condition")
+    ax.grid(True, alpha=0.3, axis="y")
+
+    # ── Plot 4: Fitness scatter + frontier over wall time ──
+    ax = axes[1, 0]
     for label, data in sorted(run_data.items()):
-        cond = data["condition"]
-        c = colors.get(cond, {}).get(label, "gray")
+        c = colors.get(data["condition"], {}).get(label, "gray")
+        pts = data["per_program"]
+        if pts:
+            ax.scatter([t / 3600 for t, _ in pts], [v * 100 for _, v in pts],
+                       color=c, alpha=0.15, s=10, edgecolors="none")
         if data["frontier"]:
-            times = [t / 3600 for t, _ in data["frontier"]]
-            fits = [v * 100 for _, v in data["frontier"]]
-            best_so_far = []
+            ft = [t / 3600 for t, _ in data["frontier"]]
+            ff = [v * 100 for _, v in data["frontier"]]
+            best = []
             b = 0
-            for f in fits:
+            for f in ff:
                 b = max(b, f)
-                best_so_far.append(b)
-            ax.plot(times, best_so_far, label=f"{label} ({cond})", color=c, linewidth=2.5)
+                best.append(b)
+            ax.plot(ft, best, color=c, linewidth=2.5, label=f"{label} ({data['condition']})")
     ax.set_xlabel("Wall time (hours)")
-    ax.set_ylabel("Best fitness (%)")
-    ax.set_title("Fitness frontier over wall time")
+    ax.set_ylabel("Fitness (%)")
+    ax.set_title("Fitness: all programs (scatter) + frontier")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # ── Plot 4: Per-program fitness scatter + rolling mean ──
-    ax = axes[1][1]
+    # ── Plot 5: Fitness frontier vs generation/epoch ──
+    ax = axes[1, 1]
     for label, data in sorted(run_data.items()):
-        cond = data["condition"]
-        c = colors.get(cond, {}).get(label, "gray")
-        pts = data["per_program"]
-        if len(pts) > 2:
-            times = np.array([t / 3600 for t, _ in pts])
-            fits = np.array([v * 100 for _, v in pts])
-            # Scatter (small, transparent)
-            ax.scatter(times, fits, color=c, alpha=0.15, s=8, edgecolors="none")
-            # Rolling mean (window = 10% of points, min 3)
-            window = max(3, len(fits) // 10)
-            if len(fits) >= window:
-                rolling_mean = np.convolve(fits, np.ones(window) / window, mode="valid")
-                rolling_t = times[window - 1:]
-                ax.plot(rolling_t, rolling_mean, color=c, linewidth=2,
-                        label=f"{label} ({cond})")
-    ax.set_xlabel("Wall time (hours)")
-    ax.set_ylabel("Per-program fitness (%)")
-    ax.set_title("Per-program fitness (scatter + rolling mean)")
+        c = colors.get(data["condition"], {}).get(label, "gray")
+        if data["frontier"]:
+            gens = list(range(len(data["frontier"])))
+            ff = [v * 100 for _, v in data["frontier"]]
+            best = []
+            b = 0
+            for f in ff:
+                b = max(b, f)
+                best.append(b)
+            ax.plot(gens, best, color=c, linewidth=2.5, marker="o", markersize=5,
+                    label=f"{label} ({data['condition']})")
+    ax.set_xlabel("Generation / Epoch")
+    ax.set_ylabel("Best fitness (%)")
+    ax.set_title("Fitness frontier vs generation")
     ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # ── Plot 6: Eval duration over time ──
+    ax = axes[1, 2]
+    for label, data in sorted(run_data.items()):
+        c = colors.get(data["condition"], {}).get(label, "gray")
+        # Use per_program timestamps to compute inter-eval intervals
+        pts = data["per_program"]
+        if len(pts) > 1:
+            times = [t / 3600 for t, _ in pts]
+            fits = [v * 100 for _, v in pts]
+            # Color by fitness: valid (>0) vs invalid (0)
+            valid_t = [t for t, f in zip(times, fits) if f > 0]
+            valid_f = [f for f in fits if f > 0]
+            invalid_t = [t for t, f in zip(times, fits) if f == 0]
+            if valid_t:
+                ax.scatter(valid_t, valid_f, color=c, alpha=0.3, s=15,
+                           edgecolors="none", label=f"{label} valid")
+            if invalid_t:
+                ax.scatter(invalid_t, [0] * len(invalid_t), color=c, alpha=0.5,
+                           s=15, marker="x")
+    ax.set_xlabel("Wall time (hours)")
+    ax.set_ylabel("Fitness (%) — 0 = invalid")
+    ax.set_title("Valid vs invalid programs over time")
+    ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
     plt.suptitle(f"Experiment: {args.experiment}", fontsize=14, fontweight="bold", y=1.01)
