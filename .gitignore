@@ -617,3 +617,10 @@ CLAUDE.md
 AGENTS.md
 snapshots/
 .claude/perf-sprint-*.md
+
+# Large dataset files (downloaded by dataset scripts)
+problems/chains/hover/dataset/*.gz
+problems/chains/hover/dataset/*.pkl
+problems/chains/hover/dataset/*.tar.bz2
+problems/chains/hover/dataset/bm25s_index/
+problems/chains/hover/dataset/*.jsonl
