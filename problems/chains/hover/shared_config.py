@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-import random
 
 # --- Squid Proxy Fix (CRITICAL) ---
 # The system Squid proxy intercepts Python HTTP to internal IPs.
@@ -24,10 +23,10 @@ os.environ["no_proxy"] = _no_proxy
 
 # --- LLM Configuration ---
 
-# HOVER_CHAIN_URL overrides the chain-execution endpoint at runtime.
-# Supports comma-separated URLs for load balancing across chain servers:
-#   export HOVER_CHAIN_URL="http://localhost:8000/v1,http://10.225.185.235:8001/v1"
-# Each LLMClient creation picks a random URL (per-call load balancing).
+# HOVER_CHAIN_URL: comma-separated chain server URLs for load balancing.
+# With multiple URLs, an occupancy-based pool (EndpointPool) routes each
+# validation call to the least-loaded chain server across all runs.
+#   export HOVER_CHAIN_URL="http://localhost:8000/v1,http://localhost:8000/v1"
 _CHAIN_URLS_STR = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
 _CHAIN_URLS = [u.strip() for u in _CHAIN_URLS_STR.split(",") if u.strip()]
 
@@ -47,21 +46,55 @@ _LLM_CONFIG_BASE = {
     },
 }
 
+# Occupancy-based chain server pool (Redis DB 15, shared across runs)
+_chain_pool = None
+if len(_CHAIN_URLS) > 1:
+    from gigaevo.infra.endpoint_pool import EndpointPool
+
+    _chain_pool = EndpointPool(
+        pool_name="chain_hover",
+        endpoints=_CHAIN_URLS,
+    )
+
 
 def get_llm_config() -> dict:
-    """Return LLM config with a random chain server URL (per-call load balancing)."""
+    """Return LLM config with a load-balanced chain server URL.
+
+    With multiple HOVER_CHAIN_URL endpoints, uses occupancy-based routing
+    via EndpointPool. Call release_chain_endpoint() when done.
+    """
+    if _chain_pool is not None:
+        url = _chain_pool.acquire_sync()
+    else:
+        url = _CHAIN_URLS[0]
     return {
         **_LLM_CONFIG_BASE,
         "client_kwargs": {
             "api_key": "None",
-            "base_url": random.choice(_CHAIN_URLS),
+            "base_url": url,
         },
     }
 
 
-# Backward compat: LLM_CONFIG still works but picks URL at import time.
-# Prefer get_llm_config() for per-call balancing.
-LLM_CONFIG = get_llm_config()
+def release_chain_endpoint(url: str, *, success: bool = True) -> None:
+    """Release a chain endpoint back to the pool after use."""
+    if _chain_pool is None:
+        return
+    if success:
+        _chain_pool.release_sync(url)
+    else:
+        _chain_pool.mark_unhealthy_sync(url)
+
+
+# Backward-compatible static config (uses first URL only).
+# Prefer get_llm_config() for load-balanced access.
+LLM_CONFIG = {
+    **_LLM_CONFIG_BASE,
+    "client_kwargs": {
+        "api_key": "None",
+        "base_url": _CHAIN_URLS[0],
+    },
+}
 
 # --- Dataset Configuration ---
 

@@ -104,6 +104,11 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self._run_start_time = time.monotonic()
         self._run_start_gen = self.metrics.total_generations
 
+        # Persist initial epoch counter so status tools can read it immediately
+        await self.storage.save_run_state(
+            _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
+        )
+
         try:
             # Phase 0: drain initial population (seed programs already queued)
             await self._await_idle()
