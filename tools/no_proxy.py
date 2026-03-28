@@ -31,7 +31,12 @@ def get_no_proxy_string() -> str:
 
 
 def ensure_no_proxy() -> None:
-    """Set NO_PROXY/no_proxy env vars from infrastructure.yaml (idempotent)."""
+    """Set NO_PROXY/no_proxy and remove HTTP(S)_PROXY (idempotent).
+
+    httpx's NO_PROXY bypass is unreliable when HTTP_PROXY is set —
+    connections intermittently tunnel through Squid despite matching
+    IPs in NO_PROXY. Removing proxy vars is the only reliable fix.
+    """
     hosts = get_no_proxy_hosts()
     current = os.environ.get("NO_PROXY", "")
     for h in hosts:
@@ -39,6 +44,8 @@ def ensure_no_proxy() -> None:
             current = ",".join(filter(None, [current, h]))
     os.environ["NO_PROXY"] = current
     os.environ["no_proxy"] = current
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        os.environ.pop(key, None)
 
 
 if __name__ == "__main__":
