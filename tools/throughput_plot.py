@@ -129,9 +129,9 @@ def main():
         valid_count = get_time_series(r, run.prefix, "program_metrics:programs_valid_count")
         if completed:
             t0 = completed[0][0]
-            # Clamp negative relative times to 0 (events before first completed)
+            # Drop events before t0 (they predate the run start)
             def _rel(series):
-                return [(max(t - t0, 0), v) for t, v in series]
+                return [(t - t0, v) for t, v in series if t >= t0]
             run_data[run.label] = {
                 "condition": run.condition,
                 "completed": _rel(completed),
