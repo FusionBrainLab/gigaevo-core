@@ -15,7 +15,7 @@ import pytest
 
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.programs.program import Program
+from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 
 
@@ -224,3 +224,79 @@ class TestIngestMutationIdsPartition:
 
         # New program should still be processed despite stale discard failure
         engine.strategy.add.assert_called_once_with(new_prog)
+
+
+# ===========================================================================
+# Chaos-hacker fixes: post-mget state filter, exclude param, mixed states
+# ===========================================================================
+
+
+class TestIngestPostMgetStateFilter:
+    """The production code filters mget results to only DONE programs (line 474).
+    Without this, stale programs that changed state between SMEMBERS and mget
+    would slip through to strategy.add().
+    """
+
+    async def test_non_done_programs_filtered_after_mget(self) -> None:
+        """Programs that changed state between SMEMBERS and mget are filtered out.
+
+        MUTATION TARGET: removing the `if p.state == ProgramState.DONE` filter
+        would let non-DONE programs reach strategy.add().
+        """
+        engine = _make_engine()
+        engine.config.program_acceptor = MagicMock()
+        engine.config.program_acceptor.is_accepted.return_value = True
+        engine.strategy.add.return_value = True
+
+        done_prog = _prog(ProgramState.DONE)
+        # Simulate a program that was DONE during SMEMBERS but changed to RUNNING
+        # by the time mget deserializes it (TOCTOU race)
+        stale_running = _prog(ProgramState.RUNNING)
+
+        engine.storage.get_ids_by_status.return_value = [done_prog.id, stale_running.id]
+        engine.storage.mget.return_value = [done_prog, stale_running]
+        engine.strategy.get_program_ids.return_value = []
+
+        await engine._ingest_completed_programs(mutation_ids=None)
+
+        # Only the DONE program should reach strategy.add
+        engine.strategy.add.assert_called_once_with(done_prog)
+
+    async def test_all_non_done_after_mget_skips_processing(self) -> None:
+        """If all programs changed state, processing should be skipped entirely."""
+        engine = _make_engine()
+
+        running = _prog(ProgramState.RUNNING)
+        queued = _prog(ProgramState.QUEUED)
+
+        engine.storage.get_ids_by_status.return_value = [running.id, queued.id]
+        engine.storage.mget.return_value = [running, queued]
+        engine.strategy.get_program_ids.return_value = []
+
+        await engine._ingest_completed_programs(mutation_ids=None)
+
+        engine.strategy.add.assert_not_called()
+
+
+class TestIngestExcludeParameter:
+    """Verify that mget is called with exclude=EXCLUDE_STAGE_RESULTS."""
+
+    async def test_mget_passes_exclude_stage_results(self) -> None:
+        """MUTATION TARGET: removing the exclude kwarg silently bloats payloads."""
+        engine = _make_engine()
+        engine.config.program_acceptor = MagicMock()
+        engine.config.program_acceptor.is_accepted.return_value = True
+        engine.strategy.add.return_value = True
+
+        prog = _prog()
+        engine.storage.get_ids_by_status.return_value = [prog.id]
+        engine.storage.mget.return_value = [prog]
+        engine.strategy.get_program_ids.return_value = []
+
+        await engine._ingest_completed_programs(mutation_ids=None)
+
+        call_kwargs = engine.storage.mget.call_args
+        assert call_kwargs.kwargs.get("exclude") == EXCLUDE_STAGE_RESULTS, (
+            "mget must be called with exclude=EXCLUDE_STAGE_RESULTS "
+            "to avoid deserializing stage results during ingestion"
+        )

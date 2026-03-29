@@ -219,3 +219,50 @@ class TestFrontierBoundaryPrecision:
         for i, v in enumerate(values):
             t._maybe_update_frontier("score", v, iteration=i + 1)
         assert t._best_valid["score"] == (1.0, 4), "1.0 at iteration 4 is the best"
+
+
+# ===========================================================================
+# Chaos-hacker: NaN/Inf adversarial floats
+# ===========================================================================
+
+
+class TestFrontierAdversarialFloats:
+    """NaN and Inf are the #1 adversarial float values for comparison operators.
+    NaN comparisons ALWAYS return False, which can permanently poison frontiers.
+    """
+
+    def test_nan_first_value_poisons_frontier(self) -> None:
+        """If NaN is the first value, no future value can ever improve.
+        This documents the current behavior (NaN comparison always returns False).
+        """
+        t = _tracker(higher_is_better=True)
+        t._maybe_update_frontier("score", float("nan"), iteration=1)
+        # NaN stored as best
+        import math
+
+        assert math.isnan(t._best_valid["score"][0])
+        # No value can "improve" over NaN (all comparisons with NaN are False)
+        result = t._maybe_update_frontier("score", 1000.0, iteration=2)
+        assert result is False, "NaN comparison always returns False — frontier is poisoned"
+
+    def test_nan_second_value_does_not_replace(self) -> None:
+        """NaN as a subsequent value should not replace a valid best."""
+        t = _tracker(higher_is_better=True)
+        t._maybe_update_frontier("score", 10.0, iteration=1)
+        result = t._maybe_update_frontier("score", float("nan"), iteration=2)
+        assert result is False, "NaN > 10.0 is False — should not replace"
+        assert t._best_valid["score"] == (10.0, 1)
+
+    def test_positive_inf_improves_higher(self) -> None:
+        """Positive infinity should always improve for higher_is_better."""
+        t = _tracker(higher_is_better=True)
+        t._maybe_update_frontier("score", 1e10, iteration=1)
+        result = t._maybe_update_frontier("score", float("inf"), iteration=2)
+        assert result is True
+
+    def test_negative_inf_improves_lower(self) -> None:
+        """Negative infinity should always improve for lower_is_better."""
+        t = _tracker(higher_is_better=False)
+        t._maybe_update_frontier("score", -1e10, iteration=1)
+        result = t._maybe_update_frontier("score", float("-inf"), iteration=2)
+        assert result is True
