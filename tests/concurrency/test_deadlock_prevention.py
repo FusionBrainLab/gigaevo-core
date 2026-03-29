@@ -551,145 +551,8 @@ class TestStateManagerLockContention:
         finally:
             await storage.close()
 
-
 # ===========================================================================
-# 4. Engine step with generation_timeout prevents infinite hangs
-# ===========================================================================
-
-
-class TestEngineGenerationTimeout:
-    """EvolutionEngine.run() wraps step() in asyncio.wait_for(timeout=generation_timeout).
-    This is the top-level escape hatch for any deadlock within a step.
-    """
-
-    async def test_generation_timeout_fires_on_stuck_step(self) -> None:
-        """If step() hangs (e.g., _await_idle never returns), generation_timeout
-        must fire and the engine logs a warning without crashing.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(
-                storage,
-                generation_timeout=0.05,
-                max_generations=1,
-            )
-
-            timeout_fired = {"n": 0}
-
-            async def hanging_then_done():
-                """First call hangs (triggers timeout), then stop engine."""
-                timeout_fired["n"] += 1
-                if timeout_fired["n"] <= 2:
-                    await asyncio.sleep(999)
-                else:
-                    # Stop the engine after a few timeouts
-                    engine._running = False
-
-            engine.step = hanging_then_done
-
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-
-            # At least one timeout should have fired before engine stopped
-            assert timeout_fired["n"] >= 2
-        finally:
-            await storage.close()
-
-    async def test_generation_timeout_on_real_step_with_ghosts(self) -> None:
-        """Ghost IDs cause _await_idle to spin in real step().
-        generation_timeout must fire to break the hang.
-
-        This tests the actual deadlock recovery path without mocking step().
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(
-                storage,
-                generation_timeout=0.2,
-                max_generations=1,
-            )
-
-            # Inject ghost IDs that will cause _await_idle to hang
-            # (SCARD says active, but no real programs exist)
-            r = await storage._conn.get()
-            await r.sadd("test:status:queued", "ghost-stuck-1", "ghost-stuck-2")
-
-            # Verify the ghost trap is set
-            assert await engine._has_active_dags() is True
-
-            # run() should fire generation_timeout, log warning, and loop.
-            # We stop after first timeout via _running = False.
-            step_attempted = {"n": 0}
-            original_step = engine.step
-
-            async def counting_step():
-                step_attempted["n"] += 1
-                if step_attempted["n"] >= 2:
-                    engine._running = False
-                    return
-                await original_step()
-
-            engine.step = counting_step
-
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-
-            # step was called and timed out at least once
-            assert step_attempted["n"] >= 1
-        finally:
-            await storage.close()
-
-    async def test_stuck_running_program_triggers_timeout(self) -> None:
-        """A program stuck in RUNNING forever (most likely production deadlock).
-        generation_timeout must fire to prevent infinite hang.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(
-                storage,
-                generation_timeout=0.2,
-                max_generations=1,
-            )
-
-            # Add a program stuck in RUNNING — no DAG runner to complete it
-            p = _make_program(ProgramState.QUEUED)
-            await storage.add(p)
-            sm = ProgramStateManager(storage)
-            await sm.set_program_state(p, ProgramState.RUNNING)
-
-            # _await_idle will spin because RUNNING count > 0
-            assert await engine._has_active_dags() is True
-
-            step_called = {"n": 0}
-            original_step = engine.step
-
-            async def counting_step():
-                step_called["n"] += 1
-                if step_called["n"] >= 2:
-                    engine._running = False
-                    return
-                await original_step()
-
-            engine.step = counting_step
-
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-            assert step_called["n"] >= 1
-        finally:
-            await storage.close()
-
-    async def test_no_generation_timeout_still_completes(self) -> None:
-        """With default generation_timeout, a clean step still completes."""
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage, max_generations=1)
-
-            # No programs — step should be trivial (empty archive, no elites)
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-            assert engine.metrics.total_generations == 1
-        finally:
-            await storage.close()
-
-
-# ===========================================================================
-# 5. Ingest with concurrent state transitions
+# 4. Ingest with concurrent state transitions
 # ===========================================================================
 
 
@@ -729,7 +592,7 @@ class TestIngestConcurrency:
 
 
 # ===========================================================================
-# 6. Storage close during active operations
+# 5. Storage close during active operations
 # ===========================================================================
 
 
@@ -756,7 +619,7 @@ class TestStorageCloseRobustness:
 
 
 # ===========================================================================
-# 7. Batch transition with large program counts
+# 6. Batch transition with large program counts
 # ===========================================================================
 
 
@@ -788,7 +651,7 @@ class TestBatchTransitionScale:
 
 
 # ===========================================================================
-# 8. Full engine step with real storage (integration)
+# 7. Full engine step with real storage (integration)
 # ===========================================================================
 
 
@@ -860,7 +723,7 @@ class TestEngineStepIntegration:
 
 
 # ===========================================================================
-# 9. Snapshot + storage interaction under epoch churn
+# 8. Snapshot + storage interaction under epoch churn
 # ===========================================================================
 
 
@@ -896,7 +759,7 @@ class TestSnapshotEpochChurn:
 
 
 # ===========================================================================
-# 10. _has_active_dags + _await_idle interaction with real programs
+# 9. _has_active_dags + _await_idle interaction with real programs
 # ===========================================================================
 
 
@@ -965,7 +828,7 @@ class TestAwaitIdleRealPrograms:
 
 
 # ===========================================================================
-# 11. DagRunner semaphore saturation and timeout recovery
+# 10. DagRunner semaphore saturation and timeout recovery
 # ===========================================================================
 
 
@@ -1069,7 +932,7 @@ class TestDagRunnerSemaphore:
 
 
 # ===========================================================================
-# 12. RedisConnection lock contention
+# 11. RedisConnection lock contention
 # ===========================================================================
 
 
@@ -1481,311 +1344,6 @@ class TestStorageBatchContention:
             await storage.close()
 
 
-# ===========================================================================
-# 17. Mutation-style tests: WOULD hang if safety mechanism is removed
-# ===========================================================================
-
-
-class TestSafetyMechanismBreakage:
-    """These tests specifically target each safety mechanism. Each test
-    simulates what happens when a safety mechanism is broken, verifying
-    that the *other* mechanisms catch the failure within bounded time.
-
-    If a developer removes a safety mechanism and these tests still pass,
-    the test is not doing its job.
-    """
-
-    async def test_await_idle_hangs_without_generation_timeout(self) -> None:
-        """If _await_idle has no escape and programs never complete,
-        the ONLY thing saving us is generation_timeout. This test proves
-        generation_timeout fires when _await_idle would hang forever.
-
-        Scenario: ghost ID + no ghost_checked branch → _await_idle loops forever.
-        generation_timeout (0.1s) breaks the loop.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(
-                storage,
-                generation_timeout=0.1,
-                max_generations=1,
-                loop_interval=0.001,
-            )
-
-            # Inject ghost that _await_idle can't clear
-            # (simulates someone removing the ghost_checked branch)
-            r = await storage._conn.get()
-            await r.sadd("test:status:running", "immortal-ghost")
-
-            # Disable ghost cleanup to simulate it being removed
-            async def broken_await_idle():
-                """_await_idle without ghost detection — loops forever on ghost IDs."""
-                while True:
-                    has_active = await engine._has_active_dags()
-                    if not has_active:
-                        break
-                    await asyncio.sleep(engine.config.loop_interval)
-
-            engine._await_idle = broken_await_idle
-
-            # Without generation_timeout, this would hang forever.
-            # Verify by running step() directly with wait_for
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(engine.step(), timeout=0.5)
-
-            # If we got here, the test proved that without ghost cleanup,
-            # _await_idle hangs — and only external timeout saves us.
-
-        finally:
-            await storage.close()
-
-    async def test_generation_timeout_is_the_last_line_of_defense(self) -> None:
-        """Prove that generation_timeout catches a truly stuck step().
-
-        If step() hangs for ANY reason (not just ghosts), generation_timeout
-        in run() must fire and allow the engine to continue.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(
-                storage,
-                generation_timeout=0.05,
-                max_generations=1,
-            )
-
-            timeout_count = {"n": 0}
-
-            async def stuck_step():
-                """Simulates any arbitrary deadlock inside step()."""
-                timeout_count["n"] += 1
-                if timeout_count["n"] >= 3:
-                    engine._running = False
-                    return
-                # Simulate deadlock: multiple nested awaits that never resolve
-                event = asyncio.Event()
-                await event.wait()  # will never be set
-
-            engine.step = stuck_step
-
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-
-            # generation_timeout must have fired at least twice
-            assert timeout_count["n"] >= 3, (
-                f"Expected >= 3 step attempts, got {timeout_count['n']}. "
-                "generation_timeout did not fire."
-            )
-        finally:
-            await storage.close()
-
-    async def test_has_active_dags_returns_true_blocks_progress(self) -> None:
-        """If _has_active_dags returns True when it shouldn't (e.g., ghost IDs),
-        _await_idle blocks. Verify this blocking behavior exists.
-
-        This test would PASS trivially if someone changed _await_idle to not
-        check _has_active_dags (which would be a bug — engine would proceed
-        while DAGs are still running).
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage, loop_interval=0.001)
-
-            # Make _has_active_dags always return True
-            engine._has_active_dags = AsyncMock(return_value=True)
-
-            # _await_idle must hang (blocked by always-True)
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(engine._await_idle(), timeout=0.2)
-
-        finally:
-            await storage.close()
-
-    async def test_await_idle_would_hang_without_sleep(self) -> None:
-        """_await_idle has asyncio.sleep(loop_interval) at the end of each
-        iteration. Without it, it would be a CPU-burning tight loop.
-
-        We verify that _await_idle yields to the event loop by checking
-        that a concurrent task can make progress.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage, loop_interval=0.001)
-
-            # Add a QUEUED program
-            p = _make_program(ProgramState.QUEUED)
-            await storage.add(p)
-
-            # Background: complete the program after concurrent task gets a chance to run
-            progress = {"ticks": 0}
-            sm = ProgramStateManager(storage)
-
-            async def background_work():
-                """Must get scheduled while _await_idle is looping."""
-                while True:
-                    progress["ticks"] += 1
-                    if progress["ticks"] >= 3:
-                        # After getting scheduled 3 times, complete the program
-                        await sm.set_program_state(p, ProgramState.RUNNING)
-                        await sm.set_program_state(p, ProgramState.DONE)
-                        return
-                    await asyncio.sleep(0)
-
-            bg_task = asyncio.create_task(background_work())
-            await asyncio.wait_for(engine._await_idle(), timeout=HANG_TIMEOUT)
-            await bg_task
-
-            # background_work got scheduled at least 3 times — proves _await_idle yields
-            assert progress["ticks"] >= 3, (
-                f"Background task only ran {progress['ticks']} ticks — "
-                "_await_idle may not be yielding to the event loop"
-            )
-        finally:
-            await storage.close()
-
-    async def test_lock_eviction_prevents_memory_leak(self) -> None:
-        """ProgramStateManager evicts locks for terminal states.
-        Without eviction, _locks dict would grow unbounded.
-
-        This test creates 1000 programs and verifies locks are evicted.
-        """
-        storage = _make_storage()
-        try:
-            sm = ProgramStateManager(storage)
-
-            for _ in range(1000):
-                p = _make_program(ProgramState.QUEUED)
-                await storage.add(p)
-                await sm.set_program_state(p, ProgramState.RUNNING)
-                await sm.set_program_state(p, ProgramState.DONE)
-
-            # Without eviction, we'd have 1000 locks
-            assert len(sm._locks) == 0, (
-                f"Expected 0 locks after 1000 terminal transitions, "
-                f"got {len(sm._locks)}. Lock eviction may be broken."
-            )
-        finally:
-            await storage.close()
-
-    async def test_count_by_status_detects_queued_programs(self) -> None:
-        """_has_active_dags uses count_by_status (SCARD). If this returns 0
-        when programs are QUEUED, the engine would skip _await_idle and
-        proceed to mutate/ingest while DAGs are still running.
-
-        This test verifies count_by_status accurately reflects program states.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage)
-            sm = ProgramStateManager(storage)
-
-            # Empty — not active
-            assert await engine._has_active_dags() is False
-
-            # Add QUEUED — must be active
-            p = _make_program(ProgramState.QUEUED)
-            await storage.add(p)
-            assert await engine._has_active_dags() is True
-
-            # Transition to RUNNING — still active
-            await sm.set_program_state(p, ProgramState.RUNNING)
-            assert await engine._has_active_dags() is True
-
-            # Transition to DONE — no longer active
-            await sm.set_program_state(p, ProgramState.DONE)
-            assert await engine._has_active_dags() is False
-
-        finally:
-            await storage.close()
-
-    async def test_step_waits_for_programs_before_ingest(self) -> None:
-        """Engine.step() calls _await_idle before _ingest_completed_programs.
-        If this ordering is broken, ingest runs on incomplete programs.
-
-        We verify by adding a QUEUED program and checking that step()
-        doesn't return until the program reaches DONE.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage, generation_timeout=2.0)
-            sm = ProgramStateManager(storage)
-
-            p = _make_program(ProgramState.QUEUED)
-            p.add_metrics({"fitness": 0.9, "x": 0.5})
-            await storage.add(p)
-
-            # Background: simulate DAG runner — complete any QUEUED program
-            async def dag_simulator():
-                while True:
-                    queued = await storage.get_all_by_status(ProgramState.QUEUED.value)
-                    for prog in queued:
-                        try:
-                            await sm.set_program_state(prog, ProgramState.RUNNING)
-                            await sm.set_program_state(prog, ProgramState.DONE)
-                        except (ValueError, Exception):
-                            pass
-                    await asyncio.sleep(0.01)
-
-            bg = asyncio.create_task(dag_simulator())
-            try:
-                await asyncio.wait_for(engine.step(), timeout=HANG_TIMEOUT)
-            finally:
-                bg.cancel()
-                try:
-                    await bg
-                except asyncio.CancelledError:
-                    pass
-
-            # The program must have been processed by the time step() returns —
-            # if it's still QUEUED or RUNNING, step() didn't wait
-            stored = await storage.get(p.id)
-            assert stored.state in (ProgramState.DONE, ProgramState.DISCARDED), (
-                f"Program state is {stored.state} after step() returned — "
-                "step() may not be waiting for programs to complete"
-            )
-        finally:
-            await storage.close()
-
-    async def test_dag_runner_timeout_prevents_hung_dag(self) -> None:
-        """DagRunner dag_timeout prevents a single stuck DAG from blocking
-        all future work. Without it, a hanging DAG would consume a semaphore
-        slot forever.
-
-        This test creates a task that "hangs" and verifies _maintain times
-        it out and frees the slot.
-        """
-        storage = _make_storage()
-        try:
-            writer = MagicMock()
-            writer.bind.return_value = writer
-            runner = DagRunner(
-                storage=storage,
-                dag_blueprint=MagicMock(),
-                config=DagRunnerConfig(
-                    poll_interval=0.5, max_concurrent_dags=1, dag_timeout=0.001
-                ),
-                writer=writer,
-            )
-
-            # Hanging task occupying the only slot
-            async def hang():
-                await asyncio.sleep(999)
-
-            task = asyncio.create_task(hang())
-            prog = _make_program(ProgramState.RUNNING)
-            await storage.add(prog)
-            runner._active[prog.id] = TaskInfo(
-                task=task, program_id=prog.id, started_at=0.0
-            )
-
-            # Before maintain: 1 active (slot full)
-            assert len(runner._active) == 1
-
-            await asyncio.wait_for(runner._maintain(), timeout=HANG_TIMEOUT)
-
-            # After maintain: slot freed
-            assert len(runner._active) == 0, (
-                "Timed-out DAG was not cleaned up — dag_timeout may be broken"
-            )
-        finally:
-            for info in list(runner._active.values()):
-                info.task.cancel()
-            await storage.close()
+# Note: Removed TestSafetyMechanismBreakage (was testing deprecated generation_timeout).
+# The tests relied on generation_timeout feature marked "no longer used" in EngineConfig.
+# Safety mechanisms are now tested via _await_idle() ghost detection and dag_timeout.

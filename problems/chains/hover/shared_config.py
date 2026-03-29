@@ -4,33 +4,18 @@ import json
 import os
 from pathlib import Path
 
-# --- Squid Proxy Fix (CRITICAL) ---
-# The system Squid proxy intercepts Python HTTP to internal IPs.
-# Must bypass before any HTTP imports.
-_no_proxy = os.environ.get("NO_PROXY", "")
-for _ip in [
-    "INTERNAL_IP",
-    "10.225.185.235",
-    "INTERNAL_IP",
-    "INTERNAL_IP",
-    "INTERNAL_IP",
-    "10.225.51.251",
-]:
-    if _ip not in _no_proxy:
-        _no_proxy = ",".join(filter(None, [_no_proxy, _ip]))
-os.environ["NO_PROXY"] = _no_proxy
-os.environ["no_proxy"] = _no_proxy
+from tools.no_proxy import ensure_no_proxy
+
+ensure_no_proxy()
 
 # --- LLM Configuration ---
+# All chain requests go through the LiteLLM proxy (INTERNAL_IP:4000),
+# which load-balances across backend servers defined in infrastructure.yaml.
+# Start the proxy with: bash tools/litellm.sh --background
 
-# HOVER_CHAIN_URL: comma-separated chain server URLs for load balancing.
-# With multiple URLs, an occupancy-based pool (EndpointPool) routes each
-# validation call to the least-loaded chain server across all runs.
-#   export HOVER_CHAIN_URL="http://localhost:8000/v1,http://localhost:8000/v1"
-_CHAIN_URLS_STR = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
-_CHAIN_URLS = [u.strip() for u in _CHAIN_URLS_STR.split(",") if u.strip()]
+_CHAIN_URL = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
 
-_LLM_CONFIG_BASE = {
+LLM_CONFIG = {
     "model": "Qwen/Qwen3-8B",
     "max_cost": 10.0,
     "model_pricing": {
@@ -40,61 +25,26 @@ _LLM_CONFIG_BASE = {
     "generation_kwargs": {
         "temperature": 0.6,
         "top_p": 0.95,
+        "max_tokens": 8192,
         "extra_body": {
             "top_k": 20,
         },
     },
+    "client_kwargs": {
+        "api_key": "sk-gigaevo",
+        "base_url": _CHAIN_URL,
+    },
 }
-
-# Occupancy-based chain server pool (Redis DB 15, shared across runs)
-_chain_pool = None
-if len(_CHAIN_URLS) > 1:
-    from gigaevo.infra.endpoint_pool import EndpointPool
-
-    _chain_pool = EndpointPool(
-        pool_name="chain_hover",
-        endpoints=_CHAIN_URLS,
-    )
 
 
 def get_llm_config() -> dict:
-    """Return LLM config with a load-balanced chain server URL.
-
-    With multiple HOVER_CHAIN_URL endpoints, uses occupancy-based routing
-    via EndpointPool. Call release_chain_endpoint() when done.
-    """
-    if _chain_pool is not None:
-        url = _chain_pool.acquire_sync()
-    else:
-        url = _CHAIN_URLS[0]
-    return {
-        **_LLM_CONFIG_BASE,
-        "client_kwargs": {
-            "api_key": "None",
-            "base_url": url,
-        },
-    }
+    """Return LLM config. Load balancing is handled by litellm proxy."""
+    return dict(LLM_CONFIG)
 
 
 def release_chain_endpoint(url: str, *, success: bool = True) -> None:
-    """Release a chain endpoint back to the pool after use."""
-    if _chain_pool is None:
-        return
-    if success:
-        _chain_pool.release_sync(url)
-    else:
-        _chain_pool.mark_unhealthy_sync(url)
-
-
-# Backward-compatible static config (uses first URL only).
-# Prefer get_llm_config() for load-balanced access.
-LLM_CONFIG = {
-    **_LLM_CONFIG_BASE,
-    "client_kwargs": {
-        "api_key": "None",
-        "base_url": _CHAIN_URLS[0],
-    },
-}
+    """No-op — load balancing is handled by litellm proxy."""
+    pass
 
 # --- Dataset Configuration ---
 

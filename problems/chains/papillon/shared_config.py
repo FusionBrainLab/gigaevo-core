@@ -28,7 +28,7 @@ LLM_CONFIG = {
         },
     },
     "client_kwargs": {
-        "api_key": "None",
+        "api_key": "sk-gigaevo",
         "base_url": "http://localhost:8000/v1",
     },
 }

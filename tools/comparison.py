@@ -544,10 +544,11 @@ def plot_comparison(
     else:
         ax.legend(loc=legend_location, **legend_kwargs)
 
-    # Ensure y-axis starts at 0 if all values are positive
+    # Zoom y-axis to data range (don't waste space starting at 0)
     y_min, y_max = ax.get_ylim()
-    if y_min > 0:
-        ax.set_ylim(bottom=0)
+    y_range = y_max - y_min
+    pad = max(y_range * 0.15, 0.005)
+    ax.set_ylim(bottom=y_min - pad, top=y_max + pad)
 
     # Finalize layout
     fig.tight_layout()
@@ -637,17 +638,25 @@ def _annotate_frontier_points(
     # Sort back by iteration (ascending) for consistent display
     significant_jumps = significant_jumps.sort_values("iteration")
 
-    # Annotate each significant jump - colored text only, no box
+    # Annotate significant jumps with staggered offsets to avoid overlap
+    used_y_offsets = []
     for _, row in significant_jumps.iterrows():
         x = row["iteration"]
         y = row["frontier"]
 
+        # Stagger vertically: alternate up/right offsets to avoid overlap
+        y_offset = 6
+        for prev_y in used_y_offsets:
+            if abs(y - prev_y) < 0.02:  # Close to a previous annotation
+                y_offset += 10
+        used_y_offsets.append(y)
+
         ax.annotate(
             f"{y:.5g}",
             xy=(x, y),
-            xytext=(0, 4),
+            xytext=(4, y_offset),
             textcoords="offset points",
-            ha="center",
+            ha="left",
             va="bottom",
             fontsize=6,
             fontweight="bold",

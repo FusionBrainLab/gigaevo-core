@@ -1,0 +1,5 @@
+# @package _global_
+
+# Default FIFO scheduling — programs launched in insertion order.
+prioritizer:
+  _target_: gigaevo.evolution.scheduling.FIFOPrioritizer

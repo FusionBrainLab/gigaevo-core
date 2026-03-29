@@ -60,7 +60,14 @@ async def generate_mutations(
         async def generate_and_persist_mutation(
             parents: list[Program], task_id: int
         ) -> str | None:
-            """Generate a single mutation and persist it. Returns program ID if successful."""
+            """Generate a single mutation and persist it. Returns program ID if successful.
+
+            Once ``storage.add()`` succeeds the program exists in Redis. Any
+            failure after that point (including ``asyncio.CancelledError``, which
+            is a ``BaseException``) must still return the program ID so the engine
+            can track it — otherwise the program becomes an orphan ghost.
+            """
+            persisted_id: str | None = None
             try:
                 mutation_spec = await mutator.mutate_single(parents)
 
@@ -76,6 +83,8 @@ async def generate_mutations(
                 program.set_metadata("iteration", iteration)
 
                 await storage.add(program)
+                persisted_id = program.id  # Point of no return — ID must be returned
+
                 prompt_id = mutation_spec.metadata.get(MutationSpec.META_PROMPT_ID, "")
                 logger.info(
                     "[mutation] Task {}: {} → {} (model={}, archetype={}, prompt_id={})",
@@ -107,13 +116,25 @@ async def generate_mutations(
 
                 return program.id
 
-            except Exception as exc:
-                logger.error(
-                    "[mutation] Task {}: Failed to generate/persist mutation: {}",
-                    task_id,
-                    exc,
-                )
-                return None
+            except BaseException as exc:
+                if persisted_id is not None:
+                    # Program is in Redis — return its ID to prevent orphan.
+                    logger.warning(
+                        "[mutation] Task {}: post-persist {} ({}), returning ID to avoid orphan",
+                        task_id,
+                        type(exc).__name__,
+                        persisted_id[:8],
+                    )
+                    return persisted_id
+                # Not yet persisted — safe to handle normally.
+                if isinstance(exc, Exception):
+                    logger.error(
+                        "[mutation] Task {}: Failed to generate/persist mutation: {}",
+                        task_id,
+                        exc,
+                    )
+                    return None
+                raise  # CancelledError before persist — propagate
 
         tasks = [
             generate_and_persist_mutation(parents, i)

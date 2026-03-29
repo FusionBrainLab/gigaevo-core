@@ -1,0 +1,12 @@
+# @package _global_
+
+# LPT (Longest Processing Time first) scheduling.
+# Starts predicted-longest programs first to reduce tail idle time.
+# Uses SimpleHeuristicPredictor (code length → eval time) by default.
+# Online learning: calibrates from completed evaluations.
+prioritizer:
+  _target_: gigaevo.evolution.scheduling.LPTPrioritizer
+  eval_predictor:
+    _target_: gigaevo.evolution.scheduling.SimpleHeuristicPredictor
+    default_rate: 0.1
+    window_size: 50

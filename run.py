@@ -2,6 +2,13 @@ import asyncio
 from datetime import UTC, datetime
 import time
 
+# Ensure NO_PROXY covers all internal LLM servers before any imports
+# or subprocess spawns. The system Squid proxy intercepts traffic to
+# IPs not listed in NO_PROXY.
+from tools.no_proxy import ensure_no_proxy
+
+ensure_no_proxy()
+
 from dotenv import load_dotenv
 import hydra
 from hydra.utils import instantiate

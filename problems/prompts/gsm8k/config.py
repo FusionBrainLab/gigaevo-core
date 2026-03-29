@@ -20,7 +20,7 @@ LLM_CONFIG = {
         "max_tokens": 16384,
     },
     "client_kwargs": {
-        "api_key": "None",
+        "api_key": "sk-gigaevo",
         "base_url": "http://localhost:8000/v1",
     },
 }

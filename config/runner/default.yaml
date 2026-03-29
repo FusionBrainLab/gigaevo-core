@@ -12,3 +12,4 @@ dag_runner:
   dag_blueprint: ${dag_blueprint}
   config: ${runner_config}
   writer: ${writer}
+  prioritizer: ${prioritizer}
