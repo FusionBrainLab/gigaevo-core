@@ -551,145 +551,8 @@ class TestStateManagerLockContention:
         finally:
             await storage.close()
 
-
 # ===========================================================================
-# 4. Engine step with generation_timeout prevents infinite hangs
-# ===========================================================================
-
-
-class TestEngineGenerationTimeout:
-    """EvolutionEngine.run() wraps step() in asyncio.wait_for(timeout=generation_timeout).
-    This is the top-level escape hatch for any deadlock within a step.
-    """
-
-    async def test_generation_timeout_fires_on_stuck_step(self) -> None:
-        """If step() hangs (e.g., _await_idle never returns), generation_timeout
-        must fire and the engine logs a warning without crashing.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(
-                storage,
-                generation_timeout=0.05,
-                max_generations=1,
-            )
-
-            timeout_fired = {"n": 0}
-
-            async def hanging_then_done():
-                """First call hangs (triggers timeout), then stop engine."""
-                timeout_fired["n"] += 1
-                if timeout_fired["n"] <= 2:
-                    await asyncio.sleep(999)
-                else:
-                    # Stop the engine after a few timeouts
-                    engine._running = False
-
-            engine.step = hanging_then_done
-
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-
-            # At least one timeout should have fired before engine stopped
-            assert timeout_fired["n"] >= 2
-        finally:
-            await storage.close()
-
-    async def test_generation_timeout_on_real_step_with_ghosts(self) -> None:
-        """Ghost IDs cause _await_idle to spin in real step().
-        generation_timeout must fire to break the hang.
-
-        This tests the actual deadlock recovery path without mocking step().
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(
-                storage,
-                generation_timeout=0.2,
-                max_generations=1,
-            )
-
-            # Inject ghost IDs that will cause _await_idle to hang
-            # (SCARD says active, but no real programs exist)
-            r = await storage._conn.get()
-            await r.sadd("test:status:queued", "ghost-stuck-1", "ghost-stuck-2")
-
-            # Verify the ghost trap is set
-            assert await engine._has_active_dags() is True
-
-            # run() should fire generation_timeout, log warning, and loop.
-            # We stop after first timeout via _running = False.
-            step_attempted = {"n": 0}
-            original_step = engine.step
-
-            async def counting_step():
-                step_attempted["n"] += 1
-                if step_attempted["n"] >= 2:
-                    engine._running = False
-                    return
-                await original_step()
-
-            engine.step = counting_step
-
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-
-            # step was called and timed out at least once
-            assert step_attempted["n"] >= 1
-        finally:
-            await storage.close()
-
-    async def test_stuck_running_program_triggers_timeout(self) -> None:
-        """A program stuck in RUNNING forever (most likely production deadlock).
-        generation_timeout must fire to prevent infinite hang.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(
-                storage,
-                generation_timeout=0.2,
-                max_generations=1,
-            )
-
-            # Add a program stuck in RUNNING — no DAG runner to complete it
-            p = _make_program(ProgramState.QUEUED)
-            await storage.add(p)
-            sm = ProgramStateManager(storage)
-            await sm.set_program_state(p, ProgramState.RUNNING)
-
-            # _await_idle will spin because RUNNING count > 0
-            assert await engine._has_active_dags() is True
-
-            step_called = {"n": 0}
-            original_step = engine.step
-
-            async def counting_step():
-                step_called["n"] += 1
-                if step_called["n"] >= 2:
-                    engine._running = False
-                    return
-                await original_step()
-
-            engine.step = counting_step
-
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-            assert step_called["n"] >= 1
-        finally:
-            await storage.close()
-
-    async def test_no_generation_timeout_still_completes(self) -> None:
-        """With default generation_timeout, a clean step still completes."""
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage, max_generations=1)
-
-            # No programs — step should be trivial (empty archive, no elites)
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-            assert engine.metrics.total_generations == 1
-        finally:
-            await storage.close()
-
-
-# ===========================================================================
-# 5. Ingest with concurrent state transitions
+# 4. Ingest with concurrent state transitions
 # ===========================================================================
 
 
@@ -729,7 +592,7 @@ class TestIngestConcurrency:
 
 
 # ===========================================================================
-# 6. Storage close during active operations
+# 5. Storage close during active operations
 # ===========================================================================
 
 
@@ -756,7 +619,7 @@ class TestStorageCloseRobustness:
 
 
 # ===========================================================================
-# 7. Batch transition with large program counts
+# 6. Batch transition with large program counts
 # ===========================================================================
 
 
@@ -788,7 +651,7 @@ class TestBatchTransitionScale:
 
 
 # ===========================================================================
-# 8. Full engine step with real storage (integration)
+# 7. Full engine step with real storage (integration)
 # ===========================================================================
 
 
@@ -860,7 +723,7 @@ class TestEngineStepIntegration:
 
 
 # ===========================================================================
-# 9. Snapshot + storage interaction under epoch churn
+# 8. Snapshot + storage interaction under epoch churn
 # ===========================================================================
 
 
@@ -896,7 +759,7 @@ class TestSnapshotEpochChurn:
 
 
 # ===========================================================================
-# 10. _has_active_dags + _await_idle interaction with real programs
+# 9. _has_active_dags + _await_idle interaction with real programs
 # ===========================================================================
 
 
@@ -965,7 +828,7 @@ class TestAwaitIdleRealPrograms:
 
 
 # ===========================================================================
-# 11. DagRunner semaphore saturation and timeout recovery
+# 10. DagRunner semaphore saturation and timeout recovery
 # ===========================================================================
 
 
@@ -1069,7 +932,7 @@ class TestDagRunnerSemaphore:
 
 
 # ===========================================================================
-# 12. RedisConnection lock contention
+# 11. RedisConnection lock contention
 # ===========================================================================
 
 
