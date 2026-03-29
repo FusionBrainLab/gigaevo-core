@@ -9,6 +9,7 @@ from problems.chains.hover.shared_config import (
     get_llm_config,
     load_context,
     outer_context_builder,
+    release_chain_endpoint,
 )
 from problems.chains.hover.static_soft.config import (
     STATIC_CHAIN_TOPOLOGY,
@@ -42,23 +43,32 @@ def validate(chain_spec: dict) -> dict:
     context = load_context(n_samples=300)
     dataset = context["train_dataset"]
 
-    # 3. Create LLM client
-    client = LLMClient(**get_llm_config())
+    # 3. Create LLM client (occupancy-based load balancing across chain servers)
+    llm_config = get_llm_config()
+    endpoint = llm_config["client_kwargs"]["base_url"]
+    success = True
+    try:
+        client = LLMClient(**llm_config)
 
-    # 4. Build tool registry: two retrieve tools with different k
-    tool_registry = {
-        "retrieve": make_retrieve_fn(
-            context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]
-        ),
-        "retrieve_deep": make_retrieve_fn(
-            context["bm25s_index_dir"], k=10, corpus_path=context["corpus_path"]
-        ),
-    }
+        # 4. Build tool registry: two retrieve tools with different k
+        tool_registry = {
+            "retrieve": make_retrieve_fn(
+                context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]
+            ),
+            "retrieve_deep": make_retrieve_fn(
+                context["bm25s_index_dir"], k=10, corpus_path=context["corpus_path"]
+            ),
+        }
 
-    # 5. Run chain on dataset
-    results = run_chain_on_dataset(
-        chain, client, dataset, outer_context_builder, tool_registry
-    )
+        # 5. Run chain on dataset
+        results = run_chain_on_dataset(
+            chain, client, dataset, outer_context_builder, tool_registry
+        )
+    except Exception:
+        success = False
+        raise
+    finally:
+        release_chain_endpoint(endpoint, success=success)
 
     # 6. Evaluate soft (fractional) retrieval coverage
     #    gold_found / n_gold per sample: 0/3, 1/3, 2/3, or 3/3.
