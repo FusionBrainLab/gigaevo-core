@@ -267,3 +267,95 @@ class TestGatherExceptionCounting:
 
         assert len(count) == 2
         assert storage.add.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# TestOrphanPrevention — CancelledError after storage.add must return ID
+# ---------------------------------------------------------------------------
+
+
+class TestOrphanPrevention:
+    """Verify that programs persisted to Redis are never lost as orphans.
+
+    The bug: ``except Exception`` doesn't catch ``asyncio.CancelledError``
+    (a ``BaseException``). When a mutation task is cancelled between
+    ``storage.add()`` and ``return program.id``, the ID is lost and the
+    program becomes a ghost in Redis — never tracked, never evaluated.
+    """
+
+    async def test_cancelled_error_after_persist_returns_id(self) -> None:
+        """CancelledError during lineage update must still return the program ID."""
+        import asyncio
+
+        mutator, storage, state_manager = _make_deps()
+        parent = _prog()
+        selector = RandomParentSelector(num_parents=1)
+
+        # storage.add succeeds (default mock), but storage.get (used in
+        # lineage update) raises CancelledError — simulating task
+        # cancellation after persist but during lineage update.
+        storage.get.side_effect = asyncio.CancelledError()
+
+        ids = await generate_mutations(
+            [parent],
+            mutator=mutator,
+            storage=storage,
+            state_manager=state_manager,
+            parent_selector=selector,
+            limit=1,
+            iteration=0,
+        )
+
+        # The program was persisted — its ID must be returned, not lost.
+        assert len(ids) == 1
+        assert isinstance(ids[0], str)
+        storage.add.assert_called_once()
+
+    async def test_cancelled_error_before_persist_propagates(self) -> None:
+        """CancelledError before storage.add — no program persisted, safe to propagate."""
+        import asyncio
+
+        mutator, storage, state_manager = _make_deps()
+        parent = _prog()
+        selector = RandomParentSelector(num_parents=1)
+
+        # CancelledError during mutation generation (before persist)
+        mutator.mutate_single.side_effect = asyncio.CancelledError()
+
+        ids = await generate_mutations(
+            [parent],
+            mutator=mutator,
+            storage=storage,
+            state_manager=state_manager,
+            parent_selector=selector,
+            limit=1,
+            iteration=0,
+        )
+
+        # Nothing persisted — empty result (gather catches the CancelledError)
+        assert len(ids) == 0
+        storage.add.assert_not_called()
+
+    async def test_exception_after_persist_returns_id(self) -> None:
+        """Any exception after storage.add must still return the program ID."""
+        mutator, storage, state_manager = _make_deps()
+        parent = _prog()
+        selector = RandomParentSelector(num_parents=1)
+
+        # storage.get raises RuntimeError during lineage update
+        storage.get.side_effect = RuntimeError("Redis connection lost")
+
+        ids = await generate_mutations(
+            [parent],
+            mutator=mutator,
+            storage=storage,
+            state_manager=state_manager,
+            parent_selector=selector,
+            limit=1,
+            iteration=0,
+        )
+
+        # Program was persisted — ID returned despite lineage failure.
+        assert len(ids) == 1
+        assert isinstance(ids[0], str)
+        storage.add.assert_called_once()
