@@ -1,0 +1,21 @@
+# @package _global_
+# Pipeline: standard + chain structural metrics (dag_depth, max_fan_in, n_deep_retrieval).
+# Used by hover/map-elites-topology experiment on ALL arms (control + treatment).
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+
+pipeline_builder:
+  _target_: gigaevo.entrypoint.experiment_pipelines.StructuralMetricsPipelineBuilder
+  ctx: ${evolution_context}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}
