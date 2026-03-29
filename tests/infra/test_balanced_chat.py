@@ -167,6 +167,175 @@ class TestMetrics:
         assert total_errors == 1
 
 
+# ---------------------------------------------------------------------------
+# Streaming tests (previously ZERO coverage)
+# ---------------------------------------------------------------------------
+
+
+class TestBalancedStream:
+    """Tests for BalancedChatOpenAI.stream() — sync streaming."""
+
+    def test_stream_yields_chunks(self, balanced: BalancedChatOpenAI):
+        """stream() should yield all chunks from the underlying client."""
+        chunks = [AIMessage(content="chunk1"), AIMessage(content="chunk2")]
+        for ep in ENDPOINTS:
+            balanced._clients[ep].stream.return_value = iter(chunks)
+
+        result = list(balanced.stream("test prompt"))
+
+        assert len(result) == 2
+        assert result[0].content == "chunk1"
+        assert result[1].content == "chunk2"
+
+    def test_stream_releases_endpoint_on_success(self, balanced: BalancedChatOpenAI):
+        """After successful streaming, endpoint should be released (not unhealthy)."""
+        balanced._clients[ENDPOINTS[0]].stream.return_value = iter(
+            [AIMessage(content="ok")]
+        )
+
+        list(balanced.stream("test"))
+
+        # Metrics should show a successful request
+        total = sum(v["requests"] for v in balanced._metrics.cumulative.values())
+        assert total == 1
+        total_errors = sum(v["errors"] for v in balanced._metrics.cumulative.values())
+        assert total_errors == 0
+
+    def test_stream_marks_unhealthy_on_error(self, balanced: BalancedChatOpenAI):
+        """If streaming raises, endpoint should be marked unhealthy."""
+        for ep in ENDPOINTS:
+            balanced._clients[ep].stream.side_effect = RuntimeError("stream failed")
+
+        with pytest.raises(RuntimeError, match="stream failed"):
+            list(balanced.stream("test"))
+
+        total_errors = sum(v["errors"] for v in balanced._metrics.cumulative.values())
+        assert total_errors == 1
+
+    def test_stream_mid_stream_error(self, balanced: BalancedChatOpenAI):
+        """Error mid-stream (after yielding some chunks) still marks unhealthy."""
+
+        def _failing_generator():
+            yield AIMessage(content="partial")
+            raise ConnectionError("connection lost")
+
+        for ep in ENDPOINTS:
+            balanced._clients[ep].stream.return_value = _failing_generator()
+
+        with pytest.raises(ConnectionError):
+            list(balanced.stream("test"))
+
+        total_errors = sum(v["errors"] for v in balanced._metrics.cumulative.values())
+        assert total_errors == 1
+
+    def test_stream_empty_response(self, balanced: BalancedChatOpenAI):
+        """Empty stream (no chunks) should still release the endpoint normally."""
+        for ep in ENDPOINTS:
+            balanced._clients[ep].stream.return_value = iter([])
+
+        result = list(balanced.stream("test"))
+
+        assert result == []
+        total = sum(v["requests"] for v in balanced._metrics.cumulative.values())
+        assert total == 1
+
+
+class TestBalancedAstream:
+    """Tests for BalancedChatOpenAI.astream() — async streaming."""
+
+    async def test_astream_yields_chunks(self, balanced: BalancedChatOpenAI):
+        chunks = [AIMessage(content="async1"), AIMessage(content="async2")]
+
+        async def _mock_astream(*args, **kwargs):
+            for c in chunks:
+                yield c
+
+        for ep in ENDPOINTS:
+            balanced._clients[ep].astream = _mock_astream
+
+        result = []
+        async for chunk in balanced.astream("test"):
+            result.append(chunk)
+
+        assert len(result) == 2
+        assert result[0].content == "async1"
+
+    async def test_astream_releases_on_success(self, balanced: BalancedChatOpenAI):
+        async def _mock_astream(*args, **kwargs):
+            yield AIMessage(content="ok")
+
+        for ep in ENDPOINTS:
+            balanced._clients[ep].astream = _mock_astream
+
+        async for _ in balanced.astream("test"):
+            pass
+
+        total = sum(v["requests"] for v in balanced._metrics.cumulative.values())
+        assert total == 1
+        total_errors = sum(v["errors"] for v in balanced._metrics.cumulative.values())
+        assert total_errors == 0
+
+    async def test_astream_marks_unhealthy_on_error(self, balanced: BalancedChatOpenAI):
+        async def _failing_astream(*args, **kwargs):
+            raise RuntimeError("async stream failed")
+            yield  # noqa: unreachable — makes it async generator
+
+        for ep in ENDPOINTS:
+            balanced._clients[ep].astream = _failing_astream
+
+        with pytest.raises(RuntimeError, match="async stream failed"):
+            async for _ in balanced.astream("test"):
+                pass
+
+        total_errors = sum(v["errors"] for v in balanced._metrics.cumulative.values())
+        assert total_errors == 1
+
+    async def test_astream_mid_stream_error(self, balanced: BalancedChatOpenAI):
+        async def _partial_then_fail(*args, **kwargs):
+            yield AIMessage(content="partial")
+            raise ConnectionError("dropped")
+
+        for ep in ENDPOINTS:
+            balanced._clients[ep].astream = _partial_then_fail
+
+        with pytest.raises(ConnectionError):
+            async for _ in balanced.astream("test"):
+                pass
+
+        total_errors = sum(v["errors"] for v in balanced._metrics.cumulative.values())
+        assert total_errors == 1
+
+
+# ---------------------------------------------------------------------------
+# Structured output streaming gap (documented)
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredOutput:
+    """Tests for _BalancedStructuredOutput."""
+
+    def test_structured_invoke(self, balanced: BalancedChatOpenAI):
+        """Structured output invoke should delegate to endpoint chain."""
+        structured = balanced.with_structured_output(dict)
+
+        # Mock the chain invoke
+        for ep, chain in structured._chains.items():
+            chain.invoke.return_value = {"result": "ok"}
+
+        result = structured.invoke("test")
+        assert result == {"result": "ok"}
+
+    async def test_structured_ainvoke(self, balanced: BalancedChatOpenAI):
+        """Structured output ainvoke should delegate to endpoint chain."""
+        structured = balanced.with_structured_output(dict)
+
+        for ep, chain in structured._chains.items():
+            chain.ainvoke = AsyncMock(return_value={"result": "async ok"})
+
+        result = await structured.ainvoke("test")
+        assert result == {"result": "async ok"}
+
+
 class TestPoolMetricsTracker:
     def test_record_writes_to_writer(self):
         writer = MagicMock()
