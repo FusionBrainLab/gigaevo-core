@@ -71,30 +71,38 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load event-driven metrics from Redis ──
-    run_data = {}
+    # First pass: find global t0 across ALL runs (BUG-01 fix)
+    all_series = {}
     for run in m.runs:
         r = redis.Redis(db=run.db)
         total_count = get_time_series(r, run.prefix, "program_metrics:programs_total_count")
         valid_count = get_time_series(r, run.prefix, "program_metrics:programs_valid_count")
         frontier = get_time_series(r, run.prefix, "program_metrics:valid_frontier_fitness")
         per_program = get_time_series(r, run.prefix, "program_metrics:valid_iter_fitness_mean")
+        all_series[run.label] = (total_count, valid_count, frontier, per_program, run.condition)
 
+    # Global t0: earliest timestamp across ALL runs and ALL metrics
+    global_starts = []
+    for label, (tc, vc, fr, pp, _) in all_series.items():
+        for s in [tc, vc, fr, pp]:
+            if s:
+                global_starts.append(s[0][0])
+    t0 = min(global_starts) if global_starts else 0
+
+    run_data = {}
+    for label, (total_count, valid_count, frontier, per_program, condition) in all_series.items():
         if not total_count:
             continue
 
-        # Shared t0: earliest timestamp across event-driven metrics
-        all_starts = [s[0][0] for s in [total_count, valid_count, frontier, per_program] if s]
-        t0 = min(all_starts)
+        def _rel(series, _t0=t0):
+            return [(t - _t0, v) for t, v in series]
 
-        def _rel(series):
-            return [(t - t0, v) for t, v in series]
-
-        run_data[run.label] = {
-            "condition": run.condition,
-            "total_count": _rel(total_count),     # (rel_t, cumulative_count)
+        run_data[label] = {
+            "condition": condition,
+            "total_count": _rel(total_count),
             "valid_count": _rel(valid_count),
-            "frontier": _rel(frontier),            # (rel_t, fitness_fraction)
-            "per_program": _rel(per_program),      # (rel_t, fitness_fraction)
+            "frontier": _rel(frontier),
+            "per_program": _rel(per_program),
         }
 
     if not run_data:
@@ -151,9 +159,11 @@ def main():
         grid = np.arange(3600, t_max + 1, 3600)  # every hour starting at hour 1
         if len(grid) < 1:
             continue
-        # Interpolate total_count at grid points and 1h earlier
-        v_now = np.interp(grid, times, vals)
-        v_prev = np.interp(grid - 3600, times, vals)
+        # Prepend (0, vals[0]) so interp doesn't extrapolate below data range
+        interp_t = np.concatenate([[0], times])
+        interp_v = np.concatenate([[vals[0]], vals])
+        v_now = np.interp(grid, interp_t, interp_v)
+        v_prev = np.interp(grid - 3600, interp_t, interp_v)
         rate = v_now - v_prev  # programs in that hour
         ax.plot(grid / 3600, rate,
                 color=_c(label), linestyle=_ls(label), linewidth=2,
@@ -237,15 +247,17 @@ def main():
         total_pts = data["total_count"]
         valid_pts = data["valid_count"]
         if len(total_pts) >= 2 and len(valid_pts) >= 2:
-            # total_count and valid_count share timestamps — pair directly
-            total_v = np.array([v for _, v in total_pts])
-            valid_v = np.array([v for _, v in valid_pts])
+            # total_count and valid_count have DIFFERENT timestamps and lengths
+            # (total increments per program, valid only per valid program).
+            # Interpolate valid_count onto total_count's timestamps.
             total_t = np.array([t for t, _ in total_pts])
-            # Use min of lengths in case they differ slightly
-            n = min(len(total_v), len(valid_v))
-            mask = total_v[:n] > 0
-            inv_rate = np.clip((1 - valid_v[:n][mask] / total_v[:n][mask]) * 100, 0, 100)
-            inv_times = total_t[:n][mask] / 3600
+            total_v = np.array([v for _, v in total_pts])
+            valid_t = np.array([t for t, _ in valid_pts])
+            valid_v = np.array([v for _, v in valid_pts])
+            valid_interp = np.interp(total_t, valid_t, valid_v)
+            mask = total_v > 0
+            inv_rate = np.clip((1 - valid_interp[mask] / total_v[mask]) * 100, 0, 100)
+            inv_times = total_t[mask] / 3600
             ax.plot(inv_times, inv_rate,
                     color=_c(label), linestyle=_ls(label), linewidth=2)
     ax.set_xlabel("Wall time (hours)", fontsize=11)
