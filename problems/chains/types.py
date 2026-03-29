@@ -8,7 +8,7 @@ lives in chain_validation.py.
 from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, constr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, constr, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Structured field constants (used in frozen-step comparison and elsewhere)
@@ -47,6 +47,14 @@ class ToolConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _coerce_to_str(v: object) -> str:
+    """Coerce list/tuple to joined string. LLM mutations sometimes generate
+    these field types instead of plain strings."""
+    if isinstance(v, (list, tuple)):
+        return " ".join(str(item) for item in v)
+    return v  # type: ignore[return-value]
+
+
 class LLMStep(BaseModel):
     """LLM reasoning step with structured fields."""
 
@@ -58,13 +66,19 @@ class LLMStep(BaseModel):
     dependencies: list[int] = Field(default_factory=list)
     frozen: bool = False
 
-    # Required structured fields (non-empty)
+    # Required structured fields (non-empty).
+    # Validator coerces list/tuple → joined string (common LLM mutation error).
     aim: constr(min_length=1)  # type: ignore[valid-type]
     stage_action: constr(min_length=1)  # type: ignore[valid-type]
 
     # Optional structured fields
     reasoning_questions: str = ""
     example_reasoning: str = ""
+
+    @field_validator("aim", "stage_action", "reasoning_questions", "example_reasoning", mode="before")
+    @classmethod
+    def _coerce_sequences_to_str(cls, v: object) -> object:
+        return _coerce_to_str(v)
 
 
 class ToolStep(BaseModel):
