@@ -20,6 +20,34 @@ def _normalize_env(value: str | None) -> str | None:
 
 _SETTINGS = load_settings()
 
+
+def _set_env_default(name: str, value: str | None) -> None:
+    if not value:
+        return
+    if not os.getenv(name):
+        os.environ[name] = value
+
+
+def _configure_huggingface_download_env() -> None:
+    hf_settings = deep_get(_SETTINGS, "downloads.huggingface", default={})
+    if not isinstance(hf_settings, dict):
+        hf_settings = {}
+
+    etag_timeout = to_str(
+        deep_get(hf_settings, "etag_timeout"),
+        default="60",
+    )
+    download_timeout = to_str(
+        deep_get(hf_settings, "download_timeout"),
+        default="300",
+    )
+
+    _set_env_default("HF_HUB_ETAG_TIMEOUT", etag_timeout)
+    _set_env_default("HF_HUB_DOWNLOAD_TIMEOUT", download_timeout)
+
+
+_configure_huggingface_download_env()
+
 OPENAI_API_KEY = _normalize_env(
     os.getenv("OPENAI_API_KEY")
     or os.getenv("OPENROUTER_API_KEY")

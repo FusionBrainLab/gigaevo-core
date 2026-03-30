@@ -1036,6 +1036,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.gam_store_dir / "indexes",
             self.checkpoint_dir / "chroma",
             enable_bm25=self.enable_bm25,
+            allowed_tools=sorted(self.allowed_gam_tools),
         )
         retrievers = {
             name: retriever
@@ -1114,6 +1115,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self.gam_store_dir / "indexes",
                 self.checkpoint_dir / "chroma",
                 enable_bm25=False,
+                allowed_tools=[
+                    "vector_description",
+                    "vector_explanation_summary",
+                    "vector_description_explanation_summary",
+                    "vector_description_task_description_summary",
+                ],
             )
         except Exception as exc:
             print(f"[Memory] Dedup retriever build failed: {exc}")

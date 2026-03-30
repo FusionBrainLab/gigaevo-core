@@ -128,17 +128,9 @@ def build_retrievers(
     chroma_dir: Path,
     chroma_collection: str = "memories",
     enable_bm25: bool = False,
+    allowed_tools: list[str] | set[str] | tuple[str, ...] | None = None,
 ):
     retrievers = {}
-
-    try:
-        index_config = IndexRetrieverConfig(index_dir=str(index_dir / "page_index"))
-        index_retriever = IndexRetriever(index_config.__dict__)
-        index_retriever.build(page_store)
-        retrievers["page_index"] = index_retriever
-        print("✅ Index retriever ready")
-    except Exception as e:
-        print(f"[WARN] Index retriever init from {IndexRetriever} failed: {e}")
 
     vector_tool_configs = {
         "vector": {
@@ -172,7 +164,27 @@ def build_retrievers(
             "source_label": "vector_description_task_description_summary",
         },
     }
+    allowed = {
+        str(tool).strip()
+        for tool in (allowed_tools or [])
+        if str(tool).strip()
+    }
+    if not allowed:
+        allowed = {"page_index", "keyword", *vector_tool_configs.keys()}
+
+    if "page_index" in allowed:
+        try:
+            index_config = IndexRetrieverConfig(index_dir=str(index_dir / "page_index"))
+            index_retriever = IndexRetriever(index_config.__dict__)
+            index_retriever.build(page_store)
+            retrievers["page_index"] = index_retriever
+            print("✅ Index retriever ready")
+        except Exception as e:
+            print(f"[WARN] Index retriever init from {IndexRetriever} failed: {e}")
+
     for tool_name, extra in vector_tool_configs.items():
+        if tool_name not in allowed:
+            continue
         try:
             chroma_config = {
                 "persist_dir": str(chroma_dir),
@@ -185,7 +197,7 @@ def build_retrievers(
         except Exception as e:
             print(f"[WARN] Chroma retriever init for '{tool_name}' failed: {e}")
 
-    if enable_bm25:
+    if enable_bm25 and "keyword" in allowed:
         try:
             bm25_config = {"index_dir": str(index_dir / "bm25")}
             bm25_retriever = BM25Retriever(bm25_config)

@@ -4,6 +4,98 @@ from typing import Any
 from uuid import uuid4
 
 
+_DESCRIPTION_KEYS = (
+    "description",
+    "summary",
+    "title",
+    "change",
+    "what_changed",
+    "pattern",
+    "improvement",
+    "name",
+)
+_EXPLANATION_KEYS = (
+    "explanation",
+    "rationale",
+    "reason",
+    "why",
+    "motivation",
+    "expected_effect",
+    "impact",
+    "details",
+    "justification",
+)
+
+
+def _stringify_improvement_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            text = _stringify_improvement_value(item)
+            if text:
+                parts.append(f"{key}: {text}")
+        return "; ".join(parts)
+    if isinstance(value, (list, tuple, set)):
+        parts = [_stringify_improvement_value(item) for item in value]
+        return "; ".join(part for part in parts if part)
+    return str(value).strip()
+
+
+def normalize_improvement_item(idea: Any) -> dict[str, str]:
+    """Coerce mutation change payloads into the tracker's legacy shape."""
+    if isinstance(idea, str):
+        description = idea.strip()
+        return {"description": description, "explanation": ""}
+
+    if not isinstance(idea, dict):
+        description = _stringify_improvement_value(idea)
+        return {"description": description or "Unspecified change", "explanation": ""}
+
+    description = ""
+    for key in _DESCRIPTION_KEYS:
+        description = _stringify_improvement_value(idea.get(key))
+        if description:
+            break
+
+    explanation = ""
+    for key in _EXPLANATION_KEYS:
+        explanation = _stringify_improvement_value(idea.get(key))
+        if explanation:
+            break
+
+    extras: list[str] = []
+    for key, value in idea.items():
+        if key in _DESCRIPTION_KEYS or key in _EXPLANATION_KEYS:
+            continue
+        text = _stringify_improvement_value(value)
+        if text:
+            extras.append(f"{key}: {text}")
+
+    if not description and extras:
+        description = extras[0]
+        extras = extras[1:]
+    if not explanation and extras:
+        explanation = "; ".join(extras)
+    if not description:
+        description = explanation or "Unspecified change"
+
+    return {"description": description, "explanation": explanation}
+
+
+def normalize_improvements(ideas: Any) -> list[dict[str, str]]:
+    if ideas is None:
+        return []
+    if isinstance(ideas, list):
+        return [normalize_improvement_item(idea) for idea in ideas]
+    return [normalize_improvement_item(ideas)]
+
+
 @dataclass
 class ProgramRecord:
     """
@@ -810,7 +902,7 @@ class IncomingIdeas:
             ideas: List of dicts with keys "description" and "explanation".
         """
         self.ideas = []
-        for idea in ideas:
+        for idea in normalize_improvements(ideas):
             idea_dict = {
                 "description": idea["description"],
                 "change_motivation": idea["explanation"],

@@ -100,7 +100,12 @@ Your response format is enforced by the system — just fill in the fields.
 - **archetype**: One of the 8 archetypes above
 - **justification**: 2-3 sentences citing insights, strategy used, expected improvement
 - **insights_used**: 1-3 insight strings copied verbatim from the input
-- **changes**: 1 or more dictionaries describing key introduced changes. For each item, describe the reusable or generalizable pattern first, then include concrete implementation details only when they matter. Prefer `general pattern + concrete instance` over a narrow one-off description. Each item should explain what changed and why, and be specific enough for tracker logging and later reuse.
+- **changes**: 1 or more dictionaries.
+  Each change dictionary must contain:
+  - `description`: a generalizable description of the introduced change, optionally followed by concrete specifics when they matter. Prefer `general pattern + concrete instance` over only a narrow one-off description.
+  - `explanation`: explain why this change was introduced and why the same idea could transfer to future evolutions when possible.
+- **changes.description**: First describe the change in a reusable, generalizable form so it can be applied in later evolutions. Then, if the change depends on concrete implementation details, include those specifics too. BAD EXAMPLE: "Increase radius upper bound from 0.5 to 0.7"; BETTER EXAMPLE: "Relaxed an overly restrictive search bound to expand feasible candidates; specifically increased the radius upper bound from 0.5 to 0.7."; Another GOOD EXAMPLE: "Replaced a brittle hard threshold with a smoother penalty so near-feasible candidates remain searchable; specifically made the constraint penalty differentiable."
+- **changes.explanation**: Explain both why this helped in this program and, when possible, why the same idea could transfer to future mutations.
 - **code**: The complete mutated Python program — valid Python only, no markdown, no JSON
 
 **CRITICAL**:
@@ -108,6 +113,7 @@ Your response format is enforced by the system — just fill in the fields.
 - The `code` field must be valid Python source code that can be executed directly
 - Do NOT put JSON, templates, or format examples in the `code` field
 - Use `changes` to capture the main introduced modifications with both a description and explanation.
+- Write `changes` so downstream idea selection can reuse them: prefer transferable principles, with concrete constants/formulas included only as supporting detail when relevant.
 - Focus on code quality — the justification should support your changes, not the other way around
 
 {parent_blocks}

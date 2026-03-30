@@ -23,6 +23,24 @@ if TYPE_CHECKING:
     from gigaevo.programs.metrics.context import MetricsContext
     from gigaevo.prompts.fetcher import PromptFetcher
 
+class MutationChange(BaseModel):
+    """Tracker-friendly description of one introduced change."""
+
+    description: str = Field(
+        description=(
+            "Generalizable description of the introduced change, optionally followed "
+            "by concrete specifics when they matter. Prefer `general pattern + "
+            "concrete instance` over a narrow one-off description."
+        )
+    )
+    explanation: str = Field(
+        description=(
+            "Explain why this change was introduced, why it helped for this "
+            "program, and when possible why the same idea could transfer to future "
+            "mutations."
+        )
+    )
+
 
 class MutationStructuredOutput(BaseModel):
     """Structured output from the mutation LLM.
@@ -40,9 +58,13 @@ class MutationStructuredOutput(BaseModel):
         default_factory=list,
         description="Flat list of insight strings that were acted on (verbatim from input)",
     )
-    changes: list[dict[str, Any]] = Field(
+    changes: list[MutationChange] = Field(
         default_factory=list,
-        description="Structured descriptions and explanations of the key changes introduced by the mutation.",
+        description=(
+            "Key introduced changes. Each item must contain a reusable or "
+            "generalizable description plus an explanation of why the change was "
+            "introduced."
+        ),
     )
     code: str = Field(
         description=(
