@@ -336,3 +336,111 @@ class TestExponentialBackoffBoundary:
 
         # max_retries=1: fails on first attempt, raises immediately, no sleep
         assert len(delays) == 0
+
+
+# ---------------------------------------------------------------------------
+# Race condition and concurrent access tests
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentCloseRace:
+    """Tests for race conditions between execute() and close()."""
+
+    async def test_execute_during_close_raises(self) -> None:
+        """If close() is called while execute() retry is sleeping,
+        the next retry should detect _closing and raise immediately.
+        """
+        conn = RedisConnection(_make_config(max_retries=5, retry_delay=0.01))
+        mock_redis = AsyncMock()
+        conn._redis = mock_redis
+
+        call_count = {"n": 0}
+
+        async def fail_then_close_signals(r):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise ConnectionError("transient")
+            # By retry 2, closing should be set
+            raise ConnectionError("still failing")
+
+        # Start close concurrently — set _closing flag
+        async def close_after_delay():
+            await asyncio.sleep(0.005)
+            conn._closing = True
+
+        close_task = asyncio.create_task(close_after_delay())
+
+        with pytest.raises(StorageError):
+            await conn.execute("race_test", fail_then_close_signals)
+
+        await close_task
+        # Should have stopped retrying once _closing was detected
+        assert call_count["n"] <= 3, "Should stop retrying early when closing"
+
+    async def test_execute_refuses_after_close(self) -> None:
+        """execute() called after close() returns immediately with StorageError."""
+        conn = RedisConnection(_make_config())
+        await conn.close()
+
+        async def should_not_run(r):
+            raise AssertionError("should not reach here")
+
+        with pytest.raises(StorageError, match="closing"):
+            await conn.execute("post_close", should_not_run)
+
+    async def test_double_close_concurrent(self) -> None:
+        """Two concurrent close() calls should both complete without error."""
+        conn = RedisConnection(_make_config())
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_redis.connection_pool = MagicMock()
+        mock_redis.connection_pool.disconnect = AsyncMock()
+        conn._redis = mock_redis
+
+        # Both should complete without error
+        await asyncio.gather(conn.close(), conn.close())
+
+        assert conn._redis is None
+        assert conn._closing is True
+
+    async def test_get_during_close_raises(self) -> None:
+        """get() called during close should raise StorageError."""
+        conn = RedisConnection(_make_config())
+        conn._closing = True
+
+        with pytest.raises(StorageError, match="closing"):
+            await conn.get()
+
+    async def test_close_during_retry_sleep(self) -> None:
+        """If close() is called during execute()'s retry sleep,
+        the next attempt should see _closing and raise.
+
+        This tests the TOCTOU window: execute() checks _closing, then sleeps,
+        then close() sets _closing, then execute() retries.
+        """
+        conn = RedisConnection(_make_config(max_retries=10, retry_delay=0.05))
+        mock_redis = AsyncMock()
+        conn._redis = mock_redis
+
+        attempts = {"n": 0}
+
+        async def always_fail(r):
+            attempts["n"] += 1
+            raise ConnectionError("always fails")
+
+        # Close after a short delay (during retry sleep)
+        async def delayed_close():
+            await asyncio.sleep(0.02)
+            conn._closing = True
+
+        close_task = asyncio.create_task(delayed_close())
+
+        with pytest.raises(StorageError):
+            await conn.execute("toctou_test", always_fail)
+
+        await close_task
+
+        # Should have stopped before max_retries due to _closing detection
+        assert attempts["n"] < 10, (
+            f"Expected early stop due to _closing, but got {attempts['n']} attempts"
+        )
