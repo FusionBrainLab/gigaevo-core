@@ -36,9 +36,82 @@ def _load_module_from_code(
 def _prepend_sys_path(paths: list[str] | None) -> None:
     if not paths:
         return
-    for p in paths:
-        if p and p not in sys.path:
-            sys.path.insert(0, str(Path(p).resolve()))
+    normalized_existing: list[tuple[str, str]] = []
+    for entry in sys.path:
+        try:
+            normalized_existing.append((entry, str(Path(entry).resolve())))
+        except OSError:
+            normalized_existing.append((entry, entry))
+
+    for raw_path in reversed(paths):
+        if not raw_path:
+            continue
+        resolved = str(Path(raw_path).resolve())
+        sys.path[:] = [
+            entry
+            for entry, normalized in normalized_existing
+            if normalized != resolved
+        ]
+        sys.path.insert(0, resolved)
+        normalized_existing = []
+        for entry in sys.path:
+            try:
+                normalized_existing.append((entry, str(Path(entry).resolve())))
+            except OSError:
+                normalized_existing.append((entry, entry))
+
+
+def _iter_top_level_module_names(path: Path) -> set[str]:
+    if not path.is_dir():
+        return set()
+
+    names: set[str] = set()
+    for child in path.iterdir():
+        if child.name == "__pycache__":
+            continue
+        if child.is_file() and child.suffix == ".py" and child.stem != "__init__":
+            names.add(child.stem)
+        elif child.is_dir() and (child / "__init__.py").is_file():
+            names.add(child.name)
+    return names
+
+
+def _module_file_path(module: types.ModuleType) -> Path | None:
+    filename = getattr(module, "__file__", None)
+    if not filename:
+        return None
+    try:
+        return Path(filename).resolve()
+    except OSError:
+        return None
+
+
+def _module_belongs_to_path(module: types.ModuleType, path: Path, name: str) -> bool:
+    module_file = _module_file_path(module)
+    if module_file is None:
+        return False
+
+    file_candidate = path / f"{name}.py"
+    package_candidate = path / name / "__init__.py"
+    candidates = [candidate.resolve() for candidate in (file_candidate, package_candidate) if candidate.exists()]
+    return module_file in candidates
+
+
+def _clear_shadowed_top_level_modules(paths: list[str] | None) -> None:
+    if not paths:
+        return
+
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        path = Path(raw_path).resolve()
+        for name in _iter_top_level_module_names(path):
+            existing = sys.modules.get(name)
+            if existing is None:
+                continue
+            if _module_belongs_to_path(existing, path, name):
+                continue
+            sys.modules.pop(name, None)
 
 
 def _ensure_cwd_in_path() -> None:
@@ -132,6 +205,7 @@ def _run_one(payload: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None
             raise TypeError("Payload must contain 'args': list and 'kwargs': dict")
 
         _prepend_sys_path(py_path)
+        _clear_shadowed_top_level_modules(py_path)
         mod = _load_module_from_code(code)
         fn = getattr(mod, fn_name, None)
         if not callable(fn):

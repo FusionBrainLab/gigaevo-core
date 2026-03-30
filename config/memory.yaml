@@ -10,7 +10,7 @@ paths:
 api:
   base_url: http://localhost:8000
   namespace: exp9
-  use_api: true
+  use_api: false
   channel: latest
   author: null
 
@@ -88,6 +88,11 @@ models:
   openrouter_model_name: google/gemini-3-flash-preview
   amem_embedding_model_name: all-MiniLM-L6-v2
   gam_dense_retriever_model_name: BAAI/bge-m3
+
+downloads:
+  huggingface:
+    etag_timeout: 60
+    download_timeout: 300
 
 ideas_tracker:
   gen_delta: 100000

@@ -2,7 +2,10 @@ import json
 
 import pandas as pd
 
-from gigaevo.memory.ideas_tracker.components.data_components import ProgramRecord
+from gigaevo.memory.ideas_tracker.components.data_components import (
+    ProgramRecord,
+    normalize_improvements,
+)
 
 
 def convert_programs_to_records(
@@ -37,7 +40,7 @@ def convert_programs_to_records(
             generation=program["generation"],
             parents=parent_ids,
             insights=mutation_metadata["insights_used"],
-            improvements=mutation_metadata["changes"],
+            improvements=normalize_improvements(mutation_metadata.get("changes")),
             category="",
             strategy=mutation_metadata["archetype"],
             task_description=task_description,
