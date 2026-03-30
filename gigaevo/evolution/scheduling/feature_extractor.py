@@ -89,6 +89,30 @@ class ChainFeatureExtractor:
                 n_deps = len([d for d in deps_str.split(",") if d.strip()])
                 max_deps = max(max_deps, float(n_deps))
 
+        # DAG depth: longest path from any root to any leaf.
+        # Steps are numbered 1..N in the code; deps_list is in order of appearance.
+        dep_lists: list[list[int]] = []
+        for m in self._DEP_RE.finditer(code):
+            deps_str = m.group(1).strip()
+            if deps_str:
+                dep_lists.append(
+                    [int(d.strip()) for d in deps_str.split(",") if d.strip()]
+                )
+            else:
+                dep_lists.append([])
+
+        dag_depth = 0.0
+        if dep_lists:
+            # depth[i] = longest path ending at step i (0-indexed)
+            n = len(dep_lists)
+            depth = [0] * n
+            for i in range(n):
+                for d in dep_lists[i]:
+                    idx = d - 1  # 1-indexed → 0-indexed
+                    if 0 <= idx < n:
+                        depth[i] = max(depth[i], depth[idx] + 1)
+            dag_depth = float(max(depth) + 1)  # +1: count nodes, not edges
+
         return {
             "code_length": float(len(code)),
             "n_tool_steps": n_tool_steps,
@@ -99,6 +123,7 @@ class ChainFeatureExtractor:
             "n_examples": n_examples,
             "has_system_prompt": has_system_prompt,
             "max_dependency_fan_in": max_deps,
+            "dag_depth": dag_depth,
         }
 
 

@@ -45,7 +45,9 @@ dependencies = [
     "langfuse>=2.0.0",
     "scikit-learn",
     "optuna",
-    "cma"
+    "cma",
+    "bm25s>=0.3.0",
+    "PyStemmer>=3.0.0"
 ]
 
 [project.optional-dependencies]

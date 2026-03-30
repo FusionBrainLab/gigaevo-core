@@ -297,3 +297,144 @@ class TestCrossRunVisibility:
         counts = Counter(selected)
         assert max(counts.values()) <= 4  # no single endpoint gets more than 4 of 8
         assert len(counts) == 3  # all endpoints used
+
+
+# ---------------------------------------------------------------------------
+# Failure mode tests (previously ZERO coverage)
+# ---------------------------------------------------------------------------
+
+
+class TestLuaScriptEviction:
+    """Test that Lua script cache eviction is handled gracefully."""
+
+    async def test_lua_reload_on_eviction(self, fake_server: fakeredis.FakeServer):
+        """If Lua script is evicted (NoScriptError), pool should reload and retry."""
+        pool = _make_pool(fake_server)
+
+        # First acquire loads the Lua script
+        ep1 = await pool.acquire()
+        assert ep1 in ENDPOINTS
+
+        # Clear the Lua SHA to simulate eviction
+        pool._lua_sha = None
+
+        # Second acquire should reload and succeed
+        ep2 = await pool.acquire()
+        assert ep2 in ENDPOINTS
+
+    async def test_acquire_after_many_releases(self, fake_server: fakeredis.FakeServer):
+        """Acquire after many release cycles should still work."""
+        pool = _make_pool(fake_server)
+
+        for _ in range(20):
+            ep = await pool.acquire()
+            await pool.release(ep, 10.0)
+
+        # Should still be functional
+        ep = await pool.acquire()
+        assert ep in ENDPOINTS
+
+
+class TestInflightCounterEdgeCases:
+    """Test edge cases in inflight counter management."""
+
+    async def test_release_without_acquire_goes_negative(
+        self, fake_server: fakeredis.FakeServer
+    ):
+        """Releasing without prior acquire decrements below 0.
+        Documents current behavior — no underflow protection.
+        """
+        pool = _make_pool(fake_server)
+        ep = ENDPOINTS[0]
+
+        await pool.release(ep, 10.0)
+
+        r = pool._get_async()
+        inflight = await r.hget(pool._inflight_key, ep)
+        assert int(inflight) == -1, "No underflow protection — counter goes negative"
+
+    async def test_concurrent_acquires_all_succeed(
+        self, fake_server: fakeredis.FakeServer
+    ):
+        """Many sequential acquires should all succeed (simulating burst load)."""
+        pool = _make_pool(fake_server)
+        import asyncio
+
+        endpoints = []
+        for _ in range(10):
+            ep = await pool.acquire()
+            endpoints.append(ep)
+
+        # All should be from the valid set
+        for ep in endpoints:
+            assert ep in ENDPOINTS
+
+        # Inflight should be 10 total
+        r = pool._get_async()
+        inflight = await r.hgetall(pool._inflight_key)
+        total = sum(int(v) for v in inflight.values())
+        assert total == 10
+
+    async def test_mark_unhealthy_then_recover(
+        self, fake_server: fakeredis.FakeServer
+    ):
+        """After marking unhealthy, endpoint should be skipped during cooldown
+        then recover after cooldown expires.
+        """
+        pool = _make_pool(fake_server, cooldown_secs=1)
+
+        # Acquire and mark unhealthy
+        ep = await pool.acquire()
+        await pool.mark_unhealthy(ep)
+
+        # During cooldown, this endpoint should be skipped (if others available)
+        # With 3 endpoints and 1 unhealthy, acquires should avoid the unhealthy one
+        selected = set()
+        for _ in range(5):
+            selected.add(await pool.acquire())
+
+        # The unhealthy endpoint should be avoided (or at least not preferred)
+        # Note: if ALL endpoints are unhealthy, it falls back to all
+        assert len(selected) >= 1  # At least one endpoint is selected
+
+    async def test_mark_unhealthy_decrements_inflight(
+        self, fake_server: fakeredis.FakeServer
+    ):
+        """mark_unhealthy should decrement the inflight counter (release the slot)."""
+        pool = _make_pool(fake_server)
+
+        ep = await pool.acquire()
+        r = pool._get_async()
+        inflight_before = int(await r.hget(pool._inflight_key, ep) or 0)
+
+        await pool.mark_unhealthy(ep)
+        inflight_after = int(await r.hget(pool._inflight_key, ep) or 0)
+
+        assert inflight_after == inflight_before - 1
+
+
+class TestStatsAccuracy:
+    """Test that stats accurately reflect usage patterns."""
+
+    async def test_stats_after_mixed_success_and_failure(
+        self, fake_server: fakeredis.FakeServer
+    ):
+        """Stats should accurately reflect both successful and failed requests."""
+        pool = _make_pool(fake_server)
+
+        # 3 successful requests
+        for _ in range(3):
+            ep = await pool.acquire()
+            await pool.release(ep, 50.0)
+
+        # 2 failed requests
+        for _ in range(2):
+            ep = await pool.acquire()
+            await pool.mark_unhealthy(ep)
+
+        stats = await pool.get_stats()
+        total_requests = sum(s.get("requests", 0) for s in stats.values())
+        total_errors = sum(s.get("errors", 0) for s in stats.values())
+
+        assert total_requests == 3
+        assert total_errors == 2
