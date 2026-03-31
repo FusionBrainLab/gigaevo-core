@@ -92,7 +92,7 @@ PIPELINE COMPONENTS
 
 CHAIN STRUCTURE — FULLY EVOLVABLE
 
-You may design any chain with up to 10 steps. The chain must:
+You may design any chain with up to 7 steps. The chain must:
 - Use only "llm" and "tool" step types
 - Use only the "retrieve" and "retrieve_deep" tools for tool steps
 - Have valid forward-only dependencies (no cycles, no references to later steps)
@@ -131,14 +131,14 @@ CONSTRAINTS
 - LLM steps require non-empty "aim" and "stage_action" fields
 - Dependencies must reference only earlier steps (by number)
 - No dependency cycles
-- Maximum 10 steps
+- Maximum 7 steps
 - Step types must be "llm" or "tool"
 - Tool steps must use "retrieve" or "retrieve_deep"
 FAILURE MODES
 - Missing or empty required fields (aim, stage_action for LLM steps)
 - Dependency cycles or references to non-existent/later steps
 - Tool step referencing unknown tool (only "retrieve" and "retrieve_deep" are available)
-- More than 10 steps
+- More than 7 steps
 
 OUTPUT FORMAT
 Implement `def entrypoint()` that returns:
