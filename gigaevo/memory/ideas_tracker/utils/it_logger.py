@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from gigaevo.memory.ideas_tracker.components.data_components import (
-        RecordCard,
         RecordCardExtended,
     )
     from gigaevo.memory.ideas_tracker.components.records_manager import RecordManager
@@ -84,7 +83,7 @@ class IdeasTrackerLogger:
         """
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def _idea_to_dict(self, idea: "RecordCard | RecordCardExtended") -> dict[str, Any]:
+    def _idea_to_dict(self, idea: "RecordCardExtended") -> dict[str, Any]:
         """
         Serialize idea to JSON-serializable dict.
 
@@ -243,61 +242,9 @@ class IdeasTrackerLogger:
             parameters=parameters,
         )
 
-    def log_move_idea(
-        self,
-        idea_id: str,
-        description: str,
-        linked_programs: list[str],
-        destination: str,
-    ) -> None:
-        """
-        Log movement of an idea between banks.
-
-        Args:
-            idea_id: UUID of moved idea.
-            description: Idea description.
-            linked_programs: List of linked program IDs.
-            destination: Destination bank ("inactive_bank" or "active_bank").
-        """
-        program_id = linked_programs[0] if linked_programs else idea_id
-
-        self._write_log(
-            program_id=program_id,
-            destination=destination,
-            action="move_idea",
-            parameters={
-                "idea_id": idea_id,
-                "description": description,
-                "linked_programs": linked_programs,
-                "destination": destination,
-            },
-        )
-
-    def log_rankings(self, rankings: list[dict[str, Any]]) -> None:
-        """
-        Append rankings to rankings.json.
-
-        Args:
-            rankings: List of ranking dictionaries
-        """
-        # Read existing rankings
-        if self.rankings_file.exists():
-            with open(self.rankings_file, "r", encoding="utf-8") as f:
-                existing_rankings = json.load(f)
-        else:
-            existing_rankings = []
-
-        # Append new rankings
-        existing_rankings.append(rankings)
-
-        # Write back
-        with open(self.rankings_file, "w", encoding="utf-8") as f:
-            json.dump(existing_rankings, f, indent=4)
-
     def log_banks(
         self,
         active_bank: list[dict[str, Any]] | dict[str, Any],
-        inactive_bank: list[dict[str, Any]] | dict[str, Any],
     ) -> None:
         """
         Append timestamped snapshot of both banks to banks.json.
@@ -308,7 +255,6 @@ class IdeasTrackerLogger:
         """
         banks_state = {
             "active_bank": active_bank,
-            "inactive_bank": inactive_bank,
             "timestamp": self._get_timestamp(),
         }
 
@@ -388,7 +334,9 @@ class IdeasTrackerLogger:
         with open(self.best_ideas_file, "w", encoding="utf-8") as f:
             json.dump(existing, f, indent=4)
 
-    def log_memory_usage_updates(self, usage_updates: dict[str, dict[str, Any]]) -> None:
+    def log_memory_usage_updates(
+        self, usage_updates: dict[str, dict[str, Any]]
+    ) -> None:
         """
         Append memory usage updates snapshot to memory_usage_updates.json.
 
@@ -432,18 +380,11 @@ class IdeasTrackerLogger:
             for idea in record_list.ideas:
                 active_bank_data.append(self._idea_to_dict(idea))
 
-        inactive_bank_data = []
-        for list_idx in range(record_manager.inactive_record_bank.num_lists):
-            record_list = record_manager.inactive_record_bank.get_record_list(list_idx)
-            for idea in record_list.ideas:
-                inactive_bank_data.append(self._idea_to_dict(idea))
-
         banks_state = {
             "active_bank": active_bank_data,
-            "inactive_bank": inactive_bank_data,
         }
 
-        self.log_banks(banks_state["active_bank"], banks_state["inactive_bank"])
+        self.log_banks(banks_state["active_bank"])
 
         self._write_log(
             program_id="final_state",
@@ -451,6 +392,5 @@ class IdeasTrackerLogger:
             action="dump_final_state",
             parameters={
                 "active_bank_size": len(active_bank_data),
-                "inactive_bank_size": len(inactive_bank_data),
             },
         )

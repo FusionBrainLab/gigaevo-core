@@ -1,7 +1,31 @@
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+
+from gigaevo.memory.ideas_tracker.components.fabrics.fabric_redis import create_redis_config
+from gigaevo.memory.ideas_tracker.utils.helpers import to_bool, to_float
+from tools.utils import RedisRunConfig
+
+_DEFAULT_BEST_PROGRAMS_PERCENT = 5.0
+
+
+def _parse_memory_write_pipeline(raw: Any) -> tuple[bool, float]:
+    if isinstance(raw, dict):
+        enabled = to_bool(raw.get("enabled", False), default=False)
+        pct = to_float(raw.get("best_programs_percent"))
+    else:
+        enabled = to_bool(raw, default=False)
+        pct = None
+    resolved = pct if pct is not None else _DEFAULT_BEST_PROGRAMS_PERCENT
+    return enabled, max(0.0, resolved)
+
+
+def _parse_usage_tracking(raw: Any) -> tuple[dict[str, Any], bool]:
+    if isinstance(raw, dict):
+        return raw, to_bool(raw.get("enabled", True), default=True)
+    return {"enabled": raw}, to_bool(raw, default=True)
 
 
 def _load_config(
@@ -48,7 +72,11 @@ def _load_config(
         return default_config
 
     with path_obj.open("r", encoding="utf-8") as f:
-        payload = yaml.safe_load(f) or {}
+        try:
+            payload = yaml.safe_load(f) or {}
+        except yaml.YAMLError as e:
+            print(f"Error loading config file: {e}")
+            return default_config
 
     if not isinstance(payload, dict):
         return default_config
@@ -60,3 +88,55 @@ def _load_config(
 
     # Backward-compatible fallback: treat the whole payload as tracker config.
     return payload
+
+
+@dataclass
+class PipelineConfig:
+    list_max_ideas: int = 5
+    analyzer_settings: dict[str, Any] = field(default_factory=dict)
+    analyzer_pipeline_type: str = "default"
+    postprocessing: dict[str, Any] = field(default_factory=dict)
+    description_rewriting: bool = True
+
+    def from_dict(self, cfg_dict) -> None:
+        self.list_max_ideas = cfg_dict.get("list_max_ideas", 5)
+        self.analyzer_settings = cfg_dict.get("analyzer", {})
+        self.analyzer_settings["analyzer_fast_settings"] = cfg_dict.get("analyzer_fast_settings", {})
+        self.analyzer_pipeline_type = self.analyzer_settings.get("type", "default")
+        self.postprocessing = self.analyzer_settings.get("postprocessing", {"type": "default"})
+        self.description_rewriting = cfg_dict.get("description_rewriting", True)
+
+@dataclass
+class MemoryConfig:
+    memory_write_pipeline_enabled: bool = False
+    best_programs_percent: float = _DEFAULT_BEST_PROGRAMS_PERCENT
+    memory_usage_tracking_enabled: bool = True
+    usage_tracking: dict[str, Any] = field(default_factory=dict)
+
+    def from_dict(self, cfg_dict) -> None:
+        mwp = cfg_dict.get("memory_write_pipeline", {})
+        self.memory_write_pipeline_enabled, self.best_programs_percent = (
+            _parse_memory_write_pipeline(mwp)
+        )
+        ut = cfg_dict.get("usage_tracking", {"enabled": True})
+        self.usage_tracking, self.memory_usage_tracking_enabled = _parse_usage_tracking(ut)
+
+@dataclass
+class IdeaTrackerConfig:
+    redis_config: RedisRunConfig
+    pipeline_config: PipelineConfig
+    memory_config: MemoryConfig
+
+def load_config(config_path: Optional[str | Path], idea_tracker_location: Path) -> IdeaTrackerConfig:
+    config_dict =  _load_config(config_path, idea_tracker_location)
+    redis_config = create_redis_config(config_dict.get("redis",{}))
+    pipeline_config = PipelineConfig()
+    pipeline_config.from_dict(config_dict)
+    memory_config = MemoryConfig()
+    memory_config.from_dict(config_dict)
+    config = IdeaTrackerConfig(redis_config=redis_config, pipeline_config=pipeline_config, memory_config=memory_config)
+    return config
+
+
+
+

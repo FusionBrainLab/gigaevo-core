@@ -435,13 +435,12 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
     payload = _load_json(path)
     snapshot = _latest_snapshot(payload, "active_bank")
     active_bank = snapshot.get("active_bank")
-    inactive_bank = snapshot.get("inactive_bank")
-    if not isinstance(active_bank, list) or not isinstance(inactive_bank, list):
+    if not isinstance(active_bank, list):
         raise ValueError(
-            f"Invalid banks format in {path}: expected 'active_bank' and 'inactive_bank' lists"
+            f"Invalid banks format in {path}: expected 'active_bank' list"
         )
 
-    all_cards = [card for card in [*active_bank, *inactive_bank] if isinstance(card, dict)]
+    all_cards = [card for card in active_bank if isinstance(card, dict)]
     cards_by_id = {
         str(card.get("id")).strip(): card
         for card in all_cards
@@ -472,12 +471,11 @@ def _load_latest_bank_cards(path: Path) -> list[dict[str, Any]]:
     payload = _load_json(path)
     snapshot = _latest_snapshot(payload, "active_bank")
     active_bank = snapshot.get("active_bank")
-    inactive_bank = snapshot.get("inactive_bank")
-    if not isinstance(active_bank, list) or not isinstance(inactive_bank, list):
+    if not isinstance(active_bank, list):
         raise ValueError(
-            f"Invalid banks format in {path}: expected 'active_bank' and 'inactive_bank' lists"
+            f"Invalid banks format in {path}: expected 'active_bank' list"
         )
-    return [card for card in [*active_bank, *inactive_bank] if isinstance(card, dict)]
+    return [card for card in active_bank if isinstance(card, dict)]
 
 
 def _build_program_cards(
@@ -636,7 +634,7 @@ def load_memory_cards(
         cards = _load_banks_cards(path, best_ideas_path)
     else:
         raise ValueError(
-            "Invalid banks JSON format. Expected payload with 'active_bank' and 'inactive_bank'."
+            "Invalid banks JSON format. Expected payload with 'active_bank'"
         )
 
     if usage_updates and memory is not None:

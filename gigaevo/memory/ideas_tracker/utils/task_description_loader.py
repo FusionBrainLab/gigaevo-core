@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 
-def _load_task_description(redis_prefix: str, idea_tracker_location: Path) -> str:
+def load_task_description(redis_prefix: str, idea_tracker_location: Path) -> str:
     """
     Load human-readable task description for the current experiment.
 
