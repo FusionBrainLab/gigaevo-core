@@ -117,21 +117,21 @@ class ProgramRecord:
     task_description_summary: str = ""
     code: str = ""
 
-
-@dataclass
-class RecordCard:
-    """
-    Represents a tracked idea with basic metadata.
-
-    Stores idea description, linked programs, and last generation seen.
-    Fields are mutable to support updates as programs evolve.
-    """
-
-    id: str = ""
-    description: str = ""
-    linked_programs: list[str] = field(default_factory=list)
-    last_generation: int = 0
-
+    def to_dict(self) -> dict[str, Any]:
+        """Convert ProgramRecord to a dictionary."""
+        return {
+            "id": self.id,
+            "fitness": self.fitness,
+            "generation": self.generation,
+            "parents": self.parents,
+            "insights": self.insights,
+            "improvements": self.improvements,
+            "category": self.category,
+            "strategy": self.strategy,
+            "task_description": self.task_description,
+            "task_description_summary": self.task_description_summary,
+            "code": self.code,
+        }
 
 @dataclass
 class RecordCardEmbedding:
@@ -181,7 +181,7 @@ class ClusterCard:
         for i, card in enumerate(self.members, start=1):
             lines.append(f"{i}) {card.description} \n")
         return "".join(lines)
-
+    
     def numbered_idea_groups(self, subgroup_size: int = 20) -> list[str]:
         """
         Split the cluster into fixed-size subgroups (last group may be short).
@@ -196,6 +196,8 @@ class ClusterCard:
         if n == 0:
             return []
         groups: list[str] = []
+        if subgroup_size >= n:
+            return [self.numbered_ideas_text()]
         for i in range(0, n, subgroup_size):
             chunk = self.members[i : i + subgroup_size]
             lines: list[str] = []
@@ -215,14 +217,6 @@ class ClusterCard:
         """Remove a card by identity; does not clear card.cluster_id (caller updates)."""
         self.members = [c for c in self.members if c is not card]
         self.rebuild_index_to_card()
-
-
-@dataclass
-class RefinementRoundResult:
-    """Aggregate result of one refinement round."""
-
-    has_changed: bool = False
-
 
 @dataclass
 class RecordCardExtended:
@@ -518,144 +512,6 @@ class RecordListV2:
             )
         self.max_ideas = new_val
 
-
-@dataclass
-class RecordList:
-    """
-    Bounded list holding RecordCard instances with capacity management.
-
-    Provides operations for adding, finding, modifying, removing ideas,
-    and identifying inactive ideas based on generation thresholds.
-    """
-
-    ideas: list[RecordCard] = field(default_factory=list)
-    num_ideas: int = 0
-    max_ideas: int = 5
-
-    def add_idea(self, idea_dict: dict[str, Any]) -> None:
-        """Append a new idea from a dict of RecordCard fields. Raises if list is full."""
-        if self.num_ideas >= self.max_ideas:
-            raise ValueError("Can't add new idea to list since it full")
-        new_idea = RecordCard(**idea_dict)
-        self.ideas.append(new_idea)
-        self.num_ideas = len(self.ideas)
-
-    def find_idea_index(self, idea_id: str) -> int | None:
-        """Return index of idea with given id, or None if not found."""
-        for index, idea in enumerate(self.ideas):
-            if idea.id == idea_id:
-                return index
-        return None
-
-    def modify_idea(
-        self,
-        idea_id: str,
-        new_programs: list[str] | None = None,
-        new_generation: int | None = None,
-        new_description: str | None = None,
-    ) -> bool:
-        """Update linked_programs (extend) and/or last_generation (if greater). Returns True if found."""
-        idea_index = self.find_idea_index(idea_id)
-        if idea_index is None:
-            return False
-        idea = self.ideas[idea_index]
-        if new_programs is not None:
-            idea.linked_programs.extend(new_programs)
-        if new_generation is not None and idea.last_generation < new_generation:
-            idea.last_generation = new_generation
-        if new_description is not None:
-            idea.description = new_description
-        return True
-
-    def get_idea(self, idea_id: str) -> RecordCard:
-        """Return the RecordCard with the given id. Raises ValueError if not found."""
-        idea_index = self.find_idea_index(idea_id)
-        if idea_index is None:
-            raise ValueError(f"Can't find idea with id {idea_id}")
-        return self.ideas[idea_index]
-
-    def remove_idea(self, idea_id: str) -> bool:
-        """Remove the idea with the given id. Returns True if found and removed."""
-        idea_index = self.find_idea_index(idea_id)
-        if idea_index is None:
-            return False
-        self.ideas.pop(idea_index)
-        self.num_ideas = len(self.ideas)
-        return True
-
-    def import_idea(self, new_idea: RecordCard) -> None:
-        """Append an existing RecordCard. Raises if list is full."""
-        if self.num_ideas >= self.max_ideas:
-            raise ValueError("Can't import idea: list is full")
-        self.ideas.append(new_idea)
-        self.num_ideas = len(self.ideas)
-
-    def exclude_inactive_ideas(
-        self, generation: int, delta: int, persist_ideas: bool = False
-    ) -> list[RecordCard]:
-        """Return ideas where |last_generation - generation| > delta; optionally remove them from this list."""
-        excluded_ideas = []
-        excluded_ideas_id = []
-        for idea in self.ideas:
-            if abs(idea.last_generation - generation) > delta:
-                excluded_ideas.append(idea)
-                excluded_ideas_id.append(idea.id)
-        if not persist_ideas:
-            for exc_idea_id in excluded_ideas_id:
-                self.remove_idea(exc_idea_id)
-        return excluded_ideas
-
-    def all_ideas_short(self) -> list[dict[str, str]]:
-        """
-        Return short representation of all ideas.
-
-        Returns:
-            List of dicts with keys: id (full UUID), short_id (first UUID segment),
-            and description.
-        """
-        ideas = []
-        for idea in self.ideas:
-            ideas.append(
-                {
-                    "id": idea.id,
-                    "short_id": idea.id.split("-")[0],
-                    "description": idea.description,
-                }
-            )
-        return ideas
-
-    def change_max_ideas(self, new_val: int) -> None:
-        """Set max_ideas to new_val. Raises if new_val is negative or less than current size."""
-        if new_val < 0:
-            raise ValueError(f"New max_ideas value {new_val} smaller than 0")
-        if new_val < self.num_ideas:
-            raise ValueError(
-                f"New max_ideas value {new_val} smaller than size of list {self.num_ideas}"
-            )
-        self.max_ideas = new_val
-
-    def is_full(self) -> bool:
-        """Return True if this list has reached max_ideas."""
-        if self.num_ideas < self.max_ideas:
-            return False
-        else:
-            return True
-
-    def rankings(self) -> list[dict[str, str | list[str] | int]]:
-        """Return a short representation of each idea: [{"id", "description", "programs", "count"}, ...]."""
-        ideas = []
-        for idea in self.ideas:
-            ideas.append(
-                {
-                    "id": idea.id,
-                    "description": idea.description,
-                    "programs": idea.linked_programs,
-                    "count": len(idea.linked_programs),
-                }
-            )
-        return ideas
-
-
 @dataclass
 class RecordBank:
     """
@@ -782,7 +638,7 @@ class RecordBank:
                 )
                 return
 
-    def import_idea(self, new_idea: RecordCard) -> None:
+    def import_idea(self, new_idea: RecordCardExtended) -> None:
         """Append an existing RecordCard; assign new id if its id already exists in the bank."""
         if new_idea.id in self.uuids:
             new_uuid = self._unique_id_pair()
@@ -807,7 +663,7 @@ class RecordBank:
             idea_dict["programs"] = list(idea_dict["programs"])
             self._append_record_list(idea_dict, is_forced=is_forced)
 
-    def get_idea(self, idea_id: str) -> RecordCard:
+    def get_idea(self, idea_id: str) -> RecordCardExtended:
         """Return the RecordCard with the given id. Raises ValueError if not found."""
         if idea_id not in self.uuids:
             raise ValueError(f"No idea with id {idea_id} found")
@@ -818,9 +674,9 @@ class RecordBank:
 
     def get_inactive_ideas(
         self, generation: int, delta: int, persist: bool = False
-    ) -> list[RecordCard]:
+    ) -> list[RecordCardExtended]:
         """Return ideas where |last_generation - generation| > delta; if not persist, remove them from the bank."""
-        excluded_ideas: list[RecordCard] = []
+        excluded_ideas: list[RecordCardExtended] = []
         for list_num in range(len(self.ideas_lists)):
             list_excluded_ideas = self.ideas_lists[list_num].exclude_inactive_ideas(
                 generation=generation, delta=delta, persist_ideas=persist
@@ -845,7 +701,7 @@ class RecordBank:
         """Return the number of RecordList instances in this bank."""
         return self.num_lists
 
-    def get_record_list(self, list_num: int) -> RecordList:
+    def get_record_list(self, list_num: int) -> RecordListV2:
         """Return the RecordList at the given index. Raises if index out of range."""
         if list_num > len(self.ideas_lists) - 1 or list_num < 0:
             raise ValueError("No records list with such id exists")
@@ -859,28 +715,12 @@ class RecordBank:
             ideas_by_list[index] = {"descriptions": short_descriptions}
         return ideas_by_list
 
-    def all_ideas_cards(self) -> list[RecordCard]:
+    def all_ideas_cards(self) -> list[RecordCardExtended]:
         """Return all ideas in the bank."""
         ideas = []
         for ideas_list in self.ideas_lists:
             ideas.extend(ideas_list.ideas)
         return ideas
-
-    def rankings(self) -> list[dict[str, str | list[str] | list[float]]]:
-        """
-        Returns:
-            List of dictionaries with keys: id, description, programs, fitness, an_fitness.
-        """
-        ideas_rankings = []
-        for ideas_list in self.ideas_lists:
-            ideas_with_scores = ideas_list.rankings()
-            for idea in ideas_with_scores:
-                idea_dict = {**idea}
-                idea_dict["fitness"] = []
-                idea_dict["an_fitness"] = []
-                ideas_rankings.append(idea_dict)
-        return ideas_rankings
-
 
 @dataclass
 class IncomingIdeas:

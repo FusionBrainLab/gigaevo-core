@@ -1,0 +1,12 @@
+Synthesize a description for the following cluster of related ideas.
+ 
+REPRESENTATIVE DESCRIPTION (most specific idea in the cluster):
+<INSERT_REP>
+ 
+ALL DESCRIPTIONS:
+<INSERT_DES>
+ 
+EXPLANATIONS:
+<INSERT_EXPL>
+ 
+Write a single synthesized description of up to 3 sentences that captures the shared mechanism, the full range of values or approaches explored, and the reasoning for why this change improves performance. Be specific and actionable.

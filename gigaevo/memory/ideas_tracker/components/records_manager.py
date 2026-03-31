@@ -20,9 +20,7 @@ class RecordManager:
             list_max_ideas: Maximum number of ideas per list in each bank.
         """
         self.record_bank: RecordBank = RecordBank(list_max_ideas=list_max_ideas)
-        self.inactive_record_bank: RecordBank = RecordBank(
-            list_max_ideas=list_max_ideas
-        )
+
         self.logger: IdeasTrackerLogger | None = None
 
     def add_new_idea(
@@ -97,13 +95,6 @@ class RecordManager:
                 idea_id, new_programs, generation, new_description, change_motivation
             )
             idea_bank = self.record_bank
-        elif idea_id in self.inactive_record_bank.uuids:
-            old_description = self.inactive_record_bank.get_idea(idea_id).description
-            self.inactive_record_bank.modify_idea(
-                idea_id, new_programs, generation, new_description, change_motivation
-            )
-            self.move_to_active(idea_id)
-            idea_bank = self.record_bank
         else:
             raise ValueError(f"No idea with id {idea_id} found!")
 
@@ -123,35 +114,6 @@ class RecordManager:
                 new_linked_programs=new_programs or [],
                 **extra,
             )
-
-    def move_inactive(self, generation: int, delta: int) -> None:
-        """
-        Move inactive ideas from active bank to inactive bank based on generation threshold.
-
-        Ideas with |last_generation - generation| > delta are considered inactive.
-
-        Args:
-            generation: Current generation number.
-            delta: Generation threshold for considering ideas inactive.
-        """
-        inactive_ideas = self.record_bank.get_inactive_ideas(
-            generation, delta, persist=True
-        )
-        for inact_idea in inactive_ideas:
-            self.inactive_record_bank.import_idea(inact_idea)
-            if self.logger is not None:
-                programs_list = list(
-                    getattr(inact_idea, "programs", None)
-                    or getattr(inact_idea, "linked_programs", [])
-                )
-                self.logger.log_move_idea(
-                    idea_id=inact_idea.id,
-                    description=inact_idea.description,
-                    linked_programs=programs_list,
-                    destination="inactive_bank",
-                )
-        for inact_idea in inactive_ideas:
-            self.record_bank.remove_idea(inact_idea.id)
 
     def ideas_as_text(self, ideas_data: list[dict[str, str]]) -> str:
         """
@@ -184,60 +146,13 @@ class RecordManager:
             Dictionary mapping list indices to dicts with "descriptions" list
             and "text" string representation.
         """
-        if use_inactive:
-            bank = self.inactive_record_bank
-        else:
-            bank = self.record_bank
+
+        bank = self.record_bank
         all_ideas = bank.all_ideas_short()
         return {
             k: {**v, "text": self.ideas_as_text(v["descriptions"])}
             for k, v in all_ideas.items()
         }
-
-    def move_to_inactive(self, idea_id: str) -> None:
-        """
-        Move idea from active bank to inactive bank.
-
-        Args:
-            idea_id: UUID of idea to move.
-
-        Raises:
-            ValueError: If idea_id not found in active bank.
-        """
-        idea = self.record_bank.get_idea(idea_id)
-        self.inactive_record_bank.import_idea(idea)
-        self.record_bank.remove_idea(idea_id)
-
-    def move_to_active(self, idea_id: str) -> None:
-        """
-        Move idea from inactive bank to active bank.
-
-        Args:
-            idea_id: UUID of idea to move.
-
-        Raises:
-            ValueError: If idea_id not found in inactive bank.
-        """
-        idea = self.inactive_record_bank.get_idea(idea_id)
-        self.record_bank.import_idea(idea)
-        self.inactive_record_bank.remove_idea(idea_id)
-
-    def get_rankings(
-        self, inactive: bool = False
-    ) -> list[dict[str, str | list[str] | list[float]]]:
-        """
-        Get idea rankings from active or inactive bank.
-
-        Args:
-            inactive: If True, return rankings from inactive bank; otherwise from active bank.
-
-        Returns:
-            List of dicts with keys: id, description, programs, count, fitness, an_fitness.
-        """
-        if not inactive:
-            return self.record_bank.rankings()
-        else:
-            return self.inactive_record_bank.rankings()
 
     def enrich_idea_metadata(
         self,
@@ -260,10 +175,6 @@ class RecordManager:
         """
         if idea_id in self.record_bank.uuids:
             self.record_bank.modify_idea_metadata(
-                idea_id, keywords, summary, task_description_summary
-            )
-        elif idea_id in self.inactive_record_bank.uuids:
-            self.inactive_record_bank.modify_idea_metadata(
                 idea_id, keywords, summary, task_description_summary
             )
         else:

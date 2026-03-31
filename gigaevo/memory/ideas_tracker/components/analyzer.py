@@ -1,13 +1,11 @@
 from copy import copy
 import json
-import os
 from typing import Any
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
 from gigaevo.memory.ideas_tracker.components.data_components import IncomingIdeas
-from gigaevo.memory.ideas_tracker.components.prompt_manager import PromptManager
+from gigaevo.memory.ideas_tracker.components.fabrics.llm_clients_fabric import LLMClient
 from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 
 load_dotenv()
@@ -27,6 +25,7 @@ class IdeaAnalyzer:
         reasoning: dict[str, Any] | None = None,
         base_url: str | None = None,
         description_rewriting: bool = False,
+        retry_attempts: int = 10,
     ) -> None:
         """
         Initialize IdeaAnalyzer with LLM model.
@@ -45,6 +44,7 @@ class IdeaAnalyzer:
         self._is_openrouter = False
         self.logger: IdeasTrackerLogger | None = None
         self.description_rewriting = description_rewriting
+        self.retry_attempts = retry_attempts
         self._init_analyzer()
 
     def _init_analyzer(self) -> None:
@@ -54,32 +54,7 @@ class IdeaAnalyzer:
         Sets up the LLM client using environment variables and creates
         a PromptManager instance for loading classification prompts.
         """
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "OPENAI_API_KEY is not set. Set it in your environment or .env file."
-            )
-
-        # Priority: env overrides config, then configured base_url.
-        env_base_url = (
-            os.getenv("OPENAI_BASE_URL")
-            or os.getenv("BASE_URL")
-            or os.getenv("LLM_BASE_URL")
-        )
-        base_url = env_base_url or self.base_url
-
-        # OpenRouter keys typically start with "sk-or-"; infer base URL when missing.
-        if not base_url and api_key.startswith("sk-or-"):
-            base_url = "https://openrouter.ai/api/v1"
-
-        self._is_openrouter = bool(base_url and "openrouter.ai" in base_url)
-
-        client_kwargs = {"api_key": api_key}
-        if base_url:
-            client_kwargs["base_url"] = base_url
-
-        self.llm = OpenAI(**client_kwargs)
-        self.prompt_manager = PromptManager()
+        self.llm = LLMClient(model=self.model, base_url=self.base_url)
 
         if self.logger is not None:
             self.logger.log_init(
@@ -98,27 +73,13 @@ class IdeaAnalyzer:
         Returns:
             LLM response content as a string, or empty string if no content.
         """
-        prompt_system_name = f"{step_name}__system"
-        prompt_user_name = f"{step_name}__user"
-        prompt_system = self.prompt_manager.load_prompt(prompt_name=prompt_system_name)
-        prompt_user = self.prompt_manager.load_prompt(
-            prompt_name=prompt_user_name, insert_data=prompt_content
-        )
-        request_kwargs: dict[str, Any] = {
-            "messages": [
-                {"role": "system", "content": prompt_system},
-                {"role": "user", "content": prompt_user},
-            ],
-            "model": self.model,
-            "temperature": 0,
-        }
-        if self._is_openrouter and self.reasoning:
-            request_kwargs["extra_body"] = {"reasoning": self.reasoning}
+        return self.llm.call_llm(step_name, prompt_content, self.reasoning)
 
-        response = self.llm.chat.completions.create(**request_kwargs)
-        if not response.choices[0].message.content:
-            return ""
-        return response.choices[0].message.content
+    async def call_llm_async(self, step_name: str, prompt_content: str) -> str:
+        """
+        Asynchronous chat completion for code paths that use the async API (e.g. refinement).
+        """
+        return await self.llm.call_llm_async(step_name, prompt_content, self.reasoning)
 
     def classify_ideas(
         self, program_changes: str, known_ideas: str
@@ -138,19 +99,14 @@ class IdeaAnalyzer:
         prompt_content = (
             f" Existing Ideas: \n {known_ideas} \n Incoming Ideas: \n {program_changes}"
         )
-        retry_attempts = 10
-        generated = False
         classified_ideas = {"present_ideas": [], "new_ideas": [], "updated_ideas": []}
-        prompt_name = "classify_ext" if self.description_rewriting else "classify"
-        while not generated:
+        for _ in range(self.retry_attempts):
             try:
-                response = self.call_llm(prompt_name, prompt_content)
+                response = self.call_llm("classify_ext", prompt_content)
                 classified_ideas = json.loads(response)
-                generated = True
-            except Exception:
-                retry_attempts -= 1
-                if retry_attempts == 0:
-                    break
+            except Exception as e:
+                print(f"Error calling LLM: {e}")
+                continue
         return classified_ideas
 
     def short_id_to_full_id(

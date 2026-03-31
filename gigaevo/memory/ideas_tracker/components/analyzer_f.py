@@ -7,14 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
+import time
 from typing import Any
 import uuid
 
 from dotenv import load_dotenv
 import numpy as np
-from openai import AsyncOpenAI
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
 from tqdm import tqdm
@@ -23,10 +22,9 @@ from gigaevo.memory.ideas_tracker.components.data_components import (
     ClusterCard,
     ProgramRecord,
     RecordCardEmbedding,
-    RecordCardExtended,
-    RefinementRoundResult,
+    RecordCardExtended
 )
-from gigaevo.memory.ideas_tracker.components.prompt_manager import PromptManager
+from gigaevo.memory.ideas_tracker.components.fabrics.llm_clients_fabric import LLMClient
 from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
 
 load_dotenv()
@@ -88,6 +86,7 @@ class IdeaAnalyzerFast:
         max_rounds: int = 20,
         recompute_center: bool = False,
         refine_subgroup_size: int = 20,
+        llm_max_concurrent: int = 100,
     ) -> None:
         """
         Args:
@@ -109,7 +108,6 @@ class IdeaAnalyzerFast:
         self.batch_size = batch_size
         self.reasoning = reasoning or {}
         self.base_url = str(base_url).strip() if base_url is not None else None
-        self._is_openrouter = False
         self.logger: IdeasTrackerLogger | None = None
         self.description_rewriting = False
 
@@ -120,8 +118,8 @@ class IdeaAnalyzerFast:
         self.max_rounds = max_rounds
         self.recompute_center = recompute_center
         self.refine_subgroup_size = refine_subgroup_size
+        self.llm_max_concurrent = llm_max_concurrent
 
-        self.prompt_manager = PromptManager()
         self.embeddings_model = SentenceTransformer(self.embeddings_model_name)
         self.embedd_size = int(self.embeddings_model.encode("Test sentence").shape[0])
 
@@ -129,30 +127,15 @@ class IdeaAnalyzerFast:
         self.program_by_id: dict[str, ProgramRecord] = {}
         self.embedding_id_pairs: list[tuple[list[float], str]] = []
 
+        # Filled in :meth:`refine_clusters_loop`: wall time since :meth:`run` start at each step end.
+        self.benchmark_time_after_iteration_s: list[float] = []
+        self.benchmark_num_clusters: list[int] = []
+
         self._init_llm_clients()
 
     def _init_llm_clients(self) -> None:
         """Build ``AsyncOpenAI`` from env (API key, optional base URL, OpenRouter detection)."""
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "OPENAI_API_KEY is not set. Set it in your environment or .env file."
-            )
-        env_base_url = (
-            os.getenv("OPENAI_BASE_URL")
-            or os.getenv("BASE_URL")
-            or os.getenv("LLM_BASE_URL")
-        )
-        base_url = env_base_url or self.base_url
-        if not base_url and api_key.startswith("sk-or-"):
-            base_url = "https://openrouter.ai/api/v1"
-        self._is_openrouter = bool(base_url and "openrouter.ai" in base_url)
-
-        client_kwargs: dict[str, Any] = {"api_key": api_key}
-        if base_url:
-            client_kwargs["base_url"] = base_url
-
-        self.llm_async = AsyncOpenAI(**client_kwargs)
+        self.llm_async = LLMClient(model=self.model, base_url=self.base_url, max_concurrent=self.llm_max_concurrent)
 
         if self.logger is not None:
             self.logger.log_init(
@@ -168,7 +151,15 @@ class IdeaAnalyzerFast:
         method; without it, :meth:`IdeaTracker.enrich_ideas` fails silently and leaves
         keywords/summaries empty.
         """
-        return asyncio.run(self._call_llm_async(step_name, prompt_content))
+        return self.llm_async.call_llm(step_name, prompt_content, self.reasoning)
+
+    async def call_llm_async(self, step_name: str, prompt_content: str) -> str:
+        """
+        Asynchronous chat completion for code paths that use the async API (e.g. refinement).
+        """
+        return await self.llm_async.call_llm_async(
+            step_name, prompt_content, self.reasoning
+        )
 
     def ingest_programs(
         self, programs: list[ProgramRecord]
@@ -285,38 +276,16 @@ class IdeaAnalyzerFast:
         if self.recompute_center and cluster.members:
             cluster.center = self._mean_center(cluster.members)
 
-    async def _call_llm_async(self, step_name: str, prompt_content: str) -> str:
+    async def _call_llm_async(self, step_name: str, prompt_content: str | dict[str, str]) -> str:
         """
         Run one chat completion: prompts ``{step_name}__system`` and ``{step_name}__user`` with ``<INSERT>``.
 
         Returns assistant message text (may be empty).
         """
-        prompt_system = self.prompt_manager.load_prompt(
-            prompt_name=f"{step_name}__system"
+        response = await self.llm_async.call_llm_async(
+            step_name, prompt_content, self.reasoning
         )
-        prompt_user = self.prompt_manager.load_prompt(
-            prompt_name=f"{step_name}__user",
-            insert_data=prompt_content,
-        )
-        request_kwargs: dict[str, Any] = {
-            "messages": [
-                {"role": "system", "content": prompt_system},
-                {"role": "user", "content": prompt_user},
-            ],
-            "model": self.model,
-            "temperature": 0,
-        }
-        if self._is_openrouter and self.reasoning:
-            request_kwargs["extra_body"] = {"reasoning": self.reasoning}
-        if self._is_openrouter and self.model.startswith("google/"):
-            request_kwargs["extra_body"] = {"provider": {"order": ["google-ai-studio"]}}
-        try:
-            response = await self.llm_async.chat.completions.create(**request_kwargs)
-        except Exception as e:
-            print(f"Error calling LLM: {e}")
-            return ""
-        content = response.choices[0].message.content
-        return content or ""
+        return response
 
     async def _refine_cluster_llm(
         self, cluster: ClusterCard
@@ -386,6 +355,32 @@ class IdeaAnalyzerFast:
                 continue
         return None
 
+    async def _desc_synth_llm(self, idea_card_description: str, descriptions_all: str, explanations_all: str) -> str:
+        """
+        Call the description synthesis LLM to generate a new description for the cluster.
+
+        Args:
+            idea_card_description: The description of the representative idea card.
+            descriptions_all: The descriptions of all the idea cards in the cluster.
+            explanations_all: The explanations of all the idea cards in the cluster.
+
+        Returns:
+            The new description for the cluster.
+        """
+        prompt_content = {
+            "<INSERT_REP>": idea_card_description,
+            "<INSERT_DES>": descriptions_all,
+            "<INSERT_EXPL>": explanations_all
+        }
+        for _ in range(self.max_attempts):
+            try:
+                raw = await self._call_llm_async("cluster_desc_synth", prompt_content)
+                return raw
+            except Exception as e:
+                print(f"Error calling LLM: {e}")
+                continue
+        return ""
+
     async def _gather_refine_results(
         self, eligible: list[ClusterCard]
     ) -> list[tuple[ClusterCard, tuple[list[int], list[int]] | None]]:
@@ -422,7 +417,7 @@ class IdeaAnalyzerFast:
         self,
         clusters: list[ClusterCard],
         pairs: list[tuple[ClusterCard, tuple[list[int], list[int]] | None]],
-    ) -> RefinementRoundResult:
+    ) -> bool:
         """
         Apply included/rejected index lists: shrink clusters; for each cluster that
         yields rejects, append **one** new cluster containing **only** that cluster's
@@ -435,7 +430,6 @@ class IdeaAnalyzerFast:
         Mutates ``clusters`` in place. Failed parses (``None``) count as change.
         """
         aggregate_changed = False
-
         for cluster, parsed in pairs:
             if parsed is None:
                 aggregate_changed = True
@@ -462,7 +456,7 @@ class IdeaAnalyzerFast:
                 clusters.append(reject_cluster)
 
         clusters[:] = [c for c in clusters if c.size > 0]
-        return RefinementRoundResult(has_changed=aggregate_changed)
+        return aggregate_changed
 
     async def refine_clusters_loop(self, clusters: list[ClusterCard]) -> None:
         """
@@ -470,6 +464,8 @@ class IdeaAnalyzerFast:
         until stable or :attr:`max_rounds`. Clusters with ``has_changed`` False (no rejects
         in the last refine) are skipped.
         """
+        self.benchmark_time_after_iteration_s.clear()
+        self.benchmark_num_clusters.clear()
         pbar = tqdm(total=self.max_rounds, desc="Refinement rounds")
         for step in range(self.max_rounds):
             for c in clusters:
@@ -481,12 +477,26 @@ class IdeaAnalyzerFast:
                 break
 
             pairs = await self._gather_refine_results(eligible)
-            round_result = self._apply_refine_round(clusters, pairs)
-            if not round_result.has_changed:
-                break
+            aggregate_changed = self._apply_refine_round(clusters, pairs)
             pbar.update(1)
             pbar.set_postfix(clusters_count=len(clusters))
+            self.benchmark_time_after_iteration_s.append(
+                time.perf_counter() - self._benchmark_run_t0
+            )
+            self.benchmark_num_clusters.append(len(clusters))
+            if not aggregate_changed:
+                break
         pbar.close()
+
+    async def build_record_extended_multi_async(
+        self, clusters: list[ClusterCard], program_by_id: dict[str, ProgramRecord]
+    ) -> list[RecordCardExtended]:
+        """
+        Build a :class:`~gigaevo.memory.ideas_tracker.components.data_components.RecordCardExtended` for each cluster.
+        """
+        tasks = [self.build_record_extended_async(c, program_by_id) for c in clusters]
+        results = await asyncio.gather(*tasks)
+        return results
 
     async def build_record_extended_async(
         self, cluster: ClusterCard, program_by_id: dict[str, ProgramRecord]
@@ -534,6 +544,11 @@ class IdeaAnalyzerFast:
                 last_gen = max(last_gen, p.generation)
 
         motivations = [m.change_motivation for m in members if m.change_motivation]
+        descriptions = [m.description for m in members if m.description]
+        representative_description = f"- {rep.description}"
+        descriptions.remove(rep.description)
+        all_motivations = "".join([f"{k}) {motiv} \n" for k, motiv in enumerate(motivations)])
+        all_descriptions = "".join([f"{k}) {descript} \n" for k, descript in enumerate(descriptions)])
         first_mot = motivations[0] if motivations else ""
 
         new_id = str(uuid.uuid4())
@@ -543,7 +558,7 @@ class IdeaAnalyzerFast:
             description=rep.description,
             task_description=task_description,
             strategy=strategy,
-            programs=programs_union,
+            programs=[rep.source_program_id],
             change_motivation=first_mot,
             last_generation=last_gen,
         )
@@ -559,13 +574,23 @@ class IdeaAnalyzerFast:
                 experiment_id="0",
                 program_id=m.source_program_id,
                 generation=0,
-                new_description=m.description,
                 change_motivation=m.change_motivation,
             )
 
+        extended.programs = list(set(extended.programs))
+        new_general_description = await self._desc_synth_llm(
+            representative_description, 
+            all_descriptions, 
+            all_motivations
+        ) if len(members) > 1 else rep.description
+        if new_general_description:
+            extended.description = new_general_description
+
         return extended
 
-    async def run(self, programs: list[ProgramRecord]) -> list[RecordCardExtended]:
+    async def run(
+        self, programs: list[ProgramRecord], record_extended_multi_async: bool = False
+    ) -> list[RecordCardExtended]:
         """
         End-to-end pipeline: ingest → embed → cluster → refine → one extended record per cluster.
 
@@ -575,19 +600,30 @@ class IdeaAnalyzerFast:
         cards = self.ingest_programs(programs)
         if not cards:
             return []
+        self._benchmark_run_t0 = time.perf_counter()
         self.create_embeddings(cards)
         clusters = self.build_initial_clusters(cards)
         await self.refine_clusters_loop(clusters)
         for c in clusters:
-            c.prune_stale_members()
+            c.prune_stale_members()  # Add extraction to separate cluster on final prunning
         clusters[:] = [c for c in clusters if c.size > 0]
 
+        if record_extended_multi_async:
+            return await self.build_record_extended_multi_async(
+                clusters, self.program_by_id
+            )
+
         out: list[RecordCardExtended] = []
+        pbar = tqdm(
+            total=len(clusters), desc="Converting clusters to RecordCardExtended"
+        )
         for c in clusters:
             if c.size == 0:
                 continue
             ext = await self.build_record_extended_async(c, self.program_by_id)
             out.append(ext)
+            pbar.update(1)
+        pbar.close()
         return out
 
     def process_ideas(self) -> None:
