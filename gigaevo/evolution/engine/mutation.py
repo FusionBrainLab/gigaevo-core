@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 from loguru import logger
 
@@ -10,6 +11,23 @@ from gigaevo.evolution.mutation.context import MUTATION_MEMORY_SELECTED_IDS_META
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.programs.program import Program
+
+
+def _mutator_accepts_memory_instructions(mutator: MutationOperator) -> bool:
+    """Return whether ``mutate_single`` supports the ``memory_instructions`` kwarg.
+
+    This keeps older custom/test mutation operators working while the base API
+    evolves to support memory-guided mutation.
+    """
+    try:
+        signature = inspect.signature(mutator.mutate_single)
+    except (TypeError, ValueError):
+        return True
+
+    parameters = signature.parameters.values()
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters):
+        return True
+    return "memory_instructions" in signature.parameters
 
 
 async def generate_mutations(
@@ -45,6 +63,7 @@ async def generate_mutations(
         return []
 
     try:
+        accepts_memory_instructions = _mutator_accepts_memory_instructions(mutator)
         parent_iterator = parent_selector.create_parent_iterator(elites)
 
         parent_selections = []
@@ -74,9 +93,12 @@ async def generate_mutations(
             """
             persisted_id: str | None = None
             try:
-                mutation_spec = await mutator.mutate_single(
-                    parents, memory_instructions=memory_instructions
-                )
+                if accepts_memory_instructions:
+                    mutation_spec = await mutator.mutate_single(
+                        parents, memory_instructions=memory_instructions
+                    )
+                else:
+                    mutation_spec = await mutator.mutate_single(parents)
 
                 if mutation_spec is None:
                     logger.debug(
