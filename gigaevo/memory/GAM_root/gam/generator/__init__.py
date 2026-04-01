@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .base import AbsGenerator
 from .amem_generator import AMemGenerator
+from .base import AbsGenerator
 
 __all__ = ["AbsGenerator", "AMemGenerator"]

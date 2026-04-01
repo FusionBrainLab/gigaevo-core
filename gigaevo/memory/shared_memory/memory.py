@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 import sys
-import uuid
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
+import uuid
 
-import httpx
 from dotenv import load_dotenv
+import httpx
 
 _THIS_DIR = Path(__file__).resolve().parent
 _AGENT_ROOT = _THIS_DIR.parent
@@ -18,6 +18,7 @@ if str(_AGENT_ROOT) not in sys.path:
 from openai_inference import OpenAIInferenceService
 
 import config
+
 try:
     from .card_update_dedup import (
         QUERY_DESCRIPTION,
@@ -50,9 +51,7 @@ except ImportError:  # pragma: no cover - direct script execution fallback
 load_dotenv()
 
 if TYPE_CHECKING:
-    from A_mem.agentic_memory.memory_system import AgenticMemorySystem, MemoryNote
-    from GAM_root.gam import ResearchAgent
-    from GAM_root.gam.generator import AMemGenerator
+    pass
 
 
 _ALLOWED_STRATEGIES = {"exploration", "exploitation", "hybrid"}
@@ -509,6 +508,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         try:
             from A_mem.agentic_memory.memory_system import (
                 AgenticMemorySystem as _AgenticMemorySystem,
+            )
+            from A_mem.agentic_memory.memory_system import (
                 MemoryNote as _MemoryNote,
             )
             from GAM_root.gam import ResearchAgent as _ResearchAgent

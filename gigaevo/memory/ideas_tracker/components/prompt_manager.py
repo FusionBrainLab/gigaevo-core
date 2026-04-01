@@ -82,7 +82,7 @@ class PromptManager:
         prompt_path = prompt_dir / f"{prompt_type}.txt"
         if not prompt_path.is_file():
             raise FileNotFoundError(f"No prompt at {prompt_path}")
-        with open(prompt_path, "r", encoding="utf-8") as f:
+        with open(prompt_path, encoding="utf-8") as f:
             prompt_text = f.read()
         if prompt_type == "user":
             prompt_text = prompt_text.replace("<INSERT>", insert_data)

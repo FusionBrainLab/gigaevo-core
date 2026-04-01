@@ -52,7 +52,7 @@ def compute_evolutionary_statistics(logger: IdeasTrackerLogger) -> None:
             stats_by_idea[idea_id] = {}
         stats_by_idea[idea_id][quartile] = metrics
 
-    with open(banks_path, "r", encoding="utf-8") as f:
+    with open(banks_path, encoding="utf-8") as f:
         banks_data = json.load(f)
 
     for snapshot in banks_data:

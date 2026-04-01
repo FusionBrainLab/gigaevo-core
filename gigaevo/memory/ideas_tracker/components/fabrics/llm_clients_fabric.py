@@ -1,9 +1,8 @@
+import asyncio
 import os
 from typing import Any
-import asyncio
 
 from openai import AsyncOpenAI, OpenAI
-
 
 from gigaevo.memory.ideas_tracker.components.prompt_manager import PromptManager
 

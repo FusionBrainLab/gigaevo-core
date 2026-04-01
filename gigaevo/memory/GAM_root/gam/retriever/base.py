@@ -1,16 +1,18 @@
 from abc import ABC, abstractmethod
-from GAM_root.gam.schemas import InMemoryPageStore, Hit
-from typing import Any, List, Dict
+from typing import Any
+
+from GAM_root.gam.schemas import Hit, InMemoryPageStore
+
 
 class AbsRetriever(ABC):
     def __init__(
         self,
-        config: Dict[str, Any],
+        config: dict[str, Any],
     ):
         self.config = config
 
     @abstractmethod
-    def search(self, query_list: List[str], top_k: int = 10) -> List[List[Hit]]:
+    def search(self, query_list: list[str], top_k: int = 10) -> list[list[Hit]]:
         pass
 
     @abstractmethod

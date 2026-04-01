@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import ast
-from typing import Any, Dict, List
+from typing import Any
 
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
@@ -21,7 +20,7 @@ class ChromaRetriever(AbsRetriever):
         "description_task_description_summary": "memories_description_task_description_summary",
     }
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         persist_dir = config.get("persist_dir")
         if not persist_dir:
@@ -62,7 +61,7 @@ class ChromaRetriever(AbsRetriever):
 
     def build(self, page_store) -> None:
         pages = page_store.load() if page_store is not None else []
-        payload_by_field: Dict[str, Dict[str, Dict[str, Any]]] = {
+        payload_by_field: dict[str, dict[str, dict[str, Any]]] = {
             field: {}
             for field in self.active_collections
         }
@@ -101,13 +100,13 @@ class ChromaRetriever(AbsRetriever):
     def update(self, page_store) -> None:
         self.build(page_store)
 
-    def search(self, query_list: List[str], top_k: int = 10) -> List[List[Hit]]:
+    def search(self, query_list: list[str], top_k: int = 10) -> list[list[Hit]]:
         if not query_list:
             return []
 
-        hits_per_query: List[List[Hit]] = []
+        hits_per_query: list[list[Hit]] = []
         for query in query_list:
-            aggregated: Dict[str, Hit] = {}
+            aggregated: dict[str, Hit] = {}
 
             for field, collection in self.collections.items():
                 results = collection.query(
@@ -130,7 +129,7 @@ class ChromaRetriever(AbsRetriever):
                     if not doc_id:
                         continue
 
-                    metadata: Dict[str, Any] = {}
+                    metadata: dict[str, Any] = {}
                     if i < len(q_metas) and isinstance(q_metas[i], dict):
                         metadata = self._convert_metadata_types(q_metas[i])
 
@@ -168,7 +167,7 @@ class ChromaRetriever(AbsRetriever):
 
         return hits_per_query
 
-    def _sync_collection(self, collection: Any, payload: Dict[str, Dict[str, Any]]) -> None:
+    def _sync_collection(self, collection: Any, payload: dict[str, dict[str, Any]]) -> None:
         current_ids = collection.get().get("ids", []) or []
         current_ids_set = {str(doc_id) for doc_id in current_ids if str(doc_id).strip()}
         next_ids_set = set(payload.keys())
@@ -196,7 +195,7 @@ class ChromaRetriever(AbsRetriever):
         return 1.0 / (1.0 + value)
 
     @staticmethod
-    def _extract_card(page: Any) -> Dict[str, Any]:
+    def _extract_card(page: Any) -> dict[str, Any]:
         meta = getattr(page, "meta", None)
         if not isinstance(meta, dict):
             return {}
@@ -206,7 +205,7 @@ class ChromaRetriever(AbsRetriever):
         return {}
 
     @staticmethod
-    def _resolve_doc_id(page: Any, card: Dict[str, Any], fallback_idx: int) -> str:
+    def _resolve_doc_id(page: Any, card: dict[str, Any], fallback_idx: int) -> str:
         page_meta = getattr(page, "meta", None)
         if isinstance(page_meta, dict):
             amem_id = str(page_meta.get("amem_id") or "").strip()
@@ -217,7 +216,7 @@ class ChromaRetriever(AbsRetriever):
             return card_id
         return str(fallback_idx)
 
-    def _extract_field_texts(self, page: Any, card: Dict[str, Any]) -> Dict[str, str]:
+    def _extract_field_texts(self, page: Any, card: dict[str, Any]) -> dict[str, str]:
         parsed = self._parse_labeled_content(str(getattr(page, "content", "") or ""))
         explanation = card.get("explanation")
         if isinstance(explanation, dict):
@@ -296,8 +295,8 @@ class ChromaRetriever(AbsRetriever):
         return ""
 
     @staticmethod
-    def _parse_labeled_content(content: str) -> Dict[str, str]:
-        out: Dict[str, str] = {}
+    def _parse_labeled_content(content: str) -> dict[str, str]:
+        out: dict[str, str] = {}
         for raw_line in content.splitlines():
             line = raw_line.strip()
             if ":" not in line:
@@ -309,7 +308,7 @@ class ChromaRetriever(AbsRetriever):
             out[key] = value.strip()
         return out
 
-    def _convert_metadata_types(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_metadata_types(self, metadata: dict[str, Any]) -> dict[str, Any]:
         converted = dict(metadata)
         for key, value in converted.items():
             if not isinstance(value, str):

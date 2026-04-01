@@ -1,9 +1,11 @@
 import json
 import sys
+
 from dotenv import load_dotenv
+
 load_dotenv()
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 _THIS_DIR = Path(__file__).resolve().parent
 _AGENT_ROOT = _THIS_DIR.parent
@@ -11,8 +13,9 @@ if str(_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(_AGENT_ROOT))
 
 from A_mem.agentic_memory.memory_system import AgenticMemorySystem
-import config
 from openai_inference import OpenAIInferenceService
+
+import config
 
 
 # -----------------------------
@@ -73,9 +76,9 @@ def _to_int(value: Any, default: int = 0) -> int:
 
 
 def normalize_memory_card(
-    card: Optional[Dict[str, Any]] = None,
-    fallback_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    card: dict[str, Any] | None = None,
+    fallback_id: str | None = None,
+) -> dict[str, Any]:
     card = dict(card or {})
     explanation = card.get("explanation")
     if not isinstance(explanation, dict):
@@ -109,7 +112,7 @@ def normalize_memory_card(
     return normalized
 
 
-def _memory_to_dict(mem, base_card: Optional[Dict[str, Any]] = None, memory_id: Optional[str] = None):
+def _memory_to_dict(mem, base_card: dict[str, Any] | None = None, memory_id: str | None = None):
     mem_id = _safe_get(mem, "id", None) or _safe_get(mem, "memory_id", None) or memory_id
     card = normalize_memory_card(base_card, fallback_id=mem_id)
     if mem is None:
@@ -135,7 +138,7 @@ def _memory_to_dict(mem, base_card: Optional[Dict[str, Any]] = None, memory_id: 
     return card
 
 
-def export_memories_jsonl(memory_system, memory_ids, out_path, card_overrides: Optional[Dict[str, Dict[str, Any]]] = None):
+def export_memories_jsonl(memory_system, memory_ids, out_path, card_overrides: dict[str, dict[str, Any]] | None = None):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     card_overrides = card_overrides or {}

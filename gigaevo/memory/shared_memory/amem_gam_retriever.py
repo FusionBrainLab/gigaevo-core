@@ -6,23 +6,26 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
-from typing import Any, Dict, List
+import sys
+from typing import Any
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from GAM_root.gam import (
-    ResearchAgent,
+    ChromaRetriever,
+    IndexRetriever,
     InMemoryMemoryStore,
     InMemoryPageStore,
-    IndexRetriever,
-    ChromaRetriever,
+    ResearchAgent,
 )
 from GAM_root.gam.generator import AMemGenerator
 from GAM_root.gam.schemas import Page
 
 import config
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -34,8 +37,9 @@ if str(_AGENT_ROOT) not in sys.path:
 
 from openai_inference import OpenAIInferenceService
 
-def load_amem_records(path: Path) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
+
+def load_amem_records(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -45,7 +49,7 @@ def load_amem_records(path: Path) -> List[Dict[str, Any]]:
     return records
 
 
-def make_card_text(record: Dict[str, Any]) -> str:
+def make_card_text(record: dict[str, Any]) -> str:
     # Support both new and legacy A-mem export schemas.
     description = record.get("description") or record.get("content") or ""
     task_description = record.get("task_description") or record.get("context") or ""
@@ -87,7 +91,7 @@ def make_card_text(record: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def build_gam_store(records: List[Dict[str, Any]], store_dir: Path):
+def build_gam_store(records: list[dict[str, Any]], store_dir: Path):
     memory_store = InMemoryMemoryStore(dir_path=str(store_dir))
     page_store = InMemoryPageStore(dir_path=str(store_dir))
 
@@ -100,7 +104,7 @@ def build_gam_store(records: List[Dict[str, Any]], store_dir: Path):
     existing_ids.discard("")
 
     added = 0
-    next_pages: List[Page] = []
+    next_pages: list[Page] = []
     seen_ids: set[str] = set()
     for rec in records:
         rid = str(rec.get("id") or "").strip()

@@ -2,7 +2,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from gigaevo.memory.ideas_tracker.components.data_components import (
@@ -29,13 +29,13 @@ class IdeasTrackerLogger:
         """
         self.ideas_tracker_path = Path(ideas_tracker_path)
         self.logs_dir = Path(logs_dir) if logs_dir is not None else (self.ideas_tracker_path.parent / "logs")
-        self.session_dir: Optional[Path] = None
-        self.log_file: Optional[Path] = None
-        self.rankings_file: Optional[Path] = None
-        self.banks_file: Optional[Path] = None
-        self.programs_file: Optional[Path] = None
-        self.best_ideas_file: Optional[Path] = None
-        self.memory_usage_updates_file: Optional[Path] = None
+        self.session_dir: Path | None = None
+        self.log_file: Path | None = None
+        self.rankings_file: Path | None = None
+        self.banks_file: Path | None = None
+        self.programs_file: Path | None = None
+        self.best_ideas_file: Path | None = None
+        self.memory_usage_updates_file: Path | None = None
 
         os.makedirs(self.logs_dir, exist_ok=True)
         self._create_session_dir()
@@ -260,7 +260,7 @@ class IdeasTrackerLogger:
 
         # Read existing banks
         if self.banks_file.exists():
-            with open(self.banks_file, "r", encoding="utf-8") as f:
+            with open(self.banks_file, encoding="utf-8") as f:
                 existing_banks = json.load(f)
         else:
             existing_banks = []
@@ -289,7 +289,7 @@ class IdeasTrackerLogger:
 
         # Read existing snapshots
         if self.programs_file.exists():
-            with open(self.programs_file, "r", encoding="utf-8") as f:
+            with open(self.programs_file, encoding="utf-8") as f:
                 try:
                     existing_programs = json.load(f)
                 except json.JSONDecodeError:
@@ -321,7 +321,7 @@ class IdeasTrackerLogger:
 
         # Read existing snapshots
         if self.best_ideas_file.exists():
-            with open(self.best_ideas_file, "r", encoding="utf-8") as f:
+            with open(self.best_ideas_file, encoding="utf-8") as f:
                 try:
                     existing = json.load(f)
                 except json.JSONDecodeError:
@@ -352,7 +352,7 @@ class IdeasTrackerLogger:
         }
 
         if self.memory_usage_updates_file.exists():
-            with open(self.memory_usage_updates_file, "r", encoding="utf-8") as f:
+            with open(self.memory_usage_updates_file, encoding="utf-8") as f:
                 try:
                     existing = json.load(f)
                 except json.JSONDecodeError:

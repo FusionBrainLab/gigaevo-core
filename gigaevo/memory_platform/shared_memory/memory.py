@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import re
-import sys
-import uuid
 from pathlib import Path
+import sys
 from typing import Any
+import uuid
 
 from dotenv import load_dotenv
 
@@ -33,12 +32,12 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_updated_card,
     parse_llm_card_decision,
 )
+
 load_dotenv()
 
 from gigaevo_memory.embeddings import MemoryApiProvider
 from gigaevo_memory.platform_client import PlatformMemoryClient
 from gigaevo_memory.search_types import SearchType
-
 
 _ALLOWED_STRATEGIES = {"exploration", "exploitation", "hybrid"}
 _VECTOR_GAM_TOOLS = {
@@ -279,11 +278,16 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _load_agentic_classes(self) -> None:
         try:
-            from A_mem.agentic_memory.memory_system import AgenticMemorySystem as _AgenticMemorySystem
+            from A_mem.agentic_memory.memory_system import (
+                AgenticMemorySystem as _AgenticMemorySystem,
+            )
             from GAM_root.gam import ResearchAgent as _ResearchAgent
             from GAM_root.gam.generator import AMemGenerator as _AMemGenerator
+
             from .remote_gam_retriever import (
                 build_gam_store as _build_gam_store,
+            )
+            from .remote_gam_retriever import (
                 build_retrievers as _build_retrievers,
             )
         except Exception as exc:

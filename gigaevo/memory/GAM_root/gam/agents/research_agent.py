@@ -1,5 +1,4 @@
 # research_agent.py
-# -*- coding: utf-8 -*-
 """
 ResearchAgent Module
 
@@ -16,24 +15,37 @@ The module focuses on providing clear abstraction and extensible interfaces for 
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
 import json
+from typing import Any
 
+from GAM_root.gam.generator import AbsGenerator
 from GAM_root.gam.prompts import (
-    Planning_PROMPT,
-    Integrate_PROMPT,
-    InfoCheck_PROMPT,
-    GenerateRequests_PROMPT,
     ExperimentalDecision_PROMPT,
+    GenerateRequests_PROMPT,
+    InfoCheck_PROMPT,
+    Integrate_PROMPT,
+    Planning_PROMPT,
 )
 from GAM_root.gam.schemas import (
-    MemoryState, SearchPlan, Hit, Result,
-    ReflectionDecision, ResearchOutput, TopIdea, ExperimentalDecision, MemoryStore, PageStore, Retriever,
-    ToolRegistry, InMemoryMemoryStore,
-    PLANNING_SCHEMA, INTEGRATE_SCHEMA, INFO_CHECK_SCHEMA, GENERATE_REQUESTS_SCHEMA, EXPERIMENTAL_DECISION_SCHEMA
+    EXPERIMENTAL_DECISION_SCHEMA,
+    GENERATE_REQUESTS_SCHEMA,
+    INFO_CHECK_SCHEMA,
+    INTEGRATE_SCHEMA,
+    PLANNING_SCHEMA,
+    ExperimentalDecision,
+    Hit,
+    InMemoryMemoryStore,
+    MemoryState,
+    MemoryStore,
+    PageStore,
+    ReflectionDecision,
+    ResearchOutput,
+    Result,
+    Retriever,
+    SearchPlan,
+    ToolRegistry,
+    TopIdea,
 )
-from GAM_root.gam.generator import AbsGenerator
-
 
 _VECTOR_TOOLS = {
     "vector",
@@ -69,14 +81,14 @@ class ResearchAgent:
         self,
         page_store: PageStore,
         memory_store: MemoryStore | None = None,
-        tool_registry: Optional[ToolRegistry] = None,
-        retrievers: Optional[Dict[str, Retriever]] = None,
+        tool_registry: ToolRegistry | None = None,
+        retrievers: dict[str, Retriever] | None = None,
         generator: AbsGenerator | None = None,  # 必须传入Generator实例
         max_iters: int = 3,
-        allowed_tools: Optional[List[str]] = None,
-        top_k_by_tool: Optional[Dict[str, int]] = None,
-        dir_path: Optional[str] = None,  # 新增：文件系统存储路径
-        system_prompts: Optional[Dict[str, str]] = None,  # 新增：system prompts字典
+        allowed_tools: list[str] | None = None,
+        top_k_by_tool: dict[str, int] | None = None,
+        dir_path: str | None = None,  # 新增：文件系统存储路径
+        system_prompts: dict[str, str] | None = None,  # 新增：system prompts字典
         pipeline_mode: str = "default",
     ) -> None:
         if generator is None:
@@ -121,7 +133,7 @@ class ResearchAgent:
         return "default"
 
     @staticmethod
-    def _normalize_allowed_tools(allowed_tools: Optional[List[str]]) -> set[str]:
+    def _normalize_allowed_tools(allowed_tools: list[str] | None) -> set[str]:
         supported_tools = {"keyword", "page_index", *_VECTOR_TOOLS}
         if not allowed_tools:
             return supported_tools
@@ -135,7 +147,7 @@ class ResearchAgent:
         return filtered or supported_tools
 
     @staticmethod
-    def _normalize_top_k_by_tool(top_k_by_tool: Optional[Dict[str, int]]) -> Dict[str, int]:
+    def _normalize_top_k_by_tool(top_k_by_tool: dict[str, int] | None) -> dict[str, int]:
         normalized = dict(_DEFAULT_TOP_K_BY_TOOL)
         if not isinstance(top_k_by_tool, dict):
             return normalized
@@ -156,17 +168,17 @@ class ResearchAgent:
         return self._top_k_by_tool.get(tool, _DEFAULT_TOP_K_BY_TOOL.get(tool, 5))
 
     @staticmethod
-    def _normalize_query_list(values: Any) -> List[str]:
+    def _normalize_query_list(values: Any) -> list[str]:
         if not isinstance(values, list):
             return []
-        cleaned: List[str] = []
+        cleaned: list[str] = []
         for value in values:
             text = str(value or "").strip()
             if text:
                 cleaned.append(text)
         return cleaned
 
-    def _vector_queries_for_tool(self, plan: SearchPlan, tool: str) -> List[str]:
+    def _vector_queries_for_tool(self, plan: SearchPlan, tool: str) -> list[str]:
         if tool == "vector":
             return self._normalize_query_list(plan.vector_queries)
         if tool == "vector_description":
@@ -177,11 +189,11 @@ class ResearchAgent:
             return self._normalize_query_list(plan.vector_explanation_summary_queries) or self._normalize_query_list(plan.vector_queries)
         return []
 
-    def _filter_tools(self, tools: List[str]) -> List[str]:
+    def _filter_tools(self, tools: list[str]) -> list[str]:
         return [tool for tool in tools if tool in self._allowed_tools]
 
     # ---- Public ----
-    def research(self, request: str, memory_state: Optional[str] = None) -> ResearchOutput:
+    def research(self, request: str, memory_state: str | None = None) -> ResearchOutput:
         # 在开始研究前，确保检索器索引是最新的
         self._update_retrievers()
 
@@ -189,9 +201,9 @@ class ResearchAgent:
             return self._research_experimental(request, memory_state=memory_state)
         return self._research_default(request, memory_state=memory_state)
 
-    def _research_default(self, request: str, memory_state: Optional[str] = None) -> ResearchOutput:
+    def _research_default(self, request: str, memory_state: str | None = None) -> ResearchOutput:
         temp = Result()
-        iterations: List[Dict[str, Any]] = []
+        iterations: list[dict[str, Any]] = []
         next_request = request
 
         for step in range(self.max_iters):
@@ -237,10 +249,10 @@ class ResearchAgent:
         }
         return ResearchOutput(integrated_memory=temp.content, raw_memory=raw)
 
-    def _research_experimental(self, request: str, memory_state: Optional[str] = None) -> ResearchOutput:
-        iterations: List[Dict[str, Any]] = []
+    def _research_experimental(self, request: str, memory_state: str | None = None) -> ResearchOutput:
+        iterations: list[dict[str, Any]] = []
         next_request = request
-        retrieved_ideas_by_id: Dict[str, Dict[str, Any]] = {}
+        retrieved_ideas_by_id: dict[str, dict[str, Any]] = {}
         final_decision: ExperimentalDecision | None = None
 
         for step in range(self.max_iters):
@@ -315,7 +327,7 @@ class ResearchAgent:
         return ResearchOutput(integrated_memory=final_output, raw_memory=raw)
 
     @staticmethod
-    def _next_request_from_queries(original_request: str, queries: List[str]) -> str:
+    def _next_request_from_queries(original_request: str, queries: list[str]) -> str:
         cleaned = [q for q in queries if str(q or "").strip()]
         if not cleaned:
             return original_request
@@ -332,14 +344,14 @@ class ResearchAgent:
         return text[: max_chars - 16] + "\n...[truncated]"
 
     @staticmethod
-    def _as_string_list(value: Any) -> List[str]:
+    def _as_string_list(value: Any) -> list[str]:
         if isinstance(value, list):
             return [str(v).strip() for v in value if str(v).strip()]
         text = str(value or "").strip()
         return [text] if text else []
 
-    def _card_map_by_id(self) -> Dict[str, Dict[str, Any]]:
-        out: Dict[str, Dict[str, Any]] = {}
+    def _card_map_by_id(self) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
         for page in self.page_store.load():
             meta = getattr(page, "meta", None)
             if not isinstance(meta, dict):
@@ -359,15 +371,15 @@ class ResearchAgent:
         return out
 
     @staticmethod
-    def _extract_explanation_summary(card: Dict[str, Any]) -> str:
+    def _extract_explanation_summary(card: dict[str, Any]) -> str:
         explanation = card.get("explanation")
         if isinstance(explanation, dict):
             return str(explanation.get("summary") or "").strip()
         return ""
 
-    def _build_retrieved_ideas(self, hits: List[Hit]) -> List[Dict[str, Any]]:
+    def _build_retrieved_ideas(self, hits: list[Hit]) -> list[dict[str, Any]]:
         card_map = self._card_map_by_id()
-        ideas: List[Dict[str, Any]] = []
+        ideas: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
 
         for hit in hits:
@@ -385,7 +397,7 @@ class ResearchAgent:
             if not evidence_summary:
                 evidence_summary = str(hit.snippet or "").strip()
 
-            idea: Dict[str, Any] = {
+            idea: dict[str, Any] = {
                 "card_id": card_id,
                 "description": description,
                 "evidence_summary": evidence_summary,
@@ -400,7 +412,7 @@ class ResearchAgent:
 
         return ideas
 
-    def _parse_retrieved_ideas(self, payload: Any) -> List[Dict[str, Any]]:
+    def _parse_retrieved_ideas(self, payload: Any) -> list[dict[str, Any]]:
         raw = payload
         if isinstance(payload, str):
             text = payload.strip()
@@ -414,7 +426,7 @@ class ResearchAgent:
         if not isinstance(raw, list):
             return []
 
-        ideas: List[Dict[str, Any]] = []
+        ideas: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         for item in raw:
             if not isinstance(item, dict):
@@ -424,7 +436,7 @@ class ResearchAgent:
                 continue
             seen_ids.add(card_id)
 
-            idea: Dict[str, Any] = {
+            idea: dict[str, Any] = {
                 "card_id": card_id,
                 "description": str(item.get("description") or "").strip(),
                 "evidence_summary": str(item.get("evidence_summary") or "").strip(),
@@ -440,9 +452,9 @@ class ResearchAgent:
 
     def _extract_original_list_field(
         self,
-        card: Dict[str, Any],
-        keys: List[str],
-    ) -> List[str]:
+        card: dict[str, Any],
+        keys: list[str],
+    ) -> list[str]:
         usage = card.get("usage")
         usage_dict = usage if isinstance(usage, dict) else {}
         for key in keys:
@@ -457,7 +469,7 @@ class ResearchAgent:
     def _reflection_experimental(
         self,
         request: str,
-        retrieved_ideas: List[Dict[str, Any]],
+        retrieved_ideas: list[dict[str, Any]],
     ) -> ExperimentalDecision:
         normalized_ideas = self._parse_retrieved_ideas(retrieved_ideas)
         card_ids = [str(item.get("card_id") or "").strip() for item in normalized_ideas]
@@ -487,7 +499,7 @@ class ResearchAgent:
 
         additional_queries = self._normalize_query_list((data or {}).get("additional_queries"))
         raw_ideas = (data or {}).get("top_ideas")
-        top_ideas: List[TopIdea] = []
+        top_ideas: list[TopIdea] = []
         seen_ids: set[str] = set()
 
         if isinstance(raw_ideas, list):
@@ -515,7 +527,7 @@ class ResearchAgent:
     def _ensure_top_ideas(
         self,
         decision: ExperimentalDecision,
-        available_card_ids: List[str],
+        available_card_ids: list[str],
     ) -> ExperimentalDecision:
         if decision.mode != "final":
             return ExperimentalDecision(mode="final", top_ideas=[], additional_queries=[])
@@ -536,7 +548,7 @@ class ResearchAgent:
                 break
         return ExperimentalDecision(mode="final", top_ideas=top_ideas[:3], additional_queries=[])
 
-    def _format_top_ideas(self, top_ideas: List[TopIdea]) -> str:
+    def _format_top_ideas(self, top_ideas: list[TopIdea]) -> str:
         if not top_ideas:
             return "No final top ideas available from experimental pipeline."
 
@@ -575,8 +587,8 @@ class ResearchAgent:
         self,
         request: str,
         memory_state: MemoryState,
-        planning_prompt: Optional[str] = None,
-        memory_state_override: Optional[str] = None,
+        planning_prompt: str | None = None,
+        memory_state_override: str | None = None,
     ) -> SearchPlan:
         """
         Produce a SearchPlan:
@@ -638,7 +650,7 @@ class ResearchAgent:
         plan: SearchPlan, 
         result: Result, 
         question: str,
-        searching_prompt: Optional[str] = None
+        searching_prompt: str | None = None
     ) -> Result:
         """
         Unified search with integration:
@@ -647,11 +659,11 @@ class ResearchAgent:
           3) Integrate all deduplicated hits together with LLM
         Returns integrated Result.
         """
-        all_hits: List[Hit] = []
+        all_hits: list[Hit] = []
 
         # Execute each planned tool and collect all hits
         for tool in self._filter_tools(plan.tools):
-            hits: List[Hit] = []
+            hits: list[Hit] = []
             print(f"[GAM] Action selected: {tool}")
 
             if tool == "keyword":
@@ -730,8 +742,8 @@ class ResearchAgent:
             return result
         
         # 按 page_id 去重 hits，避免同一个 page 被多个 tool 检索到时重复添加
-        unique_hits: Dict[str, Hit] = {}  # page_id -> Hit
-        hits_without_id: List[Hit] = []  # 没有 page_id 的 hits
+        unique_hits: dict[str, Hit] = {}  # page_id -> Hit
+        hits_without_id: list[Hit] = []  # 没有 page_id 的 hits
         for hit in all_hits:
             if hit.page_id:
                 # 如果这个 page_id 还没出现过，或者当前 hit 的得分更高（如果有的话），则更新
@@ -765,11 +777,11 @@ class ResearchAgent:
           3) Format hits as plain text results
         Returns Result with raw search hits formatted as content.
         """
-        all_hits: List[Hit] = []
+        all_hits: list[Hit] = []
 
         # Execute each planned tool and collect hits
         for tool in self._filter_tools(plan.tools):
-            hits: List[Hit] = []
+            hits: list[Hit] = []
 
             if tool == "keyword":
                 if plan.keyword_collection:
@@ -821,8 +833,8 @@ class ResearchAgent:
             return result
         
         # 按 page_id 去重 hits，避免同一个 page 被多个 tool 检索到时重复添加
-        unique_hits: Dict[str, Hit] = {}  # page_id -> Hit
-        hits_without_id: List[Hit] = []  # 没有 page_id 的 hits
+        unique_hits: dict[str, Hit] = {}  # page_id -> Hit
+        hits_without_id: list[Hit] = []  # 没有 page_id 的 hits
         for hit in all_hits:
             if hit.page_id:
                 # 如果这个 page_id 还没出现过，或者当前 hit 的得分更高（如果有的话），则更新
@@ -859,10 +871,10 @@ class ResearchAgent:
 
     def _integrate(
         self, 
-        hits: List[Hit], 
+        hits: list[Hit], 
         result: Result, 
         question: str,
-        integration_prompt: Optional[str] = None
+        integration_prompt: str | None = None
     ) -> Result:
         """
         Integrate search hits with LLM to generate question-relevant result.
@@ -914,7 +926,7 @@ class ResearchAgent:
             return result
 
     # ---- search channels ----
-    def _search_by_keyword(self, query_list: List[str], top_k: int = 3) -> List[List[Hit]]:
+    def _search_by_keyword(self, query_list: list[str], top_k: int = 3) -> list[list[Hit]]:
         r = self.retrievers.get("keyword")
         if r is not None:
             try:
@@ -924,9 +936,9 @@ class ResearchAgent:
                 print(f"Error in keyword search: {e}")
                 return []
         # naive fallback: scan pages for substring
-        out: List[List[Hit]] = []
+        out: list[list[Hit]] = []
         for query in query_list:
-            query_hits: List[Hit] = []
+            query_hits: list[Hit] = []
             q = query.lower()
             for i, p in enumerate(self.page_store.load()):
                 if q in p.content.lower() or q in p.header.lower():
@@ -937,15 +949,15 @@ class ResearchAgent:
             out.append(query_hits)
         return out
 
-    def _search_by_vector(self, query_list: List[str], top_k: int = 3) -> List[List[Hit]]:
+    def _search_by_vector(self, query_list: list[str], top_k: int = 3) -> list[list[Hit]]:
         return self._search_by_vector_tool("vector", query_list, top_k=top_k)
 
     def _search_by_vector_tool(
         self,
         tool_name: str,
-        query_list: List[str],
+        query_list: list[str],
         top_k: int = 3,
-    ) -> List[List[Hit]]:
+    ) -> list[list[Hit]]:
         r = self.retrievers.get(tool_name)
         if r is None and tool_name != "vector":
             r = self.retrievers.get("vector")
@@ -958,7 +970,7 @@ class ResearchAgent:
         # fallback: none
         return []
 
-    def _search_by_page_index(self, page_index: List[int]) -> List[List[Hit]]:
+    def _search_by_page_index(self, page_index: list[int]) -> list[list[Hit]]:
         r = self.retrievers.get("page_index")
         if r is not None:
             try:
@@ -971,7 +983,7 @@ class ResearchAgent:
                 return []
         
         # fallback: 直接通过 page_store 获取页面
-        out: List[Hit] = []
+        out: list[Hit] = []
         for idx in page_index:
             p = self.page_store.get(idx)
             if p:
@@ -985,7 +997,7 @@ class ResearchAgent:
         self, 
         request: str, 
         result: Result,
-        reflection_prompt: Optional[str] = None
+        reflection_prompt: str | None = None
     ) -> ReflectionDecision:
         """
         - "whether information is enough" 

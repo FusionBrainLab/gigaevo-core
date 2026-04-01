@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
+import sys
 from typing import Any
 
 from dotenv import load_dotenv
@@ -23,15 +23,13 @@ def _ensure_memory_client_path() -> None:
 
 _ensure_memory_client_path()
 
+from GAM_root.gam import InMemoryMemoryStore, InMemoryPageStore
+from GAM_root.gam.retriever.base import AbsRetriever
+from GAM_root.gam.schemas import Hit, Page
 from gigaevo_memory.embeddings import MemoryApiProvider
 from gigaevo_memory.models import SearchHitData
 from gigaevo_memory.platform_client import PlatformMemoryClient
 from gigaevo_memory.search_types import SearchType
-
-from GAM_root.gam import InMemoryMemoryStore, InMemoryPageStore
-from GAM_root.gam.retriever.base import AbsRetriever
-from GAM_root.gam.schemas import Hit, Page
-
 
 DOCUMENT_KIND_FULL_CARD = "full_card"
 DOCUMENT_KIND_DESCRIPTION = "description"

@@ -1,9 +1,8 @@
+import ast
+import atexit
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
-import ast
 import tempfile
-import atexit
 
 import chromadb
 from chromadb.config import Settings
@@ -60,7 +59,7 @@ class ChromaRetriever:
             name=collection_name, embedding_function=self.embedding_function
         )
 
-    def add_document(self, document: str, metadata: Dict, doc_id: str):
+    def add_document(self, document: str, metadata: dict, doc_id: str):
         """Add a document to ChromaDB.
 
         Args:
@@ -110,8 +109,8 @@ class ChromaRetriever:
 
     def _convert_metadata_types(
         self, 
-        metadatas: List[List[Dict]]
-    ) -> List[List[Dict]]:
+        metadatas: list[list[dict]]
+    ) -> list[list[dict]]:
         """Convert string metadata back to original types.
         
         Args:
@@ -121,13 +120,13 @@ class ChromaRetriever:
             Converted metadata structure
         """
         for query_metadatas in metadatas:
-            if isinstance(query_metadatas, List):
+            if isinstance(query_metadatas, list):
                 for metadata_dict in query_metadatas:
-                    if isinstance(metadata_dict, Dict):
+                    if isinstance(metadata_dict, dict):
                         self._convert_metadata_dict(metadata_dict)
         return metadatas
 
-    def _convert_metadata_dict(self, metadata: Dict) -> None:
+    def _convert_metadata_dict(self, metadata: dict) -> None:
         """Convert metadata values from strings to appropriate types in-place.
         
         Args:
@@ -154,7 +153,7 @@ class PersistentChromaRetriever(ChromaRetriever):
 
     def __init__(
         self, 
-        directory: Optional[str] = None, 
+        directory: str | None = None, 
         collection_name: str = "memories", 
         model_name: str = "all-MiniLM-L6-v2",
         extend: bool = False
@@ -219,10 +218,10 @@ class CopiedChromaRetriever(PersistentChromaRetriever):
 
     def __init__(
         self,
-        directory: Optional[str] = None, 
+        directory: str | None = None, 
         collection_name: str = "memories", 
         model_name: str = "all-MiniLM-L6-v2",
-        _dest_collection_name: Optional[str] = None,
+        _dest_collection_name: str | None = None,
         _copy_batch_size: int = 10,
     ):
         """

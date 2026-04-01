@@ -3,7 +3,6 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 from uuid import uuid4
 
-
 _DESCRIPTION_KEYS = (
     "description",
     "summary",
