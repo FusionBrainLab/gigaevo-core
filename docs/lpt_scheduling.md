@@ -3,11 +3,11 @@
 ## Quick Start
 
 ```bash
-# Simple heuristic (code length → predicted eval time)
+# Simple heuristic — works for any problem (code length → predicted eval time)
 python run.py scheduling=lpt problem.name=heilbron
 
-# Ridge regression with chain-aware features (n_steps, retrieval count, etc.)
-python run.py scheduling=lpt_ridge problem.name=heilbron
+# Chain-aware Ridge regression — for chain problems only (HoVer, HotpotQA)
+python run.py scheduling=lpt_chain problem.name=chains/hover/static_soft
 
 # Default: FIFO (no prediction)
 python run.py scheduling=fifo problem.name=heilbron
@@ -15,13 +15,12 @@ python run.py scheduling=fifo problem.name=heilbron
 
 Three scheduling configs in `config/scheduling/`:
 - **`fifo`** (default) — insertion order, no prediction
-- **`lpt`** — LPT with `SimpleHeuristicPredictor` (code length heuristic, online calibration)
-- **`lpt_ridge`** — LPT with `RidgePredictor` + `ChainFeatureExtractor` (uses sklearn, best for chain problems with variable DAG complexity)
+- **`lpt`** — LPT with `SimpleHeuristicPredictor` (code length heuristic, online calibration). General-purpose, no extra dependencies.
+- **`lpt_chain`** — LPT with `RidgePredictor` + `ChainFeatureExtractor`. Uses chain-specific features (n_steps, n_llm_steps, dag_depth, string content length, deep retrieval count) for accurate predictions on chain problems. Requires sklearn.
 
-Works with any experiment preset: `python run.py experiment=steady_state scheduling=lpt problem.name=heilbron`
+Combine with any experiment preset: `python run.py experiment=steady_state scheduling=lpt problem.name=heilbron`
 
 `scheduling=lpt` was used in production HoVer experiments (steady-state-v2, map-elites-topology).
-`lpt_ridge` with `ChainFeatureExtractor` is available for chain problems where DAG complexity varies widely — it uses structural features (n_steps, retrieval count, code length) for more accurate predictions.
 
 ## Problem
 
