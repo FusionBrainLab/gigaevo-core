@@ -1,0 +1,182 @@
+CHAIN EVOLUTION
+You are evolving a multi-step reasoning chain defined with structured fields.
+Each LLM step is specified by semantic fields (aim, stage_action, etc.) that are
+automatically assembled into prompts — you do not write raw prompt text. You control
+the structured-field content and the chain-level system_prompt.
+
+Consider the next guidelines:
+1) Chain optimization is a high-dimensional, experimental design problem. Each LLM step's
+   structured fields may combine:
+   - Reasoning scaffolds: explicit step-by-step thinking, sub-problem decomposition
+   - Role & context framing: role definition, domain setup, goal specification, success criteria
+   - Instruction precision: task boundaries, structural directives
+   - In-context exemplars: input-output examples, pattern demonstrations
+   - Constraints: output schema, formatting rules
+   Additionally, multi-step chains require attention to:
+   - Step coordination: each step should produce output shaped for its downstream consumers
+   - Information flow: pass only relevant information forward to avoid context dilution
+   - Role specialization: each step should have a clear, focused responsibility
+2) Structured fields of LLM steps:
+   - "aim" (REQUIRED, non-empty): Primary objective of this step
+   - "stage_action" (REQUIRED, non-empty): Specific action to perform
+   - "reasoning_questions" (optional): Key questions to answer
+   - "example_reasoning" (optional): Example of expert reasoning
+   These fields are assembled into a full LLM prompt for each step. The assembly
+   order (top to bottom):
+
+     [If system_prompt is non-empty]
+     System Instructions:
+     {system_prompt}
+
+     Data:
+     {outer_context}              ← initial user input
+
+     [If step has dependencies]
+     Previous steps:
+     Step N. Title
+     Result: <output>
+     ...
+     Based on the results of previous steps, perform the following task:
+     Step {number}. {title}
+     Objective: {aim}
+     Task: {stage_action}
+     Questions: {reasoning_questions}
+     Example reasoning: {example_reasoning}
+
+   Key points:
+   - system_prompt is shared — prepended to every LLM step
+   - outer_context wraps every LLM step as "Data:\n{outer_context}"
+   - Dependencies list controls which prior step outputs are visible
+3) Implementation details:
+   - entrypoint() returns a dict with "system_prompt" (str, may be empty) and "steps" (list of dicts)
+   - Each step dict has metadata fields: number, title, step_type, dependencies
+   - LLM steps carry the four structured fields above; tool steps carry step_config
+   - Tool steps use $-reference syntax in input_mapping:
+       $outer_context — the original sample context string
+       $history[-1] — output of the immediately preceding step
+       $history[N] — output of step at index N (0-based)
+
+STEP TYPES
+The chain supports two step types:
+- "llm": LLM reasoning step with structured fields (aim, stage_action, reasoning_questions,
+  example_reasoning). The LLM receives the assembled prompt and produces a text response.
+- "tool": Tool execution step with step_config. Available tools:
+    "retrieve" — BM25 retrieval over Wikipedia abstracts (k=7). Returns top-7 passages
+    formatted as "[i] Title | sentence1 sentence2 ...".
+    Usage in step_config: {"tool_name": "retrieve", "input_mapping": {"query": "$reference"}}
+    Where $reference is one of: $outer_context, $history[-1], $history[N]
+
+EVOLUTION MODE — STATIC
+The chain topology (step count, types, dependencies) is fixed. Only the structured field
+content of non-frozen LLM steps and the chain-level system_prompt are evolvable.
+Frozen steps must match the baseline exactly and cannot be modified.
+Each step dict additionally includes a "frozen" metadata field (True/False).
+
+TASK DEFINITION — MULTI-HOP EVIDENCE RETRIEVAL FOR CLAIM VERIFICATION
+
+Challenge: Design a chain that maximizes retrieval coverage for multi-hop claim verification.
+
+OBJECTIVE
+Return a chain specification guiding the downstream LLM such that:
+ 1) All chain steps are valid and well-defined
+ 2) The chain guides the LLM through multi-hop reasoning using retrieval and synthesis
+ 3) Maximizes retrieval coverage — the fraction of samples where all gold
+    supporting documents are found across the retrieval hops
+
+Output: Retrieved passages across all hops. Goal: Retrieval coverage > 0.7
+
+PIPELINE COMPONENTS
+- LLM: Model with basic multi-hop reasoning capabilities
+- Retrieval: BM25 over Wikipedia abstracts via the "retrieve" tool (k=7); returns top-k passages
+  formatted as "[i] Title | sentence1 sentence2 ..."
+
+CHAIN STRUCTURE — FIXED 7-STEP TOPOLOGY
+
+Step 1 (TOOL) — "Retrieve first-hop passages"
+  Type: tool | Dependencies: [] | Frozen: Yes
+  Purpose: Retrieve Wikipedia passages using the claim as query.
+  Config: tool_name="retrieve", input_mapping={"query": "$outer_context"}
+
+Step 2 (LLM) — "Summarize first-hop evidence"
+  Type: llm | Dependencies: [1] | Frozen: No
+  Purpose: Extract key facts from the retrieved passages relevant to the claim.
+
+Step 3 (LLM) — "Generate second-hop query"
+  Type: llm | Dependencies: [2] | Frozen: No
+  Purpose: Identify missing information and generate a focused second-hop search query.
+
+Step 4 (TOOL) — "Retrieve second-hop passages"
+  Type: tool | Dependencies: [3] | Frozen: Yes
+  Purpose: Retrieve additional passages using the generated query.
+  Config: tool_name="retrieve", input_mapping={"query": "$history[-1]"}
+
+Step 5 (LLM) — "Summarize second-hop evidence"
+  Type: llm | Dependencies: [2, 4] | Frozen: No
+  Purpose: Integrate first-hop summary with second-hop passages into unified evidence.
+
+Step 6 (LLM) — "Generate third-hop query"
+  Type: llm | Dependencies: [5] | Frozen: No
+  Purpose: Identify remaining gaps and generate a focused third-hop search query.
+
+Step 7 (TOOL) — "Retrieve third-hop passages"
+  Type: tool | Dependencies: [6] | Frozen: Yes
+  Purpose: Retrieve final passages for third hop.
+  Config: tool_name="retrieve", input_mapping={"query": "$history[-1]"}
+
+GENOME FORMAT
+entrypoint() must return a dict:
+{
+    "system_prompt": "string — shared instruction prepended to every LLM step",
+    "steps": [
+        {   # Step 1 (tool — frozen, must match exactly)
+            "number": 1,
+            "title": "Retrieve first-hop passages",
+            "step_type": "tool",
+            "dependencies": [],
+            "frozen": True,
+            "step_config": {
+                "tool_name": "retrieve",
+                "input_mapping": {"query": "$outer_context"},
+            },
+        },
+        {   # Step 2 (LLM)
+            "number": 2,
+            "title": "Summarize first-hop evidence",
+            "step_type": "llm",
+            "aim": "required — step objective",
+            "stage_action": "required — what the LLM should do",
+            "reasoning_questions": "optional — guiding questions",
+            "example_reasoning": "optional — example thought process",
+            "dependencies": [1],
+            "frozen": False,
+        },
+        ...  # Steps 3-7 follow the same pattern
+    ],
+}
+
+CONSTRAINTS
+- LLM steps require non-empty "aim" and "stage_action" fields
+- Dependencies must reference only earlier steps (by number)
+- No dependency cycles
+- Steps list must have exactly 7 entries
+- Step types and dependencies must match the fixed topology
+- Frozen steps (1, 4, and 7) must match the baseline exactly
+- Steps 1, 4, and 7 all use the "retrieve" tool (k=7)
+
+FAILURE MODES
+- Missing or empty required fields (aim, stage_action for LLM steps)
+- Dependency cycles or references to non-existent/later steps
+- Wrong number of steps or type/deps mismatch with fixed topology
+- Frozen step content differs from baseline
+
+OUTPUT FORMAT
+Implement `def entrypoint()` that returns:
+- A dict with "system_prompt" (str) and "steps" (list of step dicts)
+- Each step dict has metadata fields (number, title, step_type, dependencies)
+- LLM steps have structured fields (aim, stage_action, reasoning_questions, example_reasoning)
+- Each step dict includes "frozen" field (True/False)
+
+TASK HINTS
+- Query generation steps should instruct the LLM to output only the search query, avoiding extraneous text that confuses the retriever
+- Each summarization step should focus on extracting facts relevant to the claim
+- Retrieval coverage is evaluated across all 3 tool step outputs (steps 1, 4, 7)
