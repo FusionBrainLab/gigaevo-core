@@ -1,0 +1,49 @@
+# @package _global_
+
+# Steady-State + Migration Bus — Maximum Throughput
+# Combines continuous interleaving with cross-run program sharing.
+# Best for production runs with multiple GPUs.
+#
+# Launch 2+ runs with different redis.db values:
+#   python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
+#   python run.py experiment=steady_state_bus problem.name=heilbron redis.db=1
+#   python run.py experiment=steady_state_bus problem.name=heilbron redis.db=2
+
+defaults:
+  - /constants: base
+  - /redis: default
+  - /llm: single
+  - /prompts: default
+  - /prompt_fetcher: fixed
+  - /evolution: steady_state
+  - /algorithm: single_island
+  - /pipeline: auto
+  - /runner: default
+  - /scheduling: fifo
+  - /loader: directory
+  - /logging: tensorboard
+  - /metrics: default
+
+# Enable migration bus (fully-connected topology)
+migration_node:
+  _target_: gigaevo.evolution.bus.MigrationNode
+  run_id: "${problem.name}@db${redis.db}"
+  transport:
+    _target_: gigaevo.evolution.bus.RedisStreamTransport
+    run_id: "${problem.name}@db${redis.db}"
+    stream_key: "gigaevo:${problem.name}:migration_bus"
+    host: ${redis.host}
+    port: ${redis.port}
+    db: 15
+    max_stream_len: 1000
+    claim_ttl: 120
+  topology:
+    _target_: gigaevo.evolution.bus.BusTopology
+  max_buffer_size: 30
+  consume_interval: 3.0
+  max_consume_per_poll: 20
+
+evolution_engine:
+  _target_: gigaevo.evolution.bus.BusedEvolutionEngine
+  migration_node: ${migration_node}
+  max_imports_per_generation: 10

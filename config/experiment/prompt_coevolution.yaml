@@ -1,0 +1,32 @@
+# @package _global_
+
+# Prompt Co-Evolution — Evolve Mutation Prompts Alongside Programs
+# A paired prompt run evolves the system prompt used by the mutation LLM,
+# selecting for prompts that produce better mutations.
+#
+# Requires two parallel runs:
+#
+# 1. Main run (uses co-evolved prompts from the prompt run):
+#   python run.py experiment=prompt_coevolution problem.name=heilbron \
+#       redis.db=4 prompt_fetcher.prompt_redis_db=6
+#
+# 2. Prompt run (evolves mutation prompts, reads outcomes from main run):
+#   python run.py problem.name=prompt_evolution pipeline=prompt_evolution \
+#       redis.db=6 main_redis_db=4 main_redis_prefix=heilbron
+#
+# See docs/COEVOLUTION.md for the full architecture.
+
+defaults:
+  - /constants: base
+  - /redis: default
+  - /llm: single
+  - /prompts: default
+  - /prompt_fetcher: coevolved
+  - /evolution: default
+  - /algorithm: single_island
+  - /pipeline: auto
+  - /runner: default
+  - /scheduling: fifo
+  - /loader: directory
+  - /logging: tensorboard
+  - /metrics: default

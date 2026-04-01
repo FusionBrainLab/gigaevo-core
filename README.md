@@ -103,14 +103,28 @@ Evolution starts immediately. Logs are saved to `outputs/`.
 
 ## Customization
 
-### Different Experiments
+### Experiment Presets
 
 ```bash
-# Multi-island evolution (diverse solution exploration)
+# Steady-state: continuous mutation/evaluation, ~8x throughput
+python run.py experiment=steady_state problem.name=heilbron
+
+# Migration bus: parallel runs share rejected programs via Redis stream
+python run.py experiment=migration_bus problem.name=heilbron redis.db=0
+python run.py experiment=migration_bus problem.name=heilbron redis.db=1
+
+# Steady-state + bus: maximum throughput with cross-run sharing
+python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
+
+# Multi-island evolution (fitness + simplicity islands)
 python run.py experiment=multi_island_complexity problem.name=heilbron
 
-# Multi-LLM exploration (uses multiple models)
+# Multi-LLM exploration (diverse mutation models)
 python run.py experiment=multi_llm_exploration problem.name=heilbron
+
+# Prompt co-evolution (evolve mutation prompts alongside programs)
+python run.py experiment=prompt_coevolution problem.name=heilbron \
+    redis.db=4 prompt_fetcher.prompt_redis_db=6
 ```
 
 ### Common Overrides
@@ -155,7 +169,7 @@ files are in `config/`:
 
 | Directory | Purpose | Key files |
 |-----------|---------|-----------|
-| `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `multi_island_complexity.yaml` |
+| `experiment/` | Complete experiment templates | `base.yaml`, `steady_state.yaml`, `migration_bus.yaml`, `prompt_coevolution.yaml`, `steady_state_bus.yaml` |
 | `algorithm/` | Evolution algorithms | `single_island.yaml`, `multi_island.yaml` |
 | `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml` |
 | `pipeline/` | DAG execution pipelines | `standard.yaml`, `with_context.yaml`, `prompt_evolution.yaml` |
