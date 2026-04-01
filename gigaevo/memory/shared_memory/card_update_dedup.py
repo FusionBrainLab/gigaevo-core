@@ -244,8 +244,7 @@ def compute_weighted_candidates(
             for key in QUERY_KEYS
         }
         final_score = sum(
-            multipliers[key] * component_scores.get(key, 0.0)
-            for key in QUERY_KEYS
+            multipliers[key] * component_scores.get(key, 0.0) for key in QUERY_KEYS
         )
         if final_score < float(min_final_score):
             continue
@@ -439,9 +438,7 @@ def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
         if not isinstance(raw_deltas, list):
             continue
         deltas = [
-            parsed
-            for raw in raw_deltas
-            if (parsed := _safe_float(raw)) is not None
+            parsed for raw in raw_deltas if (parsed := _safe_float(raw)) is not None
         ]
         if not deltas:
             continue

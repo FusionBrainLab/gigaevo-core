@@ -4,10 +4,10 @@ import argparse
 import asyncio
 import importlib.util
 import json
+from pathlib import Path
 import statistics
 import sys
 import time
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -126,8 +126,12 @@ async def _main() -> int:
     if str(PROBLEM_DIR) not in sys.path:
         sys.path.insert(0, str(PROBLEM_DIR))
 
-    context_module = _load_module("algotune_kalman_filter_context", PROBLEM_DIR / "context.py")
-    validate_module = _load_module("algotune_kalman_filter_validate", PROBLEM_DIR / "validate.py")
+    context_module = _load_module(
+        "algotune_kalman_filter_context", PROBLEM_DIR / "context.py"
+    )
+    validate_module = _load_module(
+        "algotune_kalman_filter_validate", PROBLEM_DIR / "validate.py"
+    )
     program_module = _load_module("algotune_kalman_filter_program", program_path)
 
     if not hasattr(program_module, "entrypoint"):

@@ -41,7 +41,6 @@ from gigaevo.programs.stages.optimization.optuna import (
     OptunaPayloadBridge,
     PayloadResolver,
 )
-from gigaevo.programs.stages.runtime_metrics import RuntimeFitnessStage
 from gigaevo.programs.stages.python_executors.execution import (
     CallFileFunction,
     CallProgramFunction,
@@ -49,6 +48,7 @@ from gigaevo.programs.stages.python_executors.execution import (
     FetchArtifact,
     FetchMetrics,
 )
+from gigaevo.programs.stages.runtime_metrics import RuntimeFitnessStage
 from gigaevo.programs.stages.validation import ValidateCodeStage
 from gigaevo.runner.dag_blueprint import DAGBlueprint
 

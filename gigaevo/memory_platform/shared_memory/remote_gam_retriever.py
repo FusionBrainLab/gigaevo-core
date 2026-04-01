@@ -57,7 +57,11 @@ def make_card_text(record: dict[str, Any]) -> str:
     aliases = record.get("aliases", []) or []
     works_with = record.get("works_with", []) or []
     explanation = record.get("explanation", {}) or {}
-    explanation_summary = explanation.get("summary", "") if isinstance(explanation, dict) else str(explanation or "")
+    explanation_summary = (
+        explanation.get("summary", "")
+        if isinstance(explanation, dict)
+        else str(explanation or "")
+    )
     evolution_statistics = record.get("evolution_statistics", {}) or {}
     usage = record.get("usage", {}) or {}
     code = record.get("code") or ""
@@ -156,10 +160,18 @@ class RemoteSearchRetriever(AbsRetriever):
 
     def _hit_to_gam_hit(self, hit: SearchHitData) -> Hit:
         content = hit.content or {}
-        card_id = str((content.get("id") if isinstance(content, dict) else None) or "").strip()
+        card_id = str(
+            (content.get("id") if isinstance(content, dict) else None) or ""
+        ).strip()
         page_index = self._page_index_by_card_id.get(card_id)
-        page_id = str(page_index) if page_index is not None else card_id or str(hit.entity_id)
-        snippet = str(hit.snippet or (content.get("description") if isinstance(content, dict) else "") or "")
+        page_id = (
+            str(page_index) if page_index is not None else card_id or str(hit.entity_id)
+        )
+        snippet = str(
+            hit.snippet
+            or (content.get("description") if isinstance(content, dict) else "")
+            or ""
+        )
         return Hit(
             page_id=page_id,
             snippet=snippet,
@@ -185,10 +197,7 @@ class RemoteSearchRetriever(AbsRetriever):
             document_kind=self.document_kind,
             hybrid_weights=self.hybrid_weights,
         )
-        return [
-            [self._hit_to_gam_hit(hit) for hit in hits]
-            for hits in hit_batches
-        ]
+        return [[self._hit_to_gam_hit(hit) for hit in hits] for hits in hit_batches]
 
 
 class RemotePageIndexRetriever(AbsRetriever):
@@ -332,6 +341,8 @@ def build_retrievers(
         retriever.build(page_store)
 
     return retrievers
+
+
 def build_memory_client(base_url: str) -> PlatformMemoryClient:
     return PlatformMemoryClient(
         base_url=base_url,

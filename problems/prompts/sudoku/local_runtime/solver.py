@@ -91,7 +91,9 @@ class LocalVLLMSolver:
 
     def format_prompt(self, context: PathContext) -> str:
         tokenizer = self._ensure_tokenizer()
-        ctx_text = "\n".join(str(node.action) for node in context.nodes) if context else ""
+        ctx_text = (
+            "\n".join(str(node.action) for node in context.nodes) if context else ""
+        )
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": self.user_prompt.format(ctx=ctx_text)},

@@ -15,9 +15,7 @@ def is_alias_exact_match(prediction: str | None, target_aliases: Sequence[str]) 
 
     norm_pred = normalize_text(prediction)
     norm_targets = {
-        normalize_text(str(alias))
-        for alias in target_aliases
-        if str(alias).strip()
+        normalize_text(str(alias)) for alias in target_aliases if str(alias).strip()
     }
     return norm_pred in norm_targets
 
@@ -78,9 +76,7 @@ def build_failed_examples_artifact(
         ]
         aliases_text = ", ".join(shown_aliases) if shown_aliases else "<none>"
         if len(target_aliases) > MAX_ALIASES_PER_EXAMPLE:
-            aliases_text = (
-                f"{aliases_text}, ... (+{len(target_aliases) - MAX_ALIASES_PER_EXAMPLE} more)"
-            )
+            aliases_text = f"{aliases_text}, ... (+{len(target_aliases) - MAX_ALIASES_PER_EXAMPLE} more)"
 
         lines.extend(
             [

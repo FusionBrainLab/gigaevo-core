@@ -6,4 +6,3 @@ from gigaevo.memory.shared_memory.models import (  # noqa: F401
     MemoryCardExplanation,
     Strategy,
 )
-

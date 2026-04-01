@@ -6,9 +6,7 @@ def entrypoint() -> dict:
                 "number": 1,
                 "title": "Answer the MuSiQue question",
                 "step_type": "llm",
-                "aim": (
-                    "Answer the question based only on the provided passages."
-                ),
+                "aim": ("Answer the question based only on the provided passages."),
                 "stage_action": (
                     "Read the question and passages carefully, then answer strictly from "
                     "the given evidence. "

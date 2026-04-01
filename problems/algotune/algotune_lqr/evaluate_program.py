@@ -4,10 +4,10 @@ import argparse
 import asyncio
 import importlib.util
 import json
+from pathlib import Path
 import statistics
 import sys
 import time
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 

@@ -121,7 +121,13 @@ def _render_grid(canonical_grid: str, variant: PromptVariant) -> str:
     if variant.layout == "rows_sep":
         pretty_rows = [f"{row[0]} {row[1]} | {row[2]} {row[3]}" for row in rows]
         return "\n".join(
-            [pretty_rows[0], pretty_rows[1], "----+----", pretty_rows[2], pretty_rows[3]]
+            [
+                pretty_rows[0],
+                pretty_rows[1],
+                "----+----",
+                pretty_rows[2],
+                pretty_rows[3],
+            ]
         )
 
     raise ValueError(f"Unknown layout: {variant.layout}")
@@ -203,7 +209,9 @@ def _evaluate_single_example(
 
         raw_last_output = str(generated[0]).strip()
         expected_node_id = _next_node_id(context_nodes)
-        parsed_action = BasicActionParser.parse(raw_last_output, node_id=expected_node_id)
+        parsed_action = BasicActionParser.parse(
+            raw_last_output, node_id=expected_node_id
+        )
 
         if isinstance(parsed_action, BacktrackAction):
             backtracks += 1
@@ -256,10 +264,14 @@ def _evaluate_single_example(
         if is_done:
             return fail("wrong_final_grid", steps=step_idx)
 
-        next_state = _grid_with_pivots(parsed_last_grid, spec=spec, pivots_mask=pivots_mask)
+        next_state = _grid_with_pivots(
+            parsed_last_grid, spec=spec, pivots_mask=pivots_mask
+        )
         next_node = Node(
             parent=context_nodes[-1],
-            action=NodeAction(expected_node_id, _render_grid(parsed_last_grid, variant)),
+            action=NodeAction(
+                expected_node_id, _render_grid(parsed_last_grid, variant)
+            ),
             state=next_state,
         )
         context_nodes.append(next_node)
@@ -328,7 +340,9 @@ class SudokuPromptRuntime:
             user_prompt=USER_PROMPT_TEMPLATE,
         )
         self.validator = SudokuValidator()
-        self._dataset_cache: dict[tuple[str, int | None], tuple[SudokuSpec, list[GoldPath]]] = {}
+        self._dataset_cache: dict[
+            tuple[str, int | None], tuple[SudokuSpec, list[GoldPath]]
+        ] = {}
 
     def close(self) -> None:
         self.solver.close()

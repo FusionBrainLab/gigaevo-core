@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
-import time
 import json
 from pathlib import Path
+import time
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -740,7 +740,9 @@ class EvolutionEngine:
             logger.warning("[EvolutionEngine] Memory file not found: {}", path)
             return None
         except Exception as exc:
-            logger.warning("[EvolutionEngine] Failed to read memory file {}: {}", path, exc)
+            logger.warning(
+                "[EvolutionEngine] Failed to read memory file {}: {}", path, exc
+            )
             return None
 
         text = text.strip()
@@ -798,7 +800,9 @@ class EvolutionEngine:
         if card_type:
             lines.append(f"TYPE: {card_type}")
 
-        EvolutionEngine._append_card_section(lines, "WHEN_TO_USE", card.get("when_to_use"))
+        EvolutionEngine._append_card_section(
+            lines, "WHEN_TO_USE", card.get("when_to_use")
+        )
         EvolutionEngine._append_card_section(
             lines, "MUTATION_ACTIONS", card.get("mutation_actions")
         )
@@ -810,9 +814,7 @@ class EvolutionEngine:
         return "\n".join(lines)
 
     @staticmethod
-    def _append_card_section(
-        lines: list[str], label: str, items: object
-    ) -> None:
+    def _append_card_section(lines: list[str], label: str, items: object) -> None:
         if not items:
             return
         if not isinstance(items, list):

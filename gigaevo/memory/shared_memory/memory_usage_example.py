@@ -9,12 +9,19 @@ from shared_memory.memory import AmemGamMemory
 
 
 def main() -> None:
-    checkpoint_dir = Path(__file__).resolve().parent / "memory_usage_store" / "api_usage"
+    checkpoint_dir = (
+        Path(__file__).resolve().parent / "memory_usage_store" / "api_usage"
+    )
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     memory_api_url = os.getenv("MEMORY_API_URL", "http://localhost:8000")
     namespace = os.getenv("MEMORY_NAMESPACE", "demo")
-    use_api = os.getenv("MEMORY_USE_API", "true").strip().lower() not in {"0", "false", "no", "off"}
+    use_api = os.getenv("MEMORY_USE_API", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
     gam_pipeline_mode = os.getenv("MEMORY_GAM_PIPELINE_MODE", "default")
 
     memory = AmemGamMemory(

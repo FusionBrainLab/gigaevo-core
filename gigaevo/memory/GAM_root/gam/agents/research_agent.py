@@ -12,7 +12,6 @@ This module defines the ResearchAgent for the GAM (General-Agentic-Memory) frame
 The module focuses on providing clear abstraction and extensible interfaces for research-related agent functionalities.
 """
 
-
 from __future__ import annotations
 
 import json
@@ -63,6 +62,7 @@ _DEFAULT_TOP_K_BY_TOOL = {
 }
 _PIPELINE_MODES = {"default", "experimental"}
 
+
 class ResearchAgent:
     """
     Public API:
@@ -102,13 +102,9 @@ class ResearchAgent:
         self._allowed_tools = self._normalize_allowed_tools(allowed_tools)
         self._top_k_by_tool = self._normalize_top_k_by_tool(top_k_by_tool)
         self.pipeline_mode = self._normalize_pipeline_mode(pipeline_mode)
-        
+
         # 初始化 system_prompts，默认值为空字符串
-        default_system_prompts = {
-            "planning": "",
-            "integration": "",
-            "reflection": ""
-        }
+        default_system_prompts = {"planning": "", "integration": "", "reflection": ""}
         if system_prompts is None:
             self.system_prompts = default_system_prompts
         else:
@@ -138,16 +134,14 @@ class ResearchAgent:
         if not allowed_tools:
             return supported_tools
 
-        normalized = {
-            str(tool).strip()
-            for tool in allowed_tools
-            if str(tool).strip()
-        }
+        normalized = {str(tool).strip() for tool in allowed_tools if str(tool).strip()}
         filtered = {tool for tool in normalized if tool in supported_tools}
         return filtered or supported_tools
 
     @staticmethod
-    def _normalize_top_k_by_tool(top_k_by_tool: dict[str, int] | None) -> dict[str, int]:
+    def _normalize_top_k_by_tool(
+        top_k_by_tool: dict[str, int] | None,
+    ) -> dict[str, int]:
         normalized = dict(_DEFAULT_TOP_K_BY_TOOL)
         if not isinstance(top_k_by_tool, dict):
             return normalized
@@ -182,11 +176,17 @@ class ResearchAgent:
         if tool == "vector":
             return self._normalize_query_list(plan.vector_queries)
         if tool == "vector_description":
-            return self._normalize_query_list(plan.vector_description_queries) or self._normalize_query_list(plan.vector_queries)
+            return self._normalize_query_list(
+                plan.vector_description_queries
+            ) or self._normalize_query_list(plan.vector_queries)
         if tool == "vector_task_description":
-            return self._normalize_query_list(plan.vector_task_description_queries) or self._normalize_query_list(plan.vector_queries)
+            return self._normalize_query_list(
+                plan.vector_task_description_queries
+            ) or self._normalize_query_list(plan.vector_queries)
         if tool == "vector_explanation_summary":
-            return self._normalize_query_list(plan.vector_explanation_summary_queries) or self._normalize_query_list(plan.vector_queries)
+            return self._normalize_query_list(
+                plan.vector_explanation_summary_queries
+            ) or self._normalize_query_list(plan.vector_queries)
         return []
 
     def _filter_tools(self, tools: list[str]) -> list[str]:
@@ -201,7 +201,9 @@ class ResearchAgent:
             return self._research_experimental(request, memory_state=memory_state)
         return self._research_default(request, memory_state=memory_state)
 
-    def _research_default(self, request: str, memory_state: str | None = None) -> ResearchOutput:
+    def _research_default(
+        self, request: str, memory_state: str | None = None
+    ) -> ResearchOutput:
         temp = Result()
         iterations: list[dict[str, Any]] = []
         next_request = request
@@ -226,12 +228,14 @@ class ResearchAgent:
             print("[GAM] Reflection:")
             print(json.dumps(decision.__dict__, ensure_ascii=True, indent=2))
 
-            iterations.append({
-                "step": step,
-                "plan": plan.__dict__,
-                "temp_memory": temp.__dict__,
-                "decision": decision.__dict__,
-            })
+            iterations.append(
+                {
+                    "step": step,
+                    "plan": plan.__dict__,
+                    "temp_memory": temp.__dict__,
+                    "decision": decision.__dict__,
+                }
+            )
 
             if decision.enough:
                 break
@@ -241,7 +245,6 @@ class ResearchAgent:
             else:
                 next_request = decision.new_request
 
-
         raw = {
             "iterations": iterations,
             "temp_memory": temp.__dict__,
@@ -249,7 +252,9 @@ class ResearchAgent:
         }
         return ResearchOutput(integrated_memory=temp.content, raw_memory=raw)
 
-    def _research_experimental(self, request: str, memory_state: str | None = None) -> ResearchOutput:
+    def _research_experimental(
+        self, request: str, memory_state: str | None = None
+    ) -> ResearchOutput:
         iterations: list[dict[str, Any]] = []
         next_request = request
         retrieved_ideas_by_id: dict[str, dict[str, Any]] = {}
@@ -474,7 +479,9 @@ class ResearchAgent:
         normalized_ideas = self._parse_retrieved_ideas(retrieved_ideas)
         card_ids = [str(item.get("card_id") or "").strip() for item in normalized_ideas]
         ideas_payload = self._truncate_text(
-            json.dumps(normalized_ideas, ensure_ascii=True, indent=2) if normalized_ideas else "[]"
+            json.dumps(normalized_ideas, ensure_ascii=True, indent=2)
+            if normalized_ideas
+            else "[]"
         )
 
         system_prompt = self.system_prompts.get("reflection")
@@ -488,16 +495,22 @@ class ResearchAgent:
             prompt = template_prompt
 
         try:
-            response = self.generator.generate_single(prompt=prompt, schema=EXPERIMENTAL_DECISION_SCHEMA)
+            response = self.generator.generate_single(
+                prompt=prompt, schema=EXPERIMENTAL_DECISION_SCHEMA
+            )
             data = response.get("json") or json.loads(response["text"])
         except Exception as e:
             print(f"Error in experimental reflection: {e}")
-            return ExperimentalDecision(mode="continue", top_ideas=[], additional_queries=[])
+            return ExperimentalDecision(
+                mode="continue", top_ideas=[], additional_queries=[]
+            )
 
         raw_mode = str((data or {}).get("mode") or "continue").strip().lower()
         mode = "final" if raw_mode == "final" else "continue"
 
-        additional_queries = self._normalize_query_list((data or {}).get("additional_queries"))
+        additional_queries = self._normalize_query_list(
+            (data or {}).get("additional_queries")
+        )
         raw_ideas = (data or {}).get("top_ideas")
         top_ideas: list[TopIdea] = []
         seen_ids: set[str] = set()
@@ -521,8 +534,12 @@ class ResearchAgent:
                 )
 
         if mode == "final":
-            return ExperimentalDecision(mode="final", top_ideas=top_ideas[:3], additional_queries=[])
-        return ExperimentalDecision(mode="continue", top_ideas=[], additional_queries=additional_queries[:5])
+            return ExperimentalDecision(
+                mode="final", top_ideas=top_ideas[:3], additional_queries=[]
+            )
+        return ExperimentalDecision(
+            mode="continue", top_ideas=[], additional_queries=additional_queries[:5]
+        )
 
     def _ensure_top_ideas(
         self,
@@ -530,7 +547,9 @@ class ResearchAgent:
         available_card_ids: list[str],
     ) -> ExperimentalDecision:
         if decision.mode != "final":
-            return ExperimentalDecision(mode="final", top_ideas=[], additional_queries=[])
+            return ExperimentalDecision(
+                mode="final", top_ideas=[], additional_queries=[]
+            )
 
         top_ideas = list(decision.top_ideas[:3])
         selected_ids = {idea.card_id for idea in top_ideas}
@@ -546,7 +565,9 @@ class ResearchAgent:
             selected_ids.add(cid)
             if len(top_ideas) >= 3:
                 break
-        return ExperimentalDecision(mode="final", top_ideas=top_ideas[:3], additional_queries=[])
+        return ExperimentalDecision(
+            mode="final", top_ideas=top_ideas[:3], additional_queries=[]
+        )
 
     def _format_top_ideas(self, top_ideas: list[TopIdea]) -> str:
         if not top_ideas:
@@ -558,9 +579,13 @@ class ResearchAgent:
             card = card_map.get(idea.card_id, {})
             description = str(card.get("description") or "").strip()
             evidence_summary = self._extract_explanation_summary(card)
-            lines.append(f"{idx}. DESCRIPTION: {description or '(not provided in original card)'}")
+            lines.append(
+                f"{idx}. DESCRIPTION: {description or '(not provided in original card)'}"
+            )
             lines.append("WHEN_TO_USE:")
-            lines.append(f"- {evidence_summary or '(not provided in evidence summary)'}")
+            lines.append(
+                f"- {evidence_summary or '(not provided in evidence summary)'}"
+            )
             lines.append("")
         return "\n".join(lines).strip()
 
@@ -568,17 +593,22 @@ class ResearchAgent:
         """确保检索器索引是最新的"""
         # 检查是否有新的页面需要更新索引
         current_page_count = len(self.page_store.load())
-        
+
         # 如果页面数量发生变化，更新所有检索器索引
-        if hasattr(self, '_last_page_count') and current_page_count != self._last_page_count:
-            print(f"检测到页面数量变化 ({self._last_page_count} -> {current_page_count})，更新检索器索引...")
+        if (
+            hasattr(self, "_last_page_count")
+            and current_page_count != self._last_page_count
+        ):
+            print(
+                f"检测到页面数量变化 ({self._last_page_count} -> {current_page_count})，更新检索器索引..."
+            )
             for name, retriever in self.retrievers.items():
                 try:
                     retriever.update(self.page_store)
                     print(f"✅ Updated {name} retriever index")
                 except Exception as e:
                     print(f"❌ Failed to update {name} retriever: {e}")
-        
+
         # 更新页面计数
         self._last_page_count = current_page_count
 
@@ -606,21 +636,25 @@ class ResearchAgent:
             for i, abstract in enumerate(memory_state.abstracts):
                 memory_context_lines.append(f"Page {i}: {abstract}")
             memory_context = "\n".join(memory_context_lines)
-        
+
         system_prompt = self.system_prompts.get("planning")
         template_prompt = Planning_PROMPT.format(request=request, memory=memory_context)
         if system_prompt:
             prompt = f"User Instructions: {system_prompt}\n\n System Prompt: {template_prompt}"
         else:
             prompt = template_prompt
-        
+
         # 调试：打印prompt长度
         prompt_chars = len(prompt)
         estimated_tokens = prompt_chars // 4  # 粗略估算：1 token ≈ 4 字符
-        print(f"[DEBUG] Planning prompt length: {prompt_chars} chars (~{estimated_tokens} tokens)")
+        print(
+            f"[DEBUG] Planning prompt length: {prompt_chars} chars (~{estimated_tokens} tokens)"
+        )
 
         try:
-            response = self.generator.generate_single(prompt=prompt, schema=PLANNING_SCHEMA)
+            response = self.generator.generate_single(
+                prompt=prompt, schema=PLANNING_SCHEMA
+            )
             data = response.get("json") or json.loads(response["text"])
             return SearchPlan(
                 tools=data.get("tools", []),
@@ -628,9 +662,13 @@ class ResearchAgent:
                 keyword_collection=data.get("keyword_collection", []),
                 vector_queries=data.get("vector_queries", []),
                 vector_description_queries=data.get("vector_description_queries", []),
-                vector_task_description_queries=data.get("vector_task_description_queries", []),
-                vector_explanation_summary_queries=data.get("vector_explanation_summary_queries", []),
-                page_index=data.get("page_index", [])
+                vector_task_description_queries=data.get(
+                    "vector_task_description_queries", []
+                ),
+                vector_explanation_summary_queries=data.get(
+                    "vector_explanation_summary_queries", []
+                ),
+                page_index=data.get("page_index", []),
             )
         except Exception as e:
             print(f"Error in planning: {e}")
@@ -641,16 +679,15 @@ class ResearchAgent:
                 vector_description_queries=[],
                 vector_task_description_queries=[],
                 vector_explanation_summary_queries=[],
-                page_index=[]
+                page_index=[],
             )
-    
 
     def _search(
-        self, 
-        plan: SearchPlan, 
-        result: Result, 
+        self,
+        plan: SearchPlan,
+        result: Result,
         question: str,
-        searching_prompt: str | None = None
+        searching_prompt: str | None = None,
     ) -> Result:
         """
         Unified search with integration:
@@ -674,7 +711,9 @@ class ResearchAgent:
                         print(f"  - {q}")
                     # 将多个关键词拼接成一个字符串进行搜索
                     combined_keywords = " ".join(plan.keyword_collection)
-                    keyword_results = self._search_by_keyword([combined_keywords], top_k=tool_top_k)
+                    keyword_results = self._search_by_keyword(
+                        [combined_keywords], top_k=tool_top_k
+                    )
                     # Flatten the results if they come as List[List[Hit]]
                     if keyword_results and isinstance(keyword_results[0], list):
                         for result_list in keyword_results:
@@ -687,12 +726,14 @@ class ResearchAgent:
                             score = hit.meta.get("score") if hit.meta else None
                             score_str = f" score={score}" if score is not None else ""
                             page_id = hit.page_id if hit.page_id else "n/a"
-                            print(f"  {i:02d}. source={hit.source} page_id={page_id}{score_str}")
+                            print(
+                                f"  {i:02d}. source={hit.source} page_id={page_id}{score_str}"
+                            )
                             print(f"      {hit.snippet}")
                     else:
                         print("[GAM] Keyword hits: (none)")
                     all_hits.extend(hits)
-                    
+
             elif tool in _VECTOR_TOOLS:
                 vector_queries = self._vector_queries_for_tool(plan, tool)
                 if vector_queries:
@@ -718,12 +759,14 @@ class ResearchAgent:
                             score = hit.meta.get("score") if hit.meta else None
                             score_str = f" score={score}" if score is not None else ""
                             page_id = hit.page_id if hit.page_id else "n/a"
-                            print(f"  {i:02d}. source={hit.source} page_id={page_id}{score_str}")
+                            print(
+                                f"  {i:02d}. source={hit.source} page_id={page_id}{score_str}"
+                            )
                             print(f"      {hit.snippet}")
                     else:
                         print(f"[GAM] {tool} hits: (none)")
                     all_hits.extend(hits)
-                    
+
             elif tool == "page_index":
                 if plan.page_index:
                     tool_top_k = self._tool_top_k(tool)
@@ -740,7 +783,7 @@ class ResearchAgent:
         # Deduplicate hits by page_id
         if not all_hits:
             return result
-        
+
         # 按 page_id 去重 hits，避免同一个 page 被多个 tool 检索到时重复添加
         unique_hits: dict[str, Hit] = {}  # page_id -> Hit
         hits_without_id: list[Hit] = []  # 没有 page_id 的 hits
@@ -752,24 +795,30 @@ class ResearchAgent:
                 else:
                     # 如果已有该 page_id 的 hit，比较得分（如果有的话），保留得分更高的
                     existing_hit = unique_hits[hit.page_id]
-                    existing_score = existing_hit.meta.get("score", 0) if existing_hit.meta else 0
+                    existing_score = (
+                        existing_hit.meta.get("score", 0) if existing_hit.meta else 0
+                    )
                     current_score = hit.meta.get("score", 0) if hit.meta else 0
                     if current_score > existing_score:
                         unique_hits[hit.page_id] = hit
             else:
                 # 没有 page_id 的 hits 也保留
                 hits_without_id.append(hit)
-        
+
         # 合并有 page_id 和没有 page_id 的 hits，按得分排序
         all_unique_hits = list(unique_hits.values()) + hits_without_id
-        sorted_hits = sorted(all_unique_hits, 
-                           key=lambda h: h.meta.get("score", 0) if h.meta else 0, 
-                           reverse=True)
-        
+        sorted_hits = sorted(
+            all_unique_hits,
+            key=lambda h: h.meta.get("score", 0) if h.meta else 0,
+            reverse=True,
+        )
+
         # 统一进行一次 integrate
         return self._integrate(sorted_hits, result, question)
 
-    def _search_no_integrate(self, plan: SearchPlan, result: Result, question: str) -> Result:
+    def _search_no_integrate(
+        self, plan: SearchPlan, result: Result, question: str
+    ) -> Result:
         """
         Search without integration:
           1) Execute search tools
@@ -788,7 +837,9 @@ class ResearchAgent:
                     tool_top_k = self._tool_top_k(tool)
                     # 将多个关键词拼接成一个字符串进行搜索
                     combined_keywords = " ".join(plan.keyword_collection)
-                    keyword_results = self._search_by_keyword([combined_keywords], top_k=tool_top_k)
+                    keyword_results = self._search_by_keyword(
+                        [combined_keywords], top_k=tool_top_k
+                    )
                     # Flatten the results if they come as List[List[Hit]]
                     if keyword_results and isinstance(keyword_results[0], list):
                         for result_list in keyword_results:
@@ -796,7 +847,7 @@ class ResearchAgent:
                     else:
                         hits.extend(keyword_results)
                     all_hits.extend(hits)
-                    
+
             elif tool in _VECTOR_TOOLS:
                 vector_queries = self._vector_queries_for_tool(plan, tool)
                 if vector_queries:
@@ -814,7 +865,7 @@ class ResearchAgent:
                     else:
                         hits.extend(vector_results)
                     all_hits.extend(hits)
-                    
+
             elif tool == "page_index":
                 if plan.page_index:
                     tool_top_k = self._tool_top_k(tool)
@@ -831,7 +882,7 @@ class ResearchAgent:
         # Format all hits as text content without integration
         if not all_hits:
             return result
-        
+
         # 按 page_id 去重 hits，避免同一个 page 被多个 tool 检索到时重复添加
         unique_hits: dict[str, Hit] = {}  # page_id -> Hit
         hits_without_id: list[Hit] = []  # 没有 page_id 的 hits
@@ -843,43 +894,51 @@ class ResearchAgent:
                 else:
                     # 如果已有该 page_id 的 hit，比较得分（如果有的话），保留得分更高的
                     existing_hit = unique_hits[hit.page_id]
-                    existing_score = existing_hit.meta.get("score", 0) if existing_hit.meta else 0
+                    existing_score = (
+                        existing_hit.meta.get("score", 0) if existing_hit.meta else 0
+                    )
                     current_score = hit.meta.get("score", 0) if hit.meta else 0
                     if current_score > existing_score:
                         unique_hits[hit.page_id] = hit
             else:
                 # 没有 page_id 的 hits 也保留
                 hits_without_id.append(hit)
-        
+
         # 按得分排序（如果有的话）
         # 合并有 page_id 和没有 page_id 的 hits
         all_unique_hits = list(unique_hits.values()) + hits_without_id
-        sorted_hits = sorted(all_unique_hits, 
-                           key=lambda h: h.meta.get("score", 0) if h.meta else 0, 
-                           reverse=True)
+        sorted_hits = sorted(
+            all_unique_hits,
+            key=lambda h: h.meta.get("score", 0) if h.meta else 0,
+            reverse=True,
+        )
 
         ideas = self._build_retrieved_ideas(sorted_hits)
         if not ideas:
             return result
-        sources = [str(item.get("card_id") or "").strip() for item in ideas if str(item.get("card_id") or "").strip()]
+        sources = [
+            str(item.get("card_id") or "").strip()
+            for item in ideas
+            if str(item.get("card_id") or "").strip()
+        ]
         formatted_content = json.dumps(ideas, ensure_ascii=True, indent=2)
 
         return Result(
             content=formatted_content if formatted_content else result.content,
-            sources=sources if sources else result.sources
+            sources=sources if sources else result.sources,
         )
 
     def _integrate(
-        self, 
-        hits: list[Hit], 
-        result: Result, 
+        self,
+        hits: list[Hit],
+        result: Result,
         question: str,
-        integration_prompt: str | None = None
+        integration_prompt: str | None = None,
     ) -> Result:
         """
         Integrate search hits with LLM to generate question-relevant result.
         """
-        
+
         evidence_text = []
         sources = []
         for i, hit in enumerate(hits, 1):
@@ -888,23 +947,27 @@ class ResearchAgent:
             if hit.page_id:
                 source_info = f"[{hit.source}]({hit.page_id})"
             evidence_text.append(f"{i}. {source_info} {hit.snippet}")
-            
+
             if hit.page_id:
                 sources.append(hit.page_id)
-        
+
         evidence_context = "\n".join(evidence_text) if evidence_text else "无搜索结果"
-        
+
         system_prompt = self.system_prompts.get("integration")
-        template_prompt = Integrate_PROMPT.format(question=question, evidence_context=evidence_context, result=result.content)
+        template_prompt = Integrate_PROMPT.format(
+            question=question, evidence_context=evidence_context, result=result.content
+        )
         if system_prompt:
             prompt = f"User Instructions: {system_prompt}\n\n System Prompt: {template_prompt}"
         else:
             prompt = template_prompt
 
         try:
-            response = self.generator.generate_single(prompt=prompt, schema=INTEGRATE_SCHEMA)
+            response = self.generator.generate_single(
+                prompt=prompt, schema=INTEGRATE_SCHEMA
+            )
             data = response.get("json") or json.loads(response["text"])
-            
+
             # 处理 sources：确保是字符串列表（如果LLM返回的是整数，转换为字符串）
             llm_sources = data.get("sources", sources)
             if llm_sources:
@@ -916,17 +979,16 @@ class ResearchAgent:
                 sources = sources_list if sources_list else sources
             else:
                 sources = sources
-            
-            return Result(
-                content=data.get("content", ""),
-                sources=sources
-            )
+
+            return Result(content=data.get("content", ""), sources=sources)
         except Exception as e:
             print(f"Error in integration: {e}")
             return result
 
     # ---- search channels ----
-    def _search_by_keyword(self, query_list: list[str], top_k: int = 3) -> list[list[Hit]]:
+    def _search_by_keyword(
+        self, query_list: list[str], top_k: int = 3
+    ) -> list[list[Hit]]:
         r = self.retrievers.get("keyword")
         if r is not None:
             try:
@@ -943,13 +1005,17 @@ class ResearchAgent:
             for i, p in enumerate(self.page_store.load()):
                 if q in p.content.lower() or q in p.header.lower():
                     snippet = p.content
-                    query_hits.append(Hit(page_id=str(i), snippet=snippet, source="keyword", meta={}))
+                    query_hits.append(
+                        Hit(page_id=str(i), snippet=snippet, source="keyword", meta={})
+                    )
                     if len(query_hits) >= top_k:
                         break
             out.append(query_hits)
         return out
 
-    def _search_by_vector(self, query_list: list[str], top_k: int = 3) -> list[list[Hit]]:
+    def _search_by_vector(
+        self, query_list: list[str], top_k: int = 3
+    ) -> list[list[Hit]]:
         return self._search_by_vector_tool("vector", query_list, top_k=top_k)
 
     def _search_by_vector_tool(
@@ -981,60 +1047,71 @@ class ResearchAgent:
             except Exception as e:
                 print(f"Error in page index search: {e}")
                 return []
-        
+
         # fallback: 直接通过 page_store 获取页面
         out: list[Hit] = []
         for idx in page_index:
             p = self.page_store.get(idx)
             if p:
-                out.append(Hit(page_id=str(idx), snippet=p.content, source="page_index", meta={}))
+                out.append(
+                    Hit(
+                        page_id=str(idx),
+                        snippet=p.content,
+                        source="page_index",
+                        meta={},
+                    )
+                )
         return [out]  # 包装成 List[List[Hit]] 格式
-        
-        
 
     # ---- reflection & summarization ----
     def _reflection(
-        self, 
-        request: str, 
-        result: Result,
-        reflection_prompt: str | None = None
+        self, request: str, result: Result, reflection_prompt: str | None = None
     ) -> ReflectionDecision:
         """
-        - "whether information is enough" 
-        - "if not, generate remaining information as a new request"  
+        - "whether information is enough"
+        - "if not, generate remaining information as a new request"
         """
-        
+
         try:
             system_prompt = self.system_prompts.get("reflection")
-            
+
             # 调试：打印reflection prompt长度
             result_content_chars = len(result.content)
             estimated_result_tokens = result_content_chars // 4
-            print(f"[DEBUG] Reflection result.content length: {result_content_chars} chars (~{estimated_result_tokens} tokens)")
-            
+            print(
+                f"[DEBUG] Reflection result.content length: {result_content_chars} chars (~{estimated_result_tokens} tokens)"
+            )
+
             # Step 1: Check for completeness of information
-            template_check_prompt = InfoCheck_PROMPT.format(request=request, result=result.content)
+            template_check_prompt = InfoCheck_PROMPT.format(
+                request=request, result=result.content
+            )
             if system_prompt:
                 check_prompt = f"User Instructions: {system_prompt}\n\n System Prompt: {template_check_prompt}"
             else:
                 check_prompt = template_check_prompt
             check_prompt_chars = len(check_prompt)
             estimated_check_tokens = check_prompt_chars // 4
-            print(f"[DEBUG] Reflection check_prompt length: {check_prompt_chars} chars (~{estimated_check_tokens} tokens)")
-            
-            check_response = self.generator.generate_single(prompt=check_prompt, schema=INFO_CHECK_SCHEMA)
-            check_data = check_response.get("json") or json.loads(check_response["text"])
-            
+            print(
+                f"[DEBUG] Reflection check_prompt length: {check_prompt_chars} chars (~{estimated_check_tokens} tokens)"
+            )
+
+            check_response = self.generator.generate_single(
+                prompt=check_prompt, schema=INFO_CHECK_SCHEMA
+            )
+            check_data = check_response.get("json") or json.loads(
+                check_response["text"]
+            )
+
             enough = check_data.get("enough", False)
-            
+
             # If there is enough information, return directly
             if enough:
                 return ReflectionDecision(enough=True, new_request=None)
-            
+
             # Step 2: Generate a list of new requests
             template_generate_prompt = GenerateRequests_PROMPT.format(
-                request=request, 
-                result=result.content
+                request=request, result=result.content
             )
             if system_prompt:
                 generate_prompt = f"User Instructions: {system_prompt}\n\n System Prompt: {template_generate_prompt}"
@@ -1042,23 +1119,26 @@ class ResearchAgent:
                 generate_prompt = template_generate_prompt
             generate_prompt_chars = len(generate_prompt)
             estimated_generate_tokens = generate_prompt_chars // 4
-            print(f"[DEBUG] Reflection generate_prompt length: {generate_prompt_chars} chars (~{estimated_generate_tokens} tokens)")
-            
-            generate_response = self.generator.generate_single(prompt=generate_prompt, schema=GENERATE_REQUESTS_SCHEMA)
-            generate_data = generate_response.get("json") or json.loads(generate_response["text"])
-            
+            print(
+                f"[DEBUG] Reflection generate_prompt length: {generate_prompt_chars} chars (~{estimated_generate_tokens} tokens)"
+            )
+
+            generate_response = self.generator.generate_single(
+                prompt=generate_prompt, schema=GENERATE_REQUESTS_SCHEMA
+            )
+            generate_data = generate_response.get("json") or json.loads(
+                generate_response["text"]
+            )
+
             # Get the list of requests and convert to string
             new_requests_list = generate_data.get("new_requests", [])
             new_request = None
-            
+
             if new_requests_list and isinstance(new_requests_list, list):
                 new_request = " ".join(new_requests_list)
-            
-            return ReflectionDecision(
-                enough=False,
-                new_request=new_request
-            )
-            
+
+            return ReflectionDecision(enough=False, new_request=new_request)
+
         except Exception as e:
             print(f"Error in reflection: {e}")
             return ReflectionDecision(enough=False, new_request=None)

@@ -60,7 +60,9 @@ class BasicActionParser:
             return NodeAction(node_id, f'Malformed action attempt: "{text}"')
 
         if match := BasicActionParser._RE_NODE_ID.search(text):
-            return NodeAction(int(match.group(1)), BasicActionParser._clean_content(match.group(2)))
+            return NodeAction(
+                int(match.group(1)), BasicActionParser._clean_content(match.group(2))
+            )
 
         if match := BasicActionParser._RE_NODE_NO_ID.search(text):
             return NodeAction(node_id, BasicActionParser._clean_content(match.group(1)))

@@ -50,7 +50,9 @@ def _parse_problem(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, flo
     required = {"mu", "sigma", "gamma"}
     missing = required.difference(problem)
     if missing:
-        raise ValueError(f"Problem dictionary is missing keys: {', '.join(sorted(missing))}.")
+        raise ValueError(
+            f"Problem dictionary is missing keys: {', '.join(sorted(missing))}."
+        )
 
     mu = np.asarray(problem["mu"], dtype=np.float64)
     sigma = np.asarray(problem["sigma"], dtype=np.float64)
@@ -61,7 +63,11 @@ def _parse_problem(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, flo
     n = mu.shape[0]
     if sigma.shape != (n, n):
         raise ValueError(f"sigma must have shape {(n, n)}, got {sigma.shape}.")
-    if not np.all(np.isfinite(mu)) or not np.all(np.isfinite(sigma)) or not np.isfinite(gamma):
+    if (
+        not np.all(np.isfinite(mu))
+        or not np.all(np.isfinite(sigma))
+        or not np.isfinite(gamma)
+    ):
         raise ValueError("Problem data must contain only finite values.")
     if gamma <= 0.0:
         raise ValueError("gamma must be positive.")
@@ -70,7 +76,9 @@ def _parse_problem(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, flo
     return mu, sigma, gamma
 
 
-def _objective_value(mu: np.ndarray, sigma: np.ndarray, gamma: float, w: np.ndarray) -> float:
+def _objective_value(
+    mu: np.ndarray, sigma: np.ndarray, gamma: float, w: np.ndarray
+) -> float:
     return float(mu @ w - gamma * (w @ sigma @ w))
 
 
@@ -80,7 +88,9 @@ def solve_problem(problem: dict[str, Any]) -> dict[str, Any]:
     n = mu.shape[0]
     x0 = np.full(n, 1.0 / n, dtype=np.float64)
 
-    equality_constraint = LinearConstraint(np.ones((1, n), dtype=np.float64), [1.0], [1.0])
+    equality_constraint = LinearConstraint(
+        np.ones((1, n), dtype=np.float64), [1.0], [1.0]
+    )
     bounds = Bounds(lb=np.zeros(n, dtype=np.float64), ub=np.ones(n, dtype=np.float64))
 
     def objective(w: np.ndarray) -> float:
@@ -124,7 +134,9 @@ def solve_problem(problem: dict[str, Any]) -> dict[str, Any]:
 
     w = np.asarray(result.x, dtype=np.float64)
     if abs(float(np.sum(w)) - 1.0) > 1.0e-6:
-        raise RuntimeError("Solver returned a portfolio whose weights do not sum to one.")
+        raise RuntimeError(
+            "Solver returned a portfolio whose weights do not sum to one."
+        )
     if np.min(w) < -1.0e-6:
         raise RuntimeError("Solver returned a portfolio with negative weights.")
 
@@ -142,7 +154,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     mu, sigma, gamma = _parse_problem(problem)
     w = np.asarray(solution["w"], dtype=np.float64)
     if w.shape != (mu.shape[0],):
-        raise ValueError(f"Candidate portfolio has shape {w.shape}, expected {(mu.shape[0],)}.")
+        raise ValueError(
+            f"Candidate portfolio has shape {w.shape}, expected {(mu.shape[0],)}."
+        )
     if not np.all(np.isfinite(w)):
         raise ValueError("Candidate portfolio must contain only finite values.")
 
@@ -155,7 +169,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
 
     simplex_residual = abs(float(np.sum(w)) - 1.0)
     if simplex_residual > FEASIBILITY_ATOL:
-        raise ValueError(f"Portfolio weights do not sum to one: residual {simplex_residual:.3e}.")
+        raise ValueError(
+            f"Portfolio weights do not sum to one: residual {simplex_residual:.3e}."
+        )
 
     min_weight = float(np.min(w))
     if min_weight < -FEASIBILITY_ATOL:
@@ -164,7 +180,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     reference = solve_problem(problem)
     reference_objective = float(reference["objective"])
     objective_gap = reference_objective - candidate_objective
-    if objective_gap > OBJECTIVE_ATOL + OBJECTIVE_RTOL * (1.0 + abs(reference_objective)):
+    if objective_gap > OBJECTIVE_ATOL + OBJECTIVE_RTOL * (
+        1.0 + abs(reference_objective)
+    ):
         raise ValueError(
             f"Objective is suboptimal by {objective_gap:.3e} relative to the reference optimum."
         )

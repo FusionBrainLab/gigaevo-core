@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import pandas as pd
 from loguru import logger
+import pandas as pd
 
 from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,

@@ -38,7 +38,9 @@ def get_case_specs() -> list[CaseSpec]:
     ]
 
 
-def generate_problem(n: int = 1, random_seed: int = 1234) -> dict[str, list[list[float]]]:
+def generate_problem(
+    n: int = 1, random_seed: int = 1234
+) -> dict[str, list[list[float]]]:
     """Generate one Lyapunov stability instance using AlgoTune's logic."""
     rng = np.random.default_rng(random_seed)
     A = rng.normal(0, 1, (n, n))

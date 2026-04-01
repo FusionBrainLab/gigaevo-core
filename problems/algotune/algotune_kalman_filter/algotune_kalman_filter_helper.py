@@ -115,7 +115,9 @@ def _parse_problem(problem: dict[str, Any]) -> tuple[np.ndarray, ...]:
     if horizon <= 0:
         raise ValueError("y must contain at least one time step.")
     if p <= 0 or m <= 0:
-        raise ValueError("B and C must define positive process and measurement dimensions.")
+        raise ValueError(
+            "B and C must define positive process and measurement dimensions."
+        )
     if not np.isfinite(tau) or tau <= 0.0:
         raise ValueError("tau must be a finite positive scalar.")
 
@@ -162,7 +164,9 @@ def _solve_process_noise(
     horizon, m = y.shape
     p = B.shape[1]
 
-    baseline, measurement_matrix = _build_measurement_system(A, B, C, x_initial, horizon)
+    baseline, measurement_matrix = _build_measurement_system(
+        A, B, C, x_initial, horizon
+    )
     measurement_rhs = y.reshape(-1) - baseline
 
     lhs = np.eye(horizon * p, dtype=np.float64) + tau * (
@@ -237,11 +241,17 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
         raise TypeError(f"Solution contains non-numeric data: {exc}") from exc
 
     if x_hat.shape != (horizon + 1, n):
-        raise ValueError(f"x_hat has wrong shape: expected {(horizon + 1, n)}, got {x_hat.shape}.")
+        raise ValueError(
+            f"x_hat has wrong shape: expected {(horizon + 1, n)}, got {x_hat.shape}."
+        )
     if w_hat.shape != (horizon, p):
-        raise ValueError(f"w_hat has wrong shape: expected {(horizon, p)}, got {w_hat.shape}.")
+        raise ValueError(
+            f"w_hat has wrong shape: expected {(horizon, p)}, got {w_hat.shape}."
+        )
     if v_hat.shape != (horizon, m):
-        raise ValueError(f"v_hat has wrong shape: expected {(horizon, m)}, got {v_hat.shape}.")
+        raise ValueError(
+            f"v_hat has wrong shape: expected {(horizon, m)}, got {v_hat.shape}."
+        )
     if not (
         np.all(np.isfinite(x_hat))
         and np.all(np.isfinite(w_hat))
@@ -259,8 +269,7 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
         max_dynamics_residual = max(max_dynamics_residual, residual)
     if max_dynamics_residual > FEASIBILITY_TOLERANCE:
         raise ValueError(
-            "Dynamics constraint violated: "
-            f"max residual={max_dynamics_residual}."
+            f"Dynamics constraint violated: max residual={max_dynamics_residual}."
         )
 
     max_measurement_residual = 0.0
@@ -269,8 +278,7 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
         max_measurement_residual = max(max_measurement_residual, residual)
     if max_measurement_residual > FEASIBILITY_TOLERANCE:
         raise ValueError(
-            "Measurement constraint violated: "
-            f"max residual={max_measurement_residual}."
+            f"Measurement constraint violated: max residual={max_measurement_residual}."
         )
 
     candidate_objective = objective_value(problem, solution)

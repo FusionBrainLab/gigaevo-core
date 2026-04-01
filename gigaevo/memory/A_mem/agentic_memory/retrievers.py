@@ -15,12 +15,10 @@ def simple_tokenize(text):
 
 
 def _clone_collection(
-    src: chromadb.Collection,
-    dest: chromadb.Collection,
-    batch_size: int = 10
+    src: chromadb.Collection, dest: chromadb.Collection, batch_size: int = 10
 ):
     """
-    Copies one ChromaDB collection to another. 
+    Copies one ChromaDB collection to another.
     Enables duplicating of collections.
     This seemed to be the only (best) way to do this as the official ChromaDB
         docs also suggest this method:
@@ -28,23 +26,21 @@ def _clone_collection(
     existing_count = src.count()
     for i in range(0, existing_count, batch_size):
         batch = src.get(
-            include=["metadatas", "documents", "embeddings"],
-            limit=batch_size,
-            offset=i)
+            include=["metadatas", "documents", "embeddings"], limit=batch_size, offset=i
+        )
         dest.add(
             ids=batch["ids"],
             documents=batch["documents"],
             metadatas=batch["metadatas"],
-            embeddings=batch["embeddings"])
+            embeddings=batch["embeddings"],
+        )
 
 
 class ChromaRetriever:
     """Vector database retrieval using ChromaDB"""
 
     def __init__(
-        self, 
-        collection_name: str = "memories", 
-        model_name: str = "all-MiniLM-L6-v2"
+        self, collection_name: str = "memories", model_name: str = "all-MiniLM-L6-v2"
     ):
         """Initialize ChromaDB retriever.
 
@@ -100,22 +96,18 @@ class ChromaRetriever:
             Dict with documents, metadatas, ids, and distances
         """
         results = self.collection.query(query_texts=[query], n_results=k)
-        
+
         if (results is not None) and (results.get("metadatas", [])):
-            results["metadatas"] = self._convert_metadata_types(
-                results["metadatas"])
-        
+            results["metadatas"] = self._convert_metadata_types(results["metadatas"])
+
         return results
 
-    def _convert_metadata_types(
-        self, 
-        metadatas: list[list[dict]]
-    ) -> list[list[dict]]:
+    def _convert_metadata_types(self, metadatas: list[list[dict]]) -> list[list[dict]]:
         """Convert string metadata back to original types.
-        
+
         Args:
             metadatas: List of metadata lists from query results
-            
+
         Returns:
             Converted metadata structure
         """
@@ -128,7 +120,7 @@ class ChromaRetriever:
 
     def _convert_metadata_dict(self, metadata: dict) -> None:
         """Convert metadata values from strings to appropriate types in-place.
-        
+
         Args:
             metadata: Single metadata dictionary to convert
         """
@@ -152,15 +144,15 @@ class PersistentChromaRetriever(ChromaRetriever):
     """
 
     def __init__(
-        self, 
-        directory: str | None = None, 
-        collection_name: str = "memories", 
+        self,
+        directory: str | None = None,
+        collection_name: str = "memories",
         model_name: str = "all-MiniLM-L6-v2",
-        extend: bool = False
+        extend: bool = False,
     ):
         """
         Initialize persistent ChromaDB retriever.
-        
+
         :param directory: Directory path for ChromaDB storage. Defaults to
             '~/.chromadb' if None.
         :collection_name: Name of the ChromaDB collection.
@@ -171,7 +163,7 @@ class PersistentChromaRetriever(ChromaRetriever):
             existing collections.
         """
         if directory is None:
-            directory = Path.home() / '.chromadb'
+            directory = Path.home() / ".chromadb"
             directory.mkdir(parents=True, exist_ok=True)
         elif isinstance(directory, str):
             directory = Path(directory)
@@ -181,15 +173,16 @@ class PersistentChromaRetriever(ChromaRetriever):
         except FileNotFoundError:
             directory.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise ValueError(f'Error accessing directory: {e}')        
+            raise ValueError(f"Error accessing directory: {e}")
 
         # Use PersistentClient instead of regular Client
         self.client = chromadb.PersistentClient(path=str(directory))
         self.embedding_function = SentenceTransformerEmbeddingFunction(
-            model_name=model_name)
-        
+            model_name=model_name
+        )
+
         existing_collections = [col.name for col in self.client.list_collections()]
-        
+
         if collection_name in existing_collections:
             if extend:
                 self.collection = self.client.get_collection(
@@ -203,8 +196,7 @@ class PersistentChromaRetriever(ChromaRetriever):
                 )
         else:
             self.collection = self.client.get_or_create_collection(
-                name=collection_name,
-                embedding_function=self.embedding_function
+                name=collection_name, embedding_function=self.embedding_function
             )
         self.collection_name = collection_name
 
@@ -218,8 +210,8 @@ class CopiedChromaRetriever(PersistentChromaRetriever):
 
     def __init__(
         self,
-        directory: str | None = None, 
-        collection_name: str = "memories", 
+        directory: str | None = None,
+        collection_name: str = "memories",
         model_name: str = "all-MiniLM-L6-v2",
         _dest_collection_name: str | None = None,
         _copy_batch_size: int = 10,
@@ -235,50 +227,44 @@ class CopiedChromaRetriever(PersistentChromaRetriever):
             collection. If None, defaults to '{collection_name}__clone'.
             This parameter is marked as private as the class itself is meant
             for single use and discard db that exists in a temporary so naming
-            the copied collection is most likely not needed. 
+            the copied collection is most likely not needed.
         :param _copy_batch_size: Number of documents to copy per batch.
-            Shouldn't need to be changed normally. 
+            Shouldn't need to be changed normally.
         """
 
         self.embedding_function = SentenceTransformerEmbeddingFunction(
-            model_name=model_name)
+            model_name=model_name
+        )
 
         # ensure source is valid
         if directory is None:
-            directory = Path.home() / '.chromadb'
+            directory = Path.home() / ".chromadb"
             directory.mkdir(parents=True, exist_ok=True)
         elif isinstance(directory, str):
             directory = Path(directory)
         self._src_client = chromadb.PersistentClient(path=str(directory))
 
         self._src = self._src_client.get_collection(name=collection_name)
-        existing_collections = [
-            col.name for col in self._src_client.list_collections()]
+        existing_collections = [col.name for col in self._src_client.list_collections()]
         if collection_name not in existing_collections:
             raise ValueError(
                 f"Collection '{collection_name}' to be copied does not exist."
-            )        
+            )
 
         # use temp directory for destination collection
         try:
-            self._tmpdir = tempfile.TemporaryDirectory(
-                prefix='chromadb_ephemeral_')
+            self._tmpdir = tempfile.TemporaryDirectory(prefix="chromadb_ephemeral_")
             self._tmp_path = Path(self._tmpdir.name)
-            self._dst_client = chromadb.PersistentClient(
-                path=str(self._tmp_path)
-            )
-            self.collection_name = (
-                _dest_collection_name 
-                or f"{collection_name}__clone"
-            )
+            self._dst_client = chromadb.PersistentClient(path=str(self._tmp_path))
+            self.collection_name = _dest_collection_name or f"{collection_name}__clone"
             self.collection = self._dst_client.get_or_create_collection(
                 name=self.collection_name,
                 embedding_function=self.embedding_function,
-                metadata=self._src.metadata
+                metadata=self._src.metadata,
             )
         except Exception as e:
             raise ValueError(f"Error creating temporary ChromaDB: {e}")
-        
+
         try:
             _clone_collection(
                 src=self._src,
@@ -287,7 +273,7 @@ class CopiedChromaRetriever(PersistentChromaRetriever):
             )
         except Exception as e:
             raise ValueError(f"Error cloning ChromaDB collection: {e}")
-        
+
         atexit.register(self.close)
 
     def close(self):

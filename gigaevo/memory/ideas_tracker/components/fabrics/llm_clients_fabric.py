@@ -34,12 +34,16 @@ def _create_llm_clients(
 
 
 class LLMClient:
-    def __init__(self, model: str, base_url: str | None = None, max_concurrent: int = -1):
+    def __init__(
+        self, model: str, base_url: str | None = None, max_concurrent: int = -1
+    ):
         self.model = model
         self.base_url = base_url
         self.llm, self.async_llm, self.is_openrouter = _create_llm_clients(base_url)
         self.prompt_manager = PromptManager()
-        self.semaphore = asyncio.Semaphore(max_concurrent) if max_concurrent > 0 else None
+        self.semaphore = (
+            asyncio.Semaphore(max_concurrent) if max_concurrent > 0 else None
+        )
 
     def _create_payload(
         self,
@@ -51,12 +55,14 @@ class LLMClient:
         prompt_user_name = f"{step_name}__user"
         prompt_system = self.prompt_manager.load_prompt(prompt_name=prompt_system_name)
         if isinstance(prompt_content, dict):
-            prompt_user = self.prompt_manager.load_prompt_multiple_inserts(prompt_name=prompt_user_name, insert_data=prompt_content)
+            prompt_user = self.prompt_manager.load_prompt_multiple_inserts(
+                prompt_name=prompt_user_name, insert_data=prompt_content
+            )
         else:
             prompt_user = self.prompt_manager.load_prompt(
                 prompt_name=prompt_user_name, insert_data=prompt_content
             )
-        
+
         request_kwargs = {
             "messages": [
                 {"role": "system", "content": prompt_system},
@@ -69,7 +75,9 @@ class LLMClient:
         if self.is_openrouter and reasoning:
             request_kwargs["extra_body"] = {"reasoning": reasoning}
         if not self.is_openrouter and "Qwen3.5" in self.model:
-            request_kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+            request_kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False}
+            }
 
         return request_kwargs
 
@@ -110,7 +118,12 @@ class LLMClient:
             return await _do_call()
 
     def _sync_call(self, request_kwargs: dict[str, Any]) -> str:
-        response = self.llm.chat.completions.create(**request_kwargs).choices[0].message.content or "" 
+        response = (
+            self.llm.chat.completions.create(**request_kwargs)
+            .choices[0]
+            .message.content
+            or ""
+        )
         return response
 
     async def _async_call(self, request_kwargs: dict[str, Any]) -> str:

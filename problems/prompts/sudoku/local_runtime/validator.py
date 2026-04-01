@@ -32,7 +32,9 @@ class SudokuValidator:
             return ValidationResult(False, "Previous node has no state")
 
         if not isinstance(action, (NodeAction, DoneAction)):
-            return ValidationResult(False, f"Unknown action type: {type(action).__name__}")
+            return ValidationResult(
+                False, f"Unknown action type: {type(action).__name__}"
+            )
 
         if isinstance(action, NodeAction):
             last_id = -1
@@ -60,7 +62,9 @@ class SudokuValidator:
                     False,
                     f"Pivot violation: Initial clue at ({row},{col}) was modified",
                 )
-            return ValidationResult(False, "Pivot violation: Initial clues were modified")
+            return ValidationResult(
+                False, "Pivot violation: Initial clues were modified"
+            )
 
         new_grid_hash = new_grid.to_canonical()
         if new_grid_hash not in self._valid_grids:

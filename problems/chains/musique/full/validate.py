@@ -38,9 +38,7 @@ def calculate_exact_match(
 
         norm_pred = normalize_text(pred)
         norm_targets = {
-            normalize_text(str(alias))
-            for alias in target_aliases
-            if str(alias).strip()
+            normalize_text(str(alias)) for alias in target_aliases if str(alias).strip()
         }
         matches.append(int(norm_pred in norm_targets))
 
@@ -58,8 +56,7 @@ def validate(chain_spec: dict) -> dict:
     context = load_context(n_samples=300)
     dataset = context["train_dataset"]
     targets = [
-        sample.get("answer_aliases", [sample.get("answer", "")])
-        for sample in dataset
+        sample.get("answer_aliases", [sample.get("answer", "")]) for sample in dataset
     ]
 
     client = LLMClient(**LLM_CONFIG)

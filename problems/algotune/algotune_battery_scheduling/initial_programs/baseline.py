@@ -59,12 +59,17 @@ def _parse_problem(
     p = np.asarray(problem["p"], dtype=np.float64)
     u = np.asarray(problem["u"], dtype=np.float64)
     battery = problem["batteries"][0]
-    return T, p, u, {
-        "Q": float(battery["Q"]),
-        "C": float(battery["C"]),
-        "D": float(battery["D"]),
-        "efficiency": float(battery["efficiency"]),
-    }
+    return (
+        T,
+        p,
+        u,
+        {
+            "Q": float(battery["Q"]),
+            "C": float(battery["C"]),
+            "D": float(battery["D"]),
+            "efficiency": float(battery["efficiency"]),
+        },
+    )
 
 
 def _solve_lp(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -112,7 +117,9 @@ def _solve_lp(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarr
         method="highs",
     )
     if not result.success or result.x is None:
-        raise RuntimeError(f"Failed to solve the battery-scheduling LP: {result.message}")
+        raise RuntimeError(
+            f"Failed to solve the battery-scheduling LP: {result.message}"
+        )
 
     q = np.asarray(result.x[q_slice], dtype=np.float64)
     c_in = np.asarray(result.x[c_in_slice], dtype=np.float64)

@@ -4,10 +4,10 @@ import argparse
 import asyncio
 import importlib.util
 import json
+from pathlib import Path
 import statistics
 import sys
 import time
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -42,7 +42,9 @@ def _load_module(module_name: str, path: Path) -> ModuleType:
 
 
 def _load_run_exec_runner():
-    wrapper_module = _load_module("algotune_lyapunov_stability_exec_wrapper", WRAPPER_PATH)
+    wrapper_module = _load_module(
+        "algotune_lyapunov_stability_exec_wrapper", WRAPPER_PATH
+    )
     return wrapper_module.run_exec_runner
 
 

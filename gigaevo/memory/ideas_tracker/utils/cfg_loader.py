@@ -103,10 +103,15 @@ class PipelineConfig:
     def from_dict(self, cfg_dict) -> None:
         self.list_max_ideas = cfg_dict.get("list_max_ideas", 5)
         self.analyzer_settings = cfg_dict.get("analyzer", {})
-        self.analyzer_settings["analyzer_fast_settings"] = cfg_dict.get("analyzer_fast_settings", {})
+        self.analyzer_settings["analyzer_fast_settings"] = cfg_dict.get(
+            "analyzer_fast_settings", {}
+        )
         self.analyzer_pipeline_type = self.analyzer_settings.get("type", "default")
-        self.postprocessing = self.analyzer_settings.get("postprocessing", {"type": "default"})
+        self.postprocessing = self.analyzer_settings.get(
+            "postprocessing", {"type": "default"}
+        )
         self.description_rewriting = cfg_dict.get("description_rewriting", True)
+
 
 @dataclass
 class MemoryConfig:
@@ -121,7 +126,10 @@ class MemoryConfig:
             _parse_memory_write_pipeline(mwp)
         )
         ut = cfg_dict.get("usage_tracking", {"enabled": True})
-        self.usage_tracking, self.memory_usage_tracking_enabled = _parse_usage_tracking(ut)
+        self.usage_tracking, self.memory_usage_tracking_enabled = _parse_usage_tracking(
+            ut
+        )
+
 
 @dataclass
 class IdeaTrackerConfig:
@@ -129,16 +137,19 @@ class IdeaTrackerConfig:
     pipeline_config: PipelineConfig
     memory_config: MemoryConfig
 
-def load_config(config_path: str | Path | None, idea_tracker_location: Path) -> IdeaTrackerConfig:
-    config_dict =  _load_config(config_path, idea_tracker_location)
-    redis_config = create_redis_config(config_dict.get("redis",{}))
+
+def load_config(
+    config_path: str | Path | None, idea_tracker_location: Path
+) -> IdeaTrackerConfig:
+    config_dict = _load_config(config_path, idea_tracker_location)
+    redis_config = create_redis_config(config_dict.get("redis", {}))
     pipeline_config = PipelineConfig()
     pipeline_config.from_dict(config_dict)
     memory_config = MemoryConfig()
     memory_config.from_dict(config_dict)
-    config = IdeaTrackerConfig(redis_config=redis_config, pipeline_config=pipeline_config, memory_config=memory_config)
+    config = IdeaTrackerConfig(
+        redis_config=redis_config,
+        pipeline_config=pipeline_config,
+        memory_config=memory_config,
+    )
     return config
-
-
-
-

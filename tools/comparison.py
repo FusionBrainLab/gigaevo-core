@@ -703,6 +703,8 @@ def _annotate_frontier_points(
             color=color,
             zorder=10,
         )
+
+
 async def export_run_plot(
     config: RedisRunConfig,
     *,

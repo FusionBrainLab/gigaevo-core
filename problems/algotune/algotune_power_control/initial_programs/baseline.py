@@ -19,8 +19,7 @@ def generate_problem(n: int, random_seed: int) -> dict[str, Any]:
     P_feas = rng.uniform(P_min, P_max)
     sinr = np.array(
         [
-            G[i, i] * P_feas[i]
-            / (sigma[i] + (G[i] @ P_feas - G[i, i] * P_feas[i]))
+            G[i, i] * P_feas[i] / (sigma[i] + (G[i] @ P_feas - G[i, i] * P_feas[i]))
             for i in range(n)
         ],
         dtype=np.float64,

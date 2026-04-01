@@ -41,8 +41,10 @@ class PromptManager:
             Dictionary mapping step names to lists of prompt filenames.
         """
         return {k: list(v) for k, v in self.available_prompts.items()}
-    
-    def load_prompt_multiple_inserts(self, prompt_name: str, insert_data: dict[str, str]) -> str:
+
+    def load_prompt_multiple_inserts(
+        self, prompt_name: str, insert_data: dict[str, str]
+    ) -> str:
         """
         Load and optionally populate a prompt template with multiple inserts.
 

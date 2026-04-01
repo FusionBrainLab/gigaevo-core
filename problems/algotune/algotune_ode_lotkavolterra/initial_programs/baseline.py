@@ -9,6 +9,8 @@ def entrypoint(context: dict[str, Any]) -> list[list[float]]:
     """Exact baseline solver using SciPy's RK45 integrator."""
     outputs: list[list[float]] = []
     for case in context["cases"]:
-        problem = generate_problem(n=int(case["n"]), random_seed=int(case["random_seed"]))
+        problem = generate_problem(
+            n=int(case["n"]), random_seed=int(case["random_seed"])
+        )
         outputs.append(solve_problem(problem))
     return outputs

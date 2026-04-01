@@ -57,7 +57,9 @@ USE_API = to_bool(
 )
 CHANNEL = to_str(deep_get(SETTINGS, "api.channel"), default="latest")
 ENABLE_BM25 = to_bool(deep_get(SETTINGS, "gam.enable_bm25"), default=False)
-ALLOWED_GAM_TOOLS = [str(tool).strip() for tool in to_list(deep_get(SETTINGS, "gam.allowed_tools"))]
+ALLOWED_GAM_TOOLS = [
+    str(tool).strip() for tool in to_list(deep_get(SETTINGS, "gam.allowed_tools"))
+]
 GAM_PIPELINE_MODE = to_str(
     os.getenv("MEMORY_GAM_PIPELINE_MODE"),
     default=to_str(deep_get(SETTINGS, "gam.pipeline_mode"), default="default"),

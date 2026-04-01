@@ -49,7 +49,9 @@ def load_settings(path: str | Path | None = None) -> dict[str, Any]:
         payload = yaml.safe_load(file_obj) or {}
 
     if not isinstance(payload, dict):
-        raise ValueError(f"Invalid settings format in {settings_path}: expected a mapping")
+        raise ValueError(
+            f"Invalid settings format in {settings_path}: expected a mapping"
+        )
 
     return payload
 

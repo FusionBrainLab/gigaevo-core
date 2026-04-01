@@ -63,7 +63,10 @@ OPENROUTER_API_KEY = _normalize_env(
 
 OPENROUTER_MODEL_NAME = os.getenv(
     "OPENROUTER_MODEL_NAME",
-    to_str(deep_get(_SETTINGS, "models.openrouter_model_name"), default="openai/gpt-4.1-mini"),
+    to_str(
+        deep_get(_SETTINGS, "models.openrouter_model_name"),
+        default="openai/gpt-4.1-mini",
+    ),
 )
 LLM_BASE_URL = _normalize_env(
     os.getenv("OPENAI_BASE_URL")

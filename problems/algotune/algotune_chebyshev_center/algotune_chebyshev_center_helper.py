@@ -52,7 +52,9 @@ def _parse_problem(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
     required = {"a", "b"}
     missing = required.difference(problem)
     if missing:
-        raise ValueError(f"Problem dictionary is missing keys: {', '.join(sorted(missing))}.")
+        raise ValueError(
+            f"Problem dictionary is missing keys: {', '.join(sorted(missing))}."
+        )
 
     a = np.asarray(problem["a"], dtype=np.float64)
     b = np.asarray(problem["b"], dtype=np.float64)
@@ -105,14 +107,18 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     a, b = _parse_problem(problem)
     x = np.asarray(solution["solution"], dtype=np.float64)
     if x.shape != (a.shape[1],):
-        raise ValueError(f"Candidate center has shape {x.shape}, expected {(a.shape[1],)}.")
+        raise ValueError(
+            f"Candidate center has shape {x.shape}, expected {(a.shape[1],)}."
+        )
     if not np.all(np.isfinite(x)):
         raise ValueError("Candidate center must contain only finite values.")
 
     row_norms = np.linalg.norm(a, axis=1)
     max_linear_violation = float(np.max(a @ x - b, initial=-np.inf))
     if max_linear_violation > FEASIBILITY_ATOL:
-        raise ValueError(f"Polyhedron constraints violated by {max_linear_violation:.3e}.")
+        raise ValueError(
+            f"Polyhedron constraints violated by {max_linear_violation:.3e}."
+        )
 
     candidate_radius = float(np.min((b - a @ x) / row_norms, initial=np.inf))
     if candidate_radius < -FEASIBILITY_ATOL:

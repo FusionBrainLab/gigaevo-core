@@ -47,8 +47,7 @@ def generate_problem(n: int, random_seed: int) -> dict[str, Any]:
     P_feas = rng.uniform(P_min, P_max)
     sinr = np.array(
         [
-            G[i, i] * P_feas[i]
-            / (sigma[i] + (G[i] @ P_feas - G[i, i] * P_feas[i]))
+            G[i, i] * P_feas[i] / (sigma[i] + (G[i] @ P_feas - G[i, i] * P_feas[i]))
             for i in range(n)
         ],
         dtype=np.float64,
@@ -70,7 +69,9 @@ def _parse_problem(
     required = {"G", "sigma", "P_min", "P_max", "S_min"}
     missing = required.difference(problem)
     if missing:
-        raise ValueError(f"Problem dictionary is missing keys: {', '.join(sorted(missing))}.")
+        raise ValueError(
+            f"Problem dictionary is missing keys: {', '.join(sorted(missing))}."
+        )
 
     G = np.asarray(problem["G"], dtype=np.float64)
     sigma = np.asarray(problem["sigma"], dtype=np.float64)
@@ -144,7 +145,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     G, sigma, P_min, P_max, S_min = _parse_problem(problem)
     P = np.asarray(solution["P"], dtype=np.float64)
     if P.shape != P_min.shape:
-        raise ValueError(f"Candidate allocation has shape {P.shape}, expected {P_min.shape}.")
+        raise ValueError(
+            f"Candidate allocation has shape {P.shape}, expected {P_min.shape}."
+        )
     if not np.all(np.isfinite(P)):
         raise ValueError("Candidate allocation must contain only finite values.")
 
@@ -168,7 +171,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     reference = solve_problem(problem)
     reference_objective = float(reference["objective"])
     objective_gap = candidate_objective - reference_objective
-    if objective_gap > OBJECTIVE_ATOL + OBJECTIVE_RTOL * (1.0 + abs(reference_objective)):
+    if objective_gap > OBJECTIVE_ATOL + OBJECTIVE_RTOL * (
+        1.0 + abs(reference_objective)
+    ):
         raise ValueError(
             f"Objective is suboptimal by {objective_gap:.3e} relative to the reference optimum."
         )

@@ -15,10 +15,10 @@ All retrievers lazy-load their index on first call and cache as module-level sin
 from collections.abc import Callable, Iterator
 import gzip
 import json
+from pathlib import Path
 import pickle
 import shutil
 import threading
-from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 # Files required by bm25s.save(...) for one index directory
@@ -363,7 +363,9 @@ def _batch_retrieve_sharded(tokens, k: int) -> list[str]:
     if not _bm25_shards:
         return ["" for _ in range(len(tokens.ids))]
 
-    candidates: list[list[tuple[float, int, int]]] = [[] for _ in range(len(tokens.ids))]
+    candidates: list[list[tuple[float, int, int]]] = [
+        [] for _ in range(len(tokens.ids))
+    ]
     for shard_idx, shard in enumerate(_bm25_shards):
         results, scores = shard["retriever"].retrieve(
             tokens, k=k, n_threads=1, show_progress=False

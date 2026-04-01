@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
-
 from algotune_lqr_helper import generate_problem, validate_solution
+import numpy as np
 
 
 def validate(context: dict[str, Any], outputs: list[Any]) -> dict[str, float]:

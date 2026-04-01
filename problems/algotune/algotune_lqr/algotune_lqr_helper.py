@@ -213,11 +213,12 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     reference_cost = optimal_cost(problem)
 
     try:
-        npt.assert_allclose(candidate_cost, reference_cost, rtol=COST_RTOL, atol=COST_ATOL)
+        npt.assert_allclose(
+            candidate_cost, reference_cost, rtol=COST_RTOL, atol=COST_ATOL
+        )
     except AssertionError as exc:
         raise ValueError(
-            "LQR cost mismatch: "
-            f"candidate={candidate_cost}, optimal={reference_cost}."
+            f"LQR cost mismatch: candidate={candidate_cost}, optimal={reference_cost}."
         ) from exc
 
     return {

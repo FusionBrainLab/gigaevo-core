@@ -43,11 +43,7 @@ def test_baseline(
     print("\n=== Metrics ===")
     pprint.pp(metrics)
 
-    failures = [
-        item
-        for item in artifact["results"]
-        if not item["success"]
-    ]
+    failures = [item for item in artifact["results"] if not item["success"]]
     if failures:
         print("\n=== Example Failures ===")
         for failure in failures[: min(3, len(failures))]:
@@ -97,11 +93,7 @@ def test_best_prompt(
     print("\n=== Metrics ===")
     pprint.pp(metrics)
 
-    failures = [
-        item
-        for item in artifact["results"]
-        if not item["success"]
-    ]
+    failures = [item for item in artifact["results"] if not item["success"]]
     if failures:
         print("\n=== Example Failures ===")
         for failure in failures[: min(3, len(failures))]:

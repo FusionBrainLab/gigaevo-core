@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
-
 from algotune_convolve_1d_helper import generate_problem
+import numpy as np
 
 
 def entrypoint(context: dict[str, Any]) -> list[np.ndarray]:

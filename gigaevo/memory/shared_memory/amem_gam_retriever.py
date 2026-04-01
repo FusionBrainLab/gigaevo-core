@@ -24,7 +24,7 @@ from GAM_root.gam import (
 from GAM_root.gam.generator import AMemGenerator
 from GAM_root.gam.schemas import Page
 
-import config
+from gigaevo.memory import config
 
 
 def _repo_root() -> Path:
@@ -66,7 +66,9 @@ def make_card_text(record: dict[str, Any]) -> str:
     aliases = record.get("aliases", []) or []
     works_with = record.get("works_with", []) or []
     explanation = record.get("explanation", {}) or {}
-    explanation_summary = explanation.get("summary", "") if isinstance(explanation, dict) else ""
+    explanation_summary = (
+        explanation.get("summary", "") if isinstance(explanation, dict) else ""
+    )
     evolution_statistics = record.get("evolution_statistics", {}) or {}
     usage = record.get("usage", {}) or {}
     parts = [
@@ -116,7 +118,9 @@ def build_gam_store(records: list[dict[str, Any]], store_dir: Path):
         abstract = rec.get("description") or rec.get("content") or card
         memory_store.add(abstract)
         header = f"[A-MEM] {rid}" if rid else "[A-MEM]"
-        next_pages.append(Page(header=header, content=card, meta={"amem_id": rid, "amem": rec}))
+        next_pages.append(
+            Page(header=header, content=card, meta={"amem_id": rid, "amem": rec})
+        )
         if rid and rid not in existing_ids:
             added += 1
 
@@ -166,17 +170,15 @@ def build_retrievers(
             "source_label": "vector_description_task_description_summary",
         },
     }
-    allowed = {
-        str(tool).strip()
-        for tool in (allowed_tools or [])
-        if str(tool).strip()
-    }
+    allowed = {str(tool).strip() for tool in (allowed_tools or []) if str(tool).strip()}
     if not allowed:
         allowed = {"page_index", "keyword", *vector_tool_configs.keys()}
 
     if "page_index" in allowed:
         try:
-            index_retriever = IndexRetriever({"index_dir": str(index_dir / "page_index")})
+            index_retriever = IndexRetriever(
+                {"index_dir": str(index_dir / "page_index")}
+            )
             index_retriever.build(page_store)
             retrievers["page_index"] = index_retriever
             print("✅ Index retriever ready")
@@ -264,7 +266,9 @@ def main():
         max_iters=3,
     )
 
-    question = os.getenv("AMEM_QUESTION", "What changes improved min_area the most and why?")
+    question = os.getenv(
+        "AMEM_QUESTION", "What changes improved min_area the most and why?"
+    )
     print(f"\nResearch question: {question}\n")
     result = research_agent.research(question)
     print("Research result:\n")

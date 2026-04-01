@@ -28,9 +28,11 @@ def _serialize_complex_columns(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if df[col].apply(lambda x: isinstance(x, (dict, list))).any():
             df[col] = df[col].apply(
-                lambda x: json.dumps(x, ensure_ascii=False)
-                if isinstance(x, (dict, list))
-                else x
+                lambda x: (
+                    json.dumps(x, ensure_ascii=False)
+                    if isinstance(x, (dict, list))
+                    else x
+                )
             )
     return df
 

@@ -169,9 +169,7 @@ def _build_run_tracking_config(
         csv_path=outputs_dir / f"{filename_stem}.csv",
         plot_output_dir=plot_dir,
         plot_output_stem=filename_stem,
-        iteration_rolling_window=int(
-            tracking_cfg.get("iteration_rolling_window", 5)
-        ),
+        iteration_rolling_window=int(tracking_cfg.get("iteration_rolling_window", 5)),
         outlier_method=str(tracking_cfg.get("outlier_method", "percentile")),
         outlier_multiplier=tracking_cfg.get("outlier_multiplier"),
         outlier_lower_percentile=float(
@@ -184,9 +182,7 @@ def _build_run_tracking_config(
         smooth_window=int(tracking_cfg.get("smooth_window", 0)),
         smooth_frontier_window=int(tracking_cfg.get("smooth_frontier_window", 0)),
         annotate_frontier=_to_bool(tracking_cfg.get("annotate_frontier", True)),
-        frontier_annotations_max=int(
-            tracking_cfg.get("frontier_annotations_max", 15)
-        ),
+        frontier_annotations_max=int(tracking_cfg.get("frontier_annotations_max", 15)),
         fitness_col=str(tracking_cfg.get("fitness_col", "metric_fitness")),
         iteration_col=str(tracking_cfg.get("iteration_col", "metadata_iteration")),
         minimize=_to_bool(tracking_cfg.get("minimize", False)),
@@ -453,15 +449,9 @@ def _build_runtime_memory_config(
         applied_namespace = requested_namespace
 
     applied_checkpoint_dir: Path | None = None
-    should_apply_checkpoint_override = (
-        requested_checkpoint_dir is not None
-        and (
-            checkpoint_override_policy == "always"
-            or (
-                checkpoint_override_policy == "memory_write_only"
-                and memory_write_enabled
-            )
-        )
+    should_apply_checkpoint_override = requested_checkpoint_dir is not None and (
+        checkpoint_override_policy == "always"
+        or (checkpoint_override_policy == "memory_write_only" and memory_write_enabled)
     )
     if should_apply_checkpoint_override and requested_checkpoint_dir is not None:
         requested_checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -481,14 +471,17 @@ def _build_runtime_memory_config(
 def run_ideas_tracker(cfg: DictConfig, output_dir: Path, runtime_cwd: Path) -> None:
     requested_checkpoint_dir = _resolve_checkpoint_dir_arg(cfg, runtime_cwd)
     requested_namespace = _resolve_namespace_arg(cfg)
-    runtime_memory_config_path, memory_write_enabled, applied_checkpoint_dir, applied_namespace = (
-        _build_runtime_memory_config(
-            cfg,
-            output_dir,
-            requested_checkpoint_dir,
-            requested_namespace,
-            checkpoint_override_policy="memory_write_only",
-        )
+    (
+        runtime_memory_config_path,
+        memory_write_enabled,
+        applied_checkpoint_dir,
+        applied_namespace,
+    ) = _build_runtime_memory_config(
+        cfg,
+        output_dir,
+        requested_checkpoint_dir,
+        requested_namespace,
+        checkpoint_override_policy="memory_write_only",
     )
     previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
     os.environ["EVO_MEMORY_CONFIG_PATH"] = str(runtime_memory_config_path)
@@ -553,12 +546,14 @@ def main(cfg: DictConfig) -> None:
     if memory_enabled and (
         requested_checkpoint_dir is not None or requested_namespace is not None
     ):
-        runtime_memory_config_path, _, applied_checkpoint_dir, applied_namespace = _build_runtime_memory_config(
-            cfg,
-            hydra_output_dir,
-            requested_checkpoint_dir,
-            requested_namespace,
-            checkpoint_override_policy="always",
+        runtime_memory_config_path, _, applied_checkpoint_dir, applied_namespace = (
+            _build_runtime_memory_config(
+                cfg,
+                hydra_output_dir,
+                requested_checkpoint_dir,
+                requested_namespace,
+                checkpoint_override_policy="always",
+            )
         )
         os.environ["EVO_MEMORY_CONFIG_PATH"] = str(runtime_memory_config_path)
         configured_memory_env = True

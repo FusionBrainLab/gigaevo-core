@@ -62,8 +62,7 @@ class ChromaRetriever(AbsRetriever):
     def build(self, page_store) -> None:
         pages = page_store.load() if page_store is not None else []
         payload_by_field: dict[str, dict[str, dict[str, Any]]] = {
-            field: {}
-            for field in self.active_collections
+            field: {} for field in self.active_collections
         }
 
         for idx, page in enumerate(pages):
@@ -154,7 +153,9 @@ class ChromaRetriever(AbsRetriever):
                         hit.meta["document"] = document
 
                     existing = aggregated.get(doc_id)
-                    existing_score = existing.meta.get("score", 0.0) if existing else -1.0
+                    existing_score = (
+                        existing.meta.get("score", 0.0) if existing else -1.0
+                    )
                     if existing is None or score > existing_score:
                         aggregated[doc_id] = hit
 
@@ -167,7 +168,9 @@ class ChromaRetriever(AbsRetriever):
 
         return hits_per_query
 
-    def _sync_collection(self, collection: Any, payload: dict[str, dict[str, Any]]) -> None:
+    def _sync_collection(
+        self, collection: Any, payload: dict[str, dict[str, Any]]
+    ) -> None:
         current_ids = collection.get().get("ids", []) or []
         current_ids_set = {str(doc_id) for doc_id in current_ids if str(doc_id).strip()}
         next_ids_set = set(payload.keys())
@@ -224,7 +227,12 @@ class ChromaRetriever(AbsRetriever):
         else:
             explanation_summary = str(explanation or "")
 
-        description = str(card.get("description") or card.get("content") or parsed.get("description") or "")
+        description = str(
+            card.get("description")
+            or card.get("content")
+            or parsed.get("description")
+            or ""
+        )
         task_description = str(
             card.get("task_description_summary")
             or parsed.get("task_description_summary")

@@ -41,8 +41,7 @@ def load_test_context(n_samples: int | None = None) -> dict:
 def _evaluate_chain(chain, context: dict) -> dict:
     dataset = context["test_dataset"]
     targets = [
-        sample.get("answer_aliases", [sample.get("answer", "")])
-        for sample in dataset
+        sample.get("answer_aliases", [sample.get("answer", "")]) for sample in dataset
     ]
     passages_by_task = {sample["task_id"]: sample["passages"] for sample in dataset}
 

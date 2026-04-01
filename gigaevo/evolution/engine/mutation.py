@@ -7,8 +7,8 @@ from loguru import logger
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.mutation.context import MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
+from gigaevo.evolution.mutation.context import MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.programs.program import Program
 

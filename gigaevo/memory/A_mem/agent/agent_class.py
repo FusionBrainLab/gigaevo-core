@@ -18,7 +18,7 @@ class LLMService:
         openrouter_title: str | None = None,
         gigachat_scope: str = "GIGACHAT_API_CORP",
         gigachat_verify_ssl: bool = False,
-        system_prompt: str = ""
+        system_prompt: str = "",
     ):
         """
         service: 'openai', 'ollama', 'hf', 'openrouter', 'openrouter_openai' or 'gigachat'
@@ -41,30 +41,36 @@ class LLMService:
         self.openrouter_title = openrouter_title
         self.giga_client = None
 
-        if self.service == 'openai':
+        if self.service == "openai":
             if not api_key:
                 raise ValueError("You must pass an API key for OpenAI")
             try:
                 from openai import OpenAI
             except ImportError as e:
-                raise ImportError("Install the 'openai' package to use service='openai'") from e
+                raise ImportError(
+                    "Install the 'openai' package to use service='openai'"
+                ) from e
             self.client = OpenAI(api_key=api_key)
 
-        elif self.service in ('openrouter_openai',):
+        elif self.service in ("openrouter_openai",):
             if not api_key:
                 raise ValueError("You must pass an API key for OpenRouter")
             try:
                 from openai import OpenAI
             except ImportError as e:
-                raise ImportError("Install the 'openai' package to use service='openrouter_openai'") from e
+                raise ImportError(
+                    "Install the 'openai' package to use service='openrouter_openai'"
+                ) from e
             # OpenAI client pointed at OpenRouter
-            self.client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+            self.client = OpenAI(
+                api_key=api_key, base_url="https://openrouter.ai/api/v1"
+            )
 
-        elif self.service == 'ollama':
+        elif self.service == "ollama":
             # no heavy imports here; done in generate()
             pass
 
-        elif self.service.startswith('hf'):
+        elif self.service.startswith("hf"):
             # Lazy import Transformers + Torch only for HF
             try:
                 import torch  # noqa: F401 (device_map uses it)
@@ -75,17 +81,15 @@ class LLMService:
                 ) from e
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
             self.model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype="auto",
-                device_map="auto"
+                model_name, torch_dtype="auto", device_map="auto"
             )
 
-        elif self.service == 'openrouter':
+        elif self.service == "openrouter":
             if not api_key:
                 raise ValueError("You must pass an API key for OpenRouter")
             self.openrouter_key = api_key
 
-        elif self.service == 'gigachat':
+        elif self.service == "gigachat":
             if not api_key:
                 raise ValueError("You must pass GigaChat credentials")
             try:
@@ -105,7 +109,7 @@ class LLMService:
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,  # may not be supported in older versions
                     use_api_for_tokens=True,
-                    timeout=400
+                    timeout=400,
                 )
             except TypeError:
                 self.giga_client = GigaChat(
@@ -115,7 +119,7 @@ class LLMService:
                     verify_ssl_certs=gigachat_verify_ssl,
                     max_tokens=self.max_tokens,
                     use_api_for_tokens=True,
-                    timeout=400
+                    timeout=400,
                 )
 
         else:
@@ -130,11 +134,11 @@ class LLMService:
             cost         – provider-specific cost (if available)
         """
         # ---------- OpenAI ----------
-        if self.service == 'openai':
+        if self.service == "openai":
             args = {"model": self.model_name, "input": data}
             if self.temperature is not None:
                 args["temperature"] = self.temperature
-            if self.model_name.startswith('o'):
+            if self.model_name.startswith("o"):
                 # NOTE: keep both keys if your SDK supports them together.
                 # If not, merge as needed.
                 args["reasoning"] = {"effort": self.reasoning_effort, "summary": "auto"}
@@ -142,11 +146,13 @@ class LLMService:
             resp_dict = resp.model_dump()
             final_text = resp.output_text
             usage = getattr(resp, "usage", None) or {}
-            token_count = getattr(usage, "total_tokens", None) or usage.get("total_tokens")
+            token_count = getattr(usage, "total_tokens", None) or usage.get(
+                "total_tokens"
+            )
             return final_text, resp_dict, token_count, None
 
         # ---------- OpenRouter via OpenAI SDK ----------
-        elif self.service in ('openrouter_openai',):
+        elif self.service in ("openrouter_openai",):
             extra_headers = {}
             if self.openrouter_referer:
                 extra_headers["HTTP-Referer"] = self.openrouter_referer
@@ -178,7 +184,7 @@ class LLMService:
             return final_text, resp_dict, token_count, cost
 
         # ---------- Hugging Face (Transformers) ----------
-        elif self.service.startswith('hf'):
+        elif self.service.startswith("hf"):
             try:
                 from transformers import TextIteratorStreamer
             except ImportError as e:
@@ -190,7 +196,7 @@ class LLMService:
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=self.thinking
+                enable_thinking=self.thinking,
             )
             inputs = tok([text], return_tensors="pt").to(model.device)
 
@@ -199,12 +205,11 @@ class LLMService:
                 gen_common["temperature"] = self.temperature
 
             if self.streaming:
-                streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
+                streamer = TextIteratorStreamer(
+                    tok, skip_prompt=True, skip_special_tokens=True
+                )
                 gen_kwargs = dict(
-                    **inputs,
-                    streamer=streamer,
-                    max_new_tokens=32768,
-                    **gen_common
+                    **inputs, streamer=streamer, max_new_tokens=32768, **gen_common
                 )
                 thread = threading.Thread(target=model.generate, kwargs=gen_kwargs)
                 thread.start()
@@ -218,12 +223,8 @@ class LLMService:
                 thread.join()
                 return output_text, output_text, token_count, None
             else:
-                generated = model.generate(
-                    **inputs,
-                    max_new_tokens=32768,
-                    **gen_common
-                )
-                output_ids = generated[0][len(inputs.input_ids[0]):].tolist()
+                generated = model.generate(**inputs, max_new_tokens=32768, **gen_common)
+                output_ids = generated[0][len(inputs.input_ids[0]) :].tolist()
                 token_count = len(output_ids)
                 raw_text = tok.decode(output_ids, skip_special_tokens=True)
                 # Try to split off any reasoning tokens if your model uses them
@@ -231,31 +232,38 @@ class LLMService:
                     split_idx = len(output_ids) - output_ids[::-1].index(151668)
                 except ValueError:
                     split_idx = 0
-                final_text = tok.decode(output_ids[split_idx:], skip_special_tokens=True).strip()
+                final_text = tok.decode(
+                    output_ids[split_idx:], skip_special_tokens=True
+                ).strip()
                 return final_text, raw_text, token_count, None
 
         # ---------- OpenRouter (HTTP) ----------
-        elif self.service == 'openrouter':
+        elif self.service == "openrouter":
             try:
                 import requests
             except ImportError as e:
-                raise ImportError("Install 'requests' to use service='openrouter'") from e
+                raise ImportError(
+                    "Install 'requests' to use service='openrouter'"
+                ) from e
 
             headers = {
                 "Authorization": f"Bearer {self.openrouter_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
             if self.openrouter_referer:
                 headers["HTTP-Referer"] = self.openrouter_referer
             if self.openrouter_title:
                 headers["X-Title"] = self.openrouter_title
 
-            if self.model_name.startswith(('google', 'anthropic')) and self.max_tokens is not None:
+            if (
+                self.model_name.startswith(("google", "anthropic"))
+                and self.max_tokens is not None
+            ):
                 payload = {
                     "model": self.model_name,
                     "messages": [{"role": "user", "content": data}],
                     "usage": {"include": True},
-                    "reasoning": {"max_tokens": self.max_tokens}
+                    "reasoning": {"max_tokens": self.max_tokens},
                 }
                 if self.temperature is not None:
                     payload["temperature"] = self.temperature
@@ -264,14 +272,14 @@ class LLMService:
                     "model": self.model_name,
                     "messages": [
                         {"role": "system", "content": "Set reasoning effort to high"},
-                        {"role": "user", "content": data}
+                        {"role": "user", "content": data},
                     ],
                     "usage": {"include": True},
                     "reasoning": {
                         "effort": self.reasoning_effort,
                         "exclude": False,
-                        "enabled": True
-                    }
+                        "enabled": True,
+                    },
                 }
                 if self.temperature is not None:
                     payload["temperature"] = self.temperature
@@ -281,7 +289,7 @@ class LLMService:
             response = requests.post(
                 url="https://openrouter.ai/api/v1/chat/completions",
                 headers=headers,
-                data=json.dumps(payload)
+                data=json.dumps(payload),
             )
             result = response.json()
             final_text = result["choices"][0]["message"]["content"]
@@ -289,7 +297,7 @@ class LLMService:
             return final_text, result, usage.get("completion_tokens"), usage.get("cost")
 
         # ---------- GigaChat ----------
-        elif self.service == 'gigachat':
+        elif self.service == "gigachat":
             try:
                 from langchain_core.messages import HumanMessage, SystemMessage
             except ImportError as e:
@@ -325,7 +333,9 @@ class LLMService:
                     "input_tokens": token_usage.get("prompt_tokens"),
                     "output_tokens": token_usage.get("completion_tokens"),
                     "total_tokens": token_usage.get("total_tokens"),
-                    "input_token_details": {"cache_read": token_usage.get("precached_prompt_tokens")},
+                    "input_token_details": {
+                        "cache_read": token_usage.get("precached_prompt_tokens")
+                    },
                     "model_name": rm.get("model_name"),
                     "finish_reason": rm.get("finish_reason"),
                     "x_headers": rm.get("x_headers"),

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Literal
 
 from loguru import logger
 import numpy as np
 import pandas as pd
 import redis
-
-from gigaevo.utils.redis import RedisRunConfig, fetch_evolution_dataframe
 
 
 class OutlierMethod(StrEnum):

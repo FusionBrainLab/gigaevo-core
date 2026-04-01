@@ -8,8 +8,8 @@ Usage:
 """
 
 import os
-import sys
 from pathlib import Path
+import sys
 
 
 def _ensure_repo_root_on_path() -> None:

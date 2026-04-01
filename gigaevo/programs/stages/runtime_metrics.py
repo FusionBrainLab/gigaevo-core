@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
 import statistics
 import time
-from pathlib import Path
 from typing import cast
 
 from gigaevo.programs.core_types import StageIO

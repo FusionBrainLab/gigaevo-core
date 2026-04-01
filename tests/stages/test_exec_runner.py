@@ -264,9 +264,7 @@ class TestRunOne:
 
         problem_dir = tmp_path / "problem"
         problem_dir.mkdir()
-        (problem_dir / "helper.py").write_text(
-            "VALUE = 'problem'\n", encoding="utf-8"
-        )
+        (problem_dir / "helper.py").write_text("VALUE = 'problem'\n", encoding="utf-8")
 
         sys.path.insert(0, str(repo_dir))
         try:
@@ -296,9 +294,7 @@ class TestRunOne:
 
         problem_dir = tmp_path / "problem"
         problem_dir.mkdir()
-        (problem_dir / "helper.py").write_text(
-            "VALUE = 'problem'\n", encoding="utf-8"
-        )
+        (problem_dir / "helper.py").write_text("VALUE = 'problem'\n", encoding="utf-8")
 
         sys.path.insert(0, str(repo_dir))
         sys.path.append(str(problem_dir))

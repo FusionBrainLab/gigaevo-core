@@ -6,7 +6,7 @@ import random
 from problems.chains.chain_runner import run_chain_on_dataset
 from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
-from problems.chains.musique.full.validate import extract_answer, calculate_exact_match
+from problems.chains.musique.full.validate import calculate_exact_match, extract_answer
 from problems.chains.musique.shared_config import (
     DATASET_CONFIG,
     LLM_CONFIG,
@@ -34,8 +34,7 @@ def load_test_context(n_samples: int | None = None, seed: int = 42) -> dict:
 
 def _evaluate_chain(chain, dataset: list[dict]) -> dict:
     targets = [
-        sample.get("answer_aliases", [sample.get("answer", "")])
-        for sample in dataset
+        sample.get("answer_aliases", [sample.get("answer", "")]) for sample in dataset
     ]
 
     client = LLMClient(**LLM_CONFIG)

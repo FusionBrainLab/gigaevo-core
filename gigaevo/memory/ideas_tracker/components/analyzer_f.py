@@ -135,7 +135,11 @@ class IdeaAnalyzerFast:
 
     def _init_llm_clients(self) -> None:
         """Build ``AsyncOpenAI`` from env (API key, optional base URL, OpenRouter detection)."""
-        self.llm_async = LLMClient(model=self.model, base_url=self.base_url, max_concurrent=self.llm_max_concurrent)
+        self.llm_async = LLMClient(
+            model=self.model,
+            base_url=self.base_url,
+            max_concurrent=self.llm_max_concurrent,
+        )
 
         if self.logger is not None:
             self.logger.log_init(
@@ -276,7 +280,9 @@ class IdeaAnalyzerFast:
         if self.recompute_center and cluster.members:
             cluster.center = self._mean_center(cluster.members)
 
-    async def _call_llm_async(self, step_name: str, prompt_content: str | dict[str, str]) -> str:
+    async def _call_llm_async(
+        self, step_name: str, prompt_content: str | dict[str, str]
+    ) -> str:
         """
         Run one chat completion: prompts ``{step_name}__system`` and ``{step_name}__user`` with ``<INSERT>``.
 
@@ -355,7 +361,9 @@ class IdeaAnalyzerFast:
                 continue
         return None
 
-    async def _desc_synth_llm(self, idea_card_description: str, descriptions_all: str, explanations_all: str) -> str:
+    async def _desc_synth_llm(
+        self, idea_card_description: str, descriptions_all: str, explanations_all: str
+    ) -> str:
         """
         Call the description synthesis LLM to generate a new description for the cluster.
 
@@ -370,7 +378,7 @@ class IdeaAnalyzerFast:
         prompt_content = {
             "<INSERT_REP>": idea_card_description,
             "<INSERT_DES>": descriptions_all,
-            "<INSERT_EXPL>": explanations_all
+            "<INSERT_EXPL>": explanations_all,
         }
         for _ in range(self.max_attempts):
             try:
@@ -548,8 +556,12 @@ class IdeaAnalyzerFast:
         representative_description = f"- {rep.description}"
         if rep.description in descriptions:
             descriptions.remove(rep.description)
-        all_motivations = "".join([f"{k}) {motiv} \n" for k, motiv in enumerate(motivations)])
-        all_descriptions = "".join([f"{k}) {descript} \n" for k, descript in enumerate(descriptions)])
+        all_motivations = "".join(
+            [f"{k}) {motiv} \n" for k, motiv in enumerate(motivations)]
+        )
+        all_descriptions = "".join(
+            [f"{k}) {descript} \n" for k, descript in enumerate(descriptions)]
+        )
         first_mot = motivations[0] if motivations else ""
 
         new_id = str(uuid.uuid4())
@@ -579,11 +591,13 @@ class IdeaAnalyzerFast:
             )
 
         extended.programs = list(set(extended.programs))
-        new_general_description = await self._desc_synth_llm(
-            representative_description, 
-            all_descriptions, 
-            all_motivations
-        ) if len(members) > 1 else rep.description
+        new_general_description = (
+            await self._desc_synth_llm(
+                representative_description, all_descriptions, all_motivations
+            )
+            if len(members) > 1
+            else rep.description
+        )
         if new_general_description:
             extended.description = new_general_description
 

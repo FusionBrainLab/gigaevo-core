@@ -132,6 +132,7 @@ class ProgramRecord:
             "code": self.code,
         }
 
+
 @dataclass
 class RecordCardEmbedding:
     """
@@ -180,7 +181,7 @@ class ClusterCard:
         for i, card in enumerate(self.members, start=1):
             lines.append(f"{i}) {card.description} \n")
         return "".join(lines)
-    
+
     def numbered_idea_groups(self, subgroup_size: int = 20) -> list[str]:
         """
         Split the cluster into fixed-size subgroups (last group may be short).
@@ -216,6 +217,7 @@ class ClusterCard:
         """Remove a card by identity; does not clear card.cluster_id (caller updates)."""
         self.members = [c for c in self.members if c is not card]
         self.rebuild_index_to_card()
+
 
 @dataclass
 class RecordCardExtended:
@@ -511,6 +513,7 @@ class RecordListV2:
             )
         self.max_ideas = new_val
 
+
 @dataclass
 class RecordBank:
     """
@@ -710,6 +713,7 @@ class RecordBank:
         for ideas_list in self.ideas_lists:
             ideas.extend(ideas_list.ideas)
         return ideas
+
 
 @dataclass
 class IncomingIdeas:

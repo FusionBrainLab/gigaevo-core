@@ -10,7 +10,9 @@ GEOMETRIC_SERIES_TOLERANCE = 1.0e-12
 GEOMETRIC_SERIES_MAX_ITERATIONS = 10_000
 
 
-def generate_problem(n: int = 1, random_seed: int = 1234) -> dict[str, list[list[float]]]:
+def generate_problem(
+    n: int = 1, random_seed: int = 1234
+) -> dict[str, list[list[float]]]:
     rng = np.random.default_rng(random_seed)
     A = rng.normal(0, 1, (n, n))
 

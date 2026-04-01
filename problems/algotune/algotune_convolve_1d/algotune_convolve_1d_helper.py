@@ -33,7 +33,9 @@ def get_case_specs() -> list[CaseSpec]:
     ]
 
 
-def generate_problem(n: int = 1, random_seed: int = 1234) -> tuple[np.ndarray, np.ndarray]:
+def generate_problem(
+    n: int = 1, random_seed: int = 1234
+) -> tuple[np.ndarray, np.ndarray]:
     """Generate one convolve_1d instance using the same shapes as AlgoTune."""
     rng = np.random.default_rng(random_seed)
     a = rng.standard_normal(30 * n)

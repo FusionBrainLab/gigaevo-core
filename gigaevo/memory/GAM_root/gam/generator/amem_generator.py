@@ -17,7 +17,9 @@ class AMemGenerator(AbsGenerator):
         super().__init__(config)
         self.llm_service = config.get("llm_service")
         if self.llm_service is None:
-            raise ValueError("AMemGenerator requires an LLMService instance in config['llm_service']")
+            raise ValueError(
+                "AMemGenerator requires an LLMService instance in config['llm_service']"
+            )
 
     def _format_prompt(self, prompt: str, schema: dict[str, Any] | None) -> str:
         if not schema:
@@ -79,7 +81,9 @@ class AMemGenerator(AbsGenerator):
         out: dict[str, Any] = {"text": text or "", "json": None, "response": response}
         if schema is not None:
             try:
-                out["json"] = json.loads(out["text"][out["text"].find("{"): out["text"].rfind("}") + 1])
+                out["json"] = json.loads(
+                    out["text"][out["text"].find("{") : out["text"].rfind("}") + 1]
+                )
             except Exception:
                 out["json"] = None
         return out

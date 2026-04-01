@@ -124,6 +124,7 @@ def process_archive():
 
     print(f"Done! Processed {doc_count:,} documents → {OUTPUT_PATH}")
 
+
 def build_index():
     """Build BM25s index from processed corpus."""
     if not OUTPUT_PATH.exists():
@@ -159,6 +160,8 @@ def build_index():
         dtype=dtype,
         int_dtype=int_dtype,
     )
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     download_archive()

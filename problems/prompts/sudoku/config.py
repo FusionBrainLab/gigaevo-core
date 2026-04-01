@@ -48,9 +48,7 @@ MODEL_CONFIG = {
         "top_p": _env_float("GIGAEVO_SUDOKU_TOP_P", 1.0),
         "repetition_penalty": _env_float("GIGAEVO_SUDOKU_REPETITION_PENALTY", 1.0),
     },
-    "gpu_memory_utilization": _env_float(
-        "GIGAEVO_SUDOKU_GPU_MEMORY_UTILIZATION", 0.7
-    ),
+    "gpu_memory_utilization": _env_float("GIGAEVO_SUDOKU_GPU_MEMORY_UTILIZATION", 0.7),
     "max_model_len": _env_int("GIGAEVO_SUDOKU_MAX_MODEL_LEN", 2048),
     "bf16": _env_bool("GIGAEVO_SUDOKU_BF16", True),
 }

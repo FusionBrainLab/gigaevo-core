@@ -116,19 +116,27 @@ USE_API = to_bool(
 CHANNEL = to_str(deep_get(SETTINGS, "api.channel"), default="latest")
 AUTHOR = to_str(deep_get(SETTINGS, "api.author"), default="").strip() or None
 
-ENABLE_LLM_SYNTHESIS = to_bool(deep_get(SETTINGS, "runtime.enable_llm_synthesis"), default=False)
+ENABLE_LLM_SYNTHESIS = to_bool(
+    deep_get(SETTINGS, "runtime.enable_llm_synthesis"), default=False
+)
 SHOULD_EVOLVE = to_bool(deep_get(SETTINGS, "runtime.should_evolve"), default=True)
 FILL_MISSING_FIELDS_WITH_LLM = to_bool(
     deep_get(SETTINGS, "runtime.fill_missing_fields_with_llm"),
     default=False,
 )
 SEARCH_LIMIT = max(1, to_int(deep_get(SETTINGS, "runtime.search_limit"), default=5))
-REBUILD_INTERVAL = max(1, to_int(deep_get(SETTINGS, "runtime.rebuild_interval"), default=10))
-SYNC_BATCH_SIZE = max(10, to_int(deep_get(SETTINGS, "runtime.sync_batch_size"), default=100))
+REBUILD_INTERVAL = max(
+    1, to_int(deep_get(SETTINGS, "runtime.rebuild_interval"), default=10)
+)
+SYNC_BATCH_SIZE = max(
+    10, to_int(deep_get(SETTINGS, "runtime.sync_batch_size"), default=100)
+)
 SYNC_ON_INIT = to_bool(deep_get(SETTINGS, "runtime.sync_on_init"), default=True)
 
 ENABLE_BM25 = to_bool(deep_get(SETTINGS, "gam.enable_bm25"), default=False)
-ALLOWED_GAM_TOOLS = [str(tool).strip() for tool in to_list(deep_get(SETTINGS, "gam.allowed_tools"))]
+ALLOWED_GAM_TOOLS = [
+    str(tool).strip() for tool in to_list(deep_get(SETTINGS, "gam.allowed_tools"))
+]
 GAM_PIPELINE_MODE = to_str(
     os.getenv("MEMORY_GAM_PIPELINE_MODE"),
     default=to_str(deep_get(SETTINGS, "gam.pipeline_mode"), default="default"),
@@ -198,12 +206,16 @@ def _latest_snapshot(payload: Any, required_key: str) -> dict[str, Any]:
         raise ValueError(f"Missing key '{required_key}' in snapshot payload")
 
     if isinstance(payload, list):
-        snapshots = [item for item in payload if isinstance(item, dict) and required_key in item]
+        snapshots = [
+            item for item in payload if isinstance(item, dict) and required_key in item
+        ]
         if snapshots:
             return snapshots[-1]
         raise ValueError(f"No snapshot with key '{required_key}' found in payload list")
 
-    raise ValueError("Invalid snapshot JSON format. Expected a dict or list of dict snapshots")
+    raise ValueError(
+        "Invalid snapshot JSON format. Expected a dict or list of dict snapshots"
+    )
 
 
 def _to_float(value: Any) -> float | None:
@@ -252,8 +264,7 @@ def _diff_write_stats(
 ) -> dict[str, int]:
     keys = set(before) | set(after)
     return {
-        key: max(0, int(after.get(key, 0)) - int(before.get(key, 0)))
-        for key in keys
+        key: max(0, int(after.get(key, 0)) - int(before.get(key, 0))) for key in keys
     }
 
 
@@ -291,7 +302,9 @@ def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
     return task_to_deltas
 
 
-def _build_usage_payload_from_task_deltas(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
+def _build_usage_payload_from_task_deltas(
+    task_to_deltas: dict[str, list[float]],
+) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     total_deltas: list[float] = []
 
@@ -347,7 +360,9 @@ def _merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str,
         for key, value in incoming_usage.items():
             if key != "used":
                 merged_usage[key] = value
-    merged_usage["used"] = _build_usage_payload_from_task_deltas(merged_task_deltas)["used"]
+    merged_usage["used"] = _build_usage_payload_from_task_deltas(merged_task_deltas)[
+        "used"
+    ]
     return merged_usage
 
 
@@ -386,7 +401,9 @@ def _parse_best_ideas(path: Path) -> tuple[list[str], dict[str, dict[str, Any]]]
     snapshot = _latest_snapshot(payload, "best_ideas")
     best_ideas = snapshot.get("best_ideas")
     if not isinstance(best_ideas, list):
-        raise ValueError(f"Invalid best ideas format in {path}: expected list under 'best_ideas'")
+        raise ValueError(
+            f"Invalid best ideas format in {path}: expected list under 'best_ideas'"
+        )
 
     idea_ids: list[str] = []
     best_by_id: dict[str, dict[str, Any]] = {}
@@ -409,11 +426,15 @@ def _parse_programs(path: Path) -> list[dict[str, Any]]:
     snapshot = _latest_snapshot(payload, "programs")
     programs = snapshot.get("programs")
     if not isinstance(programs, list):
-        raise ValueError(f"Invalid programs format in {path}: expected list under 'programs'")
+        raise ValueError(
+            f"Invalid programs format in {path}: expected list under 'programs'"
+        )
     return [program for program in programs if isinstance(program, dict)]
 
 
-def _merge_best_idea_metrics(card: dict[str, Any], best_entry: dict[str, Any]) -> dict[str, Any]:
+def _merge_best_idea_metrics(
+    card: dict[str, Any], best_entry: dict[str, Any]
+) -> dict[str, Any]:
     merged = dict(card)
     if not merged.get("description"):
         merged["description"] = str(best_entry.get("description") or "")
@@ -441,9 +462,7 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
     snapshot = _latest_snapshot(payload, "active_bank")
     active_bank = snapshot.get("active_bank")
     if not isinstance(active_bank, list):
-        raise ValueError(
-            f"Invalid banks format in {path}: expected 'active_bank' list"
-        )
+        raise ValueError(f"Invalid banks format in {path}: expected 'active_bank' list")
 
     all_cards = [card for card in active_bank if isinstance(card, dict)]
     cards_by_id = {
@@ -477,9 +496,7 @@ def _load_latest_bank_cards(path: Path) -> list[dict[str, Any]]:
     snapshot = _latest_snapshot(payload, "active_bank")
     active_bank = snapshot.get("active_bank")
     if not isinstance(active_bank, list):
-        raise ValueError(
-            f"Invalid banks format in {path}: expected 'active_bank' list"
-        )
+        raise ValueError(f"Invalid banks format in {path}: expected 'active_bank' list")
     return [card for card in active_bank if isinstance(card, dict)]
 
 
@@ -489,7 +506,11 @@ def _build_program_cards(
     banks_path: Path,
     best_programs_percent: float,
 ) -> list[dict[str, Any]]:
-    if programs_path is None or not programs_path.exists() or best_programs_percent <= 0:
+    if (
+        programs_path is None
+        or not programs_path.exists()
+        or best_programs_percent <= 0
+    ):
         return []
 
     programs = _parse_programs(programs_path)
@@ -511,7 +532,10 @@ def _build_program_cards(
         return []
 
     eligible_programs.sort(
-        key=lambda program: (float(program.get("fitness", 0.0)), str(program["program_id"])),
+        key=lambda program: (
+            float(program.get("fitness", 0.0)),
+            str(program["program_id"]),
+        ),
         reverse=True,
     )
     selected_count = _top_percent_count(len(eligible_programs), best_programs_percent)
@@ -534,14 +558,18 @@ def _build_program_cards(
             linked_program_id = str(raw_program_id or "").strip()
             if not linked_program_id:
                 continue
-            connected_ideas_by_program.setdefault(linked_program_id, []).append(linked_idea)
+            connected_ideas_by_program.setdefault(linked_program_id, []).append(
+                linked_idea
+            )
 
     cards: list[dict[str, Any]] = []
     total_programs = len(eligible_programs)
     for rank, program in enumerate(selected_programs, start=1):
         program_id = str(program["program_id"])
         task_description = str(program.get("task_description") or "").strip()
-        task_description_summary = str(program.get("task_description_summary") or "").strip()
+        task_description_summary = str(
+            program.get("task_description_summary") or ""
+        ).strip()
         connected_ideas = connected_ideas_by_program.get(program_id, [])
         connected_descriptions = [
             str(item.get("description") or "").strip()
@@ -550,7 +578,9 @@ def _build_program_cards(
         ]
         connected_descriptions = [text for text in connected_descriptions if text]
         connected_summary = "; ".join(connected_descriptions[:5])
-        description_seed = task_description_summary or task_description or "task summary unavailable"
+        description_seed = (
+            task_description_summary or task_description or "task summary unavailable"
+        )
         description = (
             f"Top evolved program for {description_seed} "
             f"(fitness={float(program['fitness']):.6g}, rank={rank}/{total_programs})."
@@ -755,11 +785,13 @@ def main() -> dict[str, Any] | None:
             after_stats = memory.get_card_write_stats()
             stat_diff = _diff_write_stats(before_stats, after_stats)
             for stat_name, stat_value in stat_diff.items():
-                write_stats_by_card_type[card_type][stat_name] = (
-                    int(write_stats_by_card_type[card_type].get(stat_name, 0)) + int(stat_value)
-                )
+                write_stats_by_card_type[card_type][stat_name] = int(
+                    write_stats_by_card_type[card_type].get(stat_name, 0)
+                ) + int(stat_value)
             stored = memory.get_card(memory_id) or {}
-            print(f"[{idx:03d}] saved {memory_id}: {stored.get('description', '')[:110]}")
+            print(
+                f"[{idx:03d}] saved {memory_id}: {stored.get('description', '')[:110]}"
+            )
     except RuntimeError as exc:
         print(f"\nWrite failed: {exc}\n")
         return None

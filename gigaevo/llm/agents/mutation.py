@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from gigaevo.programs.metrics.context import MetricsContext
     from gigaevo.prompts.fetcher import PromptFetcher
 
+
 class MutationChange(BaseModel):
     """Tracker-friendly description of one introduced change."""
 

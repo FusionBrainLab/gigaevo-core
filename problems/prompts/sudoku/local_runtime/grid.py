@@ -19,7 +19,9 @@ class SudokuSpec:
 
     def validate(self) -> None:
         if self.size not in (4, 6, 9):
-            raise ValueError(f"Unsupported sudoku size: {self.size}. Supported: 4, 6, 9.")
+            raise ValueError(
+                f"Unsupported sudoku size: {self.size}. Supported: 4, 6, 9."
+            )
         if self.size % self.box_rows != 0 or self.size % self.box_cols != 0:
             raise ValueError(
                 f"Invalid box shape {self.box_rows}x{self.box_cols} for size {self.size}."

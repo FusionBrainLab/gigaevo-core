@@ -52,7 +52,9 @@ def generate_problem(n: int = 1, random_seed: int = 1234) -> dict[str, Any]:
     }
 
 
-def _parse_problem(problem: dict[str, Any]) -> tuple[float, float, np.ndarray, dict[str, float]]:
+def _parse_problem(
+    problem: dict[str, Any],
+) -> tuple[float, float, np.ndarray, dict[str, float]]:
     required = {"t0", "t1", "y0", "params"}
     missing = required.difference(problem)
     if missing:
@@ -123,7 +125,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     _, _, y0, _ = _parse_problem(problem)
 
     if candidate.shape != y0.shape:
-        raise ValueError(f"Output has wrong shape: expected {y0.shape}, got {candidate.shape}.")
+        raise ValueError(
+            f"Output has wrong shape: expected {y0.shape}, got {candidate.shape}."
+        )
     if not np.all(np.isfinite(candidate)):
         raise ValueError("Output must contain only finite values.")
     if np.any(candidate < 0.0):

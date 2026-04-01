@@ -51,8 +51,7 @@ def validate(chain_spec: dict) -> tuple[dict[str, float], str]:
     dataset = context["train_dataset"]
     passages_by_task = {sample["task_id"]: sample["passages"] for sample in dataset}
     targets = [
-        sample.get("answer_aliases", [sample.get("answer", "")])
-        for sample in dataset
+        sample.get("answer_aliases", [sample.get("answer", "")]) for sample in dataset
     ]
 
     client = LLMClient(**LLM_CONFIG)

@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
-
 from algotune_convolve_1d_helper import (
     generate_problem,
     is_solution,
     relative_error,
     solve_problem,
 )
+import numpy as np
 
 
 def validate(context: dict[str, Any], outputs: list[Any]) -> dict[str, float]:

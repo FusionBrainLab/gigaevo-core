@@ -56,7 +56,9 @@ class SudokuAdapter:
     ) -> list[GoldPath]:
         chains = self._read_chains()
         if difficulty is not None:
-            chains = [chain for chain in chains if chain["id"].startswith(f"{difficulty}_")]
+            chains = [
+                chain for chain in chains if chain["id"].startswith(f"{difficulty}_")
+            ]
         if start_idx > 0:
             chains = chains[start_idx:]
         if size is not None:

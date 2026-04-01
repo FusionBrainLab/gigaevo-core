@@ -4,10 +4,10 @@ import argparse
 import asyncio
 import importlib.util
 import json
+from pathlib import Path
 import statistics
 import sys
 import time
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -127,7 +127,9 @@ async def _main() -> int:
         sys.path.insert(0, str(PROBLEM_DIR))
 
     context_module = _load_module(f"{PROBLEM_NAME}_context", PROBLEM_DIR / "context.py")
-    validate_module = _load_module(f"{PROBLEM_NAME}_validate", PROBLEM_DIR / "validate.py")
+    validate_module = _load_module(
+        f"{PROBLEM_NAME}_validate", PROBLEM_DIR / "validate.py"
+    )
     program_module = _load_module(f"{PROBLEM_NAME}_program", program_path)
 
     if not hasattr(program_module, "entrypoint"):
@@ -135,7 +137,9 @@ async def _main() -> int:
 
     run_exec_runner = _load_run_exec_runner()
 
-    timing_repetitions, warmup_repetitions = _load_runtime_config(PROBLEM_DIR / "metrics.yaml")
+    timing_repetitions, warmup_repetitions = _load_runtime_config(
+        PROBLEM_DIR / "metrics.yaml"
+    )
     if args.timing_repetitions is not None:
         timing_repetitions = max(1, int(args.timing_repetitions))
     if args.warmup_repetitions is not None:

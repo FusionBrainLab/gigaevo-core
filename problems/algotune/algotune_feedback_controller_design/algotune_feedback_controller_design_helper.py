@@ -39,7 +39,9 @@ def get_case_specs() -> list[CaseSpec]:
     ]
 
 
-def generate_problem(n: int = 2, random_seed: int = 1234) -> dict[str, list[list[float]]]:
+def generate_problem(
+    n: int = 2, random_seed: int = 1234
+) -> dict[str, list[list[float]]]:
     """Generate one controller-design instance using AlgoTune's logic."""
     n = max(n, 2)
     rng = np.random.default_rng(random_seed)
@@ -113,7 +115,9 @@ def is_stabilizable_pair(A: np.ndarray, B: np.ndarray) -> bool:
     for eigenvalue in np.linalg.eigvals(A_complex):
         if abs(eigenvalue) < 1.0 - STABILITY_TOLERANCE:
             continue
-        pbh_matrix = np.hstack((eigenvalue * np.eye(n, dtype=np.complex128) - A_complex, B_complex))
+        pbh_matrix = np.hstack(
+            (eigenvalue * np.eye(n, dtype=np.complex128) - A_complex, B_complex)
+        )
         if _matrix_rank(pbh_matrix) < n:
             return False
     return True
@@ -143,7 +147,9 @@ def _solve_lyapunov_certificate(A: np.ndarray) -> np.ndarray:
     raise RuntimeError("Failed to compute a Lyapunov certificate for a stable system.")
 
 
-def _compute_stabilizing_gain(A: np.ndarray, B: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _compute_stabilizing_gain(
+    A: np.ndarray, B: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     n, m = B.shape
     if is_stable_matrix(A):
         K = np.zeros((m, n), dtype=np.float64)
@@ -158,7 +164,9 @@ def _compute_stabilizing_gain(A: np.ndarray, B: np.ndarray) -> tuple[np.ndarray,
         except TypeError:
             X = solve_discrete_are(A, B, Q, R)
     except Exception as exc:
-        raise RuntimeError("Failed to solve the discrete algebraic Riccati equation.") from exc
+        raise RuntimeError(
+            "Failed to solve the discrete algebraic Riccati equation."
+        ) from exc
 
     X = np.asarray(np.real_if_close(X, tol=1000), dtype=np.float64)
     X = 0.5 * (X + X.T)

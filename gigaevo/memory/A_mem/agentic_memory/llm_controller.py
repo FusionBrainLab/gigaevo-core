@@ -19,36 +19,45 @@ class BaseLLMController(ABC):
         """Get completion from LLM"""
         pass
 
+
 class OpenAIController(BaseLLMController):
     def __init__(self, model: str = "gpt-4", api_key: str | None = None):
         try:
             from openai import OpenAI
+
             self.model = model
             if api_key is None:
-                api_key = os.getenv('OPENAI_API_KEY')
+                api_key = os.getenv("OPENAI_API_KEY")
             if api_key is None:
-                raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
+                raise ValueError(
+                    "OpenAI API key not found. Set OPENAI_API_KEY environment variable."
+                )
             self.client = OpenAI(api_key=api_key)
         except ImportError:
-            raise ImportError("OpenAI package not found. Install it with: pip install openai")
-    
-    def get_completion(self, prompt: str, response_format: dict, temperature: float = 0.7) -> str:
+            raise ImportError(
+                "OpenAI package not found. Install it with: pip install openai"
+            )
+
+    def get_completion(
+        self, prompt: str, response_format: dict, temperature: float = 0.7
+    ) -> str:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": "You must respond with a JSON object."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
             response_format=response_format,
             temperature=temperature,
-            max_tokens=1000
+            max_tokens=1000,
         )
         return response.choices[0].message.content
+
 
 class OllamaController(BaseLLMController):
     def __init__(self, model: str = "llama2"):
         self.model = model
-    
+
     def _generate_empty_value(self, schema_type: str, schema_items: dict = None) -> Any:
         if schema_type == "array":
             return []
@@ -65,28 +74,32 @@ class OllamaController(BaseLLMController):
     def _generate_empty_response(self, response_format: dict) -> dict:
         if "json_schema" not in response_format:
             return {}
-            
+
         schema = response_format["json_schema"]["schema"]
         result = {}
-        
+
         if "properties" in schema:
             for prop_name, prop_schema in schema["properties"].items():
-                result[prop_name] = self._generate_empty_value(prop_schema["type"], 
-                                                            prop_schema.get("items"))
-        
+                result[prop_name] = self._generate_empty_value(
+                    prop_schema["type"], prop_schema.get("items")
+                )
+
         return result
 
-    def get_completion(self, prompt: str, response_format: dict, temperature: float = 0.7) -> str:
+    def get_completion(
+        self, prompt: str, response_format: dict, temperature: float = 0.7
+    ) -> str:
         # Allow exceptions (like ConnectionError) to bubble up for better debugging
         response = completion(
             model=f"ollama_chat/{self.model}",
             messages=[
                 {"role": "system", "content": "You must respond with a JSON object."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
             response_format=response_format,
         )
         return response.choices[0].message.content
+
 
 class LLMServiceController(BaseLLMController):
     """Wraps an existing LLMService instance so it can be used by the memory system."""
@@ -140,6 +153,7 @@ class LLMServiceController(BaseLLMController):
         final_text, _, _, _ = self.service.generate(formatted_prompt)
         return final_text
 
+
 class LLMController:
     """LLM-based controller for memory metadata generation"""
 
@@ -157,7 +171,9 @@ class LLMController:
         elif backend == "ollama":
             self.llm = OllamaController(model)
         elif backend == "custom":
-            raise ValueError("Provide an llm_service instance when using backend='custom'")
+            raise ValueError(
+                "Provide an llm_service instance when using backend='custom'"
+            )
         else:
             raise ValueError("Backend must be one of: 'openai', 'ollama', 'custom'")
 

@@ -7,8 +7,11 @@ from pydantic import BaseModel, Field
 
 class Result(BaseModel):
     """Search and integration result"""
+
     content: str = Field("", description="Integrated content about the question")
-    sources: list[str | None] = Field(default_factory=list, description="List of page IDs of sources used")
+    sources: list[str | None] = Field(
+        default_factory=list, description="List of page IDs of sources used"
+    )
 
     @classmethod
     def model_json_schema(cls) -> dict[str, Any]:
@@ -18,8 +21,10 @@ class Result(BaseModel):
         schema["additionalProperties"] = False
         return schema
 
+
 class EnoughDecision(BaseModel):
     """Decision on whether information is sufficient"""
+
     enough: bool = Field(..., description="Whether information is sufficient")
 
     @classmethod
@@ -28,11 +33,15 @@ class EnoughDecision(BaseModel):
         schema["required"] = ["enough"]
         schema["additionalProperties"] = False
         return schema
+
 
 class ReflectionDecision(BaseModel):
     """Complete reflection decision with new request if information is insufficient"""
+
     enough: bool = Field(..., description="Whether information is sufficient")
-    new_request: str | None = Field(None, description="New search request if information is insufficient")
+    new_request: str | None = Field(
+        None, description="New search request if information is insufficient"
+    )
 
     @classmethod
     def model_json_schema(cls) -> dict[str, Any]:
@@ -41,13 +50,17 @@ class ReflectionDecision(BaseModel):
         schema["additionalProperties"] = False
         return schema
 
+
 class ResearchOutput(BaseModel):
     """Research output"""
+
     integrated_memory: str = Field(..., description="Integrated memory content")
     raw_memory: dict[str, Any] = Field(..., description="Raw memory data")
 
+
 class GenerateRequests(BaseModel):
     """Generate new requests"""
+
     new_requests: list[str] = Field(..., description="List of new search requests")
 
     @classmethod
@@ -60,6 +73,7 @@ class GenerateRequests(BaseModel):
 
 class TopIdea(BaseModel):
     """Final selected idea for experimental reflection pipeline."""
+
     card_id: str = Field(..., description="Selected card/page id")
 
     @classmethod
@@ -73,9 +87,16 @@ class TopIdea(BaseModel):
 
 class ExperimentalDecision(BaseModel):
     """Decision output for experimental reflection pipeline."""
-    mode: Literal["final", "continue"] = Field(..., description="Pipeline decision mode")
-    top_ideas: list[TopIdea] = Field(default_factory=list, description="Top ideas when mode=final")
-    additional_queries: list[str] = Field(default_factory=list, description="Follow-up queries when mode=continue")
+
+    mode: Literal["final", "continue"] = Field(
+        ..., description="Pipeline decision mode"
+    )
+    top_ideas: list[TopIdea] = Field(
+        default_factory=list, description="Top ideas when mode=final"
+    )
+    additional_queries: list[str] = Field(
+        default_factory=list, description="Follow-up queries when mode=continue"
+    )
 
     @classmethod
     def model_json_schema(cls) -> dict[str, Any]:

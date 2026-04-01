@@ -65,7 +65,9 @@ def _parse_problem(
     required = {"P", "q", "G", "h", "A", "b"}
     missing = required.difference(problem)
     if missing:
-        raise ValueError(f"Problem dictionary is missing keys: {', '.join(sorted(missing))}.")
+        raise ValueError(
+            f"Problem dictionary is missing keys: {', '.join(sorted(missing))}."
+        )
 
     P = np.asarray(problem["P"], dtype=np.float64)
     q = np.asarray(problem["q"], dtype=np.float64)
@@ -100,7 +102,9 @@ def _objective_value(P: np.ndarray, q: np.ndarray, x: np.ndarray) -> float:
     return float(0.5 * x @ P @ x + q @ x)
 
 
-def _find_feasible_point(G: np.ndarray, h: np.ndarray, A: np.ndarray, b: np.ndarray) -> np.ndarray:
+def _find_feasible_point(
+    G: np.ndarray, h: np.ndarray, A: np.ndarray, b: np.ndarray
+) -> np.ndarray:
     n = G.shape[1]
     result = linprog(
         c=np.zeros(n, dtype=np.float64),
@@ -112,7 +116,9 @@ def _find_feasible_point(G: np.ndarray, h: np.ndarray, A: np.ndarray, b: np.ndar
         method="highs",
     )
     if not result.success or result.x is None:
-        raise RuntimeError(f"Failed to recover a feasible point for the QP: {result.message}")
+        raise RuntimeError(
+            f"Failed to recover a feasible point for the QP: {result.message}"
+        )
     return np.asarray(result.x, dtype=np.float64)
 
 
@@ -187,7 +193,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     P, q, G, h, A, b = _parse_problem(problem)
     x = np.asarray(solution["solution"], dtype=np.float64)
     if x.shape != (P.shape[0],):
-        raise ValueError(f"Candidate solution has shape {x.shape}, expected {(P.shape[0],)}.")
+        raise ValueError(
+            f"Candidate solution has shape {x.shape}, expected {(P.shape[0],)}."
+        )
     if not np.all(np.isfinite(x)):
         raise ValueError("Candidate solution must contain only finite values.")
 
@@ -211,7 +219,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     reference = solve_problem(problem)
     reference_objective = float(reference["objective"])
     objective_gap = candidate_objective - reference_objective
-    if objective_gap > OBJECTIVE_ATOL + OBJECTIVE_RTOL * (1.0 + abs(reference_objective)):
+    if objective_gap > OBJECTIVE_ATOL + OBJECTIVE_RTOL * (
+        1.0 + abs(reference_objective)
+    ):
         raise ValueError(
             f"Objective is suboptimal by {objective_gap:.3e} relative to the reference optimum."
         )

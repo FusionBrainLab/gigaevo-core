@@ -4,18 +4,17 @@ Each task/sample gets its own BM25 index built over that sample's passages.
 The retrieval tool then searches only within the current task's index.
 """
 
-import json
-import re
-import shutil
-import threading
 from collections import defaultdict
 from collections.abc import Callable
 from hashlib import sha1
+import json
 from pathlib import Path
+import re
+import shutil
+import threading
 
 import bm25s
 import Stemmer
-
 
 _BM25S_CORE_FILES = (
     "data.csc.index.npy",
@@ -56,7 +55,7 @@ def _write_passages(index_dir: Path, passages: list[str]) -> None:
 
 
 def _read_passages(index_dir: Path) -> list[str]:
-    with open(index_dir / _PASSAGES_FILE, "r", encoding="utf-8") as f:
+    with open(index_dir / _PASSAGES_FILE, encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, list):
         return []
@@ -158,8 +157,7 @@ def _retrieve_for_task(
     )
     return [
         "\n".join(
-            f"[{j + 1}] {passages[int(idx)]}"
-            for j, idx in enumerate(row[:effective_k])
+            f"[{j + 1}] {passages[int(idx)]}" for j, idx in enumerate(row[:effective_k])
         )
         for row in results
     ]
@@ -198,7 +196,9 @@ def make_retrieve_fn(
             retriever, passages = state
             queries = [q for _, q in indexed_queries]
             task_outputs = _retrieve_for_task(retriever, passages, queries, k=k)
-            for (orig_idx, _), output in zip(indexed_queries, task_outputs, strict=False):
+            for (orig_idx, _), output in zip(
+                indexed_queries, task_outputs, strict=False
+            ):
                 outputs[orig_idx] = output
 
         return outputs

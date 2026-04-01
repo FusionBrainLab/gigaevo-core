@@ -91,7 +91,9 @@ def _parse_problem(
     required = {"T", "p", "u", "batteries", "deg_cost", "num_batteries"}
     missing = required.difference(problem)
     if missing:
-        raise ValueError(f"Problem dictionary is missing keys: {', '.join(sorted(missing))}.")
+        raise ValueError(
+            f"Problem dictionary is missing keys: {', '.join(sorted(missing))}."
+        )
 
     T = int(problem["T"])
     p = np.asarray(problem["p"], dtype=np.float64)
@@ -103,7 +105,9 @@ def _parse_problem(
     if T <= 0:
         raise ValueError("T must be positive.")
     if p.shape != (T,) or u.shape != (T,):
-        raise ValueError(f"p and u must both have shape {(T,)}, got {p.shape} and {u.shape}.")
+        raise ValueError(
+            f"p and u must both have shape {(T,)}, got {p.shape} and {u.shape}."
+        )
     if not np.all(np.isfinite(p)) or not np.all(np.isfinite(u)):
         raise ValueError("p and u must contain only finite values.")
     if not isinstance(batteries, list) or len(batteries) != 1 or num_batteries != 1:
@@ -119,7 +123,14 @@ def _parse_problem(
     if min(Q, C, D, efficiency) <= 0.0:
         raise ValueError("Battery parameters must be strictly positive.")
 
-    return T, p, u, {"Q": Q, "C": C, "D": D, "efficiency": efficiency}, deg_cost, num_batteries
+    return (
+        T,
+        p,
+        u,
+        {"Q": Q, "C": C, "D": D, "efficiency": efficiency},
+        deg_cost,
+        num_batteries,
+    )
 
 
 def _solve_lp(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -168,7 +179,9 @@ def _solve_lp(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarr
         method="highs",
     )
     if not result.success or result.x is None:
-        raise RuntimeError(f"Failed to solve the battery-scheduling LP: {result.message}")
+        raise RuntimeError(
+            f"Failed to solve the battery-scheduling LP: {result.message}"
+        )
 
     q = np.asarray(result.x[q_slice], dtype=np.float64)
     c_in = np.asarray(result.x[c_in_slice], dtype=np.float64)
@@ -256,16 +269,23 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     if max_capacity_violation > FEASIBILITY_ATOL:
         raise ValueError("Battery capacity constraints are violated.")
 
-    max_charge_violation = float(max(max(-np.min(c_in), 0.0), max(np.max(c_in - C), 0.0)))
+    max_charge_violation = float(
+        max(max(-np.min(c_in), 0.0), max(np.max(c_in - C), 0.0))
+    )
     max_discharge_violation = float(
         max(max(-np.min(c_out), 0.0), max(np.max(c_out - D), 0.0))
     )
-    if max_charge_violation > FEASIBILITY_ATOL or max_discharge_violation > FEASIBILITY_ATOL:
+    if (
+        max_charge_violation > FEASIBILITY_ATOL
+        or max_discharge_violation > FEASIBILITY_ATOL
+    ):
         raise ValueError("Charge/discharge rate constraints are violated.")
 
     max_dynamics_residual = 0.0
     for t in range(T - 1):
-        residual = abs(q[t + 1] - q[t] - efficiency * c_in[t] + (1.0 / efficiency) * c_out[t])
+        residual = abs(
+            q[t + 1] - q[t] - efficiency * c_in[t] + (1.0 / efficiency) * c_out[t]
+        )
         max_dynamics_residual = max(max_dynamics_residual, float(residual))
     cyclic_residual = abs(
         q[0] - q[T - 1] - efficiency * c_in[T - 1] + (1.0 / efficiency) * c_out[T - 1]
@@ -291,8 +311,12 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     expected_cost_with = float(p @ (u + total_c))
     if deg_cost > 0.0:
         expected_cost_with += deg_cost * float(np.sum(c_in + c_out))
-    if abs(cost_with_battery - expected_cost_with) > COST_ATOL * (1.0 + abs(expected_cost_with)):
-        raise ValueError("cost_with_battery is inconsistent with the returned charging profile.")
+    if abs(cost_with_battery - expected_cost_with) > COST_ATOL * (
+        1.0 + abs(expected_cost_with)
+    ):
+        raise ValueError(
+            "cost_with_battery is inconsistent with the returned charging profile."
+        )
 
     expected_savings = cost_without_battery - cost_with_battery
     if abs(savings - expected_savings) > COST_ATOL * (1.0 + abs(expected_savings)):

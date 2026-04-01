@@ -104,7 +104,9 @@ def normalize_memory_card(
             "id": str(raw.get("id") or fallback_id or ""),
             "category": "program",
             "program_id": program_id,
-            "task_description": str(raw.get("task_description") or raw.get("context") or ""),
+            "task_description": str(
+                raw.get("task_description") or raw.get("context") or ""
+            ),
             "task_description_summary": str(
                 raw.get("task_description_summary") or raw.get("context_summary") or ""
             ),
@@ -122,7 +124,9 @@ def normalize_memory_card(
         "id": str(raw.get("id") or fallback_id or ""),
         "category": category,
         "description": str(raw.get("description") or raw.get("content") or ""),
-        "task_description": str(raw.get("task_description") or raw.get("context") or ""),
+        "task_description": str(
+            raw.get("task_description") or raw.get("context") or ""
+        ),
         "task_description_summary": str(
             raw.get("task_description_summary") or raw.get("context_summary") or ""
         ),
@@ -206,11 +210,15 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.card_update_dedup_config = CardUpdateDedupConfig.from_mapping(
             card_update_dedup_config or {}
         )
-        self.remote_vector_search_type = str(remote_vector_search_type or "vector").strip().lower()
+        self.remote_vector_search_type = (
+            str(remote_vector_search_type or "vector").strip().lower()
+        )
         self.remote_hybrid_weights = remote_hybrid_weights
 
         if not use_api:
-            print("[MemoryPlatform] use_api=False was requested, but memory_platform always uses the backend API.")
+            print(
+                "[MemoryPlatform] use_api=False was requested, but memory_platform always uses the backend API."
+            )
 
         self.client = build_memory_client(self.base_url)
         self._AgenticMemorySystemCls: type[Any] | None = None
@@ -249,13 +257,19 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def _normalize_allowed_gam_tools(allowed_gam_tools: list[str] | None) -> set[str]:
         if not allowed_gam_tools:
             return set(_ALLOWED_GAM_TOOLS)
-        valid = {str(tool).strip() for tool in allowed_gam_tools if str(tool).strip() in _ALLOWED_GAM_TOOLS}
+        valid = {
+            str(tool).strip()
+            for tool in allowed_gam_tools
+            if str(tool).strip() in _ALLOWED_GAM_TOOLS
+        }
         if "vector" in valid:
             valid.update(_VECTOR_GAM_TOOLS)
         return valid or set(_ALLOWED_GAM_TOOLS)
 
     @staticmethod
-    def _normalize_gam_top_k_by_tool(gam_top_k_by_tool: dict[str, int] | None) -> dict[str, int]:
+    def _normalize_gam_top_k_by_tool(
+        gam_top_k_by_tool: dict[str, int] | None,
+    ) -> dict[str, int]:
         normalized = dict(_DEFAULT_GAM_TOP_K_BY_TOOL)
         if not isinstance(gam_top_k_by_tool, dict):
             return normalized
@@ -347,7 +361,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         try:
             payload = json.loads(self.index_file.read_text(encoding="utf-8"))
         except Exception as exc:
-            print(f"[MemoryPlatform] Could not parse index file {self.index_file}: {exc}")
+            print(
+                f"[MemoryPlatform] Could not parse index file {self.index_file}: {exc}"
+            )
             return
 
         raw_cards = payload.get("memory_cards", {})
@@ -401,10 +417,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
             for entity in batch:
                 meta = entity.meta or {}
-                row_namespace = meta.get("namespace") if isinstance(meta, dict) else None
+                row_namespace = (
+                    meta.get("namespace") if isinstance(meta, dict) else None
+                )
                 if self.namespace and row_namespace not in (None, "", self.namespace):
                     continue
-                card = normalize_memory_card(entity.content or {}, fallback_id=str(entity.entity_id))
+                card = normalize_memory_card(
+                    entity.content or {}, fallback_id=str(entity.entity_id)
+                )
                 card_id = self._ensure_card_id(card)
                 memory_cards[card_id] = card
                 memory_ids.add(card_id)
@@ -472,7 +492,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 "category": "program",
                 "program_id": str(card.get("program_id") or ""),
                 "task_description": str(card.get("task_description") or ""),
-                "task_description_summary": str(card.get("task_description_summary") or ""),
+                "task_description_summary": str(
+                    card.get("task_description_summary") or ""
+                ),
                 "description": str(card.get("description") or ""),
                 "fitness": _to_float(card.get("fitness"), default=None),
                 "code": str(card.get("code") or ""),
@@ -490,7 +512,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
             "task_description": str(card.get("task_description") or ""),
             "task_description_summary": str(card.get("task_description_summary") or ""),
             "description": str(card.get("description") or ""),
-            "explanation": explanation if isinstance(explanation, dict) else str(explanation or ""),
+            "explanation": explanation
+            if isinstance(explanation, dict)
+            else str(explanation or ""),
             "strategy": strategy,
             "keywords": self._dedupe_keep_order(list(card.get("keywords") or [])),
             "evolution_statistics": (
@@ -510,7 +534,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         card_id = str(card.get("id") or "")
         description = str(card.get("description") or "").strip()
         task_description = str(card.get("task_description") or "").strip()
-        task_description_summary = str(card.get("task_description_summary") or "").strip()
+        task_description_summary = str(
+            card.get("task_description_summary") or ""
+        ).strip()
 
         explanation = card.get("explanation")
         explanation_summary = ""
@@ -519,7 +545,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         else:
             explanation_summary = str(explanation or "").strip()
 
-        name_seed = description or task_description_summary or task_description or "memory card"
+        name_seed = (
+            description or task_description_summary or task_description or "memory card"
+        )
         name = f"{card_id}: {name_seed}" if card_id else name_seed
         name = name[:255]
 
@@ -556,7 +584,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self._iters_after_rebuild = 0
             return
         records = list(self.memory_cards.values())
-        memory_store, page_store, _ = self._build_gam_store_fn(records, self.gam_store_dir)
+        memory_store, page_store, _ = self._build_gam_store_fn(
+            records, self.gam_store_dir
+        )
         self._dedup_retrievers = None
         self._iters_after_rebuild = 0
 
@@ -631,16 +661,26 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if retriever is None:
                 continue
             try:
-                hits_by_query = retriever.search([text_value], top_k=cfg.top_k_per_query)
+                hits_by_query = retriever.search(
+                    [text_value], top_k=cfg.top_k_per_query
+                )
             except Exception as exc:
-                print(f"[MemoryPlatform] Dedup retrieval failed for query '{query_key}': {exc}")
+                print(
+                    f"[MemoryPlatform] Dedup retrieval failed for query '{query_key}': {exc}"
+                )
                 continue
 
-            hits = hits_by_query[0] if hits_by_query and isinstance(hits_by_query[0], list) else hits_by_query
+            hits = (
+                hits_by_query[0]
+                if hits_by_query and isinstance(hits_by_query[0], list)
+                else hits_by_query
+            )
             query_scores: dict[str, float] = {}
             for hit in hits or []:
                 meta = getattr(hit, "meta", {}) or {}
-                card_id = str(meta.get("card_id") or getattr(hit, "page_id", "") or "").strip()
+                card_id = str(
+                    meta.get("card_id") or getattr(hit, "page_id", "") or ""
+                ).strip()
                 if not card_id or card_id not in self.memory_cards:
                     continue
                 if self._is_program_card(self.memory_cards[card_id]):
@@ -660,7 +700,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
             min_final_score=cfg.min_final_score,
         )
 
-    def _dedup_candidates_for_llm(self, scored_candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _dedup_candidates_for_llm(
+        self, scored_candidates: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
         for item in scored_candidates:
             card_id = str(item.get("card_id") or "").strip()
@@ -673,10 +715,17 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     "card_id": card_id,
                     "final_score": float(item.get("final_score", 0.0)),
                     "scores": item.get("scores", {}),
-                    "task_description_summary": self._truncate_text(card.get("task_description_summary"), 600),
+                    "task_description_summary": self._truncate_text(
+                        card.get("task_description_summary"), 600
+                    ),
                     "description": self._truncate_text(card.get("description"), 1200),
-                    "explanation_summary": self._truncate_text(get_explanation_summary(card), 600),
-                    "explanation_full": [self._truncate_text(explanation, 1200) for explanation in explanations],
+                    "explanation_summary": self._truncate_text(
+                        get_explanation_summary(card), 600
+                    ),
+                    "explanation_full": [
+                        self._truncate_text(explanation, 1200)
+                        for explanation in explanations
+                    ],
                 }
             )
         return payload
@@ -686,7 +735,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
         incoming_card: dict[str, Any],
         candidates_for_llm: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        default_decision = {"action": "add", "reason": "", "duplicate_of": "", "updates": []}
+        default_decision = {
+            "action": "add",
+            "reason": "",
+            "duplicate_of": "",
+            "updates": [],
+        }
         if self.llm_service is None or not candidates_for_llm:
             return default_decision
 
@@ -700,10 +754,17 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         incoming_payload = {
             "id": str(incoming_card.get("id") or "").strip(),
-            "task_description_summary": self._truncate_text(incoming_card.get("task_description_summary"), 600),
+            "task_description_summary": self._truncate_text(
+                incoming_card.get("task_description_summary"), 600
+            ),
             "description": self._truncate_text(incoming_card.get("description"), 1200),
-            "explanation_summary": self._truncate_text(get_explanation_summary(incoming_card), 600),
-            "explanation_full": [self._truncate_text(explanation, 1200) for explanation in get_full_explanations(incoming_card)],
+            "explanation_summary": self._truncate_text(
+                get_explanation_summary(incoming_card), 600
+            ),
+            "explanation_full": [
+                self._truncate_text(explanation, 1200)
+                for explanation in get_full_explanations(incoming_card)
+            ],
         }
         prompt = (
             "You are a memory-card deduplication and update policy agent.\n"
@@ -751,13 +812,19 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 break
         return decision
 
-    def _apply_update_actions(self, incoming_card: dict[str, Any], updates: list[dict[str, Any]]) -> list[str]:
+    def _apply_update_actions(
+        self, incoming_card: dict[str, Any], updates: list[dict[str, Any]]
+    ) -> list[str]:
         updated_ids: list[str] = []
         seen_ids: set[str] = set()
         for update in updates:
             card_id = str(update.get("card_id") or "").strip()
             existing_card = self.memory_cards.get(card_id)
-            if not card_id or card_id in seen_ids or not isinstance(existing_card, dict):
+            if (
+                not card_id
+                or card_id in seen_ids
+                or not isinstance(existing_card, dict)
+            ):
                 continue
             merged_card = merge_updated_card(existing_card, incoming_card, update)
             merged_card["id"] = card_id
@@ -821,14 +888,23 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.card_write_stats["added"] += 1
             return self._save_card_core(normalized_card)
 
-        if self.card_update_dedup_config.enabled and self.memory_cards and self.llm_service is None and not self._warned_missing_card_update_llm:
+        if (
+            self.card_update_dedup_config.enabled
+            and self.memory_cards
+            and self.llm_service is None
+            and not self._warned_missing_card_update_llm
+        ):
             print(
                 "[MemoryPlatform] card_update_dedup is enabled but LLM service is unavailable. "
                 "Falling back to regular save_card behavior."
             )
             self._warned_missing_card_update_llm = True
 
-        if self.card_update_dedup_config.enabled and self.memory_cards and self.llm_service is not None:
+        if (
+            self.card_update_dedup_config.enabled
+            and self.memory_cards
+            and self.llm_service is not None
+        ):
             scored_candidates = self._score_retrieved_candidates(normalized_card)
             candidates_for_llm = self._dedup_candidates_for_llm(scored_candidates)
             decision = self._decide_card_action(normalized_card, candidates_for_llm)
@@ -881,14 +957,20 @@ class AmemGamMemory(GigaEvoMemoryBase):
             lines.append(f"{idx}. {card_id} [{category}] {description}")
         return "\n".join(lines)
 
-    def _synthesize_results(self, query: str, memory_state: str | None, cards: list[dict[str, Any]]) -> str:
+    def _synthesize_results(
+        self, query: str, memory_state: str | None, cards: list[dict[str, Any]]
+    ) -> str:
         if self.llm_service is None:
             return self._format_search_results(query, cards)
 
         cards_blob = []
         for card in cards:
             explanation = card.get("explanation")
-            explanation_summary = explanation.get("summary", "") if isinstance(explanation, dict) else str(explanation or "")
+            explanation_summary = (
+                explanation.get("summary", "")
+                if isinstance(explanation, dict)
+                else str(explanation or "")
+            )
             cards_blob.append(
                 "\n".join(
                     [
@@ -909,9 +991,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             "Always cite card ids explicitly.\n"
             f"Memory state:\n{memory_state or '(empty)'}\n\n"
             f"User query:\n{query}\n\n"
-            "Retrieved cards:\n"
-            + "\n\n".join(cards_blob)
-            + "\n\nAnswer:"
+            "Retrieved cards:\n" + "\n\n".join(cards_blob) + "\n\nAnswer:"
         )
         try:
             text, _, _, _ = self.llm_service.generate(prompt)
@@ -919,14 +999,18 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if text:
                 return text
         except Exception as exc:
-            print(f"[MemoryPlatform] LLM synthesis failed, fallback to plain output: {exc}")
+            print(
+                f"[MemoryPlatform] LLM synthesis failed, fallback to plain output: {exc}"
+            )
         return self._format_search_results(query, cards)
 
     def _search_via_backend(self, query: str, memory_state: str | None = None) -> str:
         effective_query = query.strip()
         if memory_state:
             effective_query = f"{effective_query}\n{memory_state.strip()}"
-        remote_search_type = str(self.remote_vector_search_type or "vector").strip().lower()
+        remote_search_type = (
+            str(self.remote_vector_search_type or "vector").strip().lower()
+        )
         if remote_search_type == "hybrid":
             search_type = SearchType.HYBRID
         elif remote_search_type == "bm25":
@@ -967,9 +1051,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.rebuild()
         if self.research_agent is not None:
             try:
-                return self.research_agent.research(query, memory_state=memory_state).integrated_memory
+                return self.research_agent.research(
+                    query, memory_state=memory_state
+                ).integrated_memory
             except Exception as exc:
-                print(f"[MemoryPlatform] GAM search failed, falling back to backend search: {exc}")
+                print(
+                    f"[MemoryPlatform] GAM search failed, falling back to backend search: {exc}"
+                )
         return self._search_via_backend(query, memory_state=memory_state)
 
     def get_card(self, card_id: str) -> dict[str, Any] | None:

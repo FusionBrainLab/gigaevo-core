@@ -3,7 +3,6 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-
 SEED = 42
 TRAIN_SAMPLES = 1000
 TEST_SAMPLES = 300

@@ -48,9 +48,7 @@ def _prepend_sys_path(paths: list[str] | None) -> None:
             continue
         resolved = str(Path(raw_path).resolve())
         sys.path[:] = [
-            entry
-            for entry, normalized in normalized_existing
-            if normalized != resolved
+            entry for entry, normalized in normalized_existing if normalized != resolved
         ]
         sys.path.insert(0, resolved)
         normalized_existing = []
@@ -93,7 +91,11 @@ def _module_belongs_to_path(module: types.ModuleType, path: Path, name: str) -> 
 
     file_candidate = path / f"{name}.py"
     package_candidate = path / name / "__init__.py"
-    candidates = [candidate.resolve() for candidate in (file_candidate, package_candidate) if candidate.exists()]
+    candidates = [
+        candidate.resolve()
+        for candidate in (file_candidate, package_candidate)
+        if candidate.exists()
+    ]
     return module_file in candidates
 
 

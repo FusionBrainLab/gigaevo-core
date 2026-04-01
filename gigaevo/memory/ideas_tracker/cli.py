@@ -125,7 +125,9 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Override ideas_tracker.memory_write_pipeline.enabled.",
     )
     parser.add_argument("--redis-host", default=None, help="Redis host override.")
-    parser.add_argument("--redis-port", type=int, default=None, help="Redis port override.")
+    parser.add_argument(
+        "--redis-port", type=int, default=None, help="Redis port override."
+    )
     parser.add_argument("--redis-db", type=int, default=None, help="Redis DB override.")
     parser.add_argument(
         "--redis-prefix",
@@ -162,7 +164,9 @@ def _apply_cli_overrides(
 
     if checkpoint_dir is not None:
         paths_cfg = _ensure_mapping(result, "paths")
-        paths_cfg["checkpoint_dir"] = str(_resolve_project_relative_path(checkpoint_dir))
+        paths_cfg["checkpoint_dir"] = str(
+            _resolve_project_relative_path(checkpoint_dir)
+        )
 
     ideas_tracker_cfg = _ensure_mapping(result, "ideas_tracker")
     redis_cfg = _ensure_mapping(ideas_tracker_cfg, "redis")

@@ -47,11 +47,15 @@ def generate_problem(n: int, random_seed: int = 1) -> dict[str, Any]:
     return {"c": c.tolist(), "A": A.tolist(), "b": b.tolist()}
 
 
-def _parse_problem(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _parse_problem(
+    problem: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     required = {"c", "A", "b"}
     missing = required.difference(problem)
     if missing:
-        raise ValueError(f"Problem dictionary is missing keys: {', '.join(sorted(missing))}.")
+        raise ValueError(
+            f"Problem dictionary is missing keys: {', '.join(sorted(missing))}."
+        )
 
     c = np.asarray(problem["c"], dtype=np.float64)
     A = np.asarray(problem["A"], dtype=np.float64)
@@ -64,7 +68,11 @@ def _parse_problem(problem: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.
         raise ValueError(f"A must have shape (m, {n}), got {A.shape}.")
     if b.shape != (A.shape[0],):
         raise ValueError(f"b must have shape {(A.shape[0],)}, got {b.shape}.")
-    if not np.all(np.isfinite(c)) or not np.all(np.isfinite(A)) or not np.all(np.isfinite(b)):
+    if (
+        not np.all(np.isfinite(c))
+        or not np.all(np.isfinite(A))
+        or not np.all(np.isfinite(b))
+    ):
         raise ValueError("Problem data must contain only finite values.")
 
     return c, A, b
@@ -98,7 +106,9 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
     c, A, b = _parse_problem(problem)
     x = np.asarray(solution["solution"], dtype=np.float64)
     if x.shape != (c.shape[0],):
-        raise ValueError(f"Candidate solution has shape {x.shape}, expected {(c.shape[0],)}.")
+        raise ValueError(
+            f"Candidate solution has shape {x.shape}, expected {(c.shape[0],)}."
+        )
     if not np.all(np.isfinite(x)):
         raise ValueError("Candidate solution must contain only finite values.")
 
@@ -115,13 +125,18 @@ def validate_solution(problem: dict[str, Any], solution: Any) -> dict[str, float
 
     lower_bound_violation = float(max(-np.min(x), 0.0))
     upper_bound_violation = float(max(np.max(x - 1.0), 0.0))
-    if lower_bound_violation > FEASIBILITY_ATOL or upper_bound_violation > FEASIBILITY_ATOL:
+    if (
+        lower_bound_violation > FEASIBILITY_ATOL
+        or upper_bound_violation > FEASIBILITY_ATOL
+    ):
         raise ValueError("Box constraints 0 <= x <= 1 are violated.")
 
     reference = solve_problem(problem)
     reference_objective = float(reference["objective"])
     objective_gap = candidate_objective - reference_objective
-    if objective_gap > OBJECTIVE_ATOL + OBJECTIVE_RTOL * (1.0 + abs(reference_objective)):
+    if objective_gap > OBJECTIVE_ATOL + OBJECTIVE_RTOL * (
+        1.0 + abs(reference_objective)
+    ):
         raise ValueError(
             f"Objective is suboptimal by {objective_gap:.3e} relative to the reference optimum."
         )

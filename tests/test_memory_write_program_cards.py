@@ -43,7 +43,9 @@ def test_load_memory_cards_adds_top_program_cards(tmp_path):
         [
             {
                 "timestamp": "2026-03-23 00:00:00",
-                "best_ideas": [{"idea_id": "idea-1", "description": "Use simulated annealing."}],
+                "best_ideas": [
+                    {"idea_id": "idea-1", "description": "Use simulated annealing."}
+                ],
             }
         ],
     )
@@ -145,7 +147,12 @@ def test_program_cards_bypass_idea_dedup(tmp_path):
             "task_description_summary": "Solve task.",
             "description": "Top evolved program for Solve task. (fitness=12.5).",
             "code": "def run_code():\n    return 1\n",
-            "connected_ideas": [{"idea_id": "idea-1", "description": "Repair invalid candidates before scoring."}],
+            "connected_ideas": [
+                {
+                    "idea_id": "idea-1",
+                    "description": "Repair invalid candidates before scoring.",
+                }
+            ],
         }
     )
 

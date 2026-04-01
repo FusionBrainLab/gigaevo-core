@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import os
-import re
 from pathlib import Path
+import re
 from typing import Any
 
 from dotenv import load_dotenv
@@ -84,7 +84,9 @@ class MemorySelectorAgent:
             )
             memory_api_url = os.getenv(
                 "MEMORY_API_URL",
-                to_str(deep_get(settings, "api.base_url"), default="http://localhost:8000"),
+                to_str(
+                    deep_get(settings, "api.base_url"), default="http://localhost:8000"
+                ),
             )
             namespace = os.getenv(
                 "MEMORY_NAMESPACE",
@@ -104,7 +106,9 @@ class MemorySelectorAgent:
             ]
             gam_pipeline_mode = to_str(
                 os.getenv("MEMORY_GAM_PIPELINE_MODE"),
-                default=to_str(deep_get(settings, "gam.pipeline_mode"), default="default"),
+                default=to_str(
+                    deep_get(settings, "gam.pipeline_mode"), default="default"
+                ),
             )
 
             raw_top_k_by_tool = deep_get(settings, "gam.top_k_by_tool", default={})
@@ -126,7 +130,9 @@ class MemorySelectorAgent:
             runtime_fill_missing_fields = to_bool(
                 deep_get(settings, "runtime.fill_missing_fields_with_llm"), default=True
             )
-            search_limit = max(1, to_int(deep_get(settings, "runtime.search_limit"), default=5))
+            search_limit = max(
+                1, to_int(deep_get(settings, "runtime.search_limit"), default=5)
+            )
             rebuild_interval = max(
                 1,
                 to_int(deep_get(settings, "runtime.rebuild_interval"), default=10),
@@ -135,7 +141,9 @@ class MemorySelectorAgent:
                 10,
                 to_int(deep_get(settings, "runtime.sync_batch_size"), default=100),
             )
-            sync_on_init = to_bool(deep_get(settings, "runtime.sync_on_init"), default=True)
+            sync_on_init = to_bool(
+                deep_get(settings, "runtime.sync_on_init"), default=True
+            )
             memory_backend_cls = self._resolve_memory_backend_class(use_api)
 
             memory = memory_backend_cls(
@@ -248,7 +256,9 @@ class MemorySelectorAgent:
                 card_ids,
             )
         else:
-            logger.debug("[MemorySelectorAgent] Red agent returned no relevant memories")
+            logger.debug(
+                "[MemorySelectorAgent] Red agent returned no relevant memories"
+            )
         return MemorySelection(cards=cards, card_ids=card_ids)
 
     def _build_request(

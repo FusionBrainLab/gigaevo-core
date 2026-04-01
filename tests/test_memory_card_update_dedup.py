@@ -129,9 +129,10 @@ def test_build_dedup_queries_include_combined_fields() -> None:
     assert queries[QUERY_DESCRIPTION] == "Apply adaptive clipping"
     assert queries[QUERY_EXPLANATION_SUMMARY] == "outlier clipping"
     assert "IDEA_DESCRIPTION" in queries[QUERY_DESCRIPTION_EXPLANATION_SUMMARY]
-    assert "TASK_DESCRIPTION_SUMMARY" in queries[
-        QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY
-    ]
+    assert (
+        "TASK_DESCRIPTION_SUMMARY"
+        in queries[QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY]
+    )
 
 
 def test_build_dedup_queries_skip_full_task_description_fallback() -> None:
@@ -146,7 +147,10 @@ def test_build_dedup_queries_skip_full_task_description_fallback() -> None:
 
     queries = build_dedup_queries(card)
 
-    assert queries[QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY] == "IDEA_DESCRIPTION: Apply adaptive clipping"
+    assert (
+        queries[QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY]
+        == "IDEA_DESCRIPTION: Apply adaptive clipping"
+    )
 
 
 def test_merge_usage_payloads_accumulates_per_task_and_total() -> None:
