@@ -142,7 +142,7 @@ def warn_if_not_archived(db: int, before: int) -> None:
     if before == 0:
         return
     print(f"[warn]  DB {db}: {before} keys present.")
-    print("[warn]  Have you run 'bash tools/archive_run.sh --upload' for this DB?")
+    print("[warn]  Have you run 'bash tools/experiment/archive_run.sh --upload' for this DB?")
     print(
         "[warn]  Flushing without archiving destroys all evolved programs permanently."
     )

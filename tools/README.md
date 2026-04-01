@@ -20,8 +20,8 @@ export GIGAEVO_PYTHON=python3  # adjust for your environment
 Protocol gates to run before launch and before merge:
 
 ```bash
-bash tools/check_phase_order.sh <experiment-name>   # pre-launch (Phase 4)
-bash tools/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
+bash tools/experiment/check_phase_order.sh <experiment-name>   # pre-launch (Phase 4)
+bash tools/experiment/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
 ```
 
 ## Quick Reference
@@ -36,7 +36,7 @@ bash tools/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
 | Fitness curves plot | `comparison.py` | `PYTHONPATH=. python tools/comparison.py --run prefix@db:label ... --output-folder /tmp/` |
 | Export full CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --output-file /tmp/o.csv` |
 | Export frontier CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --frontier-csv --output-file /tmp/f.csv` |
-| Archive + upload | `archive_run.sh` | `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload` |
+| Archive + upload | `archive_run.sh` | `bash tools/experiment/archive_run.sh --exp <name> --run "prefix@db:label" --upload` |
 | Kill workers + flush | `flush.py` | `PYTHONPATH=. python tools/flush.py --db N [--confirm]` |
 | Task-specific tools | `experiments/<task>/<name>/tools/` | e.g. `experiments/hotpotqa/val_gap/tools/gap_analysis.py` |
 
@@ -123,7 +123,7 @@ from the denominator.
 
 > **Required order** (skipping steps loses data permanently):
 > 1. Run test evaluations → `bash experiments/<task>/<name>/run_test_eval.sh`
-> 2. Archive all runs → `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload`
+> 2. Archive all runs → `bash tools/experiment/archive_run.sh --exp <name> --run "prefix@db:label" --upload`
 > 3. Flush Redis → `PYTHONPATH=. python tools/flush.py --db N --confirm`
 
 ### `run_test_eval.sh` — Test evaluation (per-experiment)
@@ -148,15 +148,15 @@ Results: `experiments/<task>/<name>/test_evals/results.json` (one entry per run)
 
 ```bash
 # Dry run: export locally only (verify output first)
-bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C"
+bash tools/experiment/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C"
 
 # Export and upload to GitHub Release exp/hotpotqa/push
-bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C" --upload
+bash tools/experiment/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C" --upload
 
 # Archive all 4 runs
 for SPEC in "chains/hotpotqa/static_f1@8:A" "chains/hotpotqa/static@9:B" \
             "chains/hotpotqa/static_f1_600@10:C" "chains/hotpotqa/static_f1_600@11:D"; do
-  bash tools/archive_run.sh --exp hotpotqa/push --run "$SPEC" --upload
+  bash tools/experiment/archive_run.sh --exp hotpotqa/push --run "$SPEC" --upload
 done
 ```
 
@@ -291,7 +291,7 @@ Verifies all required protocol documents exist, are committed, and are in the co
 Run as the first step of Phase 4 (before any code changes, before launch).
 
 ```bash
-bash tools/check_phase_order.sh <experiment-name>
+bash tools/experiment/check_phase_order.sh <experiment-name>
 ```
 
 Exit 0 = safe to proceed. Exit 1 = do not launch.
@@ -303,7 +303,7 @@ Exit 0 = safe to proceed. Exit 1 = do not launch.
 Verifies all five experiment phases are complete before the PR is merged.
 
 ```bash
-bash tools/check_experiment_complete.sh <experiment-name>
+bash tools/experiment/check_experiment_complete.sh <experiment-name>
 ```
 
 Checks: all phase docs committed, `02_review.md` APPROVED, GitHub Release assets uploaded,
