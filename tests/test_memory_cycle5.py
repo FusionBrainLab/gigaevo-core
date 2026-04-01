@@ -1,0 +1,437 @@
+"""Cycle 5: mutation operator memory flow, sync_from_api, API client body
+verification, _build_entity_meta content, __del__ behavior.
+"""
+
+import asyncio
+import json
+from dataclasses import dataclass, field
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+
+from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_memory(tmp_path, **overrides):
+    defaults = dict(
+        checkpoint_path=str(tmp_path / "mem"),
+        use_api=False,
+        sync_on_init=False,
+        enable_llm_synthesis=False,
+        enable_memory_evolution=False,
+        enable_llm_card_enrichment=False,
+    )
+    defaults.update(overrides)
+    return AmemGamMemory(**defaults)
+
+
+def _mock_client(handler):
+    client = _ConceptApiClient.__new__(_ConceptApiClient)
+    client._http = httpx.Client(
+        base_url="http://test:8000", transport=httpx.MockTransport(handler)
+    )
+    return client
+
+
+# ===========================================================================
+# 1. Mutation operator: memory_instructions → parent metadata
+# ===========================================================================
+
+
+class TestMutationOperatorMemoryFlow:
+    """Test that memory cards get injected into parent metadata."""
+
+    @pytest.mark.asyncio
+    async def test_memory_selection_attaches_to_parent_metadata(self, tmp_path):
+        """When memory_instructions is not None, MemorySelectorAgent is called
+        and returned cards are attached to parent metadata."""
+        from gigaevo.evolution.mutation.context import (
+            MUTATION_MEMORY_METADATA_KEY,
+            MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+        )
+        from gigaevo.programs.program import Program
+
+        # Create a minimal LLMMutationOperator with mocked internals
+        from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
+
+        mock_llm = MagicMock()
+        mock_problem_ctx = MagicMock()
+        mock_problem_ctx.task_description = "Solve the task"
+        mock_metrics_fmt = MagicMock()
+        mock_metrics_fmt.format_metrics_description.return_value = "fitness: accuracy"
+
+        # Build operator with mocked dependencies
+        operator = LLMMutationOperator.__new__(LLMMutationOperator)
+        operator.mutation_mode = "rewrite"
+        operator.fallback_to_rewrite = True
+        operator.context_key = "mutation_context"
+        operator.problem_context = mock_problem_ctx
+        operator.metrics_formatter = mock_metrics_fmt
+        operator.prompt_fetcher = None
+        operator.storage = None
+        operator.bandit = None
+
+        # Mock memory_selector to return specific cards
+        from gigaevo.llm.agents.memory_selector import MemorySelection
+
+        mock_selector = AsyncMock()
+        mock_selector.select.return_value = MemorySelection(
+            cards=["1. Use simulated annealing", "2. Add repair step"],
+            card_ids=["idea-1", "idea-2"],
+        )
+        operator.memory_selector = mock_selector
+
+        # Mock mutation agent to capture the parents it receives
+        captured_parents = []
+
+        async def mock_arun(*, input, mutation_mode):
+            captured_parents.extend(input)
+            return {
+                "code": "def solve(): return 42",
+                "raw_output": "mutated",
+                "model_used": None,
+                "structured_output": None,
+            }
+
+        mock_agent = MagicMock()
+        mock_agent.arun = mock_arun
+        operator.agent = mock_agent
+        operator.llm_wrapper = MagicMock()
+        operator.llm_wrapper.get_last_model.return_value = "test-model"
+        operator.strip_comments_and_docstrings = False
+
+        parent = Program(code="def solve(): return 1", metadata={})
+        result = await operator.mutate_single([parent], memory_instructions="use memory")
+
+        # Verify memory_selector was called
+        mock_selector.select.assert_awaited_once()
+
+        # Verify parents were cloned with memory metadata
+        assert len(captured_parents) == 1
+        meta = captured_parents[0].metadata
+        assert MUTATION_MEMORY_METADATA_KEY in meta
+        assert "simulated annealing" in meta[MUTATION_MEMORY_METADATA_KEY]
+        assert meta[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == ["idea-1", "idea-2"]
+
+        # Verify ORIGINAL parent was NOT mutated (deep copy check)
+        assert MUTATION_MEMORY_METADATA_KEY not in parent.metadata
+        assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY not in parent.metadata
+
+    @pytest.mark.asyncio
+    async def test_memory_instructions_none_skips_selector(self, tmp_path):
+        """When memory_instructions is None, MemorySelectorAgent is NOT called."""
+        from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
+        from gigaevo.programs.program import Program
+
+        operator = LLMMutationOperator.__new__(LLMMutationOperator)
+        operator.mutation_mode = "rewrite"
+        operator.fallback_to_rewrite = True
+        operator.context_key = "mutation_context"
+        operator.problem_context = MagicMock()
+        operator.metrics_formatter = MagicMock()
+        operator.prompt_fetcher = None
+        operator.storage = None
+        operator.bandit = None
+
+        mock_selector = AsyncMock()
+        operator.memory_selector = mock_selector
+
+        mock_agent = MagicMock()
+        mock_agent.arun = AsyncMock(return_value={
+            "code": "def f(): pass",
+            "raw_output": "ok",
+            "model_used": None,
+            "structured_output": None,
+        })
+        operator.agent = mock_agent
+        operator.llm_wrapper = MagicMock()
+        operator.llm_wrapper.get_last_model.return_value = "test-model"
+        operator.strip_comments_and_docstrings = False
+
+        parent = Program(code="def solve(): return 1", metadata={})
+        await operator.mutate_single([parent], memory_instructions=None)
+
+        mock_selector.select.assert_not_awaited()
+
+
+# ===========================================================================
+# 2. _sync_from_api with mocked API
+# ===========================================================================
+
+
+class TestSyncFromApi:
+    """Test _sync_from_api paginated sync, version checking."""
+
+    def test_sync_disabled_when_no_api(self, tmp_path):
+        mem = _make_memory(tmp_path)
+        assert mem._sync_from_api(force_full=False) is False
+
+    def test_sync_adds_new_cards(self, tmp_path):
+        """Mocked API returns cards → they appear in memory_cards."""
+        mem = _make_memory(tmp_path)
+        mem.use_api = True
+
+        # Mock API
+        mock_api = MagicMock()
+        mock_api.list_memory_cards.return_value = [
+            {
+                "entity_id": "eid-1",
+                "version_id": "v1",
+                "meta": {"namespace": "default"},
+            },
+        ]
+        mock_api.get_concept.return_value = {
+            "content": {
+                "id": "idea-1",
+                "description": "annealing idea",
+                "category": "general",
+            },
+            "version_id": "v1",
+        }
+        mem.api = mock_api
+
+        result = mem._sync_from_api(force_full=True)
+        assert result is True
+        assert "idea-1" in mem.memory_cards
+        assert mem.entity_by_card_id.get("idea-1") == "eid-1"
+        assert mem.card_id_by_entity.get("eid-1") == "idea-1"
+        # Verify correct entity_id was passed to get_concept
+        mock_api.get_concept.assert_called_once_with("eid-1", channel="latest")
+
+    def test_sync_skips_unchanged_versions(self, tmp_path):
+        """Cards with known version are skipped during incremental sync."""
+        mem = _make_memory(tmp_path)
+        mem.use_api = True
+
+        # Pre-populate known state
+        mem.memory_cards["idea-1"] = {"id": "idea-1", "description": "known"}
+        mem.entity_by_card_id["idea-1"] = "eid-1"
+        mem.card_id_by_entity["eid-1"] = "idea-1"
+        mem.entity_version_by_entity["eid-1"] = "v1"
+
+        mock_api = MagicMock()
+        mock_api.list_memory_cards.return_value = [
+            {"entity_id": "eid-1", "version_id": "v1", "meta": {"namespace": "default"}},
+        ]
+        mem.api = mock_api
+
+        mem._sync_from_api(force_full=False)
+        # get_concept should NOT be called — version unchanged
+        mock_api.get_concept.assert_not_called()
+
+    def test_sync_paginates(self, tmp_path):
+        """API returns full pages → sync fetches next page."""
+        mem = _make_memory(tmp_path)
+        mem.use_api = True
+        mem.sync_batch_size = 2
+
+        mock_api = MagicMock()
+        # Page 1: 2 items (full page → fetch more)
+        # Page 2: 1 item (partial → stop)
+        mock_api.list_memory_cards.side_effect = [
+            [
+                {"entity_id": "e1", "version_id": "v1", "meta": {"namespace": "default"}},
+                {"entity_id": "e2", "version_id": "v1", "meta": {"namespace": "default"}},
+            ],
+            [
+                {"entity_id": "e3", "version_id": "v1", "meta": {"namespace": "default"}},
+            ],
+        ]
+        call_count = [0]
+
+        def get_concept_side_effect(entity_id, channel="latest"):
+            call_count[0] += 1
+            return {
+                "content": {"id": f"idea-{call_count[0]}", "description": "idea"},
+                "version_id": "v1",
+            }
+
+        mock_api.get_concept.side_effect = get_concept_side_effect
+        mem.api = mock_api
+
+        mem._sync_from_api(force_full=True)
+        assert mock_api.list_memory_cards.call_count == 2
+        assert mock_api.get_concept.call_count == 3  # 3 entities total
+
+    def test_sync_filters_by_namespace(self, tmp_path):
+        """Cards from different namespaces are filtered out."""
+        mem = _make_memory(tmp_path)
+        mem.use_api = True
+        mem.namespace = "my-ns"
+
+        mock_api = MagicMock()
+        mock_api.list_memory_cards.return_value = [
+            {"entity_id": "e1", "version_id": "v1", "meta": {"namespace": "my-ns"}},
+            {"entity_id": "e2", "version_id": "v1", "meta": {"namespace": "other-ns"}},
+        ]
+        mock_api.get_concept.return_value = {
+            "content": {"id": "idea-ns", "description": "idea"},
+            "version_id": "v1",
+        }
+        mem.api = mock_api
+
+        mem._sync_from_api(force_full=True)
+        # Only e1 (my-ns) should be fetched, e2 (other-ns) filtered
+        assert mock_api.get_concept.call_count == 1
+        mock_api.get_concept.assert_called_once_with("e1", channel="latest")
+
+
+# ===========================================================================
+# 3. API client request body verification (cycle 3 finding fix)
+# ===========================================================================
+
+
+class TestApiClientRequestBody:
+    """Verify request bodies contain expected fields."""
+
+    def test_save_concept_body_has_all_fields(self):
+        captured = {}
+
+        def handler(request):
+            captured["body"] = json.loads(request.content)
+            captured["method"] = request.method
+            return httpx.Response(200, json={"entity_id": "e1", "version_id": "v1"})
+
+        client = _mock_client(handler)
+        client.save_concept(
+            content={"description": "test"},
+            name="card-name",
+            tags=["t1", "t2"],
+            when_to_use="for optimization",
+            channel="latest",
+            namespace="ns1",
+            author="tester",
+        )
+
+        body = captured["body"]
+        assert body["content"] == {"description": "test"}
+        assert body["channel"] == "latest"
+        assert body["meta"]["name"] == "card-name"
+        assert body["meta"]["tags"] == ["t1", "t2"]
+        assert body["meta"]["when_to_use"] == "for optimization"
+        assert body["meta"]["namespace"] == "ns1"
+        assert body["meta"]["author"] == "tester"
+
+    def test_search_concepts_body_has_all_fields(self):
+        captured = {}
+
+        def handler(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"results": [[]]})
+
+        client = _mock_client(handler)
+        client.search_concepts(query="test query", limit=10, namespace="ns1")
+
+        body = captured["body"]
+        assert body["queries"] == ["test query"]
+        assert body["top_k"] == 10
+        assert body["namespace"] == "ns1"
+        assert body["entity_type"] == "memory_card"
+
+    def test_delete_concept_url_contains_entity_id(self):
+        captured = {}
+
+        def handler(request):
+            captured["url"] = str(request.url)
+            captured["method"] = request.method
+            return httpx.Response(204)
+
+        client = _mock_client(handler)
+        client.delete_concept("eid-123")
+        assert "eid-123" in captured["url"]
+        assert captured["method"] == "DELETE"
+
+    def test_delete_concept_404_raises(self):
+        def handler(request):
+            return httpx.Response(404, text="Not Found")
+
+        client = _mock_client(handler)
+        with pytest.raises(RuntimeError, match="404"):
+            client.delete_concept("nonexistent")
+
+    def test_list_memory_cards_params(self):
+        captured = {}
+
+        def handler(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(200, json=[])
+
+        client = _mock_client(handler)
+        client.list_memory_cards(limit=25, offset=10, channel="draft")
+        assert captured["params"]["limit"] == "25"
+        assert captured["params"]["offset"] == "10"
+        assert captured["params"]["channel"] == "draft"
+
+
+# ===========================================================================
+# 4. _build_entity_meta content assertions (cycle 3 finding fix)
+# ===========================================================================
+
+
+class TestBuildEntityMetaContent:
+    """Assert specific content in entity metadata, not just types."""
+
+    def test_name_from_description(self, tmp_path):
+        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+
+        mem = _make_memory(tmp_path)
+        card = normalize_memory_card({
+            "id": "c1",
+            "description": "Use simulated annealing for local search refinement",
+            "task_description_summary": "TSP solver",
+            "keywords": ["annealing", "TSP"],
+        })
+        name, tags, when_to_use = mem._build_entity_meta(card)
+
+        # Name should contain description text
+        assert "simulated annealing" in name.lower() or "local search" in name.lower()
+        # Tags should include keywords and category
+        assert any("annealing" in t.lower() or "tsp" in t.lower() for t in tags)
+        # when_to_use should reference task or description
+        assert "TSP" in when_to_use or "annealing" in when_to_use.lower()
+
+    def test_program_card_meta(self, tmp_path):
+        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+
+        mem = _make_memory(tmp_path)
+        card = normalize_memory_card({
+            "category": "program",
+            "program_id": "prog-1",
+            "description": "Top evolved program",
+            "fitness": 95.0,
+        })
+        name, tags, when_to_use = mem._build_entity_meta(card)
+        assert isinstance(name, str)
+        assert len(name) > 0
+        assert "program" in " ".join(tags).lower() or "program" in name.lower()
+
+
+# ===========================================================================
+# 5. __del__ behavior
+# ===========================================================================
+
+
+class TestDelBehavior:
+    def test_del_calls_close(self, tmp_path):
+        """__del__ should attempt to close the API client."""
+        mem = _make_memory(tmp_path)
+        mem.api = MagicMock()
+        mem.__del__()
+        mem.api.close.assert_called_once()
+
+    def test_del_does_not_crash_without_api(self, tmp_path):
+        mem = _make_memory(tmp_path)
+        mem.__del__()  # Should not raise
+
+    def test_del_swallows_exceptions(self, tmp_path):
+        mem = _make_memory(tmp_path)
+        mem.api = MagicMock()
+        mem.api.close.side_effect = RuntimeError("close failed")
+        mem.__del__()  # Should not raise
