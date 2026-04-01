@@ -8,7 +8,14 @@ lives in chain_validation.py.
 from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, constr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    constr,
+    field_validator,
+    model_validator,
+)
 
 # ---------------------------------------------------------------------------
 # Structured field constants (used in frozen-step comparison and elsewhere)
@@ -75,7 +82,9 @@ class LLMStep(BaseModel):
     reasoning_questions: str = ""
     example_reasoning: str = ""
 
-    @field_validator("aim", "stage_action", "reasoning_questions", "example_reasoning", mode="before")
+    @field_validator(
+        "aim", "stage_action", "reasoning_questions", "example_reasoning", mode="before"
+    )
     @classmethod
     def _coerce_sequences_to_str(cls, v: object) -> object:
         return _coerce_to_str(v)

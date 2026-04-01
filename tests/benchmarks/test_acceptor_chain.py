@@ -11,14 +11,8 @@ import time
 import pytest
 
 from gigaevo.evolution.engine.acceptor import (
-    CompositeAcceptor,
     DefaultProgramEvolutionAcceptor,
-    MetricsExistenceAcceptor,
-    MutationContextAcceptor,
-    RequiredBehaviorKeysAcceptor,
     StandardEvolutionAcceptor,
-    StateAcceptor,
-    ValidityMetricAcceptor,
 )
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.programs.metrics.context import VALIDITY_KEY
@@ -131,7 +125,9 @@ class TestAcceptorChainThroughput:
         results = [acceptor.is_accepted(p) for p in programs]
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
-        expected_valid = n_programs - (n_programs // 3 + (1 if n_programs % 3 > 0 else 0))
+        expected_valid = n_programs - (
+            n_programs // 3 + (1 if n_programs % 3 > 0 else 0)
+        )
         # Allow for rounding differences
         assert sum(results) >= expected_valid - 1
 

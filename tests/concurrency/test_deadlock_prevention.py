@@ -551,6 +551,7 @@ class TestStateManagerLockContention:
         finally:
             await storage.close()
 
+
 # ===========================================================================
 # 4. Ingest with concurrent state transitions
 # ===========================================================================

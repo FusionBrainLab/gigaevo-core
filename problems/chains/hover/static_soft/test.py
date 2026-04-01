@@ -15,7 +15,10 @@ from problems.chains.hover.shared_config import (
     outer_context_builder,
     preprocess_sample,
 )
-from problems.chains.hover.static_soft.config import STATIC_CHAIN_TOPOLOGY, load_baseline
+from problems.chains.hover.static_soft.config import (
+    STATIC_CHAIN_TOPOLOGY,
+    load_baseline,
+)
 from problems.chains.hover.utils.retrieval import make_retrieve_fn
 from problems.chains.hover.utils.utils import (
     discrete_retrieval_eval,

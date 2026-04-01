@@ -358,7 +358,6 @@ class TestInflightCounterEdgeCases:
     ):
         """Many sequential acquires should all succeed (simulating burst load)."""
         pool = _make_pool(fake_server)
-        import asyncio
 
         endpoints = []
         for _ in range(10):
@@ -375,9 +374,7 @@ class TestInflightCounterEdgeCases:
         total = sum(int(v) for v in inflight.values())
         assert total == 10
 
-    async def test_mark_unhealthy_then_recover(
-        self, fake_server: fakeredis.FakeServer
-    ):
+    async def test_mark_unhealthy_then_recover(self, fake_server: fakeredis.FakeServer):
         """After marking unhealthy, endpoint should be skipped during cooldown
         then recover after cooldown expires.
         """

@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,14 +40,16 @@ COLORS = {
 }
 
 LINESTYLES = {
-    "V1": "-",   # Solid (replicate 1)
+    "V1": "-",  # Solid (replicate 1)
     "V2": "--",  # Dashed (replicate 2)
     "V3": "-",
     "V4": "--",
 }
 
 
-def get_time_series(r: redis.Redis, prefix: str, metric: str) -> list[tuple[float, float]]:
+def get_time_series(
+    r: redis.Redis, prefix: str, metric: str
+) -> list[tuple[float, float]]:
     """Extract (timestamp, value) pairs from Redis metrics history."""
     key = f"{prefix}:metrics:history:{metric}"
     if r.type(key) != b"list":
@@ -75,11 +78,25 @@ def main():
     all_series = {}
     for run in m.runs:
         r = redis.Redis(db=run.db)
-        total_count = get_time_series(r, run.prefix, "program_metrics:programs_total_count")
-        valid_count = get_time_series(r, run.prefix, "program_metrics:programs_valid_count")
-        frontier = get_time_series(r, run.prefix, "program_metrics:valid_frontier_fitness")
-        per_program = get_time_series(r, run.prefix, "program_metrics:valid_iter_fitness_mean")
-        all_series[run.label] = (total_count, valid_count, frontier, per_program, run.condition)
+        total_count = get_time_series(
+            r, run.prefix, "program_metrics:programs_total_count"
+        )
+        valid_count = get_time_series(
+            r, run.prefix, "program_metrics:programs_valid_count"
+        )
+        frontier = get_time_series(
+            r, run.prefix, "program_metrics:valid_frontier_fitness"
+        )
+        per_program = get_time_series(
+            r, run.prefix, "program_metrics:valid_iter_fitness_mean"
+        )
+        all_series[run.label] = (
+            total_count,
+            valid_count,
+            frontier,
+            per_program,
+            run.condition,
+        )
 
     # Global t0: earliest timestamp across ALL runs and ALL metrics
     global_starts = []
@@ -90,7 +107,13 @@ def main():
     t0 = min(global_starts) if global_starts else 0
 
     run_data = {}
-    for label, (total_count, valid_count, frontier, per_program, condition) in all_series.items():
+    for label, (
+        total_count,
+        valid_count,
+        frontier,
+        per_program,
+        condition,
+    ) in all_series.items():
         if not total_count:
             continue
 
@@ -135,9 +158,17 @@ def main():
         if pts:
             times = [t / 3600 for t, _ in pts]
             vals = [v - 1 for _, v in pts]  # start at 0 (first program = 1)
-            line, = ax.step(times, vals, where="post",
-                            color=_c(label), linestyle=_ls(label), linewidth=2,
-                            marker=".", markersize=3, markevery=max(1, len(times) // 30))
+            (line,) = ax.step(
+                times,
+                vals,
+                where="post",
+                color=_c(label),
+                linestyle=_ls(label),
+                linewidth=2,
+                marker=".",
+                markersize=3,
+                markevery=max(1, len(times) // 30),
+            )
             line.set_label(f"{label} ({data['condition']})")
             legend_handles.append(line)
             legend_labels.append(f"{label} ({data['condition']})")
@@ -165,9 +196,15 @@ def main():
         v_now = np.interp(grid, interp_t, interp_v)
         v_prev = np.interp(grid - 3600, interp_t, interp_v)
         rate = v_now - v_prev  # programs in that hour
-        ax.plot(grid / 3600, rate,
-                color=_c(label), linestyle=_ls(label), linewidth=2,
-                marker="o", markersize=4)
+        ax.plot(
+            grid / 3600,
+            rate,
+            color=_c(label),
+            linestyle=_ls(label),
+            linewidth=2,
+            marker="o",
+            markersize=4,
+        )
     ax.set_xlabel("Wall time (hours)", fontsize=11)
     ax.set_ylabel("Programs / hour", fontsize=11)
     ax.set_title("Throughput Rate (1h rolling)", fontsize=13, fontweight="bold")
@@ -183,23 +220,42 @@ def main():
             pp_times = [t / 3600 for t, _ in pp]
             pp_vals = [v * 100 for _, v in pp]
             all_fitness_vals.extend(pp_vals)
-            ax.scatter(pp_times, pp_vals, color=_c(label), alpha=0.15, s=15, edgecolors="none")
+            ax.scatter(
+                pp_times, pp_vals, color=_c(label), alpha=0.15, s=15, edgecolors="none"
+            )
         # Frontier step plot
         pts = data["frontier"]
         if pts:
             times = [t / 3600 for t, _ in pts]
             vals = [v * 100 for _, v in pts]
             all_fitness_vals.extend(vals)
-            ax.step(times, vals, where="post",
-                    color=_c(label), linestyle=_ls(label), linewidth=2.5)
+            ax.step(
+                times,
+                vals,
+                where="post",
+                color=_c(label),
+                linestyle=_ls(label),
+                linewidth=2.5,
+            )
             ax.annotate(
-                f"{label}: {vals[-1]:.1f}%", xy=(times[-1], vals[-1]),
-                xytext=(6, 0), textcoords="offset points",
-                fontsize=8, fontweight="bold", color=_c(label), va="center",
+                f"{label}: {vals[-1]:.1f}%",
+                xy=(times[-1], vals[-1]),
+                xytext=(6, 0),
+                textcoords="offset points",
+                fontsize=8,
+                fontweight="bold",
+                color=_c(label),
+                va="center",
             )
     if baseline:
-        ax.axhline(y=baseline, color="#555555", linestyle=":", linewidth=1.5, alpha=0.7,
-                    label=f"baseline ({baseline:.1f}%)")
+        ax.axhline(
+            y=baseline,
+            color="#555555",
+            linestyle=":",
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"baseline ({baseline:.1f}%)",
+        )
     if all_fitness_vals:
         y_min = min(all_fitness_vals)
         y_max = max(all_fitness_vals)
@@ -222,11 +278,15 @@ def main():
         n_valid = len(fits)
         if fits:
             box_data.append(fits)
-            box_labels.append(f"{label}\n({data['condition'][:4]})\n{n_valid}/{n_total}")
+            box_labels.append(
+                f"{label}\n({data['condition'][:4]})\n{n_valid}/{n_total}"
+            )
             box_colors.append(_c(label))
     if box_data:
         bp = ax.boxplot(
-            box_data, patch_artist=True, showfliers=True,
+            box_data,
+            patch_artist=True,
+            showfliers=True,
             flierprops=dict(marker=".", markersize=3, alpha=0.3),
             medianprops=dict(color="black", linewidth=1.5),
             whiskerprops=dict(linewidth=1),
@@ -236,9 +296,13 @@ def main():
             patch.set_alpha(0.5)
         ax.set_xticklabels(box_labels, fontsize=9)
         if baseline:
-            ax.axhline(y=baseline, color="gray", linestyle=":", linewidth=1.5, alpha=0.7)
+            ax.axhline(
+                y=baseline, color="gray", linestyle=":", linewidth=1.5, alpha=0.7
+            )
     ax.set_ylabel("Fitness (%)", fontsize=11)
-    ax.set_title("Fitness Distribution (valid programs)", fontsize=13, fontweight="bold")
+    ax.set_title(
+        "Fitness Distribution (valid programs)", fontsize=13, fontweight="bold"
+    )
     ax.grid(True, alpha=0.3, axis="y")
 
     # ── Panel (1,1): Invalidity Rate vs Time ──
@@ -258,8 +322,9 @@ def main():
             mask = total_v > 0
             inv_rate = np.clip((1 - valid_interp[mask] / total_v[mask]) * 100, 0, 100)
             inv_times = total_t[mask] / 3600
-            ax.plot(inv_times, inv_rate,
-                    color=_c(label), linestyle=_ls(label), linewidth=2)
+            ax.plot(
+                inv_times, inv_rate, color=_c(label), linestyle=_ls(label), linewidth=2
+            )
     ax.set_xlabel("Wall time (hours)", fontsize=11)
     ax.set_ylabel("Invalid programs (%)", fontsize=11)
     ax.set_title("Invalidity Rate", fontsize=13, fontweight="bold")
@@ -281,8 +346,9 @@ def main():
             pp_times = np.array([t for t, _ in pp])
             pp_fits = np.array([v * 100 for _, v in pp])
             pp_evals = np.interp(pp_times, tc_times, tc_vals)
-            ax.scatter(pp_evals, pp_fits,
-                       color=_c(label), alpha=0.3, s=20, edgecolors="none")
+            ax.scatter(
+                pp_evals, pp_fits, color=_c(label), alpha=0.3, s=20, edgecolors="none"
+            )
 
         # Frontier step: x = total_count at frontier timestamp
         fr = data["frontier"]
@@ -290,8 +356,15 @@ def main():
             fr_times = np.array([t for t, _ in fr])
             fr_fits = np.array([v * 100 for _, v in fr])
             fr_evals = np.interp(fr_times, tc_times, tc_vals)
-            ax.step(fr_evals, fr_fits, where="post",
-                    color=_c(label), linestyle=_ls(label), linewidth=2, alpha=0.9)
+            ax.step(
+                fr_evals,
+                fr_fits,
+                where="post",
+                color=_c(label),
+                linestyle=_ls(label),
+                linewidth=2,
+                alpha=0.9,
+            )
     if baseline:
         ax.axhline(y=baseline, color="#555555", linestyle=":", linewidth=1.5, alpha=0.7)
     ax.set_xlabel("Cumulative programs evaluated", fontsize=11)
@@ -302,9 +375,13 @@ def main():
     # ── Shared legend at top ──
     if legend_handles:
         fig.legend(
-            legend_handles, legend_labels,
-            loc="upper center", ncol=len(legend_handles),
-            fontsize=12, frameon=True, framealpha=0.9,
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            ncol=len(legend_handles),
+            fontsize=12,
+            frameon=True,
+            framealpha=0.9,
             bbox_to_anchor=(0.5, 0.99),
         )
 

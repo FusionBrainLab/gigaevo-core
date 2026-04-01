@@ -9,8 +9,6 @@ Focuses on boundary conditions, sentinel values, and composition edge cases.
 
 from __future__ import annotations
 
-import pytest
-
 from gigaevo.evolution.engine.acceptor import (
     CompositeAcceptor,
     DefaultProgramEvolutionAcceptor,
@@ -25,7 +23,6 @@ from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
-
 
 # ---------------------------------------------------------------------------
 # Helpers
