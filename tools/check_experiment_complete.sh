@@ -152,6 +152,39 @@ if [[ -f "$EXP_DIR/PR_DESCRIPTION.md" ]]; then
     fi
 fi
 
+# ── 05_results.md not gitignored ──────────────────────────────────────────
+RESULTS_REL="experiments/$EXPERIMENT/05_results.md"
+if git -C "$PROJ" check-ignore -q "$RESULTS_REL" 2>/dev/null; then
+    fail "05_results.md is gitignored — fix .gitignore (add !experiments/**/05_results.md)"
+else
+    ok "05_results.md is not gitignored"
+fi
+
+# ── Deviation section has no unfilled placeholders ────────────────────────
+if [[ -f "$EXP_DIR/05_results.md" ]]; then
+    if grep -q '___\|<fill\|PLACEHOLDER' "$EXP_DIR/05_results.md"; then
+        fail "05_results.md contains unfilled placeholders (___/<fill/PLACEHOLDER)"
+    else
+        ok "05_results.md has no unfilled placeholders"
+    fi
+fi
+
+# ── experiment.yaml status == complete ────────────────────────────────────
+if [[ -f "$EXP_DIR/experiment.yaml" ]]; then
+    PYTHON=${GIGAEVO_PYTHON:-$(command -v python3)}
+    STATUS=$("$PYTHON" -c "
+import yaml
+with open('$EXP_DIR/experiment.yaml') as f:
+    m = yaml.safe_load(f)
+print(m.get('experiment',{}).get('status',''))
+" 2>/dev/null || echo "unknown")
+    if [[ "$STATUS" == "complete" ]]; then
+        ok "experiment.yaml status = complete"
+    else
+        fail "experiment.yaml status = '$STATUS' (expected 'complete')"
+    fi
+fi
+
 echo
 if [[ $errors -eq 0 && $warnings -eq 0 ]]; then
     echo "=== All checks passed. Safe to merge. ==="

@@ -82,6 +82,46 @@ else
     fi
 fi
 
+# ── experiment.yaml exists ───────────────────────────────────────────────
+if [[ -f "$EXP_DIR/experiment.yaml" ]]; then
+    ok "experiment.yaml exists"
+else
+    fail "experiment.yaml missing — create from experiments/_template/experiment.yaml"
+fi
+
+# ── launch.sh exists ─────────────────────────────────────────────────────
+if [[ -f "$EXP_DIR/launch.sh" ]]; then
+    ok "launch.sh exists"
+else
+    fail "launch.sh missing — run: tools/experiment/generate_launch.py --experiment $EXPERIMENT"
+fi
+
+# ── N >= 2 per cell (from experiment.yaml runs) ─────────────────────────
+if [[ -f "$EXP_DIR/experiment.yaml" ]] && command -v python3 &>/dev/null; then
+    PYTHON=${GIGAEVO_PYTHON:-$(command -v python3)}
+    N_CHECK=$("$PYTHON" -c "
+import yaml, sys
+with open('$EXP_DIR/experiment.yaml') as f:
+    m = yaml.safe_load(f)
+runs = m.get('runs') or []
+if not runs:
+    sys.exit(0)
+cells = {}
+for r in runs:
+    key = (r.get('pipeline',''), r.get('problem_name',''))
+    cells.setdefault(key, []).append(r.get('label',''))
+for cell, labels in cells.items():
+    if len(labels) < 2:
+        print(f'Cell {cell}: only {len(labels)} run(s): {labels}')
+        sys.exit(1)
+" 2>&1) || true
+    if [[ -z "$N_CHECK" ]]; then
+        ok "N >= 2 per cell (or no runs defined yet)"
+    else
+        fail "N < 2 per cell: $N_CHECK"
+    fi
+fi
+
 echo
 if [[ $errors -eq 0 ]]; then
     echo "=== All phase gate checks passed. Proceed to launch. ==="

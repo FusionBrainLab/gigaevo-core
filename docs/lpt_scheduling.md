@@ -245,10 +245,10 @@ Key findings:
 
 ```bash
 # All scheduling tests (unit + integration)
-~/envs/evo_fast/bin/python -m pytest tests/evolution/test_scheduling*.py -v
+$GIGAEVO_PYTHON -m pytest tests/evolution/test_scheduling*.py -v
 
 # Just integration tests
-~/envs/evo_fast/bin/python -m pytest tests/evolution/test_scheduling_integration.py -v
+$GIGAEVO_PYTHON -m pytest tests/evolution/test_scheduling_integration.py -v
 ```
 
 ### What the integration tests verify
