@@ -343,13 +343,6 @@ def prepare_iteration_dataframe(
     if df.empty:
         return pd.DataFrame()
 
-    # Detect steady-state runs: many programs share the same iteration (epoch).
-    # Replace with sequential index so plots show all evaluated programs.
-    n_unique = df[iteration_col].nunique()
-    if n_unique > 0 and len(df) / n_unique > 3:
-        df = df.sort_values(iteration_col).reset_index(drop=True)
-        df[iteration_col] = range(len(df))
-
     n_before = len(df)
 
     # Step 1: Remove extreme values by absolute cutoff (e.g., hard-coded failure values)
