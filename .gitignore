@@ -616,7 +616,6 @@ tools/.litellm.pid
 .claude/projects/
 .claude/agent-memory/
 .claude/perf-sprint-*.md
-.gitnexus
 AGENTS.md
 snapshots/
 
