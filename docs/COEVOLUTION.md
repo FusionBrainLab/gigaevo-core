@@ -127,7 +127,7 @@ different lengths coexist even if they have similar fitness.
 ### Minimal Example (1 main + 1 prompt run)
 
 ```bash
-PYTHON=~/envs/evo_fast/bin/python
+PYTHON=$GIGAEVO_PYTHON
 export PYTHONPATH=/path/to/gigaevo-core
 
 # Main run (X1) — evolves HotpotQA chains, fetches prompts from DB 6

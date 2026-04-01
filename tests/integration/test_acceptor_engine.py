@@ -11,21 +11,17 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
-import pytest
 
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
-from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.engine.acceptor import (
     DefaultProgramEvolutionAcceptor,
     StandardEvolutionAcceptor,
     StateAcceptor,
-    ValidityMetricAcceptor,
 )
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
-from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.evolution.strategies.elite_selectors import (
     ScalarTournamentEliteSelector,
 )
@@ -34,10 +30,8 @@ from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
-from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
-
 
 HANG_TIMEOUT = 5.0
 
@@ -124,7 +118,9 @@ class TestAcceptorEngineIntegration:
         """Programs in DONE state with metrics should be accepted by default acceptor."""
         storage = _make_storage()
         try:
-            p = Program(code="def solve(): return 1", state=ProgramState.DONE, atomic_counter=1)
+            p = Program(
+                code="def solve(): return 1", state=ProgramState.DONE, atomic_counter=1
+            )
             p.metrics = {"fitness": 1.0, "x": 0.5}
             await storage.add(p)
 
@@ -137,7 +133,9 @@ class TestAcceptorEngineIntegration:
         """Programs missing validity metric should be rejected by standard acceptor."""
         storage = _make_storage()
         try:
-            p = Program(code="def solve(): return 1", state=ProgramState.DONE, atomic_counter=1)
+            p = Program(
+                code="def solve(): return 1", state=ProgramState.DONE, atomic_counter=1
+            )
             p.metrics = {"fitness": 1.0, "x": 0.5}
             # Missing VALIDITY_KEY and mutation context
 
@@ -150,7 +148,7 @@ class TestAcceptorEngineIntegration:
         """Engine should only add programs to archive that pass the acceptor."""
         storage = _make_storage()
         try:
-            engine = _make_engine(storage)
+            _make_engine(storage)  # initializes archive
 
             # Add a valid DONE program
             p_valid = Program(

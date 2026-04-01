@@ -1,0 +1,23 @@
+# @package _global_
+
+# Steady-State Evolution
+# Continuous mutation/evaluation interleaving — no generational barrier.
+# Programs are evaluated and ingested immediately, ~8-9x throughput vs step-wise.
+#
+# Usage:
+#   python run.py experiment=steady_state problem.name=heilbron
+
+defaults:
+  - /constants: base
+  - /redis: default
+  - /llm: single
+  - /prompts: default
+  - /prompt_fetcher: fixed
+  - /evolution: steady_state
+  - /algorithm: single_island
+  - /pipeline: auto
+  - /runner: default
+  - /scheduling: fifo
+  - /loader: directory
+  - /logging: tensorboard
+  - /metrics: default

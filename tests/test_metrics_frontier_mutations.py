@@ -9,14 +9,12 @@ Gap identified by mutation testing analysis: +12-18% kill rate improvement.
 
 from __future__ import annotations
 
-import pytest
+from typing import Any
+from unittest.mock import AsyncMock
 
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.utils.metrics_tracker import MetricsTracker
 from gigaevo.utils.trackers.base import LogWriter
-from typing import Any
-from unittest.mock import AsyncMock
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,7 +25,7 @@ class RecordingWriter(LogWriter):
     def __init__(self) -> None:
         self.scalars: list[tuple[str, float, dict[str, Any]]] = []
 
-    def bind(self, path: list[str]) -> "RecordingWriter":
+    def bind(self, path: list[str]) -> RecordingWriter:
         return self
 
     def scalar(self, metric: str, value: float, **kwargs: Any) -> None:
@@ -243,7 +241,9 @@ class TestFrontierAdversarialFloats:
         assert math.isnan(t._best_valid["score"][0])
         # No value can "improve" over NaN (all comparisons with NaN are False)
         result = t._maybe_update_frontier("score", 1000.0, iteration=2)
-        assert result is False, "NaN comparison always returns False — frontier is poisoned"
+        assert result is False, (
+            "NaN comparison always returns False — frontier is poisoned"
+        )
 
     def test_nan_second_value_does_not_replace(self) -> None:
         """NaN as a subsequent value should not replace a valid best."""

@@ -593,12 +593,14 @@ outcmaes/
 # Numpy compressed arrays
 *.npz
 
-# Experiment runtime artifacts (plots, test evals, archives are gitignored)
+# Experiment runtime artifacts (plots, test evals, archives, pids, cfg dumps)
 experiments/**/plots/
 experiments/**/test_evals/
 experiments/**/archives/
 experiments/**/*.yaml.tmp
 experiments/**/*.yaml.lock
+experiments/**/pids.txt
+experiments/**/cfg_run_*.txt
 
 # Dataset indexes (large binary files — rebuild locally with build_*_index.py)
 problems/chains/hotpotqa/dataset/bm25s_index/
@@ -610,13 +612,13 @@ tools/.litellm.db
 tools/.litellm.log
 tools/.litellm.pid
 
-# Claude Code local configuration (machine-specific, not for sharing)
-.claude/
-CLAUDE.md
+# Claude Code (machine-specific memory and indexes — not for sharing)
+.claude/projects/
+.claude/agent-memory/
+.claude/perf-sprint-*.md
 .gitnexus
 AGENTS.md
 snapshots/
-.claude/perf-sprint-*.md
 
 # Large dataset files (downloaded by dataset scripts)
 problems/chains/hover/dataset/*.gz

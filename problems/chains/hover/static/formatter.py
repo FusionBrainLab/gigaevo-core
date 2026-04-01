@@ -63,8 +63,7 @@ class HoVerFeedbackFormatter(FormatterStage):
                     missing_str = ", ".join(f'"{t}"' for t in missing)
                     label = f"MISSING {missing_str}"
                 lines.append(
-                    f"**Hop {hop} retrieval** "
-                    f"({len(found)}/{n_gold} gold): {label}"
+                    f"**Hop {hop} retrieval** ({len(found)}/{n_gold} gold): {label}"
                 )
 
             hop2_q = f.get("hop2_query", "")

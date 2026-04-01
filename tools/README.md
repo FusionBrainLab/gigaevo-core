@@ -1,44 +1,87 @@
 # GigaEvo Tools
 
-**Run format** (all operational and analysis tools): `prefix@db[:label]`
-where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/static`).
-
 ## Prerequisites
 
 All tool commands use the project venv and require `PYTHONPATH=.`:
 
 ```bash
-PYTHONPATH=. ~/envs/evo_fast/bin/python tools/<tool>.py ...
+PYTHONPATH=. $GIGAEVO_PYTHON tools/<tool>.py ...
 ```
 
 Shell scripts use `$GIGAEVO_PYTHON` (falls back to `python3`):
 
 ```bash
-export GIGAEVO_PYTHON=~/envs/evo_fast/bin/python
+export GIGAEVO_PYTHON=python3  # adjust for your environment
 ```
 
-Protocol gates to run before launch and before merge:
+**Run format** (all operational and analysis tools): `prefix@db[:label]`
+where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/static`).
 
-```bash
-bash tools/check_phase_order.sh <experiment-name>   # pre-launch (Phase 4)
-bash tools/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
-```
+---
 
-## Quick Reference
+## Tool Index
 
-| Task | Tool | Command |
+### General Tools (`tools/`)
+
+Work on any GigaEvo run — no experiment.yaml required.
+
+| Tool | Purpose | Key flags |
 |---|---|---|
-| Live status (experiment) | `status.py` | `PYTHONPATH=. python tools/status.py --experiment task/name` |
-| Live status (single run) | `status.py` | `PYTHONPATH=. python tools/status.py --run prefix@db:label` |
-| Gen-by-gen trajectory | `trajectory.py` | `PYTHONPATH=. python tools/trajectory.py --run prefix@db:label` |
-| Top N programs | `top_programs.py` | `PYTHONPATH=. python tools/top_programs.py --run prefix@db:label -n 10` |
-| Evolutionary lineage | `lineage.py` | `PYTHONPATH=. python tools/lineage.py --run prefix@db:label --top-n 1` |
-| Fitness curves plot | `comparison.py` | `PYTHONPATH=. python tools/comparison.py --run prefix@db:label ... --output-folder /tmp/` |
-| Export full CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --output-file /tmp/o.csv` |
-| Export frontier CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --frontier-csv --output-file /tmp/f.csv` |
-| Archive + upload | `archive_run.sh` | `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload` |
-| Kill workers + flush | `flush.py` | `PYTHONPATH=. python tools/flush.py --db N [--confirm]` |
-| Task-specific tools | `experiments/<task>/<name>/tools/` | e.g. `experiments/hotpotqa/val_gap/tools/gap_analysis.py` |
+| `status.py` | Live run monitoring: generation, all metrics, invalidity rate, PID liveness | `--run prefix@db:label` or `--experiment task/name` |
+| `trajectory.py` | Gen-by-gen table of frontier/mean fitness and valid program count | `--run`, `--tail N` |
+| `top_programs.py` | Inspect top N programs by fitness, optionally dump source code | `--run`, `-n 10`, `--code`, `--save-dir` |
+| `lineage.py` | Trace evolutionary ancestry chain back to seed | `--run`, `--top-n 1`, `--depth N` |
+| `comparison.py` | Multi-run fitness curve plots (png/pdf/svg) | `--run` (multiple), `--output-folder` |
+| `redis2pd.py` | Export evolution data or frontier to CSV | `--run`, `--frontier-csv`, `--output-file` |
+| `flush.py` | Kill stale exec_runner workers, then flush Redis DBs | `--db N [N ...]`, `--confirm` |
+| `fitness_vs_time.py` | Fitness vs wall-clock time plots | `--run`, `--output-folder` |
+| `pareto_plot.py` | Multi-objective Pareto frontier visualization | `--run`, `--output-folder` |
+| `throughput_plot.py` | Throughput evolution curves | `--run`, `--output-folder` |
+| `no_proxy.py` | NO_PROXY environment helper for backend access | used by `litellm.sh` and launch scripts |
+| `utils.py` | Shared utilities: `parse_run_arg`, Redis helpers | imported by other tools |
+
+### Experiment Lifecycle Tools (`tools/experiment/`)
+
+Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
+
+| Tool | Purpose | Key flags |
+|---|---|---|
+| `archive_run.sh` | Export Redis data to local files + upload as GitHub Release asset | `--exp task/name`, `--run "prefix@db:label"`, `--upload` |
+| `check_phase_order.sh` | Pre-launch gate: verify protocol docs, experiment.yaml, launch.sh, N>=2 | `<experiment-name>` |
+| `check_experiment_complete.sh` | Pre-merge gate: verify all 5 phases, archives, release assets, INDEX.md | `<experiment-name>` |
+| `preflight_check.py` | 20-check validation before launch (configs, Redis, servers, treatment) | `--experiment task/name` |
+| `generate_launch.py` | Generate `launch.sh` from experiment.yaml manifest | `--experiment task/name`, `--dry-run` |
+| `manifest.py` | Load/update `experiment.yaml` programmatically | `import` — not a CLI tool |
+| `record_pids.py` | Record launched PIDs into experiment.yaml | `--experiment`, `--pids-file`, `--labels` |
+| `reset_status.py` | Force-reset experiment status (escape hatch) | `--experiment`, `--status` |
+| `process_cleanup.py` | Kill stale watchdog / run processes | `--experiment` |
+| `pr_comment.py` | Post checkpoint or status updates to experiment PR | `--experiment`, `--body` |
+| `check_all_watchdogs.sh` | Cron health check: scan Redis heartbeats, alert on stale watchdogs | standalone (no args) |
+| `skill_env.sh` | Shared env vars for skills (`$PROJ`, `$GIGAEVO_PYTHON`, `$PYTHONPATH`) | `source` — not executable |
+
+### Infrastructure Tools
+
+| Tool | Purpose |
+|---|---|
+| `litellm.sh` | Start/stop/status LiteLLM proxy for chain server load balancing |
+| `litellm_bench.py` | Benchmark LiteLLM proxy (latency, throughput, error rate) |
+| `llm_contention_bench.py` | Measure LLM server contention under concurrent load |
+
+### Benchmarking Tools
+
+| Tool | Purpose |
+|---|---|
+| `benchmark.py` | Run throughput benchmark suite (`tests/benchmarks/`) |
+| `bench_snapshot.py` | Before/after benchmark snapshots for comparison |
+| `benchmark_capture.py` | Capture benchmark results to `benchmark_history.jsonl` |
+| `profiler.py` | Redis ops, DAG construction, stage execution profiling |
+
+### Scaffolding Tools
+
+| Tool | Purpose |
+|---|---|
+| `dag_builder/` | Visual DAG pipeline builder (React + FastAPI): drag-drop stages, export YAML |
+| `wizard/` | Problem directory generator from YAML config |
 
 ---
 
@@ -112,18 +155,13 @@ Gen 42: best=66.0%  mean=57.3%  n_valid=  5
   Acceptance rate (gens 33–42): 8.5% (5 improvements / 59 valid programs)
 ```
 
-Acceptance rate note: numerator = number of gens (in last 10) where the frontier improved
-(0–1 per gen); denominator = total valid programs in those gens summed. This is a
-per-valid-program improvement rate, not a per-mutation rate — invalid programs are excluded
-from the denominator.
-
 ---
 
 ## Ending a Run
 
 > **Required order** (skipping steps loses data permanently):
 > 1. Run test evaluations → `bash experiments/<task>/<name>/run_test_eval.sh`
-> 2. Archive all runs → `bash tools/archive_run.sh --exp <name> --run "prefix@db:label" --upload`
+> 2. Archive all runs → `bash tools/experiment/archive_run.sh --exp <name> --run "prefix@db:label" --upload`
 > 3. Flush Redis → `PYTHONPATH=. python tools/flush.py --db N --confirm`
 
 ### `run_test_eval.sh` — Test evaluation (per-experiment)
@@ -133,7 +171,7 @@ Each experiment has `experiments/<task>/<name>/run_test_eval.sh`. Run it while R
 the held-out test set and writes results to `test_evals/results.json`.
 
 ```bash
-export GIGAEVO_PYTHON=~/envs/evo_fast/bin/python
+export GIGAEVO_PYTHON=python3  # adjust for your environment
 bash experiments/hotpotqa/push/run_test_eval.sh
 ```
 
@@ -148,15 +186,15 @@ Results: `experiments/<task>/<name>/test_evals/results.json` (one entry per run)
 
 ```bash
 # Dry run: export locally only (verify output first)
-bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C"
+bash tools/experiment/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C"
 
 # Export and upload to GitHub Release exp/hotpotqa/push
-bash tools/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C" --upload
+bash tools/experiment/archive_run.sh --exp hotpotqa/push --run "chains/hotpotqa/static_f1_600@10:C" --upload
 
 # Archive all 4 runs
 for SPEC in "chains/hotpotqa/static_f1@8:A" "chains/hotpotqa/static@9:B" \
             "chains/hotpotqa/static_f1_600@10:C" "chains/hotpotqa/static_f1_600@11:D"; do
-  bash tools/archive_run.sh --exp hotpotqa/push --run "$SPEC" --upload
+  bash tools/experiment/archive_run.sh --exp hotpotqa/push --run "$SPEC" --upload
 done
 ```
 
@@ -241,17 +279,6 @@ PYTHONPATH=. python tools/redis2pd.py \
     --output-file experiments/hotpotqa/val_gap/frontier_O.csv
 ```
 
-Frontier CSV format (paste directly into results tables). Dense format — one row per gen,
-including gens without frontier improvement (value carries forward from last improvement):
-
-```
-gen,best_val
-1,0.423
-5,0.552
-...
-42,0.660
-```
-
 Legacy args (`--redis-db` / `--redis-prefix`) still work for `archive_run.sh` compatibility.
 
 ---
@@ -272,15 +299,6 @@ PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --program 
 PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1 --depth 5
 ```
 
-Output:
-```
-Lineage of program abc12345 (run O, gen 32, fitness=66.0%)
-
-  gen 32  abc12345  fitness=66.0%  mutation: rewrite_answer_extraction_step6
-  gen 29  def45678  fitness=63.4%  mutation: add_coreference_resolution_step4
-  gen 25  ghi90123  fitness=62.7%  [SEED — ddce37b4]
-```
-
 ---
 
 ## Protocol Gates
@@ -291,7 +309,7 @@ Verifies all required protocol documents exist, are committed, and are in the co
 Run as the first step of Phase 4 (before any code changes, before launch).
 
 ```bash
-bash tools/check_phase_order.sh <experiment-name>
+bash tools/experiment/check_phase_order.sh <experiment-name>
 ```
 
 Exit 0 = safe to proceed. Exit 1 = do not launch.
@@ -303,7 +321,7 @@ Exit 0 = safe to proceed. Exit 1 = do not launch.
 Verifies all five experiment phases are complete before the PR is merged.
 
 ```bash
-bash tools/check_experiment_complete.sh <experiment-name>
+bash tools/experiment/check_experiment_complete.sh <experiment-name>
 ```
 
 Checks: all phase docs committed, `02_review.md` APPROVED, GitHub Release assets uploaded,
@@ -322,22 +340,6 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 | `generate_launch.py` | Generate `launch.sh` from experiment.yaml | `PYTHONPATH=. python tools/experiment/generate_launch.py --experiment task/name` |
 | `record_pids.py` | Record launched PIDs into experiment.yaml | `PYTHONPATH=. python tools/experiment/record_pids.py --experiment task/name --pids-file pids.txt --labels R1 R2` |
 | `reset_status.py` | Force-reset experiment status (escape hatch) | `PYTHONPATH=. python tools/experiment/reset_status.py --experiment task/name --status implemented` |
-
----
-
-## Visual Tools
-
-### `dag_builder/` — Visual DAG pipeline builder
-
-A React + FastAPI app for building execution pipelines visually. Drag-and-drop
-stages, connect data flow edges, export as Python code or Hydra YAML config.
-
-```bash
-# Start both backend (port 8081) and frontend (port 8082)
-bash tools/dag_builder/start.sh
-```
-
-See `tools/dag_builder/README.md` for full documentation.
 
 ---
 
@@ -371,7 +373,19 @@ PYTHONPATH=. python tools/profiler.py --redis-url redis://localhost:6379/15
 
 ## Scaffolding
 
-### `wizard` — Problem directory generator
+### `dag_builder/` — Visual DAG pipeline builder
+
+A React + FastAPI app for building execution pipelines visually. Drag-and-drop
+stages, connect data flow edges, export as Python code or Hydra YAML config.
+
+```bash
+# Start both backend (port 8081) and frontend (port 8082)
+bash tools/dag_builder/start.sh
+```
+
+See `tools/dag_builder/README.md` for full documentation.
+
+### `wizard/` — Problem directory generator
 
 Generates a complete problem directory from a YAML config (validate.py, metrics.yaml,
 initial_programs/, task_description.txt). See `tools/wizard/` for documentation.
@@ -384,81 +398,109 @@ python -m tools.wizard my_config.yaml --validate-only
 
 ---
 
-## Appendix: Redis Key Reference
+## Placement Convention
+
+- `tools/` — works for **any** GigaEvo run (just needs `--run prefix@db`)
+- `tools/experiment/` — depends on experiment.yaml, protocol docs, or PRs
+- `experiments/<task>/<name>/tools/` — imports problem-specific code, hardcodes experiment-specific values
+
+---
+
+## Appendix: Redis Data Model
 
 Every run uses one Redis DB (0–15), set via `redis.db=N`.
-All keys are prefixed with `problem.name` (e.g. `chains/hotpotqa/static`).
+`{prefix}` below = `problem.name` (e.g. `chains/hotpotqa/static`).
 
-### Key format
+### Key namespaces
 
-```
-{prefix}:metrics:history:program_metrics:{metric_name}
-```
+There are three independent key namespaces per run:
 
-Each metrics history key is a Redis **list**. Each entry is a JSON object:
+| Namespace | Key pattern | Data type | Purpose |
+|---|---|---|---|
+| **Program storage** | `{prefix}:program:{id}` | string (JSON) | Serialized Program objects |
+| **Program status** | `{prefix}:status:{state}` | set | Sets of program IDs by state (PENDING, RUNNING, DONE, ERROR) |
+| **Status stream** | `{prefix}:status_events` | stream | Status change events |
+| **Run state** | `{prefix}:run_state` | hash | Engine counters (generation, migration) |
+| **Archive** | `{prefix}:archive` | hash | MAP-Elites archive: cell → program_id |
+| **Archive reverse** | `{prefix}:archive:reverse` | hash | Reverse index: program_id → cell |
+| **Timestamp** | `{prefix}:ts` | string (int) | Atomic counter |
+| **Instance lock** | `{prefix}:__instance_lock__` | string | Distributed lock |
+| **Metrics latest** | `{prefix}:metrics:latest` | hash | Latest value for each metric tag |
+| **Metrics history** | `{prefix}:metrics:history:{tag}` | list | Time series (see below) |
+| **Metrics meta** | `{prefix}:metrics:meta` | hash | Metadata (last_update timestamp) |
+
+### Metrics history keys
+
+The metrics backend writes history lists. Each entry is JSON:
 ```json
 {"s": <step>, "t": <unix_timestamp>, "v": <value>, "k": "scalar"}
 ```
 
-### Canonical metric keys
+Tags are generated by `MetricsTracker` (bound to path `program_metrics`), then
+sanitized (`/` → `_` within segments, segments joined by `:`). The full Redis key
+for a metric tag is:
 
-| What you want | Redis key (after prefix:metrics:history:program_metrics:) | How to read |
+```
+{prefix}:metrics:history:program_metrics:{sanitized_tag}
+```
+
+**Complete list of metric tags written:**
+
+| Tag | Redis key suffix | Type | Written when |
+|---|---|---|---|
+| `is_valid` | `program_metrics:is_valid` | 0.0 or 1.0 | Every program |
+| `programs_total_count` | `program_metrics:programs_total_count` | cumulative | Every program |
+| `programs_valid_count` | `program_metrics:programs_valid_count` | cumulative | Every program |
+| `programs_invalid_count` | `program_metrics:programs_invalid_count` | cumulative | Every program |
+| `valid_program_{metric}` | `program_metrics:valid_program_{metric}` | per-program value | Each valid program |
+| `valid_frontier_{metric}` | `program_metrics:valid_frontier_{metric}` | frontier best | On frontier improvement |
+| `valid_iter_{metric}_mean` | `program_metrics:valid_iter_{metric}_mean` | running mean | Each valid program |
+| `valid_iter_{metric}_std` | `program_metrics:valid_iter_{metric}_std` | running std | Each valid program |
+| `valid_gen_{metric}_mean` | `program_metrics:valid_gen_{metric}_mean` | per-gen mean | Each valid program |
+| `valid_gen_{metric}_std` | `program_metrics:valid_gen_{metric}_std` | per-gen std | Each valid program |
+
+Where `{metric}` = metric name from `problems/{problem_name}/metrics.yaml` (e.g. `fitness`, `prompt_length`).
+
+**DAG internals** (written by the DAG runner, not MetricsTracker):
+
+| Redis key suffix | Purpose |
+|---|---|
+| `dag_runner:dag:internals:CallValidatorFunction:stage_duration` | Validator execution time |
+| `dag_runner:dag:internals:{StageName}:{metric}` | Per-stage timing/error metrics |
+
+### How to read common values
+
+| What you want | Command | Notes |
 |---|---|---|
-| **Current generation** | `{prefix}:run_state` (hash) | `hget … "engine:total_generations"` |
-| **Best frontier value** | `valid_frontier_{metric}` | last entry `"v"` field |
-| **Per-gen mean** | `valid_gen_{metric}_mean` | entries with `"s"` == gen; last `"v"` = mean |
-| **n_valid per gen** | `valid_gen_{metric}_mean` | count entries with `"s"` == gen |
-| **Total programs (cumulative)** | `programs_total_count` | last entry `"v"` field |
-| **Valid programs (cumulative)** | `programs_valid_count` | last entry `"v"` field |
-| **Frontier improvements** | `valid_frontier_{metric}` | list entries in order; `"s"` = iteration at improvement |
+| Current generation | `hget {prefix}:run_state engine:total_generations` | **Canonical** — never use other sources |
+| Best frontier fitness | `lindex {prefix}:metrics:history:program_metrics:valid_frontier_fitness -1` | Parse JSON → `"v"` field |
+| Per-gen mean fitness | `lrange {prefix}:metrics:history:program_metrics:valid_gen_fitness_mean 0 -1` | `"s"` = generation, `"v"` = mean |
+| Total programs | `lindex {prefix}:metrics:history:program_metrics:programs_total_count -1` | `"v"` field |
+| Valid programs | `lindex {prefix}:metrics:history:program_metrics:programs_valid_count -1` | `"v"` field |
+| Validator duration | `lrange {prefix}:metrics:history:dag_runner:dag:internals:CallValidatorFunction:stage_duration -20 -1` | Mean/max of last 20 entries |
+| Archive size | `hlen {prefix}:archive` | Number of occupied cells |
+| All latest metrics | `hgetall {prefix}:metrics:latest` | Quick snapshot, no history |
 
-Where `{metric}` is the metric name from `problems/{problem_name}/metrics.yaml` (e.g. `fitness`, `prompt_length`).
-Use `status.py --experiment` to auto-discover all metrics.
+Use `status.py --experiment` to auto-discover all metrics. **Never write ad-hoc Redis queries** — if a tool gives wrong results, fix the tool.
+
+### Archive persistence
+
+The archive is **dual-backed**:
+- **Redis** (`{prefix}:archive` hash, `{prefix}:archive:reverse` hash) — persistent, survives engine restarts
+- **In-memory cache** — write-through optimization, session-scoped only
+
+Archive data persists in Redis until explicitly flushed. However, the **programs themselves** and their **metrics histories** are also in Redis and equally persistent. To preserve data before flushing, run `tools/experiment/archive_run.sh --upload`.
+
+### Iteration vs. generation
+
+- **Iteration**: monotonically increasing program evaluation counter (1, 2, 3, ...)
+- **Generation**: MAP-Elites generation count (incremented after `max_mutations_per_generation` evaluations)
+
+`valid_iter_*` keys track per-iteration running aggregates. `valid_gen_*` keys track per-generation aggregates. The canonical generation count is `{prefix}:run_state` field `engine:total_generations` — never derive it from metric step values.
 
 ### Rules
 
-1. **Never use `llen(valid_frontier_fitness)` as the generation count**, and never use
-   `valid_iter_fitness_mean` last `"s"` as the canonical gen count. The canonical source is
-   `{prefix}:run_state` hash field `engine:total_generations` (hget, not lindex). Written by
-   `EvolutionEngine` after every generation; survives restarts.
-2. **Never write ad-hoc Redis queries** to answer questions the tools already answer.
-   If a tool gives wrong results, fix the tool — don't work around it with inline Python.
-3. **Archive is in-memory only** — `archive`/`archive:reverse` Redis keys are NOT persisted.
-   Export with `archive_run.sh` before flushing or rebooting.
-
-### Generation count
-
-`{prefix}:run_state` hash field `engine:total_generations` is the **canonical generation
-count** (commit `e7648ab`). Use `hget {prefix}:run_state engine:total_generations` in
-watchdogs, scripts, and status checks. Written by `EvolutionEngine` after every generation;
-survives restarts. See `tools/status.py` line ~99 for the reference implementation.
-
-`valid_iter_fitness_mean` last `"s"` is still useful for **trend analysis** (per-gen mean
-fitness curves) but should NOT be used as the canonical gen count — under high throughput
-it can lag 5+ generations behind the true count.
-
-**Do NOT use log grep for gen count.** The pattern
-`grep -c "Phase 1: Idle confirmed" run.log` is brittle: it depends on exact log message
-format, silently returns 0 if the log path is wrong, and has caused watchdog crashes
-in production. It is listed here only as a historical warning — do not use it.
-
----
-
-## Experiment-specific tools
-
-Task-specific tools (problem eval, cross-metric gap tables, custom analysis) live in
-`experiments/<task>/<name>/tools/`, not in this directory. Each experiment that needs them
-creates its own `tools/` subdirectory.
-
-**Convention**:
-- A tool goes in `tools/` if it works for **any** GigaEvo run (just needs `--run prefix@db`)
-- A tool goes in `experiments/<task>/<name>/tools/` if it imports problem-specific code,
-  hardcodes experiment URLs/paths, or is only meaningful for one experiment's design
-
-**Examples**:
-
-| Tool | Location | Reason |
-|---|---|---|
-| `lineage.py` | `tools/` | Generic — works for any GigaEvo run |
-| `gap_analysis.py` | `experiments/hotpotqa/val_gap/tools/` | Hardcodes O/R/Q/F run specs, gate criteria from 03_plan.md |
-| `eval_checkpoint.py` | `experiments/hotpotqa/val_gap/tools/` | Imports HotpotQA chain infra; HotpotQA-specific |
+1. **Canonical generation count**: `hget {prefix}:run_state engine:total_generations`. Never use `llen(valid_frontier_fitness)` or `valid_iter_fitness_mean` last `"s"` — both can lag under high throughput.
+2. **Never write ad-hoc Redis queries** to answer questions the tools already answer. If a tool gives wrong results, fix the tool.
+3. **Never flush manually** with `redis-cli FLUSHDB` — use `tools/flush.py --confirm` which kills workers first.
+4. **Never use log grep for gen count** — `grep -c "Phase 1: Idle confirmed" run.log` is brittle and has caused production crashes. Use `hget` on `run_state`.

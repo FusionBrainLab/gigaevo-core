@@ -278,7 +278,7 @@ class TestBalancedAstream:
     async def test_astream_marks_unhealthy_on_error(self, balanced: BalancedChatOpenAI):
         async def _failing_astream(*args, **kwargs):
             raise RuntimeError("async stream failed")
-            yield  # noqa: unreachable — makes it async generator
+            yield  # noqa: F841 — unreachable yield makes this an async generator
 
         for ep in ENDPOINTS:
             balanced._clients[ep].astream = _failing_astream
@@ -311,7 +311,7 @@ class TestBalancedAstream:
 # ---------------------------------------------------------------------------
 
 
-class TestStructuredOutput:
+class TestBalancedStructuredOutput:
     """Tests for _BalancedStructuredOutput."""
 
     def test_structured_invoke(self, balanced: BalancedChatOpenAI):

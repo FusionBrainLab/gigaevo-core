@@ -134,7 +134,9 @@ def build_pkl():
     with open(pkl_path, "wb") as f:
         pickle.dump(passages, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    print(f"Saved {len(passages):,} passages to {pkl_path} ({pkl_path.stat().st_size / 1e6:.0f}MB)")
+    print(
+        f"Saved {len(passages):,} passages to {pkl_path} ({pkl_path.stat().st_size / 1e6:.0f}MB)"
+    )
 
 
 def build_index():

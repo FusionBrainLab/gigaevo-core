@@ -46,6 +46,7 @@ def release_chain_endpoint(url: str, *, success: bool = True) -> None:
     """No-op — load balancing is handled by litellm proxy."""
     pass
 
+
 # --- Dataset Configuration ---
 
 _BASE_DIR = Path(__file__).parent

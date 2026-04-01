@@ -21,13 +21,13 @@ Key properties:
 
 ```bash
 # Terminal 1
-python run.py problem.name=vartodd pipeline=mcts_evo migration_bus=bus redis.db=0
+python run.py problem.name=heilbron migration_bus=bus redis.db=0
 
 # Terminal 2
-python run.py problem.name=vartodd pipeline=mcts_evo migration_bus=bus redis.db=2
+python run.py problem.name=heilbron migration_bus=bus redis.db=2
 
 # Terminal 3
-python run.py problem.name=vartodd pipeline=mcts_evo migration_bus=bus redis.db=3
+python run.py problem.name=heilbron migration_bus=bus redis.db=3
 ```
 
 All runs share a migration stream on Redis DB 15 (configurable via `migration_bus_db`).
@@ -57,7 +57,7 @@ All runs share a migration stream on Redis DB 15 (configurable via `migration_bu
 
 ```bash
 python run.py migration_bus=ring \
-  migration_bus_ring_ids='["vartodd@db0","vartodd@db2","vartodd@db3"]' \
+  migration_bus_ring_ids='["heilbron@db0","heilbron@db2","heilbron@db3"]' \
   redis.db=0
 ```
 

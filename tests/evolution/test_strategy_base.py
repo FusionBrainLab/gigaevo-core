@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from gigaevo.evolution.strategies.base import EvolutionStrategy, StrategyMetrics
-from gigaevo.programs.program import Program
 
 
 class TestStrategyMetrics:

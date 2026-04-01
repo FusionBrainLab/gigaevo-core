@@ -6,10 +6,10 @@ and the register_resolvers function.
 
 from __future__ import annotations
 
+from omegaconf import OmegaConf
 import pytest
-from omegaconf import DictConfig, OmegaConf
 
-from gigaevo.config.resolvers import _ref_resolver, register_resolvers
+from gigaevo.config.resolvers import _ref_resolver
 
 
 class TestRefResolver:

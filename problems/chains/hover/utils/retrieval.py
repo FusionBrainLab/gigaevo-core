@@ -10,8 +10,8 @@ module-level singletons would conflict across problems.
 from collections.abc import Callable
 import gzip
 import json
-import pickle
 from pathlib import Path
+import pickle
 import threading
 
 import bm25s
