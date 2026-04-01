@@ -546,7 +546,8 @@ class IdeaAnalyzerFast:
         motivations = [m.change_motivation for m in members if m.change_motivation]
         descriptions = [m.description for m in members if m.description]
         representative_description = f"- {rep.description}"
-        descriptions.remove(rep.description)
+        if rep.description in descriptions:
+            descriptions.remove(rep.description)
         all_motivations = "".join([f"{k}) {motiv} \n" for k, motiv in enumerate(motivations)])
         all_descriptions = "".join([f"{k}) {descript} \n" for k, descript in enumerate(descriptions)])
         first_mot = motivations[0] if motivations else ""
