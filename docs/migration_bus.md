@@ -20,17 +20,20 @@ Key properties:
 ## Quick Start
 
 ```bash
-# Terminal 1
-python run.py problem.name=heilbron migration_bus=bus redis.db=0
+# Using the experiment preset (recommended)
+python run.py experiment=migration_bus problem.name=heilbron redis.db=0
+python run.py experiment=migration_bus problem.name=heilbron redis.db=1
+python run.py experiment=migration_bus problem.name=heilbron redis.db=2
 
-# Terminal 2
-python run.py problem.name=heilbron migration_bus=bus redis.db=2
+# Or as a single Hydra override on any existing setup
+python run.py migration_bus=bus problem.name=heilbron redis.db=0
 
-# Terminal 3
-python run.py problem.name=heilbron migration_bus=bus redis.db=3
+# Combined with steady-state for maximum throughput
+python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
 ```
 
 All runs share a migration stream on Redis DB 15 (configurable via `migration_bus_db`).
+Each run needs a unique `redis.db`.
 
 ## Configuration
 

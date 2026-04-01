@@ -16,6 +16,24 @@
 
 ---
 
+## Quick Start
+
+```bash
+# Single island (default) — one MAP-Elites archive
+python run.py problem.name=heilbron
+
+# Multi-island — fitness + simplicity islands with migration
+python run.py experiment=multi_island_complexity problem.name=heilbron
+
+# Multi-LLM — diverse mutation models, single island
+python run.py experiment=multi_llm_exploration problem.name=heilbron
+
+# Full featured — multi-island + multi-LLM
+python run.py experiment=full_featured problem.name=heilbron
+```
+
+See `config/algorithm/` for all island configurations and `config/experiment/` for complete presets.
+
 ## Overview
 
 GigaEvo's evolution system is powered by **MAP-Elites** (Multi-dimensional Archive of Phenotypic Elites), a quality-diversity algorithm that maintains a diverse population of high-performing solutions.

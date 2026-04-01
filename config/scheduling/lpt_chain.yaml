@@ -1,0 +1,19 @@
+# @package _global_
+
+# LPT scheduling for chain problems (HoVer, HotpotQA, custom chains).
+# Uses ChainFeatureExtractor: n_steps, n_tool_steps, n_llm_steps,
+# string content length, deep retrieval count, dag_depth, etc.
+# Ridge regression learns eval-time predictions online.
+# Requires sklearn.
+#
+# For non-chain problems, use scheduling=lpt (heuristic) instead.
+prioritizer:
+  _target_: gigaevo.evolution.scheduling.LPTPrioritizer
+  eval_predictor:
+    _target_: gigaevo.evolution.scheduling.RidgePredictor
+    feature_extractor:
+      _target_: gigaevo.evolution.scheduling.ChainFeatureExtractor
+    buffer_size: 500
+    min_samples: 10
+    default_prediction: 300.0
+    alpha: 1.0
