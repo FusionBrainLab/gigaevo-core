@@ -430,19 +430,27 @@ class TestMutationStructuredOutput:
     """Tests for the MutationStructuredOutput Pydantic model."""
 
     def test_defaults(self):
-        """insights_used defaults to empty list."""
+        """List fields default to empty lists."""
         out = MutationStructuredOutput(
             archetype="test",
             justification="just",
             code="print(1)",
         )
         assert out.insights_used == []
+        assert out.changes == []
 
     def test_model_dump(self):
         """model_dump returns all fields."""
         out = _make_structured_output()
         d = out.model_dump()
-        assert set(d.keys()) == {"archetype", "justification", "insights_used", "code"}
+        assert set(d.keys()) == {
+            "archetype",
+            "justification",
+            "insights_used",
+            "changes",
+            "code",
+        }
+        assert d["changes"] == []
 
 
 # ---------------------------------------------------------------------------
