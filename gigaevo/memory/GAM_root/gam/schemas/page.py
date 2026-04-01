@@ -1,41 +1,44 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, Protocol
-from pydantic import BaseModel, Field
+
 import json
 from pathlib import Path
+from typing import Any, Protocol
+
+from pydantic import BaseModel, Field
+
 
 class Page(BaseModel):
     """Page data structure"""
     header: str = Field(..., description="Page header")
     content: str = Field(..., description="Page content")
-    meta: Dict[str, Any] = Field(default_factory=dict, description="Metadata")
+    meta: dict[str, Any] = Field(default_factory=dict, description="Metadata")
 
     @staticmethod
-    def equal(page1: 'Page', page2: 'Page') -> bool:
+    def equal(page1: Page, page2: Page) -> bool:
         return page1 == page2
 
 class PageStore(Protocol):
     def add(self, page: Page) -> None: ...
-    def load(self) -> List[Page]: ...
-    def save(self, pages: List[Page]) -> None: ...
+    def load(self) -> list[Page]: ...
+    def save(self, pages: list[Page]) -> None: ...
 
 class InMemoryPageStore:
     """
     Simple append-only list store for Page.
     Uses file system persistence.
     """
-    def __init__(self, dir_path: Optional[str] = None) -> None:
+    def __init__(self, dir_path: str | None = None) -> None:
         self._dir_path = Path(dir_path) if dir_path else None
-        self._pages: List[Page] = []
+        self._pages: list[Page] = []
         if self._dir_path:
             self._pages_file = self._dir_path / "pages.json"
             if self._pages_file.exists():
                 self._pages = self.load()
 
-    def load(self) -> List[Page]:
+    def load(self) -> list[Page]:
         if self._dir_path and self._pages_file.exists():
             try:
-                with open(self._pages_file, 'r', encoding='utf-8') as f:
+                with open(self._pages_file, encoding='utf-8') as f:
                     data = json.load(f)
                     if isinstance(data, list):
                         return [Page(**page_data) for page_data in data]
@@ -46,7 +49,7 @@ class InMemoryPageStore:
                 return []
         return self._pages
 
-    def save(self, pages: List[Page]) -> None:
+    def save(self, pages: list[Page]) -> None:
         self._pages = pages
         if self._dir_path:
             self._dir_path.mkdir(parents=True, exist_ok=True)
@@ -62,7 +65,7 @@ class InMemoryPageStore:
         if self._dir_path:
             self.save(self._pages)
 
-    def get(self, index: int) -> Optional[Page]:
+    def get(self, index: int) -> Page | None:
         if 0 <= index < len(self._pages):
             return self._pages[index]
         return None

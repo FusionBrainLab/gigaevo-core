@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
 import math
 import re
 import statistics
-from dataclasses import dataclass, field
 from typing import Any
-
 
 QUERY_DESCRIPTION = "description"
 QUERY_EXPLANATION_SUMMARY = "explanation_summary"
@@ -29,7 +28,7 @@ class RetrievalWeights:
     description_task_description_summary: float = 0.15
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> "RetrievalWeights":
+    def from_mapping(cls, payload: Any) -> RetrievalWeights:
         if not isinstance(payload, dict):
             return cls()
 
@@ -74,7 +73,7 @@ class CardUpdateDedupConfig:
     weights: RetrievalWeights = field(default_factory=RetrievalWeights)
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> "CardUpdateDedupConfig":
+    def from_mapping(cls, payload: Any) -> CardUpdateDedupConfig:
         if not isinstance(payload, dict):
             return cls()
 

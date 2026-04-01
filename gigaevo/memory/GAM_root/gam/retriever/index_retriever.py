@@ -1,15 +1,14 @@
 import os
-import json
-from typing import Dict, Any, List
+from typing import Any
 
 from GAM_root.gam.retriever.base import AbsRetriever
-from GAM_root.gam.schemas import InMemoryPageStore, Hit, Page
+from GAM_root.gam.schemas import Hit, InMemoryPageStore, Page
 
 
 class IndexRetriever(AbsRetriever):
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
-        self.pages: List[Page] = []
+        self.pages: list[Page] = []
 
     def load(self):
         index_dir = self.config.get("index_dir")
@@ -31,8 +30,8 @@ class IndexRetriever(AbsRetriever):
     def update(self, page_store: InMemoryPageStore):
         self.build(page_store)
 
-    def search(self, query_list: List[str], top_k: int = 10) -> List[List[Hit]]:
-        hits: List[Hit] = []
+    def search(self, query_list: list[str], top_k: int = 10) -> list[list[Hit]]:
+        hits: list[Hit] = []
         for query in query_list:
             # 尝试将查询解析为页面索引
             try:

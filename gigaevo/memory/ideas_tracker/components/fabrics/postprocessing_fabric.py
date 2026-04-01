@@ -1,4 +1,5 @@
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from gigaevo.memory.ideas_tracker.components.analyzer import IdeaAnalyzer
 from gigaevo.memory.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast

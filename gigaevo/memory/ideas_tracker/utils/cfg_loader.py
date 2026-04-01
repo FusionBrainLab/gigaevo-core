@@ -1,10 +1,12 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 
-from gigaevo.memory.ideas_tracker.components.fabrics.fabric_redis import create_redis_config
+from gigaevo.memory.ideas_tracker.components.fabrics.fabric_redis import (
+    create_redis_config,
+)
 from gigaevo.memory.ideas_tracker.utils.helpers import to_bool, to_float
 from tools.utils import RedisRunConfig
 
@@ -29,7 +31,7 @@ def _parse_usage_tracking(raw: Any) -> tuple[dict[str, Any], bool]:
 
 
 def _load_config(
-    config_path: Optional[str | Path], idea_tracker_location: Path
+    config_path: str | Path | None, idea_tracker_location: Path
 ) -> dict[str, Any]:
     """
     Load IdeaTracker configuration from YAML file.
@@ -127,7 +129,7 @@ class IdeaTrackerConfig:
     pipeline_config: PipelineConfig
     memory_config: MemoryConfig
 
-def load_config(config_path: Optional[str | Path], idea_tracker_location: Path) -> IdeaTrackerConfig:
+def load_config(config_path: str | Path | None, idea_tracker_location: Path) -> IdeaTrackerConfig:
     config_dict =  _load_config(config_path, idea_tracker_location)
     redis_config = create_redis_config(config_dict.get("redis",{}))
     pipeline_config = PipelineConfig()

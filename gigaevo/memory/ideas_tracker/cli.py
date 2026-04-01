@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Sequence
+from typing import Any
 
 import yaml
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 AMemGenerator
 
@@ -8,19 +7,19 @@ Adapter generator that wraps A-mem's LLMService for GAM.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from GAM_root.gam.generator.base import AbsGenerator
 
 
 class AMemGenerator(AbsGenerator):
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.llm_service = config.get("llm_service")
         if self.llm_service is None:
             raise ValueError("AMemGenerator requires an LLMService instance in config['llm_service']")
 
-    def _format_prompt(self, prompt: str, schema: Optional[Dict[str, Any]]) -> str:
+    def _format_prompt(self, prompt: str, schema: dict[str, Any] | None) -> str:
         if not schema:
             return prompt
 
@@ -48,8 +47,8 @@ class AMemGenerator(AbsGenerator):
 
         return f"{schema_instruction}\n\nUser prompt:\n{prompt}"
 
-    def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
-        parts: List[str] = []
+    def _messages_to_prompt(self, messages: list[dict[str, str]]) -> str:
+        parts: list[str] = []
         for msg in messages:
             role = (msg.get("role") or "user").upper()
             content = msg.get("content") or ""
@@ -58,11 +57,11 @@ class AMemGenerator(AbsGenerator):
 
     def generate_single(
         self,
-        prompt: Optional[str] = None,
-        messages: Optional[List[Dict[str, str]]] = None,
-        schema: Optional[Dict[str, Any]] = None,
-        extra_params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        messages: list[dict[str, str]] | None = None,
+        schema: dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if (prompt is None) and (not messages):
             raise ValueError("Either prompt or messages is required.")
         if (prompt is not None) and messages:
@@ -77,7 +76,7 @@ class AMemGenerator(AbsGenerator):
         formatted_prompt = self._format_prompt(prompt, schema)
         text, response, _, _ = self.llm_service.generate(formatted_prompt)
 
-        out: Dict[str, Any] = {"text": text or "", "json": None, "response": response}
+        out: dict[str, Any] = {"text": text or "", "json": None, "response": response}
         if schema is not None:
             try:
                 out["json"] = json.loads(out["text"][out["text"].find("{"): out["text"].rfind("}") + 1])
@@ -87,11 +86,11 @@ class AMemGenerator(AbsGenerator):
 
     def generate_batch(
         self,
-        prompts: Optional[List[str]] = None,
-        messages_list: Optional[List[List[Dict[str, str]]]] = None,
-        schema: Optional[Dict[str, Any]] = None,
-        extra_params: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
+        prompts: list[str] | None = None,
+        messages_list: list[list[dict[str, str]]] | None = None,
+        schema: dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         if (prompts is None) and (not messages_list):
             raise ValueError("Either prompts or messages_list is required.")
         if (prompts is not None) and messages_list:

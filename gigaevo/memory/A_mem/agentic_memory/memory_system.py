@@ -1,26 +1,16 @@
-import keyword
-from typing import List, Dict, Optional, Any, Tuple
-import uuid
+import ast
 from datetime import datetime
-from .llm_controller import LLMController
-from A_mem.agent.agent_class import LLMService
-from .retrievers import ChromaRetriever, PersistentChromaRetriever
 import json
 import logging
-from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-import os
-from abc import ABC, abstractmethod
-from transformers import AutoModel, AutoTokenizer
-from nltk.tokenize import word_tokenize
-import pickle
 from pathlib import Path
-from litellm import completion
-import time
 import re
-import ast
+from typing import Any
+import uuid
+
+from A_mem.agent.agent_class import LLMService
+
+from .llm_controller import LLMController
+from .retrievers import ChromaRetriever, PersistentChromaRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +28,17 @@ class MemoryNote:
     
     def __init__(self, 
                  content: str,
-                 id: Optional[str] = None,
-                 keywords: Optional[List[str]] = None,
-                 links: Optional[Dict] = None,
-                 retrieval_count: Optional[int] = None,
-                 timestamp: Optional[str] = None,
-                 last_accessed: Optional[str] = None,
-                 context: Optional[str] = None,
-                 evolution_history: Optional[List] = None,
-                 category: Optional[str] = None,
-                 tags: Optional[List[str]] = None,
-                 strategy: Optional[str] = None):
+                 id: str | None = None,
+                 keywords: list[str] | None = None,
+                 links: dict | None = None,
+                 retrieval_count: int | None = None,
+                 timestamp: str | None = None,
+                 last_accessed: str | None = None,
+                 context: str | None = None,
+                 evolution_history: list | None = None,
+                 category: str | None = None,
+                 tags: list[str] | None = None,
+                 strategy: str | None = None):
         """Initialize a new memory note with its associated metadata.
         
         Args:
@@ -101,9 +91,9 @@ class AgenticMemorySystem:
                  llm_model: str = "gpt-4o-mini",
                  evo_threshold: int = 100,
                  enable_evolution: bool = True,
-                 api_key: Optional[str] = None,
-                 llm_service: Optional[LLMService] = None,
-                 chroma_persist_dir: Optional[str | Path] = None,
+                 api_key: str | None = None,
+                 llm_service: LLMService | None = None,
+                 chroma_persist_dir: str | Path | None = None,
                  chroma_collection_name: str = "memories",
                  use_gam_card_document: bool = False):  
         """Initialize the memory system.
@@ -281,7 +271,7 @@ class AgenticMemorySystem:
                 # Re-raise original-ish error for better debugging.
                 raise ValueError(f"Could not parse LLM response as JSON. Raw head={text[:200]!r}") from e
         
-    def analyze_content(self, content: str) -> Dict:            
+    def analyze_content(self, content: str) -> dict:            
         """Analyze content using LLM to extract semantic metadata.
         
         Uses a language model to understand the content and extract:
@@ -394,7 +384,7 @@ class AgenticMemorySystem:
         }
         self.retriever.add_document(self._document_for_note(note), metadata, note.id)
         
-        if evo_label == True:
+        if evo_label:
             self.evo_cnt += 1
             if self.evo_cnt % self.evo_threshold == 0:
                 self.consolidate_memories()
@@ -423,7 +413,7 @@ class AgenticMemorySystem:
             }
             self.retriever.add_document(self._document_for_note(memory), metadata, memory.id)
     
-    def find_related_memories(self, query: str, k: int = 5) -> Tuple[str, List[int]]:
+    def find_related_memories(self, query: str, k: int = 5) -> tuple[str, list[int]]:
         """Find related memories using ChromaDB retrieval"""
         if not self.memories:
             return "", []
@@ -481,7 +471,7 @@ class AgenticMemorySystem:
                             
         return memory_str
 
-    def read(self, memory_id: str) -> Optional[MemoryNote]:
+    def read(self, memory_id: str) -> MemoryNote | None:
         """Retrieve a memory note by its ID.
         
         Args:
@@ -554,7 +544,7 @@ class AgenticMemorySystem:
             return True
         return False
     
-    def _search_raw(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+    def _search_raw(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         """Internal search method that returns raw results from ChromaDB.
         
         This is used internally by the memory evolution system to find
@@ -571,7 +561,7 @@ class AgenticMemorySystem:
         return [{'id': doc_id, 'score': score} 
                 for doc_id, score in zip(results['ids'][0], results['distances'][0])]
                 
-    def search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         """Search for memories using a hybrid retrieval approach."""
         # Get results from ChromaDB (only do this once)
         search_results = self.retriever.search(query, k)
@@ -591,7 +581,7 @@ class AgenticMemorySystem:
         
         return memories[:k]
     
-    def _search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+    def _search(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         """Search for memories using a hybrid retrieval approach.
         
         This method combines results from both:
@@ -648,7 +638,7 @@ class AgenticMemorySystem:
                     
         return memories[:k]
 
-    def search_agentic(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+    def search_agentic(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         """Search for memories using ChromaDB retrieval."""
         if not self.memories:
             return []
@@ -729,7 +719,7 @@ class AgenticMemorySystem:
             logger.error(f"Error in search_agentic: {str(e)}")
             return []
 
-    def process_memory(self, note: MemoryNote) -> Tuple[bool, MemoryNote]:
+    def process_memory(self, note: MemoryNote) -> tuple[bool, MemoryNote]:
         """Process a memory note and determine if it should evolve.
         
         Args:

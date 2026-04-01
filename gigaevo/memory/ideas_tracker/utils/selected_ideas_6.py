@@ -42,12 +42,11 @@ from __future__ import annotations
 
 import argparse
 import bisect
-import json
-import math
 from collections import defaultdict, deque
 from dataclasses import dataclass
+import json
+import math
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
 
 import pandas as pd
 
@@ -55,13 +54,13 @@ import pandas as pd
 # -----------------------------
 # Loading
 # -----------------------------
-def load_ideas(path: str) -> Tuple[Dict[str, Set[str]], Dict[str, str]]:
+def load_ideas(path: str) -> tuple[dict[str, set[str]], dict[str, str]]:
     """
     Returns:
       idea_to_origin_programs: idea_id -> set(program_id) where idea originated
       idea_desc: idea_id -> description
     """
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
     bank = None
@@ -76,8 +75,8 @@ def load_ideas(path: str) -> Tuple[Dict[str, Set[str]], Dict[str, str]]:
     if bank is None:
         raise ValueError("Could not find 'active_bank' list in banks JSON.")
 
-    idea_to_origin_programs: Dict[str, Set[str]] = {}
-    idea_desc: Dict[str, str] = {}
+    idea_to_origin_programs: dict[str, set[str]] = {}
+    idea_desc: dict[str, str] = {}
 
     for idea in bank:
         if not isinstance(idea, dict):
@@ -97,7 +96,7 @@ def load_ideas(path: str) -> Tuple[Dict[str, Set[str]], Dict[str, str]]:
     return idea_to_origin_programs, idea_desc
 
 
-def load_programs(path: str) -> Dict[str, dict]:
+def load_programs(path: str) -> dict[str, dict]:
     """
     Supports:
     - list of snapshots with {"programs":[...]}
@@ -105,10 +104,10 @@ def load_programs(path: str) -> Dict[str, dict]:
     - dict with {"programs":[...]}
     Keeps the best fitness version if duplicates appear.
     """
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
-    programs: Dict[str, dict] = {}
+    programs: dict[str, dict] = {}
 
     def fit_of(p: dict) -> float:
         try:
@@ -140,16 +139,16 @@ def load_programs(path: str) -> Dict[str, dict]:
     return programs
 
 
-def invert_idea_to_programs(idea_to_programs: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
-    prog_to_ideas: Dict[str, Set[str]] = defaultdict(set)
+def invert_idea_to_programs(idea_to_programs: dict[str, set[str]]) -> dict[str, set[str]]:
+    prog_to_ideas: dict[str, set[str]] = defaultdict(set)
     for idea, pids in idea_to_programs.items():
         for pid in pids:
             prog_to_ideas[str(pid)].add(idea)
     return prog_to_ideas
 
 
-def build_parents(programs: Dict[str, dict]) -> Dict[str, List[str]]:
-    parents_of: Dict[str, List[str]] = {}
+def build_parents(programs: dict[str, dict]) -> dict[str, list[str]]:
+    parents_of: dict[str, list[str]] = {}
     for pid, p in programs.items():
         parents = p.get("parents", []) or []
         if isinstance(parents, str):
@@ -162,8 +161,8 @@ def build_parents(programs: Dict[str, dict]) -> Dict[str, List[str]]:
     return parents_of
 
 
-def build_children(parents_of: Dict[str, List[str]]) -> Dict[str, List[str]]:
-    children_of: Dict[str, List[str]] = defaultdict(list)
+def build_children(parents_of: dict[str, list[str]]) -> dict[str, list[str]]:
+    children_of: dict[str, list[str]] = defaultdict(list)
     for child, pars in parents_of.items():
         for par in pars:
             children_of[par].append(child)
@@ -173,7 +172,7 @@ def build_children(parents_of: Dict[str, List[str]]) -> Dict[str, List[str]]:
 # -----------------------------
 # Quartiles
 # -----------------------------
-def generation_quantile_bounds(gens: List[int], qs=(0.25, 0.50, 0.75)) -> Tuple[float, float, float]:
+def generation_quantile_bounds(gens: list[int], qs=(0.25, 0.50, 0.75)) -> tuple[float, float, float]:
     gs = sorted(gens)
     if not gs:
         raise ValueError("No generations available.")
@@ -186,7 +185,7 @@ def generation_quantile_bounds(gens: List[int], qs=(0.25, 0.50, 0.75)) -> Tuple[
     return qval(qs[0]), qval(qs[1]), qval(qs[2])
 
 
-def generation_range_bounds(gens: List[int]) -> Tuple[float, float, float]:
+def generation_range_bounds(gens: list[int]) -> tuple[float, float, float]:
     gmin, gmax = min(gens), max(gens)
     span = (gmax - gmin) + 1
     b1 = gmin + 0.25 * span
@@ -208,7 +207,7 @@ def generation_to_quartile(gen: int, b1: float, b2: float, b3: float) -> str:
 # -----------------------------
 # Robust stats
 # -----------------------------
-def robust_median(xs: List[float]) -> float:
+def robust_median(xs: list[float]) -> float:
     if not xs:
         return float("nan")
     ys = sorted(xs)
@@ -217,7 +216,7 @@ def robust_median(xs: List[float]) -> float:
     return ys[m] if n % 2 == 1 else 0.5 * (ys[m - 1] + ys[m])
 
 
-def robust_quantile(xs: List[float], q: float) -> float:
+def robust_quantile(xs: list[float], q: float) -> float:
     if not xs:
         return float("nan")
     ys = sorted(xs)
@@ -227,7 +226,7 @@ def robust_quantile(xs: List[float], q: float) -> float:
     return ys[idx]
 
 
-def mad(xs: List[float]) -> float:
+def mad(xs: list[float]) -> float:
     if not xs:
         return float("nan")
     med = robust_median(xs)
@@ -235,7 +234,7 @@ def mad(xs: List[float]) -> float:
     return robust_median(devs)
 
 
-def percentile_rank(sorted_vals: List[float], x: float) -> float:
+def percentile_rank(sorted_vals: list[float], x: float) -> float:
     if not sorted_vals:
         return float("nan")
     k = bisect.bisect_right(sorted_vals, x)
@@ -245,7 +244,7 @@ def percentile_rank(sorted_vals: List[float], x: float) -> float:
 # -----------------------------
 # Elite threshold
 # -----------------------------
-def elite_threshold_by_top_k(fitness_vals: List[float], elite_pct: float) -> Tuple[float, int]:
+def elite_threshold_by_top_k(fitness_vals: list[float], elite_pct: float) -> tuple[float, int]:
     xs = [float(x) for x in fitness_vals if math.isfinite(float(x))]
     if not xs:
         return float("nan"), 0
@@ -262,7 +261,7 @@ def elite_threshold_by_top_k(fitness_vals: List[float], elite_pct: float) -> Tup
 # -----------------------------
 # Baselines
 # -----------------------------
-def pick_best_parent(parents: List[str], programs: Dict[str, dict]) -> Optional[Tuple[str, float]]:
+def pick_best_parent(parents: list[str], programs: dict[str, dict]) -> tuple[str, float] | None:
     best_pid = None
     best_fit = float("-inf")
     for par in parents:
@@ -281,7 +280,7 @@ def pick_best_parent(parents: List[str], programs: Dict[str, dict]) -> Optional[
     return best_pid, best_fit
 
 
-def mean_parent_fitness(parents: List[str], programs: Dict[str, dict]) -> Optional[float]:
+def mean_parent_fitness(parents: list[str], programs: dict[str, dict]) -> float | None:
     fits = []
     for par in parents:
         p = programs.get(par)
@@ -307,7 +306,7 @@ class IntroEvent:
     child_id: str
     child_gen: int
     child_fit: float
-    parents: List[str]
+    parents: list[str]
     best_parent_id: str
     best_parent_fit: float
     mean_parent_fit: float
@@ -315,20 +314,20 @@ class IntroEvent:
 
 
 def compute_intro_events_origin_only(
-    programs: Dict[str, dict],
-    prog_to_origin_ideas: Dict[str, Set[str]],
-    parents_of: Dict[str, List[str]],
+    programs: dict[str, dict],
+    prog_to_origin_ideas: dict[str, set[str]],
+    parents_of: dict[str, list[str]],
     b1: float,
     b2: float,
     b3: float,
-) -> List[IntroEvent]:
+) -> list[IntroEvent]:
     """
     Intro/origin event definition:
     - The idea originated in `child` (child listed in linked_programs)
     - The idea did NOT originate in any of `child`'s parents
       (supports independent rediscovery / reintroduction)
     """
-    events: List[IntroEvent] = []
+    events: list[IntroEvent] = []
 
     for child_id, parents in parents_of.items():
         if not parents:
@@ -338,7 +337,7 @@ def compute_intro_events_origin_only(
         if not child_origin_ideas:
             continue
 
-        parent_union: Set[str] = set()
+        parent_union: set[str] = set()
         for par in parents:
             parent_union |= prog_to_origin_ideas.get(par, set())
 
@@ -383,11 +382,11 @@ def compute_intro_events_origin_only(
 # Sibling groups (per generation bucket)
 # -----------------------------
 def build_sibling_groups(
-    programs: Dict[str, dict],
-    parents_of: Dict[str, List[str]],
+    programs: dict[str, dict],
+    parents_of: dict[str, list[str]],
     mode: str,
     gen_window: int,
-) -> Dict[Tuple, List[str]]:
+) -> dict[tuple, list[str]]:
     """
     Returns mapping sibling_key -> list of program_ids in that sibling group.
 
@@ -399,7 +398,7 @@ def build_sibling_groups(
       - if gen_window == 0 => exact generation
       - else bucket = gen // (gen_window+1)
     """
-    groups: Dict[Tuple, List[str]] = defaultdict(list)
+    groups: dict[tuple, list[str]] = defaultdict(list)
 
     def bucket(gen: int) -> int:
         if gen_window <= 0:
@@ -439,10 +438,10 @@ def build_sibling_groups(
 # Sibling groups (ALL generations)
 # -----------------------------
 def build_sibling_groups_allgens(
-    programs: Dict[str, dict],
-    parents_of: Dict[str, List[str]],
+    programs: dict[str, dict],
+    parents_of: dict[str, list[str]],
     mode: str,
-) -> Dict[Tuple, List[str]]:
+) -> dict[tuple, list[str]]:
     """
     Returns mapping sibling_key -> list of program_ids in that sibling group,
     ignoring generation completely.
@@ -451,7 +450,7 @@ def build_sibling_groups_allgens(
       - "best_parent": group by (best_parent_id)
       - "parent_set":  group by (sorted(parents))
     """
-    groups: Dict[Tuple, List[str]] = defaultdict(list)
+    groups: dict[tuple, list[str]] = defaultdict(list)
 
     for pid, pars in parents_of.items():
         if not pars:
@@ -498,9 +497,9 @@ class DescMetrics:
 def compute_descendant_metrics_for_child(
     child_id: str,
     child_gen: int,
-    programs: Dict[str, dict],
-    children_of: Dict[str, List[str]],
-    elite_pids: Set[str],
+    programs: dict[str, dict],
+    children_of: dict[str, list[str]],
+    elite_pids: set[str],
     gmax: int,
     k: int,
 ) -> DescMetrics:
@@ -512,13 +511,13 @@ def compute_descendant_metrics_for_child(
     max_gen = gmax if k < 0 else child_gen + k
 
     best_fit = float("-inf")
-    best_gen: Optional[int] = None
+    best_gen: int | None = None
     reaches_elite = False
-    best_time_to_elite: Optional[int] = None
+    best_time_to_elite: int | None = None
     reaches_final = False
     desc_count = 0
 
-    visited: Set[str] = set([child_id])
+    visited: set[str] = set([child_id])
     dq = deque([child_id])
 
     while dq:
@@ -581,17 +580,17 @@ def compute_descendant_metrics_for_child(
 # -----------------------------
 # Roots for lineage diversity
 # -----------------------------
-def compute_roots_memoized(parents_of: Dict[str, List[str]]) -> Dict[str, Set[str]]:
-    memo: Dict[str, Set[str]] = {}
+def compute_roots_memoized(parents_of: dict[str, list[str]]) -> dict[str, set[str]]:
+    memo: dict[str, set[str]] = {}
 
-    def roots(pid: str) -> Set[str]:
+    def roots(pid: str) -> set[str]:
         if pid in memo:
             return memo[pid]
         pars = parents_of.get(pid, [])
         if not pars:
             memo[pid] = {pid}
             return memo[pid]
-        out: Set[str] = set()
+        out: set[str] = set()
         for par in pars:
             out |= roots(par)
         memo[pid] = out
@@ -605,24 +604,24 @@ def compute_roots_memoized(parents_of: Dict[str, List[str]]) -> Dict[str, Set[st
 # -----------------------------
 # Aggregation helpers
 # -----------------------------
-def nanmedian(vals: List[float]) -> float:
+def nanmedian(vals: list[float]) -> float:
     xs = [float(x) for x in vals if math.isfinite(float(x))]
     return robust_median(xs) if xs else float("nan")
 
 
-def nanquantile(vals: List[float], q: float) -> float:
+def nanquantile(vals: list[float], q: float) -> float:
     xs = [float(x) for x in vals if math.isfinite(float(x))]
     return robust_quantile(xs, q) if xs else float("nan")
 
 
-def nanrate_bool(vals: List[float]) -> float:
+def nanrate_bool(vals: list[float]) -> float:
     xs = [float(x) for x in vals if math.isfinite(float(x))]
     if not xs:
         return float("nan")
     return sum(1 for x in xs if x > 0.5) / len(xs)
 
 
-def nancount(vals: List[float]) -> int:
+def nancount(vals: list[float]) -> int:
     return sum(1 for x in vals if math.isfinite(float(x)))
 
 
@@ -637,7 +636,7 @@ def compute_origin_analysis(
     desc_k: int = 10,
     sibling_mode: str = "best_parent",
     sibling_gen_window: int = 0,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run origin-based evolutionary statistics analysis.
 
@@ -660,9 +659,9 @@ def compute_origin_analysis(
     roots_memo = compute_roots_memoized(parents_of)
 
     # Valid programs
-    valid_pids: List[str] = []
-    gens: List[int] = []
-    fits_all: List[float] = []
+    valid_pids: list[str] = []
+    gens: list[int] = []
+    fits_all: list[float] = []
     for pid, p in programs.items():
         gen = p.get("generation", None)
         fit = p.get("fitness", None)
@@ -690,14 +689,14 @@ def compute_origin_analysis(
         b1, b2, b3 = generation_range_bounds(gens)
 
     # Precompute which generations belong to which quartile (for denom in reinvention rates)
-    gens_by_quartile: Dict[str, Set[int]] = {q: set() for q in ["Q1", "Q2", "Q3", "Q4"]}
+    gens_by_quartile: dict[str, set[int]] = {q: set() for q in ["Q1", "Q2", "Q3", "Q4"]}
     for g in distinct_gens:
         q = generation_to_quartile(g, b1, b2, b3)
         gens_by_quartile[q].add(g)
 
     # Elite set
     elite_threshold, elite_k = elite_threshold_by_top_k(fits_all, elite_pct)
-    elite_pids: Set[str] = set()
+    elite_pids: set[str] = set()
     if math.isfinite(elite_threshold):
         for pid in valid_pids:
             f = float(programs[pid]["fitness"])
@@ -708,7 +707,7 @@ def compute_origin_analysis(
     prog_to_origin_ideas = invert_idea_to_programs(idea_to_origin_programs)
 
     # Fitness distributions per generation for parent fitness percentiles
-    gen_to_sorted_fits: Dict[int, List[float]] = defaultdict(list)
+    gen_to_sorted_fits: dict[int, list[float]] = defaultdict(list)
     for pid in valid_pids:
         gen = int(programs[pid]["generation"])
         gen_to_sorted_fits[gen].append(float(programs[pid]["fitness"]))
@@ -732,7 +731,7 @@ def compute_origin_analysis(
     sibling_groups = build_sibling_groups(programs, parents_of, sibling_mode, sibling_gen_window)
     sibling_groups_allgens = build_sibling_groups_allgens(programs, parents_of, sibling_mode)
 
-    def sibling_key(best_parent_id: str, parents: List[str], child_gen: int) -> Tuple:
+    def sibling_key(best_parent_id: str, parents: list[str], child_gen: int) -> tuple:
         def bucket(gen: int) -> int:
             if sibling_gen_window <= 0:
                 return gen
@@ -742,7 +741,7 @@ def compute_origin_analysis(
             return ("best_parent", best_parent_id, bucket(child_gen))
         return ("parent_set", tuple(sorted(parents)), bucket(child_gen))
 
-    def sibling_key_allgens(best_parent_id: str, parents: List[str]) -> Tuple:
+    def sibling_key_allgens(best_parent_id: str, parents: list[str]) -> tuple:
         if sibling_mode == "best_parent":
             return ("best_parent_allgens", best_parent_id)
         return ("parent_set_allgens", tuple(sorted(parents)))
@@ -759,14 +758,14 @@ def compute_origin_analysis(
 
     # Build event-level rows
     # (We’ll aggregate by (idea, quartile) and also compute ALL.)
-    desc_cache: Dict[str, DescMetrics] = {}
+    desc_cache: dict[str, DescMetrics] = {}
 
     event_rows = []
     eps = 1e-12
 
     # First pass: compute gains for global & quartile distributions
-    gains_all: List[float] = []
-    gains_by_q: Dict[str, List[float]] = defaultdict(list)
+    gains_all: list[float] = []
+    gains_by_q: dict[str, list[float]] = defaultdict(list)
 
     for ev in intro_events:
         gain_best = ev.child_fit - ev.best_parent_fit
@@ -780,8 +779,8 @@ def compute_origin_analysis(
     # Robust z params
     overall_med = robust_median(gains_all) if gains_all else float("nan")
     overall_mad = mad(gains_all) if gains_all else float("nan")
-    q_med: Dict[str, float] = {q: robust_median(xs) for q, xs in gains_by_q.items()}
-    q_mad: Dict[str, float] = {q: mad(xs) for q, xs in gains_by_q.items()}
+    q_med: dict[str, float] = {q: robust_median(xs) for q, xs in gains_by_q.items()}
+    q_mad: dict[str, float] = {q: mad(xs) for q, xs in gains_by_q.items()}
 
     for ev in intro_events:
         gain_best = ev.child_fit - ev.best_parent_fit
@@ -960,14 +959,14 @@ def compute_origin_analysis(
         ]
 
         # Precompute origin info per quartile (and ALL)
-        origin_by_q: Dict[str, List[str]] = {q: [] for q in ["Q1", "Q2", "Q3", "Q4"]}
+        origin_by_q: dict[str, list[str]] = {q: [] for q in ["Q1", "Q2", "Q3", "Q4"]}
         for pid in origin_pids_valid:
             gen = int(programs[pid]["generation"])
             q = generation_to_quartile(gen, b1, b2, b3)
             origin_by_q[q].append(pid)
 
         # Helper to compute origin-derived metrics for a set of origin pids
-        def origin_metrics(pids: List[str], q_label: str) -> Dict[str, float]:
+        def origin_metrics(pids: list[str], q_label: str) -> dict[str, float]:
             if not pids:
                 denom_gens = len(gens_by_quartile[q_label]) if q_label in gens_by_quartile else 0
                 return {
@@ -981,7 +980,7 @@ def compute_origin_analysis(
             gens_local = sorted(int(programs[pid]["generation"]) for pid in pids)
             span = float(gens_local[-1] - gens_local[0]) if len(gens_local) >= 2 else 0.0
 
-            root_set: Set[str] = set()
+            root_set: set[str] = set()
             for pid in pids:
                 root_set |= roots_memo.get(pid, {pid})
             root_div = float(len(root_set))

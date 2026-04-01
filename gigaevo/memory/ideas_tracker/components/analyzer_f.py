@@ -22,7 +22,7 @@ from gigaevo.memory.ideas_tracker.components.data_components import (
     ClusterCard,
     ProgramRecord,
     RecordCardEmbedding,
-    RecordCardExtended
+    RecordCardExtended,
 )
 from gigaevo.memory.ideas_tracker.components.fabrics.llm_clients_fabric import LLMClient
 from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger

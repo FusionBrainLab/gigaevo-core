@@ -1,6 +1,5 @@
 import asyncio
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -9,7 +8,7 @@ from tools.utils import RedisRunConfig, fetch_evolution_dataframe
 
 
 def load_dataframe(
-    redis_config: RedisRunConfig, path_to_database: Optional[str | Path]
+    redis_config: RedisRunConfig, path_to_database: str | Path | None
 ) -> pd.DataFrame:
     if path_to_database is not None:
         if isinstance(path_to_database, str):

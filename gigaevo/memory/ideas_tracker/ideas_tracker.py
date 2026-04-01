@@ -8,7 +8,7 @@ and optionally integrates with the memory write pipeline.
 import asyncio
 from pathlib import Path
 import sys
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import tqdm
@@ -19,7 +19,9 @@ from gigaevo.memory.ideas_tracker.components.data_components import (
     IncomingIdeas,
     ProgramRecord,
 )
-from gigaevo.memory.ideas_tracker.components.fabrics.analyzer_fabric import create_analyzer
+from gigaevo.memory.ideas_tracker.components.fabrics.analyzer_fabric import (
+    create_analyzer,
+)
 from gigaevo.memory.ideas_tracker.components.fabrics.postprocessing_fabric import (
     create_postprocessing,
 )
@@ -56,7 +58,7 @@ class IdeaTracker:
 
     def __init__(
         self,
-        config_path: Optional[str | Path] = None,
+        config_path: str | Path | None = None,
         *,
         logs_dir: str | Path | None = None,
     ) -> None:
@@ -180,7 +182,7 @@ class IdeaTracker:
         Returns:
             ``ProgramRecord`` list for programs not yet tracked, after conversion.
         """
-        search_condition = (df["metric_fitness"] > 0) & (df["is_root"] == False)
+        search_condition = (df["metric_fitness"] > 0) & (~df["is_root"])
         valid_programs = df[search_condition]
         all_programs = set(valid_programs["program_id"])
         new_programs = all_programs.difference(self.programs_ids)
@@ -300,7 +302,7 @@ class IdeaTracker:
         for prog in processed_programs:
             self.ideas_manager.record_bank.import_idea_extended(prog, is_forced=True)
 
-    def run(self, path_to_database: Optional[str | Path] = None) -> None:
+    def run(self, path_to_database: str | Path | None = None) -> None:
         """End-to-end run: load data, analyze new programs, enrich ideas, log, memory I/O.
 
         Optionally builds memory-usage updates, runs default or fast analyzer

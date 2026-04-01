@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import json
 import math
 from math import ceil
 import os
+from pathlib import Path
 import statistics
-from typing import Any
+from typing import Any, Protocol
+
 from dotenv import load_dotenv
 
 try:
@@ -176,6 +177,10 @@ def _resolve_memory_backend_class(use_api: bool):
     except ImportError:  # pragma: no cover - direct script execution fallback
         from shared_memory.memory import AmemGamMemory as legacy_backend
     return legacy_backend
+
+
+class CardMemory(Protocol):
+    def get_card(self, card_id: str) -> dict[str, Any] | None: ...
 
 
 def _load_json(path: Path) -> Any:
@@ -574,7 +579,7 @@ def _apply_usage_updates_to_cards(
     cards: list[dict[str, Any]],
     *,
     usage_updates: dict[str, dict[str, Any]],
-    memory: AmemGamMemory,
+    memory: CardMemory,
 ) -> list[dict[str, Any]]:
     if not usage_updates:
         return cards
@@ -617,7 +622,7 @@ def load_memory_cards(
     programs_path: Path | None = None,
     best_programs_percent: float = 0.0,
     usage_updates_path: Path | None = None,
-    memory: AmemGamMemory | None = None,
+    memory: CardMemory | None = None,
 ) -> list[dict]:
     payload = _load_json(path)
     usage_updates = _load_usage_updates(usage_updates_path)
@@ -660,7 +665,7 @@ def _write_memory_write_stats(
     write_stats_by_card_type: dict[str, dict[str, int]],
 ) -> dict[str, Any]:
     snapshot = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "input_cards_count": int(input_cards_count),
         "input_card_type_counts": input_card_type_counts,
         "stats": write_stats,

@@ -1,23 +1,6 @@
-import os
 import json
 import threading
-from typing import Tuple, Optional
-
-import multiprocessing
-import traceback
-from typing import Dict, List, Any
-from collections import defaultdict
-from pathlib import Path
-     
-import io, contextlib, traceback
-
-import multiprocessing as mp
-import traceback, contextlib, io
-
-
-from typing import Optional, Tuple, Any
-import json
-import threading
+from typing import Any
 
 
 class LLMService:
@@ -25,14 +8,14 @@ class LLMService:
         self,
         service: str,
         model_name: str,
-        api_key: Optional[str] = None,
-        reasoning_effort: Optional[str] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
+        api_key: str | None = None,
+        reasoning_effort: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         streaming: bool = False,
         thinking: bool = False,
-        openrouter_referer: Optional[str] = None,
-        openrouter_title: Optional[str] = None,
+        openrouter_referer: str | None = None,
+        openrouter_title: str | None = None,
         gigachat_scope: str = "GIGACHAT_API_CORP",
         gigachat_verify_ssl: bool = False,
         system_prompt: str = ""
@@ -84,8 +67,8 @@ class LLMService:
         elif self.service.startswith('hf'):
             # Lazy import Transformers + Torch only for HF
             try:
-                from transformers import AutoTokenizer, AutoModelForCausalLM
                 import torch  # noqa: F401 (device_map uses it)
+                from transformers import AutoModelForCausalLM, AutoTokenizer
             except ImportError as e:
                 raise ImportError(
                     "Install 'transformers' and 'torch' to use service='hf*'"
@@ -138,7 +121,7 @@ class LLMService:
         else:
             raise ValueError(f"Unknown service {service!r}")
 
-    def generate(self, data: str) -> Tuple[str, Any, Optional[int], Optional[float]]:
+    def generate(self, data: str) -> tuple[str, Any, int | None, float | None]:
         """
         Returns:
             final_text   – model’s end-user answer
@@ -353,11 +336,6 @@ class LLMService:
                 or usage.get("completion_tokens")
                 or (usage.get("token_usage", {}) or {}).get("completion_tokens")
             )
-            total_tokens = (
-                usage.get("total_tokens")
-                or (usage.get("token_usage", {}) or {}).get("total_tokens")
-            )
-
             final_text = res_dict["content"] or ""
             return final_text, res_dict, output_tokens, None
 

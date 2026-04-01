@@ -1,18 +1,23 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, Protocol
-from pydantic import BaseModel, Field
+
 import json
 from pathlib import Path
+from typing import Any, Protocol
+
+from pydantic import BaseModel, Field
+
+from .page import Page
+
 
 class MemoryState(BaseModel):
     """Long-term memory: only abstracts list."""
-    abstracts: List[str] = Field(default_factory=list, description="List of memory abstracts")
+    abstracts: list[str] = Field(default_factory=list, description="List of memory abstracts")
 
 class MemoryUpdate(BaseModel):
     """Memory update result"""
     new_state: MemoryState = Field(..., description="Updated memory state")
-    new_page: 'Page' = Field(..., description="New page added")
-    debug: Dict[str, Any] = Field(default_factory=dict, description="Debug information")
+    new_page: Page = Field(..., description="New page added")
+    debug: dict[str, Any] = Field(default_factory=dict, description="Debug information")
 
 class MemoryStore(Protocol):
     def load(self) -> MemoryState: ...
@@ -20,7 +25,7 @@ class MemoryStore(Protocol):
     def add(self, abstract: str) -> None: ...
 
 class InMemoryMemoryStore:
-    def __init__(self, dir_path: Optional[str] = None, init_state: Optional[MemoryState] = None) -> None:
+    def __init__(self, dir_path: str | None = None, init_state: MemoryState | None = None) -> None:
         self._dir_path = Path(dir_path) if dir_path else None
         self._state = init_state or MemoryState()
         if self._dir_path:
@@ -31,7 +36,7 @@ class InMemoryMemoryStore:
     def load(self) -> MemoryState:
         if self._dir_path and self._memory_file.exists():
             try:
-                with open(self._memory_file, 'r', encoding='utf-8') as f:
+                with open(self._memory_file, encoding='utf-8') as f:
                     data = json.load(f)
                     return MemoryState(**data)
             except (json.JSONDecodeError, KeyError, TypeError) as e:

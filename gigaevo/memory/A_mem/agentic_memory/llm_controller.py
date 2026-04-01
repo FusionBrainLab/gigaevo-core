@@ -1,23 +1,26 @@
-from typing import Optional, Literal, Any
-import os
-import json
 from abc import ABC, abstractmethod
+import json
+import os
+from typing import Any, Literal
+
 from litellm import completion
+
 from A_mem.agent.agent_class import LLMService
+
 
 class BaseLLMController(ABC):
     @abstractmethod
     def get_completion(
         self,
         prompt: str,
-        response_format: Optional[dict] = None,
+        response_format: dict | None = None,
         temperature: float = 0.7,
     ) -> str:
         """Get completion from LLM"""
         pass
 
 class OpenAIController(BaseLLMController):
-    def __init__(self, model: str = "gpt-4", api_key: Optional[str] = None):
+    def __init__(self, model: str = "gpt-4", api_key: str | None = None):
         try:
             from openai import OpenAI
             self.model = model
@@ -44,7 +47,6 @@ class OpenAIController(BaseLLMController):
 
 class OllamaController(BaseLLMController):
     def __init__(self, model: str = "llama2"):
-        from ollama import chat
         self.model = model
     
     def _generate_empty_value(self, schema_type: str, schema_items: dict = None) -> Any:
@@ -77,7 +79,7 @@ class OllamaController(BaseLLMController):
     def get_completion(self, prompt: str, response_format: dict, temperature: float = 0.7) -> str:
         # Allow exceptions (like ConnectionError) to bubble up for better debugging
         response = completion(
-            model="ollama_chat/{}".format(self.model),
+            model=f"ollama_chat/{self.model}",
             messages=[
                 {"role": "system", "content": "You must respond with a JSON object."},
                 {"role": "user", "content": prompt}
@@ -92,7 +94,7 @@ class LLMServiceController(BaseLLMController):
     def __init__(self, service: LLMService):
         self.service = service
 
-    def _format_prompt(self, prompt: str, response_format: Optional[dict]) -> str:
+    def _format_prompt(self, prompt: str, response_format: dict | None) -> str:
         """Inject schema instructions for services that only accept a plain string prompt."""
         if not response_format:
             return prompt
@@ -124,7 +126,7 @@ class LLMServiceController(BaseLLMController):
     def get_completion(
         self,
         prompt: str,
-        response_format: Optional[dict] = None,
+        response_format: dict | None = None,
         temperature: float = 0.7,
     ) -> str:
         formatted_prompt = self._format_prompt(prompt, response_format)
@@ -145,8 +147,8 @@ class LLMController:
         self,
         backend: Literal["openai", "ollama", "custom"] = "openai",
         model: str = "gpt-4",
-        api_key: Optional[str] = None,
-        llm_service: Optional[LLMService] = None,
+        api_key: str | None = None,
+        llm_service: LLMService | None = None,
     ):
         if llm_service is not None:
             self.llm = LLMServiceController(llm_service)
