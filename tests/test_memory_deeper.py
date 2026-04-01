@@ -192,17 +192,24 @@ class TestBuildEntityMeta:
             "keywords": ["SA", "TSP"],
         })
         name, tags, when_to_use = mem._build_entity_meta(card)
-        assert isinstance(name, str)
-        assert isinstance(tags, list)
-        assert isinstance(when_to_use, str)
-        assert "TSP" in when_to_use or "TSP" in str(tags)
+
+        # Name derived from description (first N chars)
+        assert "simulated annealing" in name.lower() or "local search" in name.lower()
+        # Tags include keywords and category
+        tags_lower = [t.lower() for t in tags]
+        assert any("annealing" in t or "tsp" in t for t in tags_lower)
+        # when_to_use references task or description content
+        assert "TSP" in when_to_use or "simulated" in when_to_use.lower()
 
     def test_empty_card(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({})
         name, tags, when_to_use = mem._build_entity_meta(card)
+        # Even empty card produces valid metadata
         assert isinstance(name, str)
         assert isinstance(tags, list)
+        # Tags at minimum contain category
+        assert any("general" in t.lower() for t in tags) or tags == []
 
 
 # ===========================================================================
