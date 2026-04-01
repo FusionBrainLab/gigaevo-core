@@ -638,16 +638,6 @@ class RecordBank:
                 )
                 return
 
-    def import_idea(self, new_idea: RecordCardExtended) -> None:
-        """Append an existing RecordCard; assign new id if its id already exists in the bank."""
-        if new_idea.id in self.uuids:
-            new_uuid = self._unique_id_pair()
-            new_idea.id = new_uuid
-        self.uuids.append(new_idea.id)
-        idea_dict = asdict(new_idea)
-        idea_dict["linked_programs"] = list(idea_dict["linked_programs"])
-        self._append_record_list(idea_dict)
-
     def import_idea_extended(
         self, new_idea: RecordCardExtended, is_forced: bool = False
     ) -> None:
