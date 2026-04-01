@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 
 class Action:
@@ -28,7 +28,7 @@ class NodeAction(Action):
 class BacktrackAction(Action):
     __slots__ = ("target_id", "reason")
 
-    def __init__(self, target_id: int, reason: Optional[str] = None):
+    def __init__(self, target_id: int, reason: str | None = None):
         self.target_id = int(target_id)
         self.reason = reason or f"backtrack to {target_id}"
 
@@ -56,7 +56,7 @@ class DoneAction(Action):
 
 @dataclass(slots=True)
 class Node:
-    parent: Optional["Node"]
+    parent: Node | None
     action: Action
     state: Any = None
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -31,7 +30,7 @@ class SudokuAdapter:
             if not path.exists():
                 raise FileNotFoundError(f"Missing {path.name} in {self.dataset_path}")
 
-        with open(self.index_path, "r", encoding="utf-8") as handle:
+        with open(self.index_path, encoding="utf-8") as handle:
             self.metadata = yaml.safe_load(handle)
 
         grid_meta = (self.metadata or {}).get("grid", {}) or {}
@@ -43,7 +42,7 @@ class SudokuAdapter:
 
     def _read_chains(self) -> list[dict]:
         chains: list[dict] = []
-        with open(self.chains_path, "r", encoding="utf-8") as handle:
+        with open(self.chains_path, encoding="utf-8") as handle:
             for line in handle:
                 if line.strip():
                     chains.append(json.loads(line))
@@ -51,8 +50,8 @@ class SudokuAdapter:
 
     def load_gold_paths(
         self,
-        size: Optional[int] = None,
-        difficulty: Optional[str] = None,
+        size: int | None = None,
+        difficulty: str | None = None,
         start_idx: int = 0,
     ) -> list[GoldPath]:
         chains = self._read_chains()

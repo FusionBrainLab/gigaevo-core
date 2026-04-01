@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +30,7 @@ class SudokuSpec:
             )
 
     @staticmethod
-    def default_for_size(size: int) -> "SudokuSpec":
+    def default_for_size(size: int) -> SudokuSpec:
         mapping = {4: (2, 2), 6: (2, 3), 9: (3, 3)}
         if size not in mapping:
             raise ValueError(f"Unsupported size: {size}. Supported: {sorted(mapping)}")
@@ -43,7 +42,7 @@ class SudokuSpec:
     @staticmethod
     def from_grid_config(
         size: int, box_rows: int | None, box_cols: int | None
-    ) -> "SudokuSpec":
+    ) -> SudokuSpec:
         if box_rows is None or box_cols is None:
             return SudokuSpec.default_for_size(size)
         spec = SudokuSpec(size=size, box_rows=int(box_rows), box_cols=int(box_cols))
@@ -65,7 +64,7 @@ class Grid:
     _col_cache: list[int] = field(init=False, repr=False)
     _box_cache: list[int] = field(init=False, repr=False)
     _pivots: int = field(init=False, repr=False, default=0)
-    _solvable_cache: Optional[bool] = field(init=False, repr=False, default=None)
+    _solvable_cache: bool | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
         self.spec.validate()
@@ -100,7 +99,7 @@ class Grid:
             self._box_cache[box] |= bit
 
     @classmethod
-    def from_string(cls, value: str, spec: SudokuSpec | None = None) -> "Grid":
+    def from_string(cls, value: str, spec: SudokuSpec | None = None) -> Grid:
         raw = value.strip().replace("\n", "").replace(" ", "")
         if spec is None:
             size = int(len(raw) ** 0.5)
@@ -162,7 +161,7 @@ class Grid:
     def is_complete(self) -> bool:
         return "0" not in self._data
 
-    def find_empty_cell(self) -> Optional[tuple[int, int]]:
+    def find_empty_cell(self) -> tuple[int, int] | None:
         idx = self._data.find("0")
         if idx == -1:
             return None
@@ -216,12 +215,12 @@ class Grid:
         self._box_cache[box] |= bit_new
         return True
 
-    def copy(self) -> "Grid":
+    def copy(self) -> Grid:
         new_grid = Grid(spec=self.spec, _data=self._data)
         new_grid._pivots = self._pivots
         return new_grid
 
-    def validate_next_step(self, next_grid: "Grid") -> bool:
+    def validate_next_step(self, next_grid: Grid) -> bool:
         if not isinstance(next_grid, Grid) or next_grid.spec != self.spec:
             return False
 
@@ -243,8 +242,8 @@ class Grid:
         return self.is_valid_placement(row, col, val)
 
     def verify_pivots_preserved(
-        self, other: "Grid"
-    ) -> tuple[bool, Optional[tuple[int, int]]]:
+        self, other: Grid
+    ) -> tuple[bool, tuple[int, int] | None]:
         if not isinstance(other, Grid) or other.spec != self.spec:
             return (False, None)
         for idx in range(self.spec.cell_count):
@@ -262,7 +261,7 @@ class Grid:
         self._solvable_cache = self._check_solvable(self.copy())
         return self._solvable_cache
 
-    def _check_solvable(self, grid: "Grid") -> bool:
+    def _check_solvable(self, grid: Grid) -> bool:
         empty = grid.find_empty_cell()
         if empty is None:
             return True
