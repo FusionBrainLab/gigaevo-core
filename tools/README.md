@@ -1,8 +1,5 @@
 # GigaEvo Tools
 
-**Run format** (all operational and analysis tools): `prefix@db[:label]`
-where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/static`).
-
 ## Prerequisites
 
 All tool commands use the project venv and require `PYTHONPATH=.`:
@@ -17,28 +14,74 @@ Shell scripts use `$GIGAEVO_PYTHON` (falls back to `python3`):
 export GIGAEVO_PYTHON=python3  # adjust for your environment
 ```
 
-Protocol gates to run before launch and before merge:
+**Run format** (all operational and analysis tools): `prefix@db[:label]`
+where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/static`).
 
-```bash
-bash tools/experiment/check_phase_order.sh <experiment-name>   # pre-launch (Phase 4)
-bash tools/experiment/check_experiment_complete.sh <experiment-name>  # pre-merge (Phase 5)
-```
+---
 
-## Quick Reference
+## Tool Index
 
-| Task | Tool | Command |
+### General Tools (`tools/`)
+
+Work on any GigaEvo run — no experiment.yaml required.
+
+| Tool | Purpose | Key flags |
 |---|---|---|
-| Live status (experiment) | `status.py` | `PYTHONPATH=. python tools/status.py --experiment task/name` |
-| Live status (single run) | `status.py` | `PYTHONPATH=. python tools/status.py --run prefix@db:label` |
-| Gen-by-gen trajectory | `trajectory.py` | `PYTHONPATH=. python tools/trajectory.py --run prefix@db:label` |
-| Top N programs | `top_programs.py` | `PYTHONPATH=. python tools/top_programs.py --run prefix@db:label -n 10` |
-| Evolutionary lineage | `lineage.py` | `PYTHONPATH=. python tools/lineage.py --run prefix@db:label --top-n 1` |
-| Fitness curves plot | `comparison.py` | `PYTHONPATH=. python tools/comparison.py --run prefix@db:label ... --output-folder /tmp/` |
-| Export full CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --output-file /tmp/o.csv` |
-| Export frontier CSV | `redis2pd.py` | `PYTHONPATH=. python tools/redis2pd.py --run prefix@db:label --frontier-csv --output-file /tmp/f.csv` |
-| Archive + upload | `archive_run.sh` | `bash tools/experiment/archive_run.sh --exp <name> --run "prefix@db:label" --upload` |
-| Kill workers + flush | `flush.py` | `PYTHONPATH=. python tools/flush.py --db N [--confirm]` |
-| Task-specific tools | `experiments/<task>/<name>/tools/` | e.g. `experiments/hotpotqa/val_gap/tools/gap_analysis.py` |
+| `status.py` | Live run monitoring: generation, all metrics, invalidity rate, PID liveness | `--run prefix@db:label` or `--experiment task/name` |
+| `trajectory.py` | Gen-by-gen table of frontier/mean fitness and valid program count | `--run`, `--tail N` |
+| `top_programs.py` | Inspect top N programs by fitness, optionally dump source code | `--run`, `-n 10`, `--code`, `--save-dir` |
+| `lineage.py` | Trace evolutionary ancestry chain back to seed | `--run`, `--top-n 1`, `--depth N` |
+| `comparison.py` | Multi-run fitness curve plots (png/pdf/svg) | `--run` (multiple), `--output-folder` |
+| `redis2pd.py` | Export evolution data or frontier to CSV | `--run`, `--frontier-csv`, `--output-file` |
+| `flush.py` | Kill stale exec_runner workers, then flush Redis DBs | `--db N [N ...]`, `--confirm` |
+| `fitness_vs_time.py` | Fitness vs wall-clock time plots | `--run`, `--output-folder` |
+| `pareto_plot.py` | Multi-objective Pareto frontier visualization | `--run`, `--output-folder` |
+| `throughput_plot.py` | Throughput evolution curves | `--run`, `--output-folder` |
+| `no_proxy.py` | NO_PROXY environment helper for backend access | used by `litellm.sh` and launch scripts |
+| `utils.py` | Shared utilities: `parse_run_arg`, Redis helpers | imported by other tools |
+
+### Experiment Lifecycle Tools (`tools/experiment/`)
+
+Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
+
+| Tool | Purpose | Key flags |
+|---|---|---|
+| `archive_run.sh` | Export Redis data to local files + upload as GitHub Release asset | `--exp task/name`, `--run "prefix@db:label"`, `--upload` |
+| `check_phase_order.sh` | Pre-launch gate: verify protocol docs, experiment.yaml, launch.sh, N>=2 | `<experiment-name>` |
+| `check_experiment_complete.sh` | Pre-merge gate: verify all 5 phases, archives, release assets, INDEX.md | `<experiment-name>` |
+| `preflight_check.py` | 20-check validation before launch (configs, Redis, servers, treatment) | `--experiment task/name` |
+| `generate_launch.py` | Generate `launch.sh` from experiment.yaml manifest | `--experiment task/name`, `--dry-run` |
+| `manifest.py` | Load/update `experiment.yaml` programmatically | `import` — not a CLI tool |
+| `record_pids.py` | Record launched PIDs into experiment.yaml | `--experiment`, `--pids-file`, `--labels` |
+| `reset_status.py` | Force-reset experiment status (escape hatch) | `--experiment`, `--status` |
+| `process_cleanup.py` | Kill stale watchdog / run processes | `--experiment` |
+| `pr_comment.py` | Post checkpoint or status updates to experiment PR | `--experiment`, `--body` |
+| `check_all_watchdogs.sh` | Cron health check: scan Redis heartbeats, alert on stale watchdogs | standalone (no args) |
+| `skill_env.sh` | Shared env vars for skills (`$PROJ`, `$GIGAEVO_PYTHON`, `$PYTHONPATH`) | `source` — not executable |
+
+### Infrastructure Tools
+
+| Tool | Purpose |
+|---|---|
+| `litellm.sh` | Start/stop/status LiteLLM proxy for chain server load balancing |
+| `litellm_bench.py` | Benchmark LiteLLM proxy (latency, throughput, error rate) |
+| `llm_contention_bench.py` | Measure LLM server contention under concurrent load |
+
+### Benchmarking Tools
+
+| Tool | Purpose |
+|---|---|
+| `benchmark.py` | Run throughput benchmark suite (`tests/benchmarks/`) |
+| `bench_snapshot.py` | Before/after benchmark snapshots for comparison |
+| `benchmark_capture.py` | Capture benchmark results to `benchmark_history.jsonl` |
+| `profiler.py` | Redis ops, DAG construction, stage execution profiling |
+
+### Scaffolding Tools
+
+| Tool | Purpose |
+|---|---|
+| `dag_builder/` | Visual DAG pipeline builder (React + FastAPI): drag-drop stages, export YAML |
+| `wizard/` | Problem directory generator from YAML config |
 
 ---
 
@@ -111,11 +154,6 @@ Gen 42: best=66.0%  mean=57.3%  n_valid=  5
   Last improvement: gen 38 (63.4% → 66.0%, +2.6pp)
   Acceptance rate (gens 33–42): 8.5% (5 improvements / 59 valid programs)
 ```
-
-Acceptance rate note: numerator = number of gens (in last 10) where the frontier improved
-(0–1 per gen); denominator = total valid programs in those gens summed. This is a
-per-valid-program improvement rate, not a per-mutation rate — invalid programs are excluded
-from the denominator.
 
 ---
 
@@ -241,17 +279,6 @@ PYTHONPATH=. python tools/redis2pd.py \
     --output-file experiments/hotpotqa/val_gap/frontier_O.csv
 ```
 
-Frontier CSV format (paste directly into results tables). Dense format — one row per gen,
-including gens without frontier improvement (value carries forward from last improvement):
-
-```
-gen,best_val
-1,0.423
-5,0.552
-...
-42,0.660
-```
-
 Legacy args (`--redis-db` / `--redis-prefix`) still work for `archive_run.sh` compatibility.
 
 ---
@@ -270,15 +297,6 @@ PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --program 
 
 # Limit depth to 5 ancestor hops
 PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1 --depth 5
-```
-
-Output:
-```
-Lineage of program abc12345 (run O, gen 32, fitness=66.0%)
-
-  gen 32  abc12345  fitness=66.0%  mutation: rewrite_answer_extraction_step6
-  gen 29  def45678  fitness=63.4%  mutation: add_coreference_resolution_step4
-  gen 25  ghi90123  fitness=62.7%  [SEED — ddce37b4]
 ```
 
 ---
@@ -325,22 +343,6 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 
 ---
 
-## Visual Tools
-
-### `dag_builder/` — Visual DAG pipeline builder
-
-A React + FastAPI app for building execution pipelines visually. Drag-and-drop
-stages, connect data flow edges, export as Python code or Hydra YAML config.
-
-```bash
-# Start both backend (port 8081) and frontend (port 8082)
-bash tools/dag_builder/start.sh
-```
-
-See `tools/dag_builder/README.md` for full documentation.
-
----
-
 ## Benchmarking
 
 ### `benchmark.py` — Throughput benchmark runner
@@ -371,7 +373,19 @@ PYTHONPATH=. python tools/profiler.py --redis-url redis://localhost:6379/15
 
 ## Scaffolding
 
-### `wizard` — Problem directory generator
+### `dag_builder/` — Visual DAG pipeline builder
+
+A React + FastAPI app for building execution pipelines visually. Drag-and-drop
+stages, connect data flow edges, export as Python code or Hydra YAML config.
+
+```bash
+# Start both backend (port 8081) and frontend (port 8082)
+bash tools/dag_builder/start.sh
+```
+
+See `tools/dag_builder/README.md` for full documentation.
+
+### `wizard/` — Problem directory generator
 
 Generates a complete problem directory from a YAML config (validate.py, metrics.yaml,
 initial_programs/, task_description.txt). See `tools/wizard/` for documentation.
@@ -381,6 +395,14 @@ python -m tools.wizard my_config.yaml
 python -m tools.wizard my_config.yaml --overwrite
 python -m tools.wizard my_config.yaml --validate-only
 ```
+
+---
+
+## Placement Convention
+
+- `tools/` — works for **any** GigaEvo run (just needs `--run prefix@db`)
+- `tools/experiment/` — depends on experiment.yaml, protocol docs, or PRs
+- `experiments/<task>/<name>/tools/` — imports problem-specific code, hardcodes experiment-specific values
 
 ---
 
@@ -424,7 +446,7 @@ Use `status.py --experiment` to auto-discover all metrics.
 2. **Never write ad-hoc Redis queries** to answer questions the tools already answer.
    If a tool gives wrong results, fix the tool — don't work around it with inline Python.
 3. **Archive is in-memory only** — `archive`/`archive:reverse` Redis keys are NOT persisted.
-   Export with `archive_run.sh` before flushing or rebooting.
+   Export with `tools/experiment/archive_run.sh` before flushing or rebooting.
 
 ### Generation count
 
@@ -441,24 +463,3 @@ it can lag 5+ generations behind the true count.
 `grep -c "Phase 1: Idle confirmed" run.log` is brittle: it depends on exact log message
 format, silently returns 0 if the log path is wrong, and has caused watchdog crashes
 in production. It is listed here only as a historical warning — do not use it.
-
----
-
-## Experiment-specific tools
-
-Task-specific tools (problem eval, cross-metric gap tables, custom analysis) live in
-`experiments/<task>/<name>/tools/`, not in this directory. Each experiment that needs them
-creates its own `tools/` subdirectory.
-
-**Convention**:
-- A tool goes in `tools/` if it works for **any** GigaEvo run (just needs `--run prefix@db`)
-- A tool goes in `experiments/<task>/<name>/tools/` if it imports problem-specific code,
-  hardcodes experiment URLs/paths, or is only meaningful for one experiment's design
-
-**Examples**:
-
-| Tool | Location | Reason |
-|---|---|---|
-| `lineage.py` | `tools/` | Generic — works for any GigaEvo run |
-| `gap_analysis.py` | `experiments/hotpotqa/val_gap/tools/` | Hardcodes O/R/Q/F run specs, gate criteria from 03_plan.md |
-| `eval_checkpoint.py` | `experiments/hotpotqa/val_gap/tools/` | Imports HotpotQA chain infra; HotpotQA-specific |
