@@ -10,6 +10,7 @@ from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
+from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
 
 
 @dataclass
@@ -42,7 +43,8 @@ async def fetch_evolution_dataframe(
     )
 
     try:
-        programs = await storage.get_all()
+        exclude = None if add_stage_results else EXCLUDE_STAGE_RESULTS
+        programs = await storage.get_all(exclude=exclude)
     finally:
         await storage.close()
 
