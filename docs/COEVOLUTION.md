@@ -6,6 +6,22 @@ task-specific programs (e.g. HotpotQA chains), and a **prompt run** evolves the
 system prompt used by the mutation LLM. A Redis-based feedback loop connects
 them so that prompts producing better mutations survive.
 
+## Quick Start
+
+Launch two processes — one for programs, one for prompts:
+
+```bash
+# 1. Main run — uses co-evolved prompts from DB 6
+python run.py experiment=prompt_coevolution problem.name=heilbron \
+    redis.db=4 prompt_fetcher.prompt_redis_db=6
+
+# 2. Prompt run — evolves mutation prompts, reads outcomes from DB 4
+python run.py problem.name=prompt_evolution pipeline=prompt_evolution \
+    redis.db=6 main_redis_db=4 main_redis_prefix=heilbron
+```
+
+The main run fetches the current best mutation prompt from the prompt run's archive. The prompt run reads fitness outcomes from the main run to select for prompts that produce better mutations.
+
 ## Architecture
 
 ```

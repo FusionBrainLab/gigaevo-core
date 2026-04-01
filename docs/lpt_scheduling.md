@@ -1,5 +1,28 @@
 # LPT Scheduling for DAG Evaluation
 
+## Quick Start
+
+```bash
+# Simple heuristic (code length → predicted eval time)
+python run.py scheduling=lpt problem.name=heilbron
+
+# Ridge regression with chain-aware features (n_steps, retrieval count, etc.)
+python run.py scheduling=lpt_ridge problem.name=heilbron
+
+# Default: FIFO (no prediction)
+python run.py scheduling=fifo problem.name=heilbron
+```
+
+Three scheduling configs in `config/scheduling/`:
+- **`fifo`** (default) — insertion order, no prediction
+- **`lpt`** — LPT with `SimpleHeuristicPredictor` (code length heuristic, online calibration)
+- **`lpt_ridge`** — LPT with `RidgePredictor` + `ChainFeatureExtractor` (uses sklearn, best for chain problems with variable DAG complexity)
+
+Works with any experiment preset: `python run.py experiment=steady_state scheduling=lpt problem.name=heilbron`
+
+`scheduling=lpt` was used in production HoVer experiments (steady-state-v2, map-elites-topology).
+`lpt_ridge` with `ChainFeatureExtractor` is available for chain problems where DAG complexity varies widely — it uses structural features (n_steps, retrieval count, code length) for more accurate predictions.
+
 ## Problem
 
 The DagRunner launches programs for evaluation in arbitrary order (Redis SET

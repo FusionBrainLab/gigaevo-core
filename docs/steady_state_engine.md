@@ -7,16 +7,18 @@ and ingested continuously.
 
 ## Quick Start
 
-Opt in with one Hydra override:
-
 ```bash
-python run.py evolution=steady_state \
-    problem.name=chains/hover/static_soft \
-    problem.dir=problems/chains/hover/static_soft \
-    # ... other overrides as usual
+# Using the experiment preset (recommended)
+python run.py experiment=steady_state problem.name=heilbron
+
+# Or as a single Hydra override on any existing setup
+python run.py evolution=steady_state problem.name=heilbron
+
+# Combined with migration bus for maximum throughput
+python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
 ```
 
-All other config (problem, strategy, pipeline, LLM) stays the same.
+Works with any problem — just change `problem.name`. All other config (strategy, pipeline, LLM) stays the same.
 
 ## How It Works
 

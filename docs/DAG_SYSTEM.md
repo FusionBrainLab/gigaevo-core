@@ -14,6 +14,26 @@
 
 ---
 
+## Quick Start
+
+The DAG pipeline is selected via the `pipeline` config group:
+
+```bash
+# Standard pipeline (validate → execute → metrics → insights)
+python run.py pipeline=standard problem.name=heilbron
+
+# With mutation context (adds lineage + statistics to mutation prompt)
+python run.py pipeline=with_context problem.name=heilbron
+
+# Auto-detect pipeline from problem (default)
+python run.py pipeline=auto problem.name=heilbron
+
+# Custom pipeline — define your own in config/pipeline/my_pipeline.yaml
+python run.py pipeline=my_pipeline problem.name=heilbron
+```
+
+See `config/pipeline/` for all available pipelines. To build a custom pipeline visually, use `bash tools/dag_builder/start.sh`.
+
 ## Overview
 
 The **DAG (Directed Acyclic Graph) System** is GigaEvo's core execution engine for processing evolved programs. It orchestrates complex, multi-stage computations where each stage can depend on outputs from previous stages, ensuring:
