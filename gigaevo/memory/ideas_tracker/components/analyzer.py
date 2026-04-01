@@ -104,6 +104,7 @@ class IdeaAnalyzer:
             try:
                 response = self.call_llm("classify_ext", prompt_content)
                 classified_ideas = json.loads(response)
+                return classified_ideas
             except Exception as e:
                 print(f"Error calling LLM: {e}")
                 continue
