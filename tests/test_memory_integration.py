@@ -555,12 +555,13 @@ class TestFullMemoryCycle:
 
 
 # ===========================================================================
-# INTEGRATION TEST 5: Chaos-hacker findings — regression tests
+# Search fallback paths and error handling
 # ===========================================================================
 
 
-class TestChaosHackerFindings:
-    """Tests addressing specific findings from adversarial review."""
+class TestSearchFallbackPaths:
+    """Test _search_with_ids GAM vs plain-search fallback, parse guarantees,
+    and API client error handling."""
 
     def test_search_with_ids_fallback_to_plain_search(self, tmp_path):
         """When research_agent is None, _search_with_ids falls to memory.search()."""

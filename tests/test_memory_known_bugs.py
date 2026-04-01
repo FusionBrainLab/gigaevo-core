@@ -1,8 +1,7 @@
-"""Tests exposing bugs found by chaos-hacker adversarial review.
+"""Tests documenting known bugs and edge cases in the memory module.
 
-Each test documents a real bug. Tests that expose currently-broken behavior
-are marked with comments explaining the issue. When the bug is fixed,
-the test assertion should be updated to reflect correct behavior.
+Each test pins current (buggy) behavior so that intentional fixes are
+explicit. When a bug is fixed, update the assertion to match correct behavior.
 """
 
 import json
