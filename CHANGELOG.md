@@ -2,6 +2,79 @@
 
 <!-- version list -->
 
+## v1.24.0 (2026-04-01)
+
+### Highlights
+
+This release focuses on **performance infrastructure**, **experiment tooling maturity**, and **repository hygiene**. Two experiments were completed (hover/steady-state-v2: POSITIVE, hover/map-elites-topology: NULL), and the framework gained production-grade load balancing, scheduling, and monitoring.
+
+### New Features
+
+- **Steady-state evolution engine** — continuous mutation/evaluation interleaving that eliminates the generational barrier. Two async loops (producer + consumer) with backpressure via `asyncio.Semaphore(max_in_flight)`. Opt-in: `evolution=steady_state`. Expected throughput: ~8-9x improvement over step-wise generations.
+
+- **LPT scheduling for DAG evaluation** (#136) — longest-processing-time-first scheduling assigns expensive programs to evaluation slots first, reducing tail latency. Discrete-event simulation benchmarks in `tools/benchmarks/`.
+
+- **LLM load balancer** (`llm=balanced`) — Redis-coordinated endpoint pool with least-connections routing. Mutation servers shared across all runs via Redis DB 15. Replaces manual `llm_base_url` per-run configuration.
+
+- **LiteLLM proxy integration** — `bash tools/litellm.sh` auto-generates config from `experiments/infrastructure.yaml` and starts a LiteLLM proxy for chain server load balancing. All chain requests route through `INTERNAL_IP:4000`.
+
+- **Chain feature extraction** — `ChainFeatureExtractor` computes structural behavior coordinates (DAG depth, retrieval count, step count) from real chain programs for MAP-Elites behavioral characterization.
+
+- **Experiment diagnostics** — `/experiment-diagnose` skill: automated failure analysis for running experiments. Checks Redis health, PID liveness, log errors, and Hydra config overrides.
+
+- **Experiment restart** — `/experiment-restart` skill: kill all processes, flush Redis, and re-launch cleanly.
+
+- **Throughput monitoring** — `tools/throughput_plot.py` and 6-panel dashboard in watchdog: mutation rate, eval throughput, fitness distributions, validity panels. Posted hourly to experiment PRs.
+
+- **Fitness vs wall-clock time** — `tools/fitness_vs_time.py` plots fitness trajectories against real time instead of generation number.
+
+- **Prompt co-evolution** — user prompt co-evolution alongside system prompts (`prompt_fetcher=coevolved`).
+
+### Bug Fixes
+
+- **120s read timeout killed 96% of chain evaluations** — removed read timeout (`timeout=None`, keep `connect=30s`) to allow long-running chains under load.
+
+- **CancelledError orphans** — `except Exception` didn't catch `BaseException` in steady-state engine, leaving programs persisted but IDs lost. Fixed with `persisted_id` sentinel + `except BaseException`.
+
+- **Mutation LLM double-escaping** — LLMs using `with_structured_output()` sometimes double-escape quotes in code fields. Fixed by `_fix_double_escaped_quotes()` in mutation agent.
+
+- **Frontier metric recomputation** — when NO_CACHE stages re-evaluate programs, frontier is now recomputed correctly using `clear_series()` + full rewrite instead of appending stale values.
+
+- **TOCTOU races in SteadyStateEngine** — scoped drain + TOCTOU-safe `ingest_batch`, `add_elite` with optimistic locking and WatchError retry.
+
+- **Ghost program detection** — mirrors parent engine's `_await_idle()` logic to clean up orphaned program IDs.
+
+- **Proxy bypass** — added mutation server IPs to `NO_PROXY` to prevent Squid proxy from blocking LLM calls.
+
+### Experiments
+
+| Experiment | Result | PR |
+|---|---|---|
+| hover/steady-state-v2 | **POSITIVE** — continuous interleaving improves throughput | #138 |
+| hover/map-elites-topology | **NULL** — 3D structural BC (dag_depth, n_deep_retrieval, n_steps) did not improve fitness | #142 |
+
+### Repository Cleanup
+
+- **Removed leaked vartodd/circuit_evolve code** — problems, configs, custom/, gf2lib/, npy/, launch scripts (12,800+ lines deleted)
+- **Removed experiment runtime artifacts** — PNGs, pids.txt, cfg_run_*.txt from all completed experiments
+- **Consolidated tools hierarchy** — experiment-specific scripts (archive, preflight, protocol gates) now live in `tools/experiment/`; general tools in `tools/`
+- **Removed all hardcoded paths** — skills, agents, tools, and docs now use `$PROJ` (git root) and `$GIGAEVO_PYTHON` (env var) instead of `/workspace-SR008.fs2/...` or `~/...`
+- **Fixed .gitignore contradictions** — `.claude/` and `CLAUDE.md` were tracked but gitignored
+- **Cleaned root directory** — moved `benchmarks/` → `tools/benchmarks/`, `demos/` → `docs/demos/`
+- **Rewrote Redis data model docs** — complete key namespace reference with all metric tags, archive persistence, iteration vs generation glossary
+
+### Documentation
+
+- **CLAUDE.md** — added tools index, skills table (12 skills), agents table (9 agents), `@tools/README.md` include for Redis data model
+- **tools/README.md** — structured tool index with categories (general, experiment lifecycle, infrastructure, benchmarking, scaffolding), accurate Redis appendix
+- **Removed dead references** — `.claude/rules/*.md` files that never existed on main, redirect stub `docs/redis_schema.md`
+
+### Testing
+
+- 56+ new tests: race conditions, streaming, failure modes, mutation-killing, TOCTOU guards, NaN handling
+- Removed deprecated test classes (TestSafetyMechanismBreakage, TestEngineGenerationTimeout)
+- Full suite: ~3500 tests, all passing
+
 ## v1.23.0 (2026-03-15)
 
 ### Bug Fixes
