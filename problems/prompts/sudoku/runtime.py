@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import atexit
-import os
 from dataclasses import asdict, dataclass
-from typing import Optional
+import os
 
 from problems.prompts.sudoku.config import (
     MODEL_CONFIG,
@@ -90,10 +89,10 @@ class ExampleResult:
     success: bool
     steps: int
     backtracks: int
-    solved_via: Optional[str]
-    failure_reason: Optional[str]
-    raw_last_output: Optional[str]
-    parsed_last_grid: Optional[str]
+    solved_via: str | None
+    failure_reason: str | None
+    raw_last_output: str | None
+    parsed_last_grid: str | None
 
 
 def _next_node_id(nodes: list[Node]) -> int:
@@ -128,7 +127,7 @@ def _render_grid(canonical_grid: str, variant: PromptVariant) -> str:
     raise ValueError(f"Unknown layout: {variant.layout}")
 
 
-def _parse_grid_from_text(text: str, empty_symbols: set[str]) -> Optional[str]:
+def _parse_grid_from_text(text: str, empty_symbols: set[str]) -> str | None:
     tokens: list[str] = []
     for ch in text:
         if ch in "1234":
@@ -173,8 +172,8 @@ def _evaluate_single_example(
     context_nodes = [root_node]
     node_id_to_index = {0: 0}
 
-    raw_last_output: Optional[str] = None
-    parsed_last_grid: Optional[str] = None
+    raw_last_output: str | None = None
+    parsed_last_grid: str | None = None
     backtracks = 0
 
     def fail(reason: str, steps: int) -> ExampleResult:

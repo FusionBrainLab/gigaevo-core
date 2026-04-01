@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import gc
 from dataclasses import dataclass
-from typing import Optional
+import gc
 
 import torch
 import torch.distributed as dist
@@ -41,7 +40,7 @@ class LocalVLLMSolver:
         self.gpu_memory_utilization = gpu_memory_utilization
         self.max_model_len = max_model_len
         self.bf16 = bf16
-        self._vllm: Optional[LLM] = None
+        self._vllm: LLM | None = None
         self._tokenizer = None
 
     @staticmethod
