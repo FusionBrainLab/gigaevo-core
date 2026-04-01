@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v1.24.1 (2026-04-01)
+
+### Bug Fixes
+
+- Remove last 4 dead .claude/rules/ references from CLAUDE.md
+  ([`9caf0c3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9caf0c35898ea169bf269f24520398a15bc4ba78))
+
+### Chores
+
+- Remove GitNexus from CLAUDE.md, skills, and gitignore
+  ([`b9f90ed`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b9f90ed5a6eea049e5c17ad6e4ff13a8d6a170e6))
+
+### Documentation
+
+- Add Quick Start sections with runnable commands to all feature docs
+  ([`4d9a809`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4d9a809fa29e2b1ce4d0eeb86760542609dffd9c))
+
+### Refactoring
+
+- Rename scheduling/lpt_ridge → lpt_chain, clarify scope
+  ([`10cf394`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/10cf394fba7d8ac8ac78e728665989c67e17f941))
+
+
 ## v1.24.0 (2026-04-01)
 
 ### Highlights

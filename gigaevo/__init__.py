@@ -1,6 +1,6 @@
 """GigaEvo – evolutionary computation framework."""
 
-__version__ = "1.24.0"
+__version__ = "1.24.1"
 
 from pydantic import config as _pyd_config
 
