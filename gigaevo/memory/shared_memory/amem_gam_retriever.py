@@ -17,10 +17,8 @@ from GAM_root.gam import (
     InMemoryMemoryStore,
     InMemoryPageStore,
     IndexRetriever,
-    IndexRetrieverConfig,
     ChromaRetriever,
 )
-from GAM_root.gam.retriever.bm25 import BM25Retriever
 from GAM_root.gam.generator import AMemGenerator
 from GAM_root.gam.schemas import Page
 
@@ -174,8 +172,7 @@ def build_retrievers(
 
     if "page_index" in allowed:
         try:
-            index_config = IndexRetrieverConfig(index_dir=str(index_dir / "page_index"))
-            index_retriever = IndexRetriever(index_config.__dict__)
+            index_retriever = IndexRetriever({"index_dir": str(index_dir / "page_index")})
             index_retriever.build(page_store)
             retrievers["page_index"] = index_retriever
             print("✅ Index retriever ready")
@@ -199,6 +196,8 @@ def build_retrievers(
 
     if enable_bm25 and "keyword" in allowed:
         try:
+            from GAM_root.gam.retriever.bm25 import BM25Retriever
+
             bm25_config = {"index_dir": str(index_dir / "bm25")}
             bm25_retriever = BM25Retriever(bm25_config)
             bm25_retriever.build(page_store)
