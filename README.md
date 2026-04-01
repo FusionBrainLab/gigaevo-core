@@ -11,7 +11,7 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 
 ## Demo
 
-![Demo](./demos/demo-opt.gif)
+![Demo](./docs/demos/demo-opt.gif)
 
 ## Getting Started
 

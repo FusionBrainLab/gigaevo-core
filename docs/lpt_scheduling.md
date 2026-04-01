@@ -201,21 +201,21 @@ prioritizer = LPTPrioritizer(predictor)
 
 ## Benchmarks
 
-Run `benchmarks/bench_lpt.py` for a discrete-event simulation comparing
+Run `tools/benchmarks/bench_lpt.py` for a discrete-event simulation comparing
 strategies.  No Redis or real DAGs needed — pure math.
 
 ```bash
 # Default: 40 programs, 4 servers, noise=0.3
-PYTHONPATH=. python benchmarks/bench_lpt.py
+PYTHONPATH=. python tools/benchmarks/bench_lpt.py
 
 # Sweep noise levels (prediction quality impact)
-PYTHONPATH=. python benchmarks/bench_lpt.py --sweep-noise
+PYTHONPATH=. python tools/benchmarks/bench_lpt.py --sweep-noise
 
 # Sweep server count
-PYTHONPATH=. python benchmarks/bench_lpt.py --sweep-servers
+PYTHONPATH=. python tools/benchmarks/bench_lpt.py --sweep-servers
 
 # Sweep batch size
-PYTHONPATH=. python benchmarks/bench_lpt.py --sweep-programs
+PYTHONPATH=. python tools/benchmarks/bench_lpt.py --sweep-programs
 ```
 
 ### Results (40 programs, 4 servers, noise=0.3)
@@ -296,7 +296,7 @@ The predictor learns online — throughput should improve after the first
 | `gigaevo/evolution/scheduling/predictor.py` | EvalTimePredictor ABC + 3 implementations |
 | `gigaevo/evolution/scheduling/prioritizer.py` | ProgramPrioritizer ABC + FIFO/LPT/SJF |
 | `gigaevo/runner/dag_runner.py` | Integration point (prioritize in _launch, learn in _execute_dag) |
-| `benchmarks/bench_lpt.py` | Discrete-event scheduling benchmark |
+| `tools/benchmarks/bench_lpt.py` | Discrete-event scheduling benchmark |
 | `tests/evolution/test_scheduling.py` | 37 unit tests |
 | `tests/evolution/test_scheduling_integration.py` | 15 integration tests |
 | `docs/lpt_scheduling.md` | This file |
