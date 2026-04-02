@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from loguru import logger as _logger
+
 from gigaevo.memory.ideas_tracker.components.data_components import RecordBank
 from gigaevo.memory.ideas_tracker.utils.helpers import merge_usage_payloads
 from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
@@ -41,13 +43,17 @@ def run_memory_write_pipeline(
     best_ideas_path = logger.best_ideas_file
 
     if banks_path is None or best_ideas_path is None:
-        print("Memory write pipeline skipped: logger output paths are unavailable.")
+        _logger.warning(
+            "Memory write pipeline skipped: logger output paths are unavailable."
+        )
         return
     if not banks_path.exists():
-        print(f"Memory write pipeline skipped: missing banks file at {banks_path}.")
+        _logger.warning(
+            f"Memory write pipeline skipped: missing banks file at {banks_path}."
+        )
         return
     if not best_ideas_path.exists() or not _has_best_ideas_snapshot(best_ideas_path):
-        print(
+        _logger.warning(
             "Memory write pipeline skipped: best_ideas snapshot was not generated for this run."
         )
         return
@@ -89,7 +95,7 @@ def run_memory_write_pipeline(
                 else {}
             )
             if isinstance(stats, dict):
-                print(
+                _logger.info(
                     "Memory write pipeline stats: "
                     f"processed={stats.get('processed', 0)}, "
                     f"ideas_processed={ideas_stats.get('processed', 0)}, "
