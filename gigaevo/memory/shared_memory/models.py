@@ -19,7 +19,7 @@ class MemoryCardExplanation(BaseModel):
 class MemoryCard(BaseModel):
     """Canonical general memory card (ideas, insights)."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     id: str
     category: str = "general"
@@ -50,7 +50,7 @@ class ConnectedIdea(BaseModel):
 class ProgramCard(BaseModel):
     """Memory card representing a top-performing program."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     id: str
     category: str = "program"
@@ -61,6 +61,9 @@ class ProgramCard(BaseModel):
     fitness: float | None = None
     code: str = ""
     connected_ideas: list[ConnectedIdea | dict[str, Any]] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    strategy: str = ""
+    links: list[str] = Field(default_factory=list)
 
 
 AnyCard = MemoryCard | ProgramCard

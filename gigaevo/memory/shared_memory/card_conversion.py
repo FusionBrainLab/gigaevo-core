@@ -10,6 +10,12 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
+from gigaevo.memory.shared_memory.models import (
+    AnyCard,
+    MemoryCard,
+    MemoryCardExplanation,
+    ProgramCard,
+)
 from gigaevo.memory.shared_memory.utils import (
     _safe_get,
     _str_or_empty,
@@ -80,67 +86,73 @@ DEFAULT_GAM_TOP_K_BY_TOOL = {
 
 
 def normalize_memory_card(
-    card: dict[str, Any] | None = None,
+    card: dict[str, Any] | AnyCard | None = None,
     fallback_id: str | None = None,
-) -> dict[str, Any]:
-    """Normalize a raw card dict into the canonical memory card shape.
+) -> AnyCard:
+    """Normalize raw input into a typed Pydantic card model.
 
-    Two output shapes:
-    - Program cards (category="program" or program_id truthy): 9 keys
-    - General cards: 15 keys including explanation, keywords, etc.
+    Returns:
+        ProgramCard if category="program" or program_id is truthy.
+        MemoryCard otherwise.
     """
+    if isinstance(card, (MemoryCard, ProgramCard)):
+        return card
+
     raw = dict(card or {})
     category = str(raw.get("category") or "general")
     program_id = _str_or_empty(raw.get("program_id"))
+
     if category == "program" or program_id:
-        return {
-            "id": str(raw.get("id") or fallback_id or ""),
-            "category": "program",
-            "program_id": program_id,
-            "task_description": str(
+        return ProgramCard(
+            id=str(raw.get("id") or fallback_id or ""),
+            program_id=program_id,
+            task_description=str(
                 raw.get("task_description") or raw.get("context") or ""
             ),
-            "task_description_summary": str(
+            task_description_summary=str(
                 raw.get("task_description_summary") or raw.get("context_summary") or ""
             ),
-            "description": str(raw.get("description") or raw.get("content") or ""),
-            "fitness": _to_float(raw.get("fitness"), default=None),
-            "code": str(raw.get("code") or ""),
-            "connected_ideas": _to_list(raw.get("connected_ideas")),
-        }
+            description=str(raw.get("description") or raw.get("content") or ""),
+            fitness=_to_float(raw.get("fitness"), default=None),
+            code=str(raw.get("code") or ""),
+            connected_ideas=_to_list(raw.get("connected_ideas")),
+            keywords=_to_list(raw.get("keywords")),
+            strategy=str(raw.get("strategy") or ""),
+            links=_to_list(raw.get("links")),
+        )
 
     explanation = raw.get("explanation")
     if not isinstance(explanation, dict):
         explanation = {}
 
-    return {
-        "id": str(raw.get("id") or fallback_id or ""),
-        "category": category,
-        "description": str(raw.get("description") or raw.get("content") or ""),
-        "task_description": str(
+    return MemoryCard(
+        id=str(raw.get("id") or fallback_id or ""),
+        category=category,
+        description=str(raw.get("description") or raw.get("content") or ""),
+        task_description=str(
             raw.get("task_description") or raw.get("context") or ""
         ),
-        "task_description_summary": str(
+        task_description_summary=str(
             raw.get("task_description_summary") or raw.get("context_summary") or ""
         ),
-        "strategy": str(raw.get("strategy") or ""),
-        "last_generation": _to_int(raw.get("last_generation"), default=0),
-        "programs": _to_list(raw.get("programs")),
-        "aliases": _to_list(raw.get("aliases")),
-        "keywords": _to_list(raw.get("keywords")),
-        "evolution_statistics": (
+        strategy=str(raw.get("strategy") or ""),
+        last_generation=_to_int(raw.get("last_generation"), default=0),
+        programs=_to_list(raw.get("programs")),
+        aliases=_to_list(raw.get("aliases")),
+        keywords=_to_list(raw.get("keywords")),
+        evolution_statistics=(
             raw.get("evolution_statistics")
             if isinstance(raw.get("evolution_statistics"), dict)
             else {}
         ),
-        "explanation": {
-            "explanations": _to_list(explanation.get("explanations")),
-            "summary": str(explanation.get("summary") or ""),
-        },
-        "works_with": _to_list(raw.get("works_with")),
-        "links": _to_list(raw.get("links")),
-        "usage": raw.get("usage") if isinstance(raw.get("usage"), dict) else {},
-    }
+        explanation=MemoryCardExplanation(
+            explanations=_to_list(explanation.get("explanations")),
+            summary=str(explanation.get("summary") or ""),
+        ),
+        works_with=_to_list(raw.get("works_with")),
+        links=_to_list(raw.get("links")),
+        usage=raw.get("usage") if isinstance(raw.get("usage"), dict) else {},
+    )
 
 
 # ---------------------------------------------------------------------------
