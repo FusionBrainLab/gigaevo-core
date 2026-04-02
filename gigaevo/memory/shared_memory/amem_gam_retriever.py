@@ -14,7 +14,7 @@ from loguru import logger
 
 load_dotenv()
 
-from gigaevo.memory import config
+import gigaevo.memory.config as config
 from gigaevo.memory.GAM_root.gam import (
     ChromaRetriever,
     IndexRetriever,

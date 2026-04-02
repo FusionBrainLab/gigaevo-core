@@ -30,9 +30,11 @@ def test_import_from_package_root():
         AnyCard,
         ConnectedIdea,
         GigaEvoMemoryBase,
+        LocalMemorySnapshot,
         MemoryCard,
         MemoryCardExplanation,
         ProgramCard,
+        Strategy,
         normalize_memory_card,
     )
 
@@ -44,6 +46,8 @@ def test_import_from_package_root():
     assert GigaEvoMemoryBase is not None
     assert ConnectedIdea is not None
     assert MemoryCardExplanation is not None
+    assert LocalMemorySnapshot is not None
+    assert Strategy is not None
 
 
 def test_import_from_shared_memory():
