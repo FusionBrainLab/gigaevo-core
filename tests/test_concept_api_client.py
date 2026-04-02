@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
+from gigaevo.memory.shared_memory.utils import truncate_text
 
 
 # ---------------------------------------------------------------------------
@@ -194,23 +195,23 @@ class TestConceptApiClientErrors:
 
 class TestTruncateText:
     def test_short_passthrough(self):
-        assert AmemGamMemory._truncate_text("hello") == "hello"
+        assert truncate_text("hello") == "hello"
 
     def test_long_truncated(self):
-        result = AmemGamMemory._truncate_text("x" * 2000, max_chars=100)
+        result = truncate_text("x" * 2000, max_chars=100)
         assert len(result) == 100
         assert result.endswith("...")
 
     def test_none_returns_empty(self):
-        assert AmemGamMemory._truncate_text(None) == ""
+        assert truncate_text(None) == ""
 
     def test_exact_boundary(self):
         text = "a" * 1200
-        assert AmemGamMemory._truncate_text(text) == text
+        assert truncate_text(text) == text
 
     def test_one_over_boundary(self):
         text = "a" * 1201
-        result = AmemGamMemory._truncate_text(text)
+        result = truncate_text(text)
         assert len(result) == 1200
         assert result.endswith("...")
 

@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gigaevo.memory.shared_memory.card_conversion import is_program_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 from tests.fakes.agentic_memory import (
@@ -88,7 +89,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
     # Also patch _build_dedup_retrievers similarly
     def _patched_build_dedup_retrievers():
         records = list(mem.memory_cards.values())
-        records = [r for r in records if not mem._is_program_card(r)]
+        records = [r for r in records if not is_program_card(r)]
         if not records:
             return {}
 

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from gigaevo.memory.shared_memory.card_conversion import build_entity_meta
 from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
 
 
@@ -388,7 +389,7 @@ class TestBuildEntityMetaContent:
             "task_description_summary": "TSP solver",
             "keywords": ["annealing", "TSP"],
         })
-        name, tags, when_to_use = mem._build_entity_meta(card)
+        name, tags, when_to_use = build_entity_meta(card)
 
         # Name should contain description text
         assert "simulated annealing" in name.lower() or "local search" in name.lower()
@@ -407,7 +408,7 @@ class TestBuildEntityMetaContent:
             "description": "Top evolved program",
             "fitness": 95.0,
         })
-        name, tags, when_to_use = mem._build_entity_meta(card)
+        name, tags, when_to_use = build_entity_meta(card)
         assert isinstance(name, str)
         assert len(name) > 0
         assert "program" in " ".join(tags).lower() or "program" in name.lower()

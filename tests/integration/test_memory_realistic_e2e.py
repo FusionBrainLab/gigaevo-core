@@ -40,6 +40,7 @@ from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
+from gigaevo.memory.shared_memory.card_conversion import is_program_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -190,7 +191,7 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
         return FakeResearchAgent(retrievers=rets, generator=mem.generator) if rets else None
 
     def _patched_dedup():
-        recs = [r for r in mem.memory_cards.values() if not mem._is_program_card(r)]
+        recs = [r for r in mem.memory_cards.values() if not is_program_card(r)]
         if not recs:
             return {}
         _, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)

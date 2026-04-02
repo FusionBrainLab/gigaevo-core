@@ -8,6 +8,10 @@ save_card branching logic.
 import json
 from unittest.mock import MagicMock
 
+from gigaevo.memory.shared_memory.card_conversion import (
+    build_entity_meta,
+    concept_to_card,
+)
 from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
 
 
@@ -152,14 +156,14 @@ class TestConceptToCard:
             "task_description": "solve it",
             "task_description_summary": "solver",
         }
-        card = mem._concept_to_card(content, fallback_id="fb")
+        card = concept_to_card(content, fallback_id="fb")
         assert card["id"] == "c1"
         assert card["description"] == "test idea"
         assert card["task_description"] == "solve it"
 
     def test_fallback_id_used(self, tmp_path):
         mem = _make_memory(tmp_path)
-        card = mem._concept_to_card({}, fallback_id="fb-1")
+        card = concept_to_card({}, fallback_id="fb-1")
         assert card["id"] == "fb-1"
 
     def test_program_card_concept(self, tmp_path):
@@ -171,7 +175,7 @@ class TestConceptToCard:
             "fitness": 90.5,
             "code": "def f(): pass",
         }
-        card = mem._concept_to_card(content, fallback_id="fb")
+        card = concept_to_card(content, fallback_id="fb")
         assert card["category"] == "program"
         assert card["program_id"] == "prog-1"
         assert card["fitness"] == 90.5
@@ -191,7 +195,7 @@ class TestBuildEntityMeta:
             "task_description_summary": "TSP solver",
             "keywords": ["SA", "TSP"],
         })
-        name, tags, when_to_use = mem._build_entity_meta(card)
+        name, tags, when_to_use = build_entity_meta(card)
 
         # Name derived from description (first N chars)
         assert "simulated annealing" in name.lower() or "local search" in name.lower()
@@ -204,7 +208,7 @@ class TestBuildEntityMeta:
     def test_empty_card(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({})
-        name, tags, when_to_use = mem._build_entity_meta(card)
+        name, tags, when_to_use = build_entity_meta(card)
         # Even empty card produces valid metadata
         assert isinstance(name, str)
         assert isinstance(tags, list)

@@ -10,7 +10,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from gigaevo.memory.shared_memory.card_conversion import (
+    is_program_card,
+    normalize_allowed_gam_tools,
+    normalize_gam_pipeline_mode,
+    normalize_gam_top_k_by_tool,
+)
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.utils import dedupe_keep_order, looks_like_uuid
 
 
 # ---------------------------------------------------------------------------
@@ -452,84 +459,84 @@ class TestIndexPersistence:
 
 class TestStaticHelpers:
     def test_looks_like_uuid_valid(self):
-        assert AmemGamMemory._looks_like_uuid("12345678-1234-5678-1234-567812345678")
+        assert looks_like_uuid("12345678-1234-5678-1234-567812345678")
 
     def test_looks_like_uuid_hex(self):
-        assert AmemGamMemory._looks_like_uuid("12345678123456781234567812345678")
+        assert looks_like_uuid("12345678123456781234567812345678")
 
     def test_looks_like_uuid_invalid(self):
-        assert not AmemGamMemory._looks_like_uuid("not-a-uuid")
+        assert not looks_like_uuid("not-a-uuid")
 
     def test_looks_like_uuid_empty(self):
-        assert not AmemGamMemory._looks_like_uuid("")
+        assert not looks_like_uuid("")
 
     def test_is_program_card_by_category(self):
-        assert AmemGamMemory._is_program_card({"category": "program"})
+        assert is_program_card({"category": "program"})
 
     def test_is_program_card_by_program_id(self):
-        assert AmemGamMemory._is_program_card({"program_id": "p1"})
+        assert is_program_card({"program_id": "p1"})
 
     def test_is_program_card_false_for_general(self):
-        assert not AmemGamMemory._is_program_card({"category": "general"})
+        assert not is_program_card({"category": "general"})
 
     def test_is_program_card_false_empty(self):
-        assert not AmemGamMemory._is_program_card({})
+        assert not is_program_card({})
 
     def test_dedupe_keep_order(self):
-        assert AmemGamMemory._dedupe_keep_order(["a", "b", "a", "c"]) == ["a", "b", "c"]
+        assert dedupe_keep_order(["a", "b", "a", "c"]) == ["a", "b", "c"]
 
     def test_dedupe_keep_order_strips_empty(self):
-        assert AmemGamMemory._dedupe_keep_order(["a", "", "  ", "b"]) == ["a", "b"]
+        assert dedupe_keep_order(["a", "", "  ", "b"]) == ["a", "b"]
 
     def test_dedupe_keep_order_strips_whitespace(self):
-        assert AmemGamMemory._dedupe_keep_order([" a ", "a"]) == ["a"]
+        assert dedupe_keep_order([" a ", "a"]) == ["a"]
 
     def test_normalize_allowed_gam_tools_defaults(self):
-        result = AmemGamMemory._normalize_allowed_gam_tools(None)
+        result = normalize_allowed_gam_tools(None)
         assert "keyword" in result
         assert "vector" in result
 
     def test_normalize_allowed_gam_tools_custom(self):
-        result = AmemGamMemory._normalize_allowed_gam_tools(["keyword", "page_index"])
+        result = normalize_allowed_gam_tools(["keyword", "page_index"])
         assert result == {"keyword", "page_index"}
 
     def test_normalize_allowed_gam_tools_vector_expands(self):
-        result = AmemGamMemory._normalize_allowed_gam_tools(["vector"])
+        result = normalize_allowed_gam_tools(["vector"])
         # "vector" should expand to all vector-backed tools
         assert "vector_description" in result
         assert "vector_task_description" in result
 
     def test_normalize_allowed_gam_tools_invalid_ignored(self):
-        result = AmemGamMemory._normalize_allowed_gam_tools(["bogus_tool"])
+        result = normalize_allowed_gam_tools(["bogus_tool"])
         # Falls back to defaults when all custom tools are invalid
         assert "keyword" in result
 
     def test_normalize_gam_pipeline_mode_valid(self):
-        assert AmemGamMemory._normalize_gam_pipeline_mode("default") == "default"
-        assert AmemGamMemory._normalize_gam_pipeline_mode("experimental") == "experimental"
+        assert normalize_gam_pipeline_mode("default") == "default"
+        assert normalize_gam_pipeline_mode("experimental") == "experimental"
 
     def test_normalize_gam_pipeline_mode_invalid(self):
-        assert AmemGamMemory._normalize_gam_pipeline_mode("bogus") == "default"
+        assert normalize_gam_pipeline_mode("bogus") == "default"
 
     def test_normalize_gam_pipeline_mode_none(self):
-        assert AmemGamMemory._normalize_gam_pipeline_mode(None) == "default"
+        assert normalize_gam_pipeline_mode(None) == "default"
 
     def test_normalize_gam_top_k_default(self):
-        result = AmemGamMemory._normalize_gam_top_k_by_tool(None)
+        result = normalize_gam_top_k_by_tool(None)
         assert result["keyword"] == 5
         assert result["vector"] == 5
 
     def test_normalize_gam_top_k_custom(self):
-        result = AmemGamMemory._normalize_gam_top_k_by_tool({"keyword": 10})
+        result = normalize_gam_top_k_by_tool({"keyword": 10})
         assert result["keyword"] == 10
         assert result["vector"] == 5  # unchanged
 
     def test_normalize_gam_top_k_invalid_value_ignored(self):
-        result = AmemGamMemory._normalize_gam_top_k_by_tool({"keyword": "abc"})
+        result = normalize_gam_top_k_by_tool({"keyword": "abc"})
         assert result["keyword"] == 5  # default preserved
 
     def test_normalize_gam_top_k_zero_ignored(self):
-        result = AmemGamMemory._normalize_gam_top_k_by_tool({"keyword": 0})
+        result = normalize_gam_top_k_by_tool({"keyword": 0})
         assert result["keyword"] == 5  # zero is not > 0
 
 
