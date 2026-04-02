@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.26.0 (2026-04-02)
+
+### Features
+
+- Dict → Pydantic migration complete — normalize_memory_card returns AnyCard
+  ([`f2ea951`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f2ea95137a07a0eb3335566a4557bc8d6fcc3a5b))
+
+### Refactoring
+
+- Normalize_memory_card returns AnyCard (Pydantic models)
+  ([`5926631`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5926631d646b08e998deac3c22fec7a0f0c0538d))
+
+- Replace print() with loguru, remove sys.path hacks in ideas_tracker
+  ([`8663644`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/866364480a59433456881ed89475d11fea220493))
+
+
 ## v1.25.0 (2026-04-02)
 
 ### Bug Fixes
