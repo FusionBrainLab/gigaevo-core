@@ -30,8 +30,10 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
 load_dotenv()
 
 from gigaevo.memory.shared_memory.card_conversion import (
+    AnyCard,
     DEFAULT_MODEL_NAME,
     GigaEvoMemoryBase,
+    MemoryCardExplanation,
     MemoryNoteProtocol,
     build_entity_meta,
     card_to_concept_content,
@@ -106,7 +108,6 @@ class GeneratorProtocol(Protocol):
 # Card memory type alias
 # ---------------------------------------------------------------------------
 
-CardDict = dict[str, Any]
 
 
 class AmemGamMemory(GigaEvoMemoryBase):
@@ -172,7 +173,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._agentic_import_error: Exception | None = None
         self._load_agentic_classes()
 
-        self.memory_cards: dict[str, CardDict] = {}
+        self.memory_cards: dict[str, AnyCard] = {}
         self.entity_by_card_id: dict[str, str] = {}
         self.card_id_by_entity: dict[str, str] = {}
         self.entity_version_by_entity: dict[str, str] = {}
@@ -325,10 +326,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     self.entity_version_by_entity[eid] = vid
 
     def _persist_index(self) -> None:
+        serialized_cards = {
+            cid: c.model_dump() for cid, c in self.memory_cards.items()
+        }
         payload = {
             "entity_by_card_id": self.entity_by_card_id,
             "entity_version_by_entity": self.entity_version_by_entity,
-            "memory_cards": self.memory_cards,
+            "memory_cards": serialized_cards,
         }
         tmp_file = self.index_file.with_suffix(f".{os.getpid()}.tmp")
         tmp_file.write_text(
@@ -337,27 +341,27 @@ class AmemGamMemory(GigaEvoMemoryBase):
         )
         os.replace(str(tmp_file), str(self.index_file))
 
-    def _ensure_card_id(self, card: CardDict) -> str:
-        card_id = str(card.get("id") or "").strip()
+    def _ensure_card_id(self, card: AnyCard) -> str:
+        card_id = str(card.id or "").strip()
         if not card_id:
             card_id = f"mem-{uuid.uuid4().hex[:12]}"
-            card["id"] = card_id
+            card.id = card_id
         return card_id
 
-    def _build_note_from_card(self, card: CardDict) -> MemoryNoteProtocol:
+    def _build_note_from_card(self, card: AnyCard) -> MemoryNoteProtocol:
         if self._MemoryNoteCls is None:
             raise RuntimeError("MemoryNote class is unavailable")
-        card_id = str(card.get("id") or "")
-        description = str(card.get("description") or "")
+        card_id = str(card.id or "")
+        description = str(card.description or "")
         context = str(
-            card.get("task_description")
-            or card.get("task_description_summary")
+            card.task_description
+            or card.task_description_summary
             or "General"
         )
-        category = str(card.get("category") or "general")
-        strategy = str(card.get("strategy") or "")
-        keywords = list(card.get("keywords") or [])
-        links = list(card.get("links") or [])
+        category = str(card.category or "general")
+        strategy = str(card.strategy or "")
+        keywords = list(card.keywords or [])
+        links = list(card.links or [])
         existing = (
             self.memory_system.read(card_id) if self.memory_system is not None else None
         )
@@ -398,7 +402,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             or existing.links != links
         )
 
-    def _upsert_local_note_fast(self, card: CardDict) -> bool:
+    def _upsert_local_note_fast(self, card: AnyCard) -> bool:
         """Synchronize card into local A-MEM/Chroma without running LLM evolution."""
         if self.memory_system is None:
             return False
@@ -431,26 +435,26 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.memory_ids.add(note.id)
         return True
 
-    def _upsert_local_note_agentic(self, card: CardDict) -> bool:
+    def _upsert_local_note_agentic(self, card: AnyCard) -> bool:
         """Add/update card in local A-MEM using regular add/update path for local writes."""
         if self.memory_system is None:
             return False
 
-        card_id = str(card.get("id") or "").strip()
+        card_id = str(card.id or "").strip()
         if not card_id:
             return False
 
-        description = str(card.get("description") or "")
+        description = str(card.description or "")
         kwargs = {
-            "category": str(card.get("category") or "general"),
-            "keywords": list(card.get("keywords") or []),
+            "category": str(card.category or "general"),
+            "keywords": list(card.keywords or []),
             "context": str(
-                card.get("task_description")
-                or card.get("task_description_summary")
+                card.task_description
+                or card.task_description_summary
                 or "General"
             ),
-            "strategy": str(card.get("strategy") or ""),
-            "links": list(card.get("links") or []),
+            "strategy": str(card.strategy or ""),
+            "links": list(card.links or []),
             "tags": [],
         }
 
@@ -803,19 +807,20 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if not card_id:
                 continue
             card = self.memory_cards.get(card_id)
-            if not isinstance(card, dict):
+            if card is None:
                 continue
 
-            explanations = get_full_explanations(card)
+            card_dict = card.model_dump()
+            explanations = get_full_explanations(card_dict)
             payload.append(
                 {
                     "card_id": card_id,
                     "final_score": float(item.get("final_score", 0.0)),
                     "scores": item.get("scores", {}),
                     "task_description_summary": truncate_text(
-                        card.get("task_description_summary"), 600
+                        card.task_description_summary, 600
                     ),
-                    "description": truncate_text(card.get("description"), 1200),
+                    "description": truncate_text(card.description, 1200),
                     "explanation_summary": truncate_text(
                         get_explanation_summary(card), 600
                     ),
@@ -849,11 +854,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
             return default_decision
 
         incoming_payload = {
-            "id": str(incoming_card.get("id") or "").strip(),
+            "id": str(incoming_card.id or "").strip(),
             "task_description_summary": truncate_text(
-                incoming_card.get("task_description_summary"), 600
+                incoming_card.task_description_summary, 600
             ),
-            "description": truncate_text(incoming_card.get("description"), 1200),
+            "description": truncate_text(incoming_card.description, 1200),
             "explanation_summary": truncate_text(
                 get_explanation_summary(incoming_card), 600
             ),
@@ -934,25 +939,28 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if not card_id or card_id in seen_ids:
                 continue
             existing_card = self.memory_cards.get(card_id)
-            if not isinstance(existing_card, dict):
+            if existing_card is None:
                 continue
 
-            merged_card = merge_updated_card(existing_card, incoming_card, update)
-            merged_card["id"] = card_id
+            existing_dict = existing_card.model_dump()
+            incoming_dict = incoming_card.model_dump()
+            merged_dict = merge_updated_card(existing_dict, incoming_dict, update)
+            merged_dict["id"] = card_id
+            merged_card = normalize_memory_card(merged_dict)
             self._save_card_core(merged_card)
             seen_ids.add(card_id)
             updated_ids.append(card_id)
         return updated_ids
 
-    def _save_card_core(self, card: CardDict) -> str:
+    def _save_card_core(self, card: AnyCard) -> str:
         card_id = self._ensure_card_id(card)
 
         if self.enable_llm_card_enrichment and self.memory_system is not None:
-            analysis = self.memory_system.analyze_content(card["description"])
-            if not card.get("keywords"):
-                card["keywords"] = analysis.get("keywords") or []
-            if not card.get("task_description"):
-                card["task_description"] = analysis.get("context") or ""
+            analysis = self.memory_system.analyze_content(card.description)
+            if not card.keywords:
+                card.keywords = analysis.get("keywords") or []
+            if not card.task_description:
+                card.task_description = analysis.get("context") or ""
 
         content = card_to_concept_content(card)
         name, tags, when_to_use = build_entity_meta(card)
@@ -997,10 +1005,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         return card_id
 
-    def save_card(self, card: CardDict) -> str:
+    def save_card(self, card: AnyCard) -> str:
         normalized_card = normalize_memory_card(card)
         self.card_write_stats["processed"] += 1
-        incoming_card_id = str(normalized_card.get("id") or "").strip()
+        incoming_card_id = str(normalized_card.id or "").strip()
         if incoming_card_id and incoming_card_id in self.memory_cards:
             self.card_write_stats["updated"] += 1
             return self._save_card_core(normalized_card)
@@ -1081,16 +1089,18 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         cards_blob = []
         for card in cards:
+            expl = card.explanation
+            expl_text = expl.summary if isinstance(expl, MemoryCardExplanation) else str(expl or "")
             cards_blob.append(
                 "\n".join(
                     [
-                        f"id: {card.get('id', '')}",
-                        f"category: {card.get('category', '')}",
-                        f"task_description_summary: {card.get('task_description_summary', '')}",
-                        f"task_description: {card.get('task_description', '')}",
-                        f"description: {card.get('description', '')}",
-                        f"keywords: {card.get('keywords', [])}",
-                        f"explanation: {card.get('explanation', {}).get('summary', '') if isinstance(card.get('explanation'), dict) else card.get('explanation', '')}",
+                        f"id: {card.id}",
+                        f"category: {card.category}",
+                        f"task_description_summary: {card.task_description_summary}",
+                        f"task_description: {card.task_description}",
+                        f"description: {card.description}",
+                        f"keywords: {card.keywords}",
+                        f"explanation: {expl_text}",
                     ]
                 )
             )
@@ -1190,11 +1200,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
         for card in self.memory_cards.values():
             haystack_text = " ".join(
                 [
-                    str(card.get("description") or ""),
-                    str(card.get("task_description_summary") or ""),
-                    str(card.get("task_description") or ""),
-                    " ".join([str(x) for x in (card.get("keywords") or [])]),
-                    str(card.get("category") or ""),
+                    str(card.description or ""),
+                    str(card.task_description_summary or ""),
+                    str(card.task_description or ""),
+                    " ".join([str(x) for x in (card.keywords or [])]),
+                    str(card.category or ""),
                 ]
             ).lower()
             haystack_tokens = set(re.split(r"\W+", haystack_text))
