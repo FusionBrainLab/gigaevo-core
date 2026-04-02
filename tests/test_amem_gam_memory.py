@@ -121,8 +121,8 @@ class TestSaveCard:
         mem = _make_memory(tmp_path)
         mem.save_card(_make_card(id="c1"))
         stored = mem.get_card("c1")
-        assert "description" in stored
-        assert "category" in stored
+        assert stored.description is not None
+        assert stored.category is not None
 
     def test_increments_processed_and_added(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -185,7 +185,7 @@ class TestGetCard:
         mem.save_card(_make_card(id="c1", description="hello"))
         card = mem.get_card("c1")
         assert card is not None
-        assert card["description"] == "hello"
+        assert card.description == "hello"
 
     def test_nonexistent(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -195,14 +195,14 @@ class TestGetCard:
         mem = _make_memory(tmp_path)
         mem.save_card(_make_card(id="c1"))
         card = mem.get_card("c1")
-        assert isinstance(card, dict)
+        assert card is not None
 
     def test_card_is_mutable_reference(self, tmp_path):
         """get_card returns a reference to the internal dict — mutations are visible."""
         mem = _make_memory(tmp_path)
         mem.save_card(_make_card(id="c1", description="original"))
         card = mem.get_card("c1")
-        card["description"] = "mutated"
+        card.description = "mutated"
         # This documents current behavior: direct reference, not copy
         assert mem.get_card("c1")["description"] == "mutated"
 
@@ -318,8 +318,8 @@ class TestSaveConvenience:
         card_id = mem.save("some text data")
         assert card_id.startswith("mem-")
         card = mem.get_card(card_id)
-        assert card["description"] == "some text data"
-        assert card["category"] == "general"
+        assert card.description == "some text data"
+        assert card.category == "general"
 
 
 # ===========================================================================
