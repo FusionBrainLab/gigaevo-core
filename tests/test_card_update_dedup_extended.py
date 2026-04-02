@@ -206,13 +206,13 @@ class TestExtractJsonObject:
 
 
 class TestParseLlmCardDecisionEdgeCases:
-    def test_empty_string_returns_add(self):
+    def test_empty_string_returns_none(self):
         result = parse_llm_card_decision("", candidate_ids={"c1"})
-        assert result["action"] == "add"
+        assert result is None
 
-    def test_garbage_returns_add(self):
+    def test_garbage_returns_none(self):
         result = parse_llm_card_decision("garbage text", candidate_ids={"c1"})
-        assert result["action"] == "add"
+        assert result is None
 
     def test_unknown_action_falls_back(self):
         text = json.dumps({"action": "destroy"})

@@ -657,9 +657,9 @@ class TestSearchFallbackPaths:
         # from the shallow copy. The merged result has new programs list from
         # dedupe_keep_order, so existing is safe here too.
 
-    def test_parse_llm_card_decision_always_returns_dict(self):
-        """Proves retry loop in _decide_card_action is dead code:
-        parse_llm_card_decision ALWAYS returns a dict, even for garbage input.
+    def test_parse_llm_card_decision_returns_none_for_garbage(self):
+        """FIXED: parse_llm_card_decision returns None for garbage input,
+        enabling the retry loop in _decide_card_action to work correctly.
         """
         from gigaevo.memory.shared_memory.card_update_dedup import parse_llm_card_decision
 
@@ -674,8 +674,18 @@ class TestSearchFallbackPaths:
         ]
         for text in garbage_inputs:
             result = parse_llm_card_decision(text, candidate_ids={"c1"})
-            assert isinstance(result, dict), f"Expected dict for input: {text!r}"
-            assert "action" in result
+            assert result is None, f"Expected None for garbage input: {text!r}"
+
+    def test_parse_llm_card_decision_returns_dict_for_valid_json(self):
+        """Valid JSON with action field returns a dict."""
+        from gigaevo.memory.shared_memory.card_update_dedup import parse_llm_card_decision
+        import json
+
+        result = parse_llm_card_decision(
+            json.dumps({"action": "add"}), candidate_ids={"c1"},
+        )
+        assert isinstance(result, dict)
+        assert result["action"] == "add"
 
     def test_http_200_non_json_raises(self):
         """_ConceptApiClient._request crashes on 200 with non-JSON body."""

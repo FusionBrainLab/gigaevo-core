@@ -9,6 +9,7 @@ import uuid
 
 from dotenv import load_dotenv
 import httpx
+from loguru import logger
 
 from gigaevo.memory import config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
@@ -1178,7 +1179,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         )
 
         decision = default_decision
-        for _ in range(self.card_update_dedup_config.llm_max_retries):
+        for attempt in range(self.card_update_dedup_config.llm_max_retries):
             try:
                 response_text, _, _, _ = self.llm_service.generate(prompt)
             except Exception as exc:
@@ -1188,9 +1189,15 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 response_text,
                 candidate_ids=candidate_ids,
             )
-            if isinstance(parsed, dict):
+            if parsed is not None:
                 decision = parsed
                 break
+            logger.warning(
+                "[Memory] Dedup LLM returned no valid JSON "
+                "(attempt {}/{})",
+                attempt + 1,
+                self.card_update_dedup_config.llm_max_retries,
+            )
         return decision
 
     def _apply_update_actions(
