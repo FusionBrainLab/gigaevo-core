@@ -807,7 +807,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 print(f"[MemoryPlatform] Dedup LLM decision call failed: {exc}")
                 continue
             parsed = parse_llm_card_decision(response_text, candidate_ids=candidate_ids)
-            if isinstance(parsed, dict):
+            if parsed is not None:
                 decision = parsed
                 break
         return decision

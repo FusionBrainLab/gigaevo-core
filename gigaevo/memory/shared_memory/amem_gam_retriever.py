@@ -7,35 +7,24 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import sys
 from typing import Any
 
 from dotenv import load_dotenv
+from loguru import logger
 
 load_dotenv()
 
-from GAM_root.gam import (
+from gigaevo.memory import config
+from gigaevo.memory.GAM_root.gam import (
     ChromaRetriever,
     IndexRetriever,
     InMemoryMemoryStore,
     InMemoryPageStore,
     ResearchAgent,
 )
-from GAM_root.gam.generator import AMemGenerator
-from GAM_root.gam.schemas import Page
-
-from gigaevo.memory import config
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
-
-
-_AGENT_ROOT = _repo_root()
-if str(_AGENT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_AGENT_ROOT))
-
-from openai_inference import OpenAIInferenceService
+from gigaevo.memory.GAM_root.gam.generator import AMemGenerator
+from gigaevo.memory.GAM_root.gam.schemas import Page
+from gigaevo.memory.openai_inference import OpenAIInferenceService
 
 
 def load_amem_records(path: Path) -> list[dict[str, Any]]:
@@ -181,9 +170,9 @@ def build_retrievers(
             )
             index_retriever.build(page_store)
             retrievers["page_index"] = index_retriever
-            print("✅ Index retriever ready")
+            logger.debug("[Memory] Index retriever ready")
         except Exception as e:
-            print(f"[WARN] Index retriever init from {IndexRetriever} failed: {e}")
+            logger.warning("[Memory] Index retriever init failed: {}", e)
 
     for tool_name, extra in vector_tool_configs.items():
         if tool_name not in allowed:
@@ -196,9 +185,11 @@ def build_retrievers(
                 **extra,
             }
             retrievers[tool_name] = ChromaRetriever(chroma_config)
-            print(f"✅ Chroma retriever ready: {tool_name}")
+            logger.debug("[Memory] Chroma retriever ready: {}", tool_name)
         except Exception as e:
-            print(f"[WARN] Chroma retriever init for '{tool_name}' failed: {e}")
+            logger.warning(
+                "[Memory] Chroma retriever init for '{}' failed: {}", tool_name, e
+            )
 
     if enable_bm25 and "keyword" in allowed:
         try:
@@ -208,9 +199,9 @@ def build_retrievers(
             bm25_retriever = BM25Retriever(bm25_config)
             bm25_retriever.build(page_store)
             retrievers["keyword"] = bm25_retriever
-            print("✅ BM25 retriever ready")
+            logger.debug("[Memory] BM25 retriever ready")
         except Exception as e:
-            print(f"[WARN] BM25 retriever init failed: {e}")
+            logger.warning("[Memory] BM25 retriever init failed: {}", e)
 
     return retrievers
 
@@ -220,7 +211,7 @@ def main():
     # if export_path:
     #     export_file = Path(export_path)
     # else:
-    #     export_file = _repo_root()  / "amem_memories.jsonl"
+    #     export_file = Path(__file__).resolve().parents[1]  / "amem_memories.jsonl"
 
     if not export_file.exists():
         raise FileNotFoundError(f"A-mem export not found: {export_file}")
@@ -229,10 +220,10 @@ def main():
     if not records:
         raise RuntimeError("A-mem export is empty.")
 
-    store_dir = _repo_root() / "gam_shared" / "amem_store"
+    store_dir = Path(__file__).resolve().parents[1] / "gam_shared" / "amem_store"
     store_dir.mkdir(parents=True, exist_ok=True)
     memory_store, page_store, added = build_gam_store(records, store_dir)
-    print(f"Loaded {len(records)} A-mem records, added {added} new pages.")
+    logger.info("Loaded {} A-mem records, added {} new pages.", len(records), added)
 
     api_key = config.OPENAI_API_KEY
     if not api_key and config.LLM_BASE_URL:
@@ -256,7 +247,7 @@ def main():
     )
     generator = AMemGenerator({"llm_service": llm_service})
 
-    chroma_dir = _repo_root() / "chroma"
+    chroma_dir = Path(__file__).resolve().parents[1] / "chroma"
     retrievers = build_retrievers(page_store, store_dir / "indexes", chroma_dir)
     research_agent = ResearchAgent(
         page_store=page_store,
@@ -269,10 +260,9 @@ def main():
     question = os.getenv(
         "AMEM_QUESTION", "What changes improved min_area the most and why?"
     )
-    print(f"\nResearch question: {question}\n")
+    logger.info("Research question: {}", question)
     result = research_agent.research(question)
-    print("Research result:\n")
-    print(result.integrated_memory)
+    logger.info("Research result:\n{}", result.integrated_memory)
 
 
 if __name__ == "__main__":

@@ -4,187 +4,41 @@ from datetime import UTC, datetime
 import json
 import math
 from math import ceil
-import os
 from pathlib import Path
 import statistics
 from typing import Any, Protocol
 
-from dotenv import load_dotenv
+from loguru import logger
 
-try:
-    from .runtime_config import (
-        deep_get,
-        load_settings,
-        resolve_local_path,
-        resolve_settings_path,
-        to_bool,
-        to_int,
-        to_list,
-        to_str,
-    )
-except ImportError:  # pragma: no cover - direct script execution fallback
-    from runtime_config import (
-        deep_get,
-        load_settings,
-        resolve_local_path,
-        resolve_settings_path,
-        to_bool,
-        to_int,
-        to_list,
-        to_str,
-    )
-
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=True)
-
-
-THIS_DIR = Path(__file__).resolve().parent
-SETTINGS_PATH = resolve_settings_path()
-SETTINGS = load_settings(SETTINGS_PATH)
-
-_BANKS_DIR = resolve_local_path(
-    THIS_DIR,
-    deep_get(SETTINGS, "paths.banks_dir"),
-    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02",
+from gigaevo.memory.memory_write_config import (
+    ALLOWED_GAM_TOOLS,
+    AUTHOR,
+    BANKS_PATH,
+    BEST_IDEAS_PATH,
+    BEST_PROGRAMS_PERCENT,
+    CARD_UPDATE_DEDUP_CONFIG,
+    CHANNEL,
+    ENABLE_BM25,
+    ENABLE_LLM_SYNTHESIS,
+    ENABLE_USAGE_TRACKING,
+    FILL_MISSING_FIELDS_WITH_LLM,
+    GAM_PIPELINE_MODE,
+    GAM_TOP_K_BY_TOOL,
+    MEMORY_API_URL,
+    MEMORY_DIR,
+    NAMESPACE,
+    PROGRAMS_PATH,
+    REBUILD_INTERVAL,
+    SEARCH_LIMIT,
+    SETTINGS_PATH,
+    SHOULD_EVOLVE,
+    SYNC_BATCH_SIZE,
+    SYNC_ON_INIT,
+    USAGE_UPDATES_PATH,
+    USE_API,
+    resolve_memory_backend_class,
 )
-
-MEMORY_DIR = resolve_local_path(
-    THIS_DIR,
-    deep_get(SETTINGS, "paths.checkpoint_dir"),
-    default_relative="memory_usage_store/api_exp1",
-)
-BANKS_PATH = resolve_local_path(
-    THIS_DIR,
-    (
-        os.getenv("MEMORY_BANKS_PATH")
-        or deep_get(SETTINGS, "paths.banks_path")
-        or str(_BANKS_DIR / "banks.json")
-    ),
-    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/banks.json",
-)
-BEST_IDEAS_PATH = resolve_local_path(
-    THIS_DIR,
-    (
-        os.getenv("MEMORY_BEST_IDEAS_PATH")
-        or deep_get(SETTINGS, "paths.best_ideas_path")
-        or str(_BANKS_DIR / "best_ideas.json")
-    ),
-    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/best_ideas.json",
-)
-PROGRAMS_PATH = resolve_local_path(
-    THIS_DIR,
-    (
-        os.getenv("MEMORY_PROGRAMS_PATH")
-        or deep_get(SETTINGS, "paths.programs_path")
-        or str(BANKS_PATH.parent / "programs.json")
-    ),
-    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/programs.json",
-)
-ENABLE_USAGE_TRACKING = to_bool(
-    deep_get(SETTINGS, "ideas_tracker.usage_tracking.enabled"),
-    default=True,
-)
-_USAGE_UPDATES_RAW_PATH = (
-    (
-        os.getenv("MEMORY_USAGE_UPDATES_PATH")
-        or deep_get(SETTINGS, "paths.memory_usage_updates_path")
-    )
-    if ENABLE_USAGE_TRACKING
-    else None
-)
-USAGE_UPDATES_PATH = (
-    resolve_local_path(
-        THIS_DIR,
-        _USAGE_UPDATES_RAW_PATH,
-        default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/memory_usage_updates.json",
-    )
-    if _USAGE_UPDATES_RAW_PATH
-    else None
-)
-
-MEMORY_API_URL = os.getenv(
-    "MEMORY_API_URL",
-    to_str(deep_get(SETTINGS, "api.base_url"), default="http://localhost:8000"),
-)
-NAMESPACE = os.getenv(
-    "MEMORY_NAMESPACE",
-    to_str(deep_get(SETTINGS, "api.namespace"), default="exp7"),
-)
-USE_API = to_bool(
-    os.getenv("MEMORY_USE_API"),
-    default=to_bool(deep_get(SETTINGS, "api.use_api"), default=True),
-)
-CHANNEL = to_str(deep_get(SETTINGS, "api.channel"), default="latest")
-AUTHOR = to_str(deep_get(SETTINGS, "api.author"), default="").strip() or None
-
-ENABLE_LLM_SYNTHESIS = to_bool(
-    deep_get(SETTINGS, "runtime.enable_llm_synthesis"), default=False
-)
-SHOULD_EVOLVE = to_bool(deep_get(SETTINGS, "runtime.should_evolve"), default=True)
-FILL_MISSING_FIELDS_WITH_LLM = to_bool(
-    deep_get(SETTINGS, "runtime.fill_missing_fields_with_llm"),
-    default=False,
-)
-SEARCH_LIMIT = max(1, to_int(deep_get(SETTINGS, "runtime.search_limit"), default=5))
-REBUILD_INTERVAL = max(
-    1, to_int(deep_get(SETTINGS, "runtime.rebuild_interval"), default=10)
-)
-SYNC_BATCH_SIZE = max(
-    10, to_int(deep_get(SETTINGS, "runtime.sync_batch_size"), default=100)
-)
-SYNC_ON_INIT = to_bool(deep_get(SETTINGS, "runtime.sync_on_init"), default=True)
-
-ENABLE_BM25 = to_bool(deep_get(SETTINGS, "gam.enable_bm25"), default=False)
-ALLOWED_GAM_TOOLS = [
-    str(tool).strip() for tool in to_list(deep_get(SETTINGS, "gam.allowed_tools"))
-]
-GAM_PIPELINE_MODE = to_str(
-    os.getenv("MEMORY_GAM_PIPELINE_MODE"),
-    default=to_str(deep_get(SETTINGS, "gam.pipeline_mode"), default="default"),
-)
-RAW_GAM_TOP_K_BY_TOOL = deep_get(SETTINGS, "gam.top_k_by_tool", default={})
-if isinstance(RAW_GAM_TOP_K_BY_TOOL, dict):
-    GAM_TOP_K_BY_TOOL = {
-        str(tool).strip(): max(1, to_int(value, default=5))
-        for tool, value in RAW_GAM_TOP_K_BY_TOOL.items()
-        if str(tool).strip()
-    }
-else:
-    GAM_TOP_K_BY_TOOL = {}
-
-RAW_CARD_UPDATE_DEDUP = deep_get(SETTINGS, "card_update_dedup", default={})
-if isinstance(RAW_CARD_UPDATE_DEDUP, dict):
-    CARD_UPDATE_DEDUP_CONFIG = RAW_CARD_UPDATE_DEDUP
-else:
-    CARD_UPDATE_DEDUP_CONFIG = {}
-BEST_PROGRAMS_PERCENT = max(
-    0.0,
-    float(
-        deep_get(
-            SETTINGS,
-            "ideas_tracker.memory_write_pipeline.best_programs_percent",
-            default=5.0,
-        )
-        or 0.0
-    ),
-)
-
-
-def _resolve_memory_backend_class(use_api: bool):
-    if use_api:
-        try:
-            from gigaevo.memory_platform import AmemGamMemory as platform_backend
-        except Exception as exc:  # pragma: no cover - runtime dependency issue
-            raise RuntimeError(
-                "api.use_api=true selected the platform-backed memory backend, "
-                "but gigaevo.memory_platform could not be imported."
-            ) from exc
-        return platform_backend
-
-    try:
-        from .shared_memory.memory import AmemGamMemory as legacy_backend
-    except ImportError:  # pragma: no cover - direct script execution fallback
-        from shared_memory.memory import AmemGamMemory as legacy_backend
-    return legacy_backend
+from gigaevo.memory.runtime_config import to_bool
 
 
 class CardMemory(Protocol):
@@ -483,9 +337,9 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
         selected_cards.append(_merge_best_idea_metrics(bank_card, best_entry))
 
     if missing_cards:
-        print(
-            f"Warning: {len(missing_cards)} best_ideas IDs were missing in banks and "
-            f"were written as minimal cards."
+        logger.warning(
+            "{} best_ideas IDs were missing in banks and were written as minimal cards.",
+            len(missing_cards),
         )
 
     return selected_cards
@@ -637,9 +491,9 @@ def _apply_usage_updates_to_cards(
         cards_by_id[card_id] = current_card
 
     if missing_card_ids:
-        print(
-            "Warning: skipped usage updates for "
-            f"{len(missing_card_ids)} card(s) because they were not found in memory store."
+        logger.warning(
+            "Skipped usage updates for {} card(s) not found in memory store.",
+            len(missing_card_ids),
         )
 
     return list(cards_by_id.values())
@@ -720,7 +574,7 @@ def _write_memory_write_stats(
 
 
 def main() -> dict[str, Any] | None:
-    memory_backend_cls = _resolve_memory_backend_class(USE_API)
+    memory_backend_cls = resolve_memory_backend_class(USE_API)
     memory = memory_backend_cls(
         checkpoint_path=str(MEMORY_DIR),
         base_url=MEMORY_API_URL,
@@ -742,16 +596,14 @@ def main() -> dict[str, Any] | None:
         card_update_dedup_config=CARD_UPDATE_DEDUP_CONFIG,
     )
 
-    print("\n==============================")
-    print("API Memory Demo: Card Write")
-    print("==============================\n")
-    print(f"Config file: {SETTINGS_PATH}")
-    print(f"Memory evolution enabled: {SHOULD_EVOLVE}")
-    print(f"LLM field fill enabled: {FILL_MISSING_FIELDS_WITH_LLM}")
-    print(f"Memory usage tracking enabled: {ENABLE_USAGE_TRACKING}")
-    print(
-        "Card update/dedup enabled: "
-        f"{to_bool(CARD_UPDATE_DEDUP_CONFIG.get('enabled'), default=False)}"
+    logger.info("API Memory Demo: Card Write")
+    logger.info(
+        "Config: file={} evolution={} llm_fill={} usage_tracking={} dedup={}",
+        SETTINGS_PATH,
+        SHOULD_EVOLVE,
+        FILL_MISSING_FIELDS_WITH_LLM,
+        ENABLE_USAGE_TRACKING,
+        to_bool(CARD_UPDATE_DEDUP_CONFIG.get("enabled"), default=False),
     )
 
     if not BANKS_PATH.exists():
@@ -764,14 +616,16 @@ def main() -> dict[str, Any] | None:
         usage_updates_path=USAGE_UPDATES_PATH,
         memory=memory,
     )
-    print(
-        f"Loaded {len(memory_cards)} cards from banks: {BANKS_PATH} "
-        f"(filtered by: {BEST_IDEAS_PATH})"
+    logger.info(
+        "Loaded {} cards from banks: {} (filtered by: {})",
+        len(memory_cards),
+        BANKS_PATH,
+        BEST_IDEAS_PATH,
     )
     if USE_API:
-        print(f"Writing to API: {MEMORY_API_URL} (namespace={NAMESPACE})\n")
+        logger.info("Writing to API: {} (namespace={})", MEMORY_API_URL, NAMESPACE)
     else:
-        print(f"Writing in local-only mode (checkpoint={MEMORY_DIR})\n")
+        logger.info("Writing in local-only mode (checkpoint={})", MEMORY_DIR)
 
     try:
         write_stats_by_card_type = {
@@ -789,36 +643,41 @@ def main() -> dict[str, Any] | None:
                     write_stats_by_card_type[card_type].get(stat_name, 0)
                 ) + int(stat_value)
             stored = memory.get_card(memory_id) or {}
-            print(
-                f"[{idx:03d}] saved {memory_id}: {stored.get('description', '')[:110]}"
+            logger.debug(
+                "[{:03d}] saved {}: {}",
+                idx,
+                memory_id,
+                stored.get("description", "")[:110],
             )
     except RuntimeError as exc:
-        print(f"\nWrite failed: {exc}\n")
+        logger.error("Write failed: {}", exc)
         return None
 
     memory.rebuild()
-    print(f"\nLocal API index saved in: {MEMORY_DIR / 'api_index.json'}")
+    logger.info("Local API index saved in: {}", MEMORY_DIR / "api_index.json")
 
     write_stats = memory.get_card_write_stats()
     input_card_type_counts = {
         "ideas": sum(1 for card in memory_cards if _card_type(card) == "ideas"),
         "programs": sum(1 for card in memory_cards if _card_type(card) == "programs"),
     }
-    print(
-        "Write stats: "
-        f"processed={write_stats.get('processed', 0)}, "
-        f"ideas_processed={write_stats_by_card_type['ideas'].get('processed', 0)}, "
-        f"programs_processed={write_stats_by_card_type['programs'].get('processed', 0)}, "
-        f"added={write_stats.get('added', 0)}, "
-        f"ideas_added={write_stats_by_card_type['ideas'].get('added', 0)}, "
-        f"programs_added={write_stats_by_card_type['programs'].get('added', 0)}, "
-        f"updated={write_stats.get('updated', 0)}, "
-        f"ideas_updated={write_stats_by_card_type['ideas'].get('updated', 0)}, "
-        f"programs_updated={write_stats_by_card_type['programs'].get('updated', 0)}, "
-        f"rejected={write_stats.get('rejected', 0)}, "
-        f"ideas_rejected={write_stats_by_card_type['ideas'].get('rejected', 0)}, "
-        f"programs_rejected={write_stats_by_card_type['programs'].get('rejected', 0)}, "
-        f"updated_target_cards={write_stats.get('updated_target_cards', 0)}"
+    logger.info(
+        "Write stats: processed={} added={} updated={} rejected={} "
+        "ideas(proc={} add={} upd={} rej={}) "
+        "programs(proc={} add={} upd={} rej={}) updated_target_cards={}",
+        write_stats.get("processed", 0),
+        write_stats.get("added", 0),
+        write_stats.get("updated", 0),
+        write_stats.get("rejected", 0),
+        write_stats_by_card_type["ideas"].get("processed", 0),
+        write_stats_by_card_type["ideas"].get("added", 0),
+        write_stats_by_card_type["ideas"].get("updated", 0),
+        write_stats_by_card_type["ideas"].get("rejected", 0),
+        write_stats_by_card_type["programs"].get("processed", 0),
+        write_stats_by_card_type["programs"].get("added", 0),
+        write_stats_by_card_type["programs"].get("updated", 0),
+        write_stats_by_card_type["programs"].get("rejected", 0),
+        write_stats.get("updated_target_cards", 0),
     )
 
     stats_path = BANKS_PATH.parent / "memory_write_stats.json"
@@ -829,7 +688,7 @@ def main() -> dict[str, Any] | None:
         write_stats=write_stats,
         write_stats_by_card_type=write_stats_by_card_type,
     )
-    print(f"Memory write stats saved to: {stats_path}")
+    logger.info("Memory write stats saved to: {}", stats_path)
     return snapshot
 
 

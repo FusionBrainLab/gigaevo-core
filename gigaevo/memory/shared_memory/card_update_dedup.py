@@ -294,8 +294,10 @@ def parse_llm_card_decision(
     raw_text: str,
     *,
     candidate_ids: set[str],
-) -> dict[str, Any]:
-    payload = _extract_json_object(raw_text) or {}
+) -> dict[str, Any] | None:
+    payload = _extract_json_object(raw_text)
+    if payload is None:
+        return None
     action = str(payload.get("action") or "add").strip().lower()
     if action not in {"add", "discard", "update"}:
         action = "add"
