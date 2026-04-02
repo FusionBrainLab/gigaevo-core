@@ -43,6 +43,8 @@ from gigaevo.memory.shared_memory.utils import (
 # Constants
 # ---------------------------------------------------------------------------
 
+DEFAULT_MODEL_NAME = "openai/gpt-4.1-mini"
+
 ALLOWED_STRATEGIES = {"exploration", "exploitation", "hybrid"}
 
 VECTOR_GAM_TOOLS = {

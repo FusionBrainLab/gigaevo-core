@@ -34,6 +34,7 @@ load_dotenv()
 
 from gigaevo.memory.shared_memory.card_conversion import (
     ALLOWED_STRATEGIES,
+    DEFAULT_MODEL_NAME,
     GigaEvoMemoryBase,
     MemoryNoteProtocol,
     build_entity_meta,
@@ -263,7 +264,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             base_url = config.LLM_BASE_URL
 
             llm_service = OpenAIInferenceService(
-                model_name=config.OPENROUTER_MODEL_NAME or "openai/gpt-4.1-mini",
+                model_name=config.OPENROUTER_MODEL_NAME or DEFAULT_MODEL_NAME,
                 api_key=api_key,
                 base_url=base_url,
                 temperature=0.0,
