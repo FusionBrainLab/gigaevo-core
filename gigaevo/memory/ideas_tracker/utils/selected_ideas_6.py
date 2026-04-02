@@ -47,6 +47,7 @@ from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 import pandas as pd
@@ -442,7 +443,7 @@ def build_sibling_groups(
             if best is None:
                 continue
             best_pid, _ = best
-            key = ("best_parent", best_pid, bucket(gen))
+            key: tuple[Any, ...] = ("best_parent", best_pid, bucket(gen))
         else:
             key = ("parent_set", tuple(sorted(pars)), bucket(gen))
 
@@ -488,11 +489,11 @@ def build_sibling_groups_allgens(
             if best is None:
                 continue
             best_pid, _ = best
-            key = ("best_parent_allgens", best_pid)
+            key_ag: tuple[Any, ...] = ("best_parent_allgens", best_pid)
         else:
-            key = ("parent_set_allgens", tuple(sorted(pars)))
+            key_ag = ("parent_set_allgens", tuple(sorted(pars)))
 
-        groups[key].append(pid)
+        groups[key_ag].append(pid)
 
     return groups
 

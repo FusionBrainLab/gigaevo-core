@@ -257,7 +257,7 @@ class ScalarTournamentEliteSelector(EliteSelector):
             return programs
 
         # FIXED: Proper sampling without replacement
-        selected = []
+        selected: list[Program] = []
         remaining_programs = list(programs)
 
         while len(selected) < total and remaining_programs:
@@ -314,7 +314,7 @@ class ParetoTournamentEliteSelector(EliteSelector):
             return programs
 
         # FIXED: Proper sampling without replacement
-        selected = []
+        selected: list[Program] = []
         remaining_programs = list(programs)
 
         while len(selected) < total and remaining_programs:

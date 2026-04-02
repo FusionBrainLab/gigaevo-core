@@ -58,7 +58,7 @@ class LineageState(TypedDict):
     llm_response: AIMessage | TransitionInsights | None
     delta: float
     diff_blocks: list[str]
-    insights: list[dict]
+    insights: TransitionInsights | list[dict]
     full_analysis: TransitionAnalysis | dict
     metadata: dict
 
@@ -102,9 +102,9 @@ class LineageAgent(LangGraphAgent):
         self.task_description = task_description
         self.metrics_formatter = metrics_formatter
 
-        llm = llm.with_structured_output(TransitionInsights)
+        structured_llm = llm.with_structured_output(TransitionInsights)
 
-        super().__init__(llm)
+        super().__init__(structured_llm)
 
     def _compute_diff_blocks(self, parent_code: str, child_code: str) -> list[str]:
         """Compute unified diff blocks between parent and child code.
@@ -199,10 +199,10 @@ class LineageAgent(LangGraphAgent):
         )
 
         parent_errors = parent.format_errors(
-            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+            include_traceback=True, exclude_stages=set(OPTIMIZATION_STAGES)
         )
         child_errors = child.format_errors(
-            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+            include_traceback=True, exclude_stages=set(OPTIMIZATION_STAGES)
         )
 
         metric_name = self.metrics_formatter.context.get_primary_key()
@@ -251,8 +251,8 @@ class LineageAgent(LangGraphAgent):
         child = state["child"]
 
         state["full_analysis"] = TransitionAnalysis(
-            from_id=parent.id,
-            to_id=child.id,
+            from_id=parent.id,  # type: ignore[call-arg]
+            to_id=child.id,  # type: ignore[call-arg]
             parent_metrics=parent.metrics,
             child_metrics=child.metrics,
             diff_blocks=state["diff_blocks"],

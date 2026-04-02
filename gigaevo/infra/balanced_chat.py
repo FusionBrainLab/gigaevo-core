@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 from langchain_core.language_models import LanguageModelInput
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
 from loguru import logger
@@ -85,12 +85,14 @@ class BalancedChatOpenAI(ChatOpenAI):
         self,
         input: LanguageModelInput,
         config: RunnableConfig | None = None,
+        *,
+        stop: list[str] | None = None,
         **kwargs: Any,
-    ) -> BaseMessage:
+    ) -> AIMessage:
         endpoint = self._pool.acquire_sync()
         t0 = time.perf_counter()
         try:
-            result = self._clients[endpoint].invoke(input, config, **kwargs)
+            result = self._clients[endpoint].invoke(input, config, stop=stop, **kwargs)
             latency = (time.perf_counter() - t0) * 1000
             self._pool.release_sync(endpoint, latency)
             self._metrics.record(endpoint, latency, success=True)
@@ -105,12 +107,16 @@ class BalancedChatOpenAI(ChatOpenAI):
         self,
         input: LanguageModelInput,
         config: RunnableConfig | None = None,
+        *,
+        stop: list[str] | None = None,
         **kwargs: Any,
-    ) -> BaseMessage:
+    ) -> AIMessage:
         endpoint = await self._pool.acquire()
         t0 = time.perf_counter()
         try:
-            result = await self._clients[endpoint].ainvoke(input, config, **kwargs)
+            result = await self._clients[endpoint].ainvoke(
+                input, config, stop=stop, **kwargs
+            )
             latency = (time.perf_counter() - t0) * 1000
             await self._pool.release(endpoint, latency)
             self._metrics.record(endpoint, latency, success=True)
@@ -129,12 +135,16 @@ class BalancedChatOpenAI(ChatOpenAI):
         self,
         input: LanguageModelInput,
         config: RunnableConfig | None = None,
+        *,
+        stop: list[str] | None = None,
         **kwargs: Any,
-    ) -> Iterator[BaseMessage]:
+    ) -> Iterator[AIMessageChunk]:
         endpoint = self._pool.acquire_sync()
         t0 = time.perf_counter()
         try:
-            yield from self._clients[endpoint].stream(input, config, **kwargs)
+            yield from self._clients[endpoint].stream(
+                input, config, stop=stop, **kwargs
+            )
             latency = (time.perf_counter() - t0) * 1000
             self._pool.release_sync(endpoint, latency)
             self._metrics.record(endpoint, latency, success=True)
@@ -148,12 +158,16 @@ class BalancedChatOpenAI(ChatOpenAI):
         self,
         input: LanguageModelInput,
         config: RunnableConfig | None = None,
+        *,
+        stop: list[str] | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
+    ) -> AsyncIterator[AIMessageChunk]:
         endpoint = await self._pool.acquire()
         t0 = time.perf_counter()
         try:
-            async for chunk in self._clients[endpoint].astream(input, config, **kwargs):
+            async for chunk in self._clients[endpoint].astream(
+                input, config, stop=stop, **kwargs
+            ):
                 yield chunk
             latency = (time.perf_counter() - t0) * 1000
             await self._pool.release(endpoint, latency)
@@ -168,7 +182,7 @@ class BalancedChatOpenAI(ChatOpenAI):
     # Structured output
     # ------------------------------------------------------------------
 
-    def with_structured_output(
+    def with_structured_output(  # type: ignore[override]
         self, schema: Any, **kwargs: Any
     ) -> _BalancedStructuredOutput:
         """Return a balanced wrapper around per-endpoint structured output chains."""

@@ -52,7 +52,7 @@ class RedisConnection:
                     socket_timeout=self.config.connection_pool_timeout,
                     retry_on_timeout=True,
                 )
-                await r.ping()
+                await r.ping()  # type: ignore[misc]
                 logger.debug("[RedisConnection] Connected to {}", self.config.redis_url)
                 self._redis = r
 

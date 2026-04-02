@@ -22,7 +22,7 @@ class WBConfig(BaseModel):
 class RedisMetricsConfig(BaseModel):
     """Configuration for Redis metrics backend."""
 
-    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")
+    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")  # type: ignore[assignment]
     key_prefix: str = Field(default="gigaevo:metrics")
 
     # Storage options

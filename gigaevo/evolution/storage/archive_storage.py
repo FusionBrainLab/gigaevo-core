@@ -26,7 +26,7 @@ class ArchiveStorage(ABC):
         self,
         cell: CellDescriptor,
         program: Program,
-        is_better: Callable[[Program, Program | None], bool],
+        is_better: Callable[[Program, Program], bool],
     ) -> bool: ...
 
     @abstractmethod
@@ -54,7 +54,7 @@ class ArchiveStorage(ABC):
     async def bulk_add_elites(
         self,
         placements: list[tuple[CellDescriptor, Program]],
-        is_better: Callable[[Program, Program | None], bool],
+        is_better: Callable[[Program, Program], bool],
     ) -> int: ...
 
     # Adds multiple elites at once (e.g., during re-indexing). Returns number of successful adds.
@@ -174,7 +174,7 @@ class RedisArchiveStorage(ArchiveStorage):
         self,
         cell: CellDescriptor,
         program: Program,
-        is_better: Callable[[Program, Program | None], bool],
+        is_better: Callable[[Program, Program], bool],
     ) -> bool:
         """Add elite, using in-memory cache to skip Redis reads for non-improving programs."""
         await self._ensure_cache()
@@ -332,7 +332,7 @@ class RedisArchiveStorage(ArchiveStorage):
     async def bulk_add_elites(
         self,
         placements: list[tuple[CellDescriptor, Program]],
-        is_better: Callable[[Program, Program | None], bool],
+        is_better: Callable[[Program, Program], bool],
     ) -> int:
         if not placements:
             return 0

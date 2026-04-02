@@ -17,7 +17,7 @@ forward the captured output directly to ``CallValidatorFunction``.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from gigaevo.programs.core_types import StageIO
 from gigaevo.programs.program import Program
@@ -55,7 +55,9 @@ class OptunaPayloadBridge(Stage):
     OutputModel = Box[Any]
 
     async def compute(self, program: Program) -> Box[Any]:
-        po = self.params.optuna_output.best_program_output
+        po = cast(
+            OptunaPayloadBridgeInput, self.params
+        ).optuna_output.best_program_output
         if po is None:
             raise ValueError("No program output captured from Optuna best trial")
         return Box[Any](data=po)
@@ -87,8 +89,9 @@ class PayloadResolver(Stage):
     OutputModel = Box[Any]
 
     async def compute(self, program: Program) -> Box[Any]:
-        if self.params.optuna_payload is not None:
-            return Box[Any](data=self.params.optuna_payload.data)
-        if self.params.program_payload is not None:
-            return Box[Any](data=self.params.program_payload.data)
+        params = cast(PayloadResolverInput, self.params)
+        if params.optuna_payload is not None:
+            return Box[Any](data=params.optuna_payload.data)
+        if params.program_payload is not None:
+            return Box[Any](data=params.program_payload.data)
         raise ValueError("No payload source available")

@@ -113,9 +113,18 @@ class _ParamDesubstitutor(ast.NodeTransformer):
         - ``str`` / ``bool`` / ``None`` / ``list`` / ``tuple`` → ``ast.Constant``
         - Numeric → delegated to :func:`make_numeric_const_node`
         """
-        if value is None or isinstance(value, (bool, str, list, tuple)):
+        if value is None or isinstance(value, (bool, str)):
             node = ast.Constant(value=value)
             return ast.copy_location(node, src_node)
+        if isinstance(value, (list, tuple)):
+            # list/tuple not valid for ast.Constant; build as ast.List/ast.Tuple
+            elts: list[ast.expr] = [ast.Constant(value=v) for v in value]
+            container: ast.expr
+            if isinstance(value, tuple):
+                container = ast.Tuple(elts=elts, ctx=ast.Load())
+            else:
+                container = ast.List(elts=elts, ctx=ast.Load())
+            return ast.copy_location(container, src_node)
 
         # Numeric: delegate to shared helper.
         # Preserve integer values as int regardless of declared ptype (e.g.
@@ -269,7 +278,7 @@ class _EvalCleaner(ast.NodeTransformer):
             if _DOTTED_NAME_RE.match(arg.value):
                 # Build a.b.c → Attribute(Attribute(Name("a"), "b"), "c")
                 parts = arg.value.split(".")
-                result: ast.AST = ast.Name(id=parts[0], ctx=ast.Load())
+                result: ast.expr = ast.Name(id=parts[0], ctx=ast.Load())
                 for part in parts[1:]:
                     result = ast.Attribute(value=result, attr=part, ctx=ast.Load())
                 return ast.copy_location(result, node)
@@ -382,6 +391,7 @@ def desubstitute_params(
         for start, end, value_str in sorted(desub._tuned_spans, key=lambda x: -x[0]):
             code = code[:start] + value_str + code[end:]
         # Append "# tuned (Optuna)" on each affected line.
+        assert desub._line_offsets is not None  # set when line_offsets kwarg provided
         tuned_linenos = {
             bisect.bisect_right(desub._line_offsets, start)
             for start, _end, _ in desub._tuned_spans

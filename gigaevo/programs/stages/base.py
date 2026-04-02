@@ -123,13 +123,13 @@ class Stage:
         if not issubclass(cls.OutputModel, StageIO):
             raise TypeError(f"{cls.__name__}.OutputModel must inherit from StageIO")
 
-        req, opt = [], []
-        for name, field in cls.InputsModel.model_fields.items():
-            (
-                (_ := opt.append(name))
-                if _is_optional_type(field.annotation)
-                else req.append(name)
-            )
+        req: list[str] = []
+        opt: list[str] = []
+        for name, field in cls.InputsModel.model_fields.items():  # type: ignore[attr-defined]
+            if _is_optional_type(field.annotation):
+                opt.append(name)
+            else:
+                req.append(name)
         cls._required_names, cls._optional_names = req, opt
 
     def __init__(self, *, timeout: float):

@@ -133,7 +133,7 @@ class RedisMetricsBackend(LoggerBackend):
                     pipe.ltrim(history_key, -self.cfg.max_history_per_metric, -1)
 
             # Update metadata
-            pipe.hset(self._k_meta(), "last_update", time.time())
+            pipe.hset(self._k_meta(), "last_update", time.time())  # type: ignore[arg-type]
             pipe.execute()
 
         except Exception as e:
@@ -159,11 +159,11 @@ class RedisMetricsBackend(LoggerBackend):
             return {}
         try:
             if tag:
-                val = self._client.hget(self._k_latest(), tag)
-                return {tag: float(val)} if val else {}
+                val = self._client.hget(self._k_latest(), tag)  # type: ignore[union-attr]
+                return {tag: float(val)} if val else {}  # type: ignore[arg-type]
             else:
-                data = self._client.hgetall(self._k_latest())
-                return {k: self._parse_value(v) for k, v in data.items()}
+                data = self._client.hgetall(self._k_latest())  # type: ignore[union-attr]
+                return {k: self._parse_value(v) for k, v in data.items()}  # type: ignore[union-attr]
         except Exception as e:
             logger.warning("[RedisMetricsBackend] get_latest failed: {}", e)
             return {}
@@ -175,8 +175,8 @@ class RedisMetricsBackend(LoggerBackend):
         if not self._client:
             return []
         try:
-            entries = self._client.lrange(self._k_history(tag), start, end)
-            return [json.loads(e) for e in entries]
+            entries = self._client.lrange(self._k_history(tag), start, end)  # type: ignore[union-attr]
+            return [json.loads(e) for e in entries]  # type: ignore[union-attr]
         except Exception as e:
             logger.warning("[RedisMetricsBackend] get_history failed: {}", e)
             return []
@@ -186,7 +186,7 @@ class RedisMetricsBackend(LoggerBackend):
         if not self._client:
             return []
         try:
-            return list(self._client.hkeys(self._k_latest()))
+            return list(self._client.hkeys(self._k_latest()))  # type: ignore[arg-type]
         except Exception as e:
             logger.warning("[RedisMetricsBackend] list_metrics failed: {}", e)
             return []

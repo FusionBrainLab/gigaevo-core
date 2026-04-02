@@ -9,7 +9,7 @@ from pydantic import AnyUrl, BaseModel, Field
 class RedisConnectionConfig(BaseModel):
     """Configuration for Redis connection."""
 
-    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")
+    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")  # type: ignore[assignment]
     max_connections: int = Field(default=100, ge=10)
     connection_pool_timeout: float = Field(default=60.0, ge=1.0)
     health_check_interval: int = Field(default=180, ge=1)
@@ -47,7 +47,7 @@ class RedisProgramStorageConfig(BaseModel):
     """Configuration for Redis program storage."""
 
     # Connection settings
-    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")
+    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")  # type: ignore[assignment]
     max_connections: int = Field(default=100, ge=10)
     connection_pool_timeout: float = Field(default=60.0, ge=1.0)
     health_check_interval: int = Field(default=180, ge=1)

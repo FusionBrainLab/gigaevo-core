@@ -286,7 +286,7 @@ def prepare_iteration_dataframe(
 
     # Step 2: Outlier removal using robust methods (one-sided based on optimization direction)
     if remove_outliers:
-        outlier_side = "high" if minimize else "low"
+        outlier_side: Literal["both", "low", "high"] = "high" if minimize else "low"
         mask, lower, upper, n_outliers = detect_outliers(
             df[fitness_col],
             method=outlier_method,
@@ -400,7 +400,7 @@ def fetch_frontier_from_redis(
 
         # Each entry is JSON: {"s": step, "v": value, "t": wall_time, "k": "scalar"}
         frontier: dict[int, float] = {}
-        for entry_json in entries:
+        for entry_json in entries:  # type: ignore[union-attr]
             try:
                 entry = json.loads(entry_json)
                 iteration = int(entry.get("s", 0))

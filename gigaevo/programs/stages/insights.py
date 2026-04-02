@@ -33,7 +33,7 @@ class InsightsStage(LangGraphStage):
     """
 
     InputsModel = VoidInput
-    OutputModel = InsightsOutput
+    OutputModel = InsightsOutput  # type: ignore[assignment]  # narrowing ClassVar from LangGraphStage base
 
     def __init__(
         self,

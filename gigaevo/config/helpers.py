@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from gigaevo.entrypoint.default_pipelines import (
     ContextPipelineBuilder,
@@ -34,7 +34,7 @@ def is_higher_better(metrics_context: MetricsContext, key: str) -> bool:
     return metrics_context.is_higher_better(key)
 
 
-def get_bounds(metrics_context: MetricsContext, key: str) -> tuple[float, float]:
+def get_bounds(metrics_context: MetricsContext, key: str) -> tuple[float, float] | None:
     """Get bounds for a metric."""
     return metrics_context.get_bounds(key)
 
@@ -109,7 +109,7 @@ def build_behavior_space_params(
     bounds: list[tuple[float, float]],
     resolutions: list[int],
     binning_types: list[str] | None = None,
-) -> OmegaConf:
+) -> DictConfig:
     """Build all parameters needed for BehaviorSpace construction.
 
     This is a convenience helper that takes separate lists and constructs

@@ -42,18 +42,18 @@ class DagRunnerMetrics(BaseModel):
     dag_build_failures: int = 0
     state_update_failures: int = 0
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def uptime_seconds(self) -> int:
         return int((datetime.now(UTC) - self.started_at).total_seconds())
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def success_rate(self) -> float:
         finished = self.dag_runs_completed + self.dag_errors
         return 1.0 if finished == 0 else self.dag_runs_completed / finished
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def average_iterations_per_second(self) -> float:
         return (
@@ -465,12 +465,14 @@ class DagRunner:
                 "[DagScheduler] DAG run failed for {}: {}", program.short_id, exc
             )
         finally:
-            dag.automata.topology.nodes.clear()
-            dag.automata.topology = None
-            dag.automata = None
-            dag.state_manager = None
-            dag._writer = None
-            dag._stage_sema = None
+            # Eagerly release references to allow GC of heavy objects.
+            if dag.automata.topology is not None:
+                dag.automata.topology.nodes.clear()
+            dag.automata.topology = None  # type: ignore[assignment]  # intentional teardown
+            dag.automata = None  # type: ignore[assignment]  # intentional teardown
+            dag.state_manager = None  # type: ignore[assignment]  # intentional teardown
+            dag._writer = None  # type: ignore[assignment]  # intentional teardown
+            dag._stage_sema = None  # type: ignore[assignment]  # intentional teardown
 
         # Update scheduling predictor with actual eval duration (even for
         # failures — duration-until-failure is informative and avoids

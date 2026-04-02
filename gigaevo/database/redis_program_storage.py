@@ -45,7 +45,7 @@ class RedisProgramStorage(ProgramStorage):
     ):
         super().__init__()
         self.config = config
-        self._merge = resolve_merge_strategy(config.merge_strategy)
+        self._merge = resolve_merge_strategy(config.merge_strategy)  # type: ignore[arg-type]
 
         # Composed components
         self._conn = RedisConnection(config.to_connection_config())
@@ -91,8 +91,10 @@ class RedisProgramStorage(ProgramStorage):
                 f"Create storage without read_only=True for write operations."
             )
 
+    _T = TypeVar("_T")
+
     @staticmethod
-    def _chunks(items: Iterable[str], n: int) -> Iterable[list[str]]:
+    def _chunks(items: Iterable[Any], n: int) -> Iterable[list[Any]]:
         it = iter(items)
         while batch := list(islice(it, n)):
             yield batch
@@ -280,7 +282,7 @@ class RedisProgramStorage(ProgramStorage):
         in exactly one status set (invariant maintained by add/transition ops).
         """
         set_keys = [self._keys.status_set(s.value) for s in ProgramState]
-        return list(await r.sunion(*set_keys))
+        return list(await r.sunion(*set_keys))  # type: ignore[misc,arg-type]
 
     async def size(self) -> int:
         """Count programs by summing SCARD across status sets (O(1) per set)."""
@@ -288,7 +290,7 @@ class RedisProgramStorage(ProgramStorage):
         async def _size(r: aioredis.Redis) -> int:
             total = 0
             for s in ProgramState:
-                total += await r.scard(self._keys.status_set(s.value))
+                total += await r.scard(self._keys.status_set(s.value))  # type: ignore[misc]
             return total
 
         return await self._conn.execute("size", _size)
@@ -328,7 +330,7 @@ class RedisProgramStorage(ProgramStorage):
 
         async def _check(r: aioredis.Redis) -> bool:
             for s in ProgramState:
-                if await r.scard(self._keys.status_set(s.value)) > 0:
+                if await r.scard(self._keys.status_set(s.value)) > 0:  # type: ignore[misc]
                     return True
             return False
 
@@ -356,10 +358,14 @@ class RedisProgramStorage(ProgramStorage):
         self._check_write_allowed("publish_status_event")
 
         async def _event(r: aioredis.Redis) -> None:
-            data = {"id": program_id, "status": status, **(extra or {})}
+            data: dict[str, str | int | float] = {
+                "id": program_id,
+                "status": status,
+                **(extra or {}),
+            }  # type: ignore[assignment]
             await r.xadd(
                 self._keys.status_stream(),
-                data,
+                data,  # type: ignore[arg-type]
                 maxlen=STREAM_MAX_LEN,
                 approximate=True,
             )
@@ -386,7 +392,7 @@ class RedisProgramStorage(ProgramStorage):
         """Return count of programs with the given status (without fetching data)."""
 
         async def _count(r: aioredis.Redis) -> int:
-            return await r.scard(self._keys.status_set(status))
+            return await r.scard(self._keys.status_set(status))  # type: ignore[misc]
 
         return await self._conn.execute("count_by_status", _count)
 
@@ -396,7 +402,7 @@ class RedisProgramStorage(ProgramStorage):
 
     async def _ids_for_status(self, status: str) -> list[str]:
         async def _members(r: aioredis.Redis) -> list[str]:
-            return list(await r.smembers(self._keys.status_set(status)))
+            return list(await r.smembers(self._keys.status_set(status)))  # type: ignore[misc]
 
         return await self._conn.execute("_ids_for_status", _members)
 
@@ -651,7 +657,7 @@ class RedisProgramStorage(ProgramStorage):
         self._check_write_allowed("remove_ids_from_status_set")
 
         async def _srem(r: aioredis.Redis) -> None:
-            await r.srem(self._keys.status_set(status), *ids)
+            await r.srem(self._keys.status_set(status), *ids)  # type: ignore[misc]
 
         await self._conn.execute("remove_ids_from_status_set", _srem)
 
@@ -700,7 +706,7 @@ class RedisProgramStorage(ProgramStorage):
         self._check_write_allowed("save_run_state")
 
         async def _set(r: aioredis.Redis) -> None:
-            await r.hset(self._keys.run_state(), field, str(value))
+            await r.hset(self._keys.run_state(), field, str(value))  # type: ignore[misc]
 
         await self._conn.execute("save_run_state", _set)
 
@@ -708,7 +714,7 @@ class RedisProgramStorage(ProgramStorage):
         """Load a previously saved integer counter. Returns None if not found."""
 
         async def _get(r: aioredis.Redis) -> str | None:
-            return await r.hget(self._keys.run_state(), field)
+            return await r.hget(self._keys.run_state(), field)  # type: ignore[misc]
 
         raw = await self._conn.execute("load_run_state", _get)
         return int(raw) if raw is not None else None
@@ -730,7 +736,7 @@ class RedisProgramStorage(ProgramStorage):
             if prog is None:
                 # Dangling entry in status set — clean it up
                 async def _clean(r: aioredis.Redis, _pid: str = pid) -> None:
-                    await r.srem(
+                    await r.srem(  # type: ignore[misc]
                         self._keys.status_set(ProgramState.RUNNING.value), _pid
                     )
 

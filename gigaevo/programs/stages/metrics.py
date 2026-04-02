@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import math
+from typing import cast
 
 from loguru import logger
 
@@ -59,10 +60,9 @@ class EnsureMetricsStage(Stage):
         sentinel_metrics = self._get_factory_metrics()
         program.add_metrics(sentinel_metrics)
 
+        params = cast("EnsureMetricsInputs", self.params)
         metrics_input = (
-            self.params.candidate.data
-            if self.params.candidate is not None
-            else sentinel_metrics
+            params.candidate.data if params.candidate is not None else sentinel_metrics
         )
 
         final_metrics = self._process_metrics(metrics_input)
@@ -91,7 +91,10 @@ class EnsureMetricsStage(Stage):
 
         out: dict[str, float] = {}
         for k in self.required_keys:
-            out[k] = self._coerce_and_clamp(k, metrics.get(k))
+            val = metrics.get(k)
+            if val is None:
+                raise ValueError(f"Metric key '{k}' has None value after missing check")
+            out[k] = self._coerce_and_clamp(k, val)
         return out
 
     def _coerce_and_clamp(self, key: str, value: float) -> float:

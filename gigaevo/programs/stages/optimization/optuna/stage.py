@@ -13,8 +13,7 @@ import asyncio
 import math
 from pathlib import Path
 import time
-from typing import Any
-import warnings
+from typing import Any, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from loguru import logger
@@ -276,7 +275,7 @@ class OptunaOptimizationStage(Stage):
         """
         # Use explicit eval_timeout if provided, otherwise a conservative cap
         # for baseline measurement (before adaptive eval_timeout is resolved).
-        baseline_timeout = (
+        baseline_timeout = int(
             self._eval_timeout_cfg
             if self._eval_timeout_cfg is not None
             else min(120, self._budget * 0.05)
@@ -532,9 +531,9 @@ class OptunaOptimizationStage(Stage):
 
         # TPE with configurable startup trials and multivariate
         from_config = self.config.n_startup_trials is not None
-        n_startup = (
+        n_startup: int = (
             self.config.n_startup_trials
-            if from_config
+            if from_config and self.config.n_startup_trials is not None
             else default_n_startup_trials(self.n_trials)
         )
         # Total trials = startup (random) + n_trials (TPE); startup trials are extra, not counted in n_trials.
@@ -549,17 +548,13 @@ class OptunaOptimizationStage(Stage):
             self.n_trials,
         )
         has_categorical = any(p.param_type == "categorical" for p in param_specs)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=optuna.exceptions.ExperimentalWarning
-            )
-            sampler = optuna.samplers.TPESampler(
-                n_startup_trials=n_startup,
-                multivariate=self.config.multivariate,
-                group=has_categorical,
-                constant_liar=True,
-                seed=self.config.random_state,
-            )
+        sampler = optuna.samplers.TPESampler(
+            n_startup_trials=int(n_startup),
+            multivariate=self.config.multivariate,
+            group=has_categorical,
+            constant_liar=True,
+            seed=self.config.random_state,
+        )
         study = optuna.create_study(
             direction=direction,
             sampler=sampler,
@@ -868,20 +863,24 @@ class OptunaOptimizationStage(Stage):
                     values: dict[str, Any] = {}
                     for p in param_specs:
                         if p.param_type == "float":
+                            assert p.low is not None and p.high is not None
                             v = trial.suggest_float(p.name, p.low, p.high)
                             if v != 0 and math.isfinite(v):
                                 v = float(f"{v:.{_DEFAULT_PRECISION}g}")
                             values[p.name] = v
                         elif p.param_type == "int":
+                            assert p.low is not None and p.high is not None
                             values[p.name] = trial.suggest_int(
                                 p.name, int(p.low), int(p.high)
                             )
                         elif p.param_type == "log_float":
+                            assert p.low is not None and p.high is not None
                             v = trial.suggest_float(p.name, p.low, p.high, log=True)
                             if v != 0 and math.isfinite(v):
                                 v = float(f"{v:.{_DEFAULT_PRECISION}g}")
                             values[p.name] = v
                         elif p.param_type == "categorical":
+                            assert p.choices is not None
                             values[p.name] = trial.suggest_categorical(
                                 p.name, p.choices
                             )
@@ -997,12 +996,16 @@ class OptunaOptimizationStage(Stage):
                 baseline_trial = study.ask()
                 for p in param_specs:
                     if p.param_type == "float":
+                        assert p.low is not None and p.high is not None
                         baseline_trial.suggest_float(p.name, p.low, p.high)
                     elif p.param_type == "int":
+                        assert p.low is not None and p.high is not None
                         baseline_trial.suggest_int(p.name, int(p.low), int(p.high))
                     elif p.param_type == "log_float":
+                        assert p.low is not None and p.high is not None
                         baseline_trial.suggest_float(p.name, p.low, p.high, log=True)
                     elif p.param_type == "categorical":
+                        assert p.choices is not None
                         baseline_trial.suggest_categorical(p.name, p.choices)
                 study.tell(baseline_trial, baseline_score)
             except Exception as e:
@@ -1093,7 +1096,8 @@ class OptunaOptimizationStage(Stage):
         pid = program.id[:8]
 
         # 0. Resolve context early (needed for baseline runtime measurement)
-        ctx = self.params.context.data if self.params.context is not None else None
+        opt_params = cast(OptimizationInput, self.params)
+        ctx = opt_params.context.data if opt_params.context is not None else None
 
         # 1. Measure baseline runtime for the LLM prompt
         baseline_runtime_s = await self._measure_baseline_runtime(code, ctx, pid)
@@ -1164,7 +1168,7 @@ class OptunaOptimizationStage(Stage):
             raise ValueError(f"[Optuna][{pid}] Optuna produced no usable scores")
 
         # 4. Build optimised code (desubstitute params into clean code)
-        param_types = {p.name: p.param_type for p in param_specs}
+        param_types: dict[str, str] = {p.name: p.param_type for p in param_specs}
         optimized_code = desubstitute_params(
             parameterized_code,
             best_params,

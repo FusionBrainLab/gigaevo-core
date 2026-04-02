@@ -1,7 +1,7 @@
 # gigaevo/programs/stages/mutation_context.py
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -12,6 +12,7 @@ from gigaevo.evolution.mutation.context import (
     FamilyTreeMutationContext,
     InsightsMutationContext,
     MetricsMutationContext,
+    MutationContext,
     PreformattedMutationContext,
 )
 from gigaevo.llm.agents.lineage import TransitionAnalysis
@@ -69,8 +70,8 @@ class MutationContextStage(Stage):
         self.metadata_key = MUTATION_CONTEXT_METADATA_KEY
 
     async def compute(self, program: Program) -> StageIO:
-        contexts: list[CompositeMutationContext] = []
-        params: MutationContextInputs = self.params
+        contexts: list[MutationContext] = []
+        params = cast(MutationContextInputs, self.params)
 
         if params.metrics is not None:
             metrics_map = params.metrics.data

@@ -43,7 +43,7 @@ def as_string_list(value: Any) -> list[str]:
         text = value.strip()
         if not text:
             return []
-        parsed: Any = text
+        parsed = text  # type: ignore[assignment]
         if text[0] in "[{(":
             try:
                 parsed = json.loads(text)
@@ -51,7 +51,7 @@ def as_string_list(value: Any) -> list[str]:
                 try:
                     parsed = ast.literal_eval(text)
                 except Exception:
-                    parsed = text
+                    parsed = text  # type: ignore[assignment]
         if not isinstance(parsed, list):
             return [str(parsed).strip()] if str(parsed).strip() else []
     else:
@@ -264,7 +264,7 @@ def build_memory_usage_updates(
 
 
 def sort_ideas(ideas: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    sorted_ideas = {
+    sorted_ideas: dict[str, list[dict[str, Any]]] = {
         "new": [],
         "update": [],
         "rewrite": [],

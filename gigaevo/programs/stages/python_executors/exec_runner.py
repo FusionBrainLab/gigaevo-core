@@ -136,7 +136,7 @@ def _write_code_context(tb: BaseException, *, out: io.TextIOBase) -> None:
         last = user_frames[-1]
         lineno = last.lineno
         lines = linecache.getlines(_CODE_FILENAME)
-        if not lines:
+        if not lines or lineno is None:
             return
         start = max(1, lineno - 3)
         end = min(len(lines), lineno + 3)

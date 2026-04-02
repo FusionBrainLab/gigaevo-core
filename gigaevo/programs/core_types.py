@@ -36,8 +36,8 @@ class VoidOutput(StageIO):
 class StageError(BaseModel):
     type: str = Field(..., description="Exception class or category")
     message: str = Field(..., description="Human-readable message")
-    stage: str | None = Field(None, description="Stage class name, if known")
-    traceback: str | None = Field(None, description="Formatted traceback")
+    stage: str | None = Field(default=None, description="Stage class name, if known")
+    traceback: str | None = Field(default=None, description="Formatted traceback")
 
     @classmethod
     def from_exception(
@@ -82,13 +82,13 @@ FINAL_STATES = {
 
 
 class ProgramStageResult(BaseModel):
-    status: StageState = Field(StageState.PENDING)
+    status: StageState = Field(default=StageState.PENDING)
     output: Any | None = None
     error: StageError | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     input_hash: str | None = Field(
-        None,
+        default=None,
         description="Hash of inputs when stage was executed (for cache invalidation)",
     )
 

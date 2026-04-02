@@ -33,7 +33,7 @@ async def fetch_evolution_dataframe(
 ) -> pd.DataFrame:
     storage = RedisProgramStorage(
         RedisProgramStorageConfig(
-            redis_url=config.url(),
+            redis_url=config.url(),  # type: ignore[arg-type]  # pydantic validates str -> AnyUrl
             key_prefix=config.redis_prefix,
             max_connections=50,
             connection_pool_timeout=30.0,

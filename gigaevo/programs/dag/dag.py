@@ -60,7 +60,7 @@ class DAG:
         self.stall_grace_seconds = max(
             DEFAULT_STALL_GRACE_SECONDS, max_stage_timeout * 1.5
         )
-        self._previous_launched_hash = None
+        self._previous_launched_hash: tuple[tuple[str, ...], ...] | None = None
         self._writer: LogWriter = writer.bind(path=["dag", "internals"])
         self._caller_handles_persist = caller_handles_persist
 
@@ -103,6 +103,7 @@ class DAG:
 
     async def _run_internal(self, program: Program) -> None:
         pid = self._pid(program)
+        assert self.automata.topology is not None, "DAG topology not initialized"
 
         # Initialize all stages to PENDING
         for name in self.automata.topology.nodes.keys():
@@ -339,6 +340,7 @@ class DAG:
                 stage_name=name, precomputed_inputs=ready_with_inputs[name]
             ):
                 async with self._stage_sema:
+                    assert self.automata.topology is not None
                     stage: Stage = self.automata.topology.nodes[stage_name]
                     stage.attach_inputs(precomputed_inputs)
                     return await stage.execute(program)

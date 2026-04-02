@@ -70,7 +70,7 @@ class GenericLogger(LogWriter):
 
         self._last_flush = time.time()
 
-    def bind(self, *, path: list[str] | None = None) -> BoundGeneric:
+    def bind(self, *, path: list[str] | None = None) -> BoundGeneric:  # type: ignore[override]
         return BoundGeneric(self, path or [])
 
     def scalar(self, metric: str, value: float, **kw) -> None:
@@ -251,7 +251,7 @@ class BoundGeneric(LogWriter):
         self._base = base
         self._path = list(path)
 
-    def bind(self, *, path: list[str] | None = None) -> BoundGeneric:
+    def bind(self, *, path: list[str] | None = None) -> BoundGeneric:  # type: ignore[override]
         return BoundGeneric(self._base, [*self._path, *(path or [])])
 
     def scalar(self, metric: str, value: float, **kw) -> None:

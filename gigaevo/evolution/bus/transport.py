@@ -140,7 +140,7 @@ class RedisStreamTransport(Transport):
         assert self._redis is not None, "Transport not started"
         await self._redis.xadd(
             self.stream_key,
-            envelope.to_stream_fields(),
+            envelope.to_stream_fields(),  # type: ignore[arg-type]
             maxlen=self._max_stream_len,
             approximate=True,
         )
@@ -200,7 +200,7 @@ class RedisStreamTransport(Transport):
 
     async def save_cursor(self) -> None:
         if self._redis is not None:
-            await self._redis.hset(
+            await self._redis.hset(  # type: ignore[misc]
                 f"{self.stream_key}:cursors",
                 self.run_id,
                 self._last_id,
@@ -208,7 +208,7 @@ class RedisStreamTransport(Transport):
 
     async def restore_cursor(self) -> None:
         if self._redis is not None:
-            raw = await self._redis.hget(
+            raw = await self._redis.hget(  # type: ignore[misc]
                 f"{self.stream_key}:cursors",
                 self.run_id,
             )

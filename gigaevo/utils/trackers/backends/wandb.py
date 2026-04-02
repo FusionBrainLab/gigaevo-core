@@ -24,7 +24,7 @@ class Event:
 class WandBBackend(LoggerBackend):
     def __init__(self, cfg: WBConfig):
         self.cfg = cfg
-        self._run = None
+        self._run: Any = None
         self._lock = threading.Lock()
         self._buffer: list[Event] = []
 

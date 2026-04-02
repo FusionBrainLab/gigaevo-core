@@ -56,7 +56,7 @@ class RelatedCollectorBase(Stage):
 
 @StageRegistry.register(description="Collect related Program IDs (List[str])")
 class ProgramIdsCollector(RelatedCollectorBase):
-    OutputModel = StringList
+    OutputModel = StringList  # type: ignore[assignment]  # narrowing ClassVar from base
 
     async def _process(self, program: Program, programs: list[Program]) -> StringList:
         return StringList(items=[p.id for p in programs])
@@ -354,7 +354,7 @@ async def _get_descendants(storage: ProgramStorage, program: Program) -> list[Pr
 
 @StageRegistry.register(description="Evolutionary statistics collector")
 class EvolutionaryStatisticsCollector(RelatedCollectorBase):
-    OutputModel = EvolutionaryStatistics
+    OutputModel = EvolutionaryStatistics  # type: ignore[assignment]  # narrowing ClassVar from base
 
     def __init__(self, *, metrics_context: MetricsContext, **kwargs: Any):
         super().__init__(**kwargs)

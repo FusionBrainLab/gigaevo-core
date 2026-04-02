@@ -14,7 +14,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover – dev/test envs without orjson
     import json as _json_stdlib
 
-    json = _json_stdlib
+    def dumps(obj: Any) -> str:  # type: ignore[override]
+        """Serialize *obj* to a ``str`` using the stdlib *json* module."""
+        return _backend.dumps(obj)  # type: ignore[return-value]
 
 
 def dumps(obj: Any) -> str:

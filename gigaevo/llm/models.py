@@ -39,8 +39,8 @@ def _create_langfuse_handler() -> CallbackHandler | None:
         return None
 
     handler = CallbackHandler()
-    handler.client.flush_at = 1
-    handler.client.flush_interval = 1
+    handler.client.flush_at = 1  # type: ignore[attr-defined]
+    handler.client.flush_interval = 1  # type: ignore[attr-defined]
     logger.info("[MultiModelRouter] Langfuse tracing enabled")
     return handler
 
@@ -49,18 +49,19 @@ def _with_langfuse(
     config: RunnableConfig | None,
     handler: CallbackHandler | None,
     model_name: str | None = None,
-) -> RunnableConfig:
+) -> RunnableConfig | None:
     """Add Langfuse handler and metadata to config."""
     if handler is None:
         return config
 
-    cfg = dict(config or {})
-    callbacks = cfg.setdefault("callbacks", [])
+    cfg: RunnableConfig = dict(config or {})  # type: ignore[assignment]
+    callbacks: list[Any] = cfg.setdefault("callbacks", [])  # type: ignore[assignment]
     if handler not in callbacks:
         callbacks.append(handler)
 
     if model_name:
-        cfg.setdefault("metadata", {})["selected_model"] = model_name
+        metadata: dict[str, Any] = cfg.setdefault("metadata", {})  # type: ignore[arg-type]
+        metadata["selected_model"] = model_name
 
     return cfg
 
@@ -206,7 +207,9 @@ class MultiModelRouter(Runnable):
     ) -> None:
         """Callback when a mutated program completes evaluation. Override for feedback."""
 
-    def _config(self, config: RunnableConfig | None, model_name: str) -> RunnableConfig:
+    def _config(
+        self, config: RunnableConfig | None, model_name: str
+    ) -> RunnableConfig | None:
         return _with_langfuse(config, self._langfuse, model_name)
 
     def invoke(
@@ -296,7 +299,9 @@ class _StructuredOutputRouter(Runnable):
                 self._task_model_map[tid] = name
         return model, name
 
-    def _config(self, config: RunnableConfig | None, model_name: str) -> RunnableConfig:
+    def _config(
+        self, config: RunnableConfig | None, model_name: str
+    ) -> RunnableConfig | None:
         return _with_langfuse(config, self._langfuse, model_name)
 
     def _process(self, response: dict, name: str) -> Any:

@@ -79,8 +79,8 @@ class ScoringAgent(LangGraphAgent):
         self.user_prompt_template = user_prompt_template
         self.trait_description = trait_description
         self.max_score = max_score
-        llm = llm.with_structured_output(ProgramScore)
-        super().__init__(llm)
+        structured_llm = llm.with_structured_output(ProgramScore)
+        super().__init__(structured_llm)
 
     def build_prompt(self, state: ScoringState) -> ScoringState:
         """Build scoring prompt - ALL formatting logic here."""

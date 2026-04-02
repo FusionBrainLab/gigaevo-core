@@ -118,12 +118,12 @@ class BehaviorSpace(BaseModel):
         description="Map of behavior name to its binning strategy"
     )
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def behavior_keys(self) -> list[str]:
         return list(self.bins.keys())
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def total_cells(self) -> int:
         total = 1
@@ -299,7 +299,7 @@ class DynamicBehaviorSpace(BehaviorSpace):
 
     def calculate_optimized_bounds(
         self, metrics_batch: list[dict[str, float]]
-    ) -> dict[str, tuple[float, float]]:
+    ) -> dict[str, tuple[float | None, float | None]]:
         """Calculate new optimized bounds based on a batch of metrics.
 
         Respects fixed bounds - only optimizes bounds that are marked as dynamic.
@@ -310,7 +310,7 @@ class DynamicBehaviorSpace(BehaviorSpace):
         if not metrics_batch:
             return {}
 
-        new_bounds = {}
+        new_bounds: dict[str, tuple[float | None, float | None]] = {}
         for key, strategy in self.bins.items():
             values = [m[key] for m in metrics_batch if key in m]
             if not values:

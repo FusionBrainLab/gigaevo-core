@@ -155,6 +155,8 @@ class IdeasTrackerLogger:
 
         log_entry += "\n"
 
+        if self.log_file is None:
+            return
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(log_entry)
 
@@ -267,6 +269,8 @@ class IdeasTrackerLogger:
         }
 
         # Read existing banks
+        if self.banks_file is None:
+            return
         if self.banks_file.exists():
             with open(self.banks_file, encoding="utf-8") as f:
                 existing_banks = json.load(f)

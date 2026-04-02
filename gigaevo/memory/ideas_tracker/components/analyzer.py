@@ -86,7 +86,7 @@ class IdeaAnalyzer:
 
     def classify_ideas(
         self, program_changes: str, known_ideas: str
-    ) -> dict[str, list[str]]:
+    ) -> dict[str, list[Any]]:
         """
         Classify ideas as new or already known using LLM.
 
@@ -102,7 +102,11 @@ class IdeaAnalyzer:
         prompt_content = (
             f" Existing Ideas: \n {known_ideas} \n Incoming Ideas: \n {program_changes}"
         )
-        classified_ideas = {"present_ideas": [], "new_ideas": [], "updated_ideas": []}
+        classified_ideas: dict[str, list[Any]] = {
+            "present_ideas": [],
+            "new_ideas": [],
+            "updated_ideas": [],
+        }
         for _ in range(self.retry_attempts):
             try:
                 response = self.call_llm("classify_ext", prompt_content)
@@ -154,22 +158,23 @@ class IdeaAnalyzer:
         ideas_data = copy(program_changes)
         for idea_block in bank_data.values():
             block_text = idea_block["text"]
+            if not isinstance(block_text, str):
+                continue
+            descriptions = idea_block["descriptions"]
+            if not isinstance(descriptions, list):
+                continue
             new_ideas_text = ideas_data.get_list_of_ideas()
             parsed_ideas = self.classify_ideas(new_ideas_text, block_text)
             for idea in parsed_ideas.get("present_ideas", []):
                 idea_short_id, idea_sequence_number = self._split_id(idea)
-                idea_full_id = self.short_id_to_full_id(
-                    idea_short_id, idea_block["descriptions"]
-                )
+                idea_full_id = self.short_id_to_full_id(idea_short_id, descriptions)
                 if not idea_full_id:
                     continue
                 ideas_data.update_idea(idea_sequence_number, idea_full_id, False)
 
             for idea in parsed_ideas.get("updated_ideas", []):
                 idea_short_id, idea_sequence_number = self._split_id(idea["id"])
-                idea_full_id = self.short_id_to_full_id(
-                    idea_short_id, idea_block["descriptions"]
-                )
+                idea_full_id = self.short_id_to_full_id(idea_short_id, descriptions)
                 if not idea_full_id:
                     continue
                 ideas_data.update_idea(idea_sequence_number, idea_full_id, True)

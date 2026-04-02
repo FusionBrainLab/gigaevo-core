@@ -37,9 +37,13 @@ class DAGBlueprint(BaseModel):
     ) -> DAG:
         return DAG(
             nodes={name: factory() for name, factory in self.nodes.items()},
-            data_flow_edges=self.data_flow_edges,
+            data_flow_edges=list(self.data_flow_edges),
             state_manager=state_manager,
-            execution_order_deps=self.exec_order_deps,
+            execution_order_deps=(
+                {k: list(v) for k, v in self.exec_order_deps.items()}
+                if self.exec_order_deps is not None
+                else None
+            ),
             max_parallel_stages=self.max_parallel_stages,
             dag_timeout=self.dag_timeout,
             writer=writer,

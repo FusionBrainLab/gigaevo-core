@@ -86,20 +86,28 @@ class MetricsContext(BaseModel):
 
         Returns:
             The MetricSpec marked as primary
+
+        Raises:
+            ValueError: If no primary metric is found (should not happen after validation)
         """
         for spec in self.specs.values():
             if spec.is_primary:
                 return spec
+        raise ValueError("No primary metric found in MetricsContext")
 
     def get_primary_key(self) -> str:
         """Get the key of the primary metric.
 
         Returns:
             The metric key marked as primary
+
+        Raises:
+            ValueError: If no primary metric is found (should not happen after validation)
         """
         for key, spec in self.specs.items():
             if spec.is_primary:
                 return key
+        raise ValueError("No primary metric found in MetricsContext")
 
     def get_description(self, key: str) -> str:
         """Get the description for a metric.
@@ -153,7 +161,11 @@ class MetricsContext(BaseModel):
         Returns:
             Dictionary mapping metric keys to their sentinel values
         """
-        return {k: spec.sentinel_value for k, spec in self.specs.items()}
+        return {
+            k: spec.sentinel_value
+            for k, spec in self.specs.items()
+            if spec.sentinel_value is not None
+        }
 
     def get_bounds(self, key: str) -> tuple[float, float] | None:
         """Get the bounds for a metric if defined.
