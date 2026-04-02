@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -103,13 +104,20 @@ def _to_float(value: Any, default: float | None = None) -> float | None:
         return default
 
 
+def _str_or_empty(value: Any) -> str:
+    """Convert to string, preserving falsy-but-valid values like 0."""
+    if value is None:
+        return ""
+    return str(value)
+
+
 def normalize_memory_card(
     card: dict[str, Any] | None = None,
     fallback_id: str | None = None,
 ) -> dict[str, Any]:
     raw = dict(card or {})
     category = str(raw.get("category") or "general")
-    program_id = str(raw.get("program_id") or "")
+    program_id = _str_or_empty(raw.get("program_id"))
     if category == "program" or program_id:
         return {
             "id": str(raw.get("id") or fallback_id or ""),
@@ -639,10 +647,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
             "entity_version_by_entity": self.entity_version_by_entity,
             "memory_cards": self.memory_cards,
         }
-        self.index_file.write_text(
+        tmp_file = self.index_file.with_suffix(f".{os.getpid()}.tmp")
+        tmp_file.write_text(
             json.dumps(payload, ensure_ascii=True, indent=2),
             encoding="utf-8",
         )
+        os.replace(str(tmp_file), str(self.index_file))
 
     @staticmethod
     def _looks_like_uuid(value: str) -> bool:
@@ -676,7 +686,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             return {
                 "id": str(card.get("id") or ""),
                 "category": "program",
-                "program_id": str(card.get("program_id") or ""),
+                "program_id": _str_or_empty(card.get("program_id")),
                 "task_description": str(card.get("task_description") or ""),
                 "task_description_summary": str(
                     card.get("task_description_summary") or ""
@@ -708,7 +718,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return {
             "id": str(card.get("id") or ""),
             "category": str(card.get("category") or "general"),
-            "program_id": str(card.get("program_id") or ""),
+            "program_id": _str_or_empty(card.get("program_id")),
             "fitness": _to_float(card.get("fitness"), default=None),
             "task_description": str(card.get("task_description") or ""),
             "task_description_summary": str(card.get("task_description_summary") or ""),
@@ -1460,7 +1470,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def _is_program_card(card: dict[str, Any]) -> bool:
         if str(card.get("category") or "").strip().lower() == "program":
             return True
-        return bool(str(card.get("program_id") or "").strip())
+        return bool(_str_or_empty(card.get("program_id")).strip())
 
     def save_card(self, card: dict[str, Any]) -> str:
         normalized_card = normalize_memory_card(card)
@@ -1660,7 +1670,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         scored: list[tuple[int, dict[str, Any]]] = []
         for card in self.memory_cards.values():
-            haystack = " ".join(
+            haystack_text = " ".join(
                 [
                     str(card.get("description") or ""),
                     str(card.get("task_description_summary") or ""),
@@ -1669,7 +1679,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     str(card.get("category") or ""),
                 ]
             ).lower()
-            score = sum(1 for tok in tokens if tok and tok in haystack)
+            haystack_tokens = set(re.split(r"\W+", haystack_text))
+            score = sum(1 for tok in tokens if tok and tok in haystack_tokens)
             if score > 0:
                 scored.append((score, card))
 

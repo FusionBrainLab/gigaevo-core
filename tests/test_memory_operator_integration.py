@@ -300,10 +300,14 @@ class TestSelectorWithRealMemory:
     @pytest.mark.asyncio
     async def test_search_returns_relevant_cards(self, tmp_path):
         selector = self._make_selector(tmp_path, [
-            {"id": "idea-1", "description": "Sort evidence by relevance score",
-             "keywords": ["sort", "relevance", "evidence"]},
-            {"id": "idea-2", "description": "Filter low-confidence hops using threshold",
-             "keywords": ["filter", "confidence"]},
+            {"id": "idea-1",
+             "description": "Sort evidence by relevance score for multi-hop verification",
+             "keywords": ["sort", "relevance", "evidence", "verification", "multi"],
+             "task_description": "Multi-hop fact verification"},
+            {"id": "idea-2",
+             "description": "Filter low-confidence hops using threshold for fact checking",
+             "keywords": ["filter", "confidence", "fact", "verification"],
+             "task_description": "Multi-hop fact verification"},
         ])
         parent = _make_program(code="def solve(x):\n    return x\n")
 

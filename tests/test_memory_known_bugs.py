@@ -73,37 +73,36 @@ class TestBug1CorruptIndexFile:
 # ===========================================================================
 
 
-class TestBug5SubstringSearch:
-    def test_short_token_matches_too_broadly(self, tmp_path):
-        """Token 'a' matches any card containing 'a' anywhere in ANY field.
+class TestBug5SubstringSearchFixed:
+    """BUG 5 FIXED: search now uses word-boundary token matching."""
 
-        BUG: _search_local_cards uses `tok in haystack` (substring match)
-        across description + task_description_summary + task_description +
-        keywords + category. The category field defaults to "general" which
-        contains 'a', so single-char token 'a' matches EVERY card.
-        """
+    def test_short_token_no_longer_matches_inside_words(self, tmp_path):
+        """Token 'a' no longer matches 'general' (category) because 'a'
+        is not a standalone word in 'general'."""
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "xyz specific topic",
                         "task_description": "", "task_description_summary": ""})
 
         result = mem.search("a")
-        # BUG: "a" matches because category="general" contains "a"
-        # This means searching for "a" returns ALL cards regardless of content
-        assert "c1" in result  # Documents the bug: false positive
+        # FIXED: "a" is not a word in any field → no match
+        assert "No relevant memories found" in result
 
-    def test_single_char_token_overmatch(self, tmp_path):
-        """Single-char tokens match almost everything."""
+    def test_single_char_token_no_overmatch(self, tmp_path):
+        """Single-char token 'a' doesn't match inside 'database' or 'programming'."""
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "database management"})
         mem.save_card({"id": "c2", "description": "python programming"})
 
         result = mem.search("a")
-        # "a" is in "database" and "management" → c1 matches
+        # FIXED: "a" is not a word in "database", "management", or "programming"
+        assert "No relevant memories found" in result
+
+    def test_whole_word_matching_still_works(self, tmp_path):
+        """Whole word tokens still match correctly."""
+        mem = _make_memory(tmp_path)
+        mem.save_card({"id": "c1", "description": "database management system"})
+        result = mem.search("database")
         assert "c1" in result
-        # BUG: "a" is NOT in "python" but IS in "programming" → c2 also matches
-        # This is overly broad — a search for "a" shouldn't match "programming"
-        # Documenting actual behavior:
-        assert "c2" in result  # This is the bug: "a" in "programming"
 
 
 # ===========================================================================
@@ -220,23 +219,30 @@ class TestBug12AppendUniqueTextSubstring:
 # ===========================================================================
 
 
-class TestBugFalsyProgramId:
-    def test_zero_program_id_lost(self):
-        """program_id=0 → str(0 or '') → '' → falsy → general card.
+class TestBugFalsyProgramIdFixed:
+    """FIXED: program_id=0 now correctly triggers program card path."""
 
-        This means numeric program IDs that happen to be 0 are silently
-        treated as general cards instead of program cards.
-        """
+    def test_zero_program_id_preserved(self):
+        """program_id=0 → _str_or_empty(0) → '0' → truthy → program card."""
         card = normalize_memory_card({"program_id": 0, "description": "prog"})
-        # BUG: 0 is a valid program_id but gets lost
-        assert card.get("program_id", "") == ""  # Lost!
-        assert "fitness" not in card  # Not treated as program card
+        assert card["program_id"] == "0"
+        assert card["category"] == "program"
+        assert "fitness" in card
 
     def test_nonzero_numeric_program_id_works(self):
-        """program_id=42 → str(42 or '')='42' → truthy → program card."""
         card = normalize_memory_card({"program_id": 42, "description": "prog"})
         assert card["category"] == "program"
         assert card["program_id"] == "42"
+
+    def test_none_program_id_still_general(self):
+        card = normalize_memory_card({"program_id": None, "description": "d"})
+        assert card.get("category") == "general"
+
+    def test_false_program_id_preserved(self):
+        """program_id=False → _str_or_empty(False) → 'False' → truthy → program card."""
+        card = normalize_memory_card({"program_id": False, "description": "d"})
+        assert card["category"] == "program"
+        assert card["program_id"] == "False"
 
 
 # ===========================================================================

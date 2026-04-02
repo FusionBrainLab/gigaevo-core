@@ -373,21 +373,16 @@ class TestNormalizeEdgeCases:
         result = normalize_memory_card({"program_id": ""})
         assert set(result.keys()) == _GENERAL_KEYS
 
-    def test_zero_program_id_does_not_trigger_program_path(self):
-        """program_id=0 → str(0 or "") → str("") → "" which is falsy.
-
-        BUG NOTE: This is arguably a bug — program_id=0 could be a valid
-        numeric ID. The `or ""` coercion in normalize_memory_card converts
-        any falsy program_id to empty string BEFORE str(), so 0, False, None
-        all behave the same. Documenting actual behavior.
-        """
+    def test_zero_program_id_triggers_program_path(self):
+        """FIXED: program_id=0 → _str_or_empty(0) → "0" → truthy → program card."""
         result = normalize_memory_card({"program_id": 0})
-        assert set(result.keys()) == _GENERAL_KEYS
+        assert set(result.keys()) == _PROGRAM_KEYS
+        assert result["program_id"] == "0"
 
-    def test_false_program_id_does_not_trigger(self):
-        """program_id=False → str(False or "")="" which is falsy."""
+    def test_false_program_id_triggers_program_path(self):
+        """FIXED: program_id=False → _str_or_empty(False) → "False" → truthy."""
         result = normalize_memory_card({"program_id": False})
-        assert set(result.keys()) == _GENERAL_KEYS
+        assert set(result.keys()) == _PROGRAM_KEYS
 
     def test_none_program_id_does_not_trigger(self):
         result = normalize_memory_card({"program_id": None})
