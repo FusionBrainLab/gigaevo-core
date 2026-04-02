@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v1.27.0 (2026-04-02)
+
+### Bug Fixes
+
+- Format card_conversion.py
+  ([`228b8f3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/228b8f3e68bcdede0a5fe5bdb4335542edf3f648))
+
+- Lint import sorting in A_mem + GAM_root (pre-existing)
+  ([`5e3baa3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5e3baa34d5dce321a24abaace314dd590b1ff57f))
+
+- **memory**: Address chaos-hacker findings on public API
+  ([`91aec06`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/91aec061a2357e5bf5d0a9e57dfe8f981fd6f95a))
+
+- **memory**: Correct concept_to_card return type annotation
+  ([`78327d0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/78327d0ab04a0e71b8d77e3e980399eb959bdbe6))
+
+### Features
+
+- Add gigaevo.memory public API exports
+  ([`7790b82`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/7790b82ec79eb67e783bb5562f120dd376f76bc6))
+
+### Refactoring
+
+- Replace 50 print() with loguru in A_mem + GAM_root
+  ([`59853df`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/59853dfef4348e5a68de55f8020ef47d65d07990))
+
+- **memory**: Add future annotations, reduce hasattr/getattr usage
+  ([`ae4e403`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ae4e4037ea512fb2ffd27e7c63a8a73701d41ae5))
+
+- **memory**: Consolidate 20 test files into tests/memory/
+  ([`e6f8480`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e6f8480b0619a6f57ef6476ee49f8455ad6d9741))
+
+
 ## v1.26.0 (2026-04-02)
 
 ### Features
