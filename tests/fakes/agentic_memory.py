@@ -71,16 +71,23 @@ class FakeRetriever:
         self._docs.pop(doc_id, None)
 
     def search(self, queries: list[str], top_k: int = 5) -> list[list[Any]]:
-        """Simple keyword matching — returns FakeSearchResult objects."""
+        """Jaccard similarity search — returns normalized [0,1] scores."""
         results = []
         for query in queries:
-            tokens = set(re.split(r"\W+", query.lower()))
+            tokens = set(re.split(r"\W+", query.lower())) - {""}
             scored = []
             for doc_id, (doc, meta) in self._docs.items():
-                doc_tokens = set(re.split(r"\W+", doc.lower()))
-                score = len(tokens & doc_tokens)
-                if score > 0:
-                    scored.append(FakeSearchResult(page_id=doc_id, score=float(score), meta=meta))
+                doc_tokens = set(re.split(r"\W+", doc.lower())) - {""}
+                union = tokens | doc_tokens
+                if not union:
+                    continue
+                jaccard = len(tokens & doc_tokens) / len(union)
+                if jaccard > 0:
+                    # Put score in meta so _score_retrieved_candidates can read it
+                    hit_meta = {**meta, "score": jaccard}
+                    scored.append(FakeSearchResult(
+                        page_id=doc_id, score=jaccard, meta=hit_meta,
+                    ))
             scored.sort(key=lambda r: r.score, reverse=True)
             results.append(scored[:top_k])
         return results
@@ -288,6 +295,124 @@ class FakeResearchAgent:
 
 
 # ---------------------------------------------------------------------------
+# Fake GAM stores — mirrors InMemoryMemoryStore, InMemoryPageStore, Page
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FakePage:
+    """Mirrors GAM_root.gam.schemas.Page."""
+    header: str = ""
+    content: str = ""
+    meta: dict = field(default_factory=dict)
+
+
+class FakeMemoryStore:
+    """Mirrors InMemoryMemoryStore."""
+
+    def __init__(self, dir_path: str = ""):
+        self._items: list[str] = []
+
+    def add(self, abstract: str) -> None:
+        self._items.append(abstract)
+
+    def load(self) -> list[str]:
+        return list(self._items)
+
+
+class FakePageStore:
+    """Mirrors InMemoryPageStore."""
+
+    def __init__(self, dir_path: str = ""):
+        self._pages: list[FakePage] = []
+
+    def save(self, pages: list[FakePage]) -> None:
+        self._pages = list(pages)
+
+    def load(self) -> list[FakePage]:
+        return list(self._pages)
+
+
+# ---------------------------------------------------------------------------
+# Fake build_gam_store / build_retrievers / load_amem_records
+# ---------------------------------------------------------------------------
+
+
+def fake_load_amem_records(path: Any) -> list[dict[str, Any]]:
+    """Load JSONL records — same as real implementation, no external deps."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    records: list[dict[str, Any]] = []
+    p = _Path(path)
+    if not p.exists():
+        return records
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            records.append(_json.loads(line))
+    return records
+
+
+def fake_build_gam_store(
+    records: list[dict[str, Any]], store_dir: Any
+) -> tuple[FakeMemoryStore, FakePageStore, int]:
+    """Build fake GAM stores from records."""
+    memory_store = FakeMemoryStore()
+    page_store = FakePageStore()
+
+    pages: list[FakePage] = []
+    for rec in records:
+        rid = str(rec.get("id") or "").strip()
+        desc = rec.get("description") or rec.get("content") or ""
+        memory_store.add(desc)
+        pages.append(FakePage(
+            header=f"[A-MEM] {rid}" if rid else "[A-MEM]",
+            content=desc,
+            meta={"amem_id": rid, "amem": rec},
+        ))
+
+    page_store.save(pages)
+    return memory_store, page_store, len(pages)
+
+
+def fake_build_retrievers(
+    page_store: FakePageStore,
+    index_dir: Any,
+    chroma_dir: Any,
+    chroma_collection: str = "memories",
+    enable_bm25: bool = False,
+    allowed_tools: list[str] | None = None,
+) -> dict[str, FakeRetriever]:
+    """Build fake retrievers from page store content.
+
+    Creates a FakeRetriever per allowed tool, all sharing the same
+    in-memory keyword search index built from page content.
+    """
+    allowed = set(allowed_tools or [
+        "page_index", "keyword",
+        "vector", "vector_description", "vector_task_description",
+        "vector_explanation_summary",
+        "vector_description_explanation_summary",
+        "vector_description_task_description_summary",
+    ])
+
+    # Build a single index from all pages
+    base_retriever = FakeRetriever()
+    for page in page_store.load():
+        amem_id = (page.meta or {}).get("amem_id", "")
+        base_retriever.add_document(
+            page.content,
+            {**(page.meta or {})},
+            amem_id or page.header,
+        )
+
+    return {tool: base_retriever for tool in allowed}
+
+
+# ---------------------------------------------------------------------------
 # inject_fakes_into_memory — wire fakes into AmemGamMemory
 # ---------------------------------------------------------------------------
 
@@ -307,3 +432,19 @@ def inject_fakes_into_memory(mem: Any) -> FakeAgenticMemorySystem:
     mem._ResearchAgentCls = FakeResearchAgent
     mem._AMemGeneratorCls = FakeAMemGenerator
     return fake_system
+
+
+def patch_gam_imports():
+    """Return a dict suitable for unittest.mock.patch on the amem_gam_retriever import.
+
+    Usage:
+        with patch.dict('sys.modules', patch_gam_imports()):
+            ...
+    Or more commonly, patch the specific import site in memory.py.
+    """
+    import types
+    fake_module = types.ModuleType("shared_memory.amem_gam_retriever")
+    fake_module.build_gam_store = fake_build_gam_store  # type: ignore[attr-defined]
+    fake_module.build_retrievers = fake_build_retrievers  # type: ignore[attr-defined]
+    fake_module.load_amem_records = fake_load_amem_records  # type: ignore[attr-defined]
+    return {"shared_memory.amem_gam_retriever": fake_module}
