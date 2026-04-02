@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from copy import copy
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any

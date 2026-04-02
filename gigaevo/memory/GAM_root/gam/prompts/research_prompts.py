@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 Planning_PROMPT = """
 You are the PlanningAgent. Your job is to generate a concrete retrieval plan for selecting the most relevant memory cards for a REQUEST.
 You must use the REQUEST and the current MEMORY (which contains abstracts of all messages so far).

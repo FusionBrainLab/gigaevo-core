@@ -373,7 +373,7 @@ def normalize_gam_pipeline_mode(gam_pipeline_mode: str | None) -> str:
 
 def concept_to_card(
     concept_content: dict[str, Any], fallback_id: str
-) -> dict[str, Any]:
+) -> AnyCard:
     """Convert an API concept content dict to a normalized memory card."""
     return normalize_memory_card(
         {

@@ -1,5 +1,7 @@
 """Shared memory backend components."""
 
+from __future__ import annotations
+
 from gigaevo.memory.shared_memory.card_conversion import (
     GigaEvoMemoryBase,
     normalize_memory_card,

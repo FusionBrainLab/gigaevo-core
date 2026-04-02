@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 import json
 import os
@@ -89,7 +91,7 @@ class IdeasTrackerLogger:
         """
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def _idea_to_dict(self, idea: "RecordCardExtended") -> dict[str, Any]:
+    def _idea_to_dict(self, idea: RecordCardExtended) -> dict[str, Any]:
         """
         Serialize idea to JSON-serializable dict.
 
@@ -370,7 +372,7 @@ class IdeasTrackerLogger:
         with open(self.memory_usage_updates_file, "w", encoding="utf-8") as f:
             json.dump(existing, f, indent=4)
 
-    def dump_final_state(self, record_manager: "RecordManager") -> None:
+    def dump_final_state(self, record_manager: RecordManager) -> None:
         """
         Extract and log final state of both idea banks.
 
