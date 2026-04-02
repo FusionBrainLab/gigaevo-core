@@ -188,7 +188,7 @@ class TestDedupWithRealScoring:
         )
 
         # Score candidates for a similar card
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card(
             {
@@ -219,7 +219,7 @@ class TestDedupWithRealScoring:
             card_update_dedup_config={"enabled": True},
         )
 
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card({"description": "SA optimization"})
         scored = mem._score_retrieved_candidates(incoming)
@@ -234,7 +234,7 @@ class TestDedupWithRealScoring:
             ideas=[{"id": "i1", "description": "test"}],
         )
 
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card({"description": "test"})
         scored = mem._score_retrieved_candidates(incoming)
