@@ -190,7 +190,7 @@ class TestSynthesizeResults:
 
     def test_no_llm_falls_back_to_format(self, tmp_path):
         mem = _make_memory(tmp_path)
-        cards = [{"id": "c1", "description": "test", "category": "general"}]
+        cards = [normalize_memory_card({"id": "c1", "description": "test", "category": "general"})]
         result = mem._synthesize_results("query", None, cards)
         assert "c1" in result
         assert "Query: query" in result
@@ -226,7 +226,7 @@ class TestSynthesizeResults:
         mock_llm.generate.return_value = ("", {}, None, None)
         mem.llm_service = mock_llm
 
-        cards = [{"id": "c1", "description": "test", "category": "general"}]
+        cards = [normalize_memory_card({"id": "c1", "description": "test", "category": "general"})]
         result = mem._synthesize_results("query", None, cards)
         # Empty LLM response → fallback to _format_search_results
         assert "c1" in result
@@ -238,7 +238,7 @@ class TestSynthesizeResults:
         mock_llm.generate.side_effect = RuntimeError("LLM down")
         mem.llm_service = mock_llm
 
-        cards = [{"id": "c1", "description": "test", "category": "general"}]
+        cards = [normalize_memory_card({"id": "c1", "description": "test", "category": "general"})]
         result = mem._synthesize_results("query", None, cards)
         assert "c1" in result
 

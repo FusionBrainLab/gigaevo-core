@@ -12,7 +12,9 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     _extract_json_object,
     append_unique_text,
 )
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.models import ProgramCard
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -229,9 +231,9 @@ class TestBugFalsyProgramIdFixed:
     def test_zero_program_id_preserved(self):
         """program_id=0 → _str_or_empty(0) → '0' → truthy → program card."""
         card = normalize_memory_card({"program_id": 0, "description": "prog"})
+        assert isinstance(card, ProgramCard)
         assert card.program_id == "0"
         assert card.category == "program"
-        assert "fitness" in card
 
     def test_nonzero_numeric_program_id_works(self):
         card = normalize_memory_card({"program_id": 42, "description": "prog"})

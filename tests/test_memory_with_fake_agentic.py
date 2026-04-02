@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from tests.fakes.agentic_memory import (
     FakeAgenticMemorySystem,

@@ -617,7 +617,7 @@ class TestApiSyncSimulation:
         mem.use_api = True
 
         # Pre-populate as if already synced
-        mem.memory_cards["c1"] = {"id": "c1", "description": "known"}
+        mem.memory_cards["c1"] = normalize_memory_card({"id": "c1", "description": "known"})
         mem.entity_by_card_id["c1"] = "e1"
         mem.card_id_by_entity["e1"] = "c1"
         mem.entity_version_by_entity["e1"] = "v1"
