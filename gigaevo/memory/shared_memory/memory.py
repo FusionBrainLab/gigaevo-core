@@ -7,6 +7,7 @@ import re
 from typing import Any, Protocol
 import uuid
 
+from dataclasses import dataclass
 from dotenv import load_dotenv
 import httpx
 from loguru import logger
@@ -34,6 +35,7 @@ load_dotenv()
 from gigaevo.memory.shared_memory.card_conversion import (
     ALLOWED_STRATEGIES,
     GigaEvoMemoryBase,
+    MemoryNoteProtocol,
     build_entity_meta,
     card_to_concept_content,
     concept_to_card,
@@ -57,12 +59,64 @@ from gigaevo.memory.shared_memory.utils import (
     truncate_text,
 )
 
-
-
-
-
 # Re-export for backward compatibility (extracted to concept_api.py)
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
+
+
+# ---------------------------------------------------------------------------
+# Protocols for agentic dependencies (A-MEM, GAM)
+# ---------------------------------------------------------------------------
+
+
+class LLMServiceProtocol(Protocol):
+    """Structural type for OpenAIInferenceService."""
+
+    def generate(self, data: str) -> tuple[str, Any, int | None, float | None]: ...
+
+
+class AgenticMemoryProtocol(Protocol):
+    """Structural type for AgenticMemorySystem."""
+
+    memories: dict[str, Any]
+    retriever: Any
+
+    def read(self, memory_id: str) -> MemoryNoteProtocol | None: ...
+    def add_note(self, content: str, **kwargs: Any) -> str: ...
+    def update(self, memory_id: str, **kwargs: Any) -> bool: ...
+    def delete(self, memory_id: str) -> bool: ...
+    def analyze_content(self, content: str) -> dict[str, Any]: ...
+    def _document_for_note(self, note: MemoryNoteProtocol) -> str: ...
+
+
+@dataclass
+class ResearchOutput:
+    """Return type of ResearchAgent.research()."""
+
+    integrated_memory: str = ""
+    raw_memory: dict[str, Any] | None = None
+
+
+class ResearchAgentProtocol(Protocol):
+    """Structural type for GAM ResearchAgent."""
+
+    def research(
+        self, request: str, memory_state: str | None = None
+    ) -> ResearchOutput: ...
+
+
+class GeneratorProtocol(Protocol):
+    """Structural type for AMemGenerator."""
+
+    def generate_single(
+        self, prompt: str | None = None, **kwargs: Any
+    ) -> dict[str, Any]: ...
+
+
+# ---------------------------------------------------------------------------
+# Card memory type alias
+# ---------------------------------------------------------------------------
+
+CardDict = dict[str, Any]
 
 
 class AmemGamMemory(GigaEvoMemoryBase):
@@ -128,7 +182,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._agentic_import_error: Exception | None = None
         self._load_agentic_classes()
 
-        self.memory_cards: dict[str, dict[str, Any]] = {}
+        self.memory_cards: dict[str, CardDict] = {}
         self.entity_by_card_id: dict[str, str] = {}
         self.card_id_by_entity: dict[str, str] = {}
         self.entity_version_by_entity: dict[str, str] = {}
@@ -142,9 +196,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
         }
         self._load_index()
 
+        self.llm_service: LLMServiceProtocol | None
+        self.generator: GeneratorProtocol | None
         self.llm_service, self.generator = self._init_llm_service_and_generator()
-        self.memory_system = self._init_storage()
-        self.research_agent: Any | None = None
+        self.memory_system: AgenticMemoryProtocol | None = self._init_storage()
+        self.research_agent: ResearchAgentProtocol | None = None
         self._dedup_retrievers: dict[str, Any] | None = None
 
         if (
@@ -185,7 +241,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._ResearchAgentCls = _ResearchAgent
         self._AMemGeneratorCls = _AMemGenerator
 
-    def _init_llm_service_and_generator(self) -> tuple[Any | None, Any | None]:
+    def _init_llm_service_and_generator(
+        self,
+    ) -> tuple[LLMServiceProtocol | None, GeneratorProtocol | None]:
         if self._AMemGeneratorCls is None and not self.card_update_dedup_config.enabled:
             return None, None
         api_key = config.OPENAI_API_KEY
@@ -205,7 +263,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             base_url = config.LLM_BASE_URL
 
             llm_service = OpenAIInferenceService(
-                model_name=config.OPENROUTER_MODEL_NAME,
+                model_name=config.OPENROUTER_MODEL_NAME or "openai/gpt-4.1-mini",
                 api_key=api_key,
                 base_url=base_url,
                 temperature=0.0,
@@ -220,7 +278,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             logger.warning("[Memory] Could not initialize LLM/generator: {}", exc)
             return None, None
 
-    def _init_storage(self) -> Any | None:
+    def _init_storage(self) -> AgenticMemoryProtocol | None:
         if self.llm_service is None or self._AgenticMemorySystemCls is None:
             return None
         try:
@@ -287,7 +345,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         os.replace(str(tmp_file), str(self.index_file))
 
 
-    def _ensure_card_id(self, card: dict[str, Any]) -> str:
+    def _ensure_card_id(self, card: CardDict) -> str:
         card_id = str(card.get("id") or "").strip()
         if not card_id:
             card_id = f"mem-{uuid.uuid4().hex[:12]}"
@@ -295,7 +353,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return card_id
 
 
-    def _build_note_from_card(self, card: dict[str, Any]) -> Any:
+    def _build_note_from_card(self, card: CardDict) -> MemoryNoteProtocol:
         if self._MemoryNoteCls is None:
             raise RuntimeError("MemoryNote class is unavailable")
         card_id = str(card.get("id") or "")
@@ -330,7 +388,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             strategy=strategy,
         )
 
-    def _upsert_local_note_fast(self, card: dict[str, Any]) -> bool:
+    def _upsert_local_note_fast(self, card: CardDict) -> bool:
         """Synchronize card into local A-MEM/Chroma without running LLM evolution."""
         if self.memory_system is None:
             return False
@@ -363,7 +421,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.memory_ids.add(note.id)
         return True
 
-    def _upsert_local_note_agentic(self, card: dict[str, Any]) -> bool:
+    def _upsert_local_note_agentic(self, card: CardDict) -> bool:
         """Add/update card in local A-MEM using regular add/update path for local writes."""
         if self.memory_system is None:
             return False
@@ -512,7 +570,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             eid for eid in self.card_id_by_entity if eid not in remote_entity_ids
         ]
         for entity_id in stale_entities:
-            card_id = self.card_id_by_entity.pop(entity_id, None)
+            card_id = self.card_id_by_entity.pop(entity_id, "")
             self.entity_version_by_entity.pop(entity_id, None)
             if card_id:
                 self.entity_by_card_id.pop(card_id, None)
@@ -533,7 +591,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         return changed
 
-    def _load_or_create_retriever(self) -> Any | None:
+    def _load_or_create_retriever(self) -> ResearchAgentProtocol | None:
         if self.generator is None or self._ResearchAgentCls is None:
             raise RuntimeError(
                 "Generator is not available. Cannot create GAM research agent."
@@ -644,7 +702,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if name in self.allowed_gam_tools
         }
 
-    def _resolve_vector_retriever(self, tool_name: str) -> Any | None:
+    def _resolve_vector_retriever(self, tool_name: str) -> Any:
         if self._dedup_retrievers is None:
             self._dedup_retrievers = self._build_dedup_retrievers()
         retrievers = self._dedup_retrievers or {}
@@ -658,7 +716,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _score_retrieved_candidates(
         self,
-        card: dict[str, Any],
+        card: CardDict,
     ) -> list[dict[str, Any]]:
         cfg = self.card_update_dedup_config
         if not cfg.enabled or not self.memory_cards:
@@ -759,7 +817,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _decide_card_action(
         self,
-        incoming_card: dict[str, Any],
+        incoming_card: CardDict,
         candidates_for_llm: list[dict[str, Any]],
     ) -> dict[str, Any]:
         default_decision = {
@@ -854,7 +912,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _apply_update_actions(
         self,
-        incoming_card: dict[str, Any],
+        incoming_card: CardDict,
         updates: list[dict[str, Any]],
     ) -> list[str]:
         updated_ids: list[str] = []
@@ -876,7 +934,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             updated_ids.append(card_id)
         return updated_ids
 
-    def _save_card_core(self, card: dict[str, Any]) -> str:
+    def _save_card_core(self, card: CardDict) -> str:
         card_id = self._ensure_card_id(card)
 
         if self.enable_llm_card_enrichment and self.memory_system is not None:
@@ -930,7 +988,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return card_id
 
 
-    def save_card(self, card: dict[str, Any]) -> str:
+    def save_card(self, card: CardDict) -> str:
         normalized_card = normalize_memory_card(card)
         self.card_write_stats["processed"] += 1
         incoming_card_id = str(normalized_card.get("id") or "").strip()
@@ -1163,7 +1221,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             return self._search_via_api(query, memory_state=memory_state)
         return self._search_local_cards(query, memory_state=memory_state)
 
-    def get_card(self, card_id: str) -> dict[str, Any] | None:
+    def get_card(self, card_id: str) -> CardDict | None:
         return self.memory_cards.get(card_id)
 
     def get_card_write_stats(self) -> dict[str, int]:
@@ -1217,7 +1275,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def __enter__(self) -> AmemGamMemory:
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
         if self._iters_after_rebuild > 0:
             try:
                 self.rebuild()
