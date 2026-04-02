@@ -737,7 +737,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if not cfg.enabled or not self.memory_cards:
             return []
 
-        query_by_key = build_dedup_queries(card)
+        query_by_key = build_dedup_queries(card.model_dump())
         tool_by_key = {
             QUERY_DESCRIPTION: "vector_description",
             QUERY_EXPLANATION_SUMMARY: "vector_explanation_summary",

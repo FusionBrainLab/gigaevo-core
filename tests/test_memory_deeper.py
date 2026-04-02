@@ -12,7 +12,8 @@ from gigaevo.memory.shared_memory.card_conversion import (
     build_entity_meta,
     concept_to_card,
 )
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 
 def _make_memory(tmp_path, **overrides):
@@ -38,11 +39,7 @@ class TestApplyUpdateActions:
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "old", "programs": ["p1"]})
 
-        incoming = {
-            "description": "new info",
-            "programs": ["p2"],
-            "last_generation": 10,
-        }
+        incoming = normalize_memory_card({"description": "new info", "programs": ["p2"], "last_generation": 10})
         updates = [
             {
                 "card_id": "c1",
@@ -54,7 +51,7 @@ class TestApplyUpdateActions:
         assert result == ["c1"]
 
         card = mem.get_card("c1")
-        assert "extra detail" in card.explanation["explanations"]
+        assert "extra detail" in card.explanation.explanations
         # Programs should be merged
         assert "p1" in card.programs
         assert "p2" in card.programs
@@ -62,7 +59,7 @@ class TestApplyUpdateActions:
     def test_skips_missing_card(self, tmp_path):
         mem = _make_memory(tmp_path)
         updates = [{"card_id": "nonexistent", "update_explanation": True}]
-        result = mem._apply_update_actions({}, updates)
+        result = mem._apply_update_actions(normalize_memory_card({}), updates)
         assert result == []
 
     def test_skips_duplicate_card_id(self, tmp_path):
@@ -73,13 +70,13 @@ class TestApplyUpdateActions:
             {"card_id": "c1", "update_explanation": True, "explanation_append": "a"},
             {"card_id": "c1", "update_explanation": True, "explanation_append": "b"},
         ]
-        result = mem._apply_update_actions({}, updates)
+        result = mem._apply_update_actions(normalize_memory_card({}), updates)
         assert result == ["c1"]  # Only processed once
 
     def test_skips_non_dict_update(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        result = mem._apply_update_actions({}, ["not a dict", None])
+        result = mem._apply_update_actions(normalize_memory_card({}), ["not a dict", None])
         assert result == []
 
     def test_multiple_target_cards(self, tmp_path):
@@ -99,7 +96,7 @@ class TestApplyUpdateActions:
                 "explanation_append": "info2",
             },
         ]
-        result = mem._apply_update_actions({}, updates)
+        result = mem._apply_update_actions(normalize_memory_card({}), updates)
         assert set(result) == {"c1", "c2"}
 
 
@@ -132,25 +129,25 @@ class TestSaveCardCoreRebuild:
 class TestEnsureCardId:
     def test_existing_id_preserved(self, tmp_path):
         mem = _make_memory(tmp_path)
-        card = {"id": "my-id", "description": "test"}
+        card = normalize_memory_card({"id": "my-id", "description": "test"})
         assert mem._ensure_card_id(card) == "my-id"
 
     def test_empty_id_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
-        card = {"id": "", "description": "test"}
+        card = normalize_memory_card({"id": "", "description": "test"})
         result = mem._ensure_card_id(card)
         assert result.startswith("mem-")
         assert card.id == result  # Mutates the card dict
 
     def test_whitespace_id_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
-        card = {"id": "   ", "description": "test"}
+        card = normalize_memory_card({"id": "   ", "description": "test"})
         result = mem._ensure_card_id(card)
         assert result.startswith("mem-")
 
     def test_no_id_key_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
-        card = {"description": "test"}
+        card = normalize_memory_card({"description": "test"})
         result = mem._ensure_card_id(card)
         assert result.startswith("mem-")
 
