@@ -209,3 +209,15 @@ class RidgePredictor(EvalTimePredictor):
         model = Ridge(alpha=self._alpha)
         model.fit(X, y)
         self._model = model
+
+        # Log retrain event with feature weights
+        weights = dict(zip(self._feature_keys, model.coef_))
+        top_features = sorted(weights.items(), key=lambda kv: abs(kv[1]), reverse=True)
+        weight_str = ", ".join(f"{k}={v:+.3f}" for k, v in top_features[:5])
+        logger.info(
+            "[RidgePredictor] Retrained on {} samples | intercept={:.1f}s | "
+            "top weights: {}",
+            len(y),
+            model.intercept_,
+            weight_str,
+        )

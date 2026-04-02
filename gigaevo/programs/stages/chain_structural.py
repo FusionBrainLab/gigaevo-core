@@ -21,11 +21,16 @@ from gigaevo.programs.stages.stage_registry import StageRegistry
 _EXTRACTOR = ChainFeatureExtractor()
 
 # Keys surfaced as program.metrics for MAP-Elites behavioral characterization.
-STRUCTURAL_METRIC_KEYS = ("dag_depth", "max_dependency_fan_in", "n_deep_retrieval")
+STRUCTURAL_METRIC_KEYS = (
+    "dag_depth",
+    "max_dependency_fan_in",
+    "n_deep_retrieval",
+    "n_retrievals",
+)
 
 
 @StageRegistry.register(
-    description="Extract chain structural metrics (dag_depth, max_fan_in, n_deep_retrieval)"
+    description="Extract chain structural metrics (dag_depth, max_fan_in, n_deep_retrieval, n_retrievals)"
 )
 class ChainStructuralMetricsStage(Stage):
     """Extract chain topology features and store them in ``program.metrics``.
@@ -35,6 +40,7 @@ class ChainStructuralMetricsStage(Stage):
     - ``dag_depth``: longest path from root to leaf in the dependency DAG
     - ``max_dependency_fan_in``: maximum in-degree across all steps
     - ``n_deep_retrieval``: count of ``retrieve_deep`` calls (k=10)
+    - ``n_retrievals``: total count of all retrieval calls (retrieve + retrieve_deep)
 
     These are stored directly on the program so the MAP-Elites behavior
     space can key on them.  The stage also returns a :class:`FloatDictContainer`
@@ -49,10 +55,11 @@ class ChainStructuralMetricsStage(Stage):
         structural = {k: features[k] for k in STRUCTURAL_METRIC_KEYS}
         program.add_metrics(structural)
         logger.debug(
-            "[{}] structural metrics: dag_depth={}, max_fan_in={}, n_deep_ret={}",
+            "[{}] structural metrics: dag_depth={}, max_fan_in={}, n_deep_ret={}, n_ret={}",
             self.stage_name,
             structural["dag_depth"],
             structural["max_dependency_fan_in"],
             structural["n_deep_retrieval"],
+            structural["n_retrievals"],
         )
         return FloatDictContainer(data=structural)

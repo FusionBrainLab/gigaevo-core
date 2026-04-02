@@ -84,6 +84,7 @@ include = ["gigaevo*"]
 [tool.ruff]
 line-length = 88  # same as in black
 target-version = "py312"
+exclude = [".claude/worktrees", "experiments/*/top_programs_*"]
 
 [tool.ruff.lint]
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes

@@ -72,6 +72,11 @@ class ChainFeatureExtractor:
         # Deep retrieval steps use k=10 vs k=7, take longer
         n_deep_retrieval = float(code.count('"retrieve_deep"'))
 
+        # Total retrieval steps (both retrieve and retrieve_deep)
+        n_retrievals = n_deep_retrieval + float(
+            len(re.findall(r'"retrieve"(?!_)', code))
+        )
+
         # Few-shot example blocks add significant token count
         n_examples = float(len(re.findall(r"Example \d+", code)))
 
@@ -120,6 +125,7 @@ class ChainFeatureExtractor:
             "n_total_steps": n_total_steps,
             "total_string_content": float(total_string_content),
             "n_deep_retrieval": n_deep_retrieval,
+            "n_retrievals": n_retrievals,
             "n_examples": n_examples,
             "has_system_prompt": has_system_prompt,
             "max_dependency_fan_in": max_deps,

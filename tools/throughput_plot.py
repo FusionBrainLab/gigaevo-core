@@ -32,19 +32,19 @@ from tools.experiment.manifest import load_manifest
 
 # ── Color scheme (colorblind-friendly, high contrast) ──
 
-COLORS = {
-    "V1": "#2166ac",  # Dark blue (control)
-    "V2": "#67a9cf",  # Light blue (control)
-    "V3": "#b2182b",  # Dark red (treatment)
-    "V4": "#ef8a62",  # Orange-red (treatment)
-}
+_PALETTE = [
+    "#1f77b4",  # Blue
+    "#ff7f0e",  # Orange
+    "#2ca02c",  # Green
+    "#d62728",  # Red
+    "#9467bd",  # Purple
+    "#8c564b",  # Brown
+    "#e377c2",  # Pink
+    "#17becf",  # Cyan
+]
 
-LINESTYLES = {
-    "V1": "-",  # Solid (replicate 1)
-    "V2": "--",  # Dashed (replicate 2)
-    "V3": "-",
-    "V4": "--",
-}
+COLORS: dict[str, str] = {}  # Populated dynamically from run labels
+LINESTYLES: dict[str, str] = {}  # Populated dynamically
 
 
 def get_time_series(
@@ -136,6 +136,13 @@ def main():
     baseline = None
     if hasattr(m, "baseline") and m.baseline and hasattr(m.baseline, "mean"):
         baseline = m.baseline.mean  # percentage (e.g. 81.78)
+
+    # ── Assign colors/linestyles dynamically from run labels ──
+    for idx, label in enumerate(sorted(run_data.keys())):
+        if label not in COLORS:
+            COLORS[label] = _PALETTE[idx % len(_PALETTE)]
+        if label not in LINESTYLES:
+            LINESTYLES[label] = "-" if idx % 2 == 0 else "--"
 
     # ── Figure setup ──
     fig, axes = plt.subplots(2, 3, figsize=(24, 14))
