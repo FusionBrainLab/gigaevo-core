@@ -274,7 +274,9 @@ class TestSearchLocal:
         # Save then inject keywords (normalize_memory_card produces keyword field)
         mem.save_card(card)
         # Directly modify to add keywords for search
-        mem.memory_cards["c1"] = mem.memory_cards["c1"].model_copy(update={"keywords": ["optimization", "local-search"]})
+        mem.memory_cards["c1"] = mem.memory_cards["c1"].model_copy(
+            update={"keywords": ["optimization", "local-search"]}
+        )
         result = mem.search("optimization")
         assert "c1" in result
 

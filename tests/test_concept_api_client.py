@@ -242,13 +242,17 @@ def _make_memory(tmp_path, **overrides):
 class TestDecideCardAction:
     def test_no_llm_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
-        result = mem._decide_card_action(normalize_memory_card({"description": "test"}), [{"card_id": "c1"}])
+        result = mem._decide_card_action(
+            normalize_memory_card({"description": "test"}), [{"card_id": "c1"}]
+        )
         assert result["action"] == "add"
 
     def test_no_candidates_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.llm_service = MagicMock()
-        result = mem._decide_card_action(normalize_memory_card({"description": "test"}), [])
+        result = mem._decide_card_action(
+            normalize_memory_card({"description": "test"}), []
+        )
         assert result["action"] == "add"
         mem.llm_service.generate.assert_not_called()
 
@@ -266,7 +270,9 @@ class TestDecideCardAction:
         mem.llm_service = mock_llm
 
         candidates = [{"card_id": "existing", "final_score": 0.9}]
-        result = mem._decide_card_action(normalize_memory_card({"description": "dup"}), candidates)
+        result = mem._decide_card_action(
+            normalize_memory_card({"description": "dup"}), candidates
+        )
         assert result["action"] == "discard"
         assert result["duplicate_of"] == "existing"
 
@@ -289,7 +295,9 @@ class TestDecideCardAction:
         mem.llm_service = mock_llm
 
         candidates = [{"card_id": "c1", "final_score": 0.5}]
-        result = mem._decide_card_action(normalize_memory_card({"description": "new"}), candidates)
+        result = mem._decide_card_action(
+            normalize_memory_card({"description": "new"}), candidates
+        )
         assert result["action"] == "add"
         assert mock_llm.generate.call_count == 3
 

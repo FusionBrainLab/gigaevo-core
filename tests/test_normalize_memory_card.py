@@ -4,7 +4,11 @@ Pin down the exact normalization behavior so refactoring can be validated.
 """
 
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.models import MemoryCard, MemoryCardExplanation, ProgramCard
+from gigaevo.memory.shared_memory.models import (
+    MemoryCard,
+    MemoryCardExplanation,
+    ProgramCard,
+)
 from gigaevo.memory.shared_memory.utils import _to_float, _to_int, _to_list
 
 # ===========================================================================
@@ -108,8 +112,6 @@ class TestToFloat:
 # ===========================================================================
 # normalize_memory_card — general cards
 # ===========================================================================
-
-
 
 
 class TestNormalizeGeneralCard:
@@ -351,7 +353,7 @@ class TestNormalizeEdgeCases:
     def test_explanation_with_extra_keys_preserved(self):
         """explanation dict may have extra keys beyond explanations/summary."""
         expl = {"explanations": ["a"], "summary": "s", "extra": "val"}
-        result = normalize_memory_card({"explanation": expl})
+        normalize_memory_card({"explanation": expl})
         # Only explanations and summary are extracted
         assert "extra" not in MemoryCardExplanation.model_fields
 

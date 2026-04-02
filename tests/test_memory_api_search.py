@@ -191,7 +191,11 @@ class TestSynthesizeResults:
 
     def test_no_llm_falls_back_to_format(self, tmp_path):
         mem = _make_memory(tmp_path)
-        cards = [normalize_memory_card({"id": "c1", "description": "test", "category": "general"})]
+        cards = [
+            normalize_memory_card(
+                {"id": "c1", "description": "test", "category": "general"}
+            )
+        ]
         result = mem._synthesize_results("query", None, cards)
         assert "c1" in result
         assert "Query: query" in result
@@ -208,7 +212,9 @@ class TestSynthesizeResults:
         mem.llm_service = mock_llm
 
         cards = [
-            {"id": "mem-1", "description": "SA optimization", "category": "general"}
+            normalize_memory_card(
+                {"id": "mem-1", "description": "SA optimization", "category": "general"}
+            )
         ]
         result = mem._synthesize_results("how to optimize", "current state", cards)
 
@@ -227,7 +233,11 @@ class TestSynthesizeResults:
         mock_llm.generate.return_value = ("", {}, None, None)
         mem.llm_service = mock_llm
 
-        cards = [normalize_memory_card({"id": "c1", "description": "test", "category": "general"})]
+        cards = [
+            normalize_memory_card(
+                {"id": "c1", "description": "test", "category": "general"}
+            )
+        ]
         result = mem._synthesize_results("query", None, cards)
         # Empty LLM response → fallback to _format_search_results
         assert "c1" in result
@@ -239,7 +249,11 @@ class TestSynthesizeResults:
         mock_llm.generate.side_effect = RuntimeError("LLM down")
         mem.llm_service = mock_llm
 
-        cards = [normalize_memory_card({"id": "c1", "description": "test", "category": "general"})]
+        cards = [
+            normalize_memory_card(
+                {"id": "c1", "description": "test", "category": "general"}
+            )
+        ]
         result = mem._synthesize_results("query", None, cards)
         assert "c1" in result
 
@@ -250,15 +264,17 @@ class TestSynthesizeResults:
         mem.llm_service = mock_llm
 
         cards = [
-            {
-                "id": "c1",
-                "description": "SA optimization",
-                "category": "retrieval",
-                "task_description_summary": "HoVer verification",
-                "task_description": "Multi-hop fact verification",
-                "keywords": ["SA", "annealing"],
-                "explanation": {"summary": "SA works well", "explanations": []},
-            }
+            normalize_memory_card(
+                {
+                    "id": "c1",
+                    "description": "SA optimization",
+                    "category": "retrieval",
+                    "task_description_summary": "HoVer verification",
+                    "task_description": "Multi-hop fact verification",
+                    "keywords": ["SA", "annealing"],
+                    "explanation": {"summary": "SA works well", "explanations": []},
+                }
+            )
         ]
         mem._synthesize_results("test", None, cards)
 

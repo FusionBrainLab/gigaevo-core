@@ -30,11 +30,10 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
 load_dotenv()
 
 from gigaevo.memory.shared_memory.card_conversion import (
-    AnyCard,
     DEFAULT_MODEL_NAME,
+    AnyCard,
     GigaEvoMemoryBase,
     MemoryCard,
-    MemoryCardExplanation,
     MemoryNoteProtocol,
     build_entity_meta,
     card_to_concept_content,
@@ -108,7 +107,6 @@ class GeneratorProtocol(Protocol):
 # ---------------------------------------------------------------------------
 # Card memory type alias
 # ---------------------------------------------------------------------------
-
 
 
 class AmemGamMemory(GigaEvoMemoryBase):
@@ -327,9 +325,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     self.entity_version_by_entity[eid] = vid
 
     def _persist_index(self) -> None:
-        serialized_cards = {
-            cid: c.model_dump() for cid, c in self.memory_cards.items()
-        }
+        serialized_cards = {cid: c.model_dump() for cid, c in self.memory_cards.items()}
         payload = {
             "entity_by_card_id": self.entity_by_card_id,
             "entity_version_by_entity": self.entity_version_by_entity,
@@ -355,9 +351,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         card_id = str(card.id or "")
         description = str(card.description or "")
         context = str(
-            card.task_description
-            or card.task_description_summary
-            or "General"
+            card.task_description or card.task_description_summary or "General"
         )
         category = str(card.category or "general")
         strategy = str(card.strategy or "")
@@ -450,9 +444,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             "category": str(card.category or "general"),
             "keywords": list(card.keywords or []),
             "context": str(
-                card.task_description
-                or card.task_description_summary
-                or "General"
+                card.task_description or card.task_description_summary or "General"
             ),
             "strategy": str(card.strategy or ""),
             "links": list(card.links or []),
@@ -689,7 +681,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 records = [c.model_dump() for c in self.memory_cards.values()]
         else:
             records = [c.model_dump() for c in self.memory_cards.values()]
-        records = [r for r in records if str(r.get("category", "")).strip().lower() != "program"]
+        records = [
+            r
+            for r in records
+            if str(r.get("category", "")).strip().lower() != "program"
+        ]
         if not records:
             return {}
 
@@ -731,7 +727,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _score_retrieved_candidates(
         self,
-        card: CardDict,
+        card: AnyCard,
     ) -> list[dict[str, Any]]:
         cfg = self.card_update_dedup_config
         if not cfg.enabled or not self.memory_cards:
@@ -834,7 +830,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _decide_card_action(
         self,
-        incoming_card: CardDict,
+        incoming_card: AnyCard,
         candidates_for_llm: list[dict[str, Any]],
     ) -> dict[str, Any]:
         default_decision = {
@@ -929,7 +925,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _apply_update_actions(
         self,
-        incoming_card: CardDict,
+        incoming_card: AnyCard,
         updates: list[dict[str, Any]],
     ) -> list[str]:
         updated_ids: list[str] = []
@@ -1245,7 +1241,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             return self._search_via_api(query, memory_state=memory_state)
         return self._search_local_cards(query, memory_state=memory_state)
 
-    def get_card(self, card_id: str) -> CardDict | None:
+    def get_card(self, card_id: str) -> AnyCard | None:
         return self.memory_cards.get(card_id)
 
     def get_card_write_stats(self) -> dict[str, int]:

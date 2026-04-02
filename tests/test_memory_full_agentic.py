@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-from gigaevo.memory.shared_memory.card_conversion import is_program_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from tests.fakes.agentic_memory import (
     FakeAMemGenerator,
@@ -83,7 +82,11 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
     # Also patch _build_dedup_retrievers similarly
     def _patched_build_dedup_retrievers():
         records = [c.model_dump() for c in mem.memory_cards.values()]
-        records = [r for r in records if str(r.get("category", "")).strip().lower() != "program"]
+        records = [
+            r
+            for r in records
+            if str(r.get("category", "")).strip().lower() != "program"
+        ]
         if not records:
             return {}
 

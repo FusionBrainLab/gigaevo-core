@@ -143,13 +143,15 @@ class TestSaveGetRoundtrip:
 
     def test_persist_reload_roundtrip(self, tmp_path):
         mem1 = _make_memory(tmp_path)
-        mem1.save_card({
-            "id": "c1",
-            "description": "test idea",
-            "keywords": ["k1", "k2"],
-            "explanation": {"explanations": ["e1"], "summary": "s"},
-            "last_generation": 7,
-        })
+        mem1.save_card(
+            {
+                "id": "c1",
+                "description": "test idea",
+                "keywords": ["k1", "k2"],
+                "explanation": {"explanations": ["e1"], "summary": "s"},
+                "last_generation": 7,
+            }
+        )
         mem2 = _make_memory(tmp_path)
         stored = mem2.get_card("c1")
         assert stored.description == "test idea"
@@ -171,7 +173,9 @@ class TestSearchOutputContract:
 
     def test_results_format_has_query_line(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "annealing idea", "keywords": ["annealing"]})
+        mem.save_card(
+            {"id": "c1", "description": "annealing idea", "keywords": ["annealing"]}
+        )
         result = mem.search("annealing")
         assert result.startswith("Query: annealing")
 
@@ -245,7 +249,11 @@ class TestWriteStatsContract:
         mem = _make_memory(tmp_path)
         stats = mem.get_card_write_stats()
         assert set(stats.keys()) == {
-            "processed", "added", "rejected", "updated", "updated_target_cards",
+            "processed",
+            "added",
+            "rejected",
+            "updated",
+            "updated_target_cards",
         }
 
     def test_stats_all_int(self, tmp_path):
@@ -272,24 +280,37 @@ class TestWriteStatsContract:
 
 class TestDedupDecisionContract:
     def test_parse_decision_shape(self):
-        from gigaevo.memory.shared_memory.card_update_dedup import parse_llm_card_decision
+        from gigaevo.memory.shared_memory.card_update_dedup import (
+            parse_llm_card_decision,
+        )
 
         result = parse_llm_card_decision(
-            json.dumps({"action": "add"}), candidate_ids={"c1"},
+            json.dumps({"action": "add"}),
+            candidate_ids={"c1"},
         )
         assert set(result.keys()) == {"action", "reason", "duplicate_of", "updates"}
 
     def test_parse_decision_actions(self):
-        from gigaevo.memory.shared_memory.card_update_dedup import parse_llm_card_decision
+        from gigaevo.memory.shared_memory.card_update_dedup import (
+            parse_llm_card_decision,
+        )
 
         for action in ("add", "discard", "update"):
             if action == "discard":
                 text = json.dumps({"action": action, "duplicate_of": "c1"})
             elif action == "update":
-                text = json.dumps({
-                    "action": action,
-                    "updates": [{"card_id": "c1", "update_explanation": True, "explanation_append": "x"}],
-                })
+                text = json.dumps(
+                    {
+                        "action": action,
+                        "updates": [
+                            {
+                                "card_id": "c1",
+                                "update_explanation": True,
+                                "explanation_append": "x",
+                            }
+                        ],
+                    }
+                )
             else:
                 text = json.dumps({"action": action})
             result = parse_llm_card_decision(text, candidate_ids={"c1"})
@@ -321,5 +342,6 @@ class TestMutationMetadataKeysContract:
             MUTATION_MEMORY_METADATA_KEY,
             MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
         )
+
         assert MUTATION_MEMORY_METADATA_KEY == "mutation_memory"
         assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY == "memory_selected_idea_ids"

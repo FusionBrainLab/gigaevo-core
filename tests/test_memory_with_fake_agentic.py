@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from tests.fakes.agentic_memory import (
     FakeAgenticMemorySystem,
@@ -117,8 +116,8 @@ class TestFakeAgenticMemorySystem:
     def test_analyze_content(self):
         sys = FakeAgenticMemorySystem()
         result = sys.analyze_content("Use simulated annealing for optimization")
-        assert "simulated" in result.keywords
-        assert "annealing" in result.keywords
+        assert "simulated" in result["keywords"]
+        assert "annealing" in result["keywords"]
 
     def test_retriever_search(self):
         sys = FakeAgenticMemorySystem()

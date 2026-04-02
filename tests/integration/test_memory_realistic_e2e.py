@@ -38,9 +38,10 @@ from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_conversion import is_program_card
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.card_conversion import (
+    is_program_card,
+    normalize_memory_card,
+)
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -192,9 +193,9 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
 
     def _patched_retriever():
         mem._dump_memory()
-        recs = fake_load_amem_records(mem.export_file) or list(
-            mem.memory_cards.values()
-        )
+        recs = fake_load_amem_records(mem.export_file) or [
+            c.model_dump() for c in mem.memory_cards.values()
+        ]
         ms, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)
         rets = fake_build_retrievers(
             ps,
@@ -209,7 +210,9 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
         )
 
     def _patched_dedup():
-        recs = [r for r in mem.memory_cards.values() if not is_program_card(r)]
+        recs = [
+            c.model_dump() for c in mem.memory_cards.values() if not is_program_card(c)
+        ]
         if not recs:
             return {}
         _, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)
@@ -335,7 +338,7 @@ class TestKnowledgeAccumulation:
         # Write memory file for phase 2
         mf = tmp_path / "memory.txt"
         mf.write_text(
-            "\n".join(f"- {c['description']}" for c in mem.memory_cards.values())
+            "\n".join(f"- {c.description}" for c in mem.memory_cards.values())
         )
 
         # Phase 2: evolution with memory
@@ -619,7 +622,9 @@ class TestApiSyncSimulation:
         mem.use_api = True
 
         # Pre-populate as if already synced
-        mem.memory_cards["c1"] = normalize_memory_card({"id": "c1", "description": "known"})
+        mem.memory_cards["c1"] = normalize_memory_card(
+            {"id": "c1", "description": "known"}
+        )
         mem.entity_by_card_id["c1"] = "e1"
         mem.card_id_by_entity["e1"] = "c1"
         mem.entity_version_by_entity["e1"] = "v1"
@@ -762,8 +767,7 @@ class TestFullEvolutionMemoryRebuildCycle:
         )
         assert len(mem2.memory_cards) == 2
         assert (
-            mem2.get_card("real-1").description
-            == "enhanced SA with adaptive cooling"
+            mem2.get_card("real-1").description == "enhanced SA with adaptive cooling"
         )
         assert mem2.get_card("real-2") is None
         assert mem2.get_card("real-3") is not None
@@ -825,7 +829,7 @@ class TestFullEvolutionMemoryRebuildCycle:
         # Write memory file for run 2
         mf = tmp_path / "memory.txt"
         mf.write_text(
-            "\n".join(f"- {c['description']}" for c in mem.memory_cards.values())
+            "\n".join(f"- {c.description}" for c in mem.memory_cards.values())
         )
 
         # Run 2: evolution with memory

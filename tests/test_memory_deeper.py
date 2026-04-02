@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 from gigaevo.memory.shared_memory.card_conversion import (
     build_entity_meta,
     concept_to_card,
+    normalize_memory_card,
 )
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 
@@ -39,7 +39,9 @@ class TestApplyUpdateActions:
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "old", "programs": ["p1"]})
 
-        incoming = normalize_memory_card({"description": "new info", "programs": ["p2"], "last_generation": 10})
+        incoming = normalize_memory_card(
+            {"description": "new info", "programs": ["p2"], "last_generation": 10}
+        )
         updates = [
             {
                 "card_id": "c1",
@@ -76,7 +78,9 @@ class TestApplyUpdateActions:
     def test_skips_non_dict_update(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        result = mem._apply_update_actions(normalize_memory_card({}), ["not a dict", None])
+        result = mem._apply_update_actions(
+            normalize_memory_card({}), ["not a dict", None]
+        )
         assert result == []
 
     def test_multiple_target_cards(self, tmp_path):

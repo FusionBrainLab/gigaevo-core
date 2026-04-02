@@ -130,9 +130,7 @@ def normalize_memory_card(
         id=str(raw.get("id") or fallback_id or ""),
         category=category,
         description=str(raw.get("description") or raw.get("content") or ""),
-        task_description=str(
-            raw.get("task_description") or raw.get("context") or ""
-        ),
+        task_description=str(raw.get("task_description") or raw.get("context") or ""),
         task_description_summary=str(
             raw.get("task_description_summary") or raw.get("context_summary") or ""
         ),
@@ -187,9 +185,7 @@ def memory_to_card(
     if isinstance(card, ProgramCard):
         return card.model_copy(update=updates)
 
-    updates["strategy"] = str(
-        card.strategy or _safe_get(memory_note, "strategy", "")
-    )
+    updates["strategy"] = str(card.strategy or _safe_get(memory_note, "strategy", ""))
     updates["keywords"] = _to_list(_safe_get(memory_note, "keywords", []) or [])
 
     if not card.links:
@@ -253,7 +249,11 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
         }
 
     explanation = card.explanation
-    explanation_text = explanation.summary if isinstance(explanation, MemoryCardExplanation) else str(explanation or "")
+    explanation_text = (
+        explanation.summary
+        if isinstance(explanation, MemoryCardExplanation)
+        else str(explanation or "")
+    )
 
     strategy = card.strategy.strip().lower() or None
     if strategy not in ALLOWED_STRATEGIES:
@@ -272,7 +272,9 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
         "explanation": explanation_text,
         "strategy": strategy,
         "keywords": dedupe_keep_order(list(card.keywords)),
-        "evolution_statistics": card.evolution_statistics if isinstance(card.evolution_statistics, dict) else None,
+        "evolution_statistics": card.evolution_statistics
+        if isinstance(card.evolution_statistics, dict)
+        else None,
         "works_with": dedupe_keep_order(list(card.works_with)),
         "links": dedupe_keep_order(list(card.links)),
         "usage": card.usage if isinstance(card.usage, dict) else None,

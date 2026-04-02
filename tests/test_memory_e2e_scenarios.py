@@ -18,6 +18,7 @@ from gigaevo.memory.ideas_tracker.components.data_components import (
 )
 from gigaevo.memory.memory_write_example import load_memory_cards
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.models import ProgramCard
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -353,10 +354,10 @@ class TestScenarioIncrementalGrowth:
         # but the explicit id was "program-prog-best-1" (we set it, not auto-prefixed)
         # Let's verify by checking all cards
         prog_cards = [
-            c for c in mem2.memory_cards.values() if c.get("category") == "program"
+            c for c in mem2.memory_cards.values() if isinstance(c, ProgramCard)
         ]
         assert len(prog_cards) == 1
-        assert prog_cards[0]["fitness"] == 95.0
+        assert prog_cards[0].fitness == 95.0
 
 
 # ===========================================================================
@@ -374,7 +375,7 @@ class TestScenarioDedup:
         mem.save_card({"id": "idea-1", "description": "SA optimization v2 (improved)"})
 
         assert len(mem.memory_cards) == 1
-        assert "v2" in mem.get_card("idea-1")["description"]
+        assert "v2" in mem.get_card("idea-1").description
 
         stats = mem.get_card_write_stats()
         assert stats["updated"] == 1
@@ -526,8 +527,8 @@ class TestScenarioWritePipeline:
             banks, best, programs_path=progs, best_programs_percent=100.0
         )
 
-        idea_cards = [c for c in cards if c.get("category") != "program"]
-        prog_cards = [c for c in cards if c.get("category") == "program"]
+        idea_cards = [c for c in cards if not isinstance(c, ProgramCard)]
+        prog_cards = [c for c in cards if isinstance(c, ProgramCard)]
         assert len(idea_cards) == 5
         assert len(prog_cards) == 3
 

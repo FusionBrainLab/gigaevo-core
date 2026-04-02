@@ -39,6 +39,7 @@ from gigaevo.memory.memory_write_config import (
     resolve_memory_backend_class,
 )
 from gigaevo.memory.runtime_config import to_bool
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
 
 class CardMemory(Protocol):
@@ -507,7 +508,7 @@ def load_memory_cards(
     best_programs_percent: float = 0.0,
     usage_updates_path: Path | None = None,
     memory: CardMemory | None = None,
-) -> list[dict]:
+) -> list:
     payload = _load_json(path)
     usage_updates = _load_usage_updates(usage_updates_path)
 
@@ -533,11 +534,12 @@ def load_memory_cards(
             memory=memory,
         )
 
-    return cards + _build_program_cards(
+    all_cards = cards + _build_program_cards(
         programs_path=programs_path,
         banks_path=path,
         best_programs_percent=best_programs_percent,
     )
+    return [normalize_memory_card(c) for c in all_cards]
 
 
 def _write_memory_write_stats(

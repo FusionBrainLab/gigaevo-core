@@ -513,9 +513,7 @@ class TestFullMemoryCycle:
 
         # Update
         mem.save_card(_make_idea_card("idea-1", "Enhanced SA with adaptive cooling"))
-        assert (
-            mem.get_card("idea-1").description == "Enhanced SA with adaptive cooling"
-        )
+        assert mem.get_card("idea-1").description == "Enhanced SA with adaptive cooling"
 
         # Search
         result = mem.search("cooling")

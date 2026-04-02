@@ -8,11 +8,11 @@ import json
 from unittest.mock import MagicMock, patch
 import uuid
 
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_update_dedup import (
     _extract_json_object,
     append_unique_text,
 )
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.models import ProgramCard
 
