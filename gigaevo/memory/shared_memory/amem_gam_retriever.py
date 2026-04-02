@@ -7,35 +7,24 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import sys
 from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from GAM_root.gam import (
+from gigaevo.memory.GAM_root.gam import (
     ChromaRetriever,
     IndexRetriever,
     InMemoryMemoryStore,
     InMemoryPageStore,
     ResearchAgent,
 )
-from GAM_root.gam.generator import AMemGenerator
-from GAM_root.gam.schemas import Page
+from gigaevo.memory.GAM_root.gam.generator import AMemGenerator
+from gigaevo.memory.GAM_root.gam.schemas import Page
 
 from gigaevo.memory import config
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
-
-
-_AGENT_ROOT = _repo_root()
-if str(_AGENT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_AGENT_ROOT))
-
-from openai_inference import OpenAIInferenceService
+from gigaevo.memory.openai_inference import OpenAIInferenceService
 
 
 def load_amem_records(path: Path) -> list[dict[str, Any]]:

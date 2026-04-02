@@ -414,24 +414,23 @@ class TestBuildEntityMetaContent:
 
 
 # ===========================================================================
-# 5. __del__ behavior
+# 5. Context manager behavior (replaces __del__)
 # ===========================================================================
 
 
-class TestDelBehavior:
-    def test_del_calls_close(self, tmp_path):
-        """__del__ should attempt to close the API client."""
-        mem = _make_memory(tmp_path)
-        mem.api = MagicMock()
-        mem.__del__()
-        mem.api.close.assert_called_once()
+class TestContextManager:
+    def test_with_statement_calls_close(self, tmp_path):
+        mock_api = MagicMock()
+        with _make_memory(tmp_path) as mem:
+            mem.api = mock_api
+        mock_api.close.assert_called_once()
 
-    def test_del_does_not_crash_without_api(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.__del__()  # Should not raise
+    def test_with_statement_without_api(self, tmp_path):
+        with _make_memory(tmp_path) as mem:
+            mem.save_card({"id": "c1", "description": "test"})
+        # Should not raise
 
-    def test_del_swallows_exceptions(self, tmp_path):
+    def test_enter_returns_self(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.api = MagicMock()
-        mem.api.close.side_effect = RuntimeError("close failed")
-        mem.__del__()  # Should not raise
+        assert mem.__enter__() is mem
+        mem.close()

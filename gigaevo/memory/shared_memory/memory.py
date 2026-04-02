@@ -4,50 +4,27 @@ import json
 import os
 from pathlib import Path
 import re
-import sys
 from typing import TYPE_CHECKING, Any
 import uuid
 
 from dotenv import load_dotenv
 import httpx
 
-_THIS_DIR = Path(__file__).resolve().parent
-_AGENT_ROOT = _THIS_DIR.parent
-if str(_AGENT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_AGENT_ROOT))
-
-from openai_inference import OpenAIInferenceService
-
 from gigaevo.memory import config
-
-try:
-    from .card_update_dedup import (
-        QUERY_DESCRIPTION,
-        QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
-        QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY,
-        QUERY_EXPLANATION_SUMMARY,
-        CardUpdateDedupConfig,
-        build_dedup_queries,
-        compute_weighted_candidates,
-        get_explanation_summary,
-        get_full_explanations,
-        merge_updated_card,
-        parse_llm_card_decision,
-    )
-except ImportError:  # pragma: no cover - direct script execution fallback
-    from shared_memory.card_update_dedup import (
-        QUERY_DESCRIPTION,
-        QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
-        QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY,
-        QUERY_EXPLANATION_SUMMARY,
-        CardUpdateDedupConfig,
-        build_dedup_queries,
-        compute_weighted_candidates,
-        get_explanation_summary,
-        get_full_explanations,
-        merge_updated_card,
-        parse_llm_card_decision,
-    )
+from gigaevo.memory.openai_inference import OpenAIInferenceService
+from gigaevo.memory.shared_memory.card_update_dedup import (
+    QUERY_DESCRIPTION,
+    QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
+    QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY,
+    QUERY_EXPLANATION_SUMMARY,
+    CardUpdateDedupConfig,
+    build_dedup_queries,
+    compute_weighted_candidates,
+    get_explanation_summary,
+    get_full_explanations,
+    merge_updated_card,
+    parse_llm_card_decision,
+)
 
 load_dotenv()
 
@@ -532,14 +509,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _load_agentic_classes(self) -> None:
         try:
-            from A_mem.agentic_memory.memory_system import (
+            from gigaevo.memory.A_mem.agentic_memory.memory_system import (
                 AgenticMemorySystem as _AgenticMemorySystem,
             )
-            from A_mem.agentic_memory.memory_system import (
+            from gigaevo.memory.A_mem.agentic_memory.memory_system import (
                 MemoryNote as _MemoryNote,
             )
-            from GAM_root.gam import ResearchAgent as _ResearchAgent
-            from GAM_root.gam.generator import AMemGenerator as _AMemGenerator
+            from gigaevo.memory.GAM_root.gam import ResearchAgent as _ResearchAgent
+            from gigaevo.memory.GAM_root.gam.generator import AMemGenerator as _AMemGenerator
         except Exception as exc:
             self._agentic_import_error = exc
             print(
@@ -1068,7 +1045,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 "Generator is not available. Cannot create GAM research agent."
             )
         try:
-            from shared_memory.amem_gam_retriever import (
+            from gigaevo.memory.shared_memory.amem_gam_retriever import (
                 build_gam_store,
                 build_retrievers,
                 load_amem_records,
@@ -1134,21 +1111,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def _build_dedup_retrievers(self) -> dict[str, Any]:
         try:
-            from .amem_gam_retriever import (
+            from gigaevo.memory.shared_memory.amem_gam_retriever import (
                 build_gam_store,
                 build_retrievers,
                 load_amem_records,
             )
         except Exception as exc:
-            try:
-                from shared_memory.amem_gam_retriever import (
-                    build_gam_store,
-                    build_retrievers,
-                    load_amem_records,
-                )
-            except Exception:
-                print(f"[Memory] Dedup retriever import failed: {exc}")
-                return {}
+            print(f"[Memory] Dedup retriever import failed: {exc}")
+            return {}
 
         self.gam_store_dir.mkdir(parents=True, exist_ok=True)
         if self.export_file.exists():
@@ -1763,13 +1733,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self.api is not None:
             self.api.close()
 
-    def __del__(self) -> None:
-        try:
-            if self._iters_after_rebuild > 0:
+    def __enter__(self) -> AmemGamMemory:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self._iters_after_rebuild > 0:
+            try:
                 self.rebuild()
-        except Exception:
-            pass
-        try:
-            self.close()
-        except Exception:
-            pass
+            except Exception:
+                pass
+        self.close()

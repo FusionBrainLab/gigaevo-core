@@ -1,21 +1,14 @@
 import json
-import sys
+from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
-from pathlib import Path
-from typing import Any
-
-_THIS_DIR = Path(__file__).resolve().parent
-_AGENT_ROOT = _THIS_DIR.parent
-if str(_AGENT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_AGENT_ROOT))
-
-from A_mem.agentic_memory.memory_system import AgenticMemorySystem
-from openai_inference import OpenAIInferenceService
 
 from gigaevo.memory import config
+from gigaevo.memory.A_mem.agentic_memory.memory_system import AgenticMemorySystem
+from gigaevo.memory.openai_inference import OpenAIInferenceService
 
 
 # -----------------------------
