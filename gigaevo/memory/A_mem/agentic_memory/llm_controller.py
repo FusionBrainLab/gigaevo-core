@@ -3,9 +3,8 @@ import json
 import os
 from typing import Any, Literal
 
-from litellm import completion
-
 from A_mem.agent.agent_class import LLMService
+from litellm import completion
 
 
 class BaseLLMController(ABC):

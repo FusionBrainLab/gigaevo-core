@@ -5,7 +5,6 @@ from typing import Any
 
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-
 from GAM_root.gam.retriever.base import AbsRetriever
 from GAM_root.gam.schemas import Hit
 
