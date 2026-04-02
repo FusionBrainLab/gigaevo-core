@@ -284,11 +284,10 @@ def build_entity_meta(card: AnyCard) -> tuple[str, list[str], str]:
     task_description = card.task_description.strip()
     task_description_summary = card.task_description_summary.strip()
 
-    expl = card.explanation
-    if isinstance(expl, MemoryCardExplanation):
-        explanation_summary = expl.summary.strip()
+    if isinstance(card, MemoryCard):
+        explanation_summary = card.explanation.summary.strip()
     else:
-        explanation_summary = str(expl or "").strip()
+        explanation_summary = ""
 
     name_seed = (
         description or task_description_summary or task_description or "memory card"

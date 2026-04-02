@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 import uuid
 
 from gigaevo.memory.shared_memory.card_conversion import (
+    MemoryCard,
+    ProgramCard,
     is_program_card,
     normalize_allowed_gam_tools,
     normalize_gam_pipeline_mode,
@@ -140,7 +142,7 @@ class TestSaveCard:
         assert stats["updated"] == 1
         assert stats["added"] == 1
         # Second save should overwrite
-        assert mem.get_card("c1")["description"] == "v2"
+        assert mem.get_card("c1").description == "v2"
 
     def test_multiple_cards(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -204,7 +206,7 @@ class TestGetCard:
         card = mem.get_card("c1")
         card.description = "mutated"
         # This documents current behavior: direct reference, not copy
-        assert mem.get_card("c1")["description"] == "mutated"
+        assert mem.get_card("c1").description == "mutated"
 
 
 # ===========================================================================
@@ -272,7 +274,7 @@ class TestSearchLocal:
         # Save then inject keywords (normalize_memory_card produces keyword field)
         mem.save_card(card)
         # Directly modify to add keywords for search
-        mem.memory_cards["c1"]["keywords"] = ["optimization", "local-search"]
+        mem.memory_cards["c1"] = mem.memory_cards["c1"].model_copy(update={"keywords": ["optimization", "local-search"]})
         result = mem.search("optimization")
         assert "c1" in result
 
@@ -417,7 +419,7 @@ class TestIndexPersistence:
         # Create new instance from same checkpoint
         mem2 = _make_memory(tmp_path)
         assert mem2.get_card("c1") is not None
-        assert mem2.get_card("c1")["description"] == "idea one"
+        assert mem2.get_card("c1").description == "idea one"
         assert mem2.get_card("c2") is not None
 
     def test_malformed_json_handled(self, tmp_path):
@@ -472,16 +474,16 @@ class TestStaticHelpers:
         assert not looks_like_uuid("")
 
     def test_is_program_card_by_category(self):
-        assert is_program_card({"category": "program"})
+        assert is_program_card(ProgramCard(id="p1"))
 
     def test_is_program_card_by_program_id(self):
-        assert is_program_card({"program_id": "p1"})
+        assert is_program_card(ProgramCard(id="p1", program_id="p1"))
 
     def test_is_program_card_false_for_general(self):
-        assert not is_program_card({"category": "general"})
+        assert not is_program_card(MemoryCard(id="c1"))
 
     def test_is_program_card_false_empty(self):
-        assert not is_program_card({})
+        assert not is_program_card(MemoryCard(id="c1"))
 
     def test_dedupe_keep_order(self):
         assert dedupe_keep_order(["a", "b", "a", "c"]) == ["a", "b", "c"]

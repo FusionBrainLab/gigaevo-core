@@ -822,7 +822,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     ),
                     "description": truncate_text(card.description, 1200),
                     "explanation_summary": truncate_text(
-                        get_explanation_summary(card), 600
+                        get_explanation_summary(card_dict), 600
                     ),
                     "explanation_full": [
                         truncate_text(explanation, 1200) for explanation in explanations
@@ -853,6 +853,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if not candidate_ids:
             return default_decision
 
+        incoming_dict = incoming_card.model_dump()
         incoming_payload = {
             "id": str(incoming_card.id or "").strip(),
             "task_description_summary": truncate_text(
@@ -860,11 +861,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
             ),
             "description": truncate_text(incoming_card.description, 1200),
             "explanation_summary": truncate_text(
-                get_explanation_summary(incoming_card), 600
+                get_explanation_summary(incoming_dict), 600
             ),
             "explanation_full": [
                 truncate_text(explanation, 1200)
-                for explanation in get_full_explanations(incoming_card)
+                for explanation in get_full_explanations(incoming_dict)
             ],
         }
         prompt = (
