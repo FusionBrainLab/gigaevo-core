@@ -434,16 +434,16 @@ class TestGenerateMutationsWithMemory:
         mock_operator = MagicMock()
         mock_operator.mutate_single = mock_mutate
 
+        parent = Program(code=SEED_CODE, metadata={})
         mock_storage = AsyncMock()
         mock_storage.add = AsyncMock(return_value="prog-id")
+        mock_storage.get = AsyncMock(return_value=parent)
         mock_state = AsyncMock()
         mock_selector = MagicMock()
-        mock_selector.create_parent_iterator.return_value = iter(
-            [[Program(code=SEED_CODE, metadata={})]]
-        )
+        mock_selector.create_parent_iterator.return_value = iter([[parent]])
 
         await generate_mutations(
-            [Program(code=SEED_CODE, metadata={})],
+            [parent],
             mutator=mock_operator,
             storage=mock_storage,
             state_manager=mock_state,
@@ -472,16 +472,16 @@ class TestGenerateMutationsWithMemory:
         mock_operator = MagicMock()
         mock_operator.mutate_single = mock_mutate
 
+        parent = Program(code=SEED_CODE, metadata={})
         mock_storage = AsyncMock()
         mock_storage.add = AsyncMock(return_value="prog-id")
+        mock_storage.get = AsyncMock(return_value=parent)
         mock_state = AsyncMock()
         mock_selector = MagicMock()
-        mock_selector.create_parent_iterator.return_value = iter(
-            [[Program(code=SEED_CODE, metadata={})]]
-        )
+        mock_selector.create_parent_iterator.return_value = iter([[parent]])
 
         await generate_mutations(
-            [Program(code=SEED_CODE, metadata={})],
+            [parent],
             mutator=mock_operator,
             storage=mock_storage,
             state_manager=mock_state,
