@@ -11,18 +11,14 @@ All tests run without OPENAI_API_KEY, Redis, Chroma, or network.
 """
 
 import asyncio
-import json
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+import json
+from unittest.mock import MagicMock
 
 import pytest
 
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
 from gigaevo.memory.memory_write_example import load_memory_cards
-
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -165,11 +161,13 @@ class TestMemoryFillAndSearch:
     def test_search_limit_respected_across_reload(self, tmp_path):
         mem = _make_memory(tmp_path, search_limit=2)
         for i in range(10):
-            mem.save_card(_make_idea_card(
-                f"idea-{i}",
-                f"optimization technique variant {i}",
-                keywords=["optimization"],
-            ))
+            mem.save_card(
+                _make_idea_card(
+                    f"idea-{i}",
+                    f"optimization technique variant {i}",
+                    keywords=["optimization"],
+                )
+            )
 
         mem2 = _make_memory(tmp_path, search_limit=2)
         result = mem2.search("optimization")
@@ -190,32 +188,42 @@ class TestMemoryWritePipeline:
         """Load from banks.json → save to memory → verify searchable."""
         # Create input files (simulating IdeaTracker output)
         banks = tmp_path / "banks.json"
-        _write_json(banks, [{
-            "active_bank": [
+        _write_json(
+            banks,
+            [
                 {
-                    "id": "idea-1",
-                    "description": "Use simulated annealing for local refinement",
-                    "task_description": "Solve TSP",
-                    "task_description_summary": "TSP solver",
-                    "programs": ["prog-1"],
-                },
-                {
-                    "id": "idea-2",
-                    "description": "Apply genetic crossover between pairs",
-                    "task_description": "Solve TSP",
-                    "task_description_summary": "TSP solver",
-                    "programs": ["prog-2"],
-                },
+                    "active_bank": [
+                        {
+                            "id": "idea-1",
+                            "description": "Use simulated annealing for local refinement",
+                            "task_description": "Solve TSP",
+                            "task_description_summary": "TSP solver",
+                            "programs": ["prog-1"],
+                        },
+                        {
+                            "id": "idea-2",
+                            "description": "Apply genetic crossover between pairs",
+                            "task_description": "Solve TSP",
+                            "task_description_summary": "TSP solver",
+                            "programs": ["prog-2"],
+                        },
+                    ],
+                }
             ],
-        }])
+        )
 
         best_ideas = tmp_path / "best_ideas.json"
-        _write_json(best_ideas, [{
-            "best_ideas": [
-                {"idea_id": "idea-1", "description": "SA for refinement"},
-                {"idea_id": "idea-2", "description": "Genetic crossover"},
+        _write_json(
+            best_ideas,
+            [
+                {
+                    "best_ideas": [
+                        {"idea_id": "idea-1", "description": "SA for refinement"},
+                        {"idea_id": "idea-2", "description": "Genetic crossover"},
+                    ],
+                }
             ],
-        }])
+        )
 
         # Load cards via the write pipeline
         cards = load_memory_cards(banks, best_ideas)
@@ -227,7 +235,10 @@ class TestMemoryWritePipeline:
             mem.save_card(card)
 
         assert len(mem.memory_cards) == 2
-        assert mem.get_card("idea-1")["description"] == "Use simulated annealing for local refinement"
+        assert (
+            mem.get_card("idea-1")["description"]
+            == "Use simulated annealing for local refinement"
+        )
 
         # Search works
         result = mem.search("annealing")
@@ -236,36 +247,47 @@ class TestMemoryWritePipeline:
     def test_banks_with_programs_to_memory(self, tmp_path):
         """Full pipeline with program cards."""
         banks = tmp_path / "banks.json"
-        _write_json(banks, [{
-            "active_bank": [
+        _write_json(
+            banks,
+            [
                 {
-                    "id": "idea-1",
-                    "description": "SA refinement",
-                    "task_description": "Solve TSP",
-                    "task_description_summary": "TSP",
-                    "programs": ["prog-1"],
-                },
+                    "active_bank": [
+                        {
+                            "id": "idea-1",
+                            "description": "SA refinement",
+                            "task_description": "Solve TSP",
+                            "task_description_summary": "TSP",
+                            "programs": ["prog-1"],
+                        },
+                    ],
+                }
             ],
-        }])
+        )
 
         best_ideas = tmp_path / "best_ideas.json"
         _write_json(best_ideas, [{"best_ideas": [{"idea_id": "idea-1"}]}])
 
         programs = tmp_path / "programs.json"
-        _write_json(programs, [{
-            "programs": [
+        _write_json(
+            programs,
+            [
                 {
-                    "id": "prog-1",
-                    "fitness": 90.0,
-                    "code": "def solve():\n    return 42\n",
-                    "task_description": "Solve TSP",
-                    "task_description_summary": "TSP",
-                },
+                    "programs": [
+                        {
+                            "id": "prog-1",
+                            "fitness": 90.0,
+                            "code": "def solve():\n    return 42\n",
+                            "task_description": "Solve TSP",
+                            "task_description_summary": "TSP",
+                        },
+                    ],
+                }
             ],
-        }])
+        )
 
         cards = load_memory_cards(
-            banks, best_ideas,
+            banks,
+            best_ideas,
             programs_path=programs,
             best_programs_percent=100.0,
         )
@@ -313,10 +335,14 @@ class TestMemorySelectorIntegration:
     @pytest.mark.asyncio
     async def test_select_returns_relevant_cards(self, tmp_path):
         ideas = [
-            _make_idea_card("idea-1", "Use simulated annealing for optimization",
-                            keywords=["annealing", "optimization"]),
-            _make_idea_card("idea-2", "Apply crossover for diversity",
-                            keywords=["crossover"]),
+            _make_idea_card(
+                "idea-1",
+                "Use simulated annealing for optimization",
+                keywords=["annealing", "optimization"],
+            ),
+            _make_idea_card(
+                "idea-2", "Apply crossover for diversity", keywords=["crossover"]
+            ),
         ]
         selector = self._make_selector_with_memory(tmp_path, ideas)
         parent = FakeProgram(code="def solve(): return sum(x)")
@@ -476,13 +502,19 @@ class TestFullMemoryCycle:
         mem = _make_memory(tmp_path)
 
         # Create
-        mem.save_card(_make_idea_card("idea-1", "SA optimization", keywords=["annealing"]))
-        mem.save_card(_make_idea_card("idea-2", "Crossover recombination", keywords=["crossover"]))
+        mem.save_card(
+            _make_idea_card("idea-1", "SA optimization", keywords=["annealing"])
+        )
+        mem.save_card(
+            _make_idea_card("idea-2", "Crossover recombination", keywords=["crossover"])
+        )
         assert len(mem.memory_cards) == 2
 
         # Update
         mem.save_card(_make_idea_card("idea-1", "Enhanced SA with adaptive cooling"))
-        assert mem.get_card("idea-1")["description"] == "Enhanced SA with adaptive cooling"
+        assert (
+            mem.get_card("idea-1")["description"] == "Enhanced SA with adaptive cooling"
+        )
 
         # Search
         result = mem.search("cooling")
@@ -508,7 +540,9 @@ class TestFullMemoryCycle:
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             json.dumps({"action": "discard", "duplicate_of": "idea-1"}),
-            {}, None, None,
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
         mem._score_retrieved_candidates = MagicMock(
@@ -526,11 +560,13 @@ class TestFullMemoryCycle:
         """Save 50 cards, reload, verify all present and searchable."""
         mem = _make_memory(tmp_path)
         for i in range(50):
-            mem.save_card(_make_idea_card(
-                f"idea-{i}",
-                f"Optimization technique number {i} using method_{i}",
-                keywords=[f"method_{i}"],
-            ))
+            mem.save_card(
+                _make_idea_card(
+                    f"idea-{i}",
+                    f"Optimization technique number {i} using method_{i}",
+                    keywords=[f"method_{i}"],
+                )
+            )
 
         mem2 = _make_memory(tmp_path)
         assert len(mem2.memory_cards) == 50
@@ -568,8 +604,11 @@ class TestSearchFallbackPaths:
         from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 
         mem = _make_memory(tmp_path)
-        mem.save_card(_make_idea_card("idea-1", "simulated annealing optimization",
-                                       keywords=["annealing"]))
+        mem.save_card(
+            _make_idea_card(
+                "idea-1", "simulated annealing optimization", keywords=["annealing"]
+            )
+        )
         # Ensure no research_agent
         assert mem.research_agent is None
 
@@ -614,8 +653,9 @@ class TestSearchFallbackPaths:
         from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 
         mem = _make_memory(tmp_path)
-        mem.save_card(_make_idea_card("idea-1", "annealing optimization",
-                                       keywords=["annealing"]))
+        mem.save_card(
+            _make_idea_card("idea-1", "annealing optimization", keywords=["annealing"])
+        )
 
         mock_agent = MagicMock()
         mock_agent.research.side_effect = RuntimeError("GAM failed")
@@ -634,8 +674,9 @@ class TestSearchFallbackPaths:
         existing card's explanation.explanations is NOT mutated.
         However, the top-level dict IS shallow-copied, so other nested
         dicts (usage, evolution_statistics) could be mutated."""
-        from gigaevo.memory.shared_memory.card_update_dedup import merge_updated_card
         import copy
+
+        from gigaevo.memory.shared_memory.card_update_dedup import merge_updated_card
 
         existing = {
             "id": "c1",
@@ -652,7 +693,10 @@ class TestSearchFallbackPaths:
         merge_updated_card(existing, incoming, update)
 
         # Explanations list is NOT mutated (safe: _safe_string_list creates new list)
-        assert existing["explanation"]["explanations"] == existing_snapshot["explanation"]["explanations"]
+        assert (
+            existing["explanation"]["explanations"]
+            == existing_snapshot["explanation"]["explanations"]
+        )
         # But programs list IS shared — merged dict references same list objects
         # from the shallow copy. The merged result has new programs list from
         # dedupe_keep_order, so existing is safe here too.
@@ -661,7 +705,9 @@ class TestSearchFallbackPaths:
         """FIXED: parse_llm_card_decision returns None for garbage input,
         enabling the retry loop in _decide_card_action to work correctly.
         """
-        from gigaevo.memory.shared_memory.card_update_dedup import parse_llm_card_decision
+        from gigaevo.memory.shared_memory.card_update_dedup import (
+            parse_llm_card_decision,
+        )
 
         garbage_inputs = [
             "",
@@ -678,11 +724,15 @@ class TestSearchFallbackPaths:
 
     def test_parse_llm_card_decision_returns_dict_for_valid_json(self):
         """Valid JSON with action field returns a dict."""
-        from gigaevo.memory.shared_memory.card_update_dedup import parse_llm_card_decision
         import json
 
+        from gigaevo.memory.shared_memory.card_update_dedup import (
+            parse_llm_card_decision,
+        )
+
         result = parse_llm_card_decision(
-            json.dumps({"action": "add"}), candidate_ids={"c1"},
+            json.dumps({"action": "add"}),
+            candidate_ids={"c1"},
         )
         assert isinstance(result, dict)
         assert result["action"] == "add"
@@ -690,6 +740,7 @@ class TestSearchFallbackPaths:
     def test_http_200_non_json_raises(self):
         """_ConceptApiClient._request crashes on 200 with non-JSON body."""
         import httpx
+
         from gigaevo.memory.shared_memory.memory import _ConceptApiClient
 
         def handler(request):

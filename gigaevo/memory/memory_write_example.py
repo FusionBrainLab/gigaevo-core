@@ -618,7 +618,9 @@ def main() -> dict[str, Any] | None:
     )
     logger.info(
         "Loaded {} cards from banks: {} (filtered by: {})",
-        len(memory_cards), BANKS_PATH, BEST_IDEAS_PATH,
+        len(memory_cards),
+        BANKS_PATH,
+        BEST_IDEAS_PATH,
     )
     if USE_API:
         logger.info("Writing to API: {} (namespace={})", MEMORY_API_URL, NAMESPACE)
@@ -643,7 +645,9 @@ def main() -> dict[str, Any] | None:
             stored = memory.get_card(memory_id) or {}
             logger.debug(
                 "[{:03d}] saved {}: {}",
-                idx, memory_id, stored.get("description", "")[:110],
+                idx,
+                memory_id,
+                stored.get("description", "")[:110],
             )
     except RuntimeError as exc:
         logger.error("Write failed: {}", exc)

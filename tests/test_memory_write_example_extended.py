@@ -8,9 +8,9 @@ import json
 import pytest
 
 from gigaevo.memory.memory_write_example import (
+    _card_type,
     _latest_snapshot,
     _top_percent_count,
-    _card_type,
     load_memory_cards,
 )
 
@@ -171,9 +171,24 @@ class TestLoadMemoryCardsEdgeCases:
         programs = _make_programs(
             tmp_path,
             programs=[
-                {"id": "p1", "fitness": 50.0, "code": "a", "task_description_summary": "t"},
-                {"id": "p2", "fitness": 90.0, "code": "b", "task_description_summary": "t"},
-                {"id": "p3", "fitness": 70.0, "code": "c", "task_description_summary": "t"},
+                {
+                    "id": "p1",
+                    "fitness": 50.0,
+                    "code": "a",
+                    "task_description_summary": "t",
+                },
+                {
+                    "id": "p2",
+                    "fitness": 90.0,
+                    "code": "b",
+                    "task_description_summary": "t",
+                },
+                {
+                    "id": "p3",
+                    "fitness": 70.0,
+                    "code": "c",
+                    "task_description_summary": "t",
+                },
             ],
         )
         cards = load_memory_cards(
@@ -190,7 +205,12 @@ class TestLoadMemoryCardsEdgeCases:
             tmp_path,
             programs=[
                 {"id": "p1", "code": "a"},  # no fitness
-                {"id": "p2", "fitness": 80.0, "code": "b", "task_description_summary": "t"},
+                {
+                    "id": "p2",
+                    "fitness": 80.0,
+                    "code": "b",
+                    "task_description_summary": "t",
+                },
             ],
         )
         cards = load_memory_cards(

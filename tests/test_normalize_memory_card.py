@@ -3,13 +3,8 @@
 Pin down the exact normalization behavior so refactoring can be validated.
 """
 
-from gigaevo.memory.shared_memory.memory import normalize_memory_card
-
-# ---------------------------------------------------------------------------
-# Private helpers — import via module internals
-# ---------------------------------------------------------------------------
-from gigaevo.memory.shared_memory.memory import _to_float, _to_int, _to_list
-
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.utils import _to_float, _to_int, _to_list
 
 # ===========================================================================
 # _to_list
@@ -171,9 +166,7 @@ class TestNormalizeGeneralCard:
         assert result["description"] == "from content"
 
     def test_description_preferred_over_content(self):
-        result = normalize_memory_card(
-            {"description": "desc", "content": "content"}
-        )
+        result = normalize_memory_card({"description": "desc", "content": "content"})
         assert result["description"] == "desc"
 
     def test_task_description_falls_back_to_context(self):
@@ -295,9 +288,7 @@ class TestNormalizeProgramCard:
         assert set(result.keys()) == _PROGRAM_KEYS
 
     def test_fitness_from_string(self):
-        result = normalize_memory_card(
-            {"category": "program", "fitness": "3.14"}
-        )
+        result = normalize_memory_card({"category": "program", "fitness": "3.14"})
         assert result["fitness"] == 3.14
 
     def test_fitness_none_when_missing(self):
@@ -305,9 +296,7 @@ class TestNormalizeProgramCard:
         assert result["fitness"] is None
 
     def test_fitness_invalid_returns_none(self):
-        result = normalize_memory_card(
-            {"category": "program", "fitness": "abc"}
-        )
+        result = normalize_memory_card({"category": "program", "fitness": "abc"})
         assert result["fitness"] is None
 
     def test_connected_ideas_preserved(self):
@@ -334,9 +323,7 @@ class TestNormalizeProgramCard:
         assert "aliases" not in result
 
     def test_code_preserved(self):
-        result = normalize_memory_card(
-            {"category": "program", "code": "def f(): pass"}
-        )
+        result = normalize_memory_card({"category": "program", "code": "def f(): pass"})
         assert result["code"] == "def f(): pass"
 
     def test_code_empty_when_missing(self):
@@ -344,15 +331,11 @@ class TestNormalizeProgramCard:
         assert result["code"] == ""
 
     def test_description_falls_back_to_content(self):
-        result = normalize_memory_card(
-            {"category": "program", "content": "prog desc"}
-        )
+        result = normalize_memory_card({"category": "program", "content": "prog desc"})
         assert result["description"] == "prog desc"
 
     def test_task_description_falls_back_to_context(self):
-        result = normalize_memory_card(
-            {"category": "program", "context": "ctx"}
-        )
+        result = normalize_memory_card({"category": "program", "context": "ctx"})
         assert result["task_description"] == "ctx"
 
 

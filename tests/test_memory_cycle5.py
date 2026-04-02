@@ -2,18 +2,14 @@
 verification, _build_entity_meta content, __del__ behavior.
 """
 
-import asyncio
 import json
-from dataclasses import dataclass, field
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 from gigaevo.memory.shared_memory.card_conversion import build_entity_meta
 from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,12 +53,12 @@ class TestMutationOperatorMemoryFlow:
             MUTATION_MEMORY_METADATA_KEY,
             MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
         )
-        from gigaevo.programs.program import Program
 
         # Create a minimal LLMMutationOperator with mocked internals
         from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
+        from gigaevo.programs.program import Program
 
-        mock_llm = MagicMock()
+        MagicMock()
         mock_problem_ctx = MagicMock()
         mock_problem_ctx.task_description = "Solve the task"
         mock_metrics_fmt = MagicMock()
@@ -109,7 +105,7 @@ class TestMutationOperatorMemoryFlow:
         operator.strip_comments_and_docstrings = False
 
         parent = Program(code="def solve(): return 1", metadata={})
-        result = await operator.mutate_single([parent], memory_instructions="use memory")
+        await operator.mutate_single([parent], memory_instructions="use memory")
 
         # Verify memory_selector was called
         mock_selector.select.assert_awaited_once()
@@ -145,12 +141,14 @@ class TestMutationOperatorMemoryFlow:
         operator.memory_selector = mock_selector
 
         mock_agent = MagicMock()
-        mock_agent.arun = AsyncMock(return_value={
-            "code": "def f(): pass",
-            "raw_output": "ok",
-            "model_used": None,
-            "structured_output": None,
-        })
+        mock_agent.arun = AsyncMock(
+            return_value={
+                "code": "def f(): pass",
+                "raw_output": "ok",
+                "model_used": None,
+                "structured_output": None,
+            }
+        )
         operator.agent = mock_agent
         operator.llm_wrapper = MagicMock()
         operator.llm_wrapper.get_last_model.return_value = "test-model"
@@ -219,7 +217,11 @@ class TestSyncFromApi:
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [
-            {"entity_id": "eid-1", "version_id": "v1", "meta": {"namespace": "default"}},
+            {
+                "entity_id": "eid-1",
+                "version_id": "v1",
+                "meta": {"namespace": "default"},
+            },
         ]
         mem.api = mock_api
 
@@ -238,11 +240,23 @@ class TestSyncFromApi:
         # Page 2: 1 item (partial → stop)
         mock_api.list_memory_cards.side_effect = [
             [
-                {"entity_id": "e1", "version_id": "v1", "meta": {"namespace": "default"}},
-                {"entity_id": "e2", "version_id": "v1", "meta": {"namespace": "default"}},
+                {
+                    "entity_id": "e1",
+                    "version_id": "v1",
+                    "meta": {"namespace": "default"},
+                },
+                {
+                    "entity_id": "e2",
+                    "version_id": "v1",
+                    "meta": {"namespace": "default"},
+                },
             ],
             [
-                {"entity_id": "e3", "version_id": "v1", "meta": {"namespace": "default"}},
+                {
+                    "entity_id": "e3",
+                    "version_id": "v1",
+                    "meta": {"namespace": "default"},
+                },
             ],
         ]
         call_count = [0]
@@ -382,13 +396,15 @@ class TestBuildEntityMetaContent:
     def test_name_from_description(self, tmp_path):
         from gigaevo.memory.shared_memory.memory import normalize_memory_card
 
-        mem = _make_memory(tmp_path)
-        card = normalize_memory_card({
-            "id": "c1",
-            "description": "Use simulated annealing for local search refinement",
-            "task_description_summary": "TSP solver",
-            "keywords": ["annealing", "TSP"],
-        })
+        _make_memory(tmp_path)
+        card = normalize_memory_card(
+            {
+                "id": "c1",
+                "description": "Use simulated annealing for local search refinement",
+                "task_description_summary": "TSP solver",
+                "keywords": ["annealing", "TSP"],
+            }
+        )
         name, tags, when_to_use = build_entity_meta(card)
 
         # Name should contain description text
@@ -401,13 +417,15 @@ class TestBuildEntityMetaContent:
     def test_program_card_meta(self, tmp_path):
         from gigaevo.memory.shared_memory.memory import normalize_memory_card
 
-        mem = _make_memory(tmp_path)
-        card = normalize_memory_card({
-            "category": "program",
-            "program_id": "prog-1",
-            "description": "Top evolved program",
-            "fitness": 95.0,
-        })
+        _make_memory(tmp_path)
+        card = normalize_memory_card(
+            {
+                "category": "program",
+                "program_id": "prog-1",
+                "description": "Top evolved program",
+                "fitness": 95.0,
+            }
+        )
         name, tags, when_to_use = build_entity_meta(card)
         assert isinstance(name, str)
         assert len(name) > 0

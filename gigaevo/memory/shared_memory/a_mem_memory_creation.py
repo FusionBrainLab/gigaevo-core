@@ -47,7 +47,15 @@ def pretty_print_memory(mem, title=None):
 
 def summarize_diff(before, after, label="Memory evolution check"):
     logger.debug("--- {} ---", label)
-    fields = ["content", "tags", "keywords", "context", "category", "timestamp", "links"]
+    fields = [
+        "content",
+        "tags",
+        "keywords",
+        "context",
+        "category",
+        "timestamp",
+        "links",
+    ]
     for f in fields:
         b = _safe_get(before, f, None)
         a = _safe_get(after, f, None)

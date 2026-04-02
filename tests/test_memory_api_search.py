@@ -7,16 +7,16 @@ self.api and self.llm_service.
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 
 def _make_memory(tmp_path, **overrides):
     defaults = dict(
         checkpoint_path=str(tmp_path / "mem"),
-        use_api=False, sync_on_init=False,
-        enable_llm_synthesis=False, enable_memory_evolution=False,
+        use_api=False,
+        sync_on_init=False,
+        enable_llm_synthesis=False,
+        enable_memory_evolution=False,
         enable_llm_card_enrichment=False,
     )
     defaults.update(overrides)
@@ -33,8 +33,13 @@ class TestSearchViaApi:
 
     def test_no_api_falls_back_to_local(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "annealing optimization",
-                        "keywords": ["annealing"]})
+        mem.save_card(
+            {
+                "id": "c1",
+                "description": "annealing optimization",
+                "keywords": ["annealing"],
+            }
+        )
         result = mem._search_via_api("annealing")
         assert "c1" in result
 
@@ -47,7 +52,11 @@ class TestSearchViaApi:
             "hits": [{"entity_id": "e1", "version_id": "v1"}],
         }
         mock_api.get_concept.return_value = {
-            "content": {"id": "idea-1", "description": "SA optimization", "category": "general"},
+            "content": {
+                "id": "idea-1",
+                "description": "SA optimization",
+                "category": "general",
+            },
             "version_id": "v1",
         }
         mem.api = mock_api
@@ -106,8 +115,9 @@ class TestSearchViaApi:
         assert mem.entity_by_card_id.get("idea-1") == "e1"
         assert mem.card_id_by_entity.get("e1") == "idea-1"
         version = mem.entity_version_by_entity.get("e1")
-        assert version is not None and version != "", \
+        assert version is not None and version != "", (
             f"version_id should be set from get_concept response, got {version!r}"
+        )
         assert "idea-1" in mem.memory_cards
 
     def test_api_search_persists_to_index(self, tmp_path):
@@ -190,11 +200,15 @@ class TestSynthesizeResults:
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             "Based on memory card mem-1, you should use SA for optimization.",
-            {}, None, None,
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
 
-        cards = [{"id": "mem-1", "description": "SA optimization", "category": "general"}]
+        cards = [
+            {"id": "mem-1", "description": "SA optimization", "category": "general"}
+        ]
         result = mem._synthesize_results("how to optimize", "current state", cards)
 
         assert "SA for optimization" in result
@@ -234,15 +248,17 @@ class TestSynthesizeResults:
         mock_llm.generate.return_value = ("answer", {}, None, None)
         mem.llm_service = mock_llm
 
-        cards = [{
-            "id": "c1",
-            "description": "SA optimization",
-            "category": "retrieval",
-            "task_description_summary": "HoVer verification",
-            "task_description": "Multi-hop fact verification",
-            "keywords": ["SA", "annealing"],
-            "explanation": {"summary": "SA works well", "explanations": []},
-        }]
+        cards = [
+            {
+                "id": "c1",
+                "description": "SA optimization",
+                "category": "retrieval",
+                "task_description_summary": "HoVer verification",
+                "task_description": "Multi-hop fact verification",
+                "keywords": ["SA", "annealing"],
+                "explanation": {"summary": "SA works well", "explanations": []},
+            }
+        ]
         mem._synthesize_results("test", None, cards)
 
         prompt = mock_llm.generate.call_args[0][0]
@@ -262,8 +278,9 @@ class TestSearchRouting:
 
     def test_search_no_api_no_agent_uses_local(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "annealing idea",
-                        "keywords": ["annealing"]})
+        mem.save_card(
+            {"id": "c1", "description": "annealing idea", "keywords": ["annealing"]}
+        )
         result = mem.search("annealing")
         assert "c1" in result
 
@@ -281,8 +298,9 @@ class TestSearchRouting:
 
     def test_search_gam_failure_falls_back_to_local(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "annealing idea",
-                        "keywords": ["annealing"]})
+        mem.save_card(
+            {"id": "c1", "description": "annealing idea", "keywords": ["annealing"]}
+        )
 
         mock_agent = MagicMock()
         mock_agent.research.side_effect = RuntimeError("GAM down")

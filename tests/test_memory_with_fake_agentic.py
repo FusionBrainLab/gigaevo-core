@@ -8,15 +8,9 @@ _dump_memory, rebuild with real data, and LLM card enrichment.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
-
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
-
 from tests.fakes.agentic_memory import (
     FakeAgenticMemorySystem,
     FakeAMemGenerator,
@@ -24,7 +18,6 @@ from tests.fakes.agentic_memory import (
     FakeResearchAgent,
     inject_fakes_into_memory,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,8 +27,10 @@ from tests.fakes.agentic_memory import (
 def _make_memory(tmp_path, **overrides):
     defaults = dict(
         checkpoint_path=str(tmp_path / "mem"),
-        use_api=False, sync_on_init=False,
-        enable_llm_synthesis=False, enable_memory_evolution=False,
+        use_api=False,
+        sync_on_init=False,
+        enable_llm_synthesis=False,
+        enable_memory_evolution=False,
         enable_llm_card_enrichment=False,
     )
     defaults.update(overrides)
@@ -48,7 +43,6 @@ def _make_memory_with_fakes(tmp_path, **overrides):
     mem = _make_memory(tmp_path, **overrides)
     fake_system = inject_fakes_into_memory(mem)
     # Patch _load_or_create_retriever to avoid chromadb import
-    original_load = mem._load_or_create_retriever
 
     def _fake_load_or_create_retriever():
         return FakeResearchAgent(
@@ -76,8 +70,13 @@ class TestFakeMemoryNote:
 
     def test_all_fields(self):
         note = FakeMemoryNote(
-            content="text", id="n1", keywords=["k"], links=["l"],
-            context="ctx", category="cat", strategy="strat",
+            content="text",
+            id="n1",
+            keywords=["k"],
+            links=["l"],
+            context="ctx",
+            category="cat",
+            strategy="strat",
         )
         assert note.content == "text"
         assert note.keywords == ["k"]
@@ -162,8 +161,7 @@ class TestUpsertLocalNoteAgentic:
         mem.save_card({"id": "c1", "description": "same"})
 
         # Save again with identical content
-        note_before = fake_sys.read("c1")
-        last_accessed_before = note_before.last_accessed
+        fake_sys.read("c1")
 
         mem.save_card({"id": "c1", "description": "same"})
         # Note should not be re-upserted (no change detected)
@@ -227,7 +225,8 @@ class TestRebuildWithFakes:
 
     def test_rebuild_auto_triggers_at_interval(self, tmp_path):
         mem, fake_sys = _make_memory_with_fakes(
-            tmp_path, rebuild_interval=3,
+            tmp_path,
+            rebuild_interval=3,
         )
         mem.generator = FakeAMemGenerator({"llm_service": MagicMock()})
 
@@ -247,9 +246,12 @@ class TestRebuildWithFakes:
 class TestLlmCardEnrichment:
     def test_enrichment_adds_keywords(self, tmp_path):
         mem, fake_sys = _make_memory_with_fakes(
-            tmp_path, enable_llm_card_enrichment=True,
+            tmp_path,
+            enable_llm_card_enrichment=True,
         )
-        mem.save_card({"id": "c1", "description": "simulated annealing for optimization"})
+        mem.save_card(
+            {"id": "c1", "description": "simulated annealing for optimization"}
+        )
 
         card = mem.get_card("c1")
         # analyze_content extracts keywords from description
@@ -258,7 +260,8 @@ class TestLlmCardEnrichment:
 
     def test_enrichment_skipped_when_disabled(self, tmp_path):
         mem, fake_sys = _make_memory_with_fakes(
-            tmp_path, enable_llm_card_enrichment=False,
+            tmp_path,
+            enable_llm_card_enrichment=False,
         )
         mem.save_card({"id": "c1", "description": "simulated annealing"})
 
@@ -267,13 +270,16 @@ class TestLlmCardEnrichment:
 
     def test_enrichment_preserves_existing_keywords(self, tmp_path):
         mem, fake_sys = _make_memory_with_fakes(
-            tmp_path, enable_llm_card_enrichment=True,
+            tmp_path,
+            enable_llm_card_enrichment=True,
         )
-        mem.save_card({
-            "id": "c1",
-            "description": "optimization technique",
-            "keywords": ["existing-keyword"],
-        })
+        mem.save_card(
+            {
+                "id": "c1",
+                "description": "optimization technique",
+                "keywords": ["existing-keyword"],
+            }
+        )
 
         card = mem.get_card("c1")
         # Existing keywords should not be overwritten
@@ -294,11 +300,13 @@ class TestFullCycleWithFakes:
 
         # Save ideas
         for i in range(5):
-            mem.save_card({
-                "id": f"idea-{i}",
-                "description": f"Optimization technique {i} using method_{i}",
-                "keywords": [f"method_{i}"],
-            })
+            mem.save_card(
+                {
+                    "id": f"idea-{i}",
+                    "description": f"Optimization technique {i} using method_{i}",
+                    "keywords": [f"method_{i}"],
+                }
+            )
 
         # All in agentic system
         assert len(fake_sys.memories) == 5
@@ -351,10 +359,14 @@ class TestFullCycleWithFakes:
         from gigaevo.memory.shared_memory.memory import normalize_memory_card
 
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
-        card = normalize_memory_card({
-            "id": "c1", "description": "SA optimization",
-            "keywords": ["SA"], "task_description": "Solve TSP",
-        })
+        card = normalize_memory_card(
+            {
+                "id": "c1",
+                "description": "SA optimization",
+                "keywords": ["SA"],
+                "task_description": "Solve TSP",
+            }
+        )
 
         # Directly call the fast upsert (normally called by _sync_from_api)
         changed = mem._upsert_local_note_fast(card)

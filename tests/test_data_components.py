@@ -16,7 +16,6 @@ from gigaevo.memory.ideas_tracker.components.data_components import (
     normalize_improvements,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -48,18 +47,22 @@ class TestNormalizeImprovementItem:
         assert result["explanation"] == ""
 
     def test_dict_with_description_and_explanation(self):
-        result = normalize_improvement_item({
-            "description": "SA refinement",
-            "explanation": "Improves convergence",
-        })
+        result = normalize_improvement_item(
+            {
+                "description": "SA refinement",
+                "explanation": "Improves convergence",
+            }
+        )
         assert result["description"] == "SA refinement"
         assert result["explanation"] == "Improves convergence"
 
     def test_dict_with_alternative_keys(self):
-        result = normalize_improvement_item({
-            "summary": "SA method",
-            "rationale": "Better convergence",
-        })
+        result = normalize_improvement_item(
+            {
+                "summary": "SA method",
+                "rationale": "Better convergence",
+            }
+        )
         assert result["description"] == "SA method"
         assert result["explanation"] == "Better convergence"
 
@@ -80,9 +83,11 @@ class TestNormalizeImprovementItem:
         assert "custom_field: value" in result["description"]
 
     def test_nested_dict_stringified(self):
-        result = normalize_improvement_item({
-            "description": {"nested": "value", "other": "data"},
-        })
+        result = normalize_improvement_item(
+            {
+                "description": {"nested": "value", "other": "data"},
+            }
+        )
         assert "nested: value" in result["description"]
 
 
@@ -157,8 +162,9 @@ class TestRecordCardExtended:
     def test_update_idea_with_new_description_archives(self):
         card = RecordCardExtended(**_make_idea_dict())
         old_desc = card.description
-        card.update_idea("exp1", "prog-2", generation=10,
-                          new_description="Updated SA method")
+        card.update_idea(
+            "exp1", "prog-2", generation=10, new_description="Updated SA method"
+        )
         assert card.description == "Updated SA method"
         assert len(card.aliases) == 1
         # Alias should contain the OLD description (archived before update)
@@ -244,17 +250,30 @@ class TestRecordListV2:
 class TestRecordBank:
     def test_add_and_get(self):
         bank = RecordBank(list_max_ideas=5)
-        bank.add_idea("SA refinement", "prog-1", generation=5,
-                       category="opt", strategy="exploit", task_description="TSP",
-                       change_motivation="convergence")
+        bank.add_idea(
+            "SA refinement",
+            "prog-1",
+            generation=5,
+            category="opt",
+            strategy="exploit",
+            task_description="TSP",
+            change_motivation="convergence",
+        )
         assert len(bank.uuids) == 1
         idea = bank.get_idea(bank.uuids[0])
         assert "SA refinement" in idea.description
 
     def test_modify_idea(self):
         bank = RecordBank(list_max_ideas=5)
-        bank.add_idea("SA", "prog-1", generation=1, category="",
-                       strategy="", task_description="", change_motivation="")
+        bank.add_idea(
+            "SA",
+            "prog-1",
+            generation=1,
+            category="",
+            strategy="",
+            task_description="",
+            change_motivation="",
+        )
         idea_id = bank.uuids[0]
         bank.modify_idea(idea_id, new_programs=["prog-2"], new_generation=5)
         idea = bank.get_idea(idea_id)
@@ -268,8 +287,15 @@ class TestRecordBank:
 
     def test_remove_idea(self):
         bank = RecordBank(list_max_ideas=5)
-        bank.add_idea("SA", "prog-1", generation=1, category="",
-                       strategy="", task_description="", change_motivation="")
+        bank.add_idea(
+            "SA",
+            "prog-1",
+            generation=1,
+            category="",
+            strategy="",
+            task_description="",
+            change_motivation="",
+        )
         idea_id = bank.uuids[0]
         bank.remove_idea(idea_id)
         assert idea_id not in bank.uuids
@@ -281,10 +307,24 @@ class TestRecordBank:
 
     def test_get_inactive_ideas(self):
         bank = RecordBank(list_max_ideas=10)
-        bank.add_idea("old", "p1", generation=1, category="",
-                       strategy="", task_description="", change_motivation="")
-        bank.add_idea("new", "p2", generation=10, category="",
-                       strategy="", task_description="", change_motivation="")
+        bank.add_idea(
+            "old",
+            "p1",
+            generation=1,
+            category="",
+            strategy="",
+            task_description="",
+            change_motivation="",
+        )
+        bank.add_idea(
+            "new",
+            "p2",
+            generation=10,
+            category="",
+            strategy="",
+            task_description="",
+            change_motivation="",
+        )
         inactive = bank.get_inactive_ideas(generation=10, delta=5)
         assert len(inactive) == 1
         assert inactive[0].description == "old"
@@ -292,16 +332,30 @@ class TestRecordBank:
     def test_all_ideas_cards(self):
         bank = RecordBank(list_max_ideas=5)
         for i in range(3):
-            bank.add_idea(f"idea-{i}", f"p-{i}", generation=i, category="",
-                           strategy="", task_description="", change_motivation="")
+            bank.add_idea(
+                f"idea-{i}",
+                f"p-{i}",
+                generation=i,
+                category="",
+                strategy="",
+                task_description="",
+                change_motivation="",
+            )
         all_cards = bank.all_ideas_cards()
         assert len(all_cards) == 3
 
     def test_import_idea_forced_deduplicates_id(self):
         """import_idea_extended(is_forced=True) avoids asdict() crash."""
         bank = RecordBank(list_max_ideas=5)
-        bank.add_idea("first", "p1", generation=1, category="",
-                       strategy="", task_description="", change_motivation="")
+        bank.add_idea(
+            "first",
+            "p1",
+            generation=1,
+            category="",
+            strategy="",
+            task_description="",
+            change_motivation="",
+        )
         existing_id = bank.uuids[0]
 
         card = RecordCardExtended(**_make_idea_dict(id=existing_id))
@@ -321,7 +375,13 @@ class TestRecordBank:
         bank = RecordBank(list_max_ideas=5)
         card = RecordCardExtended(**_make_idea_dict())
         # Verify the missing attributes directly
-        for attr in ("keywords", "evolution_statistics", "works_with", "links", "usage"):
+        for attr in (
+            "keywords",
+            "evolution_statistics",
+            "works_with",
+            "links",
+            "usage",
+        ):
             assert not hasattr(card, attr), f"Expected {attr} to be missing"
         with pytest.raises(AttributeError):
             bank.import_idea_extended(card, is_forced=False)
@@ -334,37 +394,45 @@ class TestRecordBank:
 
 class TestIncomingIdeas:
     def test_construction(self):
-        ideas = IncomingIdeas([
-            {"description": "idea A", "explanation": "reason A"},
-            {"description": "idea B", "explanation": "reason B"},
-        ])
+        ideas = IncomingIdeas(
+            [
+                {"description": "idea A", "explanation": "reason A"},
+                {"description": "idea B", "explanation": "reason B"},
+            ]
+        )
         assert len(ideas.ideas) == 2
         assert ideas.new_ideas_count == 2
         assert ideas.present_ideas_count == 0
 
     def test_update_marks_classified(self):
-        ideas = IncomingIdeas([
-            {"description": "idea A"},
-            {"description": "idea B"},
-        ])
+        ideas = IncomingIdeas(
+            [
+                {"description": "idea A"},
+                {"description": "idea B"},
+            ]
+        )
         ideas.update_idea(1, target_idea_id="uuid-1", rewrite=False)
         assert ideas.new_ideas_count == 1
         assert ideas.present_ideas_count == 1
 
     def test_get_list_of_ideas(self):
-        ideas = IncomingIdeas([
-            {"description": "idea A"},
-            {"description": "idea B"},
-        ])
+        ideas = IncomingIdeas(
+            [
+                {"description": "idea A"},
+                {"description": "idea B"},
+            ]
+        )
         text = ideas.get_list_of_ideas()
         assert "1) idea A" in text
         assert "2) idea B" in text
 
     def test_classified_excluded_from_list(self):
-        ideas = IncomingIdeas([
-            {"description": "idea A"},
-            {"description": "idea B"},
-        ])
+        ideas = IncomingIdeas(
+            [
+                {"description": "idea A"},
+                {"description": "idea B"},
+            ]
+        )
         ideas.update_idea(1, target_idea_id="uuid-1", rewrite=False)
         ideas.update_mapping()
         text = ideas.get_list_of_ideas()

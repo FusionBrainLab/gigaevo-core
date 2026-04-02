@@ -6,9 +6,6 @@ behavioral contract. Each test documents WHY the contract matters.
 """
 
 import json
-from typing import Any
-
-import pytest
 
 from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
 
@@ -16,8 +13,10 @@ from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_
 def _make_memory(tmp_path, **overrides):
     defaults = dict(
         checkpoint_path=str(tmp_path / "mem"),
-        use_api=False, sync_on_init=False,
-        enable_llm_synthesis=False, enable_memory_evolution=False,
+        use_api=False,
+        sync_on_init=False,
+        enable_llm_synthesis=False,
+        enable_memory_evolution=False,
         enable_llm_card_enrichment=False,
     )
     defaults.update(overrides)
@@ -33,18 +32,39 @@ def _make_memory(tmp_path, **overrides):
 # ===========================================================================
 
 
-_GENERAL_CARD_KEYS = frozenset({
-    "id", "category", "description", "task_description",
-    "task_description_summary", "strategy", "last_generation",
-    "programs", "aliases", "keywords", "evolution_statistics",
-    "explanation", "works_with", "links", "usage",
-})
+_GENERAL_CARD_KEYS = frozenset(
+    {
+        "id",
+        "category",
+        "description",
+        "task_description",
+        "task_description_summary",
+        "strategy",
+        "last_generation",
+        "programs",
+        "aliases",
+        "keywords",
+        "evolution_statistics",
+        "explanation",
+        "works_with",
+        "links",
+        "usage",
+    }
+)
 
-_PROGRAM_CARD_KEYS = frozenset({
-    "id", "category", "program_id", "task_description",
-    "task_description_summary", "description", "fitness",
-    "code", "connected_ideas",
-})
+_PROGRAM_CARD_KEYS = frozenset(
+    {
+        "id",
+        "category",
+        "program_id",
+        "task_description",
+        "task_description_summary",
+        "description",
+        "fitness",
+        "code",
+        "connected_ideas",
+    }
+)
 
 
 class TestNormalizeCardContract:
@@ -79,9 +99,13 @@ class TestNormalizeCardContract:
         assert isinstance(card["usage"], dict)
 
     def test_program_card_field_types(self):
-        card = normalize_memory_card({
-            "category": "program", "program_id": "p1", "fitness": 90.0,
-        })
+        card = normalize_memory_card(
+            {
+                "category": "program",
+                "program_id": "p1",
+                "fitness": 90.0,
+            }
+        )
         assert isinstance(card["id"], str)
         assert card["category"] == "program"
         assert isinstance(card["program_id"], str)
@@ -125,7 +149,9 @@ class TestSaveGetRoundtrip:
         assert stored["id"] == "c1"
         assert stored["description"] == original["description"]
         assert stored["task_description"] == original["task_description"]
-        assert stored["task_description_summary"] == original["task_description_summary"]
+        assert (
+            stored["task_description_summary"] == original["task_description_summary"]
+        )
         assert stored["strategy"] == original["strategy"]
         assert stored["last_generation"] == original["last_generation"]
         assert stored["programs"] == original["programs"]
@@ -158,13 +184,15 @@ class TestSaveGetRoundtrip:
     def test_persist_reload_roundtrip(self, tmp_path):
         """Save → persist → reload from disk → get must return same data."""
         mem1 = _make_memory(tmp_path)
-        mem1.save_card({
-            "id": "c1",
-            "description": "test idea",
-            "keywords": ["k1", "k2"],
-            "explanation": {"explanations": ["e1"], "summary": "s"},
-            "last_generation": 7,
-        })
+        mem1.save_card(
+            {
+                "id": "c1",
+                "description": "test idea",
+                "keywords": ["k1", "k2"],
+                "explanation": {"explanations": ["e1"], "summary": "s"},
+                "last_generation": 7,
+            }
+        )
 
         mem2 = _make_memory(tmp_path)
         stored = mem2.get_card("c1")
@@ -193,8 +221,9 @@ class TestSearchOutputContract:
 
     def test_results_format_has_query_line(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "annealing idea",
-                        "keywords": ["annealing"]})
+        mem.save_card(
+            {"id": "c1", "description": "annealing idea", "keywords": ["annealing"]}
+        )
         result = mem.search("annealing")
         assert result.startswith("Query: annealing")
 
@@ -205,6 +234,7 @@ class TestSearchOutputContract:
         result = mem.search("annealing crossover")
         # Format: "1. <card_id> [<category>] <description>"
         import re
+
         numbered = re.findall(r"(?m)^\d+\.\s+\S+\s+\[[^\]]+\]\s+", result)
         assert len(numbered) >= 1
 
@@ -296,7 +326,11 @@ class TestWriteStatsContract:
         mem = _make_memory(tmp_path)
         stats = mem.get_card_write_stats()
         assert set(stats.keys()) == {
-            "processed", "added", "rejected", "updated", "updated_target_cards",
+            "processed",
+            "added",
+            "rejected",
+            "updated",
+            "updated_target_cards",
         }
 
     def test_stats_all_int(self, tmp_path):
@@ -327,7 +361,9 @@ class TestWriteStatsContract:
 
 class TestDedupDecisionContract:
     def test_parse_decision_shape(self):
-        from gigaevo.memory.shared_memory.card_update_dedup import parse_llm_card_decision
+        from gigaevo.memory.shared_memory.card_update_dedup import (
+            parse_llm_card_decision,
+        )
 
         result = parse_llm_card_decision(
             json.dumps({"action": "add"}),
@@ -340,17 +376,26 @@ class TestDedupDecisionContract:
         assert isinstance(result["updates"], list)
 
     def test_parse_decision_actions(self):
-        from gigaevo.memory.shared_memory.card_update_dedup import parse_llm_card_decision
+        from gigaevo.memory.shared_memory.card_update_dedup import (
+            parse_llm_card_decision,
+        )
 
         for action in ("add", "discard", "update"):
             if action == "discard":
                 text = json.dumps({"action": action, "duplicate_of": "c1"})
             elif action == "update":
-                text = json.dumps({
-                    "action": action,
-                    "updates": [{"card_id": "c1", "update_explanation": True,
-                                  "explanation_append": "x"}],
-                })
+                text = json.dumps(
+                    {
+                        "action": action,
+                        "updates": [
+                            {
+                                "card_id": "c1",
+                                "update_explanation": True,
+                                "explanation_append": "x",
+                            }
+                        ],
+                    }
+                )
             else:
                 text = json.dumps({"action": action})
             result = parse_llm_card_decision(text, candidate_ids={"c1"})
@@ -397,6 +442,7 @@ class TestMutationMetadataKeysContract:
             MUTATION_MEMORY_METADATA_KEY,
             MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
         )
+
         # Pin exact values — renaming these breaks the pipeline
         assert MUTATION_MEMORY_METADATA_KEY == "mutation_memory"
         assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY == "memory_selected_idea_ids"

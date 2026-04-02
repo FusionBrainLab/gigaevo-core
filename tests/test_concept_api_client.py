@@ -4,14 +4,13 @@ All HTTP calls are mocked via httpx mock transport.
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
 from gigaevo.memory.shared_memory.utils import truncate_text
-
 
 # ---------------------------------------------------------------------------
 # _ConceptApiClient
@@ -114,9 +113,9 @@ class TestConceptApiClientSearchConcepts:
         def handler(request):
             body = json.loads(request.content)
             assert body["queries"] == ["test query"]
-            return httpx.Response(200, json={
-                "results": [[{"entity_id": "e1", "score": 0.9}]]
-            })
+            return httpx.Response(
+                200, json={"results": [[{"entity_id": "e1", "score": 0.9}]]}
+            )
 
         client = _mock_client(handler)
         result = client.search_concepts(query="test query", limit=5, namespace="ns")
@@ -155,8 +154,13 @@ class TestConceptApiClientErrors:
         client = _mock_client(handler)
         with pytest.raises(RuntimeError, match="Cannot connect"):
             client.save_concept(
-                content={}, name="", tags=[], when_to_use="",
-                channel="latest", namespace=None, author=None,
+                content={},
+                name="",
+                tags=[],
+                when_to_use="",
+                channel="latest",
+                namespace=None,
+                author=None,
             )
 
     def test_timeout_error(self):
@@ -237,9 +241,7 @@ def _make_memory(tmp_path, **overrides):
 class TestDecideCardAction:
     def test_no_llm_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
-        result = mem._decide_card_action(
-            {"description": "test"}, [{"card_id": "c1"}]
-        )
+        result = mem._decide_card_action({"description": "test"}, [{"card_id": "c1"}])
         assert result["action"] == "add"
 
     def test_no_candidates_returns_add(self, tmp_path):
@@ -256,7 +258,9 @@ class TestDecideCardAction:
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             json.dumps({"action": "discard", "duplicate_of": "existing"}),
-            {}, None, None,
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
 
@@ -266,9 +270,13 @@ class TestDecideCardAction:
         assert result["duplicate_of"] == "existing"
 
     def test_llm_exception_retries(self, tmp_path):
-        mem = _make_memory(tmp_path, card_update_dedup_config={
-            "enabled": True, "llm": {"max_retries": 3},
-        })
+        mem = _make_memory(
+            tmp_path,
+            card_update_dedup_config={
+                "enabled": True,
+                "llm": {"max_retries": 3},
+            },
+        )
         mem.save_card({"id": "c1", "description": "test"})
 
         mock_llm = MagicMock()
@@ -293,12 +301,14 @@ class TestDecideCardAction:
 class TestDedupCandidatesForLlm:
     def test_builds_payload(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({
-            "id": "c1",
-            "description": "Use simulated annealing",
-            "task_description_summary": "TSP",
-            "explanation": {"explanations": ["tried SA"], "summary": "SA works"},
-        })
+        mem.save_card(
+            {
+                "id": "c1",
+                "description": "Use simulated annealing",
+                "task_description_summary": "TSP",
+                "explanation": {"explanations": ["tried SA"], "summary": "SA works"},
+            }
+        )
 
         candidates = [{"card_id": "c1", "final_score": 0.8, "scores": {}}]
         result = mem._dedup_candidates_for_llm(candidates)
@@ -315,10 +325,12 @@ class TestDedupCandidatesForLlm:
 
     def test_truncates_long_text(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({
-            "id": "c1",
-            "description": "x" * 5000,
-        })
+        mem.save_card(
+            {
+                "id": "c1",
+                "description": "x" * 5000,
+            }
+        )
         candidates = [{"card_id": "c1", "final_score": 0.8, "scores": {}}]
         result = mem._dedup_candidates_for_llm(candidates)
         assert len(result[0]["description"]) <= 1200

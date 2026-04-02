@@ -3,15 +3,14 @@
 Pin down validation behavior: required fields, defaults, extra="forbid".
 """
 
-import pytest
 from pydantic import ValidationError
+import pytest
 
 from gigaevo.memory.shared_memory.models import (
     LocalMemorySnapshot,
     MemoryCard,
     MemoryCardExplanation,
 )
-
 
 # ===========================================================================
 # MemoryCardExplanation

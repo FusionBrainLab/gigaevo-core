@@ -5,10 +5,8 @@ to pin down behavior for safe refactoring. Dedup tests mock the LLM.
 """
 
 import json
-import uuid
 from unittest.mock import MagicMock
-
-import pytest
+import uuid
 
 from gigaevo.memory.shared_memory.card_conversion import (
     is_program_card,
@@ -18,7 +16,6 @@ from gigaevo.memory.shared_memory.card_conversion import (
 )
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order, looks_like_uuid
-
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -161,13 +158,15 @@ class TestSaveCard:
         mem.save_card(_make_card(id="seed"))
 
         # Program card should bypass dedup even though dedup is enabled
-        card_id = mem.save_card({
-            "category": "program",
-            "program_id": "prog-1",
-            "description": "Top program",
-            "fitness": 95.0,
-            "code": "def f(): pass",
-        })
+        mem.save_card(
+            {
+                "category": "program",
+                "program_id": "prog-1",
+                "description": "Top program",
+                "fitness": 95.0,
+                "code": "def f(): pass",
+            }
+        )
         stats = mem.get_card_write_stats()
         assert stats["added"] == 2  # seed + program
         assert stats["rejected"] == 0
@@ -286,7 +285,9 @@ class TestSearchLocal:
     def test_respects_search_limit(self, tmp_path):
         mem = _make_memory(tmp_path, search_limit=2)
         for i in range(10):
-            mem.save_card(_make_card(id=f"c{i}", description=f"idea about optimization {i}"))
+            mem.save_card(
+                _make_card(id=f"c{i}", description=f"idea about optimization {i}")
+            )
         result = mem.search("optimization")
         # Count card IDs in result — should be at most 2
         found = [f"c{i}" for i in range(10) if f"c{i}" in result]
@@ -387,7 +388,7 @@ class TestDedup:
             return_value=[{"card_id": "existing", "score": 0.3}]
         )
 
-        card_id = mem.save_card(_make_card(description="new unique idea"))
+        mem.save_card(_make_card(description="new unique idea"))
         stats = mem.get_card_write_stats()
         assert stats["added"] == 2  # existing + new
 

@@ -5,18 +5,14 @@ explicit. When a bug is fixed, update the assertion to match correct behavior.
 """
 
 import json
-import re
-import uuid
 from unittest.mock import MagicMock, patch
+import uuid
 
-import pytest
-
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
 from gigaevo.memory.shared_memory.card_update_dedup import (
     _extract_json_object,
     append_unique_text,
 )
-
+from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -80,8 +76,14 @@ class TestBug5SubstringSearchFixed:
         """Token 'a' no longer matches 'general' (category) because 'a'
         is not a standalone word in 'general'."""
         mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "xyz specific topic",
-                        "task_description": "", "task_description_summary": ""})
+        mem.save_card(
+            {
+                "id": "c1",
+                "description": "xyz specific topic",
+                "task_description": "",
+                "task_description_summary": "",
+            }
+        )
 
         result = mem.search("a")
         # FIXED: "a" is not a word in any field → no match
@@ -119,7 +121,9 @@ class TestBug6IDCollision:
 
         # Mock uuid4 to return same value twice
         fixed_uuid = uuid.UUID("12345678-1234-5678-1234-567812345678")
-        with patch("gigaevo.memory.shared_memory.memory.uuid.uuid4", return_value=fixed_uuid):
+        with patch(
+            "gigaevo.memory.shared_memory.memory.uuid.uuid4", return_value=fixed_uuid
+        ):
             id1 = mem.save_card({"description": "first card"})
             id2 = mem.save_card({"description": "second card"})
 
@@ -261,14 +265,18 @@ class TestBug7UpdateFallthrough:
         # Set up LLM mock returning update action
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
-            json.dumps({
-                "action": "update",
-                "updates": [{
-                    "card_id": "existing",
-                    "update_explanation": True,
-                    "explanation_append": "new info",
-                }],
-            }),
+            json.dumps(
+                {
+                    "action": "update",
+                    "updates": [
+                        {
+                            "card_id": "existing",
+                            "update_explanation": True,
+                            "explanation_append": "new info",
+                        }
+                    ],
+                }
+            ),
             {},
             None,
             None,
@@ -283,10 +291,12 @@ class TestBug7UpdateFallthrough:
         del mem.memory_cards["existing"]
 
         # Now save a new card — dedup will try to update "existing" but it's gone
-        card_id = mem.save_card({"description": "should be deduped"})
+        mem.save_card({"description": "should be deduped"})
         # BUG: Falls through to add because _apply_update_actions returns []
         stats = mem.get_card_write_stats()
-        assert stats["added"] >= 2  # Both cards added despite dedup identifying duplicate
+        assert (
+            stats["added"] >= 2
+        )  # Both cards added despite dedup identifying duplicate
 
 
 # ===========================================================================

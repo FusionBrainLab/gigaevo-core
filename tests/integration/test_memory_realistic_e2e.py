@@ -20,8 +20,6 @@ import asyncio
 import contextlib
 import json
 import re
-from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import fakeredis.aioredis
@@ -44,7 +42,6 @@ from gigaevo.memory.shared_memory.card_conversion import is_program_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
-
 from tests.fakes.agentic_memory import (
     FakeAMemGenerator,
     FakeResearchAgent,
@@ -53,7 +50,6 @@ from tests.fakes.agentic_memory import (
     fake_load_amem_records,
     inject_fakes_into_memory,
 )
-
 
 # ---------------------------------------------------------------------------
 # Infrastructure
@@ -91,12 +87,14 @@ class MemoryBoostOperator(MutationOperator):
         global _CALL_COUNTER
         p = _extract(parents[0].code)
         boost = 2.0 if memory_instructions else 1.0
-        self.history.append({
-            "parent_fitness": p["fitness"],
-            "boost": boost,
-            "has_memory": memory_instructions is not None,
-            "memory_len": len(memory_instructions) if memory_instructions else 0,
-        })
+        self.history.append(
+            {
+                "parent_fitness": p["fitness"],
+                "boost": boost,
+                "has_memory": memory_instructions is not None,
+                "memory_len": len(memory_instructions) if memory_instructions else 0,
+            }
+        )
         f = p["fitness"] + boost
         x = 0.5 + _CALL_COUNTER
         _CALL_COUNTER += 1
@@ -141,9 +139,13 @@ def _island():
             bins={"x": LinearBinning(min_val=0, max_val=10, num_bins=10, type="linear")}
         ),
         archive_selector=SumArchiveSelector(fitness_keys=["fitness"]),
-        archive_remover=FitnessArchiveRemover(fitness_key="fitness", fitness_key_higher_is_better=True),
+        archive_remover=FitnessArchiveRemover(
+            fitness_key="fitness", fitness_key_higher_is_better=True
+        ),
         elite_selector=ScalarTournamentEliteSelector(
-            fitness_key="fitness", fitness_key_higher_is_better=True, tournament_size=99,
+            fitness_key="fitness",
+            fitness_key_higher_is_better=True,
+            tournament_size=99,
         ),
         migrant_selector=RandomMigrantSelector(),
     )
@@ -167,9 +169,14 @@ def _tracker():
 
 
 def _make_memory(tmp_path, **kw):
-    d = dict(checkpoint_path=str(tmp_path / "mem"), use_api=False, sync_on_init=False,
-             enable_llm_synthesis=False, enable_memory_evolution=False,
-             enable_llm_card_enrichment=False)
+    d = dict(
+        checkpoint_path=str(tmp_path / "mem"),
+        use_api=False,
+        sync_on_init=False,
+        enable_llm_synthesis=False,
+        enable_memory_evolution=False,
+        enable_llm_card_enrichment=False,
+    )
     d.update(kw)
     return AmemGamMemory(**d)
 
@@ -183,24 +190,38 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
 
     def _patched_retriever():
         mem._dump_memory()
-        recs = fake_load_amem_records(mem.export_file) or list(mem.memory_cards.values())
+        recs = fake_load_amem_records(mem.export_file) or list(
+            mem.memory_cards.values()
+        )
         ms, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)
-        rets = fake_build_retrievers(ps, mem.gam_store_dir / "idx",
-                                      mem.checkpoint_dir / "chroma",
-                                      allowed_tools=sorted(mem.allowed_gam_tools))
-        return FakeResearchAgent(retrievers=rets, generator=mem.generator) if rets else None
+        rets = fake_build_retrievers(
+            ps,
+            mem.gam_store_dir / "idx",
+            mem.checkpoint_dir / "chroma",
+            allowed_tools=sorted(mem.allowed_gam_tools),
+        )
+        return (
+            FakeResearchAgent(retrievers=rets, generator=mem.generator)
+            if rets
+            else None
+        )
 
     def _patched_dedup():
         recs = [r for r in mem.memory_cards.values() if not is_program_card(r)]
         if not recs:
             return {}
         _, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)
-        rets = fake_build_retrievers(ps, mem.gam_store_dir / "idx",
-                                      mem.checkpoint_dir / "chroma",
-                                      allowed_tools=["vector_description",
-                                                      "vector_explanation_summary",
-                                                      "vector_description_explanation_summary",
-                                                      "vector_description_task_description_summary"])
+        rets = fake_build_retrievers(
+            ps,
+            mem.gam_store_dir / "idx",
+            mem.checkpoint_dir / "chroma",
+            allowed_tools=[
+                "vector_description",
+                "vector_explanation_summary",
+                "vector_description_explanation_summary",
+                "vector_description_task_description_summary",
+            ],
+        )
         return {n: r for n, r in rets.items() if n in mem.allowed_gam_tools}
 
     # Patch ALL paths BEFORE saving any cards
@@ -222,24 +243,40 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
     mem.rebuild = _safe_rebuild
 
     # NOW save ideas (safe — all patches in place)
-    for idea in (ideas or []):
+    for idea in ideas or []:
         mem.save_card(idea)
 
     return mem, fs
 
 
-async def _evolve(server, gens, *, operator, memory_enabled=False, memory_top_n=0,
-                   memory_path="memory.txt"):
+async def _evolve(
+    server,
+    gens,
+    *,
+    operator,
+    memory_enabled=False,
+    memory_top_n=0,
+    memory_path="memory.txt",
+):
     s = _storage(server)
     strat = MapElitesMultiIsland(island_configs=[_island()], program_storage=s)
     eng = EvolutionEngine(
-        storage=s, strategy=strat, mutation_operator=operator,
-        config=EngineConfig(loop_interval=0.005, max_elites_per_generation=1,
-                             max_mutations_per_generation=1, generation_timeout=30,
-                             max_generations=gens, memory_enabled=memory_enabled,
-                             memory_top_n=memory_top_n, memory_path=memory_path,
-                             fitness_key="fitness"),
-        writer=_writer(), metrics_tracker=_tracker(),
+        storage=s,
+        strategy=strat,
+        mutation_operator=operator,
+        config=EngineConfig(
+            loop_interval=0.005,
+            max_elites_per_generation=1,
+            max_mutations_per_generation=1,
+            generation_timeout=30,
+            max_generations=gens,
+            memory_enabled=memory_enabled,
+            memory_top_n=memory_top_n,
+            memory_path=memory_path,
+            fitness_key="fitness",
+        ),
+        writer=_writer(),
+        metrics_tracker=_tracker(),
     )
     await s.add(Program(code=_code(1.0, 0.0), state=ProgramState.QUEUED))
     sm = ProgramStateManager(s)
@@ -280,25 +317,37 @@ class TestKnowledgeAccumulation:
         baseline_best = max(p.metrics["fitness"] for p in progs1)
 
         # Extract "ideas" from phase 1 programs
-        mem, _ = _make_full_memory(tmp_path, ideas=[
-            {"id": f"idea-{i}", "description": f"Technique from gen {i}: fitness boost method",
-             "keywords": ["optimization", f"gen{i}"]}
-            for i in range(3)
-        ])
+        mem, _ = _make_full_memory(
+            tmp_path,
+            ideas=[
+                {
+                    "id": f"idea-{i}",
+                    "description": f"Technique from gen {i}: fitness boost method",
+                    "keywords": ["optimization", f"gen{i}"],
+                }
+                for i in range(3)
+            ],
+        )
         mem.rebuild()
 
         # Write memory file for phase 2
         mf = tmp_path / "memory.txt"
-        mf.write_text("\n".join(
-            f"- {c['description']}" for c in mem.memory_cards.values()
-        ))
+        mf.write_text(
+            "\n".join(f"- {c['description']}" for c in mem.memory_cards.values())
+        )
 
         # Phase 2: evolution with memory
         _reset()
         s2 = fakeredis.FakeServer()
         op2 = MemoryBoostOperator()
-        _, progs2, _ = await _evolve(s2, 5, operator=op2, memory_enabled=True,
-                                       memory_top_n=1, memory_path=str(mf))
+        _, progs2, _ = await _evolve(
+            s2,
+            5,
+            operator=op2,
+            memory_enabled=True,
+            memory_top_n=1,
+            memory_path=str(mf),
+        )
         memory_best = max(p.metrics["fitness"] for p in progs2)
 
         # Memory run should produce higher fitness (boost=2.0 vs 1.0)
@@ -317,33 +366,55 @@ class TestMemorySearchRelevance:
     """Search returns ideas matching the query, ranked by similarity."""
 
     def test_relevant_ideas_rank_higher(self, tmp_path):
-        mem, _ = _make_full_memory(tmp_path, ideas=[
-            {"id": "sa", "description": "simulated annealing for local search optimization",
-             "keywords": ["annealing", "local-search"]},
-            {"id": "ga", "description": "genetic algorithm crossover for population diversity",
-             "keywords": ["genetic", "crossover"]},
-            {"id": "dp", "description": "dynamic programming for optimal substructure problems",
-             "keywords": ["dynamic", "programming"]},
-            {"id": "sa2", "description": "adaptive cooling schedule for simulated annealing",
-             "keywords": ["annealing", "cooling", "schedule"]},
-        ])
+        mem, _ = _make_full_memory(
+            tmp_path,
+            ideas=[
+                {
+                    "id": "sa",
+                    "description": "simulated annealing for local search optimization",
+                    "keywords": ["annealing", "local-search"],
+                },
+                {
+                    "id": "ga",
+                    "description": "genetic algorithm crossover for population diversity",
+                    "keywords": ["genetic", "crossover"],
+                },
+                {
+                    "id": "dp",
+                    "description": "dynamic programming for optimal substructure problems",
+                    "keywords": ["dynamic", "programming"],
+                },
+                {
+                    "id": "sa2",
+                    "description": "adaptive cooling schedule for simulated annealing",
+                    "keywords": ["annealing", "cooling", "schedule"],
+                },
+            ],
+        )
         mem.rebuild()
 
         # Search for annealing-related ideas
         result = mem.search("simulated annealing cooling optimization")
 
         # SA ideas should appear before unrelated ones
-        sa_pos = result.find("sa") if "sa" in result else 999
-        ga_pos = result.find("ga") if "ga" in result else 999
+        result.find("sa") if "sa" in result else 999
+        result.find("ga") if "ga" in result else 999
         # At minimum, SA-related cards should be in results
         assert "sa" in result.lower() or "annealing" in result.lower()
 
     def test_search_with_many_ideas_returns_top_k(self, tmp_path):
-        mem, _ = _make_full_memory(tmp_path, search_limit=3, ideas=[
-            {"id": f"idea-{i}", "description": f"optimization technique {i} for solving problems",
-             "keywords": [f"technique{i}", "optimization"]}
-            for i in range(20)
-        ])
+        mem, _ = _make_full_memory(
+            tmp_path,
+            search_limit=3,
+            ideas=[
+                {
+                    "id": f"idea-{i}",
+                    "description": f"optimization technique {i} for solving problems",
+                    "keywords": [f"technique{i}", "optimization"],
+                }
+                for i in range(20)
+            ],
+        )
         # Use local search (no research_agent) to test search_limit
         mem.research_agent = None
 
@@ -353,9 +424,12 @@ class TestMemorySearchRelevance:
         assert len(found) <= 3, f"Expected ≤3 results, found {len(found)}: {found}"
 
     def test_empty_query_returns_no_results(self, tmp_path):
-        mem, _ = _make_full_memory(tmp_path, ideas=[
-            {"id": "i1", "description": "test idea"},
-        ])
+        mem, _ = _make_full_memory(
+            tmp_path,
+            ideas=[
+                {"id": "i1", "description": "test idea"},
+            ],
+        )
         result = mem.search("")
         assert "No relevant" in result
 
@@ -372,8 +446,11 @@ class TestDedupPreventsIdeaBloat:
         mem, _ = _make_full_memory(
             tmp_path,
             ideas=[
-                {"id": "idea-1", "description": "simulated annealing for optimization",
-                 "keywords": ["annealing"]},
+                {
+                    "id": "idea-1",
+                    "description": "simulated annealing for optimization",
+                    "keywords": ["annealing"],
+                },
             ],
             card_update_dedup_config={"enabled": True},
         )
@@ -382,7 +459,9 @@ class TestDedupPreventsIdeaBloat:
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             json.dumps({"action": "discard", "duplicate_of": "idea-1"}),
-            {}, None, None,
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
 
@@ -403,7 +482,10 @@ class TestDedupPreventsIdeaBloat:
 
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
-            json.dumps({"action": "add"}), {}, None, None,
+            json.dumps({"action": "add"}),
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
 
@@ -421,12 +503,21 @@ class TestCrossExperimentTransfer:
 
     def test_transfer_ideas_between_experiments(self, tmp_path):
         # Experiment A: creates ideas
-        mem_a, _ = _make_full_memory(tmp_path / "exp_a", ideas=[
-            {"id": "expA-1", "description": "Sort evidence by relevance score for HoVer",
-             "keywords": ["sort", "relevance", "HoVer"]},
-            {"id": "expA-2", "description": "Filter low-confidence hops with threshold 0.5",
-             "keywords": ["filter", "confidence", "threshold"]},
-        ])
+        mem_a, _ = _make_full_memory(
+            tmp_path / "exp_a",
+            ideas=[
+                {
+                    "id": "expA-1",
+                    "description": "Sort evidence by relevance score for HoVer",
+                    "keywords": ["sort", "relevance", "HoVer"],
+                },
+                {
+                    "id": "expA-2",
+                    "description": "Filter low-confidence hops with threshold 0.5",
+                    "keywords": ["filter", "confidence", "threshold"],
+                },
+            ],
+        )
 
         # Export ideas from A
         exported_ideas = list(mem_a.memory_cards.values())
@@ -465,18 +556,22 @@ class TestApiSyncSimulation:
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [
-            {"entity_id": "e1", "version_id": "v1",
-             "meta": {"namespace": "default"}},
-            {"entity_id": "e2", "version_id": "v1",
-             "meta": {"namespace": "default"}},
+            {"entity_id": "e1", "version_id": "v1", "meta": {"namespace": "default"}},
+            {"entity_id": "e2", "version_id": "v1", "meta": {"namespace": "default"}},
         ]
 
         def get_concept(eid, channel="latest"):
             ideas = {
-                "e1": {"id": "remote-1", "description": "SA from remote",
-                       "category": "general"},
-                "e2": {"id": "remote-2", "description": "crossover from remote",
-                       "category": "general"},
+                "e1": {
+                    "id": "remote-1",
+                    "description": "SA from remote",
+                    "category": "general",
+                },
+                "e2": {
+                    "id": "remote-2",
+                    "description": "crossover from remote",
+                    "category": "general",
+                },
             }
             return {"content": ideas[eid], "version_id": "v1"}
 
@@ -493,9 +588,12 @@ class TestApiSyncSimulation:
         assert fake_sys.read("remote-2") is not None
 
     def test_sync_prunes_stale_entities(self, tmp_path):
-        mem, fake_sys = _make_full_memory(tmp_path, ideas=[
-            {"id": "local-1", "description": "local idea"},
-        ])
+        mem, fake_sys = _make_full_memory(
+            tmp_path,
+            ideas=[
+                {"id": "local-1", "description": "local idea"},
+            ],
+        )
         mem.use_api = True
 
         # Pre-populate entity maps as if this card came from API
@@ -551,11 +649,13 @@ class TestRapidSaveSearchInterleaving:
         mem.research_agent = None
 
         for i in range(20):
-            mem.save_card({
-                "id": f"idea-{i}",
-                "description": f"unique_keyword_{i} optimization technique",
-                "keywords": [f"unique_keyword_{i}"],
-            })
+            mem.save_card(
+                {
+                    "id": f"idea-{i}",
+                    "description": f"unique_keyword_{i} optimization technique",
+                    "keywords": [f"unique_keyword_{i}"],
+                }
+            )
 
             # Search with unique keyword → must find the just-saved card
             result = mem._search_local_cards(f"unique_keyword_{i}")
@@ -568,8 +668,13 @@ class TestRapidSaveSearchInterleaving:
 
         # Populate
         for i in range(10):
-            mem.save_card({"id": f"c{i}", "description": f"technique {i} optimization",
-                            "keywords": [f"technique{i}"]})
+            mem.save_card(
+                {
+                    "id": f"c{i}",
+                    "description": f"technique {i} optimization",
+                    "keywords": [f"technique{i}"],
+                }
+            )
 
         # Delete every other card, search after each delete
         for i in range(0, 10, 2):
@@ -597,18 +702,35 @@ class TestFullEvolutionMemoryRebuildCycle:
         # Real AmemGamMemory — no inject_fakes, no patched rebuild
         mem = AmemGamMemory(
             checkpoint_path=str(tmp_path / "real_mem"),
-            use_api=False, sync_on_init=False,
-            enable_llm_synthesis=False, enable_memory_evolution=False,
+            use_api=False,
+            sync_on_init=False,
+            enable_llm_synthesis=False,
+            enable_memory_evolution=False,
             enable_llm_card_enrichment=False,
         )
 
         # Save cards
-        mem.save_card({"id": "real-1", "description": "simulated annealing optimization",
-                        "keywords": ["annealing"]})
-        mem.save_card({"id": "real-2", "description": "genetic crossover recombination",
-                        "keywords": ["crossover"]})
-        mem.save_card({"id": "real-3", "description": "dynamic programming substructure",
-                        "keywords": ["dynamic"]})
+        mem.save_card(
+            {
+                "id": "real-1",
+                "description": "simulated annealing optimization",
+                "keywords": ["annealing"],
+            }
+        )
+        mem.save_card(
+            {
+                "id": "real-2",
+                "description": "genetic crossover recombination",
+                "keywords": ["crossover"],
+            }
+        )
+        mem.save_card(
+            {
+                "id": "real-3",
+                "description": "dynamic programming substructure",
+                "keywords": ["dynamic"],
+            }
+        )
 
         assert len(mem.memory_cards) == 3
 
@@ -617,7 +739,9 @@ class TestFullEvolutionMemoryRebuildCycle:
         assert "real-1" in result
 
         # Update
-        mem.save_card({"id": "real-1", "description": "enhanced SA with adaptive cooling"})
+        mem.save_card(
+            {"id": "real-1", "description": "enhanced SA with adaptive cooling"}
+        )
         assert "adaptive cooling" in mem.get_card("real-1")["description"]
 
         # Delete
@@ -628,12 +752,17 @@ class TestFullEvolutionMemoryRebuildCycle:
         # Persist + reload (new process)
         mem2 = AmemGamMemory(
             checkpoint_path=str(tmp_path / "real_mem"),
-            use_api=False, sync_on_init=False,
-            enable_llm_synthesis=False, enable_memory_evolution=False,
+            use_api=False,
+            sync_on_init=False,
+            enable_llm_synthesis=False,
+            enable_memory_evolution=False,
             enable_llm_card_enrichment=False,
         )
         assert len(mem2.memory_cards) == 2
-        assert mem2.get_card("real-1")["description"] == "enhanced SA with adaptive cooling"
+        assert (
+            mem2.get_card("real-1")["description"]
+            == "enhanced SA with adaptive cooling"
+        )
         assert mem2.get_card("real-2") is None
         assert mem2.get_card("real-3") is not None
 
@@ -645,8 +774,10 @@ class TestFullEvolutionMemoryRebuildCycle:
         """UNPATCHED: verify card_write_stats shape and behavior."""
         mem = AmemGamMemory(
             checkpoint_path=str(tmp_path / "real"),
-            use_api=False, sync_on_init=False,
-            enable_llm_synthesis=False, enable_memory_evolution=False,
+            use_api=False,
+            sync_on_init=False,
+            enable_llm_synthesis=False,
+            enable_memory_evolution=False,
             enable_llm_card_enrichment=False,
         )
         mem.save_card({"id": "c1", "description": "idea"})
@@ -668,12 +799,17 @@ class TestFullEvolutionMemoryRebuildCycle:
         baseline_best = max(p.metrics["fitness"] for p in progs1)
 
         # Fill memory from run 1 programs
-        mem, _ = _make_full_memory(tmp_path, ideas=[
-            {"id": f"run1-idea-{i}",
-             "description": f"Technique discovered at fitness {p.metrics['fitness']:.1f}",
-             "keywords": ["technique", "optimization"]}
-            for i, p in enumerate(progs1[:3])
-        ])
+        mem, _ = _make_full_memory(
+            tmp_path,
+            ideas=[
+                {
+                    "id": f"run1-idea-{i}",
+                    "description": f"Technique discovered at fitness {p.metrics['fitness']:.1f}",
+                    "keywords": ["technique", "optimization"],
+                }
+                for i, p in enumerate(progs1[:3])
+            ],
+        )
 
         # Rebuild creates research agent with searchable index
         mem.rebuild()
@@ -686,16 +822,22 @@ class TestFullEvolutionMemoryRebuildCycle:
 
         # Write memory file for run 2
         mf = tmp_path / "memory.txt"
-        mf.write_text("\n".join(
-            f"- {c['description']}" for c in mem.memory_cards.values()
-        ))
+        mf.write_text(
+            "\n".join(f"- {c['description']}" for c in mem.memory_cards.values())
+        )
 
         # Run 2: evolution with memory
         _reset()
         s2 = fakeredis.FakeServer()
         op2 = MemoryBoostOperator()
-        eng2, progs2, _ = await _evolve(s2, 5, operator=op2, memory_enabled=True,
-                                          memory_top_n=1, memory_path=str(mf))
+        eng2, progs2, _ = await _evolve(
+            s2,
+            5,
+            operator=op2,
+            memory_enabled=True,
+            memory_top_n=1,
+            memory_path=str(mf),
+        )
         memory_best = max(p.metrics["fitness"] for p in progs2)
 
         # Memory run beats baseline

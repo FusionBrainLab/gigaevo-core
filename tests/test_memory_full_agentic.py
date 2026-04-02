@@ -8,27 +8,18 @@ dedup pipeline with real scoring (not mocked _score_retrieved_candidates).
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from gigaevo.memory.shared_memory.card_conversion import is_program_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
-
 from tests.fakes.agentic_memory import (
     FakeAMemGenerator,
-    FakeAgenticMemorySystem,
-    FakeMemoryNote,
     FakeResearchAgent,
-    FakeRetriever,
     fake_build_gam_store,
     fake_build_retrievers,
     fake_load_amem_records,
     inject_fakes_into_memory,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,8 +29,10 @@ from tests.fakes.agentic_memory import (
 def _make_memory(tmp_path, **overrides):
     defaults = dict(
         checkpoint_path=str(tmp_path / "mem"),
-        use_api=False, sync_on_init=False,
-        enable_llm_synthesis=False, enable_memory_evolution=False,
+        use_api=False,
+        sync_on_init=False,
+        enable_llm_synthesis=False,
+        enable_memory_evolution=False,
         enable_llm_card_enrichment=False,
     )
     defaults.update(overrides)
@@ -53,7 +46,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
     mem.generator = FakeAMemGenerator({"llm_service": MagicMock()})
 
     # Save ideas to populate both memory_cards and agentic system
-    for idea in (ideas or []):
+    for idea in ideas or []:
         mem.save_card(idea)
 
     # Patch _load_or_create_retriever to use fake GAM builders
@@ -66,7 +59,8 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
             records = list(mem.memory_cards.values())
 
         memory_store, page_store, added = fake_build_gam_store(
-            records, mem.gam_store_dir,
+            records,
+            mem.gam_store_dir,
         )
         retrievers = fake_build_retrievers(
             page_store,
@@ -106,8 +100,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
             ],
         )
         return {
-            name: r for name, r in retrievers.items()
-            if name in mem.allowed_gam_tools
+            name: r for name, r in retrievers.items() if name in mem.allowed_gam_tools
         }
 
     mem._build_dedup_retrievers = _patched_build_dedup_retrievers
@@ -122,10 +115,17 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
 
 class TestLoadOrCreateRetriever:
     def test_creates_research_agent_after_rebuild(self, tmp_path):
-        mem, _ = _make_full_memory(tmp_path, ideas=[
-            {"id": "i1", "description": "SA optimization", "keywords": ["SA"]},
-            {"id": "i2", "description": "Crossover recombination", "keywords": ["crossover"]},
-        ])
+        mem, _ = _make_full_memory(
+            tmp_path,
+            ideas=[
+                {"id": "i1", "description": "SA optimization", "keywords": ["SA"]},
+                {
+                    "id": "i2",
+                    "description": "Crossover recombination",
+                    "keywords": ["crossover"],
+                },
+            ],
+        )
 
         mem.rebuild()
 
@@ -133,12 +133,21 @@ class TestLoadOrCreateRetriever:
         assert mem.export_file.exists()
 
     def test_research_agent_finds_cards(self, tmp_path):
-        mem, _ = _make_full_memory(tmp_path, ideas=[
-            {"id": "i1", "description": "simulated annealing for optimization",
-             "keywords": ["annealing"]},
-            {"id": "i2", "description": "genetic crossover for diversity",
-             "keywords": ["crossover"]},
-        ])
+        mem, _ = _make_full_memory(
+            tmp_path,
+            ideas=[
+                {
+                    "id": "i1",
+                    "description": "simulated annealing for optimization",
+                    "keywords": ["annealing"],
+                },
+                {
+                    "id": "i2",
+                    "description": "genetic crossover for diversity",
+                    "keywords": ["crossover"],
+                },
+            ],
+        )
 
         mem.rebuild()
         result = mem.search("annealing optimization")
@@ -164,19 +173,28 @@ class TestDedupWithRealScoring:
         mem, _ = _make_full_memory(
             tmp_path,
             ideas=[
-                {"id": "existing-1", "description": "Use simulated annealing for local search refinement",
-                 "keywords": ["annealing", "local-search"]},
-                {"id": "existing-2", "description": "Apply genetic crossover between top pairs",
-                 "keywords": ["crossover", "genetic"]},
+                {
+                    "id": "existing-1",
+                    "description": "Use simulated annealing for local search refinement",
+                    "keywords": ["annealing", "local-search"],
+                },
+                {
+                    "id": "existing-2",
+                    "description": "Apply genetic crossover between top pairs",
+                    "keywords": ["crossover", "genetic"],
+                },
             ],
             card_update_dedup_config={"enabled": True},
         )
 
         # Score candidates for a similar card
         from gigaevo.memory.shared_memory.memory import normalize_memory_card
-        incoming = normalize_memory_card({
-            "description": "simulated annealing optimization for local search",
-        })
+
+        incoming = normalize_memory_card(
+            {
+                "description": "simulated annealing optimization for local search",
+            }
+        )
 
         scored = mem._score_retrieved_candidates(incoming)
 
@@ -190,13 +208,19 @@ class TestDedupWithRealScoring:
             tmp_path,
             ideas=[
                 {"id": "idea-1", "description": "SA optimization"},
-                {"id": "prog-1", "category": "program", "program_id": "p1",
-                 "description": "SA optimization program", "fitness": 90.0},
+                {
+                    "id": "prog-1",
+                    "category": "program",
+                    "program_id": "p1",
+                    "description": "SA optimization program",
+                    "fitness": 90.0,
+                },
             ],
             card_update_dedup_config={"enabled": True},
         )
 
         from gigaevo.memory.shared_memory.memory import normalize_memory_card
+
         incoming = normalize_memory_card({"description": "SA optimization"})
         scored = mem._score_retrieved_candidates(incoming)
 
@@ -211,6 +235,7 @@ class TestDedupWithRealScoring:
         )
 
         from gigaevo.memory.shared_memory.memory import normalize_memory_card
+
         incoming = normalize_memory_card({"description": "test"})
         scored = mem._score_retrieved_candidates(incoming)
         assert scored == []
@@ -225,7 +250,7 @@ class TestDedupWithRealScoring:
 
         # First access builds retrievers
         mem._dedup_retrievers = None
-        retriever = mem._resolve_vector_retriever("vector_description")
+        mem._resolve_vector_retriever("vector_description")
         assert mem._dedup_retrievers is not None
 
         # Save new card clears cache
@@ -246,8 +271,11 @@ class TestFullDedupPipeline:
         mem, _ = _make_full_memory(
             tmp_path,
             ideas=[
-                {"id": "existing", "description": "simulated annealing for optimization",
-                 "keywords": ["annealing", "optimization"]},
+                {
+                    "id": "existing",
+                    "description": "simulated annealing for optimization",
+                    "keywords": ["annealing", "optimization"],
+                },
             ],
             card_update_dedup_config={"enabled": True},
         )
@@ -256,13 +284,17 @@ class TestFullDedupPipeline:
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             json.dumps({"action": "discard", "duplicate_of": "existing"}),
-            {}, None, None,
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
 
-        result_id = mem.save_card({
-            "description": "simulated annealing optimization technique",
-        })
+        result_id = mem.save_card(
+            {
+                "description": "simulated annealing optimization technique",
+            }
+        )
 
         assert result_id == "existing"
         assert len(mem.memory_cards) == 1
@@ -274,30 +306,41 @@ class TestFullDedupPipeline:
         mem, _ = _make_full_memory(
             tmp_path,
             ideas=[
-                {"id": "existing", "description": "simulated annealing",
-                 "explanation": {"explanations": ["original"], "summary": "SA"},
-                 "keywords": ["annealing"]},
+                {
+                    "id": "existing",
+                    "description": "simulated annealing",
+                    "explanation": {"explanations": ["original"], "summary": "SA"},
+                    "keywords": ["annealing"],
+                },
             ],
             card_update_dedup_config={"enabled": True},
         )
 
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
-            json.dumps({
-                "action": "update",
-                "updates": [{
-                    "card_id": "existing",
-                    "update_explanation": True,
-                    "explanation_append": "Also works for multi-hop chains",
-                }],
-            }),
-            {}, None, None,
+            json.dumps(
+                {
+                    "action": "update",
+                    "updates": [
+                        {
+                            "card_id": "existing",
+                            "update_explanation": True,
+                            "explanation_append": "Also works for multi-hop chains",
+                        }
+                    ],
+                }
+            ),
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
 
-        result_id = mem.save_card({
-            "description": "annealing for multi-hop chain optimization",
-        })
+        result_id = mem.save_card(
+            {
+                "description": "annealing for multi-hop chain optimization",
+            }
+        )
 
         assert result_id == "existing"
         card = mem.get_card("existing")
@@ -310,8 +353,11 @@ class TestFullDedupPipeline:
         mem, _ = _make_full_memory(
             tmp_path,
             ideas=[
-                {"id": "existing", "description": "simulated annealing",
-                 "keywords": ["annealing"]},
+                {
+                    "id": "existing",
+                    "description": "simulated annealing",
+                    "keywords": ["annealing"],
+                },
             ],
             card_update_dedup_config={"enabled": True},
         )
@@ -319,13 +365,17 @@ class TestFullDedupPipeline:
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             json.dumps({"action": "add"}),
-            {}, None, None,
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
 
-        result_id = mem.save_card({
-            "description": "quantum computing for protein folding",
-        })
+        result_id = mem.save_card(
+            {
+                "description": "quantum computing for protein folding",
+            }
+        )
 
         assert result_id != "existing"
         assert len(mem.memory_cards) == 2
@@ -362,13 +412,14 @@ class TestResolveVectorRetriever:
         mem._dedup_retrievers = None
 
         # Request a tool that might not exist
-        retriever = mem._resolve_vector_retriever("vector_nonexistent")
+        mem._resolve_vector_retriever("vector_nonexistent")
         # Falls back to "vector" if tool not found
         # (may or may not find it depending on what _build_dedup_retrievers returns)
 
     def test_empty_memory_returns_none(self, tmp_path):
-        mem, _ = _make_full_memory(tmp_path, ideas=[],
-                                     card_update_dedup_config={"enabled": True})
+        mem, _ = _make_full_memory(
+            tmp_path, ideas=[], card_update_dedup_config={"enabled": True}
+        )
         retriever = mem._resolve_vector_retriever("vector_description")
         assert retriever is None
 
@@ -380,10 +431,13 @@ class TestResolveVectorRetriever:
 
 class TestDumpMemory:
     def test_dump_creates_jsonl(self, tmp_path):
-        mem, fake_sys = _make_full_memory(tmp_path, ideas=[
-            {"id": "i1", "description": "idea one"},
-            {"id": "i2", "description": "idea two"},
-        ])
+        mem, fake_sys = _make_full_memory(
+            tmp_path,
+            ideas=[
+                {"id": "i1", "description": "idea one"},
+                {"id": "i2", "description": "idea two"},
+            ],
+        )
 
         mem._dump_memory()
 

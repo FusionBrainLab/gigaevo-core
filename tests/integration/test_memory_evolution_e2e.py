@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
-import re
 from pathlib import Path
-from typing import Any
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
@@ -29,10 +27,6 @@ from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.engine.mutation import generate_mutations
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
-from gigaevo.evolution.mutation.context import (
-    MUTATION_MEMORY_METADATA_KEY,
-    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
-)
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
 from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
@@ -43,7 +37,6 @@ from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
-
 
 # ---------------------------------------------------------------------------
 # Deterministic mutation operators
@@ -195,11 +188,16 @@ def _make_island_config() -> IslandConfig:
     return IslandConfig(
         island_id="main",
         behavior_space=BehaviorSpace(
-            bins={"x": LinearBinning(min_val=0.0, max_val=10.0, num_bins=10, type="linear")}
+            bins={
+                "x": LinearBinning(
+                    min_val=0.0, max_val=10.0, num_bins=10, type="linear"
+                )
+            }
         ),
         archive_selector=SumArchiveSelector(fitness_keys=["fitness"]),
         archive_remover=FitnessArchiveRemover(
-            fitness_key="fitness", fitness_key_higher_is_better=True,
+            fitness_key="fitness",
+            fitness_key_higher_is_better=True,
         ),
         elite_selector=ScalarTournamentEliteSelector(
             fitness_key="fitness",
@@ -230,8 +228,10 @@ def _make_metrics_tracker() -> MagicMock:
 def _make_memory(tmp_path: Path, **overrides) -> AmemGamMemory:
     defaults = dict(
         checkpoint_path=str(tmp_path / "mem"),
-        use_api=False, sync_on_init=False,
-        enable_llm_synthesis=False, enable_memory_evolution=False,
+        use_api=False,
+        sync_on_init=False,
+        enable_llm_synthesis=False,
+        enable_memory_evolution=False,
         enable_llm_card_enrichment=False,
     )
     defaults.update(overrides)
@@ -315,7 +315,9 @@ class TestMemoryEnabledEvolution:
         operator = PlainIncrementOperator()
 
         engine, programs = await _run_evolution(
-            server, max_generations=5, mutation_operator=operator,
+            server,
+            max_generations=5,
+            mutation_operator=operator,
         )
 
         assert engine.metrics.total_generations == 5
@@ -350,8 +352,9 @@ class TestMemoryEnabledEvolution:
         best_fitness = max(p.metrics["fitness"] for p in programs)
 
         # Verify memory was actually used
-        assert len(operator.calls_with_memory) > 0, \
+        assert len(operator.calls_with_memory) > 0, (
             "Memory instructions never reached the mutation operator"
+        )
 
         # With memory boost (+2.0 per memory-augmented mutation) the best fitness
         # should exceed what's achievable without memory (+1.0/gen → max ~6.0 after 5 gens).
@@ -369,7 +372,9 @@ class TestMemoryEnabledEvolution:
         operator = MemoryAwareMutationOperator()
 
         engine, _ = await _run_evolution(
-            server, max_generations=3, mutation_operator=operator,
+            server,
+            max_generations=3,
+            mutation_operator=operator,
             memory_enabled=False,
         )
 
@@ -385,8 +390,11 @@ class TestMemoryEnabledEvolution:
         operator = MemoryAwareMutationOperator()
 
         engine, _ = await _run_evolution(
-            server, max_generations=3, mutation_operator=operator,
-            memory_enabled=True, memory_top_n=1,
+            server,
+            max_generations=3,
+            mutation_operator=operator,
+            memory_enabled=True,
+            memory_top_n=1,
             memory_path="/nonexistent/memory.txt",
         )
 
@@ -430,9 +438,9 @@ class TestGenerateMutationsWithMemory:
         mock_storage.add = AsyncMock(return_value="prog-id")
         mock_state = AsyncMock()
         mock_selector = MagicMock()
-        mock_selector.create_parent_iterator.return_value = iter([
-            [Program(code=SEED_CODE, metadata={})]
-        ])
+        mock_selector.create_parent_iterator.return_value = iter(
+            [[Program(code=SEED_CODE, metadata={})]]
+        )
 
         await generate_mutations(
             [Program(code=SEED_CODE, metadata={})],
@@ -456,7 +464,9 @@ class TestGenerateMutationsWithMemory:
         async def mock_mutate(parents, memory_instructions=None):
             captured.append(memory_instructions)
             return MutationSpec(
-                code=_make_code(2.0, 0.5), parents=parents, name="test",
+                code=_make_code(2.0, 0.5),
+                parents=parents,
+                name="test",
             )
 
         mock_operator = MagicMock()
@@ -466,9 +476,9 @@ class TestGenerateMutationsWithMemory:
         mock_storage.add = AsyncMock(return_value="prog-id")
         mock_state = AsyncMock()
         mock_selector = MagicMock()
-        mock_selector.create_parent_iterator.return_value = iter([
-            [Program(code=SEED_CODE, metadata={})]
-        ])
+        mock_selector.create_parent_iterator.return_value = iter(
+            [[Program(code=SEED_CODE, metadata={})]]
+        )
 
         await generate_mutations(
             [Program(code=SEED_CODE, metadata={})],
@@ -501,7 +511,9 @@ class TestMemoryFillThenUsePhases:
         operator = PlainIncrementOperator()
 
         engine, programs = await _run_evolution(
-            server, max_generations=3, mutation_operator=operator,
+            server,
+            max_generations=3,
+            mutation_operator=operator,
         )
 
         assert engine.metrics.total_generations == 3
@@ -516,12 +528,21 @@ class TestMemoryFillThenUsePhases:
         # Simulate phase 1 output: save idea cards to memory
         mem = _make_memory(tmp_path)
         ideas = [
-            {"id": "idea-sort", "description": "Sort evidence by relevance score",
-             "keywords": ["sort", "relevance", "evidence"]},
-            {"id": "idea-filter", "description": "Filter low-confidence hops",
-             "keywords": ["filter", "confidence", "threshold"]},
-            {"id": "idea-depth", "description": "Limit retrieval depth to 3 hops",
-             "keywords": ["retrieval", "depth", "hops"]},
+            {
+                "id": "idea-sort",
+                "description": "Sort evidence by relevance score",
+                "keywords": ["sort", "relevance", "evidence"],
+            },
+            {
+                "id": "idea-filter",
+                "description": "Filter low-confidence hops",
+                "keywords": ["filter", "confidence", "threshold"],
+            },
+            {
+                "id": "idea-depth",
+                "description": "Limit retrieval depth to 3 hops",
+                "keywords": ["retrieval", "depth", "hops"],
+            },
         ]
         for idea in ideas:
             mem.save_card(idea)
@@ -542,19 +563,23 @@ class TestMemoryFillThenUsePhases:
         server1 = fakeredis.FakeServer()
         operator1 = PlainIncrementOperator()
         engine1, programs1 = await _run_evolution(
-            server1, max_generations=3, mutation_operator=operator1,
+            server1,
+            max_generations=3,
+            mutation_operator=operator1,
         )
         assert len(programs1) >= 1
 
         # Extract "ideas" from programs (simulating IdeaTracker)
         mem = _make_memory(tmp_path)
         for i, prog in enumerate(programs1):
-            mem.save_card({
-                "id": f"idea-from-gen-{i}",
-                "description": f"Technique from program with fitness {prog.metrics.get('fitness', 0):.1f}",
-                "keywords": ["optimization", f"gen{i}"],
-                "task_description": "Evolution optimization",
-            })
+            mem.save_card(
+                {
+                    "id": f"idea-from-gen-{i}",
+                    "description": f"Technique from program with fitness {prog.metrics.get('fitness', 0):.1f}",
+                    "keywords": ["optimization", f"gen{i}"],
+                    "task_description": "Evolution optimization",
+                }
+            )
 
         # Phase 2: Evolution with memory
         _reset_counter()
@@ -564,22 +589,25 @@ class TestMemoryFillThenUsePhases:
         # Write memory instructions file from ideas
         memory_file = tmp_path / "memory.txt"
         ideas_text = "\n".join(
-            f"- {card['description']}"
-            for card in mem.memory_cards.values()
+            f"- {card['description']}" for card in mem.memory_cards.values()
         )
         memory_file.write_text(ideas_text)
 
         engine2, programs2 = await _run_evolution(
-            server2, max_generations=3, mutation_operator=operator2,
-            memory_enabled=True, memory_top_n=1,
+            server2,
+            max_generations=3,
+            mutation_operator=operator2,
+            memory_enabled=True,
+            memory_top_n=1,
             memory_path=str(memory_file),
         )
 
         assert engine2.metrics.total_generations == 3
 
         # Verify memory was used in phase 2
-        assert len(operator2.calls_with_memory) > 0, \
+        assert len(operator2.calls_with_memory) > 0, (
             "Phase 2 should have used memory instructions"
+        )
 
         # Phase 2 should show the ACTUAL content from phase 1 ideas
         non_empty_calls = [c for c in operator2.calls_with_memory if c]
@@ -604,16 +632,20 @@ class TestMemorySelectorInMutationLoop:
         from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 
         mem = _make_memory(tmp_path)
-        mem.save_card({
-            "id": "idea-1",
-            "description": "Sort evidence by relevance score for better chain quality",
-            "keywords": ["sort", "relevance", "evidence", "chain"],
-        })
-        mem.save_card({
-            "id": "idea-2",
-            "description": "Filter low-confidence hops using threshold",
-            "keywords": ["filter", "confidence", "threshold"],
-        })
+        mem.save_card(
+            {
+                "id": "idea-1",
+                "description": "Sort evidence by relevance score for better chain quality",
+                "keywords": ["sort", "relevance", "evidence", "chain"],
+            }
+        )
+        mem.save_card(
+            {
+                "id": "idea-2",
+                "description": "Filter low-confidence hops using threshold",
+                "keywords": ["filter", "confidence", "threshold"],
+            }
+        )
 
         # Create selector with injected memory
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
@@ -636,7 +668,9 @@ class TestMemorySelectorInMutationLoop:
         )
 
         # Should find relevant cards
-        assert len(selection.cards) > 0, "Selector returned no cards from pre-filled memory"
+        assert len(selection.cards) > 0, (
+            "Selector returned no cards from pre-filled memory"
+        )
 
         # Card IDs should be extractable
         assert isinstance(selection.card_ids, list)

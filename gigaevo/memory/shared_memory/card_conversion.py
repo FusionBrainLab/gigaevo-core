@@ -8,9 +8,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from typing import Protocol
+from gigaevo.memory.shared_memory.utils import (
+    _safe_get,
+    _str_or_empty,
+    _to_float,
+    _to_int,
+    _to_list,
+    dedupe_keep_order,
+)
 
 
 class MemoryNoteProtocol(Protocol):
@@ -29,15 +36,6 @@ class MemoryNoteProtocol(Protocol):
     tags: list[str]
     strategy: str
 
-
-from gigaevo.memory.shared_memory.utils import (
-    _safe_get,
-    _str_or_empty,
-    _to_float,
-    _to_int,
-    _to_list,
-    dedupe_keep_order,
-)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -228,9 +226,7 @@ def card_to_concept_content(card: dict[str, Any]) -> dict[str, Any]:
             "category": "program",
             "program_id": _str_or_empty(card.get("program_id")),
             "task_description": str(card.get("task_description") or ""),
-            "task_description_summary": str(
-                card.get("task_description_summary") or ""
-            ),
+            "task_description_summary": str(card.get("task_description_summary") or ""),
             "description": str(card.get("description") or ""),
             "fitness": _to_float(card.get("fitness"), default=None),
             "code": str(card.get("code") or ""),
@@ -280,9 +276,7 @@ def build_entity_meta(card: dict[str, Any]) -> tuple[str, list[str], str]:
     card_id = str(card.get("id") or "")
     description = str(card.get("description") or "").strip()
     task_description = str(card.get("task_description") or "").strip()
-    task_description_summary = str(
-        card.get("task_description_summary") or ""
-    ).strip()
+    task_description_summary = str(card.get("task_description_summary") or "").strip()
 
     explanation = card.get("explanation")
     if isinstance(explanation, dict):
@@ -330,9 +324,7 @@ def normalize_allowed_gam_tools(allowed_gam_tools: list[str] | None) -> set[str]
     if not allowed_gam_tools:
         return set(ALLOWED_GAM_TOOLS)
 
-    normalized = {
-        str(tool).strip() for tool in allowed_gam_tools if str(tool).strip()
-    }
+    normalized = {str(tool).strip() for tool in allowed_gam_tools if str(tool).strip()}
     valid = {tool for tool in normalized if tool in ALLOWED_GAM_TOOLS}
     if "vector" in valid:
         valid.update(VECTOR_GAM_TOOLS)
@@ -385,9 +377,7 @@ def concept_to_card(
             "fitness": concept_content.get("fitness"),
             "description": concept_content.get("description") or "",
             "task_description": concept_content.get("task_description") or "",
-            "task_description_summary": concept_content.get(
-                "task_description_summary"
-            )
+            "task_description_summary": concept_content.get("task_description_summary")
             or "",
             "code": concept_content.get("code") or "",
             "connected_ideas": concept_content.get("connected_ideas") or [],

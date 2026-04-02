@@ -15,12 +15,11 @@ Usage:
 
 from __future__ import annotations
 
-import re
-import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import re
 from typing import Any
-
+import uuid
 
 # ---------------------------------------------------------------------------
 # FakeMemoryNote — mirrors A_mem.agentic_memory.memory_system.MemoryNote
@@ -85,9 +84,13 @@ class FakeRetriever:
                 if jaccard > 0:
                     # Put score in meta so _score_retrieved_candidates can read it
                     hit_meta = {**meta, "score": jaccard}
-                    scored.append(FakeSearchResult(
-                        page_id=doc_id, score=jaccard, meta=hit_meta,
-                    ))
+                    scored.append(
+                        FakeSearchResult(
+                            page_id=doc_id,
+                            score=jaccard,
+                            meta=hit_meta,
+                        )
+                    )
             scored.sort(key=lambda r: r.score, reverse=True)
             results.append(scored[:top_k])
         return results
@@ -96,6 +99,7 @@ class FakeRetriever:
 @dataclass
 class FakeSearchResult:
     """Mimics the GAM search result object."""
+
     page_id: str = ""
     score: float = 0.0
     meta: dict = field(default_factory=dict)
@@ -302,6 +306,7 @@ class FakeResearchAgent:
 @dataclass
 class FakePage:
     """Mirrors GAM_root.gam.schemas.Page."""
+
     header: str = ""
     content: str = ""
     meta: dict = field(default_factory=dict)
@@ -368,11 +373,13 @@ def fake_build_gam_store(
         rid = str(rec.get("id") or "").strip()
         desc = rec.get("description") or rec.get("content") or ""
         memory_store.add(desc)
-        pages.append(FakePage(
-            header=f"[A-MEM] {rid}" if rid else "[A-MEM]",
-            content=desc,
-            meta={"amem_id": rid, "amem": rec},
-        ))
+        pages.append(
+            FakePage(
+                header=f"[A-MEM] {rid}" if rid else "[A-MEM]",
+                content=desc,
+                meta={"amem_id": rid, "amem": rec},
+            )
+        )
 
     page_store.save(pages)
     return memory_store, page_store, len(pages)
@@ -391,13 +398,19 @@ def fake_build_retrievers(
     Creates a FakeRetriever per allowed tool, all sharing the same
     in-memory keyword search index built from page content.
     """
-    allowed = set(allowed_tools or [
-        "page_index", "keyword",
-        "vector", "vector_description", "vector_task_description",
-        "vector_explanation_summary",
-        "vector_description_explanation_summary",
-        "vector_description_task_description_summary",
-    ])
+    allowed = set(
+        allowed_tools
+        or [
+            "page_index",
+            "keyword",
+            "vector",
+            "vector_description",
+            "vector_task_description",
+            "vector_explanation_summary",
+            "vector_description_explanation_summary",
+            "vector_description_task_description_summary",
+        ]
+    )
 
     # Build a single index from all pages
     base_retriever = FakeRetriever()
@@ -443,6 +456,7 @@ def patch_gam_imports():
     Or more commonly, patch the specific import site in memory.py.
     """
     import types
+
     fake_module = types.ModuleType("shared_memory.amem_gam_retriever")
     fake_module.build_gam_store = fake_build_gam_store  # type: ignore[attr-defined]
     fake_module.build_retrievers = fake_build_retrievers  # type: ignore[attr-defined]

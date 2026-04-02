@@ -3,6 +3,8 @@
 Pin down config loading and type coercion behavior.
 """
 
+from pathlib import Path
+
 import pytest
 
 from gigaevo.memory.runtime_config import (
@@ -15,8 +17,6 @@ from gigaevo.memory.runtime_config import (
     to_list,
     to_str,
 )
-from pathlib import Path
-
 
 # ===========================================================================
 # deep_get
@@ -60,7 +60,9 @@ class TestDeepGet:
 
 
 class TestToBool:
-    @pytest.mark.parametrize("val", [True, 1, 1.0, "1", "true", "True", "TRUE", "yes", "on"])
+    @pytest.mark.parametrize(
+        "val", [True, 1, 1.0, "1", "true", "True", "TRUE", "yes", "on"]
+    )
     def test_truthy(self, val):
         assert to_bool(val) is True
 

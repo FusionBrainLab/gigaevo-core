@@ -9,7 +9,6 @@ import pytest
 
 from gigaevo.memory.openai_inference import OpenAIInferenceService
 
-
 # ===========================================================================
 # _resolve_base_url (static, pure)
 # ===========================================================================
@@ -80,7 +79,9 @@ class TestExtractContentText:
 
 class TestExtractTotalTokens:
     def test_total_present(self):
-        assert OpenAIInferenceService._extract_total_tokens({"total_tokens": 100}) == 100
+        assert (
+            OpenAIInferenceService._extract_total_tokens({"total_tokens": 100}) == 100
+        )
 
     def test_prompt_and_completion(self):
         usage = {"prompt_tokens": 30, "completion_tokens": 70}

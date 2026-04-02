@@ -9,12 +9,10 @@ with memory_instructions.
 from __future__ import annotations
 
 import asyncio
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.context import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_METADATA_KEY,
@@ -26,7 +24,6 @@ from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -84,12 +81,15 @@ def _make_operator(agent_mock, selector_mock=None, **kwargs):
     """Build LLMMutationOperator with REAL constructor, patched factories."""
     llm = _make_llm_mock()
 
-    with patch(
-        "gigaevo.evolution.mutation.mutation_operator.create_mutation_agent",
-        return_value=agent_mock,
-    ), patch(
-        "gigaevo.evolution.mutation.mutation_operator.create_memory_selector_agent",
-        return_value=selector_mock or _make_selector_mock(),
+    with (
+        patch(
+            "gigaevo.evolution.mutation.mutation_operator.create_mutation_agent",
+            return_value=agent_mock,
+        ),
+        patch(
+            "gigaevo.evolution.mutation.mutation_operator.create_memory_selector_agent",
+            return_value=selector_mock or _make_selector_mock(),
+        ),
     ):
         op = LLMMutationOperator(
             llm_wrapper=llm,
@@ -170,7 +170,10 @@ class TestMutateSingleWithMemory:
 
         # Verify memory card IDs propagated to MutationSpec output
         assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY in result.metadata
-        assert result.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == ["idea-1", "idea-2"]
+        assert result.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == [
+            "idea-1",
+            "idea-2",
+        ]
 
         # Verify selector was called
         selector.select.assert_awaited_once()
@@ -200,10 +203,7 @@ class TestMutateSingleWithMemory:
         # Use MUTABLE metadata value to test deep copy
         parent = _make_program()
         parent.metadata["nested_list"] = ["original"]
-        original_meta_snapshot = {
-            k: list(v) if isinstance(v, list) else v
-            for k, v in parent.metadata.items()
-        }
+        {k: list(v) if isinstance(v, list) else v for k, v in parent.metadata.items()}
 
         await op.mutate_single([parent], memory_instructions="use memory")
 
@@ -219,8 +219,12 @@ class TestMutateSingleWithMemory:
 
         async def spy_arun(*, input, mutation_mode):
             captured["parents"] = input
-            return {"code": "def f(): pass", "raw_output": "", "model_used": "t",
-                    "structured_output": None}
+            return {
+                "code": "def f(): pass",
+                "raw_output": "",
+                "model_used": "t",
+                "structured_output": None,
+            }
 
         agent = MagicMock()
         agent.arun = spy_arun
@@ -252,13 +256,18 @@ class TestMutateSingleWithMemory:
 
         async def spy(*, input, mutation_mode):
             captured["parents"] = input
-            return {"code": "def f(): pass", "raw_output": "", "model_used": "t",
-                    "structured_output": None}
+            return {
+                "code": "def f(): pass",
+                "raw_output": "",
+                "model_used": "t",
+                "structured_output": None,
+            }
 
         agent = MagicMock()
         agent.arun = spy
         selector = _make_selector_mock(
-            cards=["1. SA optimization"], card_ids=["idea-1"],
+            cards=["1. SA optimization"],
+            card_ids=["idea-1"],
         )
         op = _make_operator(agent, selector)
 
@@ -284,8 +293,10 @@ class TestSelectorWithRealMemory:
     def _make_selector(self, tmp_path, ideas):
         mem = AmemGamMemory(
             checkpoint_path=str(tmp_path / "mem"),
-            use_api=False, sync_on_init=False,
-            enable_llm_synthesis=False, enable_memory_evolution=False,
+            use_api=False,
+            sync_on_init=False,
+            enable_llm_synthesis=False,
+            enable_memory_evolution=False,
             enable_llm_card_enrichment=False,
         )
         for idea in ideas:
@@ -299,16 +310,29 @@ class TestSelectorWithRealMemory:
 
     @pytest.mark.asyncio
     async def test_search_returns_relevant_cards(self, tmp_path):
-        selector = self._make_selector(tmp_path, [
-            {"id": "idea-1",
-             "description": "Sort evidence by relevance score for multi-hop verification",
-             "keywords": ["sort", "relevance", "evidence", "verification", "multi"],
-             "task_description": "Multi-hop fact verification"},
-            {"id": "idea-2",
-             "description": "Filter low-confidence hops using threshold for fact checking",
-             "keywords": ["filter", "confidence", "fact", "verification"],
-             "task_description": "Multi-hop fact verification"},
-        ])
+        selector = self._make_selector(
+            tmp_path,
+            [
+                {
+                    "id": "idea-1",
+                    "description": "Sort evidence by relevance score for multi-hop verification",
+                    "keywords": [
+                        "sort",
+                        "relevance",
+                        "evidence",
+                        "verification",
+                        "multi",
+                    ],
+                    "task_description": "Multi-hop fact verification",
+                },
+                {
+                    "id": "idea-2",
+                    "description": "Filter low-confidence hops using threshold for fact checking",
+                    "keywords": ["filter", "confidence", "fact", "verification"],
+                    "task_description": "Multi-hop fact verification",
+                },
+            ],
+        )
         parent = _make_program(code="def solve(x):\n    return x\n")
 
         selection = await selector.select(
@@ -351,7 +375,9 @@ class TestSelectorWithRealMemory:
         """Parent with mutation_context metadata → appears in request."""
         selector = self._make_selector(tmp_path, [])
         parent = _make_program(code="def f(): pass")
-        parent.metadata[MUTATION_CONTEXT_METADATA_KEY] = "Previous mutation improved sorting"
+        parent.metadata[MUTATION_CONTEXT_METADATA_KEY] = (
+            "Previous mutation improved sorting"
+        )
 
         query = selector._build_request(
             parents=[parent],
@@ -367,10 +393,16 @@ class TestSelectorWithRealMemory:
     @pytest.mark.asyncio
     async def test_search_with_ids_extracts_card_ids(self, tmp_path):
         """_search_with_ids returns card IDs from search output."""
-        selector = self._make_selector(tmp_path, [
-            {"id": "idea-abc-123", "description": "Use simulated annealing",
-             "keywords": ["annealing"]},
-        ])
+        selector = self._make_selector(
+            tmp_path,
+            [
+                {
+                    "id": "idea-abc-123",
+                    "description": "Use simulated annealing",
+                    "keywords": ["annealing"],
+                },
+            ],
+        )
 
         text, ids = selector._search_with_ids("simulated annealing")
 
@@ -430,6 +462,8 @@ class TestSelectorWithRealMemory:
         assert merged == ["a", "b", "c"]  # Limited to max_cards=3
 
         merged_all = selector._merge_card_ids(
-            primary=["a"], secondary=["b", "c"], max_cards=10,
+            primary=["a"],
+            secondary=["b", "c"],
+            max_cards=10,
         )
         assert merged_all == ["a", "b", "c"]

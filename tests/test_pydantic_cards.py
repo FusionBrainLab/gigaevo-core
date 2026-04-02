@@ -7,7 +7,6 @@ from gigaevo.memory.shared_memory.models import (
     AnyCard,
     ConnectedIdea,
     MemoryCard,
-    MemoryCardExplanation,
     ProgramCard,
 )
 

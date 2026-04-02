@@ -38,12 +38,18 @@ class TestApplyUpdateActions:
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "old", "programs": ["p1"]})
 
-        incoming = {"description": "new info", "programs": ["p2"], "last_generation": 10}
-        updates = [{
-            "card_id": "c1",
-            "update_explanation": True,
-            "explanation_append": "extra detail",
-        }]
+        incoming = {
+            "description": "new info",
+            "programs": ["p2"],
+            "last_generation": 10,
+        }
+        updates = [
+            {
+                "card_id": "c1",
+                "update_explanation": True,
+                "explanation_append": "extra detail",
+            }
+        ]
         result = mem._apply_update_actions(incoming, updates)
         assert result == ["c1"]
 
@@ -82,8 +88,16 @@ class TestApplyUpdateActions:
         mem.save_card({"id": "c2", "description": "card 2"})
 
         updates = [
-            {"card_id": "c1", "update_explanation": True, "explanation_append": "info1"},
-            {"card_id": "c2", "update_explanation": True, "explanation_append": "info2"},
+            {
+                "card_id": "c1",
+                "update_explanation": True,
+                "explanation_append": "info1",
+            },
+            {
+                "card_id": "c2",
+                "update_explanation": True,
+                "explanation_append": "info2",
+            },
         ]
         result = mem._apply_update_actions({}, updates)
         assert set(result) == {"c1", "c2"}
@@ -148,7 +162,7 @@ class TestEnsureCardId:
 
 class TestConceptToCard:
     def test_basic_roundtrip(self, tmp_path):
-        mem = _make_memory(tmp_path)
+        _make_memory(tmp_path)
         content = {
             "id": "c1",
             "category": "general",
@@ -162,12 +176,12 @@ class TestConceptToCard:
         assert card["task_description"] == "solve it"
 
     def test_fallback_id_used(self, tmp_path):
-        mem = _make_memory(tmp_path)
+        _make_memory(tmp_path)
         card = concept_to_card({}, fallback_id="fb-1")
         assert card["id"] == "fb-1"
 
     def test_program_card_concept(self, tmp_path):
-        mem = _make_memory(tmp_path)
+        _make_memory(tmp_path)
         content = {
             "id": "p1",
             "category": "program",
@@ -188,13 +202,15 @@ class TestConceptToCard:
 
 class TestBuildEntityMeta:
     def test_basic(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        card = normalize_memory_card({
-            "id": "c1",
-            "description": "Use simulated annealing for TSP",
-            "task_description_summary": "TSP solver",
-            "keywords": ["SA", "TSP"],
-        })
+        _make_memory(tmp_path)
+        card = normalize_memory_card(
+            {
+                "id": "c1",
+                "description": "Use simulated annealing for TSP",
+                "task_description_summary": "TSP solver",
+                "keywords": ["SA", "TSP"],
+            }
+        )
         name, tags, when_to_use = build_entity_meta(card)
 
         # Name derived from description (first N chars)
@@ -206,7 +222,7 @@ class TestBuildEntityMeta:
         assert "TSP" in when_to_use or "simulated" in when_to_use.lower()
 
     def test_empty_card(self, tmp_path):
-        mem = _make_memory(tmp_path)
+        _make_memory(tmp_path)
         card = normalize_memory_card({})
         name, tags, when_to_use = build_entity_meta(card)
         # Even empty card produces valid metadata
@@ -240,12 +256,14 @@ class TestSaveCardBranching:
 
     def test_program_card_always_added(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({
-            "category": "program",
-            "program_id": "p1",
-            "description": "prog",
-            "fitness": 80.0,
-        })
+        mem.save_card(
+            {
+                "category": "program",
+                "program_id": "p1",
+                "description": "prog",
+                "fitness": 80.0,
+            }
+        )
         stats = mem.get_card_write_stats()
         assert stats["added"] == 1
 
@@ -256,15 +274,21 @@ class TestSaveCardBranching:
 
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
-            json.dumps({
-                "action": "update",
-                "updates": [{
-                    "card_id": "existing",
-                    "update_explanation": True,
-                    "explanation_append": "merged info",
-                }],
-            }),
-            {}, None, None,
+            json.dumps(
+                {
+                    "action": "update",
+                    "updates": [
+                        {
+                            "card_id": "existing",
+                            "update_explanation": True,
+                            "explanation_append": "merged info",
+                        }
+                    ],
+                }
+            ),
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
         mem._score_retrieved_candidates = MagicMock(

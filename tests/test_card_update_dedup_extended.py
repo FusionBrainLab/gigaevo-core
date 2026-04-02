@@ -4,13 +4,14 @@ Complements test_memory_card_update_dedup.py with adversarial inputs.
 """
 
 import json
-import math
 
+# Also test private helpers that are critical to correctness
 from gigaevo.memory.shared_memory.card_update_dedup import (
     CardUpdateDedupConfig,
     RetrievalWeights,
+    _extract_json_object,
+    _safe_float,
     append_unique_text,
-    build_dedup_queries,
     compute_weighted_candidates,
     dedupe_keep_order,
     get_explanation_summary,
@@ -19,13 +20,6 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_usage_payloads,
     parse_llm_card_decision,
 )
-
-# Also test private helpers that are critical to correctness
-from gigaevo.memory.shared_memory.card_update_dedup import (
-    _extract_json_object,
-    _safe_float,
-)
-
 
 # ===========================================================================
 # CardUpdateDedupConfig
@@ -62,15 +56,17 @@ class TestCardUpdateDedupConfig:
         assert cfg.enabled is False
 
     def test_from_mapping_full(self):
-        cfg = CardUpdateDedupConfig.from_mapping({
-            "enabled": True,
-            "retrieval": {
-                "top_k_per_query": 10,
-                "final_top_n": 3,
-                "min_final_score": 0.5,
-            },
-            "llm": {"max_retries": 5},
-        })
+        cfg = CardUpdateDedupConfig.from_mapping(
+            {
+                "enabled": True,
+                "retrieval": {
+                    "top_k_per_query": 10,
+                    "final_top_n": 3,
+                    "min_final_score": 0.5,
+                },
+                "llm": {"max_retries": 5},
+            }
+        )
         assert cfg.enabled is True
         assert cfg.top_k_per_query == 10
         assert cfg.final_top_n == 3
@@ -79,10 +75,12 @@ class TestCardUpdateDedupConfig:
 
     def test_from_mapping_min_clamping(self):
         """Values below min_value are clamped."""
-        cfg = CardUpdateDedupConfig.from_mapping({
-            "enabled": True,
-            "retrieval": {"top_k_per_query": -1, "final_top_n": 0},
-        })
+        cfg = CardUpdateDedupConfig.from_mapping(
+            {
+                "enabled": True,
+                "retrieval": {"top_k_per_query": -1, "final_top_n": 0},
+            }
+        )
         assert cfg.top_k_per_query >= 1
         assert cfg.final_top_n >= 1
 
@@ -104,7 +102,12 @@ class TestCardUpdateDedupConfig:
 class TestRetrievalWeights:
     def test_default_weights_sum_close_to_one(self):
         w = RetrievalWeights()
-        total = w.description + w.explanation_summary + w.description_explanation_summary + w.description_task_description_summary
+        total = (
+            w.description
+            + w.explanation_summary
+            + w.description_explanation_summary
+            + w.description_task_description_summary
+        )
         assert abs(total - 1.0) < 0.01
 
     def test_from_mapping_custom(self):
@@ -133,9 +136,10 @@ class TestRetrievalWeights:
 
 class TestComputeWeightedCandidatesEdgeCases:
     def test_empty_scores(self):
-        assert compute_weighted_candidates(
-            {}, weights=RetrievalWeights(), final_top_n=5
-        ) == []
+        assert (
+            compute_weighted_candidates({}, weights=RetrievalWeights(), final_top_n=5)
+            == []
+        )
 
     def test_min_final_score_filters(self):
         scores = {"description": {"c1": 0.01, "c2": 0.9}}
@@ -237,10 +241,12 @@ class TestParseLlmCardDecisionEdgeCases:
         assert result["action"] == "add"
 
     def test_update_with_unknown_card_id_in_updates(self):
-        text = json.dumps({
-            "action": "update",
-            "updates": [{"card_id": "unknown", "update_explanation": True}],
-        })
+        text = json.dumps(
+            {
+                "action": "update",
+                "updates": [{"card_id": "unknown", "update_explanation": True}],
+            }
+        )
         result = parse_llm_card_decision(text, candidate_ids={"c1"})
         # Unknown card filtered out → no updates → falls back to add
         assert result["action"] == "add"
@@ -252,23 +258,31 @@ class TestParseLlmCardDecisionEdgeCases:
         assert result["duplicate_of"] == "c1"
 
     def test_valid_update(self):
-        text = json.dumps({
-            "action": "update",
-            "updates": [
-                {"card_id": "c1", "update_explanation": True, "explanation_append": "new info"}
-            ],
-        })
+        text = json.dumps(
+            {
+                "action": "update",
+                "updates": [
+                    {
+                        "card_id": "c1",
+                        "update_explanation": True,
+                        "explanation_append": "new info",
+                    }
+                ],
+            }
+        )
         result = parse_llm_card_decision(text, candidate_ids={"c1"})
         assert result["action"] == "update"
         assert len(result["updates"]) == 1
 
     def test_update_with_empty_updates_and_duplicate_of(self):
         """update with no valid updates but has duplicate_of → discard."""
-        text = json.dumps({
-            "action": "update",
-            "updates": [],
-            "duplicate_of": "c1",
-        })
+        text = json.dumps(
+            {
+                "action": "update",
+                "updates": [],
+                "duplicate_of": "c1",
+            }
+        )
         result = parse_llm_card_decision(text, candidate_ids={"c1"})
         assert result["action"] == "discard"
 

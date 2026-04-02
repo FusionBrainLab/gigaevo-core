@@ -4,11 +4,7 @@ Tests the generate_mutations → mutate_single → MemorySelectorAgent pipeline,
 and the EvolutionEngine.memory_enabled flag behavior.
 """
 
-import asyncio
-import json
-from dataclasses import dataclass, field
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,7 +14,6 @@ from gigaevo.evolution.mutation.context import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.programs.program import Program
-
 
 # ===========================================================================
 # generate_mutations with memory_instructions
@@ -37,12 +32,15 @@ class TestGenerateMutationsMemoryFlow:
         captured_calls = []
 
         async def mock_mutate_single(parents, memory_instructions=None):
-            captured_calls.append({
-                "parents": parents,
-                "memory_instructions": memory_instructions,
-            })
+            captured_calls.append(
+                {
+                    "parents": parents,
+                    "memory_instructions": memory_instructions,
+                }
+            )
             # Return a valid MutationSpec-like object
             from gigaevo.evolution.mutation.base import MutationSpec
+
             return MutationSpec(
                 code="def solve(): return 1",
                 parents=[p.id for p in parents],
@@ -57,11 +55,11 @@ class TestGenerateMutationsMemoryFlow:
         mock_state = AsyncMock()
 
         mock_selector = MagicMock()
-        mock_selector.create_parent_iterator.return_value = iter([
-            [Program(code="def f(): pass", metadata={})]
-        ])
+        mock_selector.create_parent_iterator.return_value = iter(
+            [[Program(code="def f(): pass", metadata={})]]
+        )
 
-        result = await generate_mutations(
+        await generate_mutations(
             [Program(code="def f(): pass", metadata={})],
             mutator=mock_mutator,
             storage=mock_storage,
@@ -86,6 +84,7 @@ class TestGenerateMutationsMemoryFlow:
         async def mock_mutate_single(parents, memory_instructions=None):
             captured_calls.append({"memory_instructions": memory_instructions})
             from gigaevo.evolution.mutation.base import MutationSpec
+
             return MutationSpec(
                 code="def solve(): return 1",
                 parents=[p.id for p in parents],
@@ -98,9 +97,9 @@ class TestGenerateMutationsMemoryFlow:
         mock_storage.add = AsyncMock(return_value="new-prog-id")
         mock_state = AsyncMock()
         mock_selector = MagicMock()
-        mock_selector.create_parent_iterator.return_value = iter([
-            [Program(code="def f(): pass", metadata={})]
-        ])
+        mock_selector.create_parent_iterator.return_value = iter(
+            [[Program(code="def f(): pass", metadata={})]]
+        )
 
         await generate_mutations(
             [Program(code="def f(): pass", metadata={})],
@@ -153,7 +152,9 @@ class TestMutationOperatorMemoryInjection:
         operator.problem_context = MagicMock()
         operator.problem_context.task_description = "Multi-hop fact verification"
         operator.metrics_formatter = MagicMock()
-        operator.metrics_formatter.format_metrics_description.return_value = "fitness: accuracy"
+        operator.metrics_formatter.format_metrics_description.return_value = (
+            "fitness: accuracy"
+        )
         operator.prompt_fetcher = None
         operator.storage = None
         operator.bandit = None
@@ -165,7 +166,8 @@ class TestMutationOperatorMemoryInjection:
         cards = memory_cards or ["1. Sort evidence by relevance score"]
         mock_selector = AsyncMock()
         mock_selector.select.return_value = MemorySelection(
-            cards=cards, card_ids=["idea-1"],
+            cards=cards,
+            card_ids=["idea-1"],
         )
         operator.memory_selector = mock_selector
 
@@ -192,14 +194,18 @@ class TestMutationOperatorMemoryInjection:
         operator, captured = self._make_operator()
         parent = Program(code="def f(): return 1", metadata={})
 
-        result = await operator.mutate_single([parent], memory_instructions="use memory")
+        result = await operator.mutate_single(
+            [parent], memory_instructions="use memory"
+        )
         assert result is not None
 
         # The mutation agent received parents WITH memory metadata
         mutated_parent = captured["parents"][0]
         assert MUTATION_MEMORY_METADATA_KEY in mutated_parent.metadata
         assert "Sort evidence" in mutated_parent.metadata[MUTATION_MEMORY_METADATA_KEY]
-        assert mutated_parent.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == ["idea-1"]
+        assert mutated_parent.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == [
+            "idea-1"
+        ]
 
     @pytest.mark.asyncio
     async def test_original_parent_not_mutated(self):
@@ -220,7 +226,8 @@ class TestMutationOperatorMemoryInjection:
         operator, captured = self._make_operator(memory_cards=[])
         # Override to return empty
         operator.memory_selector.select.return_value = MemorySelection(
-            cards=[], card_ids=[],
+            cards=[],
+            card_ids=[],
         )
 
         parent = Program(code="def f(): return 1", metadata={})
@@ -251,7 +258,9 @@ class TestMutationOperatorMemoryInjection:
         operator, _ = self._make_operator()
         parent = Program(code="def f(): return 1", metadata={})
 
-        result = await operator.mutate_single([parent], memory_instructions="use memory")
+        result = await operator.mutate_single(
+            [parent], memory_instructions="use memory"
+        )
         assert result is not None
         assert result.code == "def solve(x): return sorted(x)"
         assert len(result.parents) == 1
@@ -267,14 +276,20 @@ class TestProgramMetadataRoundtrip:
 
     def test_program_preserves_memory_metadata_on_parent(self):
         """Parent program can carry memory metadata that the mutation agent sees."""
-        parent = Program(code="def f(): return 1", metadata={
-            MUTATION_MEMORY_METADATA_KEY: "1. Sort by relevance",
-            MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY: ["idea-1", "idea-2"],
-        })
+        parent = Program(
+            code="def f(): return 1",
+            metadata={
+                MUTATION_MEMORY_METADATA_KEY: "1. Sort by relevance",
+                MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY: ["idea-1", "idea-2"],
+            },
+        )
 
         # Verify the metadata is accessible
         assert parent.metadata[MUTATION_MEMORY_METADATA_KEY] == "1. Sort by relevance"
-        assert parent.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == ["idea-1", "idea-2"]
+        assert parent.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == [
+            "idea-1",
+            "idea-2",
+        ]
 
         # Deep copy preserves metadata
         clone = parent.model_copy(deep=True)

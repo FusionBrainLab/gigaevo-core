@@ -165,4 +165,5 @@ def resolve_memory_backend_class(use_api: bool):
         return platform_backend
 
     from gigaevo.memory.shared_memory.memory import AmemGamMemory as legacy_backend
+
     return legacy_backend

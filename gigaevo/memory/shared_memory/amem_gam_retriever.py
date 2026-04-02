@@ -14,6 +14,7 @@ from loguru import logger
 
 load_dotenv()
 
+from gigaevo.memory import config
 from gigaevo.memory.GAM_root.gam import (
     ChromaRetriever,
     IndexRetriever,
@@ -23,8 +24,6 @@ from gigaevo.memory.GAM_root.gam import (
 )
 from gigaevo.memory.GAM_root.gam.generator import AMemGenerator
 from gigaevo.memory.GAM_root.gam.schemas import Page
-
-from gigaevo.memory import config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
 
 
@@ -188,7 +187,9 @@ def build_retrievers(
             retrievers[tool_name] = ChromaRetriever(chroma_config)
             logger.debug("[Memory] Chroma retriever ready: {}", tool_name)
         except Exception as e:
-            logger.warning("[Memory] Chroma retriever init for '{}' failed: {}", tool_name, e)
+            logger.warning(
+                "[Memory] Chroma retriever init for '{}' failed: {}", tool_name, e
+            )
 
     if enable_bm25 and "keyword" in allowed:
         try:
@@ -210,7 +211,7 @@ def main():
     # if export_path:
     #     export_file = Path(export_path)
     # else:
-    #     export_file = _repo_root()  / "amem_memories.jsonl"
+    #     export_file = Path(__file__).resolve().parents[1]  / "amem_memories.jsonl"
 
     if not export_file.exists():
         raise FileNotFoundError(f"A-mem export not found: {export_file}")
@@ -219,7 +220,7 @@ def main():
     if not records:
         raise RuntimeError("A-mem export is empty.")
 
-    store_dir = _repo_root() / "gam_shared" / "amem_store"
+    store_dir = Path(__file__).resolve().parents[1] / "gam_shared" / "amem_store"
     store_dir.mkdir(parents=True, exist_ok=True)
     memory_store, page_store, added = build_gam_store(records, store_dir)
     logger.info("Loaded {} A-mem records, added {} new pages.", len(records), added)
@@ -246,7 +247,7 @@ def main():
     )
     generator = AMemGenerator({"llm_service": llm_service})
 
-    chroma_dir = _repo_root() / "chroma"
+    chroma_dir = Path(__file__).resolve().parents[1] / "chroma"
     retrievers = build_retrievers(page_store, store_dir / "indexes", chroma_dir)
     research_agent = ResearchAgent(
         page_store=page_store,

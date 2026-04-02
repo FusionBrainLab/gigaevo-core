@@ -8,21 +8,16 @@ All tests use local-only mode (no API, no network, no Redis).
 """
 
 import asyncio
-import json
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+import json
+from unittest.mock import MagicMock
 
-import pytest
-
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
-from gigaevo.memory.memory_write_example import load_memory_cards
 from gigaevo.memory.ideas_tracker.components.data_components import (
     IncomingIdeas,
     RecordBank,
 )
-
+from gigaevo.memory.memory_write_example import load_memory_cards
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -68,38 +63,59 @@ class TestScenarioTwoRunCycle:
         """Simulate IdeaTracker: programs → ideas bank → best_ideas → memory cards."""
         # Programs from evolution run (simulated Redis export)
         programs = [
-            {"id": "prog-1", "fitness": 92.0, "generation": 15,
-             "code": "def solve(x):\n    return sorted(x, key=lambda t: t[1])\n",
-             "task_description": "Multi-hop fact verification",
-             "task_description_summary": "HoVer verification"},
-            {"id": "prog-2", "fitness": 88.5, "generation": 12,
-             "code": "def solve(x):\n    return [hop for hop in x if hop['score'] > 0.5]\n",
-             "task_description": "Multi-hop fact verification",
-             "task_description_summary": "HoVer verification"},
-            {"id": "prog-3", "fitness": 78.0, "generation": 8,
-             "code": "def solve(x):\n    return x[:3]\n",
-             "task_description": "Multi-hop fact verification",
-             "task_description_summary": "HoVer verification"},
+            {
+                "id": "prog-1",
+                "fitness": 92.0,
+                "generation": 15,
+                "code": "def solve(x):\n    return sorted(x, key=lambda t: t[1])\n",
+                "task_description": "Multi-hop fact verification",
+                "task_description_summary": "HoVer verification",
+            },
+            {
+                "id": "prog-2",
+                "fitness": 88.5,
+                "generation": 12,
+                "code": "def solve(x):\n    return [hop for hop in x if hop['score'] > 0.5]\n",
+                "task_description": "Multi-hop fact verification",
+                "task_description_summary": "HoVer verification",
+            },
+            {
+                "id": "prog-3",
+                "fitness": 78.0,
+                "generation": 8,
+                "code": "def solve(x):\n    return x[:3]\n",
+                "task_description": "Multi-hop fact verification",
+                "task_description_summary": "HoVer verification",
+            },
         ]
 
         # Simulate IdeaTracker classification: extract ideas from improvements
         ideas_bank = RecordBank(list_max_ideas=20)
         ideas_bank.add_idea(
             "Sort evidence by relevance score before hop selection",
-            "prog-1", generation=15, category="retrieval",
-            strategy="exploitation", task_description="Multi-hop fact verification",
+            "prog-1",
+            generation=15,
+            category="retrieval",
+            strategy="exploitation",
+            task_description="Multi-hop fact verification",
             change_motivation="Sorting improves evidence chain quality",
         )
         ideas_bank.add_idea(
             "Filter low-confidence hops using threshold 0.5",
-            "prog-2", generation=12, category="filtering",
-            strategy="exploration", task_description="Multi-hop fact verification",
+            "prog-2",
+            generation=12,
+            category="filtering",
+            strategy="exploration",
+            task_description="Multi-hop fact verification",
             change_motivation="Reduces noise in multi-hop chains",
         )
         ideas_bank.add_idea(
             "Limit retrieval depth to 3 hops maximum",
-            "prog-3", generation=8, category="retrieval",
-            strategy="exploitation", task_description="Multi-hop fact verification",
+            "prog-3",
+            generation=8,
+            category="retrieval",
+            strategy="exploitation",
+            task_description="Multi-hop fact verification",
             change_motivation="Prevents over-retrieval degradation",
         )
 
@@ -107,22 +123,25 @@ class TestScenarioTwoRunCycle:
         all_ideas = ideas_bank.all_ideas_cards()
         active_bank = []
         for idea in all_ideas:
-            active_bank.append({
-                "id": idea.id,
-                "description": idea.description,
-                "task_description": idea.task_description,
-                "task_description_summary": "HoVer verification",
-                "programs": idea.programs,
-                "explanation": idea.explanation,
-                "strategy": idea.strategy,
-                "category": idea.category,
-            })
+            active_bank.append(
+                {
+                    "id": idea.id,
+                    "description": idea.description,
+                    "task_description": idea.task_description,
+                    "task_description_summary": "HoVer verification",
+                    "programs": idea.programs,
+                    "explanation": idea.explanation,
+                    "strategy": idea.strategy,
+                    "category": idea.category,
+                }
+            )
 
         banks_path = tmp_path / "logs" / "banks.json"
         _write_json(banks_path, [{"active_bank": active_bank}])
 
-        best_ideas = [{"idea_id": idea.id, "description": idea.description}
-                      for idea in all_ideas]
+        best_ideas = [
+            {"idea_id": idea.id, "description": idea.description} for idea in all_ideas
+        ]
         best_ideas_path = tmp_path / "logs" / "best_ideas.json"
         _write_json(best_ideas_path, [{"best_ideas": best_ideas}])
 
@@ -137,7 +156,8 @@ class TestScenarioTwoRunCycle:
 
         # --- Run 1: Write to memory ---
         cards = load_memory_cards(
-            banks, best_ideas,
+            banks,
+            best_ideas,
             programs_path=programs,
             best_programs_percent=50.0,
         )
@@ -164,12 +184,16 @@ class TestScenarioTwoRunCycle:
         result = mem2.search("evidence retrieval sorting relevance")
         # At least one idea card ID should appear in the formatted result
         matched_ids = [uid for uid in idea_ids if uid in result]
-        assert len(matched_ids) > 0, f"No card IDs found in search result: {result[:200]}"
+        assert len(matched_ids) > 0, (
+            f"No card IDs found in search result: {result[:200]}"
+        )
 
         # Search for filtering ideas
         result = mem2.search("confidence threshold filtering hops")
         matched_ids = [uid for uid in idea_ids if uid in result]
-        assert len(matched_ids) > 0, f"No card IDs found in search result: {result[:200]}"
+        assert len(matched_ids) > 0, (
+            f"No card IDs found in search result: {result[:200]}"
+        )
 
     def test_memory_guides_mutation(self, tmp_path):
         """Full cycle: fill memory → MemorySelectorAgent.select() → cards in mutation."""
@@ -200,14 +224,16 @@ class TestScenarioTwoRunCycle:
 
         loop = asyncio.new_event_loop()
         try:
-            selection = loop.run_until_complete(selector.select(
-                input=[parent],
-                mutation_mode="rewrite",
-                task_description="Multi-hop fact verification for HoVer dataset",
-                metrics_description="fitness: label accuracy on validation set",
-                memory_text="",
-                max_cards=3,
-            ))
+            selection = loop.run_until_complete(
+                selector.select(
+                    input=[parent],
+                    mutation_mode="rewrite",
+                    task_description="Multi-hop fact verification for HoVer dataset",
+                    metrics_description="fitness: label accuracy on validation set",
+                    memory_text="",
+                    max_cards=3,
+                )
+            )
         finally:
             loop.close()
 
@@ -228,10 +254,18 @@ class TestScenarioIncrementalGrowth:
 
         # Generation 5: first batch of ideas
         gen5_ideas = [
-            {"id": "idea-g5-1", "description": "Use beam search for chain construction",
-             "task_description": "Multi-hop QA", "task_description_summary": "QA"},
-            {"id": "idea-g5-2", "description": "Increase retrieval context window",
-             "task_description": "Multi-hop QA", "task_description_summary": "QA"},
+            {
+                "id": "idea-g5-1",
+                "description": "Use beam search for chain construction",
+                "task_description": "Multi-hop QA",
+                "task_description_summary": "QA",
+            },
+            {
+                "id": "idea-g5-2",
+                "description": "Increase retrieval context window",
+                "task_description": "Multi-hop QA",
+                "task_description_summary": "QA",
+            },
         ]
         for idea in gen5_ideas:
             mem.save_card(idea)
@@ -243,10 +277,18 @@ class TestScenarioIncrementalGrowth:
 
         # Generation 10: second batch
         gen10_ideas = [
-            {"id": "idea-g10-1", "description": "Apply chain-of-thought prompting",
-             "task_description": "Multi-hop QA", "task_description_summary": "QA"},
-            {"id": "idea-g10-2", "description": "Dynamic hop count based on query complexity",
-             "task_description": "Multi-hop QA", "task_description_summary": "QA"},
+            {
+                "id": "idea-g10-1",
+                "description": "Apply chain-of-thought prompting",
+                "task_description": "Multi-hop QA",
+                "task_description_summary": "QA",
+            },
+            {
+                "id": "idea-g10-2",
+                "description": "Dynamic hop count based on query complexity",
+                "task_description": "Multi-hop QA",
+                "task_description_summary": "QA",
+            },
         ]
         for idea in gen10_ideas:
             mem2.save_card(idea)
@@ -255,8 +297,12 @@ class TestScenarioIncrementalGrowth:
         # Generation 15: update existing idea
         mem3 = _make_memory(tmp_path)
         assert len(mem3.memory_cards) == 4
-        mem3.save_card({"id": "idea-g5-1",
-                         "description": "Use beam search with width=3 for chain construction"})
+        mem3.save_card(
+            {
+                "id": "idea-g5-1",
+                "description": "Use beam search with width=3 for chain construction",
+            }
+        )
         # Updated, not duplicated
         assert len(mem3.memory_cards) == 4
         card = mem3.get_card("idea-g5-1")
@@ -267,18 +313,32 @@ class TestScenarioIncrementalGrowth:
         mem = _make_memory(tmp_path)
 
         # Ideas from early generations
-        mem.save_card({"id": "idea-1", "description": "sort by relevance",
-                        "task_description": "HoVer"})
-        mem.save_card({"id": "idea-2", "description": "filter low confidence",
-                        "task_description": "HoVer"})
+        mem.save_card(
+            {
+                "id": "idea-1",
+                "description": "sort by relevance",
+                "task_description": "HoVer",
+            }
+        )
+        mem.save_card(
+            {
+                "id": "idea-2",
+                "description": "filter low confidence",
+                "task_description": "HoVer",
+            }
+        )
 
         # Programs from later generations
-        mem.save_card({
-            "category": "program", "program_id": "prog-best-1",
-            "description": "Top program for HoVer",
-            "fitness": 95.0, "code": "def solve(): return 42",
-            "task_description": "HoVer",
-        })
+        mem.save_card(
+            {
+                "category": "program",
+                "program_id": "prog-best-1",
+                "description": "Top program for HoVer",
+                "fitness": 95.0,
+                "code": "def solve(): return 42",
+                "task_description": "HoVer",
+            }
+        )
 
         # Reload and verify
         mem2 = _make_memory(tmp_path)
@@ -292,8 +352,9 @@ class TestScenarioIncrementalGrowth:
         # The card was saved with category="program", program_id="prog-best-1"
         # but the explicit id was "program-prog-best-1" (we set it, not auto-prefixed)
         # Let's verify by checking all cards
-        prog_cards = [c for c in mem2.memory_cards.values()
-                      if c.get("category") == "program"]
+        prog_cards = [
+            c for c in mem2.memory_cards.values() if c.get("category") == "program"
+        ]
         assert len(prog_cards) == 1
         assert prog_cards[0]["fitness"] == 95.0
 
@@ -327,7 +388,9 @@ class TestScenarioDedup:
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             json.dumps({"action": "discard", "duplicate_of": "idea-1"}),
-            {}, None, None,
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
         mem._score_retrieved_candidates = MagicMock(
@@ -342,22 +405,34 @@ class TestScenarioDedup:
     def test_llm_dedup_updates_existing_card(self, tmp_path):
         """LLM says 'update' → existing card gets new explanation merged."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.save_card({
-            "id": "idea-1", "description": "SA optimization",
-            "explanation": {"explanations": ["original insight"], "summary": "SA works"},
-        })
+        mem.save_card(
+            {
+                "id": "idea-1",
+                "description": "SA optimization",
+                "explanation": {
+                    "explanations": ["original insight"],
+                    "summary": "SA works",
+                },
+            }
+        )
 
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
-            json.dumps({
-                "action": "update",
-                "updates": [{
-                    "card_id": "idea-1",
-                    "update_explanation": True,
-                    "explanation_append": "Also effective for multi-hop chains",
-                }],
-            }),
-            {}, None, None,
+            json.dumps(
+                {
+                    "action": "update",
+                    "updates": [
+                        {
+                            "card_id": "idea-1",
+                            "update_explanation": True,
+                            "explanation_append": "Also effective for multi-hop chains",
+                        }
+                    ],
+                }
+            ),
+            {},
+            None,
+            None,
         )
         mem.llm_service = mock_llm
         mem._score_retrieved_candidates = MagicMock(
@@ -385,36 +460,45 @@ class TestScenarioWritePipeline:
         """Generate realistic IdeaTracker output files."""
         active_bank = []
         for i in range(n_ideas):
-            active_bank.append({
-                "id": f"idea-{i}",
-                "description": f"Optimization technique {i}: improve convergence via method_{i}",
-                "task_description": "Multi-hop fact verification on HoVer",
-                "task_description_summary": "HoVer verification",
-                "programs": [f"prog-{i}", f"prog-{i+10}"],
-                "explanation": {"explanations": [f"Method {i} explanation"], "summary": f"Method {i} works"},
-                "strategy": "exploitation" if i % 2 == 0 else "exploration",
-                "category": "retrieval" if i < 3 else "filtering",
-                "keywords": [f"method_{i}", "optimization"],
-            })
+            active_bank.append(
+                {
+                    "id": f"idea-{i}",
+                    "description": f"Optimization technique {i}: improve convergence via method_{i}",
+                    "task_description": "Multi-hop fact verification on HoVer",
+                    "task_description_summary": "HoVer verification",
+                    "programs": [f"prog-{i}", f"prog-{i + 10}"],
+                    "explanation": {
+                        "explanations": [f"Method {i} explanation"],
+                        "summary": f"Method {i} works",
+                    },
+                    "strategy": "exploitation" if i % 2 == 0 else "exploration",
+                    "category": "retrieval" if i < 3 else "filtering",
+                    "keywords": [f"method_{i}", "optimization"],
+                }
+            )
 
         banks = tmp_path / "banks.json"
         _write_json(banks, [{"active_bank": active_bank}])
 
-        best_ideas = [{"idea_id": f"idea-{i}", "description": f"Technique {i}"}
-                      for i in range(n_ideas)]
+        best_ideas = [
+            {"idea_id": f"idea-{i}", "description": f"Technique {i}"}
+            for i in range(n_ideas)
+        ]
         best = tmp_path / "best_ideas.json"
         _write_json(best, [{"best_ideas": best_ideas}])
 
         programs = []
         for i in range(n_programs):
-            programs.append({
-                "id": f"prog-{i}",
-                "fitness": 90.0 - i * 5,
-                "generation": 10 + i,
-                "code": f"def solve_{i}(x):\n    return x[:{i+1}]\n",
-                "task_description": "Multi-hop fact verification on HoVer",
-                "task_description_summary": "HoVer verification",
-            })
+            programs.append(
+                {
+                    "id": f"prog-{i}",
+                    "fitness": 90.0 - i * 5,
+                    "generation": 10 + i,
+                    "code": f"def solve_{i}(x):\n    return x[:{i + 1}]\n",
+                    "task_description": "Multi-hop fact verification on HoVer",
+                    "task_description_summary": "HoVer verification",
+                }
+            )
         progs = tmp_path / "programs.json"
         _write_json(progs, [{"programs": programs}])
 
@@ -438,7 +522,9 @@ class TestScenarioWritePipeline:
 
     def test_full_pipeline_with_programs(self, tmp_path):
         banks, best, progs = self._setup_tracker_output(tmp_path)
-        cards = load_memory_cards(banks, best, programs_path=progs, best_programs_percent=100.0)
+        cards = load_memory_cards(
+            banks, best, programs_path=progs, best_programs_percent=100.0
+        )
 
         idea_cards = [c for c in cards if c.get("category") != "program"]
         prog_cards = [c for c in cards if c.get("category") == "program"]
@@ -485,9 +571,18 @@ class TestScenarioIdeasToMemory:
         """Classify incoming ideas, add to bank, then save to memory."""
         # Programs produce improvements (raw LLM output)
         raw_improvements = [
-            {"description": "Sort evidence by relevance", "explanation": "Better chain quality"},
-            {"description": "Filter noise from retrieval", "explanation": "Reduces false positives"},
-            {"description": "Sort evidence by relevance", "explanation": "Duplicate of first"},
+            {
+                "description": "Sort evidence by relevance",
+                "explanation": "Better chain quality",
+            },
+            {
+                "description": "Filter noise from retrieval",
+                "explanation": "Reduces false positives",
+            },
+            {
+                "description": "Sort evidence by relevance",
+                "explanation": "Duplicate of first",
+            },
         ]
 
         # Classify via IncomingIdeas
@@ -520,16 +615,18 @@ class TestScenarioIdeasToMemory:
         # Write bank ideas to memory
         mem = _make_memory(tmp_path)
         for card in bank.all_ideas_cards():
-            mem.save_card({
-                "id": card.id,
-                "description": card.description,
-                "task_description": card.task_description,
-                "task_description_summary": "HoVer",
-                "strategy": card.strategy,
-                "category": card.category,
-                "explanation": card.explanation,
-                "programs": card.programs,
-            })
+            mem.save_card(
+                {
+                    "id": card.id,
+                    "description": card.description,
+                    "task_description": card.task_description,
+                    "task_description_summary": "HoVer",
+                    "strategy": card.strategy,
+                    "category": card.category,
+                    "explanation": card.explanation,
+                    "programs": card.programs,
+                }
+            )
 
         assert len(mem.memory_cards) == 2
 
@@ -550,10 +647,16 @@ class TestScenarioDeleteAndRebuild:
 
     def test_delete_removes_from_search(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.save_card({"id": "idea-keep", "description": "Use beam search",
-                        "keywords": ["beam"]})
-        mem.save_card({"id": "idea-remove", "description": "Use random search",
-                        "keywords": ["random"]})
+        mem.save_card(
+            {"id": "idea-keep", "description": "Use beam search", "keywords": ["beam"]}
+        )
+        mem.save_card(
+            {
+                "id": "idea-remove",
+                "description": "Use random search",
+                "keywords": ["random"],
+            }
+        )
 
         # Both searchable
         assert "idea-keep" in mem.search("beam search")
@@ -603,14 +706,18 @@ class TestScenarioCrossTask:
     def test_separate_checkpoint_dirs_isolate_memory(self, tmp_path):
         mem_hover = AmemGamMemory(
             checkpoint_path=str(tmp_path / "hover_mem"),
-            use_api=False, sync_on_init=False,
-            enable_llm_synthesis=False, enable_memory_evolution=False,
+            use_api=False,
+            sync_on_init=False,
+            enable_llm_synthesis=False,
+            enable_memory_evolution=False,
             enable_llm_card_enrichment=False,
         )
         mem_hotpot = AmemGamMemory(
             checkpoint_path=str(tmp_path / "hotpot_mem"),
-            use_api=False, sync_on_init=False,
-            enable_llm_synthesis=False, enable_memory_evolution=False,
+            use_api=False,
+            sync_on_init=False,
+            enable_llm_synthesis=False,
+            enable_memory_evolution=False,
             enable_llm_card_enrichment=False,
         )
 
@@ -626,8 +733,10 @@ class TestScenarioCrossTask:
         # Reload verifies isolation
         mem_hover2 = AmemGamMemory(
             checkpoint_path=str(tmp_path / "hover_mem"),
-            use_api=False, sync_on_init=False,
-            enable_llm_synthesis=False, enable_memory_evolution=False,
+            use_api=False,
+            sync_on_init=False,
+            enable_llm_synthesis=False,
+            enable_memory_evolution=False,
             enable_llm_card_enrichment=False,
         )
         assert len(mem_hover2.memory_cards) == 1
@@ -710,16 +819,20 @@ class TestScenarioErrorRecovery:
         """With 100 cards, search returns the most relevant, not random."""
         mem = _make_memory(tmp_path, search_limit=3)
         for i in range(100):
-            mem.save_card({
-                "id": f"noise-{i}",
-                "description": f"generic optimization idea number {i}",
-            })
+            mem.save_card(
+                {
+                    "id": f"noise-{i}",
+                    "description": f"generic optimization idea number {i}",
+                }
+            )
         # Add a very specific card
-        mem.save_card({
-            "id": "target",
-            "description": "quantum annealing for protein folding",
-            "keywords": ["quantum", "annealing", "protein"],
-        })
+        mem.save_card(
+            {
+                "id": "target",
+                "description": "quantum annealing for protein folding",
+                "keywords": ["quantum", "annealing", "protein"],
+            }
+        )
 
         result = mem.search("quantum annealing protein")
         assert "target" in result

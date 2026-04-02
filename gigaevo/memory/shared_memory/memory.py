@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -7,9 +8,7 @@ import re
 from typing import Any, Protocol
 import uuid
 
-from dataclasses import dataclass
 from dotenv import load_dotenv
-import httpx
 from loguru import logger
 
 from gigaevo.memory import config
@@ -31,7 +30,6 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
 load_dotenv()
 
 from gigaevo.memory.shared_memory.card_conversion import (
-    ALLOWED_STRATEGIES,
     DEFAULT_MODEL_NAME,
     GigaEvoMemoryBase,
     MemoryNoteProtocol,
@@ -47,28 +45,24 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
     note_metadata,
 )
-from gigaevo.memory.shared_memory.utils import (
-    _safe_get,
-    _str_or_empty,
-    _to_float,
-    _to_int,
-    _to_list,
-    dedupe_keep_order,
-    looks_like_uuid,
-    truncate_text,
-)
 
 # Re-export for backward compatibility (extracted to concept_api.py)
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
+from gigaevo.memory.shared_memory.utils import (
+    looks_like_uuid,
+    truncate_text,
+)
 
 # ---------------------------------------------------------------------------
 # Protocols for agentic dependencies (A-MEM, GAM)
 # ---------------------------------------------------------------------------
 
+
 class LLMServiceProtocol(Protocol):
     """Structural type for OpenAIInferenceService."""
 
     def generate(self, data: str) -> tuple[str, Any, int | None, float | None]: ...
+
 
 class AgenticMemoryProtocol(Protocol):
     """Structural type for AgenticMemorySystem."""
@@ -83,12 +77,14 @@ class AgenticMemoryProtocol(Protocol):
     def analyze_content(self, content: str) -> dict[str, Any]: ...
     def _document_for_note(self, note: MemoryNoteProtocol) -> str: ...
 
+
 @dataclass
 class ResearchOutput:
     """Return type of ResearchAgent.research()."""
 
     integrated_memory: str = ""
     raw_memory: dict[str, Any] | None = None
+
 
 class ResearchAgentProtocol(Protocol):
     """Structural type for GAM ResearchAgent."""
@@ -97,6 +93,7 @@ class ResearchAgentProtocol(Protocol):
         self, request: str, memory_state: str | None = None
     ) -> ResearchOutput: ...
 
+
 class GeneratorProtocol(Protocol):
     """Structural type for AMemGenerator."""
 
@@ -104,11 +101,13 @@ class GeneratorProtocol(Protocol):
         self, prompt: str | None = None, **kwargs: Any
     ) -> dict[str, Any]: ...
 
+
 # ---------------------------------------------------------------------------
 # Card memory type alias
 # ---------------------------------------------------------------------------
 
 CardDict = dict[str, Any]
+
 
 class AmemGamMemory(GigaEvoMemoryBase):
     """API-backed memory where API is the source of truth and local GAM is retrieval runtime."""
@@ -216,7 +215,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 MemoryNote as _MemoryNote,
             )
             from gigaevo.memory.GAM_root.gam import ResearchAgent as _ResearchAgent
-            from gigaevo.memory.GAM_root.gam.generator import AMemGenerator as _AMemGenerator
+            from gigaevo.memory.GAM_root.gam.generator import (
+                AMemGenerator as _AMemGenerator,
+            )
         except Exception as exc:
             self._agentic_import_error = exc
             logger.info(
@@ -292,7 +293,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         try:
             payload = json.loads(self.index_file.read_text(encoding="utf-8"))
         except Exception as exc:
-            logger.warning("[Memory] Could not parse index file {}: {}", self.index_file, exc)
+            logger.warning(
+                "[Memory] Could not parse index file {}: {}", self.index_file, exc
+            )
             return
 
         raw_cards = payload.get("memory_cards", {})
@@ -403,8 +406,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
         note = self._build_note_from_card(card)
         existing = self.memory_system.read(note.id)
         changed = existing is None or self._note_fields_changed(
-            existing, note.content, note.category, note.context,
-            note.strategy, note.keywords, note.links,
+            existing,
+            note.content,
+            note.category,
+            note.context,
+            note.strategy,
+            note.keywords,
+            note.links,
         )
         if not changed:
             self.memory_ids.add(note.id)
@@ -451,8 +459,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.memory_system.add_note(id=card_id, content=description, **kwargs)
         else:
             changed = self._note_fields_changed(
-                existing, description, kwargs["category"], kwargs["context"],
-                kwargs["strategy"], kwargs["keywords"], kwargs["links"],
+                existing,
+                description,
+                kwargs["category"],
+                kwargs["context"],
+                kwargs["strategy"],
+                kwargs["keywords"],
+                kwargs["links"],
             )
             if not changed:
                 self.memory_ids.add(card_id)
@@ -608,7 +621,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
             records = list(self.memory_cards.values())
 
         memory_store, page_store, added = build_gam_store(records, self.gam_store_dir)
-        logger.info("[Memory] Loaded {} cards, added {} new pages.", len(records), added)
+        logger.info(
+            "[Memory] Loaded {} cards, added {} new pages.", len(records), added
+        )
 
         retrievers = build_retrievers(
             page_store,
@@ -739,7 +754,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
             try:
                 hits_by_query = retriever.search([text], top_k=cfg.top_k_per_query)
             except Exception as exc:
-                logger.warning("[Memory] Dedup retrieval failed for query '{}': {}", query_key, exc)
+                logger.warning(
+                    "[Memory] Dedup retrieval failed for query '{}': {}", query_key, exc
+                )
                 continue
 
             hits = []
@@ -803,8 +820,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                         get_explanation_summary(card), 600
                     ),
                     "explanation_full": [
-                        truncate_text(explanation, 1200)
-                        for explanation in explanations
+                        truncate_text(explanation, 1200) for explanation in explanations
                     ],
                 }
             )
@@ -898,8 +914,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 decision = parsed
                 break
             logger.warning(
-                "[Memory] Dedup LLM returned no valid JSON "
-                "(attempt {}/{})",
+                "[Memory] Dedup LLM returned no valid JSON (attempt {}/{})",
                 attempt + 1,
                 self.card_update_dedup_config.llm_max_retries,
             )
@@ -1096,7 +1111,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if text:
                 return text
         except Exception as exc:
-            logger.warning("[Memory] LLM synthesis failed, fallback to plain output: {}", exc)
+            logger.warning(
+                "[Memory] LLM synthesis failed, fallback to plain output: {}", exc
+            )
 
         return format_search_results(query, cards)
 
