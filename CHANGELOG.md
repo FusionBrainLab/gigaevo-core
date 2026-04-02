@@ -2,6 +2,283 @@
 
 <!-- version list -->
 
+## v1.25.0 (2026-04-02)
+
+### Bug Fixes
+
+- Add break condition for processing when no new ideas are present
+  ([`a6a3a18`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a6a3a18916408611c4473dc332731ed680314909))
+
+- Add break condition for processing when no new ideas are present
+  ([`0e20d87`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0e20d8747fbab2d0fd474a0a6bf77508296c3f88))
+
+- Changed cooccurrence threshold agressive scaling to fixed minimum
+  ([`5c5c29b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5c5c29b43752cd50fb2dbeaf670d2bdd4d135591))
+
+- Changed cooccurrence threshold agressive scaling to fixed minimum
+  ([`c8a7e5b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c8a7e5bb22a3908df1d7611a7107e3e3619449a0))
+
+- Circular import in logger
+  ([`55e3b1f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/55e3b1fe956b73cf731c63f2a4d70ed92f953429))
+
+- Circular import in logger
+  ([`522d28e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/522d28e99ca011775cdb2c677ca2f541767b258a))
+
+- Clean up memory PR merge — lint, format, junk dirs, broken imports
+  ([`21035ab`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/21035ab9003e25d810415bbbcb41064d129d65ec))
+
+- Correct serialization of dict and lists in pd columns
+  ([`f7a6bbe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f7a6bbeb669bd64b71eaa6d4662e0e9a658370dd))
+
+- Correct serialization of dict and lists in pd columns
+  ([`2dd2eba`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2dd2eba10f6af1ef41dc30995f67bb18164e0f27))
+
+- Dead retry in _decide_card_action — parse_llm_card_decision returns None for garbage
+  ([`80649dd`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/80649dda8429daf5793540b4d4219fada39aa975))
+
+- Eliminate RuntimeWarning in generate_mutations tests
+  ([`ba4195d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ba4195dc07bd420cb7c570b7be2d33e2170f6d5b))
+
+- Handle parent_ids as string in ideas_tracker
+  ([`7601ed9`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/7601ed9b7083477f85f172b8c5b3277d4d177e09))
+
+- Handle parent_ids as string in ideas_tracker
+  ([`3148878`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3148878c2396141af69318f78bab8b3710d13c05))
+
+- IncomingIdeas update logic fix
+  ([`b9a1781`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b9a1781003c1f9874187aa09915f489de30e1c76))
+
+- IncomingIdeas update logic fix
+  ([`2947dda`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2947dda9a988c503c3a23c62ced28d3852d77441))
+
+- Lint and format errors for CI (ruff check + ruff format)
+  ([`b884547`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b884547912cb3b7327683b3d63251e729a5c8c6d))
+
+- Phase 1 — 3 confirmed bugs fixed in memory system
+  ([`5e9addd`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5e9addd3cd02de1c3017ecde5cf3289771f4886c))
+
+- Remove debug print
+  ([`bf4a981`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/bf4a981fa28d86a53240ca70ba86fd09225a3949))
+
+- Remove debug print
+  ([`cda32cb`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/cda32cb6069d76a8f8793c04f01df23f441a05bb))
+
+- Remove short id separate storage and generation
+  ([`d0fd1a6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d0fd1a6fb061488c17cb6d4829deb436303b41a3))
+
+- Remove short id separate storage and generation
+  ([`d1fdde8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d1fdde8aec4faafaa20bcab87dc7d0459b955ca4))
+
+- Restore RedisRunConfig + fetch_evolution_dataframe re-export in tools/utils.py
+  ([`30bc8ea`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/30bc8ea4c05040ba0cfc52e8ad87b7714d586e3b))
+
+- Wrong key name fix
+  ([`66cab68`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/66cab6851a8ebb222c1943fbc1c5f1a05950d2fa))
+
+- Wrong key name fix
+  ([`9cc9912`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9cc99122595b17cee965cd74105c66b5429b3ed8))
+
+### Chores
+
+- Removed unused prompts
+  ([`5cff8f1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5cff8f18f6e443d3023529ad3f07f53df0c5abd7))
+
+- Removed unused prompts
+  ([`52852cc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/52852cc9cc2bc39c5a2376bd9f510dabb9c357bf))
+
+- Update docstrings
+  ([`3123cba`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3123cba56d437550da2ba1e148b1587823c7b5c5))
+
+- Update docstrings
+  ([`6a44189`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6a44189ad41c12e3c5d2653375632d01bc86f50c))
+
+### Features
+
+- Add best idea extraction based on top_k selection by fitness and delta fitness
+  ([`04ab7c6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/04ab7c6e4e8652feb93863c44ab13a8ae1054e84))
+
+- Add best idea extraction based on top_k selection by fitness and delta fitness
+  ([`995929e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/995929e079c83aaa01e50b32765ce828af6eabf7))
+
+- Add changes extraction to mutation agent
+  ([`cd924c7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/cd924c72084c29dda25ad9daa0af978adaddd91c))
+
+- Add changes extraction to mutation agent
+  ([`ad342ca`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ad342ca4d78ac24f79318da4ea5398c90e7d1f47))
+
+- Add extended record card dataclass
+  ([`8aeab4e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8aeab4ee27fe1493ff4a2d702fd65b9b270b81e3))
+
+- Add extended record card dataclass
+  ([`2d80776`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2d807769fd04e6f7e2421f0b97bf2ee617abf838))
+
+- Add idea description rewriting logic
+  ([`0201eb3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0201eb3b18d1b0d28c707d04f4145c2581089694))
+
+- Add idea description rewriting logic
+  ([`ea8ddd3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ea8ddd33a7e32dcd398a7082b09029b59602c8bb))
+
+- Add idea origin analysis script and minor refactor ideas_tracker.py
+  ([`ab184b8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ab184b886ba6aaee50fd646b061c8de07b2cd197))
+
+- Add idea origin analysis script and minor refactor ideas_tracker.py
+  ([`5a38c1d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5a38c1dc9035799430e8411bbc0531b0c704c45c))
+
+- Add idea tracker
+  ([`e9e911d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e9e911d7deadc0762e613d4ea8d536e74ba0d4be))
+
+- Add idea tracker
+  ([`eb9701b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/eb9701ba7bb9fbdd549da3dceadfa440d0027c91))
+
+- Add logging for idea tracker
+  ([`21b6f58`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/21b6f5859181ff37a394365712589ce632de8c66))
+
+- Add logging for idea tracker
+  ([`0563796`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/05637963cea3ec09dd93d7e4f93b2a711d1ee81c))
+
+- Add ProgramCard, ConnectedIdea, AnyCard Pydantic models
+  ([`edbdd1e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/edbdd1efe4ca4f69e8f5d8189fba59a1c2b8c406))
+
+- Add update logic for extended record card
+  ([`0bb5038`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0bb503807bff566dc2b738f2a5e2ce45a7d04fbe))
+
+- Add update logic for extended record card
+  ([`8529a30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8529a3025c3c3f6c6c1b19983eaca5ea7487a6c6))
+
+- Csv loading to IdeaTracker
+  ([`3cc0605`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3cc0605511c217b47e074546cea5bcb0fe2f895c))
+
+- Csv loading to IdeaTracker
+  ([`5b610ca`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5b610ca1cfab27a5eed430cbd8552257e520bc87))
+
+- Experimental ml pipeline for impact estimation based on linear regression feature weights
+  ([`ffaac97`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ffaac97458bd11bf9b8612745cbecef052319149))
+
+- Experimental ml pipeline for impact estimation based on linear regression feature weights
+  ([`bda2e79`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/bda2e793e387267b6a5ecae6b606b41f82e53640))
+
+- Implement idea enrichment with LLM-generated keywords and summaries
+  ([`1d4f350`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1d4f350e3e958a9343f1b4b1b7e6d8a3e0704513))
+
+- Implement idea enrichment with LLM-generated keywords and summaries
+  ([`102cb74`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/102cb74ef3cf8051ce1ac9bc6a05e130eb47a2e2))
+
+- Support for extended record card
+  ([`a7cb492`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a7cb492e5f6365a5df37374a003b11b1ab1a7907))
+
+- Support for extended record card
+  ([`0549fe7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0549fe7587078ff0ddd4928fbf6e73f3909d86a2))
+
+- Task description loading
+  ([`bbfc57a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/bbfc57a3eaed9b6e216c5e83f98fe6f2f9ed3b2e))
+
+- Task description loading
+  ([`2c3ff68`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2c3ff6864318783385d45195ea1cfe345dd79535))
+
+- Update main logic to work with extended record card
+  ([`b1ed1ac`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b1ed1ac75a079b26b42df7e319eb687756456f7d))
+
+- Update main logic to work with extended record card
+  ([`a98d6b1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a98d6b1e9e69d239b963c352cf94e4374f10bdc7))
+
+### Refactoring
+
+- Add Protocol types, fix mypy errors, CardDict alias
+  ([`2f09116`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2f091166030a5a4893755c85e53e96a26b7e2431))
+
+- Extract _note_fields_changed, remove stale comments and blank lines
+  ([`c3fbede`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c3fbede31dec9941c9adbb1f89ae7e839cc5f3e4))
+
+- Extract card_conversion.py + utils.py, add MemoryNoteProtocol typing
+  ([`406f2cd`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/406f2cdeb29f04e6fad2042264aab727d7997a1f))
+
+- Extract DEFAULT_MODEL_NAME constant, remove ad-hoc string
+  ([`0f67bc1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0f67bc13317979792c50573b998d70acb397a3ad))
+
+- Extract more pure functions + memory_write_config.py
+  ([`7e1bdbe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/7e1bdbe383529e1ab27a4b12c04b494c2adc7ffa))
+
+- Phase 2 — import cleanup, context manager, remove __del__
+  ([`dd31c4f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/dd31c4fed46de6eead0a8ba14507e9f755846b55))
+
+- Phase 3 — extract _ConceptApiClient + utilities
+  ([`8dacf30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8dacf30cd93b9c59e59dc1d4ada5aa7e7fa3d7a5))
+
+- Record card extended minor refactor
+  ([`bbda084`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/bbda084fab66b071bb5a99c5a03450fa94319622))
+
+- Record card extended minor refactor
+  ([`b5eac06`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b5eac06a2c47e70e29f09cbf67c5489bb77dcd61))
+
+- Remove debug code
+  ([`5a9f8ec`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5a9f8ecaae4b273549e1cec62f98c88379366e27))
+
+- Remove debug code
+  ([`117a325`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/117a3253574f56133ed0e88321e1494c0e4f5846))
+
+- Rename test files and classes to professional naming
+  ([`6ae0134`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6ae0134744a7b42b112fbee7e3c41d8e2cd2343a))
+
+- Replace all print() with loguru logger across memory module
+  ([`5091f37`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5091f37410029b881312d06da0aa55794984131a))
+
+- Replace ML impact pipeline with origin analysis computation and improve docstring clarity
+  ([`bcb2ff7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/bcb2ff768d014ee7c55972eb37b8510f07511f1f))
+
+- Replace ML impact pipeline with origin analysis computation and improve docstring clarity
+  ([`3f57d5f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3f57d5f5ea882437bd0ee189a47d9eb94f392567))
+
+### Testing
+
+- Chaos-hacker bug exposure tests (16 tests)
+  ([`1e62411`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1e62411879716283514f868fcf35650fa91604d7))
+
+- Cycle 10 (final) — API search, LLM synthesis, close() (21 tests)
+  ([`2d63100`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2d6310088d0e911a804aa64bfe8bf49740688cac))
+
+- Cycle 11 — fake agentic memory infrastructure + 24 tests
+  ([`72c49e5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/72c49e531948a79f72d14895aab5257178e34b4b))
+
+- Cycle 12 — fake Chroma/GAM + full dedup pipeline (15 tests)
+  ([`d94a674`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d94a67478707ecddc3f27768c82ec84b5f4ec8c9))
+
+- Cycle 13 — 7 realistic E2E scenarios + 2 unpatched real-memory tests
+  ([`282f7f6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/282f7f6c4f26caef687f0b9595592ec1e28b26e1))
+
+- Cycle 2 — API client, dedup decision, truncate (28 tests)
+  ([`77aa25d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/77aa25dcf635b5f7b506ac9a6105ece3e1dcd08d))
+
+- Cycle 3 — deeper AmemGamMemory internals (21 tests)
+  ([`543b2e2`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/543b2e234a69ed378cca85e636ded592efc9ab6a))
+
+- Cycle 4 — integration tests + chaos-hacker regression fixes (25 tests)
+  ([`4b92198`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4b921986d92b34c7252e4567fca391edca4b5eb1))
+
+- Cycle 5 — mutation operator memory flow, sync_from_api, API body checks (17 tests)
+  ([`fcbc352`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/fcbc35270c31ace767c043873323de834b578f20))
+
+- Cycle 6 — 8 e2e scenarios + data_components (64 new tests)
+  ([`1040f02`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1040f027e94310d0fa23e280747ae64c009988da))
+
+- Cycle 7 — contract tests + engine interaction (34 new tests)
+  ([`616f88c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/616f88cb042e5f1cf9bcfd1ff94eb3657854330d))
+
+- Cycle 8 — full-loop evolution with memory (11 E2E tests)
+  ([`d7ef94d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d7ef94da085711f4ef6cfb7c22c9bc3169fe9980))
+
+- Cycle 9 — LLMMutationOperator real constructor + memory (14 tests)
+  ([`9035068`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/903506877ddd0768dc50896fa63a424a9f5a0534))
+
+- P0 exhaustive tests for memory module core (211 tests)
+  ([`572c28a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/572c28a3dc8c8e232e061f704c81e6eae2d1f89a))
+
+- P1 dedup edge cases + OpenAI inference tests (100 tests)
+  ([`9945c0e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9945c0e499f0243a78f029bad47f26c78da5f8cb))
+
+- P2 memory_write_example edge cases (22 tests)
+  ([`70375bb`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/70375bb8c9b3e0cd8b040c4550bd4cdc7e8be924))
+
+
 ## v1.24.1 (2026-04-01)
 
 ### Bug Fixes
