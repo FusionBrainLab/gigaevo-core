@@ -11,7 +11,7 @@ import uuid
 from dotenv import load_dotenv
 from loguru import logger
 
-from gigaevo.memory import config
+import gigaevo.memory.config as config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
 from gigaevo.memory.shared_memory.card_update_dedup import (
     QUERY_DESCRIPTION,
