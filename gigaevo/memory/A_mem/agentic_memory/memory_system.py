@@ -3,18 +3,16 @@ from __future__ import annotations
 import ast
 from datetime import datetime
 import json
-import logging
 from pathlib import Path
 import re
 from typing import Any
 import uuid
 
 from A_mem.agent.agent_class import LLMService
+from loguru import logger
 
 from .llm_controller import LLMController
 from .retrievers import ChromaRetriever, PersistentChromaRetriever
-
-logger = logging.getLogger(__name__)
 
 
 class MemoryNote:
@@ -357,7 +355,9 @@ class AgenticMemorySystem:
                     },
                 },
             )
-            print("[LLM DEBUG][analyze_content] Response received:\n" + str(response))
+            logger.debug(
+                "[LLM DEBUG][analyze_content] Response received:\n" + str(response)
+            )
             parsed = self._parse_llm_json(response)
             # Ensure expected keys exist.
             return {
@@ -370,7 +370,7 @@ class AgenticMemorySystem:
                 "tags": parsed.get("tags", []) if isinstance(parsed, dict) else [],
             }
         except Exception as e:
-            print(f"Error analyzing content: {e}")
+            logger.error(f"Error analyzing content: {e}")
             return {"keywords": [], "context": "General", "tags": []}
 
     def add_note(self, content: str, time: str = None, **kwargs) -> str:
@@ -846,7 +846,7 @@ class AgenticMemorySystem:
                         },
                     },
                 )
-                print(
+                logger.debug(
                     f"[LLM DEBUG][process_memory] Response for note {note.id}:\n{response}"
                 )
 

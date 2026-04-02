@@ -5,6 +5,7 @@ from typing import Any
 
 from GAM_root.gam.retriever.base import AbsRetriever
 from GAM_root.gam.schemas import Hit, InMemoryPageStore, Page
+from loguru import logger
 
 
 class IndexRetriever(AbsRetriever):
@@ -20,7 +21,7 @@ class IndexRetriever(AbsRetriever):
                 dir_path=os.path.join(index_dir, "pages")
             )
         except Exception as e:
-            print("cannot load index, error: ", e)
+            logger.error("cannot load index, error: ", e)
 
     def build(self, page_store: InMemoryPageStore):
         # 创建一个新的 InMemoryPageStore 实例用于保存
