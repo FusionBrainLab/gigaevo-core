@@ -26,6 +26,8 @@ AnyContainer = Box[Any]
 StringContainer = Box[str]
 FloatDictContainer = Box[dict[str, float]]
 DictContainer = Box[dict[str, Any]]
+# Backward-compat alias for validator stage outputs stored via cloudpickle.
+ValidatorOutput = Box[tuple[dict[str, float], Any]]
 
 StringList = ListOf[str]
 FloatDictList = ListOf[dict[str, float]]

@@ -256,6 +256,65 @@ class TestRunOne:
         sys.modules.pop("user_code", None)
         linecache.cache.pop(_CODE_FILENAME, None)
 
+    def test_python_path_replaces_shadowed_top_level_module(self, tmp_path) -> None:
+        """Problem-local modules should override stale cached modules in workers."""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        (repo_dir / "helper.py").write_text("VALUE = 'repo'\n", encoding="utf-8")
+
+        problem_dir = tmp_path / "problem"
+        problem_dir.mkdir()
+        (problem_dir / "helper.py").write_text("VALUE = 'problem'\n", encoding="utf-8")
+
+        sys.path.insert(0, str(repo_dir))
+        try:
+            import helper
+
+            assert helper.VALUE == "repo"
+
+            payload: dict[str, Any] = {
+                "code": "from helper import VALUE\n\ndef read_value(): return VALUE\n",
+                "function_name": "read_value",
+                "python_path": [str(problem_dir)],
+            }
+            result, error = _run_one(payload)
+            assert error is None
+            assert result == "problem"
+        finally:
+            sys.modules.pop("helper", None)
+            sys.modules.pop("user_code", None)
+            linecache.cache.pop(_CODE_FILENAME, None)
+            sys.path = [p for p in sys.path if p != str(repo_dir)]
+
+    def test_python_path_is_moved_ahead_of_repo_root(self, tmp_path) -> None:
+        """A reused worker must reorder python_path entries to the front."""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        (repo_dir / "helper.py").write_text("VALUE = 'repo'\n", encoding="utf-8")
+
+        problem_dir = tmp_path / "problem"
+        problem_dir.mkdir()
+        (problem_dir / "helper.py").write_text("VALUE = 'problem'\n", encoding="utf-8")
+
+        sys.path.insert(0, str(repo_dir))
+        sys.path.append(str(problem_dir))
+        try:
+            payload: dict[str, Any] = {
+                "code": "from helper import VALUE\n\ndef read_value(): return VALUE\n",
+                "function_name": "read_value",
+                "python_path": [str(problem_dir)],
+            }
+            result, error = _run_one(payload)
+            assert error is None
+            assert result == "problem"
+        finally:
+            sys.modules.pop("helper", None)
+            sys.modules.pop("user_code", None)
+            linecache.cache.pop(_CODE_FILENAME, None)
+            sys.path = [
+                p for p in sys.path if p not in {str(repo_dir), str(problem_dir)}
+            ]
+
 
 # ---------------------------------------------------------------------------
 # _worker_loop

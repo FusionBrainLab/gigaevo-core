@@ -1,0 +1,71 @@
+TASK DEFINITION - ADAPTED ALGOTUNE LQR
+
+This problem adapts the AlgoTune `lqr` task into gigaevo's standard problem
+format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of discrete-time
+finite-horizon Linear-Quadratic Regulator (LQR) cases.
+
+Each case minimizes:
+`sum_{t=0}^{T-1} (x_t^T Q x_t + u_t^T R u_t) + x_T^T P x_T`
+
+subject to:
+`x_{t+1} = A x_t + B u_t`
+with initial state `x_0 = x0`
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: state dimension
+- `random_seed`: seed used to deterministically generate the LQR instance
+
+For each case:
+- set `m = max(1, n // 2)` and `T = 2 * n`
+- generate `A` with standard normal entries of shape `(n, n)`
+- generate `B` with standard normal entries of shape `(n, m)`
+- generate `Q = G^T G` from a standard normal `(n, n)` matrix `G`
+- generate terminal cost `P = H^T H` from a standard normal `(n, n)` matrix `H`
+- generate `R = M^T M + 1e-2 I` from a standard normal `(m, m)` matrix `M`
+- generate `x0` as a standard normal column vector of shape `(n, 1)`
+
+OUTPUT
+Return a list of dictionaries, in the same order as `context["cases"]`.
+
+Each output dictionary must contain:
+- `U`: a numeric matrix of shape `(T, m)` containing the control sequence
+
+The validator accepts any control sequence whose total cost matches the optimal
+finite-horizon LQR cost within numerical tolerance.
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full fixed-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `exact_case_fraction`: diagnostic metric for how many cases achieved optimal
+  cost
+- `avg_relative_cost_error`: mean relative cost error across the fixed suite
+
+RULES
+- Keep the case order unchanged
+- Do not use randomness beyond the deterministic problem generation
+- Return finite numeric controls only
+- `U` must have shape `(T, m)` for each case
+- You may use NumPy and SciPy
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/lqr/lqr.py`

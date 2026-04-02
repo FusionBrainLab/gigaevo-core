@@ -1,0 +1,24 @@
+MUTATION INPUTS
+
+TASK DESCRIPTION:
+{task_description}
+
+AVAILABLE METRICS:
+{metrics_description}
+
+MUTATION MODE:
+{mutation_mode}
+
+PARENTS (same parent code + mutation context given to mutation agent):
+{parent_blocks}
+
+MEMORY CARDS:
+{memory_text}
+
+Select up to {max_cards} memory card(s) that are most helpful for this mutation.
+Use task objectives, metrics, mutation mode, and parent context (code/metrics/insights/lineage) to pick the most actionable cards.
+Return each selected card as a compact block with:
+- CARD_ID
+- WHEN_TO_USE (1-3 bullets)
+- MUTATION_ACTIONS (1-3 bullets)
+- NOTES (optional)

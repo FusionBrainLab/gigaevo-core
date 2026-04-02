@@ -344,6 +344,16 @@ ehthumbs.db
 Thumbs.db
 
 # =============================================================================
+# Memory
+# =============================================================================
+
+evo_memory_agent/evo_test/
+evo_memory_agent/memory_usage_store/
+insights_appearence/
+selected_ideas/
+redis_commands.txt
+
+# =============================================================================
 # Development and Testing
 # =============================================================================
 
@@ -625,3 +635,19 @@ problems/chains/hover/dataset/*.pkl
 problems/chains/hover/dataset/*.tar.bz2
 problems/chains/hover/dataset/bm25s_index/
 problems/chains/hover/dataset/*.jsonl
+gigaevo/llm/ideas_tracker/utils/it_logger_description.md
+
+gigaevo.memory/
+mut_dmp/
+.codex
+evo_memory_agent/
+insights_appearence/
+selected_ideas/
+redis_commands.txt
+gigaevo/memory/memory_usage_store/
+bm25s_index/
+wiki17_abstracts.jsonl.gz
+task_bm25s_index
+check_openrouter_key.py
+experiments.txt
+AlgoTune-main/

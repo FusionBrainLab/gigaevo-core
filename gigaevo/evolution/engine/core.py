@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
+import json
+from pathlib import Path
 import time
 from typing import TYPE_CHECKING
 
@@ -19,6 +21,7 @@ from gigaevo.evolution.mutation.mutation_operator import (
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
+from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
@@ -391,7 +394,43 @@ class EvolutionEngine:
             parent_selector=self.config.parent_selector,
             limit=self.config.max_mutations_per_generation,
             iteration=self.metrics.total_generations,
+            memory_used=False,
         )
+        if self.config.memory_enabled:
+            fitness_key = self.config.fitness_key
+            if not fitness_key:
+                logger.warning(
+                    "[EvolutionEngine] Memory enabled but fitness_key is not configured"
+                )
+                memory_parents = elites[: self.config.memory_top_n]
+            else:
+                memory_parents = await self._select_top_programs_by_fitness(
+                    self.config.memory_top_n
+                )
+
+            if memory_parents:
+                memory_instructions = self._read_memory_instructions() or ""
+                if not memory_instructions:
+                    logger.debug(
+                        "[EvolutionEngine] No local memory file loaded; using backend memory search only"
+                    )
+                memory_ids = await generate_mutations(
+                    memory_parents,
+                    mutator=self.mutation_operator,
+                    storage=self.storage,
+                    state_manager=self.state,
+                    parent_selector=self.config.parent_selector,
+                    limit=self.config.memory_top_n,
+                    iteration=self.metrics.total_generations,
+                    memory_instructions=memory_instructions,
+                    memory_used=True,
+                )
+                mutation_ids.extend(memory_ids)
+            else:
+                logger.debug(
+                    "[EvolutionEngine] No eligible programs for memory mutations"
+                )
+
         self.metrics.record_mutation_metrics(len(mutation_ids), 0)
         return mutation_ids
 
@@ -655,3 +694,133 @@ class EvolutionEngine:
     def _reached_generation_cap(self) -> bool:
         cap = self.config.max_generations
         return cap is not None and self.metrics.total_generations >= cap
+
+    async def _select_top_programs_by_fitness(self, total: int) -> list[Program]:
+        if total <= 0:
+            return []
+        fitness_key = self.config.fitness_key
+        if not fitness_key:
+            logger.warning(
+                "[EvolutionEngine] Memory enabled but fitness_key is not configured"
+            )
+            return []
+
+        program_ids = await self.strategy.get_program_ids()
+        if not program_ids:
+            return []
+
+        programs = await self.storage.mget(program_ids)
+        scored: list[tuple[Program, float]] = []
+        for prog in programs:
+            if not prog:
+                continue
+            metrics = prog.metrics or {}
+            fitness_val = metrics.get(fitness_key)
+            if fitness_val is None:
+                continue
+            validity = metrics.get(VALIDITY_KEY)
+            if validity is not None and validity < 0.5:
+                continue
+            scored.append((prog, float(fitness_val)))
+
+        if not scored:
+            return []
+
+        scored.sort(
+            key=lambda item: item[1],
+            reverse=bool(self.config.fitness_key_higher_is_better),
+        )
+        return [prog for prog, _ in scored[:total]]
+
+    def _read_memory_instructions(self) -> str | None:
+        path = Path(self.config.memory_path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            logger.warning("[EvolutionEngine] Memory file not found: {}", path)
+            return None
+        except Exception as exc:
+            logger.warning(
+                "[EvolutionEngine] Failed to read memory file {}: {}", path, exc
+            )
+            return None
+
+        text = text.strip()
+        if not text:
+            return None
+
+        if path.suffix.lower() == ".json":
+            formatted = self._format_memory_cards_json(text, path)
+            if not formatted:
+                return None
+            return formatted
+
+        return text
+
+    @staticmethod
+    def _format_memory_cards_json(raw: str, path: Path) -> str | None:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "[EvolutionEngine] Failed to parse memory JSON {}: {}", path, exc
+            )
+            return None
+
+        cards = payload.get("memory_cards")
+        if not isinstance(cards, list) or not cards:
+            logger.warning(
+                "[EvolutionEngine] Memory JSON {} missing non-empty memory_cards list",
+                path,
+            )
+            return None
+
+        formatted_cards: list[str] = []
+        for idx, card in enumerate(cards, start=1):
+            if not isinstance(card, dict):
+                continue
+            formatted = EvolutionEngine._format_memory_card(card, idx)
+            if formatted:
+                formatted_cards.append(formatted)
+
+        if not formatted_cards:
+            logger.warning(
+                "[EvolutionEngine] Memory JSON {} contained no usable cards", path
+            )
+            return None
+
+        return "\n\n---\n\n".join(formatted_cards)
+
+    @staticmethod
+    def _format_memory_card(card: dict[str, Any], index: int) -> str:
+        card_id = str(card.get("card_id") or f"card_{index}")
+        lines = [f"CARD_ID: {card_id}"]
+
+        card_type = card.get("type")
+        if card_type:
+            lines.append(f"TYPE: {card_type}")
+
+        EvolutionEngine._append_card_section(
+            lines, "WHEN_TO_USE", card.get("when_to_use")
+        )
+        EvolutionEngine._append_card_section(
+            lines, "MUTATION_ACTIONS", card.get("mutation_actions")
+        )
+        EvolutionEngine._append_card_section(
+            lines, "WORKS_BEST_TOGETHER", card.get("works_best_together")
+        )
+        EvolutionEngine._append_card_section(lines, "NOTES", card.get("notes"))
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _append_card_section(lines: list[str], label: str, items: object) -> None:
+        if not items:
+            return
+        if not isinstance(items, list):
+            items = [items]
+        cleaned = [str(item).strip() for item in items if item and str(item).strip()]
+        if not cleaned:
+            return
+        lines.append(f"{label}:")
+        lines.extend(f"- {item}" for item in cleaned)

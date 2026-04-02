@@ -1,0 +1,52 @@
+name: easy12_4
+total_examples: 200
+date_created: '2026-03-13T23:19:44.511334'
+format: jsonl
+version: '1.0'
+serializer: orjson
+grid:
+  size: 4
+  box_rows: 2
+  box_cols: 2
+config:
+  dataset_name: easy12_4
+  num_examples:
+    easy: 200
+    medium: 0
+    hard: 0
+    expert: 0
+  min_clues:
+    easy: 14
+    medium: 10
+    hard: 8
+    expert: 6
+  random_seed: 42069
+  require_unique: true
+  solutions_limit: 2
+  save_path: data/datasets/sudoku/easy12_4
+  force: true
+  deduplicate: true
+  exclude_dataset_paths: []
+  grid:
+    size: 4
+    box_rows: null
+    box_cols: null
+statistics:
+  generated: 200
+  rejected: 0
+  by_difficulty:
+    easy:
+      generated: 200
+      rejected: 0
+    medium:
+      generated: 0
+      rejected: 0
+    hard:
+      generated: 0
+      rejected: 0
+    expert:
+      generated: 0
+      rejected: 0
+files:
+  puzzles: easy12_4/puzzles.jsonl
+  chains: easy12_4/chains.jsonl

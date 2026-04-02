@@ -7,12 +7,20 @@ from typing import TYPE_CHECKING, Literal
 from loguru import logger
 
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
-from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.context import (
+    MUTATION_CONTEXT_METADATA_KEY,
+    MUTATION_MEMORY_METADATA_KEY,
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
 from gigaevo.evolution.mutation.utils import _DocstringRemover
 from gigaevo.exceptions import MutationError
-from gigaevo.llm.agents.factories import create_mutation_agent
+from gigaevo.llm.agents.factories import (
+    create_memory_selector_agent,
+    create_mutation_agent,
+)
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
+from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import Program
 
 if TYPE_CHECKING:
@@ -51,6 +59,7 @@ class LLMMutationOperator(MutationOperator):
         self.fallback_to_rewrite = fallback_to_rewrite
         self.context_key = context_key
         self.metrics_context = problem_context.metrics_context
+        self.metrics_formatter = MetricsFormatter(self.metrics_context)
         self.strip_comments_and_docstrings = strip_comments_and_docstrings
         self._prompt_fetcher = prompt_fetcher
 
@@ -62,6 +71,7 @@ class LLMMutationOperator(MutationOperator):
             prompts_dir=prompts_dir,
             prompt_fetcher=prompt_fetcher,
         )
+        self.memory_selector = create_memory_selector_agent(llm=llm_wrapper)
 
         logger.info(
             "[LLMMutationOperator] Initialized with mode: {}, "
@@ -96,12 +106,15 @@ class LLMMutationOperator(MutationOperator):
             return code
 
     async def mutate_single(
-        self, selected_parents: list[Program]
+        self,
+        selected_parents: list[Program],
+        memory_instructions: str | None = None,
     ) -> MutationSpec | None:
         """Generate a single mutation from the selected parents.
 
         Args:
             selected_parents: List of parent programs to mutate
+            memory_instructions: Optional memory text to guide mutation
 
         Returns:
             MutationSpec if successful, None if no mutation could be generated
@@ -111,6 +124,36 @@ class LLMMutationOperator(MutationOperator):
             return None
 
         try:
+            parents_for_mutation = selected_parents
+            memory_text = (memory_instructions or "").strip()
+            memory_selected_ids: list[str] = []
+            use_memory_selector = memory_instructions is not None
+            if use_memory_selector:
+                memory_selection = await self.memory_selector.select(
+                    input=selected_parents,
+                    mutation_mode=self.mutation_mode,
+                    task_description=self.problem_context.task_description,
+                    metrics_description=self.metrics_formatter.format_metrics_description(),
+                    memory_text=memory_text,
+                    max_cards=3,
+                )
+                selected_cards = memory_selection.cards
+                memory_selected_ids = memory_selection.card_ids
+                if selected_cards:
+                    memory_block = "\n\n".join(selected_cards)
+                    parents_for_mutation = []
+                    for parent in selected_parents:
+                        clone = parent.model_copy(deep=True)
+                        clone.metadata[MUTATION_MEMORY_METADATA_KEY] = memory_block
+                        clone.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] = (
+                            memory_selected_ids
+                        )
+                        parents_for_mutation.append(clone)
+                else:
+                    logger.warning(
+                        "[LLMMutationOperator] Red memory search returned no ideas; continuing without memory"
+                    )
+
             if self.mutation_mode == "diff" and len(selected_parents) != 1:
                 raise MutationError(
                     "Diff-based mutation requires exactly 1 parent program"
@@ -122,11 +165,11 @@ class LLMMutationOperator(MutationOperator):
             )
 
             result = await self.agent.arun(
-                input=selected_parents, mutation_mode=self.mutation_mode
+                input=parents_for_mutation, mutation_mode=self.mutation_mode
             )
 
             # Capture model name (works for both standard and bandit routers)
-            model_name = self.llm_wrapper.get_last_model()
+            model_name = result.get("model_used") or self.llm_wrapper.get_last_model()
 
             final_code: str = result["code"].strip()
             if not final_code:
@@ -148,12 +191,19 @@ class LLMMutationOperator(MutationOperator):
                 mutation_metadata[MutationSpec.META_OUTPUT] = structured_output
                 archetype = result.get("archetype", "unknown")
                 logger.debug("[LLMMutationOperator] Mutation archetype: {}", archetype)
+            if result.get("changes"):
+                logger.debug(
+                    "[LLMMutationOperator] Mutation returned {} tracked change(s)",
+                    len(result["changes"]),
+                )
             if model_name:
                 mutation_metadata[MutationSpec.META_MODEL] = model_name
-            # Stamp prompt tracking ID if present
             prompt_id = result.get("prompt_id")
             if prompt_id is not None:
                 mutation_metadata[MutationSpec.META_PROMPT_ID] = prompt_id
+            mutation_metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] = (
+                memory_selected_ids
+            )
 
             mutation_spec = MutationSpec(
                 code=final_code,

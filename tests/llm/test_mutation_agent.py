@@ -430,19 +430,27 @@ class TestMutationStructuredOutput:
     """Tests for the MutationStructuredOutput Pydantic model."""
 
     def test_defaults(self):
-        """insights_used defaults to empty list."""
+        """List fields default to empty lists."""
         out = MutationStructuredOutput(
             archetype="test",
             justification="just",
             code="print(1)",
         )
         assert out.insights_used == []
+        assert out.changes == []
 
     def test_model_dump(self):
         """model_dump returns all fields."""
         out = _make_structured_output()
         d = out.model_dump()
-        assert set(d.keys()) == {"archetype", "justification", "insights_used", "code"}
+        assert set(d.keys()) == {
+            "archetype",
+            "justification",
+            "insights_used",
+            "changes",
+            "code",
+        }
+        assert d["changes"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -467,19 +475,16 @@ class TestMutationPromptFields:
 class TestBuildPromptEdgeCases:
     """Edge cases for build_prompt."""
 
-    def test_missing_mutation_context_key_produces_none_text(self):
-        """When MUTATION_CONTEXT_METADATA_KEY is absent, formatted_context is None.
-
-        This means "None" appears literally in the prompt — test the actual output.
-        """
+    def test_missing_mutation_context_key_produces_empty_context(self):
+        """When MUTATION_CONTEXT_METADATA_KEY is absent, formatted_context is empty string."""
         agent = _make_agent()
         parent = _make_program(code="def solve(): return 1", metadata={})
         state = _make_state(parents=[parent])
 
         result = agent.build_prompt(state)
         user_content = result["messages"][1].content
-        # metadata.get(key) returns None → formatted as "None"
-        assert "None" in user_content
+        # metadata.get(key) returns None → or "" → no "None" literal in prompt
+        assert "None" not in user_content
 
     def test_multiple_parents_count(self):
         """build_prompt with 3 parents produces count=3."""

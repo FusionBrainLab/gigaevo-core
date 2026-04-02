@@ -1,0 +1,74 @@
+TASK DEFINITION - ADAPTED ALGOTUNE POWER_CONTROL
+
+This problem adapts the AlgoTune `power_control` task into gigaevo's standard
+problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of wireless
+power-control problems.
+
+Each case minimizes:
+`sum(P)`
+
+subject to:
+- `P_min <= P <= P_max`
+- `SINR_i >= S_min` for every link `i`
+
+where:
+`SINR_i = G_ii P_i / (sigma_i + sum_{k != i} G_ik P_k)`
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: number of wireless links
+- `random_seed`: seed used to deterministically generate the network
+
+For each case:
+- draw the channel matrix `G` from `Uniform(0, 0.2)` and strengthen the
+  diagonal with an extra diagonal draw from `Uniform(0.8, 1.2)`
+- draw `sigma` from `Uniform(0.1, 0.5)`
+- draw `P_min` from `Uniform(0.05, 0.15)`
+- draw `P_max` from `Uniform(3.0, 7.0)`
+- draw one feasible power vector `P_feas` uniformly between `P_min` and `P_max`
+- compute its per-link SINR values and set `S_min = 0.8 * min(SINR)`
+
+OUTPUT
+Return a list of dictionaries, in the same order as `context["cases"]`.
+
+Each output dictionary must contain:
+- `P`: a numeric vector with length `n`
+- `objective`: the optimal total transmit power at that solution
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full fixed-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `exact_case_fraction`: diagnostic metric for how many cases were solved
+  exactly
+
+RULES
+- Keep the case order unchanged
+- Do not use randomness beyond the deterministic problem generation
+- Return only finite numeric values
+- `P` must satisfy the power bounds and all SINR constraints within numerical
+  tolerance
+- `objective` must match the returned power allocation
+- The returned objective must be optimal within validator tolerance
+- You may use NumPy and SciPy
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/power_control/power_control.py`

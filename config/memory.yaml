@@ -1,0 +1,160 @@
+# Unified configuration for memory backend and ideas tracker.
+#
+# Top-level sections are used by gigaevo.memory and MemorySelectorAgent.
+# The ideas_tracker section is used by gigaevo.memory.ideas_tracker.IdeaTracker.
+
+paths:
+  checkpoint_dir: memory_usage_store/api_exp4
+  banks_dir: ../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02
+
+api:
+  base_url: http://localhost:8000
+  namespace: exp9
+  use_api: false
+  channel: latest
+  author: null
+
+runtime:
+  # Synthesize search responses with LLM when needed.
+  enable_llm_synthesis: false
+
+  # Run A-MEM evolution flow during writes.
+  should_evolve: false
+
+  # Auto-fill missing card metadata using LLM.
+  fill_missing_fields_with_llm: false
+
+  search_limit: 5
+  rebuild_interval: 30
+  sync_batch_size: 100
+  sync_on_init: true
+
+gam:
+  enable_bm25: false
+
+  # default | experimental
+  pipeline_mode: experimental
+
+  # Supported tools:
+  # page_index, keyword, vector,
+  # vector_description, vector_task_description, vector_explanation_summary,
+  # vector_description_explanation_summary,
+  # vector_description_task_description_summary
+  allowed_tools:
+    - page_index
+    - vector
+
+  # Maximum retrieval hits (top_k) per tool.
+  top_k_by_tool:
+    keyword: 5
+    vector: 3
+    vector_description: 3
+    vector_task_description: 0
+    vector_explanation_summary: 3
+    vector_description_explanation_summary: 3
+    vector_description_task_description_summary: 3
+    page_index: 5
+
+# Update/dedup pipeline used when writing cards into an existing memory folder.
+# Set enabled=false to disable LLM deduplication/update actions.
+card_update_dedup:
+  enabled: true
+  retrieval:
+    # Top-k retrieved per each query:
+    # 1) description
+    # 2) explanation summary
+    # 3) description + explanation summary
+    # 4) description + task description summary
+    top_k_per_query: 10
+    # Final top-N after weighted score aggregation.
+    final_top_n: 10
+    # Filter out very weak candidates before LLM decision.
+    min_final_score: 0.05
+    # final_score = sum_i(w_i * s_i)
+    weights:
+      description: 0.35
+      explanation_summary: 0.2
+      description_explanation_summary: 0.3
+      description_task_description_summary: 0.15
+  llm:
+    max_retries: 2
+
+# OpenRouter reasoning controls for gigaevo.memory/config.py.
+reasoning:
+  effort: "minimal"
+
+models:
+  openai_base_url: https://openrouter.ai/api/v1
+  openrouter_model_name: google/gemini-3-flash-preview
+  amem_embedding_model_name: all-MiniLM-L6-v2
+  gam_dense_retriever_model_name: BAAI/bge-m3
+
+downloads:
+  huggingface:
+    etag_timeout: 60
+    download_timeout: 300
+
+ideas_tracker:
+  # Number of known ideas bundled into one RecordList.
+  list_max_ideas: 20
+
+  # LLM model used by IdeaAnalyzer.
+  analyzer:
+    type: default # options: default, fast
+    model: google/gemini-3-flash-preview
+    base_url: "https://openrouter.ai/api/v1"
+    reasoning:
+      effort: "minimal"
+    postprocessing:
+      type: default # options: default, fast
+    record_conversion:
+      type: default # options: default, fast
+    description_rewriting: true
+
+  analyzer_fast_settings:
+    embeddings_model: "sentence-transformers/all-mpnet-base-v2"
+    batch_size: 32
+    min_samples_for_dbscan: 4
+    dbscan_eps: 0.38
+    dbscan_min_samples: 2
+    max_attempts: 10
+    max_rounds: 100
+    recompute_center: false
+    refine_subgroup_size: 1000
+    llm_max_concurrent: 100
+
+  # Connection settings for RedisRunConfig.
+  redis:
+    redis_host: "localhost"
+    redis_port: 6379
+    redis_db: 1
+    redis_prefix: "heilbron"
+    label: ""
+
+  statistics:
+    enabled: false
+    # available modes: top_k, top_fitness, delta_fitness
+    mode: "top_k"
+    top_k_delta_fitness: 5
+    top_k_fitness: 5
+
+  # Optional: write current run's best ideas into memory DB pipeline.
+  memory_write_pipeline:
+    enabled: true
+    best_programs_percent: 5.0
+
+  # Track memory-card usage (selected memory IDs + per-use fitness deltas)
+  # and write it back into card `usage.used` during memory write pipeline.
+  usage_tracking:
+    enabled: true
+
+  experimental_features:
+    # ML-based impact analysis pipeline (Bootstrap ElasticNet).
+    ml_impact_pipeline:
+      enabled: false
+      n_iterations: 200
+      include_interactions: true
+      max_interaction_pairs: 10
+      min_idea_programs: 2
+      confidence_level: 0.95
+      random_state: 42

@@ -1,0 +1,67 @@
+TASK DEFINITION - ADAPTED ALGOTUNE CHEBYSHEV_CENTER
+
+This problem adapts the AlgoTune `chebyshev_center` task into gigaevo's
+standard problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of Chebyshev-center
+problems.
+
+Each case asks for the center of the largest Euclidean ball contained in the
+polyhedron:
+`{x | a_i^T x <= b_i}`
+
+Equivalently, the optimal radius `r` satisfies:
+`a_i^T x + r ||a_i||_2 <= b_i` for all rows `i`
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: the primary size parameter
+- `random_seed`: seed used to deterministically generate the polyhedron
+
+For each case:
+- increment `n` by one
+- set `m = n // 2`
+- draw `x_pseudo` and a matrix `a` from a standard normal distribution
+- replace `a` with `concat(a, -a)`
+- set `b = a @ x_pseudo + u` for one extra uniform random vector `u`
+
+OUTPUT
+Return a list of dictionaries, in the same order as `context["cases"]`.
+
+Each output dictionary must contain:
+- `solution`: a numeric vector with length `n` representing the center
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full fixed-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `exact_case_fraction`: diagnostic metric for how many cases were solved
+  exactly
+
+RULES
+- Keep the case order unchanged
+- Do not use randomness beyond the deterministic problem generation
+- Return only finite numeric values
+- `solution` must lie inside the polyhedron within numerical tolerance
+- The inscribed-ball radius induced by `solution` must be optimal within
+  validator tolerance
+- You may use NumPy and SciPy
+
+NOTES ON FITNESS
+This adaptation is intended for speed optimization of a correct algorithm.
+Programs that fail exact correctness are rejected by validation. Among valid
+programs, higher fitness means faster average execution.
+
+TIMING CONFIGURATION
+The number of repeated timing runs is controlled by:
+`runtime_evaluation.timing_repetitions` in `metrics.yaml`
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/chebyshev_center/chebyshev_center.py`

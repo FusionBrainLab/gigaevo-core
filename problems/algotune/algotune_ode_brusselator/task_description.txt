@@ -1,0 +1,49 @@
+TASK DEFINITION - ADAPTED ALGOTUNE ODE_BRUSSELATOR
+
+This problem adapts the AlgoTune `ode_brusselator` task into gigaevo's
+standard problem format.
+
+OBJECTIVE
+Implement `entrypoint(context)` that solves a fixed suite of Brusselator
+initial value problems and returns the final two-species state for each one.
+
+INPUT CONTEXT
+`context["cases"]` is a list of dictionaries. Each case contains:
+- `n`: integration horizon scale factor
+- `random_seed`: seed used to deterministically generate the ODE parameters and
+  initial state
+
+For each case, the generated problem contains:
+- `t0 = 0.0`
+- `t1 = n`
+- `y0`: a length-2 initial state
+- `params`: `A`, `B`
+
+OUTPUT
+Return a list of length-2 numeric arrays/lists, in the same order as
+`context["cases"]`.
+
+Each output must equal the final state produced by the reference RK45 solve of
+the generated Brusselator system.
+
+EVALUATION
+- `is_valid`: hard correctness gate; invalid outputs are rejected
+- `fitness`: execution speed score `1 / execution_time_sec`
+- `execution_time_sec`: median runtime of the full 5-case batch
+- `timing_repetitions`: number of repeated batch timings used in the median
+- `avg_relative_error`: diagnostic metric for exactness
+- `exact_case_fraction`: diagnostic metric for how many cases matched exactly
+
+RULES
+- Keep the case order unchanged
+- Return numeric finite arrays only
+- Do not use randomness
+- You may use NumPy and SciPy
+
+RUN CONFIGURATION
+Use this problem with:
+`pipeline=algotune_speed`
+
+REFERENCE
+This problem mirrors the core behavior of:
+`AlgoTune-main/AlgoTuneTasks/ode_brusselator/ode_brusselator.py`

@@ -11,14 +11,36 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from gigaevo.evolution.mutation.base import MutationSpec
-from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.context import (
+    MUTATION_CONTEXT_METADATA_KEY,
+    MUTATION_MEMORY_METADATA_KEY,
+)
 from gigaevo.llm.agents.base import LangGraphAgent
-from gigaevo.llm.models import MultiModelRouter
+from gigaevo.llm.models import MultiModelRouter, get_selected_model
 from gigaevo.programs.program import Program
 
 if TYPE_CHECKING:
     from gigaevo.programs.metrics.context import MetricsContext
     from gigaevo.prompts.fetcher import PromptFetcher
+
+
+class MutationChange(BaseModel):
+    """Tracker-friendly description of one introduced change."""
+
+    description: str = Field(
+        description=(
+            "Generalizable description of the introduced change, optionally followed "
+            "by concrete specifics when they matter. Prefer `general pattern + "
+            "concrete instance` over a narrow one-off description."
+        )
+    )
+    explanation: str = Field(
+        description=(
+            "Explain why this change was introduced, why it helped for this "
+            "program, and when possible why the same idea could transfer to future "
+            "mutations."
+        )
+    )
 
 
 class MutationStructuredOutput(BaseModel):
@@ -36,6 +58,14 @@ class MutationStructuredOutput(BaseModel):
     insights_used: list[str] = Field(
         default_factory=list,
         description="Flat list of insight strings that were acted on (verbatim from input)",
+    )
+    changes: list[MutationChange] = Field(
+        default_factory=list,
+        description=(
+            "Key introduced changes. Each item must contain a reusable or "
+            "generalizable description plus an explanation of why the change was "
+            "introduced."
+        ),
     )
     code: str = Field(
         description=(
@@ -80,6 +110,7 @@ class MutationState(TypedDict):
     # Fields set during response parsing (optional initially)
     parsed_output: NotRequired[dict[str, Any]]
     structured_output: NotRequired[MutationStructuredOutput]
+    metadata: NotRequired[dict[str, Any]]
     error: NotRequired[str]
 
 
@@ -209,15 +240,17 @@ class MutationAgent(LangGraphAgent):
         Returns:
             Updated state with llm_response and structured_output fields
         """
+        structured_response: Any = None
         try:
             structured_response = await self.structured_llm.ainvoke(state["messages"])
             state["llm_response"] = structured_response
             state["structured_output"] = structured_response
+            if "metadata" not in state:
+                state["metadata"] = {}
+            model_used = get_selected_model()
+            if model_used:
+                state["metadata"]["model_used"] = model_used
 
-            # Log model used (if LLM is a router)
-            model_used = None
-            if isinstance(self.llm, MultiModelRouter):
-                model_used = self.llm.get_last_model()
             logger.debug(
                 "[MutationAgent] Received structured output — archetype: {}, model: {}",
                 structured_response.archetype,
@@ -268,28 +301,7 @@ class MutationAgent(LangGraphAgent):
             state["prompt_id"] = None
 
         parents = state["input"]
-
-        # Build parent blocks - code + mutation context
-        parent_blocks = []
-        for i, p in enumerate(parents):
-            # Get pre-formatted mutation context from metadata
-            formatted_context = p.metadata.get(MUTATION_CONTEXT_METADATA_KEY)
-
-            block = f"""=== Parent {i + 1} ===
-```python
-{p.code}
-```
-
-{formatted_context}
-"""
-            parent_blocks.append(block)
-
-        # Use Pydantic model for type-safe formatting
-        prompt_fields = MutationPromptFields(
-            count=len(parents), parent_blocks="\n\n".join(parent_blocks)
-        )
-
-        user_prompt = self.user_prompt_template.format(**prompt_fields.model_dump())
+        user_prompt = self.build_user_prompt(parents)
 
         # Store prompts in state for logging
         state["system_prompt"] = self.system_prompt
@@ -316,6 +328,47 @@ class MutationAgent(LangGraphAgent):
 
         return state
 
+    def build_user_prompt(self, parents: list[Program]) -> str:
+        """Build the mutation user prompt for a set of parents."""
+        parent_blocks = self._build_parent_blocks(parents)
+        memory_block = self._build_memory_block(parents)
+        if memory_block:
+            parent_blocks = f"{parent_blocks}\n\n{memory_block}"
+        prompt_fields = MutationPromptFields(
+            count=len(parents), parent_blocks=parent_blocks
+        )
+        return self.user_prompt_template.format(**prompt_fields.model_dump())
+
+    def _build_parent_blocks(self, parents: list[Program]) -> str:
+        """Build formatted parent blocks for the mutation prompt."""
+        blocks: list[str] = []
+        for i, p in enumerate(parents):
+            formatted_context = p.metadata.get(MUTATION_CONTEXT_METADATA_KEY) or ""
+
+            block = f"""=== Parent {i + 1} ===
+```python
+{p.code}
+```
+
+{formatted_context}
+"""
+            blocks.append(block)
+
+        return "\n\n".join(blocks)
+
+    def _build_memory_block(self, parents: list[Program]) -> str:
+        """Build a single memory block from any parent metadata."""
+        memory_text = ""
+        for parent in parents:
+            memory_instructions = parent.metadata.get(MUTATION_MEMORY_METADATA_KEY)
+            if memory_instructions:
+                memory_text = str(memory_instructions).strip()
+                if memory_text:
+                    break
+        if not memory_text:
+            return ""
+        return f"## Memory Instructions\n{memory_text}"
+
     def parse_response(self, state: MutationState) -> MutationState:
         """Parse LLM structured response to extract code and metadata.
 
@@ -331,6 +384,7 @@ class MutationAgent(LangGraphAgent):
         structured_output: MutationStructuredOutput | None = state.get(
             "structured_output"
         )
+        model_used = state.get("metadata", {}).get("model_used")
 
         if structured_output is None:
             error_msg = state.get("error", "No structured output received")
@@ -339,6 +393,7 @@ class MutationAgent(LangGraphAgent):
                 "code": "",
                 "structured_output": None,
                 "error": error_msg,
+                "model_used": model_used,
             }
             return state
 
@@ -385,6 +440,8 @@ class MutationAgent(LangGraphAgent):
                 "archetype": structured_output.archetype,
                 "justification": structured_output.justification,
                 "insights_used": structured_output.insights_used,
+                "changes": structured_output.changes,
+                "model_used": model_used,
             }
 
             logger.debug(
@@ -401,6 +458,7 @@ class MutationAgent(LangGraphAgent):
                     structured_output.model_dump() if structured_output else None
                 ),
                 "error": str(e),
+                "model_used": model_used,
             }
 
         return state

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gigaevo"
-version = "1.24.1"
+version = "1.27.0"
 description = "Advanced evolutionary computation framework with MAP-Elites and DAG-based program execution"
 authors = [
     {name = "GigaEvo Team", email = "team@gigaevo.ai"}
@@ -25,6 +25,16 @@ dependencies = [
     "orjson",
     "diffpatch",
     "openai>=1.0.0",
+    "httpx>=0.27.0",
+    "PyYAML>=6.0",
+    "chromadb>=0.4.22",
+    "sentence-transformers>=2.2.2",
+    "rank-bm25>=0.2.2",
+    "nltk>=3.8.1",
+    "transformers>=4.36.2",
+    "litellm>=1.16.11",
+    "scikit-learn>=1.3.2",
+    "tqdm>=4.65.0",
     "networkx",
     "scipy",
     "pandas",
@@ -88,6 +98,13 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "tools/**/*.py" = ["E402"]
 "__init__.py" = ["F401"]
 "problems/**/*.py" = ["E402", "E722", "E741", "F841"]
+"gigaevo/memory/ideas_tracker/run_ideas_tracker_from_csv.py" = ["E402"]
+"gigaevo/memory/shared_memory/a_mem_memory_creation.py" = ["E402"]
+"gigaevo/memory/shared_memory/amem_gam_retriever.py" = ["E402"]
+"gigaevo/memory/shared_memory/memory.py" = ["E402"]
+"gigaevo/memory/shared_memory/memory_usage_example.py" = ["E402"]
+"gigaevo/memory_platform/shared_memory/memory.py" = ["E402"]
+"gigaevo/memory_platform/shared_memory/remote_gam_retriever.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["gigaevo"]

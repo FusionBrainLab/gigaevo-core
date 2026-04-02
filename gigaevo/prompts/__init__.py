@@ -127,3 +127,17 @@ class ScoringPrompts:
     def user(prompts_dir: str | Path | None = None) -> str:
         """User prompt template for scoring."""
         return load_prompt("scoring", "user", prompts_dir=prompts_dir)
+
+
+class MemorySelectorPrompts:
+    """Memory selector agent prompt templates."""
+
+    @staticmethod
+    def system(prompts_dir: str | Path | None = None) -> str:
+        """System prompt for memory selector."""
+        return load_prompt("memory_selector", "system", prompts_dir=prompts_dir)
+
+    @staticmethod
+    def user(prompts_dir: str | Path | None = None) -> str:
+        """User prompt template for memory selector."""
+        return load_prompt("memory_selector", "user", prompts_dir=prompts_dir)

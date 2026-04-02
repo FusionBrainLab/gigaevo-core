@@ -38,6 +38,24 @@ class EngineConfig(BaseModel):
         default_factory=lambda: DefaultProgramEvolutionAcceptor(),
         description="Acceptor for determining if programs should be accepted for evolution",
     )
+    memory_enabled: bool = Field(
+        default=False, description="Enable memory-augmented mutations"
+    )
+    memory_top_n: int = Field(
+        default=0,
+        ge=0,
+        description="Top N programs by primary fitness to use for memory mutations",
+    )
+    memory_path: str = Field(
+        default="memory.txt",
+        description="Path to memory instructions file (.txt or .json)",
+    )
+    fitness_key: str | None = Field(
+        default=None, description="Primary fitness metric key for memory selection"
+    )
+    fitness_key_higher_is_better: bool = Field(
+        default=True, description="Whether higher fitness values are better"
+    )
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 

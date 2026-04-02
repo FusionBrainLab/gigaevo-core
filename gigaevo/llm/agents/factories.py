@@ -18,6 +18,7 @@ from langchain_openai import ChatOpenAI
 
 from gigaevo.llm.agents.insights import InsightsAgent
 from gigaevo.llm.agents.lineage import LineageAgent
+from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 from gigaevo.llm.agents.mutation import MutationAgent
 from gigaevo.llm.agents.scoring import ScoringAgent
 from gigaevo.llm.models import MultiModelRouter
@@ -251,3 +252,11 @@ def create_scoring_agent(
         trait_description=trait_description,
         max_score=max_score,
     )
+
+
+def create_memory_selector_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+) -> MemorySelectorAgent:
+    """Create a red-agent-backed memory selector for filtering memory ideas."""
+    _ = llm  # kept for API compatibility with existing call sites
+    return MemorySelectorAgent()

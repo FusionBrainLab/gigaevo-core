@@ -241,7 +241,7 @@ class TestGatherExceptionCounting:
 
         call_count = 0
 
-        async def mutate_side_effect(parents):
+        async def mutate_side_effect(parents, memory_instructions: str | None = None):
             nonlocal call_count
             call_count += 1
             if call_count == 2:

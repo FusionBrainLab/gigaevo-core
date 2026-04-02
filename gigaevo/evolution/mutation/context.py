@@ -12,6 +12,10 @@ from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.stages.collector import EvolutionaryStatistics
 
+MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
+MUTATION_MEMORY_METADATA_KEY = "mutation_memory"
+MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY = "memory_selected_idea_ids"
+
 
 class MutationContext(BaseModel, ABC):
     """Base class for mutation prompt context."""
