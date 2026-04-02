@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import redis
 
+from gigaevo.utils.redis import RedisRunConfig, fetch_evolution_dataframe  # noqa: F401
+
 
 class OutlierMethod(StrEnum):
     """Outlier detection methods."""
