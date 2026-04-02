@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from .page import Page
@@ -49,7 +50,7 @@ class InMemoryMemoryStore:
                     data = json.load(f)
                     return MemoryState(**data)
             except (json.JSONDecodeError, KeyError, TypeError) as e:
-                print(
+                logger.debug(
                     f"Warning: Failed to load memory state from {self._memory_file}: {e}"
                 )
                 return MemoryState()
@@ -63,7 +64,7 @@ class InMemoryMemoryStore:
                 with open(self._memory_file, "w", encoding="utf-8") as f:
                     json.dump(state.model_dump(), f, ensure_ascii=False, indent=2)
             except Exception as e:
-                print(
+                logger.debug(
                     f"Warning: Failed to save memory state to {self._memory_file}: {e}"
                 )
 

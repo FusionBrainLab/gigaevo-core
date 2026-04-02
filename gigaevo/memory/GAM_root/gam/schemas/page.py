@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 
@@ -51,7 +52,9 @@ class InMemoryPageStore:
                             Page(**page_data) for page_data in data.get("pages", [])
                         ]
             except (json.JSONDecodeError, KeyError, TypeError) as e:
-                print(f"Warning: Failed to load pages from {self._pages_file}: {e}")
+                logger.error(
+                    f"Warning: Failed to load pages from {self._pages_file}: {e}"
+                )
                 return []
         return self._pages
 
@@ -64,7 +67,9 @@ class InMemoryPageStore:
                 with open(self._pages_file, "w", encoding="utf-8") as f:
                     json.dump(pages_data, f, ensure_ascii=False, indent=2)
             except Exception as e:
-                print(f"Warning: Failed to save pages to {self._pages_file}: {e}")
+                logger.error(
+                    f"Warning: Failed to save pages to {self._pages_file}: {e}"
+                )
 
     def add(self, page: Page) -> None:
         self._pages.append(page)

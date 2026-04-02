@@ -45,6 +45,7 @@ from GAM_root.gam.schemas import (
     ToolRegistry,
     TopIdea,
 )
+from loguru import logger
 
 _VECTOR_TOOLS = {
     "vector",
@@ -116,9 +117,9 @@ class ResearchAgent:
             try:
                 # 调用 retriever 的 build 方法，传递 page_store
                 r.build(self.page_store)
-                print(f"Successfully built {name} retriever")
+                logger.debug(f"Successfully built {name} retriever")
             except Exception as e:
-                print(f"Failed to build {name} retriever: {e}")
+                logger.error(f"Failed to build {name} retriever: {e}")
                 pass
 
     @staticmethod
@@ -217,16 +218,16 @@ class ResearchAgent:
                 memory_state_override=memory_state,
             )
             plan.tools = self._filter_tools(plan.tools)
-            print("[GAM] Plan:")
-            print(json.dumps(plan.__dict__, ensure_ascii=True, indent=2))
+            logger.debug("[GAM] Plan:")
+            logger.debug(json.dumps(plan.__dict__, ensure_ascii=True, indent=2))
 
             temp = self._search(plan, temp, request)
-            print("[GAM] Retrieval result:")
-            print(json.dumps(temp.__dict__, ensure_ascii=True, indent=2))
+            logger.debug("[GAM] Retrieval result:")
+            logger.debug(json.dumps(temp.__dict__, ensure_ascii=True, indent=2))
 
             decision = self._reflection(request, temp)
-            print("[GAM] Reflection:")
-            print(json.dumps(decision.__dict__, ensure_ascii=True, indent=2))
+            logger.debug("[GAM] Reflection:")
+            logger.debug(json.dumps(decision.__dict__, ensure_ascii=True, indent=2))
 
             iterations.append(
                 {
@@ -268,8 +269,8 @@ class ResearchAgent:
                 memory_state_override=memory_state,
             )
             plan.tools = self._filter_tools(plan.tools)
-            print("[GAM][experimental] Plan:")
-            print(json.dumps(plan.__dict__, ensure_ascii=True, indent=2))
+            logger.debug("[GAM][experimental] Plan:")
+            logger.debug(json.dumps(plan.__dict__, ensure_ascii=True, indent=2))
 
             retrieved = self._search_no_integrate(plan, Result(), request)
             iteration_ideas = self._parse_retrieved_ideas(retrieved.content)
@@ -285,8 +286,8 @@ class ResearchAgent:
                 request=request,
                 retrieved_ideas=aggregated_ideas,
             )
-            print("[GAM][experimental] Reflection decision:")
-            print(json.dumps(decision.model_dump(), ensure_ascii=True, indent=2))
+            logger.debug("[GAM][experimental] Reflection decision:")
+            logger.debug(json.dumps(decision.model_dump(), ensure_ascii=True, indent=2))
 
             iterations.append(
                 {
@@ -500,7 +501,7 @@ class ResearchAgent:
             )
             data = response.get("json") or json.loads(response["text"])
         except Exception as e:
-            print(f"Error in experimental reflection: {e}")
+            logger.error(f"Error in experimental reflection: {e}")
             return ExperimentalDecision(
                 mode="continue", top_ideas=[], additional_queries=[]
             )
@@ -599,15 +600,15 @@ class ResearchAgent:
             hasattr(self, "_last_page_count")
             and current_page_count != self._last_page_count
         ):
-            print(
+            logger.debug(
                 f"检测到页面数量变化 ({self._last_page_count} -> {current_page_count})，更新检索器索引..."
             )
             for name, retriever in self.retrievers.items():
                 try:
                     retriever.update(self.page_store)
-                    print(f"✅ Updated {name} retriever index")
+                    logger.debug(f"✅ Updated {name} retriever index")
                 except Exception as e:
-                    print(f"❌ Failed to update {name} retriever: {e}")
+                    logger.error(f"❌ Failed to update {name} retriever: {e}")
 
         # 更新页面计数
         self._last_page_count = current_page_count
@@ -647,7 +648,7 @@ class ResearchAgent:
         # 调试：打印prompt长度
         prompt_chars = len(prompt)
         estimated_tokens = prompt_chars // 4  # 粗略估算：1 token ≈ 4 字符
-        print(
+        logger.debug(
             f"[DEBUG] Planning prompt length: {prompt_chars} chars (~{estimated_tokens} tokens)"
         )
 
@@ -671,7 +672,7 @@ class ResearchAgent:
                 page_index=data.get("page_index", []),
             )
         except Exception as e:
-            print(f"Error in planning: {e}")
+            logger.error(f"Error in planning: {e}")
             return SearchPlan(
                 tools=[],
                 keyword_collection=[],
@@ -701,14 +702,14 @@ class ResearchAgent:
         # Execute each planned tool and collect all hits
         for tool in self._filter_tools(plan.tools):
             hits: list[Hit] = []
-            print(f"[GAM] Action selected: {tool}")
+            logger.debug(f"[GAM] Action selected: {tool}")
 
             if tool == "keyword":
                 if plan.keyword_collection:
                     tool_top_k = self._tool_top_k(tool)
-                    print("[GAM] Keyword queries:")
+                    logger.debug("[GAM] Keyword queries:")
                     for q in plan.keyword_collection:
-                        print(f"  - {q}")
+                        logger.debug(f"  - {q}")
                     # 将多个关键词拼接成一个字符串进行搜索
                     combined_keywords = " ".join(plan.keyword_collection)
                     keyword_results = self._search_by_keyword(
@@ -721,26 +722,26 @@ class ResearchAgent:
                     else:
                         hits.extend(keyword_results)
                     if hits:
-                        print("[GAM] Keyword hits:")
+                        logger.debug("[GAM] Keyword hits:")
                         for i, hit in enumerate(hits, 1):
                             score = hit.meta.get("score") if hit.meta else None
                             score_str = f" score={score}" if score is not None else ""
                             page_id = hit.page_id if hit.page_id else "n/a"
-                            print(
+                            logger.debug(
                                 f"  {i:02d}. source={hit.source} page_id={page_id}{score_str}"
                             )
-                            print(f"      {hit.snippet}")
+                            logger.debug(f"      {hit.snippet}")
                     else:
-                        print("[GAM] Keyword hits: (none)")
+                        logger.debug("[GAM] Keyword hits: (none)")
                     all_hits.extend(hits)
 
             elif tool in _VECTOR_TOOLS:
                 vector_queries = self._vector_queries_for_tool(plan, tool)
                 if vector_queries:
                     tool_top_k = self._tool_top_k(tool)
-                    print(f"[GAM] {tool} queries:")
+                    logger.debug(f"[GAM] {tool} queries:")
                     for q in vector_queries:
-                        print(f"  - {q}")
+                        logger.debug(f"  - {q}")
                     # 对每个向量查询都进行独立的搜索，然后在retriever层面聚合得分
                     vector_results = self._search_by_vector_tool(
                         tool_name=tool,
@@ -754,17 +755,17 @@ class ResearchAgent:
                     else:
                         hits.extend(vector_results)
                     if hits:
-                        print(f"[GAM] {tool} hits:")
+                        logger.debug(f"[GAM] {tool} hits:")
                         for i, hit in enumerate(hits, 1):
                             score = hit.meta.get("score") if hit.meta else None
                             score_str = f" score={score}" if score is not None else ""
                             page_id = hit.page_id if hit.page_id else "n/a"
-                            print(
+                            logger.debug(
                                 f"  {i:02d}. source={hit.source} page_id={page_id}{score_str}"
                             )
-                            print(f"      {hit.snippet}")
+                            logger.debug(f"      {hit.snippet}")
                     else:
-                        print(f"[GAM] {tool} hits: (none)")
+                        logger.debug(f"[GAM] {tool} hits: (none)")
                     all_hits.extend(hits)
 
             elif tool == "page_index":
@@ -982,7 +983,7 @@ class ResearchAgent:
 
             return Result(content=data.get("content", ""), sources=sources)
         except Exception as e:
-            print(f"Error in integration: {e}")
+            logger.error(f"Error in integration: {e}")
             return result
 
     # ---- search channels ----
@@ -995,7 +996,7 @@ class ResearchAgent:
                 # BM25Retriever 返回 List[List[Hit]]
                 return r.search(query_list, top_k=top_k)
             except Exception as e:
-                print(f"Error in keyword search: {e}")
+                logger.error(f"Error in keyword search: {e}")
                 return []
         # naive fallback: scan pages for substring
         out: list[list[Hit]] = []
@@ -1031,7 +1032,7 @@ class ResearchAgent:
             try:
                 return r.search(query_list, top_k=top_k)
             except Exception as e:
-                print(f"Error in vector search ({tool_name}): {e}")
+                logger.error(f"Error in vector search ({tool_name}): {e}")
                 return []
         # fallback: none
         return []
@@ -1045,7 +1046,7 @@ class ResearchAgent:
                 hits = r.search([query_string], top_k=len(page_index))
                 return hits if hits else []
             except Exception as e:
-                print(f"Error in page index search: {e}")
+                logger.error(f"Error in page index search: {e}")
                 return []
 
         # fallback: 直接通过 page_store 获取页面
@@ -1078,7 +1079,7 @@ class ResearchAgent:
             # 调试：打印reflection prompt长度
             result_content_chars = len(result.content)
             estimated_result_tokens = result_content_chars // 4
-            print(
+            logger.debug(
                 f"[DEBUG] Reflection result.content length: {result_content_chars} chars (~{estimated_result_tokens} tokens)"
             )
 
@@ -1092,7 +1093,7 @@ class ResearchAgent:
                 check_prompt = template_check_prompt
             check_prompt_chars = len(check_prompt)
             estimated_check_tokens = check_prompt_chars // 4
-            print(
+            logger.debug(
                 f"[DEBUG] Reflection check_prompt length: {check_prompt_chars} chars (~{estimated_check_tokens} tokens)"
             )
 
@@ -1119,7 +1120,7 @@ class ResearchAgent:
                 generate_prompt = template_generate_prompt
             generate_prompt_chars = len(generate_prompt)
             estimated_generate_tokens = generate_prompt_chars // 4
-            print(
+            logger.debug(
                 f"[DEBUG] Reflection generate_prompt length: {generate_prompt_chars} chars (~{estimated_generate_tokens} tokens)"
             )
 
@@ -1140,5 +1141,5 @@ class ResearchAgent:
             return ReflectionDecision(enough=False, new_request=new_request)
 
         except Exception as e:
-            print(f"Error in reflection: {e}")
+            logger.error(f"Error in reflection: {e}")
             return ReflectionDecision(enough=False, new_request=None)

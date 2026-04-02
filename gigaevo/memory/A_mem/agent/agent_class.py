@@ -4,6 +4,8 @@ import json
 import threading
 from typing import Any
 
+from loguru import logger
+
 
 class LLMService:
     def __init__(
@@ -219,7 +221,7 @@ class LLMService:
                 output_text = ""
                 token_count = 0
                 for token in streamer:
-                    print(token, end="", flush=True)
+                    logger.debug(token, end="", flush=True)
                     output_text += token
                     token_count += 1
                 thread.join()
