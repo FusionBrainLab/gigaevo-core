@@ -10,6 +10,7 @@ import statistics
 from typing import Any, Protocol
 
 from dotenv import load_dotenv
+from loguru import logger
 
 try:
     from .runtime_config import (
@@ -483,9 +484,9 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
         selected_cards.append(_merge_best_idea_metrics(bank_card, best_entry))
 
     if missing_cards:
-        print(
-            f"Warning: {len(missing_cards)} best_ideas IDs were missing in banks and "
-            f"were written as minimal cards."
+        logger.warning(
+            "{} best_ideas IDs were missing in banks and were written as minimal cards.",
+            len(missing_cards),
         )
 
     return selected_cards
@@ -637,9 +638,9 @@ def _apply_usage_updates_to_cards(
         cards_by_id[card_id] = current_card
 
     if missing_card_ids:
-        print(
-            "Warning: skipped usage updates for "
-            f"{len(missing_card_ids)} card(s) because they were not found in memory store."
+        logger.warning(
+            "Skipped usage updates for {} card(s) not found in memory store.",
+            len(missing_card_ids),
         )
 
     return list(cards_by_id.values())
@@ -742,16 +743,14 @@ def main() -> dict[str, Any] | None:
         card_update_dedup_config=CARD_UPDATE_DEDUP_CONFIG,
     )
 
-    print("\n==============================")
-    print("API Memory Demo: Card Write")
-    print("==============================\n")
-    print(f"Config file: {SETTINGS_PATH}")
-    print(f"Memory evolution enabled: {SHOULD_EVOLVE}")
-    print(f"LLM field fill enabled: {FILL_MISSING_FIELDS_WITH_LLM}")
-    print(f"Memory usage tracking enabled: {ENABLE_USAGE_TRACKING}")
-    print(
-        "Card update/dedup enabled: "
-        f"{to_bool(CARD_UPDATE_DEDUP_CONFIG.get('enabled'), default=False)}"
+    logger.info("API Memory Demo: Card Write")
+    logger.info(
+        "Config: file={} evolution={} llm_fill={} usage_tracking={} dedup={}",
+        SETTINGS_PATH,
+        SHOULD_EVOLVE,
+        FILL_MISSING_FIELDS_WITH_LLM,
+        ENABLE_USAGE_TRACKING,
+        to_bool(CARD_UPDATE_DEDUP_CONFIG.get("enabled"), default=False),
     )
 
     if not BANKS_PATH.exists():
@@ -764,14 +763,14 @@ def main() -> dict[str, Any] | None:
         usage_updates_path=USAGE_UPDATES_PATH,
         memory=memory,
     )
-    print(
-        f"Loaded {len(memory_cards)} cards from banks: {BANKS_PATH} "
-        f"(filtered by: {BEST_IDEAS_PATH})"
+    logger.info(
+        "Loaded {} cards from banks: {} (filtered by: {})",
+        len(memory_cards), BANKS_PATH, BEST_IDEAS_PATH,
     )
     if USE_API:
-        print(f"Writing to API: {MEMORY_API_URL} (namespace={NAMESPACE})\n")
+        logger.info("Writing to API: {} (namespace={})", MEMORY_API_URL, NAMESPACE)
     else:
-        print(f"Writing in local-only mode (checkpoint={MEMORY_DIR})\n")
+        logger.info("Writing in local-only mode (checkpoint={})", MEMORY_DIR)
 
     try:
         write_stats_by_card_type = {
@@ -789,36 +788,39 @@ def main() -> dict[str, Any] | None:
                     write_stats_by_card_type[card_type].get(stat_name, 0)
                 ) + int(stat_value)
             stored = memory.get_card(memory_id) or {}
-            print(
-                f"[{idx:03d}] saved {memory_id}: {stored.get('description', '')[:110]}"
+            logger.debug(
+                "[{:03d}] saved {}: {}",
+                idx, memory_id, stored.get("description", "")[:110],
             )
     except RuntimeError as exc:
-        print(f"\nWrite failed: {exc}\n")
+        logger.error("Write failed: {}", exc)
         return None
 
     memory.rebuild()
-    print(f"\nLocal API index saved in: {MEMORY_DIR / 'api_index.json'}")
+    logger.info("Local API index saved in: {}", MEMORY_DIR / "api_index.json")
 
     write_stats = memory.get_card_write_stats()
     input_card_type_counts = {
         "ideas": sum(1 for card in memory_cards if _card_type(card) == "ideas"),
         "programs": sum(1 for card in memory_cards if _card_type(card) == "programs"),
     }
-    print(
-        "Write stats: "
-        f"processed={write_stats.get('processed', 0)}, "
-        f"ideas_processed={write_stats_by_card_type['ideas'].get('processed', 0)}, "
-        f"programs_processed={write_stats_by_card_type['programs'].get('processed', 0)}, "
-        f"added={write_stats.get('added', 0)}, "
-        f"ideas_added={write_stats_by_card_type['ideas'].get('added', 0)}, "
-        f"programs_added={write_stats_by_card_type['programs'].get('added', 0)}, "
-        f"updated={write_stats.get('updated', 0)}, "
-        f"ideas_updated={write_stats_by_card_type['ideas'].get('updated', 0)}, "
-        f"programs_updated={write_stats_by_card_type['programs'].get('updated', 0)}, "
-        f"rejected={write_stats.get('rejected', 0)}, "
-        f"ideas_rejected={write_stats_by_card_type['ideas'].get('rejected', 0)}, "
-        f"programs_rejected={write_stats_by_card_type['programs'].get('rejected', 0)}, "
-        f"updated_target_cards={write_stats.get('updated_target_cards', 0)}"
+    logger.info(
+        "Write stats: processed={} added={} updated={} rejected={} "
+        "ideas(proc={} add={} upd={} rej={}) "
+        "programs(proc={} add={} upd={} rej={}) updated_target_cards={}",
+        write_stats.get("processed", 0),
+        write_stats.get("added", 0),
+        write_stats.get("updated", 0),
+        write_stats.get("rejected", 0),
+        write_stats_by_card_type["ideas"].get("processed", 0),
+        write_stats_by_card_type["ideas"].get("added", 0),
+        write_stats_by_card_type["ideas"].get("updated", 0),
+        write_stats_by_card_type["ideas"].get("rejected", 0),
+        write_stats_by_card_type["programs"].get("processed", 0),
+        write_stats_by_card_type["programs"].get("added", 0),
+        write_stats_by_card_type["programs"].get("updated", 0),
+        write_stats_by_card_type["programs"].get("rejected", 0),
+        write_stats.get("updated_target_cards", 0),
     )
 
     stats_path = BANKS_PATH.parent / "memory_write_stats.json"
@@ -829,7 +831,7 @@ def main() -> dict[str, Any] | None:
         write_stats=write_stats,
         write_stats_by_card_type=write_stats_by_card_type,
     )
-    print(f"Memory write stats saved to: {stats_path}")
+    logger.info("Memory write stats saved to: {}", stats_path)
     return snapshot
 
 

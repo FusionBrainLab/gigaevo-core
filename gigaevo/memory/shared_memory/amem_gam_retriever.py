@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from loguru import logger
 
 load_dotenv()
 
@@ -170,9 +171,9 @@ def build_retrievers(
             )
             index_retriever.build(page_store)
             retrievers["page_index"] = index_retriever
-            print("✅ Index retriever ready")
+            logger.debug("[Memory] Index retriever ready")
         except Exception as e:
-            print(f"[WARN] Index retriever init from {IndexRetriever} failed: {e}")
+            logger.warning("[Memory] Index retriever init failed: {}", e)
 
     for tool_name, extra in vector_tool_configs.items():
         if tool_name not in allowed:
@@ -185,9 +186,9 @@ def build_retrievers(
                 **extra,
             }
             retrievers[tool_name] = ChromaRetriever(chroma_config)
-            print(f"✅ Chroma retriever ready: {tool_name}")
+            logger.debug("[Memory] Chroma retriever ready: {}", tool_name)
         except Exception as e:
-            print(f"[WARN] Chroma retriever init for '{tool_name}' failed: {e}")
+            logger.warning("[Memory] Chroma retriever init for '{}' failed: {}", tool_name, e)
 
     if enable_bm25 and "keyword" in allowed:
         try:
@@ -197,9 +198,9 @@ def build_retrievers(
             bm25_retriever = BM25Retriever(bm25_config)
             bm25_retriever.build(page_store)
             retrievers["keyword"] = bm25_retriever
-            print("✅ BM25 retriever ready")
+            logger.debug("[Memory] BM25 retriever ready")
         except Exception as e:
-            print(f"[WARN] BM25 retriever init failed: {e}")
+            logger.warning("[Memory] BM25 retriever init failed: {}", e)
 
     return retrievers
 
@@ -221,7 +222,7 @@ def main():
     store_dir = _repo_root() / "gam_shared" / "amem_store"
     store_dir.mkdir(parents=True, exist_ok=True)
     memory_store, page_store, added = build_gam_store(records, store_dir)
-    print(f"Loaded {len(records)} A-mem records, added {added} new pages.")
+    logger.info("Loaded {} A-mem records, added {} new pages.", len(records), added)
 
     api_key = config.OPENAI_API_KEY
     if not api_key and config.LLM_BASE_URL:
@@ -258,10 +259,9 @@ def main():
     question = os.getenv(
         "AMEM_QUESTION", "What changes improved min_area the most and why?"
     )
-    print(f"\nResearch question: {question}\n")
+    logger.info("Research question: {}", question)
     result = research_agent.research(question)
-    print("Research result:\n")
-    print(result.integrated_memory)
+    logger.info("Research result:\n{}", result.integrated_memory)
 
 
 if __name__ == "__main__":

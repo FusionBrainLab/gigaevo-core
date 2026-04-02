@@ -261,7 +261,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self.use_api:
             self.api = _ConceptApiClient(base_url=base_url)
         else:
-            print("[Memory] API mode disabled. Running in local-only mode.")
+            logger.info("[Memory] API mode disabled. Running in local-only mode.")
 
         self._AgenticMemorySystemCls: type[Any] | None = None
         self._MemoryNoteCls: type[Any] | None = None
@@ -297,7 +297,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             try:
                 self.research_agent = self._load_or_create_retriever()
             except Exception as exc:
-                print(f"[Memory] Initial retriever load skipped: {exc}")
+                logger.debug("[Memory] Initial retriever load skipped: {}", exc)
 
         if sync_on_init and self.use_api:
             self._sync_from_api(force_full=True)
@@ -355,9 +355,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
             from gigaevo.memory.GAM_root.gam.generator import AMemGenerator as _AMemGenerator
         except Exception as exc:
             self._agentic_import_error = exc
-            print(
+            logger.info(
                 "[Memory] Agentic runtime dependencies are unavailable. "
-                f"Reason: {exc}. Falling back to API full-text mode."
+                "Reason: {}. Falling back to API full-text mode.",
+                exc,
             )
             return
 
@@ -376,7 +377,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             api_key = "EMPTY"
 
         if not api_key:
-            print(
+            logger.info(
                 "[Memory] OPENAI_API_KEY/OPENROUTER_API_KEY is not set. "
                 "Agentic retrieval is disabled; API full-text fallback is available."
             )
@@ -398,7 +399,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             generator = self._AMemGeneratorCls({"llm_service": llm_service})
             return llm_service, generator
         except Exception as exc:
-            print(f"[Memory] Could not initialize LLM/generator: {exc}")
+            logger.warning("[Memory] Could not initialize LLM/generator: {}", exc)
             return None, None
 
     def _init_storage(self) -> Any | None:
@@ -415,7 +416,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 enable_evolution=self.enable_memory_evolution,
             )
         except Exception as exc:
-            print(f"[Memory] Could not initialize AgenticMemorySystem: {exc}")
+            logger.warning("[Memory] Could not initialize AgenticMemorySystem: {}", exc)
             return None
 
     def _load_index(self) -> None:
@@ -425,7 +426,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         try:
             payload = json.loads(self.index_file.read_text(encoding="utf-8"))
         except Exception as exc:
-            print(f"[Memory] Could not parse index file {self.index_file}: {exc}")
+            logger.warning("[Memory] Could not parse index file {}: {}", self.index_file, exc)
             return
 
         raw_cards = payload.get("memory_cards", {})
@@ -896,7 +897,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             records = list(self.memory_cards.values())
 
         memory_store, page_store, added = build_gam_store(records, self.gam_store_dir)
-        print(f"[Memory] Loaded {len(records)} cards, added {added} new pages.")
+        logger.info("[Memory] Loaded {} cards, added {} new pages.", len(records), added)
 
         retrievers = build_retrievers(
             page_store,
@@ -911,7 +912,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if name in self.allowed_gam_tools
         }
         if not retrievers:
-            print(
+            logger.info(
                 "[Memory] No GAM retrievers enabled after applying allowed_gam_tools. "
                 "GAM agentic search is disabled."
             )
@@ -953,7 +954,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 load_amem_records,
             )
         except Exception as exc:
-            print(f"[Memory] Dedup retriever import failed: {exc}")
+            logger.warning("[Memory] Dedup retriever import failed: {}", exc)
             return {}
 
         self.gam_store_dir.mkdir(parents=True, exist_ok=True)
@@ -983,7 +984,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 ],
             )
         except Exception as exc:
-            print(f"[Memory] Dedup retriever build failed: {exc}")
+            logger.warning("[Memory] Dedup retriever build failed: {}", exc)
             return {}
 
         return {
@@ -1034,7 +1035,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             try:
                 hits_by_query = retriever.search([text], top_k=cfg.top_k_per_query)
             except Exception as exc:
-                print(f"[Memory] Dedup retrieval failed for query '{query_key}': {exc}")
+                logger.warning("[Memory] Dedup retrieval failed for query '{}': {}", query_key, exc)
                 continue
 
             hits = []
@@ -1183,7 +1184,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             try:
                 response_text, _, _, _ = self.llm_service.generate(prompt)
             except Exception as exc:
-                print(f"[Memory] Dedup LLM decision call failed: {exc}")
+                logger.warning("[Memory] Dedup LLM decision call failed: {}", exc)
                 continue
             parsed = parse_llm_card_decision(
                 response_text,
@@ -1302,7 +1303,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             and self.llm_service is None
             and not self._warned_missing_card_update_llm
         ):
-            print(
+            logger.warning(
                 "[Memory] card_update_dedup is enabled but LLM service is unavailable. "
                 "Falling back to regular save_card behavior."
             )
@@ -1407,7 +1408,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if text:
                 return text
         except Exception as exc:
-            print(f"[Memory] LLM synthesis failed, fallback to plain output: {exc}")
+            logger.warning("[Memory] LLM synthesis failed, fallback to plain output: {}", exc)
 
         return self._format_search_results(query, cards)
 
@@ -1516,8 +1517,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     query, memory_state=memory_state
                 ).integrated_memory
             except Exception as exc:
-                print(
-                    f"[Memory] GAM search failed, falling back to non-agentic search: {exc}"
+                logger.warning(
+                    "[Memory] GAM search failed, falling back to non-agentic search: {}",
+                    exc,
                 )
 
         if self.use_api and self.api is not None:

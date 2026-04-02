@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from loguru import logger
+
 from gigaevo.memory import config
 from gigaevo.memory.A_mem.agentic_memory.memory_system import AgenticMemorySystem
 from gigaevo.memory.openai_inference import OpenAIInferenceService
@@ -20,17 +22,9 @@ def _safe_get(obj, name, default=None):
 
 def pretty_print_memory(mem, title=None):
     if title:
-        print(f"\n{'=' * 10} {title} {'=' * 10}")
+        logger.debug("========== {} ==========", title)
 
     mem_id = _safe_get(mem, "id", None) or _safe_get(mem, "memory_id", None)
-    print(f"ID:        {mem_id}")
-    print(f"Content:   {_safe_get(mem, 'content', '')}")
-    print(f"Category:  {_safe_get(mem, 'category', None)}")
-    print(f"Timestamp: {_safe_get(mem, 'timestamp', None)}")
-    print(f"Tags:      {_safe_get(mem, 'tags', [])}")
-    print(f"Keywords:  {_safe_get(mem, 'keywords', [])}")
-    print(f"Context:   {_safe_get(mem, 'context', '')}")
-
     links = (
         _safe_get(mem, "links", None)
         or _safe_get(mem, "linked_memories", None)
@@ -38,27 +32,27 @@ def pretty_print_memory(mem, title=None):
         or _safe_get(mem, "relations", None)
         or []
     )
-    print(f"Links:     {links}")
+    logger.debug(
+        "ID={} Content={} Category={} Timestamp={} Tags={} Keywords={} Context={} Links={}",
+        mem_id,
+        _safe_get(mem, "content", ""),
+        _safe_get(mem, "category", None),
+        _safe_get(mem, "timestamp", None),
+        _safe_get(mem, "tags", []),
+        _safe_get(mem, "keywords", []),
+        _safe_get(mem, "context", ""),
+        links,
+    )
 
 
 def summarize_diff(before, after, label="Memory evolution check"):
-    print(f"\n--- {label} ---")
-    fields = [
-        "content",
-        "tags",
-        "keywords",
-        "context",
-        "category",
-        "timestamp",
-        "links",
-    ]
+    logger.debug("--- {} ---", label)
+    fields = ["content", "tags", "keywords", "context", "category", "timestamp", "links"]
     for f in fields:
         b = _safe_get(before, f, None)
         a = _safe_get(after, f, None)
         if b != a:
-            print(f"* {f} changed:")
-            print(f"  - before: {b}")
-            print(f"  - after : {a}")
+            logger.debug("* {} changed: before={} after={}", f, b, a)
 
 
 def _to_list(value: Any) -> list:
@@ -236,9 +230,7 @@ def main():
         llm_service=llm_service,
     )
 
-    print("\n==============================")
-    print("A-MEM Demo: ingest from list[str]")
-    print("==============================\n")
+    logger.info("A-MEM Demo: ingest from list[str]")
 
     # -------------------------------------------------------
     # 1) Your memories: list of strings only
@@ -266,7 +258,7 @@ def main():
     # -------------------------------------------------------
     # 2) Add/index them (category=heilbron, everything else blank)
     # -------------------------------------------------------
-    print("1) Adding memories from list...\n")
+    logger.info("1) Adding memories from list...")
     memory_ids = add_memories_from_list(memory_system, memories, category="heilbron")
 
     # Read back and print each memory so you can see what A-MEM generated
@@ -281,14 +273,14 @@ def main():
         Path(__file__).resolve().parent / "amem_exports" / "amem_memories.jsonl"
     )
     export_memories_jsonl(memory_system, memory_ids, export_path)
-    print(f"\nExported A-mem memories to: {export_path}")
+    logger.info("Exported A-mem memories to: {}", export_path)
 
     # -------------------------------------------------------
     # 3) Retrieval example
     # -------------------------------------------------------
-    print("\n2) Retrieval example (search_agentic) ...\n")
+    logger.info("2) Retrieval example (search_agentic)...")
     q = "memory1"
-    print(f">>> QUERY: {q!r} (k=5)")
+    logger.info(">>> QUERY: {!r} (k=5)", q)
     results = memory_system.search_agentic(q, k=5)
 
     for i, r in enumerate(results, start=1):
@@ -296,9 +288,9 @@ def main():
         rcontent = (
             r.get("content") if isinstance(r, dict) else _safe_get(r, "content", "")
         )
-        print(f"  [{i}] id={rid} | {rcontent}")
+        logger.debug("  [{}] id={} | {}", i, rid, rcontent)
 
-    print("\nDone.\n")
+    logger.info("Done.")
 
 
 if __name__ == "__main__":
