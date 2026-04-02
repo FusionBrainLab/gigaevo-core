@@ -38,7 +38,9 @@ from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_conversion import is_program_card
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState

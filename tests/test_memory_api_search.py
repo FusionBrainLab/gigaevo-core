@@ -7,6 +7,7 @@ self.api and self.llm_service.
 import json
 from unittest.mock import MagicMock
 
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 
