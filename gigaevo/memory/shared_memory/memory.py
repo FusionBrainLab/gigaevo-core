@@ -686,10 +686,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
             try:
                 records = load_amem_records(self.export_file)
             except Exception:
-                records = list(self.memory_cards.values())
+                records = [c.model_dump() for c in self.memory_cards.values()]
         else:
-            records = list(self.memory_cards.values())
-        records = [record for record in records if not is_program_card(record)]
+            records = [c.model_dump() for c in self.memory_cards.values()]
+        records = [r for r in records if str(r.get("category", "")).strip().lower() != "program"]
         if not records:
             return {}
 

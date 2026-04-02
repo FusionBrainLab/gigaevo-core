@@ -56,7 +56,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
 
         records = fake_load_amem_records(mem.export_file)
         if not records:
-            records = list(mem.memory_cards.values())
+            records = [c.model_dump() for c in mem.memory_cards.values()]
 
         memory_store, page_store, added = fake_build_gam_store(
             records,
@@ -82,8 +82,8 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
 
     # Also patch _build_dedup_retrievers similarly
     def _patched_build_dedup_retrievers():
-        records = list(mem.memory_cards.values())
-        records = [r for r in records if not is_program_card(r)]
+        records = [c.model_dump() for c in mem.memory_cards.values()]
+        records = [r for r in records if str(r.get("category", "")).strip().lower() != "program"]
         if not records:
             return {}
 
