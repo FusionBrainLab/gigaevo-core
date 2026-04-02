@@ -3,6 +3,7 @@ import json
 from typing import Any
 
 from dotenv import load_dotenv
+from loguru import logger
 
 from gigaevo.memory.ideas_tracker.components.data_components import IncomingIdeas
 from gigaevo.memory.ideas_tracker.components.fabrics.llm_clients_fabric import LLMClient
@@ -106,7 +107,7 @@ class IdeaAnalyzer:
                 classified_ideas = json.loads(response)
                 return classified_ideas
             except Exception as e:
-                print(f"Error calling LLM: {e}")
+                logger.error(f"Error calling LLM: {e}")
                 continue
         return classified_ideas
 

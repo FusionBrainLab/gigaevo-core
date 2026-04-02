@@ -7,13 +7,12 @@ and optionally integrates with the memory write pipeline.
 
 import asyncio
 from pathlib import Path
-import sys
 from typing import Any
 
+from loguru import logger
 import pandas as pd
 import tqdm
 
-sys.path.append("../gigaevo-core-internal")
 from gigaevo.memory.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
 from gigaevo.memory.ideas_tracker.components.data_components import (
     IncomingIdeas,
@@ -316,7 +315,9 @@ class IdeaTracker:
         """
         df = load_dataframe(self.redis_config, path_to_database)
         if df.empty:
-            print("Ideas tracker skipped: no programs found in the selected source.")
+            logger.warning(
+                "Ideas tracker skipped: no programs found in the selected source."
+            )
             return
 
         if self.memory_usage_tracking_enabled:

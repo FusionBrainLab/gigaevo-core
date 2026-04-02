@@ -2,6 +2,7 @@ import asyncio
 import os
 from typing import Any
 
+from loguru import logger
 from openai import AsyncOpenAI, OpenAI
 
 from gigaevo.memory.ideas_tracker.components.prompt_manager import PromptManager
@@ -91,7 +92,7 @@ class LLMClient:
         try:
             result = self._sync_call(request_kwargs)
         except Exception as e:
-            print(f"Error calling LLM: {e}")
+            logger.error(f"Error calling LLM: {e}")
             return ""
         return result
 
@@ -108,7 +109,7 @@ class LLMClient:
             try:
                 return await self._async_call(request_kwargs)
             except Exception as e:
-                print(f"Error calling LLM: {e}")
+                logger.error(f"Error calling LLM: {e}")
                 return ""
 
         if self.semaphore:

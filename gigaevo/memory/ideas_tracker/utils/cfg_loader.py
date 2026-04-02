@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
 import yaml
 
 from gigaevo.memory.ideas_tracker.components.fabrics.fabric_redis import (
@@ -77,7 +78,7 @@ def _load_config(
         try:
             payload = yaml.safe_load(f) or {}
         except yaml.YAMLError as e:
-            print(f"Error loading config file: {e}")
+            logger.error(f"Error loading config file: {e}")
             return default_config
 
     if not isinstance(payload, dict):

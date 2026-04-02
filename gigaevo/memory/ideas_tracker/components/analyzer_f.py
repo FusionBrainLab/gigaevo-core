@@ -13,6 +13,7 @@ from typing import Any
 import uuid
 
 from dotenv import load_dotenv
+from loguru import logger
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
@@ -385,7 +386,7 @@ class IdeaAnalyzerFast:
                 raw = await self._call_llm_async("cluster_desc_synth", prompt_content)
                 return raw
             except Exception as e:
-                print(f"Error calling LLM: {e}")
+                logger.error(f"Error calling LLM: {e}")
                 continue
         return ""
 

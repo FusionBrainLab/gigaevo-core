@@ -3,6 +3,8 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 from uuid import uuid4
 
+from loguru import logger
+
 _DESCRIPTION_KEYS = (
     "description",
     "summary",
@@ -783,7 +785,7 @@ class IncomingIdeas:
 
         idea_description = self.mapping.get(idea_number, -1)
         if idea_description == -1:
-            print(f"No idea with number {idea_number} found")
+            logger.warning(f"No idea with number {idea_number} found")
             return
         for index, idea in enumerate(self.ideas):
             if idea["description"] == idea_description:

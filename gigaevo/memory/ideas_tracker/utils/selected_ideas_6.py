@@ -48,6 +48,7 @@ import json
 import math
 from pathlib import Path
 
+from loguru import logger
 import pandas as pd
 
 
@@ -1285,15 +1286,15 @@ def main():
     best_csv = out_dir / (Path(args.output_name).stem + "_best_ideas.csv")
     df_best_ideas.to_csv(best_csv, index=False)
 
-    print("\nWrote (filtered best ideas, deduped per idea_id):")
-    print(f" - {best_csv}")
-    print("\nSanity check (first 15 rows of best ideas):")
-    print(df_best_ideas.head(15).to_string(index=False))
+    logger.info(f"Wrote (filtered best ideas, deduped per idea_id): {best_csv}")
+    logger.debug(
+        f"Sanity check (first 15 rows of best ideas):\n{df_best_ideas.head(15).to_string(index=False)}"
+    )
 
-    print("Wrote:")
-    print(f" - {out_csv}")
-    print("\nSanity check (first 15 rows):")
-    print(df_out.head(15).to_string(index=False))
+    logger.info(f"Wrote: {out_csv}")
+    logger.debug(
+        f"Sanity check (first 15 rows):\n{df_out.head(15).to_string(index=False)}"
+    )
 
 
 if __name__ == "__main__":
