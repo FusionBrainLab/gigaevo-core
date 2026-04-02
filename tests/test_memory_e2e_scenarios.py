@@ -306,7 +306,7 @@ class TestScenarioIncrementalGrowth:
         # Updated, not duplicated
         assert len(mem3.memory_cards) == 4
         card = mem3.get_card("idea-g5-1")
-        assert "width=3" in card["description"]
+        assert "width=3" in card.description
 
     def test_ideas_and_programs_accumulate(self, tmp_path):
         """Ideas from gen 5 + programs from gen 10 coexist."""
@@ -442,7 +442,7 @@ class TestScenarioDedup:
         result_id = mem.save_card({"description": "SA for chain optimization"})
         assert result_id == "idea-1"
         card = mem.get_card("idea-1")
-        assert "multi-hop chains" in str(card["explanation"])
+        assert "multi-hop chains" in str(card.explanation)
         stats = mem.get_card_write_stats()
         assert stats["updated"] == 1
         assert stats["updated_target_cards"] == 1
@@ -774,8 +774,8 @@ class TestScenarioErrorRecovery:
         card_id = mem.save_card({"description": "just a description"})
         card = mem.get_card(card_id)
         assert card is not None
-        assert card["description"] == "just a description"
-        assert card["category"] == "general"
+        assert card.description == "just a description"
+        assert card.category == "general"
 
     def test_save_card_with_empty_dict(self, tmp_path):
         """Empty dict should produce a valid card with auto-generated ID."""

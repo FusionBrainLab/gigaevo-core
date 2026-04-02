@@ -218,7 +218,7 @@ class TestLoadMemoryCardsEdgeCases:
         )
         program_cards = [c for c in cards if c.get("category") == "program"]
         assert len(program_cards) == 1
-        assert program_cards[0]["program_id"] == "p2"
+        assert program_cards[0].program_id == "p2"
 
     def test_missing_banks_file_raises(self, tmp_path):
         best = _make_best_ideas(tmp_path)

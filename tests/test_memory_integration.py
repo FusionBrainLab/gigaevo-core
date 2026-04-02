@@ -19,6 +19,7 @@ import pytest
 
 from gigaevo.memory.memory_write_example import load_memory_cards
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.models import ProgramCard
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -154,9 +155,9 @@ class TestMemoryFillAndSearch:
         assert len(mem.memory_cards) == 2
         idea = mem.get_card("idea-1")
         prog = mem.get_card("program-prog-1")
-        assert idea["category"] == "general"
-        assert prog["category"] == "program"
-        assert prog["fitness"] == 95.0
+        assert idea.category == "general"
+        assert prog.category == "program"
+        assert prog.fitness == 95.0
 
     def test_search_limit_respected_across_reload(self, tmp_path):
         mem = _make_memory(tmp_path, search_limit=2)
@@ -236,7 +237,7 @@ class TestMemoryWritePipeline:
 
         assert len(mem.memory_cards) == 2
         assert (
-            mem.get_card("idea-1")["description"]
+            mem.get_card("idea-1").description
             == "Use simulated annealing for local refinement"
         )
 
@@ -293,11 +294,11 @@ class TestMemoryWritePipeline:
         )
 
         # Should have 1 idea + 1 program card
-        idea_cards = [c for c in cards if c.get("category") != "program"]
-        program_cards = [c for c in cards if c.get("category") == "program"]
+        idea_cards = [c for c in cards if not isinstance(c, ProgramCard)]
+        program_cards = [c for c in cards if isinstance(c, ProgramCard)]
         assert len(idea_cards) == 1
         assert len(program_cards) == 1
-        assert program_cards[0]["fitness"] == 90.0
+        assert program_cards[0].fitness == 90.0
 
         # Save all to memory
         mem = _make_memory(tmp_path)
@@ -513,7 +514,7 @@ class TestFullMemoryCycle:
         # Update
         mem.save_card(_make_idea_card("idea-1", "Enhanced SA with adaptive cooling"))
         assert (
-            mem.get_card("idea-1")["description"] == "Enhanced SA with adaptive cooling"
+            mem.get_card("idea-1").description == "Enhanced SA with adaptive cooling"
         )
 
         # Search

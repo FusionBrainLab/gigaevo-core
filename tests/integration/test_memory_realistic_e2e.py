@@ -742,7 +742,7 @@ class TestFullEvolutionMemoryRebuildCycle:
         mem.save_card(
             {"id": "real-1", "description": "enhanced SA with adaptive cooling"}
         )
-        assert "adaptive cooling" in mem.get_card("real-1")["description"]
+        assert "adaptive cooling" in mem.get_card("real-1").description
 
         # Delete
         mem.delete("real-2")
@@ -760,7 +760,7 @@ class TestFullEvolutionMemoryRebuildCycle:
         )
         assert len(mem2.memory_cards) == 2
         assert (
-            mem2.get_card("real-1")["description"]
+            mem2.get_card("real-1").description
             == "enhanced SA with adaptive cooling"
         )
         assert mem2.get_card("real-2") is None

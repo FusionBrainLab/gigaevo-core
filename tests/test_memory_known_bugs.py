@@ -130,7 +130,7 @@ class TestBug6IDCollision:
         # Both got the same auto-generated ID
         assert id1 == id2
         # BUG: first card silently overwritten
-        assert mem.get_card(id1)["description"] == "second card"
+        assert mem.get_card(id1).description == "second card"
         assert len(mem.memory_cards) == 1  # Only one card exists
 
 
@@ -229,24 +229,24 @@ class TestBugFalsyProgramIdFixed:
     def test_zero_program_id_preserved(self):
         """program_id=0 → _str_or_empty(0) → '0' → truthy → program card."""
         card = normalize_memory_card({"program_id": 0, "description": "prog"})
-        assert card["program_id"] == "0"
-        assert card["category"] == "program"
+        assert card.program_id == "0"
+        assert card.category == "program"
         assert "fitness" in card
 
     def test_nonzero_numeric_program_id_works(self):
         card = normalize_memory_card({"program_id": 42, "description": "prog"})
-        assert card["category"] == "program"
-        assert card["program_id"] == "42"
+        assert card.category == "program"
+        assert card.program_id == "42"
 
     def test_none_program_id_still_general(self):
         card = normalize_memory_card({"program_id": None, "description": "d"})
-        assert card.get("category") == "general"
+        assert card.category == "general"
 
     def test_false_program_id_preserved(self):
         """program_id=False → _str_or_empty(False) → 'False' → truthy → program card."""
         card = normalize_memory_card({"program_id": False, "description": "d"})
-        assert card["category"] == "program"
-        assert card["program_id"] == "False"
+        assert card.category == "program"
+        assert card.program_id == "False"
 
 
 # ===========================================================================
@@ -304,23 +304,22 @@ class TestBug7UpdateFallthrough:
 # ===========================================================================
 
 
-class TestGetCardMutableReference:
-    def test_mutation_visible_through_reference(self, tmp_path):
-        """get_card returns direct dict reference — external mutations
-        are visible and will be persisted on next _persist_index call.
-        """
+class TestGetCardReturnsPydanticModel:
+    def test_get_card_returns_model(self, tmp_path):
+        """get_card returns a Pydantic model with typed fields."""
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "original"})
 
         card = mem.get_card("c1")
-        card["description"] = "externally mutated"
-        card["injected_field"] = "sneaky"
+        assert card.description == "original"
+        assert card.id == "c1"
+        assert card.category == "general"
 
-        # Mutation is visible
-        assert mem.get_card("c1")["description"] == "externally mutated"
-        assert mem.get_card("c1")["injected_field"] == "sneaky"
+    def test_model_mutation_via_validate_assignment(self, tmp_path):
+        """Pydantic models with validate_assignment=True allow field mutation."""
+        mem = _make_memory(tmp_path)
+        mem.save_card({"id": "c1", "description": "original"})
 
-        # And will be persisted!
-        mem._persist_index()
-        data = json.loads(mem.index_file.read_text())
-        assert data["memory_cards"]["c1"]["injected_field"] == "sneaky"
+        card = mem.get_card("c1")
+        card.description = "mutated"
+        assert mem.get_card("c1").description == "mutated"

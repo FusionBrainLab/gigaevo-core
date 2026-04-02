@@ -33,6 +33,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     DEFAULT_MODEL_NAME,
     GigaEvoMemoryBase,
+    MemoryCard,
     MemoryCardExplanation,
     MemoryNoteProtocol,
     build_entity_meta,
@@ -1006,7 +1007,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         return card_id
 
-    def save_card(self, card: AnyCard) -> str:
+    def save_card(self, card: dict[str, Any] | AnyCard) -> str:
         normalized_card = normalize_memory_card(card)
         self.card_write_stats["processed"] += 1
         incoming_card_id = str(normalized_card.id or "").strip()
@@ -1090,8 +1091,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         cards_blob = []
         for card in cards:
-            expl = card.explanation
-            expl_text = expl.summary if isinstance(expl, MemoryCardExplanation) else str(expl or "")
+            if isinstance(card, MemoryCard):
+                expl_text = card.explanation.summary
+            else:
+                expl_text = ""
             cards_blob.append(
                 "\n".join(
                     [
@@ -1145,7 +1148,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if not hits:
             return f"Query: {query}\n\nNo relevant memories found."
 
-        cards: list[dict[str, Any]] = []
+        cards: list[AnyCard] = []
         local_changed = False
 
         for hit in hits:

@@ -77,18 +77,18 @@ def test_load_memory_cards_adds_top_program_cards(tmp_path):
         best_programs_percent=5.0,
     )
 
-    idea_cards = [card for card in cards if card.get("category") != "program"]
-    program_cards = [card for card in cards if card.get("category") == "program"]
+    idea_cards = [card for card in cards if card.category != "program"]
+    program_cards = [card for card in cards if card.category == "program"]
 
     assert len(idea_cards) == 1
     assert len(program_cards) == 1
 
     program_card = program_cards[0]
-    assert program_card["program_id"] == "prog-9"
-    assert program_card["fitness"] == 9.0
-    assert program_card["task_description_summary"] == "Solve the task efficiently."
-    assert "def run_code()" in program_card["code"]
-    assert program_card["connected_ideas"] == [
+    assert program_card.program_id == "prog-9"
+    assert program_card.fitness == 9.0
+    assert program_card.task_description_summary == "Solve the task efficiently."
+    assert "def run_code()" in program_card.code
+    assert program_card.connected_ideas == [
         {
             "idea_id": "idea-1",
             "description": "Use simulated annealing for local refinement.",
@@ -159,9 +159,9 @@ def test_program_cards_bypass_idea_dedup(tmp_path):
     stored = memory.get_card(card_id)
     assert card_id == "program-prog-1"
     assert stored is not None
-    assert stored["program_id"] == "prog-1"
-    assert stored["fitness"] == 12.5
-    assert stored["connected_ideas"] == [
+    assert stored.program_id == "prog-1"
+    assert stored.fitness == 12.5
+    assert stored.connected_ideas == [
         {
             "idea_id": "idea-1",
             "description": "Repair invalid candidates before scoring.",

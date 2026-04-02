@@ -80,23 +80,23 @@ class TestNormalizeCardContract:
 
     def test_general_card_field_types(self):
         card = normalize_memory_card({"id": "c1", "description": "d"})
-        assert isinstance(card["id"], str)
-        assert isinstance(card["category"], str)
-        assert isinstance(card["description"], str)
-        assert isinstance(card["task_description"], str)
-        assert isinstance(card["task_description_summary"], str)
-        assert isinstance(card["strategy"], str)
-        assert isinstance(card["last_generation"], int)
-        assert isinstance(card["programs"], list)
-        assert isinstance(card["aliases"], list)
-        assert isinstance(card["keywords"], list)
-        assert isinstance(card["evolution_statistics"], dict)
-        assert isinstance(card["explanation"], dict)
-        assert isinstance(card["explanation"]["explanations"], list)
-        assert isinstance(card["explanation"]["summary"], str)
-        assert isinstance(card["works_with"], list)
-        assert isinstance(card["links"], list)
-        assert isinstance(card["usage"], dict)
+        assert isinstance(card.id, str)
+        assert isinstance(card.category, str)
+        assert isinstance(card.description, str)
+        assert isinstance(card.task_description, str)
+        assert isinstance(card.task_description_summary, str)
+        assert isinstance(card.strategy, str)
+        assert isinstance(card.last_generation, int)
+        assert isinstance(card.programs, list)
+        assert isinstance(card.aliases, list)
+        assert isinstance(card.keywords, list)
+        assert isinstance(card.evolution_statistics, dict)
+        assert isinstance(card.explanation, dict)
+        assert isinstance(card.explanation["explanations"], list)
+        assert isinstance(card.explanation["summary"], str)
+        assert isinstance(card.works_with, list)
+        assert isinstance(card.links, list)
+        assert isinstance(card.usage, dict)
 
     def test_program_card_field_types(self):
         card = normalize_memory_card(
@@ -106,16 +106,16 @@ class TestNormalizeCardContract:
                 "fitness": 90.0,
             }
         )
-        assert isinstance(card["id"], str)
-        assert card["category"] == "program"
-        assert isinstance(card["program_id"], str)
-        assert isinstance(card["description"], str)
-        assert isinstance(card["task_description"], str)
-        assert isinstance(card["task_description_summary"], str)
-        assert isinstance(card["code"], str)
-        assert isinstance(card["connected_ideas"], list)
+        assert isinstance(card.id, str)
+        assert card.category == "program"
+        assert isinstance(card.program_id, str)
+        assert isinstance(card.description, str)
+        assert isinstance(card.task_description, str)
+        assert isinstance(card.task_description_summary, str)
+        assert isinstance(card.code, str)
+        assert isinstance(card.connected_ideas, list)
         # fitness can be float or None
-        assert card["fitness"] is None or isinstance(card["fitness"], float)
+        assert card.fitness is None or isinstance(card.fitness, float)
 
 
 # ===========================================================================
@@ -146,18 +146,18 @@ class TestSaveGetRoundtrip:
         mem.save_card(original)
         stored = mem.get_card("c1")
 
-        assert stored["id"] == "c1"
-        assert stored["description"] == original["description"]
-        assert stored["task_description"] == original["task_description"]
+        assert stored.id == "c1"
+        assert stored.description == original["description"]
+        assert stored.task_description == original["task_description"]
         assert (
-            stored["task_description_summary"] == original["task_description_summary"]
+            stored.task_description_summary == original["task_description_summary"]
         )
-        assert stored["strategy"] == original["strategy"]
-        assert stored["last_generation"] == original["last_generation"]
-        assert stored["programs"] == original["programs"]
-        assert stored["keywords"] == original["keywords"]
-        assert stored["explanation"]["summary"] == "SA works"
-        assert stored["explanation"]["explanations"] == ["tried SA"]
+        assert stored.strategy == original["strategy"]
+        assert stored.last_generation == original["last_generation"]
+        assert stored.programs == original["programs"]
+        assert stored.keywords == original["keywords"]
+        assert stored.explanation["summary"] == "SA works"
+        assert stored.explanation["explanations"] == ["tried SA"]
 
     def test_program_card_roundtrip(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -175,11 +175,11 @@ class TestSaveGetRoundtrip:
         mem.save_card(original)
         stored = mem.get_card("prog-1")
 
-        assert stored["category"] == "program"
-        assert stored["program_id"] == "prog-1"
-        assert stored["fitness"] == 95.5
-        assert stored["code"] == original["code"]
-        assert stored["connected_ideas"] == original["connected_ideas"]
+        assert stored.category == "program"
+        assert stored.program_id == "prog-1"
+        assert stored.fitness == 95.5
+        assert stored.code == original["code"]
+        assert stored.connected_ideas == original["connected_ideas"]
 
     def test_persist_reload_roundtrip(self, tmp_path):
         """Save → persist → reload from disk → get must return same data."""
@@ -196,10 +196,10 @@ class TestSaveGetRoundtrip:
 
         mem2 = _make_memory(tmp_path)
         stored = mem2.get_card("c1")
-        assert stored["description"] == "test idea"
-        assert stored["keywords"] == ["k1", "k2"]
-        assert stored["explanation"]["explanations"] == ["e1"]
-        assert stored["last_generation"] == 7
+        assert stored.description == "test idea"
+        assert stored.keywords == ["k1", "k2"]
+        assert stored.explanation["explanations"] == ["e1"]
+        assert stored.last_generation == 7
 
 
 # ===========================================================================
@@ -309,8 +309,8 @@ class TestIndexPersistenceContract:
         card = mem.get_card("c1")
         assert card is not None
         # normalize_memory_card fills in missing fields
-        assert card["description"] == "old format card"
-        assert card["programs"] == []  # Default filled in
+        assert card.description == "old format card"
+        assert card.programs == []  # Default filled in
 
 
 # ===========================================================================

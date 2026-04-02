@@ -116,8 +116,8 @@ class TestFakeAgenticMemorySystem:
     def test_analyze_content(self):
         sys = FakeAgenticMemorySystem()
         result = sys.analyze_content("Use simulated annealing for optimization")
-        assert "simulated" in result["keywords"]
-        assert "annealing" in result["keywords"]
+        assert "simulated" in result.keywords
+        assert "annealing" in result.keywords
 
     def test_retriever_search(self):
         sys = FakeAgenticMemorySystem()
@@ -255,8 +255,8 @@ class TestLlmCardEnrichment:
 
         card = mem.get_card("c1")
         # analyze_content extracts keywords from description
-        assert len(card["keywords"]) > 0
-        assert "simulated" in card["keywords"] or "annealing" in card["keywords"]
+        assert len(card.keywords) > 0
+        assert "simulated" in card.keywords or "annealing" in card.keywords
 
     def test_enrichment_skipped_when_disabled(self, tmp_path):
         mem, fake_sys = _make_memory_with_fakes(
@@ -266,7 +266,7 @@ class TestLlmCardEnrichment:
         mem.save_card({"id": "c1", "description": "simulated annealing"})
 
         card = mem.get_card("c1")
-        assert card["keywords"] == []
+        assert card.keywords == []
 
     def test_enrichment_preserves_existing_keywords(self, tmp_path):
         mem, fake_sys = _make_memory_with_fakes(
@@ -283,7 +283,7 @@ class TestLlmCardEnrichment:
 
         card = mem.get_card("c1")
         # Existing keywords should not be overwritten
-        assert "existing-keyword" in card["keywords"]
+        assert "existing-keyword" in card.keywords
 
 
 # ===========================================================================
@@ -379,7 +379,7 @@ class TestFullCycleWithFakes:
         assert changed2 is False
 
         # Update content → change detected
-        card["description"] = "Updated SA optimization"
+        card.description = "Updated SA optimization"
         changed3 = mem._upsert_local_note_fast(card)
         assert changed3 is True
         assert "Updated" in fake_sys.read("c1").content

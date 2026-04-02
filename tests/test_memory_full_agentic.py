@@ -344,7 +344,7 @@ class TestFullDedupPipeline:
 
         assert result_id == "existing"
         card = mem.get_card("existing")
-        assert "multi-hop chains" in str(card["explanation"])
+        assert "multi-hop chains" in str(card.explanation)
         stats = mem.get_card_write_stats()
         assert stats["updated"] == 1
 

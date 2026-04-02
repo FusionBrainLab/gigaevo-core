@@ -54,10 +54,10 @@ class TestApplyUpdateActions:
         assert result == ["c1"]
 
         card = mem.get_card("c1")
-        assert "extra detail" in card["explanation"]["explanations"]
+        assert "extra detail" in card.explanation["explanations"]
         # Programs should be merged
-        assert "p1" in card["programs"]
-        assert "p2" in card["programs"]
+        assert "p1" in card.programs
+        assert "p2" in card.programs
 
     def test_skips_missing_card(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -140,7 +140,7 @@ class TestEnsureCardId:
         card = {"id": "", "description": "test"}
         result = mem._ensure_card_id(card)
         assert result.startswith("mem-")
-        assert card["id"] == result  # Mutates the card dict
+        assert card.id == result  # Mutates the card dict
 
     def test_whitespace_id_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -171,14 +171,14 @@ class TestConceptToCard:
             "task_description_summary": "solver",
         }
         card = concept_to_card(content, fallback_id="fb")
-        assert card["id"] == "c1"
-        assert card["description"] == "test idea"
-        assert card["task_description"] == "solve it"
+        assert card.id == "c1"
+        assert card.description == "test idea"
+        assert card.task_description == "solve it"
 
     def test_fallback_id_used(self, tmp_path):
         _make_memory(tmp_path)
         card = concept_to_card({}, fallback_id="fb-1")
-        assert card["id"] == "fb-1"
+        assert card.id == "fb-1"
 
     def test_program_card_concept(self, tmp_path):
         _make_memory(tmp_path)
@@ -190,9 +190,9 @@ class TestConceptToCard:
             "code": "def f(): pass",
         }
         card = concept_to_card(content, fallback_id="fb")
-        assert card["category"] == "program"
-        assert card["program_id"] == "prog-1"
-        assert card["fitness"] == 90.5
+        assert card.category == "program"
+        assert card.program_id == "prog-1"
+        assert card.fitness == 90.5
 
 
 # ===========================================================================
