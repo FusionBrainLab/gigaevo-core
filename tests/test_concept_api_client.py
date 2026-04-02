@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
 from gigaevo.memory.shared_memory.utils import truncate_text
 
@@ -241,13 +242,17 @@ def _make_memory(tmp_path, **overrides):
 class TestDecideCardAction:
     def test_no_llm_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
-        result = mem._decide_card_action({"description": "test"}, [{"card_id": "c1"}])
+        result = mem._decide_card_action(
+            normalize_memory_card({"description": "test"}), [{"card_id": "c1"}]
+        )
         assert result["action"] == "add"
 
     def test_no_candidates_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.llm_service = MagicMock()
-        result = mem._decide_card_action({"description": "test"}, [])
+        result = mem._decide_card_action(
+            normalize_memory_card({"description": "test"}), []
+        )
         assert result["action"] == "add"
         mem.llm_service.generate.assert_not_called()
 
@@ -265,7 +270,9 @@ class TestDecideCardAction:
         mem.llm_service = mock_llm
 
         candidates = [{"card_id": "existing", "final_score": 0.9}]
-        result = mem._decide_card_action({"description": "dup"}, candidates)
+        result = mem._decide_card_action(
+            normalize_memory_card({"description": "dup"}), candidates
+        )
         assert result["action"] == "discard"
         assert result["duplicate_of"] == "existing"
 
@@ -288,7 +295,9 @@ class TestDecideCardAction:
         mem.llm_service = mock_llm
 
         candidates = [{"card_id": "c1", "final_score": 0.5}]
-        result = mem._decide_card_action({"description": "new"}, candidates)
+        result = mem._decide_card_action(
+            normalize_memory_card({"description": "new"}), candidates
+        )
         assert result["action"] == "add"
         assert mock_llm.generate.call_count == 3
 

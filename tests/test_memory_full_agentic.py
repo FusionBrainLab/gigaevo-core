@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-from gigaevo.memory.shared_memory.card_conversion import is_program_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from tests.fakes.agentic_memory import (
     FakeAMemGenerator,
@@ -56,7 +55,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
 
         records = fake_load_amem_records(mem.export_file)
         if not records:
-            records = list(mem.memory_cards.values())
+            records = [c.model_dump() for c in mem.memory_cards.values()]
 
         memory_store, page_store, added = fake_build_gam_store(
             records,
@@ -82,8 +81,12 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
 
     # Also patch _build_dedup_retrievers similarly
     def _patched_build_dedup_retrievers():
-        records = list(mem.memory_cards.values())
-        records = [r for r in records if not is_program_card(r)]
+        records = [c.model_dump() for c in mem.memory_cards.values()]
+        records = [
+            r
+            for r in records
+            if str(r.get("category", "")).strip().lower() != "program"
+        ]
         if not records:
             return {}
 
@@ -188,7 +191,7 @@ class TestDedupWithRealScoring:
         )
 
         # Score candidates for a similar card
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card(
             {
@@ -219,7 +222,7 @@ class TestDedupWithRealScoring:
             card_update_dedup_config={"enabled": True},
         )
 
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card({"description": "SA optimization"})
         scored = mem._score_retrieved_candidates(incoming)
@@ -234,7 +237,7 @@ class TestDedupWithRealScoring:
             ideas=[{"id": "i1", "description": "test"}],
         )
 
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card({"description": "test"})
         scored = mem._score_retrieved_candidates(incoming)
@@ -344,7 +347,7 @@ class TestFullDedupPipeline:
 
         assert result_id == "existing"
         card = mem.get_card("existing")
-        assert "multi-hop chains" in str(card["explanation"])
+        assert "multi-hop chains" in str(card.explanation)
         stats = mem.get_card_write_stats()
         assert stats["updated"] == 1
 

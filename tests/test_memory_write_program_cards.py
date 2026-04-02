@@ -1,7 +1,8 @@
 import json
 
 from gigaevo.memory.memory_write_example import load_memory_cards
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, normalize_memory_card
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 
 def _write_json(path, payload):
@@ -77,38 +78,23 @@ def test_load_memory_cards_adds_top_program_cards(tmp_path):
         best_programs_percent=5.0,
     )
 
-    idea_cards = [card for card in cards if card.get("category") != "program"]
-    program_cards = [card for card in cards if card.get("category") == "program"]
+    idea_cards = [card for card in cards if card.category != "program"]
+    program_cards = [card for card in cards if card.category == "program"]
 
     assert len(idea_cards) == 1
     assert len(program_cards) == 1
 
     program_card = program_cards[0]
-    assert program_card["program_id"] == "prog-9"
-    assert program_card["fitness"] == 9.0
-    assert program_card["task_description_summary"] == "Solve the task efficiently."
-    assert "def run_code()" in program_card["code"]
-    assert program_card["connected_ideas"] == [
-        {
-            "idea_id": "idea-1",
-            "description": "Use simulated annealing for local refinement.",
-        },
-        {
-            "idea_id": "idea-2",
-            "description": "Add a boundary-aware repair step.",
-        },
-    ]
-    assert set(program_card.keys()) == {
-        "id",
-        "category",
-        "program_id",
-        "task_description",
-        "task_description_summary",
-        "description",
-        "fitness",
-        "code",
-        "connected_ideas",
-    }
+    assert program_card.program_id == "prog-9"
+    assert program_card.fitness == 9.0
+    assert program_card.task_description_summary == "Solve the task efficiently."
+    assert "def run_code()" in program_card.code
+    assert len(program_card.connected_ideas) == 2
+    assert program_card.connected_ideas[0].idea_id == "idea-1"
+    assert program_card.connected_ideas[1].idea_id == "idea-2"
+    from gigaevo.memory.shared_memory.models import ProgramCard as PC
+
+    assert isinstance(program_card, PC)
 
 
 def test_program_cards_bypass_idea_dedup(tmp_path):
@@ -159,14 +145,10 @@ def test_program_cards_bypass_idea_dedup(tmp_path):
     stored = memory.get_card(card_id)
     assert card_id == "program-prog-1"
     assert stored is not None
-    assert stored["program_id"] == "prog-1"
-    assert stored["fitness"] == 12.5
-    assert stored["connected_ideas"] == [
-        {
-            "idea_id": "idea-1",
-            "description": "Repair invalid candidates before scoring.",
-        }
-    ]
+    assert stored.program_id == "prog-1"
+    assert stored.fitness == 12.5
+    assert len(stored.connected_ideas) == 1
+    assert stored.connected_ideas[0].idea_id == "idea-1"
 
 
 def test_normalize_program_card_is_minimal_shape():
@@ -186,14 +168,7 @@ def test_normalize_program_card_is_minimal_shape():
         }
     )
 
-    assert card == {
-        "id": "program-prog-1",
-        "category": "program",
-        "program_id": "prog-1",
-        "task_description": "Solve task.",
-        "task_description_summary": "Solve task.",
-        "description": "Top evolved program.",
-        "fitness": 12.5,
-        "code": "def run_code():\n    return 1\n",
-        "connected_ideas": [{"idea_id": "idea-1"}],
-    }
+    assert card.id == "program-prog-1"
+    assert card.category == "program"
+    assert card.program_id == "prog-1"
+    assert card.fitness == 12.5

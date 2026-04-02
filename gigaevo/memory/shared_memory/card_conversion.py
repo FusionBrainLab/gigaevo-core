@@ -10,6 +10,13 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
+from gigaevo.memory.shared_memory.models import (
+    AnyCard,
+    ConnectedIdea,
+    MemoryCard,
+    MemoryCardExplanation,
+    ProgramCard,
+)
 from gigaevo.memory.shared_memory.utils import (
     _safe_get,
     _str_or_empty,
@@ -80,67 +87,71 @@ DEFAULT_GAM_TOP_K_BY_TOOL = {
 
 
 def normalize_memory_card(
-    card: dict[str, Any] | None = None,
+    card: dict[str, Any] | AnyCard | None = None,
     fallback_id: str | None = None,
-) -> dict[str, Any]:
-    """Normalize a raw card dict into the canonical memory card shape.
+) -> AnyCard:
+    """Normalize raw input into a typed Pydantic card model.
 
-    Two output shapes:
-    - Program cards (category="program" or program_id truthy): 9 keys
-    - General cards: 15 keys including explanation, keywords, etc.
+    Returns:
+        ProgramCard if category="program" or program_id is truthy.
+        MemoryCard otherwise.
     """
+    if isinstance(card, (MemoryCard, ProgramCard)):
+        return card
+
     raw = dict(card or {})
     category = str(raw.get("category") or "general")
     program_id = _str_or_empty(raw.get("program_id"))
+
     if category == "program" or program_id:
-        return {
-            "id": str(raw.get("id") or fallback_id or ""),
-            "category": "program",
-            "program_id": program_id,
-            "task_description": str(
+        return ProgramCard(
+            id=str(raw.get("id") or fallback_id or ""),
+            program_id=program_id,
+            task_description=str(
                 raw.get("task_description") or raw.get("context") or ""
             ),
-            "task_description_summary": str(
+            task_description_summary=str(
                 raw.get("task_description_summary") or raw.get("context_summary") or ""
             ),
-            "description": str(raw.get("description") or raw.get("content") or ""),
-            "fitness": _to_float(raw.get("fitness"), default=None),
-            "code": str(raw.get("code") or ""),
-            "connected_ideas": _to_list(raw.get("connected_ideas")),
-        }
+            description=str(raw.get("description") or raw.get("content") or ""),
+            fitness=_to_float(raw.get("fitness"), default=None),
+            code=str(raw.get("code") or ""),
+            connected_ideas=_to_list(raw.get("connected_ideas")),
+            keywords=_to_list(raw.get("keywords")),
+            strategy=str(raw.get("strategy") or ""),
+            links=_to_list(raw.get("links")),
+        )
 
     explanation = raw.get("explanation")
     if not isinstance(explanation, dict):
         explanation = {}
 
-    return {
-        "id": str(raw.get("id") or fallback_id or ""),
-        "category": category,
-        "description": str(raw.get("description") or raw.get("content") or ""),
-        "task_description": str(
-            raw.get("task_description") or raw.get("context") or ""
-        ),
-        "task_description_summary": str(
+    return MemoryCard(
+        id=str(raw.get("id") or fallback_id or ""),
+        category=category,
+        description=str(raw.get("description") or raw.get("content") or ""),
+        task_description=str(raw.get("task_description") or raw.get("context") or ""),
+        task_description_summary=str(
             raw.get("task_description_summary") or raw.get("context_summary") or ""
         ),
-        "strategy": str(raw.get("strategy") or ""),
-        "last_generation": _to_int(raw.get("last_generation"), default=0),
-        "programs": _to_list(raw.get("programs")),
-        "aliases": _to_list(raw.get("aliases")),
-        "keywords": _to_list(raw.get("keywords")),
-        "evolution_statistics": (
+        strategy=str(raw.get("strategy") or ""),
+        last_generation=_to_int(raw.get("last_generation"), default=0),
+        programs=_to_list(raw.get("programs")),
+        aliases=_to_list(raw.get("aliases")),
+        keywords=_to_list(raw.get("keywords")),
+        evolution_statistics=(
             raw.get("evolution_statistics")
             if isinstance(raw.get("evolution_statistics"), dict)
             else {}
         ),
-        "explanation": {
-            "explanations": _to_list(explanation.get("explanations")),
-            "summary": str(explanation.get("summary") or ""),
-        },
-        "works_with": _to_list(raw.get("works_with")),
-        "links": _to_list(raw.get("links")),
-        "usage": raw.get("usage") if isinstance(raw.get("usage"), dict) else {},
-    }
+        explanation=MemoryCardExplanation(
+            explanations=_to_list(explanation.get("explanations")),
+            summary=str(explanation.get("summary") or ""),
+        ),
+        works_with=_to_list(raw.get("works_with")),
+        links=_to_list(raw.get("links")),
+        usage=raw.get("usage") if isinstance(raw.get("usage"), dict) else {},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -152,41 +163,42 @@ def memory_to_card(
     memory_note: MemoryNoteProtocol | None,
     base_card: dict[str, Any] | None = None,
     memory_id: str | None = None,
-) -> dict[str, Any]:
-    """Convert an A-MEM MemoryNote into a normalized card dict."""
+) -> AnyCard:
+    """Convert an A-MEM MemoryNote into a normalized card model."""
     mem_id = _safe_get(memory_note, "id", None) or memory_id
     card = normalize_memory_card(base_card, fallback_id=mem_id)
     if memory_note is None:
         return card
 
-    card["id"] = str(mem_id or card["id"])
-    card["category"] = str(
-        card.get("category") or _safe_get(memory_note, "category", None) or "general"
+    updates: dict[str, Any] = {}
+    updates["id"] = str(mem_id or card.id)
+    updates["category"] = str(
+        card.category or _safe_get(memory_note, "category", None) or "general"
     )
-    card["description"] = str(
-        card.get("description") or _safe_get(memory_note, "content", "")
+    updates["description"] = str(
+        card.description or _safe_get(memory_note, "content", "")
     )
-    card["task_description"] = str(
-        card.get("task_description") or _safe_get(memory_note, "context", "")
+    updates["task_description"] = str(
+        card.task_description or _safe_get(memory_note, "context", "")
     )
-    if str(card.get("category") or "").strip().lower() == "program":
-        return card
-    card["strategy"] = str(
-        card.get("strategy") or _safe_get(memory_note, "strategy", "")
-    )
-    card["keywords"] = _to_list(_safe_get(memory_note, "keywords", []) or [])
 
-    if not card.get("links"):
-        card["links"] = (
+    if isinstance(card, ProgramCard):
+        return card.model_copy(update=updates)
+
+    updates["strategy"] = str(card.strategy or _safe_get(memory_note, "strategy", ""))
+    updates["keywords"] = _to_list(_safe_get(memory_note, "keywords", []) or [])
+
+    if not card.links:
+        links = (
             _safe_get(memory_note, "links", None)
             or _safe_get(memory_note, "linked_memories", None)
             or _safe_get(memory_note, "linked_ids", None)
             or _safe_get(memory_note, "relations", None)
             or []
         )
-    card["links"] = _to_list(card["links"])
+        updates["links"] = _to_list(links)
 
-    return card
+    return card.model_copy(update=updates)
 
 
 def export_memories_jsonl(
@@ -210,7 +222,7 @@ def export_memories_jsonl(
             record = memory_to_card(
                 memory_note, base_card=base_card, memory_id=memory_id
             )
-            file_obj.write(json.dumps(record, ensure_ascii=True) + "\n")
+            file_obj.write(json.dumps(record.model_dump(), ensure_ascii=True) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -218,83 +230,79 @@ def export_memories_jsonl(
 # ---------------------------------------------------------------------------
 
 
-def card_to_concept_content(card: dict[str, Any]) -> dict[str, Any]:
-    """Convert a normalized card dict to the API concept content format."""
-    if is_program_card(card):
+def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
+    """Convert a Pydantic card model to the API concept content format."""
+    if isinstance(card, ProgramCard):
         return {
-            "id": str(card.get("id") or ""),
+            "id": card.id,
             "category": "program",
-            "program_id": _str_or_empty(card.get("program_id")),
-            "task_description": str(card.get("task_description") or ""),
-            "task_description_summary": str(card.get("task_description_summary") or ""),
-            "description": str(card.get("description") or ""),
-            "fitness": _to_float(card.get("fitness"), default=None),
-            "code": str(card.get("code") or ""),
-            "connected_ideas": _to_list(card.get("connected_ideas")),
+            "program_id": card.program_id,
+            "task_description": card.task_description,
+            "task_description_summary": card.task_description_summary,
+            "description": card.description,
+            "fitness": card.fitness,
+            "code": card.code,
+            "connected_ideas": [
+                ci.model_dump() if isinstance(ci, ConnectedIdea) else ci
+                for ci in card.connected_ideas
+            ],
         }
 
-    explanation = card.get("explanation")
-    if isinstance(explanation, dict):
-        explanation_text = str(explanation.get("summary") or "")
-    else:
-        explanation_text = str(explanation or "")
+    explanation = card.explanation
+    explanation_text = (
+        explanation.summary
+        if isinstance(explanation, MemoryCardExplanation)
+        else str(explanation or "")
+    )
 
-    strategy = str(card.get("strategy") or "").strip().lower() or None
+    strategy = card.strategy.strip().lower() or None
     if strategy not in ALLOWED_STRATEGIES:
         strategy = None
 
-    evolution_statistics = card.get("evolution_statistics")
-    if not isinstance(evolution_statistics, dict):
-        evolution_statistics = None
-
-    usage = card.get("usage")
-    if not isinstance(usage, dict):
-        usage = None
-
     return {
-        "id": str(card.get("id") or ""),
-        "category": str(card.get("category") or "general"),
-        "program_id": _str_or_empty(card.get("program_id")),
-        "fitness": _to_float(card.get("fitness"), default=None),
-        "task_description": str(card.get("task_description") or ""),
-        "task_description_summary": str(card.get("task_description_summary") or ""),
-        "description": str(card.get("description") or ""),
-        "code": str(card.get("code") or ""),
-        "connected_ideas": _to_list(card.get("connected_ideas")),
+        "id": card.id,
+        "category": card.category,
+        "program_id": "",
+        "fitness": None,
+        "task_description": card.task_description,
+        "task_description_summary": card.task_description_summary,
+        "description": card.description,
+        "code": "",
+        "connected_ideas": [],
         "explanation": explanation_text,
         "strategy": strategy,
-        "keywords": dedupe_keep_order(list(card.get("keywords") or [])),
-        "evolution_statistics": evolution_statistics,
-        "works_with": dedupe_keep_order(list(card.get("works_with") or [])),
-        "links": dedupe_keep_order(list(card.get("links") or [])),
-        "usage": usage,
+        "keywords": dedupe_keep_order(list(card.keywords)),
+        "evolution_statistics": card.evolution_statistics
+        if isinstance(card.evolution_statistics, dict)
+        else None,
+        "works_with": dedupe_keep_order(list(card.works_with)),
+        "links": dedupe_keep_order(list(card.links)),
+        "usage": card.usage if isinstance(card.usage, dict) else None,
     }
 
 
-def build_entity_meta(card: dict[str, Any]) -> tuple[str, list[str], str]:
+def build_entity_meta(card: AnyCard) -> tuple[str, list[str], str]:
     """Build API entity metadata (name, tags, when_to_use) from a card."""
-    card_id = str(card.get("id") or "")
-    description = str(card.get("description") or "").strip()
-    task_description = str(card.get("task_description") or "").strip()
-    task_description_summary = str(card.get("task_description_summary") or "").strip()
+    description = card.description.strip()
+    task_description = card.task_description.strip()
+    task_description_summary = card.task_description_summary.strip()
 
-    explanation = card.get("explanation")
-    if isinstance(explanation, dict):
-        explanation_summary = str(explanation.get("summary") or "").strip()
+    if isinstance(card, MemoryCard):
+        explanation_summary = card.explanation.summary.strip()
     else:
-        explanation_summary = str(explanation or "").strip()
+        explanation_summary = ""
 
     name_seed = (
         description or task_description_summary or task_description or "memory card"
     )
-    name = f"{card_id}: {name_seed}" if card_id else name_seed
+    name = f"{card.id}: {name_seed}" if card.id else name_seed
     name = name[:255]
 
     tags = dedupe_keep_order(
         [
-            str(card.get("category") or "").strip(),
-            str(card.get("strategy") or "").strip(),
-            *[str(x).strip() for x in (card.get("keywords") or [])],
+            card.category.strip(),
+            card.strategy.strip(),
+            *[str(x).strip() for x in card.keywords],
         ]
     )
 
@@ -304,7 +312,7 @@ def build_entity_meta(card: dict[str, Any]) -> tuple[str, list[str], str]:
             task_description,
             description,
             explanation_summary,
-            " ".join([str(x) for x in (card.get("keywords") or [])]).strip(),
+            " ".join(str(x) for x in card.keywords).strip(),
         ]
     )
     when_to_use = " | ".join(when_to_use_parts)
@@ -312,11 +320,9 @@ def build_entity_meta(card: dict[str, Any]) -> tuple[str, list[str], str]:
     return name, tags, when_to_use
 
 
-def is_program_card(card: dict[str, Any]) -> bool:
-    """Check if a card dict represents a program card."""
-    if str(card.get("category") or "").strip().lower() == "program":
-        return True
-    return bool(_str_or_empty(card.get("program_id")).strip())
+def is_program_card(card: AnyCard) -> bool:
+    """Check if a card is a program card."""
+    return isinstance(card, ProgramCard)
 
 
 def normalize_allowed_gam_tools(allowed_gam_tools: list[str] | None) -> set[str]:
@@ -414,14 +420,11 @@ def note_metadata(note: MemoryNoteProtocol) -> dict[str, Any]:
     }
 
 
-def format_search_results(query: str, cards: list[dict[str, Any]]) -> str:
+def format_search_results(query: str, cards: list[AnyCard]) -> str:
     """Format search results as numbered card list for MemorySelectorAgent parsing."""
     lines = [f"Query: {query}", "", "Top relevant memory cards:"]
     for idx, card in enumerate(cards, start=1):
-        card_id = str(card.get("id") or "")
-        category = str(card.get("category") or "general")
-        description = str(card.get("description") or "").strip()
-        lines.append(f"{idx}. {card_id} [{category}] {description}")
+        lines.append(f"{idx}. {card.id} [{card.category}] {card.description.strip()}")
     return "\n".join(lines)
 
 

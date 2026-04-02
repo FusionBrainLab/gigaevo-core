@@ -133,7 +133,7 @@ class TestLoadMemoryCardsEdgeCases:
         cards = load_memory_cards(banks, best, programs_path=None)
         # Should return ideas only, no program cards
         assert len(cards) == 1
-        assert cards[0].get("id") == "i1"
+        assert cards[0].id == "i1"
 
     def test_zero_best_programs_percent(self, tmp_path):
         banks = _make_banks(
@@ -152,7 +152,7 @@ class TestLoadMemoryCardsEdgeCases:
             banks, best, programs_path=programs, best_programs_percent=0.0
         )
         # Zero percent = no program cards
-        program_cards = [c for c in cards if c.get("category") == "program"]
+        program_cards = [c for c in cards if c.category == "program"]
         assert program_cards == []
 
     def test_best_idea_missing_from_bank_creates_minimal_card(self, tmp_path):
@@ -163,7 +163,7 @@ class TestLoadMemoryCardsEdgeCases:
         )
         cards = load_memory_cards(banks, best)
         assert len(cards) == 1
-        assert cards[0]["id"] == "missing-1"
+        assert cards[0].id == "missing-1"
 
     def test_programs_sorted_by_fitness(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
@@ -194,8 +194,8 @@ class TestLoadMemoryCardsEdgeCases:
         cards = load_memory_cards(
             banks, best, programs_path=programs, best_programs_percent=100.0
         )
-        program_cards = [c for c in cards if c.get("category") == "program"]
-        fitnesses = [c["fitness"] for c in program_cards]
+        program_cards = [c for c in cards if c.category == "program"]
+        fitnesses = [c.fitness for c in program_cards]
         assert fitnesses == sorted(fitnesses, reverse=True)
 
     def test_program_without_fitness_skipped(self, tmp_path):
@@ -216,9 +216,9 @@ class TestLoadMemoryCardsEdgeCases:
         cards = load_memory_cards(
             banks, best, programs_path=programs, best_programs_percent=100.0
         )
-        program_cards = [c for c in cards if c.get("category") == "program"]
+        program_cards = [c for c in cards if c.category == "program"]
         assert len(program_cards) == 1
-        assert program_cards[0]["program_id"] == "p2"
+        assert program_cards[0].program_id == "p2"
 
     def test_missing_banks_file_raises(self, tmp_path):
         best = _make_best_ideas(tmp_path)

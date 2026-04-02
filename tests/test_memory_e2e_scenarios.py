@@ -18,6 +18,7 @@ from gigaevo.memory.ideas_tracker.components.data_components import (
 )
 from gigaevo.memory.memory_write_example import load_memory_cards
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.models import ProgramCard
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -306,7 +307,7 @@ class TestScenarioIncrementalGrowth:
         # Updated, not duplicated
         assert len(mem3.memory_cards) == 4
         card = mem3.get_card("idea-g5-1")
-        assert "width=3" in card["description"]
+        assert "width=3" in card.description
 
     def test_ideas_and_programs_accumulate(self, tmp_path):
         """Ideas from gen 5 + programs from gen 10 coexist."""
@@ -353,10 +354,10 @@ class TestScenarioIncrementalGrowth:
         # but the explicit id was "program-prog-best-1" (we set it, not auto-prefixed)
         # Let's verify by checking all cards
         prog_cards = [
-            c for c in mem2.memory_cards.values() if c.get("category") == "program"
+            c for c in mem2.memory_cards.values() if isinstance(c, ProgramCard)
         ]
         assert len(prog_cards) == 1
-        assert prog_cards[0]["fitness"] == 95.0
+        assert prog_cards[0].fitness == 95.0
 
 
 # ===========================================================================
@@ -374,7 +375,7 @@ class TestScenarioDedup:
         mem.save_card({"id": "idea-1", "description": "SA optimization v2 (improved)"})
 
         assert len(mem.memory_cards) == 1
-        assert "v2" in mem.get_card("idea-1")["description"]
+        assert "v2" in mem.get_card("idea-1").description
 
         stats = mem.get_card_write_stats()
         assert stats["updated"] == 1
@@ -442,7 +443,7 @@ class TestScenarioDedup:
         result_id = mem.save_card({"description": "SA for chain optimization"})
         assert result_id == "idea-1"
         card = mem.get_card("idea-1")
-        assert "multi-hop chains" in str(card["explanation"])
+        assert "multi-hop chains" in str(card.explanation)
         stats = mem.get_card_write_stats()
         assert stats["updated"] == 1
         assert stats["updated_target_cards"] == 1
@@ -526,8 +527,8 @@ class TestScenarioWritePipeline:
             banks, best, programs_path=progs, best_programs_percent=100.0
         )
 
-        idea_cards = [c for c in cards if c.get("category") != "program"]
-        prog_cards = [c for c in cards if c.get("category") == "program"]
+        idea_cards = [c for c in cards if not isinstance(c, ProgramCard)]
+        prog_cards = [c for c in cards if isinstance(c, ProgramCard)]
         assert len(idea_cards) == 5
         assert len(prog_cards) == 3
 
@@ -774,8 +775,8 @@ class TestScenarioErrorRecovery:
         card_id = mem.save_card({"description": "just a description"})
         card = mem.get_card(card_id)
         assert card is not None
-        assert card["description"] == "just a description"
-        assert card["category"] == "general"
+        assert card.description == "just a description"
+        assert card.category == "general"
 
     def test_save_card_with_empty_dict(self, tmp_path):
         """Empty dict should produce a valid card with auto-generated ID."""

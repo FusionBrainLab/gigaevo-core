@@ -589,7 +589,7 @@ class TestMemoryFillThenUsePhases:
         # Write memory instructions file from ideas
         memory_file = tmp_path / "memory.txt"
         ideas_text = "\n".join(
-            f"- {card['description']}" for card in mem.memory_cards.values()
+            f"- {card.description}" for card in mem.memory_cards.values()
         )
         memory_file.write_text(ideas_text)
 

@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from gigaevo.memory.shared_memory.card_conversion import build_entity_meta
+from gigaevo.memory.shared_memory.card_conversion import (
+    build_entity_meta,
+    normalize_memory_card,
+)
 from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
 
 # ---------------------------------------------------------------------------
@@ -210,7 +213,9 @@ class TestSyncFromApi:
         mem.use_api = True
 
         # Pre-populate known state
-        mem.memory_cards["idea-1"] = {"id": "idea-1", "description": "known"}
+        mem.memory_cards["idea-1"] = normalize_memory_card(
+            {"id": "idea-1", "description": "known"}
+        )
         mem.entity_by_card_id["idea-1"] = "eid-1"
         mem.card_id_by_entity["eid-1"] = "idea-1"
         mem.entity_version_by_entity["eid-1"] = "v1"
