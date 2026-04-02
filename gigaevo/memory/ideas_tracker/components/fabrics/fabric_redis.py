@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from gigaevo.utils.redis import RedisRunConfig
 
 

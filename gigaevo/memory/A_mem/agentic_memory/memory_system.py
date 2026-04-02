@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import ast
 from datetime import datetime
 import json
@@ -186,7 +188,7 @@ class AgenticMemorySystem:
             extend=True,
         )
 
-    def _build_gam_card_text(self, note: "MemoryNote") -> str:
+    def _build_gam_card_text(self, note: MemoryNote) -> str:
         keywords = ", ".join(note.keywords or [])
         links = note.links or []
         parts = [
@@ -206,7 +208,7 @@ class AgenticMemorySystem:
         ]
         return "\n".join(parts)
 
-    def _document_for_note(self, note: "MemoryNote") -> str:
+    def _document_for_note(self, note: MemoryNote) -> str:
         if self._use_gam_card_document:
             return self._build_gam_card_text(note)
         return note.content

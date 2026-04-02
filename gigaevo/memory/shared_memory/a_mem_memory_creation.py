@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any
@@ -11,13 +13,7 @@ from loguru import logger
 from gigaevo.memory.A_mem.agentic_memory.memory_system import AgenticMemorySystem
 import gigaevo.memory.config as config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
-
-
-# -----------------------------
-# Helpers (safe printing + diff)
-# -----------------------------
-def _safe_get(obj, name, default=None):
-    return getattr(obj, name, default)
+from gigaevo.memory.shared_memory.utils import _safe_get
 
 
 def pretty_print_memory(mem, title=None):

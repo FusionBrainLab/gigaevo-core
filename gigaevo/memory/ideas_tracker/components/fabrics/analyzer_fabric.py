@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from gigaevo.memory.ideas_tracker.components.analyzer import IdeaAnalyzer
 from gigaevo.memory.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
 

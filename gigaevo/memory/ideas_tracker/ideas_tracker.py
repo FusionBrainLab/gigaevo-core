@@ -5,6 +5,8 @@ maintains active and inactive idea banks, enriches records with postprocessing,
 and optionally integrates with the memory write pipeline.
 """
 
+from __future__ import annotations
+
 import asyncio
 from pathlib import Path
 from typing import Any

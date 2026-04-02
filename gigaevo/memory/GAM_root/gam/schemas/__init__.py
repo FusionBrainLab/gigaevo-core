@@ -5,6 +5,8 @@ This module exposes all core data models and protocol definitions for the GAM (G
 It organizes memory, page, search, tool, and result schemas for unified import and type safety across the system.
 """
 
+from __future__ import annotations
+
 from .memory import InMemoryMemoryStore, MemoryState, MemoryStore, MemoryUpdate
 from .page import InMemoryPageStore, Page, PageStore
 from .result import (

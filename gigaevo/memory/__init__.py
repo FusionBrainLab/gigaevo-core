@@ -10,6 +10,8 @@ Public API:
     GigaEvoMemoryBase  — abstract base for memory backends
 """
 
+from __future__ import annotations
+
 from gigaevo.memory.shared_memory.card_conversion import (
     GigaEvoMemoryBase,
     normalize_memory_card,
