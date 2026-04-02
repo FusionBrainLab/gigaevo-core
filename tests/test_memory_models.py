@@ -46,11 +46,12 @@ class TestMemoryCard:
         assert c.description == "d"
 
     def test_defaults(self):
-        c = MemoryCard(id="x", description="d")
+        c = MemoryCard(id="x")
         assert c.category == "general"
+        assert c.description == ""
         assert c.task_description == ""
         assert c.task_description_summary == ""
-        assert c.strategy is None
+        assert c.strategy == ""
         assert c.last_generation == 0
         assert c.programs == []
         assert c.aliases == []
@@ -87,9 +88,9 @@ class TestMemoryCard:
         with pytest.raises(ValidationError):
             MemoryCard(description="d")
 
-    def test_missing_description_raises(self):
-        with pytest.raises(ValidationError):
-            MemoryCard(id="x")
+    def test_description_defaults_to_empty(self):
+        c = MemoryCard(id="x")
+        assert c.description == ""
 
     def test_extra_field_raises(self):
         with pytest.raises(ValidationError):
@@ -100,13 +101,9 @@ class TestMemoryCard:
             c = MemoryCard(id="x", description="d", strategy=s)
             assert c.strategy == s
 
-    def test_strategy_none_valid(self):
-        c = MemoryCard(id="x", description="d", strategy=None)
-        assert c.strategy is None
-
-    def test_strategy_invalid_raises(self):
-        with pytest.raises(ValidationError):
-            MemoryCard(id="x", description="d", strategy="random")
+    def test_strategy_accepts_any_string(self):
+        c = MemoryCard(id="x", strategy="custom_approach")
+        assert c.strategy == "custom_approach"
 
     def test_list_fields_are_independent_instances(self):
         """Default factory creates new lists per instance."""
