@@ -30,8 +30,6 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
 
 load_dotenv()
 
-
-
 from gigaevo.memory.shared_memory.card_conversion import (
     ALLOWED_STRATEGIES,
     DEFAULT_MODEL_NAME,
@@ -63,17 +61,14 @@ from gigaevo.memory.shared_memory.utils import (
 # Re-export for backward compatibility (extracted to concept_api.py)
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 
-
 # ---------------------------------------------------------------------------
 # Protocols for agentic dependencies (A-MEM, GAM)
 # ---------------------------------------------------------------------------
-
 
 class LLMServiceProtocol(Protocol):
     """Structural type for OpenAIInferenceService."""
 
     def generate(self, data: str) -> tuple[str, Any, int | None, float | None]: ...
-
 
 class AgenticMemoryProtocol(Protocol):
     """Structural type for AgenticMemorySystem."""
@@ -88,14 +83,12 @@ class AgenticMemoryProtocol(Protocol):
     def analyze_content(self, content: str) -> dict[str, Any]: ...
     def _document_for_note(self, note: MemoryNoteProtocol) -> str: ...
 
-
 @dataclass
 class ResearchOutput:
     """Return type of ResearchAgent.research()."""
 
     integrated_memory: str = ""
     raw_memory: dict[str, Any] | None = None
-
 
 class ResearchAgentProtocol(Protocol):
     """Structural type for GAM ResearchAgent."""
@@ -104,7 +97,6 @@ class ResearchAgentProtocol(Protocol):
         self, request: str, memory_state: str | None = None
     ) -> ResearchOutput: ...
 
-
 class GeneratorProtocol(Protocol):
     """Structural type for AMemGenerator."""
 
@@ -112,13 +104,11 @@ class GeneratorProtocol(Protocol):
         self, prompt: str | None = None, **kwargs: Any
     ) -> dict[str, Any]: ...
 
-
 # ---------------------------------------------------------------------------
 # Card memory type alias
 # ---------------------------------------------------------------------------
 
 CardDict = dict[str, Any]
-
 
 class AmemGamMemory(GigaEvoMemoryBase):
     """API-backed memory where API is the source of truth and local GAM is retrieval runtime."""
@@ -216,7 +206,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if sync_on_init and self.use_api:
             self._sync_from_api(force_full=True)
-
 
     def _load_agentic_classes(self) -> None:
         try:
@@ -345,14 +334,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
         )
         os.replace(str(tmp_file), str(self.index_file))
 
-
     def _ensure_card_id(self, card: CardDict) -> str:
         card_id = str(card.get("id") or "").strip()
         if not card_id:
             card_id = f"mem-{uuid.uuid4().hex[:12]}"
             card["id"] = card_id
         return card_id
-
 
     def _build_note_from_card(self, card: CardDict) -> MemoryNoteProtocol:
         if self._MemoryNoteCls is None:
@@ -389,6 +376,25 @@ class AmemGamMemory(GigaEvoMemoryBase):
             strategy=strategy,
         )
 
+    @staticmethod
+    def _note_fields_changed(
+        existing: MemoryNoteProtocol,
+        content: Any,
+        category: Any,
+        context: Any,
+        strategy: Any,
+        keywords: Any,
+        links: Any,
+    ) -> bool:
+        return (
+            existing.content != content
+            or existing.category != category
+            or existing.context != context
+            or existing.strategy != strategy
+            or existing.keywords != keywords
+            or existing.links != links
+        )
+
     def _upsert_local_note_fast(self, card: CardDict) -> bool:
         """Synchronize card into local A-MEM/Chroma without running LLM evolution."""
         if self.memory_system is None:
@@ -396,14 +402,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         note = self._build_note_from_card(card)
         existing = self.memory_system.read(note.id)
-        changed = (
-            existing is None
-            or existing.content != note.content
-            or existing.category != note.category
-            or existing.context != note.context
-            or existing.strategy != note.strategy
-            or existing.keywords != note.keywords
-            or existing.links != note.links
+        changed = existing is None or self._note_fields_changed(
+            existing, note.content, note.category, note.context,
+            note.strategy, note.keywords, note.links,
         )
         if not changed:
             self.memory_ids.add(note.id)
@@ -449,13 +450,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if existing is None:
             self.memory_system.add_note(id=card_id, content=description, **kwargs)
         else:
-            changed = (
-                existing.content != description
-                or existing.category != kwargs["category"]
-                or existing.context != kwargs["context"]
-                or existing.strategy != kwargs["strategy"]
-                or existing.keywords != kwargs["keywords"]
-                or existing.links != kwargs["links"]
+            changed = self._note_fields_changed(
+                existing, description, kwargs["category"], kwargs["context"],
+                kwargs["strategy"], kwargs["keywords"], kwargs["links"],
             )
             if not changed:
                 self.memory_ids.add(card_id)
@@ -479,7 +476,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
         hits: list[dict[str, Any]] = []
         offset = 0
         while True:
-            # New API: list memory cards via `/v1/memory-cards` and filter by namespace client-side.
             rows = self.api.list_memory_cards(
                 limit=self.sync_batch_size,
                 offset=offset,
@@ -498,7 +494,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     continue
                 page_hits.append(row)
 
-            # Advance offset by raw rows count to preserve pagination even with filtering.
             offset += len(rows)
             hits.extend(page_hits)
 
@@ -654,7 +649,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.export_file,
             card_overrides=self.memory_cards,
         )
-
 
     def _build_dedup_retrievers(self) -> dict[str, Any]:
         try:
@@ -988,7 +982,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         return card_id
 
-
     def save_card(self, card: CardDict) -> str:
         normalized_card = normalize_memory_card(card)
         self.card_write_stats["processed"] += 1
@@ -1061,7 +1054,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 "usage": {},
             }
         )
-
 
     def _synthesize_results(
         self,
