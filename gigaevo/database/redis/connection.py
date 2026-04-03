@@ -99,7 +99,7 @@ class RedisConnection:
         r, self._redis = self._redis, None
         if r is not None:
             try:
-                await r.aclose()
+                await r.aclose()  # type: ignore[attr-defined]
             except Exception:
                 pass
             try:

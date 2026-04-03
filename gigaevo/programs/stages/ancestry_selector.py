@@ -35,7 +35,7 @@ class AncestrySelector:
             higher_better = bool(
                 self.metrics_context.get_primary_spec().higher_is_better
             )
-            scored: list[tuple[float, str]] = []
+            scored: list[tuple[float, Program]] = []
             for program in programs:
                 if fitness_key not in program.metrics:
                     logger.warning(

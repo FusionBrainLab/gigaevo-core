@@ -133,14 +133,14 @@ class RedisStreamTransport(Transport):
 
     async def stop(self) -> None:
         if self._redis:
-            await self._redis.aclose()
+            await self._redis.aclose()  # type: ignore[attr-defined]
             self._redis = None
 
     async def publish(self, envelope: MigrantEnvelope) -> None:
         assert self._redis is not None, "Transport not started"
         await self._redis.xadd(
             self.stream_key,
-            envelope.to_stream_fields(),
+            envelope.to_stream_fields(),  # type: ignore[arg-type]
             maxlen=self._max_stream_len,
             approximate=True,
         )

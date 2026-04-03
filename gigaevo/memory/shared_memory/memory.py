@@ -615,7 +615,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self.export_file.exists():
             records = load_amem_records(self.export_file)
         else:
-            records = list(self.memory_cards.values())
+            records = [c.model_dump() for c in self.memory_cards.values()]
 
         memory_store, page_store, added = build_gam_store(records, self.gam_store_dir)
         logger.info(
@@ -655,11 +655,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self.memory_system is None:
             return
         all_ids = sorted(set(self.memory_ids) | set(self.memory_cards.keys()))
+        card_overrides_dict = {
+            cid: c.model_dump() for cid, c in self.memory_cards.items()
+        }
         export_memories_jsonl(
             self.memory_system,
             all_ids,
             self.export_file,
-            card_overrides=self.memory_cards,
+            card_overrides=card_overrides_dict,
         )
 
     def _build_dedup_retrievers(self) -> dict[str, Any]:
@@ -1080,7 +1083,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self,
         query: str,
         memory_state: str | None,
-        cards: list[dict[str, Any]],
+        cards: list[AnyCard],
     ) -> str:
         if self.llm_service is None:
             return format_search_results(query, cards)
@@ -1196,7 +1199,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if not tokens:
             tokens = [query.strip().lower()] if query.strip() else []
 
-        scored: list[tuple[int, dict[str, Any]]] = []
+        scored: list[tuple[int, AnyCard]] = []
         for card in self.memory_cards.values():
             haystack_text = " ".join(
                 [

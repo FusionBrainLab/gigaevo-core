@@ -88,6 +88,8 @@ class TokenTracker(BaseModel):
         """Write per-call and cumulative metrics."""
         path = [self.name, model_name.replace("/", "_").replace(":", "_")]
 
+        if self.writer is None:
+            return
         self.writer.scalar("context_tokens", float(usage.context), path=path)
         self.writer.scalar("generated_tokens", float(usage.generated), path=path)
         self.writer.scalar("reasoning_tokens", float(usage.reasoning), path=path)

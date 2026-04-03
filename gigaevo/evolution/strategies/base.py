@@ -21,7 +21,7 @@ class StrategyMetrics(BaseModel):
         default=None, description="Strategy-specific metrics and statistics"
     )
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def programs_per_population(self) -> float:
         """Calculate average programs per population."""
@@ -29,7 +29,7 @@ class StrategyMetrics(BaseModel):
             return 0.0
         return self.total_programs / self.active_populations
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def has_programs(self) -> bool:
         """Check if strategy contains any programs."""

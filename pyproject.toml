@@ -62,6 +62,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pre-commit", "python-semantic-release"]
+typing = ["mypy>=1.10", "types-PyYAML", "types-redis", "types-psutil"]
 opt = ["jax", "optax"]
 prompt = ["nltk", "emoji", "syllapy", "langdetect", "immutabledict"]
 test = [
@@ -110,28 +111,59 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 known-first-party = ["gigaevo"]
 force-sort-within-sections = true
 
-# [tool.mypy]
-# python_version = "3.12"
-# warn_unused_configs = true
-# check_untyped_defs = true
-# warn_redundant_casts = true
-# warn_unused_ignores = true
-# strict_optional = true
-# no_implicit_optional = true
-# warn_no_return = true
-# exclude = ["build/", "dist/"]
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+strict_optional = true
+no_implicit_optional = true
+warn_no_return = true
+exclude = ["build/", "dist/", "gigaevo/memory/A_mem/", "gigaevo/memory/GAM_root/"]
 
-# [[tool.mypy.overrides]]
-# module = [
-#     "redis.*",
-#     "loguru.*",
-#     "numpy.*",
-#     "matplotlib.*",
-#     "pandas.*",
-#     "hydra.*",
-#     "omegaconf.*",
-# ]
-# ignore_missing_imports = true
+[[tool.mypy.overrides]]
+module = [
+    "loguru.*",
+    "numpy.*",
+    "matplotlib.*",
+    "pandas.*",
+    "hydra.*",
+    "omegaconf.*",
+    "chromadb.*",
+    "sentence_transformers.*",
+    "rank_bm25.*",
+    "bm25s.*",
+    "nltk.*",
+    "transformers.*",
+    "litellm.*",
+    "sklearn.*",
+    "tqdm.*",
+    "networkx.*",
+    "scipy.*",
+    "wandb.*",
+    "cloudpickle.*",
+    "seaborn.*",
+    "statsmodels.*",
+    "tensorboardX.*",
+    "langchain.*",
+    "langchain_core.*",
+    "langchain_openai.*",
+    "langgraph.*",
+    "langfuse.*",
+    "optuna.*",
+    "cma.*",
+    "orjson.*",
+    "diffpatch.*",
+    "dotenv.*",
+    "jinja2.*",
+    "fakeredis.*",
+    "GAM_root.*",
+    "gigaevo_memory.*",
+    "A_mem.*",
+    "shared_memory.*",
+    "runtime_config.*",
+]
+ignore_missing_imports = true
 
 [tool.semantic_release]
 version_variables = ["gigaevo/__init__.py:__version__"]

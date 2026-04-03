@@ -101,8 +101,8 @@ class Stage:
           (None allowed only if OutputModel is VoidOutput)
     """
 
-    InputsModel: ClassVar[type[StageIO]]
-    OutputModel: ClassVar[type[StageIO]]
+    InputsModel: type[StageIO]
+    OutputModel: type[StageIO]
 
     # Caching behavior
     cache_handler: ClassVar[CacheHandler] = DEFAULT_CACHE
@@ -123,13 +123,13 @@ class Stage:
         if not issubclass(cls.OutputModel, StageIO):
             raise TypeError(f"{cls.__name__}.OutputModel must inherit from StageIO")
 
-        req, opt = [], []
+        req: list[str] = []
+        opt: list[str] = []
         for name, field in cls.InputsModel.model_fields.items():
-            (
-                (_ := opt.append(name))
-                if _is_optional_type(field.annotation)
-                else req.append(name)
-            )
+            if _is_optional_type(field.annotation):
+                opt.append(name)
+            else:
+                req.append(name)
         cls._required_names, cls._optional_names = req, opt
 
     def __init__(self, *, timeout: float):

@@ -104,7 +104,7 @@ class MigrationNode:
         program = Program.from_dict(envelope.program_data)
         # Fresh UUID to avoid cross-run ID collisions
         program.id = str(uuid.uuid4())
-        program.lineage = Lineage(parents=[], children=[])
+        program.lineage = Lineage(parents=[], children=[], mutation=None)
         program.set_metadata("migration_source_run", envelope.source_run_id)
         program.set_metadata("migration_source_id", envelope.program_id)
         program.set_metadata("migration_generation", envelope.generation)

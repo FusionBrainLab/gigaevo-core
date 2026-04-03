@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import types
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from loguru import logger
 
@@ -31,8 +31,9 @@ class MergeDictStage[K, V](Stage):
     OutputModel = Box[dict[Any, Any]]
 
     async def compute(self, program: Program) -> StageIO:
-        first = self.params.first.data
-        second = self.params.second.data
+        params = cast("MergeDictInputs[Any, Any]", self.params)
+        first = params.first.data
+        second = params.second.data
 
         merged = {**first, **second}
         overlapping_keys = len(first) + len(second) - len(merged)
@@ -47,7 +48,7 @@ class MergeDictStage[K, V](Stage):
         return self.__class__.OutputModel(data=merged)
 
     @classmethod
-    def __class_getitem__(cls, params):
+    def __class_getitem__(cls, params):  # type: ignore[override]  # dynamic generic specialization
         """
         Returns a dynamic subclass with InputsModel/OutputModel specialized
         to the provided K,V types.
@@ -83,7 +84,7 @@ class MergeDictStage[K, V](Stage):
             key_type: ${get_object:builtins.str}
             value_type: ${get_object:builtins.float}
         """
-        return cls[key_type, value_type]
+        return cls[key_type, value_type]  # type: ignore[index]  # dynamic generic specialization via __class_getitem__
 
 
 class StrFloatDictInputs(StageIO):
@@ -113,8 +114,9 @@ class MergeStrFloatDict(Stage):
     OutputModel = Box[dict[str, float]]
 
     async def compute(self, program: Program) -> StageIO:
-        first = self.params.first.data
-        second = self.params.second.data
+        params = cast(StrFloatDictInputs, self.params)
+        first = params.first.data
+        second = params.second.data
 
         merged = {**first, **second}
         overlapping_keys = len(first) + len(second) - len(merged)
@@ -143,7 +145,7 @@ class ParseJSONStage(Stage):
     OutputModel = AnyContainer
 
     async def compute(self, program: Program) -> StageIO:
-        s = self.params.data
+        s = cast(StringContainer, self.params).data
         try:
             parsed = json.loads(s)
         except json.JSONDecodeError as e:
@@ -164,7 +166,7 @@ class StringifyJSONStage(Stage):
         self.indent = indent
 
     async def compute(self, program: Program) -> StageIO:
-        obj = self.params.data
+        obj = cast(AnyContainer, self.params).data
         try:
             s = json.dumps(obj, indent=self.indent)
         except (TypeError, ValueError) as e:

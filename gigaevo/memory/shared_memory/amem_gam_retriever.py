@@ -238,7 +238,7 @@ def main():
     base_url = config.LLM_BASE_URL
 
     llm_service = OpenAIInferenceService(
-        model_name=config.OPENROUTER_MODEL_NAME,
+        model_name=config.OPENROUTER_MODEL_NAME or "openai/gpt-4.1-mini",
         api_key=api_key,
         base_url=base_url,
         temperature=0.0,

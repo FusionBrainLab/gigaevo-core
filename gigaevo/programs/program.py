@@ -129,7 +129,8 @@ class Program(BaseModel):
         default=ProgramState.QUEUED, description="Lifecycle state."
     )
     lineage: Lineage = Field(
-        default_factory=Lineage, description="Evolutionary lineage."
+        default_factory=lambda: Lineage(mutation=None),  # explicit default for mypy
+        description="Evolutionary lineage.",
     )
 
     created_at: datetime = Field(

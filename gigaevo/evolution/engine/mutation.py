@@ -66,7 +66,7 @@ async def generate_mutations(
         accepts_memory_instructions = _mutator_accepts_memory_instructions(mutator)
         parent_iterator = parent_selector.create_parent_iterator(elites)
 
-        parent_selections = []
+        parent_selections: list[list[Program]] = []
         for parents in parent_iterator:
             if len(parent_selections) >= limit:
                 break

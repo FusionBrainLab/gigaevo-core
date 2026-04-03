@@ -8,6 +8,7 @@ state schema using TypedDict.
 from abc import ABC, abstractmethod
 from typing import Any
 
+from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -51,11 +52,11 @@ class LangGraphAgent(ABC):
     # Subclasses must define their StateSchema
     StateSchema: type
 
-    def __init__(self, llm: ChatOpenAI | MultiModelRouter):
+    def __init__(self, llm: ChatOpenAI | MultiModelRouter | Runnable):
         """Initialize agent with LLM.
 
         Args:
-            llm: LangChain chat model or multi-model router
+            llm: LangChain chat model, multi-model router, or structured output runnable
         """
         self.llm = llm
         self.graph = self._build_graph()
@@ -125,7 +126,7 @@ class LangGraphAgent(ABC):
         Returns:
             Compiled LangGraph
         """
-        workflow = StateGraph(self.StateSchema)
+        workflow: StateGraph = StateGraph(self.StateSchema)
 
         workflow.add_node("build_prompt", self.build_prompt)
         workflow.add_node("call_llm", self.acall_llm)

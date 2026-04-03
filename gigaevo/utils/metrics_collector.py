@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 import inspect
 from typing import Any
 
@@ -18,7 +18,12 @@ async def _maybe_await(x: Any) -> Any:
 def start_metrics_collector(
     *,
     writer: LogWriter,
-    collect_fn: Callable[[], dict[str, Any] | asyncio.Future[dict[str, Any]]],
+    collect_fn: Callable[
+        [],
+        dict[str, Any]
+        | asyncio.Future[dict[str, Any]]
+        | Coroutine[Any, Any, dict[str, Any]],
+    ],
     interval: float,
     stop_flag: Callable[[], bool],
     task_name: str = "metrics-collector",  # kept for backward compat; used as task name

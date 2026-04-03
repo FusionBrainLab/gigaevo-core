@@ -33,8 +33,8 @@ class RelatedCollectorBase(Stage):
     Subclasses set a concrete OutputModel and override the two abstract methods.
     """
 
-    InputsModel = VoidInput
-    OutputModel = VoidOutput
+    InputsModel: type[StageIO] = VoidInput
+    OutputModel: type[StageIO] = VoidOutput
     cache_handler = NO_CACHE  # lineage-derived sets usually change over time
 
     def __init__(self, *, storage: ProgramStorage, **kwargs: Any):

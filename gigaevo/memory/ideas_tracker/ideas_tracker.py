@@ -202,7 +202,10 @@ class IdeaTracker:
         Args:
             program: Source program record (improvements and lineage metadata).
         """
-        assert isinstance(self.analyzer, IdeaAnalyzer)
+        if not isinstance(self.analyzer, IdeaAnalyzer):
+            raise TypeError(
+                "process_program requires IdeaAnalyzer (not IdeaAnalyzerFast)"
+            )
         active_ideas = self.ideas_manager.ideas_groups_texts()
         inactive_ideas = self.ideas_manager.ideas_groups_texts(use_inactive=True)
         program_ideas = IncomingIdeas(program.improvements)
@@ -252,9 +255,11 @@ class IdeaTracker:
             self.ideas_manager.record_bank.get_idea(uuid) for uuid in all_uuids
         ]
         task_description_summary = self._get_task_description_summary()
-        enriched_ideas = self.postprocessing(
-            all_ideas, self.analyzer, task_description_summary
-        )
+        result = self.postprocessing(all_ideas, self.analyzer, task_description_summary)
+        if asyncio.iscoroutine(result):
+            enriched_ideas = asyncio.run(result)
+        else:
+            enriched_ideas = result
         for idea in enriched_ideas:
             self.ideas_manager.enrich_idea_metadata(
                 idea.id,

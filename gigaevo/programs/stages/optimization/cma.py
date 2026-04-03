@@ -21,7 +21,7 @@ import ast
 import asyncio
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import cma
 from loguru import logger
@@ -95,13 +95,6 @@ def _extract_constants(
     # Track inner Constant nodes already consumed by a UnaryOp(USub, ...)
     _consumed: set[int] = set()
 
-    filter_kw = dict(
-        skip_zero_one=skip_zero_one,
-        skip_integers=skip_integers,
-        min_abs_value=min_abs_value,
-        max_abs_value=max_abs_value,
-    )
-
     for node in ast.walk(tree):
         # Pattern: -<numeric literal>
         if (
@@ -113,7 +106,14 @@ def _extract_constants(
         ):
             raw = node.operand.value
             fval = -float(raw)
-            if _should_extract(fval, raw_value=raw, **filter_kw):
+            if _should_extract(
+                fval,
+                raw_value=raw,
+                skip_zero_one=skip_zero_one,
+                skip_integers=skip_integers,
+                min_abs_value=min_abs_value,
+                max_abs_value=max_abs_value,
+            ):
                 constants.append(
                     _ConstantInfo(
                         value=fval,
@@ -135,7 +135,14 @@ def _extract_constants(
         ):
             raw = node.value
             fval = float(raw)
-            if _should_extract(fval, raw_value=raw, **filter_kw):
+            if _should_extract(
+                fval,
+                raw_value=raw,
+                skip_zero_one=skip_zero_one,
+                skip_integers=skip_integers,
+                min_abs_value=min_abs_value,
+                max_abs_value=max_abs_value,
+            ):
                 constants.append(
                     _ConstantInfo(
                         value=fval,
@@ -534,7 +541,8 @@ class CMANumericalOptimizationStage(Stage):
         parameterized_code = _parameterize(tree, constants)
 
         # 3. Resolve context ------------------------------------------------
-        ctx = self.params.context.data if self.params.context is not None else None
+        params = cast(OptimizationInput, self.params)
+        ctx = params.context.data if params.context is not None else None
 
         # 4. Run CMA-ES ----------------------------------------------------
         opts: dict[str, Any] = {

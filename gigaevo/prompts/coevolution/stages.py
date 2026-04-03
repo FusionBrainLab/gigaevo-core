@@ -8,7 +8,7 @@ PromptInsightsStage / PromptLineageStage: cache-aware wrappers that invalidate
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -52,7 +52,7 @@ class PromptExecutionStage(Stage):
     def __init__(self, *, timeout: float = 30.0, **kwargs):
         super().__init__(timeout=timeout, **kwargs)
 
-    async def compute(self, program: Program) -> PromptExecutionOutput:
+    async def compute(self, program: Program) -> PromptExecutionOutput:  # type: ignore[override]
         code = program.code
         if "def entrypoint" not in code:
             raise ValueError(
@@ -157,8 +157,8 @@ class PromptFitnessStage(Stage):
         self._prior_alpha = prior_alpha
         self._prior_beta = prior_beta
 
-    async def compute(self, program: Program) -> FloatDictContainer:
-        execution_output: PromptExecutionOutput = self.params.execution_output
+    async def compute(self, program: Program) -> FloatDictContainer:  # type: ignore[override]
+        execution_output: PromptExecutionOutput = self.params.execution_output  # type: ignore[attr-defined]
 
         prompt_id = execution_output.prompt_id
         stats = await self._stats_provider.get_stats(prompt_id)
@@ -230,8 +230,8 @@ class PromptInsightsStage(InsightsStage):
 
     InputsModel = FitnessMetricsInput
 
-    async def compute(self, program: Program) -> InsightsOutput | ProgramStageResult:
-        fm = self.params.fitness_metrics
+    async def compute(self, program: Program) -> InsightsOutput | ProgramStageResult:  # type: ignore[override]
+        fm = cast(FitnessMetricsInput, self.params).fitness_metrics
         if fm is not None and fm.data.get("trials", 0) == 0:
             return ProgramStageResult.skipped(
                 message="No trials yet — fitness is Beta prior, insights deferred",
@@ -254,11 +254,12 @@ class PromptLineageStage(LineageStage):
 
     async def compute(
         self, program: Program
-    ) -> LineageAnalysesOutput | ProgramStageResult:
-        fm = self.params.fitness_metrics
+    ) -> LineageAnalysesOutput | ProgramStageResult:  # type: ignore[override]
+        fm = cast(FitnessMetricsInput, self.params).fitness_metrics
         if fm is not None and fm.data.get("trials", 0) == 0:
             return ProgramStageResult.skipped(
                 message="No trials yet — fitness is Beta prior, lineage deferred",
                 stage=self.stage_name,
             )
-        return await super().compute(program)
+        result = await super().compute(program)
+        return result  # type: ignore[return-value]

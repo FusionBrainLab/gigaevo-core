@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -42,8 +42,8 @@ class LineageStage(LangGraphStage):
     as `program`, calls the lineage agent, and returns analyses (same order as parents).
     """
 
-    InputsModel = VoidInput
-    OutputModel = LineageAnalysesOutput  # Output: list of TransitionAnalysis from parent<i> to child
+    InputsModel: type[StageIO] = VoidInput
+    OutputModel: type[StageIO] = LineageAnalysesOutput
 
     def __init__(
         self,
@@ -69,8 +69,8 @@ class LineageStage(LangGraphStage):
         self.storage = storage
 
     async def preprocess(
-        self, program: Program, params: VoidInput
-    ) -> dict[str, Program] | ProgramStageResult:
+        self, program: Program, params: StageIO
+    ) -> dict[str, Any] | ProgramStageResult:
         ids: list[str] = list(program.lineage.parents)
         return {"parents": await self.storage.mget(ids)}
 
@@ -102,7 +102,9 @@ class LineagesToDescendants(Stage):
     async def compute(
         self, program: Program
     ) -> TransitionAnalysisList | ProgramStageResult:
-        child_ids = list(self.params.descendant_ids.items)
+        child_ids = list(
+            cast(LineagesToDescendantsInputs, self.params).descendant_ids.items
+        )
         if not child_ids:
             return ProgramStageResult.skipped(
                 message="No descendant IDs provided for lineage analysis",
@@ -160,13 +162,17 @@ class LineagesFromAncestors(Stage):
     async def compute(
         self, program: Program
     ) -> TransitionAnalysisList | ProgramStageResult:
-        parent_ids: list[str] = list(self.params.ancestor_ids.items)
+        parent_ids: list[str] = list(
+            cast(LineagesFromAncestorsInputs, self.params).ancestor_ids.items
+        )
         if not parent_ids:
             return ProgramStageResult.skipped(
                 message="No ancestor IDs provided for lineage analysis",
                 stage=self.stage_name,
             )
-        res: ProgramStageResult = program.stage_results.get(self.source_stage_name)
+        res: ProgramStageResult | None = program.stage_results.get(
+            self.source_stage_name
+        )
         if not res or res.output is None:
             return ProgramStageResult.skipped(
                 message="No transitions computed for this program",

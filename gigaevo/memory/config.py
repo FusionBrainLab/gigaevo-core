@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 try:
     from .runtime_config import deep_get, load_settings, to_str
 except ImportError:  # pragma: no cover - script-style import fallback
-    from runtime_config import deep_get, load_settings, to_str
+    from runtime_config import deep_get, load_settings, to_str  # type: ignore[no-redef]
 
 # Always load env from repository root, regardless of process cwd.
 load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)

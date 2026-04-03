@@ -97,7 +97,7 @@ USE_API = to_bool(
     default=to_bool(deep_get(SETTINGS, "api.use_api"), default=True),
 )
 CHANNEL = to_str(deep_get(SETTINGS, "api.channel"), default="latest")
-AUTHOR = to_str(deep_get(SETTINGS, "api.author"), default="").strip() or None
+AUTHOR = (to_str(deep_get(SETTINGS, "api.author"), default="") or "").strip() or None
 
 ENABLE_LLM_SYNTHESIS = to_bool(
     deep_get(SETTINGS, "runtime.enable_llm_synthesis"), default=False

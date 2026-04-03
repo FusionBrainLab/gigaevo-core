@@ -25,7 +25,7 @@ class PromptManager:
         mapping step names to lists of prompt files.
         """
         os.makedirs(self.prompts_dir, exist_ok=True)
-        self.available_prompts = {}
+        self.available_prompts: dict[str, list[str]] = {}
         for root, _subdirs, files in os.walk(self.prompts_dir):
             if not files:
                 continue

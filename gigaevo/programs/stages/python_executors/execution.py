@@ -47,8 +47,8 @@ class PythonCodeExecutor[T](Stage):
     Subclasses must implement `_build_call(self, program) -> (args, kwargs)`.
     """
 
-    InputsModel = VoidInput
-    OutputModel = Box[T]
+    InputsModel: type[StageIO] = VoidInput
+    OutputModel = Box[T]  # type: ignore[valid-type]  # bound TypeVar used as generic alias in base class
 
     def __init__(
         self,

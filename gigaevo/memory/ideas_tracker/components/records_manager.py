@@ -199,7 +199,10 @@ class RecordManager:
             Full UUID string if found, empty string otherwise.
         """
         for desc_list in ideas_desc_lists.values():
-            for description in desc_list["descriptions"]:
+            descriptions = desc_list["descriptions"]
+            if not isinstance(descriptions, list):
+                continue
+            for description in descriptions:
                 if description["short_id"] == short_id:
                     return description["id"]
         return ""

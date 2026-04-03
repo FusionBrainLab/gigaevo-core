@@ -12,7 +12,7 @@ import hashlib
 import json
 
 from loguru import logger
-from redis.asyncio import Redis as AsyncRedis
+from redis import asyncio as aioredis
 
 
 @dataclass
@@ -87,11 +87,11 @@ class RedisPromptStatsProvider(PromptStatsProvider):
                 "or sources=[{db, prefix}, ...]"
             )
 
-        self._redis_clients: dict[int, AsyncRedis] = {}
+        self._redis_clients: dict[int, aioredis.Redis] = {}  # type: ignore[type-arg]
 
-    def _get_redis(self, db: int) -> AsyncRedis:
+    def _get_redis(self, db: int) -> aioredis.Redis:  # type: ignore[type-arg]
         if db not in self._redis_clients:
-            self._redis_clients[db] = AsyncRedis(
+            self._redis_clients[db] = aioredis.Redis(
                 host=self._host,
                 port=self._port,
                 db=db,

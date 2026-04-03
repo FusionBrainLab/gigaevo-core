@@ -243,7 +243,7 @@ class RecordCardExtended:
     programs: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     evolution_statistics: dict[str, Any] = field(default_factory=dict)
-    explanation: dict[str, list[str] | str] = field(default_factory=dict)
+    explanation: dict[str, Any] = field(default_factory=dict)
     works_with: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
@@ -275,8 +275,8 @@ class RecordCardExtended:
     def update_idea(
         self,
         experiment_id: str,
-        program_id: str | list[str],
-        generation: int,
+        program_id: str | list[str] | None,
+        generation: int | None,
         new_description: str | None = None,
         change_motivation: str | None = None,
     ) -> None:
@@ -292,7 +292,9 @@ class RecordCardExtended:
             new_description: Optional new description (archives old version if provided).
             change_motivation: Optional explanation to add to explanation history.
         """
-        if isinstance(program_id, str):
+        if program_id is None:
+            program_id = []
+        elif isinstance(program_id, str):
             program_id = [program_id]
 
         if new_description is not None:
@@ -728,8 +730,8 @@ class IncomingIdeas:
     for each incoming idea during the classification workflow.
     """
 
-    ideas: list[dict[str, str]] = field(default_factory=list)
-    mapping: dict[str, str] = field(default_factory=dict)
+    ideas: list[dict[str, Any]] = field(default_factory=list)
+    mapping: dict[int, str] = field(default_factory=dict)
 
     def __init__(self, ideas: list[dict[str, str]]) -> None:
         """
@@ -752,7 +754,7 @@ class IncomingIdeas:
 
     def update_mapping(self) -> None:
         """Rebuild mapping from sequence numbers to unclassified idea descriptions."""
-        mapping = {}
+        mapping: dict[int, str] = {}
         c = 1
         for idea in self.ideas:
             if not idea["classified"]:
@@ -785,8 +787,8 @@ class IncomingIdeas:
             rewrite: Whether this idea rewrites the target idea's description.
         """
 
-        idea_description = self.mapping.get(idea_number, -1)
-        if idea_description == -1:
+        idea_description = self.mapping.get(idea_number)
+        if idea_description is None:
             logger.warning(f"No idea with number {idea_number} found")
             return
         for index, idea in enumerate(self.ideas):

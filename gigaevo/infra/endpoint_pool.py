@@ -165,7 +165,8 @@ class EndpointPool:
     def _ensure_lua(self, r: redis.Redis) -> str:
         """Load the Lua script and cache its SHA."""
         if self._lua_sha is None:
-            self._lua_sha = r.script_load(_LUA_ACQUIRE)
+            self._lua_sha = str(r.script_load(_LUA_ACQUIRE))
+        assert self._lua_sha is not None  # guaranteed by branch above
         return self._lua_sha
 
     # ------------------------------------------------------------------
@@ -177,12 +178,14 @@ class EndpointPool:
         r = self._get_sync()
         sha = self._ensure_lua(r)
         try:
-            return r.evalsha(sha, 1, self._inflight_key, *self._lua_argv)
+            result = r.evalsha(sha, 1, self._inflight_key, *self._lua_argv)
+            return str(result)
         except redis.exceptions.NoScriptError:
             # Script evicted from cache — reload
             self._lua_sha = None
             sha = self._ensure_lua(r)
-            return r.evalsha(sha, 1, self._inflight_key, *self._lua_argv)
+            result = r.evalsha(sha, 1, self._inflight_key, *self._lua_argv)
+            return str(result)
 
     # ------------------------------------------------------------------
     # Async API
@@ -296,14 +299,14 @@ class EndpointPool:
         import json as _json
 
         r = self._get_sync()
-        inflight = r.hgetall(self._inflight_key)
+        inflight: dict[str, str] = r.hgetall(self._inflight_key)  # type: ignore[assignment]
         ep_data = {}
         for ep in self._endpoints:
-            stats_raw = r.hgetall(self._stats_key(ep))
+            stats_raw: dict[str, str] = r.hgetall(self._stats_key(ep))  # type: ignore[assignment]
             ep_data[ep] = {
-                "inflight": int(inflight.get(ep, 0)),
-                "requests": int(stats_raw.get("requests", 0)),
-                "errors": int(stats_raw.get("errors", 0)),
+                "inflight": int(inflight.get(ep, "0")),
+                "requests": int(stats_raw.get("requests", "0")),
+                "errors": int(stats_raw.get("errors", "0")),
             }
         entry = _json.dumps({"t": time.time(), "endpoints": ep_data})
         key = f"llm_pool:{self._pool_name}:snapshots"
@@ -317,7 +320,7 @@ class EndpointPool:
     async def close(self) -> None:
         """Close Redis connections."""
         if self._async_redis is not None:
-            await self._async_redis.aclose()
+            await self._async_redis.aclose()  # type: ignore[attr-defined]  # stub gap: aclose exists at runtime
             self._async_redis = None
         if self._sync_redis is not None:
             self._sync_redis.close()

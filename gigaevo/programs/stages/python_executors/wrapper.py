@@ -56,9 +56,9 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
         pass
 
     for pipe in (proc.stdin, proc.stdout, proc.stderr):
-        if pipe:
+        if pipe and hasattr(pipe, "close"):
             try:
-                pipe.close()
+                pipe.close()  # type: ignore[union-attr]
             except Exception:
                 pass
 
@@ -214,6 +214,8 @@ async def _run_via_worker(
 
     try:
         # Write length (4-byte big-endian) + payload
+        assert proc.stdin is not None
+        assert proc.stdout is not None
         proc.stdin.write(struct.pack(">I", len(data)) + data)
         await proc.stdin.drain()
 
@@ -404,5 +406,5 @@ async def run_exec_runner(
         return value, b"", stderr_text
 
     raise ExecRunnerError(
-        returncode=returncode, stderr=stderr_text, stdout_bytes=stdout
+        returncode=returncode or -1, stderr=stderr_text, stdout_bytes=stdout
     )

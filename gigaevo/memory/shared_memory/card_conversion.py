@@ -139,18 +139,16 @@ def normalize_memory_card(
         programs=_to_list(raw.get("programs")),
         aliases=_to_list(raw.get("aliases")),
         keywords=_to_list(raw.get("keywords")),
-        evolution_statistics=(
-            raw.get("evolution_statistics")
-            if isinstance(raw.get("evolution_statistics"), dict)
-            else {}
-        ),
+        evolution_statistics=_evo_stats
+        if isinstance((_evo_stats := raw.get("evolution_statistics")), dict)
+        else {},
         explanation=MemoryCardExplanation(
             explanations=_to_list(explanation.get("explanations")),
             summary=str(explanation.get("summary") or ""),
         ),
         works_with=_to_list(raw.get("works_with")),
         links=_to_list(raw.get("links")),
-        usage=raw.get("usage") if isinstance(raw.get("usage"), dict) else {},
+        usage=_usage if isinstance((_usage := raw.get("usage")), dict) else {},
     )
 
 

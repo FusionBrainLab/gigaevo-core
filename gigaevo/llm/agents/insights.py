@@ -89,9 +89,9 @@ class InsightsAgent(LangGraphAgent):
         self.user_prompt_template = user_prompt_template
         self.max_insights = max_insights
         self.metrics_formatter = metrics_formatter
-        llm = llm.with_structured_output(ProgramInsights)
+        structured_llm = llm.with_structured_output(ProgramInsights)
 
-        super().__init__(llm)
+        super().__init__(structured_llm)
 
     def build_prompt(self, state: InsightsState) -> InsightsState:
         """Build insights prompt - ALL formatting logic here.
@@ -112,7 +112,7 @@ class InsightsAgent(LangGraphAgent):
         )
 
         errors = program.format_errors(
-            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+            include_traceback=True, exclude_stages=set(OPTIMIZATION_STAGES)
         )
         error_section = (
             f"**Error Analysis**: Focus on fixing or avoiding failure modes from stages:\n{errors}"
@@ -136,7 +136,9 @@ class InsightsAgent(LangGraphAgent):
 
     def parse_response(self, state: InsightsState) -> InsightsState:
         """Parse LLM response (already validated by LangChain structured output)."""
-        llm_response: ProgramInsights = state["llm_response"]
+        llm_response = state["llm_response"]
+        if not isinstance(llm_response, ProgramInsights):
+            raise ValueError(f"Expected ProgramInsights, got {type(llm_response)}")
         state["insights"] = llm_response
         return state
 

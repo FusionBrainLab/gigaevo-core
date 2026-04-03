@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 
 class LogWriter(ABC):
     @abstractmethod
-    def bind(self, path: list[str]) -> "LogWriter":
+    def bind(self, *, path: list[str] | None = None) -> "LogWriter":
         pass
 
     @abstractmethod

@@ -8,9 +8,7 @@ from typing import Any
 _yaml: types.ModuleType | None
 
 try:
-    import yaml
-
-    _yaml = yaml
+    import yaml  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - defensive fallback
     _yaml = None
 
@@ -111,7 +109,8 @@ def to_str(value: Any, default: str | None = "") -> str | None:
 
 
 def resolve_local_path(base_dir: Path, value: Any, default_relative: str) -> Path:
-    raw = to_str(value, default=default_relative).strip()
+    raw_val = to_str(value, default=default_relative)
+    raw = raw_val.strip() if raw_val else default_relative
     if not raw:
         raw = default_relative
     path = Path(raw)

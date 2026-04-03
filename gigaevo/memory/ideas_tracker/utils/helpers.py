@@ -35,6 +35,7 @@ def to_float(value: Any) -> float | None:
 
 
 def as_string_list(value: Any) -> list[str]:
+    parsed: Any
     if isinstance(value, list):
         parsed = value
     elif isinstance(value, tuple):
@@ -43,7 +44,7 @@ def as_string_list(value: Any) -> list[str]:
         text = value.strip()
         if not text:
             return []
-        parsed: Any = text
+        parsed = text
         if text[0] in "[{(":
             try:
                 parsed = json.loads(text)
@@ -264,7 +265,7 @@ def build_memory_usage_updates(
 
 
 def sort_ideas(ideas: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    sorted_ideas = {
+    sorted_ideas: dict[str, list[dict[str, Any]]] = {
         "new": [],
         "update": [],
         "rewrite": [],

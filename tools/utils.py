@@ -286,7 +286,7 @@ def prepare_iteration_dataframe(
 
     # Step 2: Outlier removal using robust methods (one-sided based on optimization direction)
     if remove_outliers:
-        outlier_side = "high" if minimize else "low"
+        outlier_side: Literal["both", "low", "high"] = "high" if minimize else "low"
         mask, lower, upper, n_outliers = detect_outliers(
             df[fitness_col],
             method=outlier_method,

@@ -50,7 +50,7 @@ class IslandConfig(BaseModel):
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def redis_prefix(self) -> str:
         return f"island_{self.island_id}"

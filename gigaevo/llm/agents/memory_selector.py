@@ -319,6 +319,7 @@ class MemorySelectorAgent:
                     exc,
                 )
 
+        assert self.memory is not None  # caller checks self.memory before calling
         result_text = str(self.memory.search(query) or "")
         card_ids = self._extract_card_ids_from_text(result_text)
         return result_text, card_ids

@@ -45,7 +45,7 @@ class RedisProgramStorage(ProgramStorage):
     ):
         super().__init__()
         self.config = config
-        self._merge = resolve_merge_strategy(config.merge_strategy)
+        self._merge = resolve_merge_strategy(config.merge_strategy)  # type: ignore[arg-type]
 
         # Composed components
         self._conn = RedisConnection(config.to_connection_config())
@@ -91,8 +91,10 @@ class RedisProgramStorage(ProgramStorage):
                 f"Create storage without read_only=True for write operations."
             )
 
+    _T = TypeVar("_T")
+
     @staticmethod
-    def _chunks(items: Iterable[str], n: int) -> Iterable[list[str]]:
+    def _chunks(items: Iterable[Any], n: int) -> Iterable[list[Any]]:
         it = iter(items)
         while batch := list(islice(it, n)):
             yield batch
@@ -280,7 +282,7 @@ class RedisProgramStorage(ProgramStorage):
         in exactly one status set (invariant maintained by add/transition ops).
         """
         set_keys = [self._keys.status_set(s.value) for s in ProgramState]
-        return list(await r.sunion(*set_keys))
+        return list(await r.sunion(*set_keys))  # type: ignore[misc,arg-type]
 
     async def size(self) -> int:
         """Count programs by summing SCARD across status sets (O(1) per set)."""
@@ -356,10 +358,14 @@ class RedisProgramStorage(ProgramStorage):
         self._check_write_allowed("publish_status_event")
 
         async def _event(r: aioredis.Redis) -> None:
-            data = {"id": program_id, "status": status, **(extra or {})}
+            data: dict[str, Any] = {
+                "id": program_id,
+                "status": status,
+                **(extra or {}),
+            }
             await r.xadd(
                 self._keys.status_stream(),
-                data,
+                data,  # type: ignore[arg-type]
                 maxlen=STREAM_MAX_LEN,
                 approximate=True,
             )

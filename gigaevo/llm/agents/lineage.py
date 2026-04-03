@@ -39,11 +39,12 @@ class TransitionInsights(BaseModel):
 class TransitionAnalysis(BaseModel):
     """Complete transition analysis output."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     from_id: str = Field(alias="from")
     to_id: str = Field(alias="to")
     parent_metrics: dict[str, float]
     child_metrics: dict[str, float]
-    model_config = ConfigDict(populate_by_name=True)
 
     diff_blocks: list[str]
     insights: TransitionInsights
@@ -58,8 +59,8 @@ class LineageState(TypedDict):
     llm_response: AIMessage | TransitionInsights | None
     delta: float
     diff_blocks: list[str]
-    insights: list[dict]
-    full_analysis: TransitionAnalysis | dict
+    insights: TransitionInsights | list[dict]
+    full_analysis: TransitionAnalysis | dict[str, object]
     metadata: dict
 
 
@@ -102,9 +103,9 @@ class LineageAgent(LangGraphAgent):
         self.task_description = task_description
         self.metrics_formatter = metrics_formatter
 
-        llm = llm.with_structured_output(TransitionInsights)
+        structured_llm = llm.with_structured_output(TransitionInsights)
 
-        super().__init__(llm)
+        super().__init__(structured_llm)
 
     def _compute_diff_blocks(self, parent_code: str, child_code: str) -> list[str]:
         """Compute unified diff blocks between parent and child code.
@@ -199,10 +200,10 @@ class LineageAgent(LangGraphAgent):
         )
 
         parent_errors = parent.format_errors(
-            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+            include_traceback=True, exclude_stages=set(OPTIMIZATION_STAGES)
         )
         child_errors = child.format_errors(
-            include_traceback=True, exclude_stages=OPTIMIZATION_STAGES
+            include_traceback=True, exclude_stages=set(OPTIMIZATION_STAGES)
         )
 
         metric_name = self.metrics_formatter.context.get_primary_key()
@@ -250,13 +251,15 @@ class LineageAgent(LangGraphAgent):
         parent = state["parent"]
         child = state["child"]
 
-        state["full_analysis"] = TransitionAnalysis(
-            from_id=parent.id,
-            to_id=child.id,
-            parent_metrics=parent.metrics,
-            child_metrics=child.metrics,
-            diff_blocks=state["diff_blocks"],
-            insights=llm_response,
+        state["full_analysis"] = TransitionAnalysis.model_validate(
+            {
+                "from_id": parent.id,
+                "to_id": child.id,
+                "parent_metrics": parent.metrics,
+                "child_metrics": child.metrics,
+                "diff_blocks": state["diff_blocks"],
+                "insights": llm_response,
+            }
         )
 
         return state

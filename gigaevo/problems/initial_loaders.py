@@ -73,7 +73,7 @@ class RedisTopProgramsLoader:
     async def load(self, storage: RedisProgramStorage) -> list[Program]:
         source = RedisProgramStorage(
             RedisProgramStorageConfig(
-                redis_url=f"redis://{self.source_host}:{self.source_port}/{self.source_db}",
+                redis_url=f"redis://{self.source_host}:{self.source_port}/{self.source_db}",  # type: ignore[arg-type]  # pydantic validates str -> AnyUrl
                 key_prefix=self.key_prefix,
                 max_connections=self.max_connections,
                 connection_pool_timeout=self.connection_pool_timeout,

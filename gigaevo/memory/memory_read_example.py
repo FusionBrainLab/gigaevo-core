@@ -17,7 +17,7 @@ try:
         to_str,
     )
 except ImportError:  # pragma: no cover - direct script execution fallback
-    from runtime_config import (
+    from runtime_config import (  # type: ignore[no-redef]
         deep_get,
         load_settings,
         resolve_local_path,
@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - direct script execution fallback
 try:
     from .shared_memory.memory import AmemGamMemory
 except ImportError:  # pragma: no cover - direct script execution fallback
-    from shared_memory.memory import AmemGamMemory
+    from shared_memory.memory import AmemGamMemory  # type: ignore[no-redef]
 
 
 THIS_DIR = Path(__file__).resolve().parent
@@ -122,14 +122,14 @@ Parent context:
 def main() -> None:
     memory = AmemGamMemory(
         checkpoint_path=str(MEMORY_DIR),
-        base_url=MEMORY_API_URL,
+        base_url=MEMORY_API_URL or "http://localhost:8000",
         use_api=USE_API,
-        namespace=NAMESPACE,
-        channel=CHANNEL,
+        namespace=NAMESPACE or "default",
+        channel=CHANNEL or "latest",
         enable_bm25=ENABLE_BM25,
         allowed_gam_tools=ALLOWED_GAM_TOOLS,
         gam_top_k_by_tool=GAM_TOP_K_BY_TOOL,
-        gam_pipeline_mode=GAM_PIPELINE_MODE,
+        gam_pipeline_mode=GAM_PIPELINE_MODE or "default",
     )
 
     print("\n==============================")

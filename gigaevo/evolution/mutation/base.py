@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -43,7 +43,7 @@ class MutationSpec(BaseModel):
             return output.get("archetype")
         return None
 
-    def __iter__(self) -> Iterable:
+    def __iter__(self) -> Iterator[Any]:  # type: ignore[override]
         """Allow easy unpacking: ``code, parents, name = spec``."""
         return iter((self.code, self.parents, self.name))
 
