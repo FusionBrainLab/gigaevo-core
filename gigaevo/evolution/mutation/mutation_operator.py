@@ -9,15 +9,10 @@ from loguru import logger
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
-    MUTATION_MEMORY_METADATA_KEY,
-    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.utils import _DocstringRemover
 from gigaevo.exceptions import MutationError
-from gigaevo.llm.agents.factories import (
-    create_memory_selector_agent,
-    create_mutation_agent,
-)
+from gigaevo.llm.agents.factories import create_mutation_agent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -71,7 +66,6 @@ class LLMMutationOperator(MutationOperator):
             prompts_dir=prompts_dir,
             prompt_fetcher=prompt_fetcher,
         )
-        self.memory_selector = create_memory_selector_agent(llm=llm_wrapper)
 
         logger.info(
             "[LLMMutationOperator] Initialized with mode: {}, "
@@ -114,7 +108,7 @@ class LLMMutationOperator(MutationOperator):
 
         Args:
             selected_parents: List of parent programs to mutate
-            memory_instructions: Optional memory text to guide mutation
+            memory_instructions: Deprecated, ignored. Memory is injected via DAG pipeline.
 
         Returns:
             MutationSpec if successful, None if no mutation could be generated
@@ -125,34 +119,6 @@ class LLMMutationOperator(MutationOperator):
 
         try:
             parents_for_mutation = selected_parents
-            memory_text = (memory_instructions or "").strip()
-            memory_selected_ids: list[str] = []
-            use_memory_selector = memory_instructions is not None
-            if use_memory_selector:
-                memory_selection = await self.memory_selector.select(
-                    input=selected_parents,
-                    mutation_mode=self.mutation_mode,
-                    task_description=self.problem_context.task_description,
-                    metrics_description=self.metrics_formatter.format_metrics_description(),
-                    memory_text=memory_text,
-                    max_cards=3,
-                )
-                selected_cards = memory_selection.cards
-                memory_selected_ids = memory_selection.card_ids
-                if selected_cards:
-                    memory_block = "\n\n".join(selected_cards)
-                    parents_for_mutation = []
-                    for parent in selected_parents:
-                        clone = parent.model_copy(deep=True)
-                        clone.metadata[MUTATION_MEMORY_METADATA_KEY] = memory_block
-                        clone.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] = (
-                            memory_selected_ids
-                        )
-                        parents_for_mutation.append(clone)
-                else:
-                    logger.warning(
-                        "[LLMMutationOperator] Red memory search returned no ideas; continuing without memory"
-                    )
 
             if self.mutation_mode == "diff" and len(selected_parents) != 1:
                 raise MutationError(
@@ -201,9 +167,6 @@ class LLMMutationOperator(MutationOperator):
             prompt_id = result.get("prompt_id")
             if prompt_id is not None:
                 mutation_metadata[MutationSpec.META_PROMPT_ID] = prompt_id
-            mutation_metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] = (
-                memory_selected_ids
-            )
 
             mutation_spec = MutationSpec(
                 code=final_code,

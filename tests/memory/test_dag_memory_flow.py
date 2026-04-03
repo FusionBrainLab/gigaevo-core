@@ -737,4 +737,5 @@ class TestHydraConfigContracts:
             mock_cls.assert_called_once_with(
                 checkpoint_dir="/data/memory",
                 namespace="test-ns",
+                use_api=False,
             )
