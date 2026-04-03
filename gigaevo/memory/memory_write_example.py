@@ -40,6 +40,7 @@ from gigaevo.memory.memory_write_config import (
 )
 from gigaevo.memory.runtime_config import to_bool
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
 
 
 class CardMemory(Protocol):
@@ -95,11 +96,14 @@ def _top_percent_count(total: int, percent: float) -> int:
     return max(1, ceil(total * (percent / 100.0)))
 
 
-def _card_type(card: dict[str, Any]) -> str:
-    if str(card.get("category") or "").strip().lower() == "program":
+def _card_type(card: dict[str, Any] | AnyCard) -> str:
+    if isinstance(card, ProgramCard):
         return "programs"
-    if str(card.get("program_id") or "").strip():
-        return "programs"
+    if isinstance(card, dict):
+        if str(card.get("category") or "").strip().lower() == "program":
+            return "programs"
+        if str(card.get("program_id") or "").strip():
+            return "programs"
     return "ideas"
 
 
