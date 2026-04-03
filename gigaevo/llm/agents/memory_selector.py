@@ -43,7 +43,16 @@ class MemorySelectorAgent:
 
     _RESULT_CHAR_LIMIT = 6000
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        checkpoint_dir: str | None = None,
+        namespace: str | None = None,
+        use_api: bool | None = None,
+    ) -> None:
+        self._checkpoint_dir_override = checkpoint_dir
+        self._namespace_override = namespace
+        self._use_api_override = use_api
         self._search_lock = asyncio.Lock()
         self._backend_error: str | None = None
         self.memory = self._create_memory_backend()
@@ -77,10 +86,14 @@ class MemorySelectorAgent:
             settings_path = resolve_settings_path()
             settings = load_settings(settings_path)
 
-            memory_dir = resolve_local_path(
-                memory_api_root,
-                deep_get(settings, "paths.checkpoint_dir"),
-                default_relative="memory_usage_store/api_exp4",
+            memory_dir = (
+                Path(self._checkpoint_dir_override)
+                if self._checkpoint_dir_override
+                else resolve_local_path(
+                    memory_api_root,
+                    deep_get(settings, "paths.checkpoint_dir"),
+                    default_relative="memory_usage_store/api_exp4",
+                )
             )
             memory_api_url = os.getenv(
                 "MEMORY_API_URL",
@@ -88,16 +101,19 @@ class MemorySelectorAgent:
                     deep_get(settings, "api.base_url"), default="http://localhost:8000"
                 ),
             )
-            namespace = os.getenv(
+            namespace = self._namespace_override or os.getenv(
                 "MEMORY_NAMESPACE",
                 to_str(deep_get(settings, "api.namespace"), default="default"),
             )
             channel = to_str(deep_get(settings, "api.channel"), default="latest")
             author = to_str(deep_get(settings, "api.author"), default=None)
-            use_api = to_bool(
-                os.getenv("MEMORY_USE_API"),
-                default=to_bool(deep_get(settings, "api.use_api"), default=True),
-            )
+            if self._use_api_override is not None:
+                use_api = self._use_api_override
+            else:
+                use_api = to_bool(
+                    os.getenv("MEMORY_USE_API"),
+                    default=to_bool(deep_get(settings, "api.use_api"), default=True),
+                )
             enable_bm25 = to_bool(deep_get(settings, "gam.enable_bm25"), default=False)
             allowed_gam_tools = [
                 str(tool).strip()

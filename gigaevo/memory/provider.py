@@ -74,6 +74,7 @@ class SelectorMemoryProvider(MemoryProvider):
             self._selector = MemorySelectorAgent(
                 checkpoint_dir=self._checkpoint_dir,
                 namespace=self._namespace,
+                use_api=False,
             )
         return self._selector
 
