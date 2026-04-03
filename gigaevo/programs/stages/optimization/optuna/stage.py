@@ -550,7 +550,9 @@ class OptunaOptimizationStage(Stage):
         )
         has_categorical = any(p.param_type == "categorical" for p in param_specs)
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning)
+            warnings.filterwarnings(
+                "ignore", category=optuna.exceptions.ExperimentalWarning
+            )
             sampler = optuna.samplers.TPESampler(
                 n_startup_trials=n_startup,
                 multivariate=self.config.multivariate,

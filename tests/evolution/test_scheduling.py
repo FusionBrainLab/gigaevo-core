@@ -111,16 +111,14 @@ class TestCompositeFeatureExtractor:
 # ---------------------------------------------------------------------------
 
 # Real HoVer baseline (7 steps: 3 tool + 4 LLM, empty system_prompt)
-_HOVER_BASELINE = (
-    pathlib.Path("problems/chains/hover/static_soft/initial_programs/baseline.py")
-    .read_text()
-)
+_HOVER_BASELINE = pathlib.Path(
+    "problems/chains/hover/static_soft/initial_programs/baseline.py"
+).read_text()
 
 # Real HotpotQA baseline (6 steps: 2 tool + 4 LLM, empty system_prompt)
-_HOTPOTQA_BASELINE = (
-    pathlib.Path("problems/chains/hotpotqa/static/initial_programs/baseline.py")
-    .read_text()
-)
+_HOTPOTQA_BASELINE = pathlib.Path(
+    "problems/chains/hotpotqa/static/initial_programs/baseline.py"
+).read_text()
 
 
 class TestChainFeatureExtractor:
