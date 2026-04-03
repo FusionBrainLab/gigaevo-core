@@ -8,6 +8,7 @@ evolution_context:
   storage: ${ref:redis_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
+  memory_provider: ${memory_provider}
 
 # Pipeline builder - automatically selects based on problem_context.is_contextual
 pipeline_builder:

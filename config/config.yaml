@@ -2,6 +2,7 @@ defaults:
   - experiment: base       # Base experiment setup (override with experiment=full_featured)
   - /migration_bus: disabled
   - ideas_tracker: none    # Post-run ideas analysis (override with ideas_tracker=default)
+  - memory: none           # Memory provider (override with memory=local for treatment arms)
   - _self_
 
 # Problem metadata (set via command line or problem-specific config)

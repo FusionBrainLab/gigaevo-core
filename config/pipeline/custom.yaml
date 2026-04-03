@@ -10,6 +10,7 @@ evolution_context:
   storage: ${ref:redis_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
+  memory_provider: ${memory_provider}
 
 dag_blueprint:
   _target_: gigaevo.runner.dag_blueprint.DAGBlueprint
