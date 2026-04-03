@@ -40,7 +40,7 @@ from gigaevo.memory.memory_write_config import (
 )
 from gigaevo.memory.runtime_config import to_bool
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
+from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard, ProgramCard
 
 
 class CardMemory(Protocol):
@@ -648,12 +648,18 @@ def main() -> dict[str, Any] | None:
                 write_stats_by_card_type[card_type][stat_name] = int(
                     write_stats_by_card_type[card_type].get(stat_name, 0)
                 ) + int(stat_value)
-            stored = memory.get_card(memory_id) or {}
+            stored = memory.get_card(memory_id)
+            if isinstance(stored, (MemoryCard, ProgramCard)):
+                stored_desc = stored.description or ""
+            elif isinstance(stored, dict):
+                stored_desc = stored.get("description", "")
+            else:
+                stored_desc = ""
             logger.debug(
                 "[{:03d}] saved {}: {}",
                 idx,
                 memory_id,
-                stored.get("description", "")[:110],
+                stored_desc[:110],
             )
     except RuntimeError as exc:
         logger.error("Write failed: {}", exc)
