@@ -2,6 +2,44 @@
 
 <!-- version list -->
 
+## v1.28.0 (2026-04-03)
+
+### Bug Fixes
+
+- Eliminate ~76k test warnings (0 remaining)
+  ([`df637e6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/df637e67b2c8bf808288cc634655f35f3d8a984b))
+
+- Flatten ideas_tracker aliases (list[dict]) to MemoryCard (list[str])
+  ([`f6e620d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f6e620d5a0431265e8e25ad9b77ec1d36eb408a3))
+
+- Lint + format pre-existing errors in experiment files
+  ([`9241296`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9241296c3d3dc383d08f4f7ca6496c2382443f6b))
+
+- Lint errors in ablation_v3_no_deep.py, update prereg_commit
+  ([`a118bbf`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a118bbffee6a6061a7dec0f8e924b0ecadce74cc))
+
+- MemoryCard.aliases type list[str] → list[Any]
+  ([`a31443f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a31443f851f5185d38b280eb767f4559975fcdf5))
+
+### Code Style
+
+- Ruff format
+  ([`d05507d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d05507de30612d483f3967505b4f02f543cdc17b))
+
+### Refactoring
+
+- Remove all 27 type: ignore comments from codebase
+  ([`91a175f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/91a175fde1dc941cb6fe397a6d7adccb01a75a7b))
+
+- Rename memory test files to describe what they test
+  ([`68828e2`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/68828e283de54d061b9eb89c5c546e06967dfef7))
+
+### Testing
+
+- Integration test for ideas_tracker dict aliases (Bug #2, PR #161)
+  ([`ff54673`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ff54673d9ed918eb93e92856f45da9db0ad8e2a6))
+
+
 ## v1.27.0 (2026-04-02)
 
 ### Bug Fixes
