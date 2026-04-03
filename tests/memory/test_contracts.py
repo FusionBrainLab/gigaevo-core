@@ -338,7 +338,7 @@ class TestMemorySelectionContract:
 
 class TestMutationMetadataKeysContract:
     def test_metadata_key_values(self):
-        from gigaevo.evolution.mutation.context import (
+        from gigaevo.evolution.mutation.constants import (
             MUTATION_MEMORY_METADATA_KEY,
             MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
         )

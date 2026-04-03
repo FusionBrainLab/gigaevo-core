@@ -52,7 +52,7 @@ class TestMutationOperatorMemoryFlow:
     async def test_memory_selection_attaches_to_parent_metadata(self, tmp_path):
         """When memory_instructions is not None, MemorySelectorAgent is called
         and returned cards are attached to parent metadata."""
-        from gigaevo.evolution.mutation.context import (
+        from gigaevo.evolution.mutation.constants import (
             MUTATION_MEMORY_METADATA_KEY,
             MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
         )

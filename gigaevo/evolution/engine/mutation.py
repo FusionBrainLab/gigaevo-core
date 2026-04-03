@@ -1,33 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 
 from loguru import logger
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
-from gigaevo.evolution.mutation.context import MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.programs.program import Program
-
-
-def _mutator_accepts_memory_instructions(mutator: MutationOperator) -> bool:
-    """Return whether ``mutate_single`` supports the ``memory_instructions`` kwarg.
-
-    This keeps older custom/test mutation operators working while the base API
-    evolves to support memory-guided mutation.
-    """
-    try:
-        signature = inspect.signature(mutator.mutate_single)
-    except (TypeError, ValueError):
-        return True
-
-    parameters = signature.parameters.values()
-    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters):
-        return True
-    return "memory_instructions" in signature.parameters
 
 
 async def generate_mutations(
@@ -39,23 +23,13 @@ async def generate_mutations(
     parent_selector: ParentSelector,
     limit: int,
     iteration: int,
-    memory_instructions: str | None = None,
-    memory_used: bool = False,
 ) -> list[str]:
     """Generate at most *limit* mutations from *elites* and persist them immediately.
 
-    This function now uses parallel execution for efficient mutation generation
-    while maintaining proper error handling and respecting the limit.
+    Memory usage is auto-derived from parent metadata: if any parent has
+    ``MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY`` set by the DAG-based
+    MemoryContextStage, the child is marked ``memory_used=True``.
 
-    Args:
-        elites: List of elite programs to use as parents
-        mutator: Mutation operator to use for generating mutations
-        storage: Storage backend for persisting mutations
-        parent_selector: Strategy for selecting parents from elites
-        limit: Maximum number of mutations to generate
-        iteration: Current iteration number
-        memory_instructions: Optional memory string to guide mutation
-        memory_used: Whether to mark resulting programs as memory-based mutations
     Returns:
         List of program IDs for persisted mutations.
     """
@@ -63,7 +37,6 @@ async def generate_mutations(
         return []
 
     try:
-        accepts_memory_instructions = _mutator_accepts_memory_instructions(mutator)
         parent_iterator = parent_selector.create_parent_iterator(elites)
 
         parent_selections: list[list[Program]] = []
@@ -93,12 +66,7 @@ async def generate_mutations(
             """
             persisted_id: str | None = None
             try:
-                if accepts_memory_instructions:
-                    mutation_spec = await mutator.mutate_single(
-                        parents, memory_instructions=memory_instructions
-                    )
-                else:
-                    mutation_spec = await mutator.mutate_single(parents)
+                mutation_spec = await mutator.mutate_single(parents)
 
                 if mutation_spec is None:
                     logger.debug(
@@ -110,15 +78,13 @@ async def generate_mutations(
 
                 program = Program.from_mutation_spec(mutation_spec)
                 program.set_metadata("iteration", iteration)
-                program.set_metadata("memory_used", bool(memory_used))
-                selected_ids = program.get_metadata(
-                    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY
+
+                # Auto-derive memory_used from parent metadata (set by MemoryContextStage)
+                has_memory_ids = any(
+                    parent.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
+                    for parent in parents
                 )
-                if not isinstance(selected_ids, list):
-                    selected_ids = []
-                program.set_metadata(
-                    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, selected_ids
-                )
+                program.set_metadata("memory_used", bool(has_memory_ids))
 
                 await storage.add(program)
                 persisted_id = program.id  # Point of no return — ID must be returned

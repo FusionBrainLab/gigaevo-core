@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.llm.models import MultiModelRouter
+from gigaevo.memory.provider import MemoryProvider, NullMemoryProvider
 from gigaevo.problems.context import ProblemContext
 
 if TYPE_CHECKING:
@@ -33,5 +34,9 @@ class EvolutionContext(BaseModel):
         default=None,
         description="Optional PromptFetcher for dynamic prompt co-evolution. "
         "When None, agents use FixedDirPromptFetcher(prompts_dir) by default.",
+    )
+    memory_provider: MemoryProvider = Field(
+        default_factory=NullMemoryProvider,
+        description="Memory provider for DAG pipeline. NullMemoryProvider is a no-op.",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)

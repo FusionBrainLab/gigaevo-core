@@ -228,6 +228,7 @@ class TestDefaultPipelineBuilder:
             "LineageStage",
             "LineagesToDescendants",
             "LineagesFromAncestors",
+            "MemoryContextStage",
             "MutationContextStage",
             "ComputeComplexityStage",
             "MergeMetricsStage",

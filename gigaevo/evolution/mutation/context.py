@@ -6,15 +6,16 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
+from gigaevo.evolution.mutation.constants import (  # noqa: F401 — re-export
+    MUTATION_CONTEXT_METADATA_KEY,
+    MUTATION_MEMORY_METADATA_KEY,
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
 from gigaevo.llm.agents.insights import ProgramInsights
 from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.stages.collector import EvolutionaryStatistics
-
-MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
-MUTATION_MEMORY_METADATA_KEY = "mutation_memory"
-MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY = "memory_selected_idea_ids"
 
 
 class MutationContext(BaseModel, ABC):
@@ -236,6 +237,17 @@ class ArtifactMutationContext(MutationContext):
         if not isinstance(body, str):
             body = repr(body)
         return f"## Execution Artifact\n\n{body}"
+
+
+class MemoryMutationContext(MutationContext):
+    """Context with memory-selected idea cards."""
+
+    memory_block: str
+
+    def format(self) -> str:
+        if not self.memory_block.strip():
+            return ""
+        return f"## Memory Instructions\n{self.memory_block}"
 
 
 class PreformattedMutationContext(MutationContext):

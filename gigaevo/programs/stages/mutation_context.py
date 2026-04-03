@@ -11,6 +11,7 @@ from gigaevo.evolution.mutation.context import (
     EvolutionaryStatisticsMutationContext,
     FamilyTreeMutationContext,
     InsightsMutationContext,
+    MemoryMutationContext,
     MetricsMutationContext,
     MutationContext,
     PreformattedMutationContext,
@@ -45,6 +46,7 @@ class MutationContextInputs(StageIO):
     lineage_descendants: TransitionAnalysisList | None
     evolutionary_statistics: EvolutionaryStatistics | None
     formatted: StringContainer | None
+    memory: StringContainer | None
 
 
 @StageRegistry.register(
@@ -109,6 +111,9 @@ class MutationContextStage(Stage):
                     metrics_context=self.metrics_context,
                 )
             )
+
+        if params.memory is not None and params.memory.data.strip():
+            contexts.append(MemoryMutationContext(memory_block=params.memory.data))
 
         if params.formatted is not None:
             contexts.append(PreformattedMutationContext(content=params.formatted.data))

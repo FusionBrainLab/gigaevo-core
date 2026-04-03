@@ -27,3 +27,4 @@ evolution_engine:
   writer: ${writer}
   metrics_tracker: ${metrics_tracker}
   pre_step_hook: null
+  post_run_hook: ${ideas_tracker}

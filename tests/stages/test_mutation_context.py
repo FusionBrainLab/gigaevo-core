@@ -274,6 +274,73 @@ class TestMutationContextStage:
         # The metadata should contain the same string as the output
         assert prog.metadata[MUTATION_CONTEXT_METADATA_KEY] == result.output.data
 
+    async def test_only_memory_provided(self):
+        """Only memory → MemoryMutationContext in composite."""
+        stage = _make_stage()
+        stage.attach_inputs(
+            {
+                "metrics": None,
+                "insights": None,
+                "lineage_ancestors": None,
+                "lineage_descendants": None,
+                "evolutionary_statistics": None,
+                "formatted": None,
+                "memory": StringContainer(
+                    data="1. Sort evidence by relevance score\n2. Filter noise"
+                ),
+            }
+        )
+        prog = _prog()
+        result = await stage.execute(prog)
+
+        assert result.status == StageState.COMPLETED
+        assert "Memory Instructions" in result.output.data
+        assert "Sort evidence" in result.output.data
+        assert "Filter noise" in result.output.data
+
+    async def test_empty_memory_ignored(self):
+        """Empty/whitespace memory string is not included in context."""
+        stage = _make_stage()
+        stage.attach_inputs(
+            {
+                "metrics": None,
+                "insights": None,
+                "lineage_ancestors": None,
+                "lineage_descendants": None,
+                "evolutionary_statistics": None,
+                "formatted": None,
+                "memory": StringContainer(data="   "),
+            }
+        )
+        prog = _prog()
+        result = await stage.execute(prog)
+
+        assert result.status == StageState.COMPLETED
+        assert "Memory Instructions" not in result.output.data
+
+    async def test_memory_combined_with_metrics(self):
+        """Memory + metrics → both appear in composite context."""
+        stage = _make_stage()
+        stage.attach_inputs(
+            {
+                "metrics": FloatDictContainer(data={"score": 75.0}),
+                "insights": None,
+                "lineage_ancestors": None,
+                "lineage_descendants": None,
+                "evolutionary_statistics": None,
+                "formatted": None,
+                "memory": StringContainer(data="Use simulated annealing"),
+            }
+        )
+        prog = _prog()
+        result = await stage.execute(prog)
+
+        assert result.status == StageState.COMPLETED
+        context = result.output.data
+        assert "Memory Instructions" in context
+        assert "simulated annealing" in context
+        assert "75" in context or "score" in context
+
     async def test_multiple_contexts_combined(self):
         """Multiple inputs → composite context contains all sections."""
         stage = _make_stage()

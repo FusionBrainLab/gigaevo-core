@@ -1,0 +1,29 @@
+# @package _global_
+ideas_tracker:
+  _target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
+  analyzer_type: fast
+  analyzer_model: google/gemini-3-flash-preview
+  analyzer_base_url: "https://openrouter.ai/api/v1"
+  analyzer_reasoning:
+    effort: "minimal"
+  analyzer_fast_settings:
+    embeddings_model: sentence-transformers/all-mpnet-base-v2
+    batch_size: 32
+    min_samples_for_dbscan: 4
+    dbscan_eps: 0.25
+    dbscan_min_samples: 2
+    max_attempts: 10
+    max_rounds: 20
+    recompute_center: false
+    refine_subgroup_size: 20
+    llm_max_concurrent: 100
+  list_max_ideas: 20
+  postprocessing_type: fast
+  description_rewriting: true
+  record_conversion_type: fast
+  memory_write_enabled: true
+  memory_write_best_programs_percent: 5.0
+  memory_usage_tracking_enabled: true
+  checkpoint_dir: ${checkpoint_dir}
+  namespace: ${namespace}
+  redis_prefix: ${problem.name}

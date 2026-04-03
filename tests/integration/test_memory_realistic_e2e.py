@@ -259,9 +259,6 @@ async def _evolve(
     gens,
     *,
     operator,
-    memory_enabled=False,
-    memory_top_n=0,
-    memory_path="memory.txt",
 ):
     s = _storage(server)
     strat = MapElitesMultiIsland(island_configs=[_island()], program_storage=s)
@@ -275,10 +272,6 @@ async def _evolve(
             max_mutations_per_generation=1,
             generation_timeout=30,
             max_generations=gens,
-            memory_enabled=memory_enabled,
-            memory_top_n=memory_top_n,
-            memory_path=memory_path,
-            fitness_key="fitness",
         ),
         writer=_writer(),
         metrics_tracker=_tracker(),
@@ -306,60 +299,6 @@ async def _evolve(
 # ===========================================================================
 # Scenario 1: Knowledge accumulation across generations
 # ===========================================================================
-
-
-class TestKnowledgeAccumulation:
-    """Ideas from early gens help later gens via memory."""
-
-    @pytest.mark.asyncio
-    async def test_phase1_produces_ideas_phase2_uses_them(self, tmp_path):
-        """Run 1: evolve → extract ideas. Run 2: evolve with those ideas → higher fitness."""
-        # Phase 1: baseline evolution
-        _reset()
-        s1 = fakeredis.FakeServer()
-        op1 = MemoryBoostOperator()
-        _, progs1, _ = await _evolve(s1, 5, operator=op1)
-        baseline_best = max(p.metrics["fitness"] for p in progs1)
-
-        # Extract "ideas" from phase 1 programs
-        mem, _ = _make_full_memory(
-            tmp_path,
-            ideas=[
-                {
-                    "id": f"idea-{i}",
-                    "description": f"Technique from gen {i}: fitness boost method",
-                    "keywords": ["optimization", f"gen{i}"],
-                }
-                for i in range(3)
-            ],
-        )
-        mem.rebuild()
-
-        # Write memory file for phase 2
-        mf = tmp_path / "memory.txt"
-        mf.write_text(
-            "\n".join(f"- {c.description}" for c in mem.memory_cards.values())
-        )
-
-        # Phase 2: evolution with memory
-        _reset()
-        s2 = fakeredis.FakeServer()
-        op2 = MemoryBoostOperator()
-        _, progs2, _ = await _evolve(
-            s2,
-            5,
-            operator=op2,
-            memory_enabled=True,
-            memory_top_n=1,
-            memory_path=str(mf),
-        )
-        memory_best = max(p.metrics["fitness"] for p in progs2)
-
-        # Memory run should produce higher fitness (boost=2.0 vs 1.0)
-        assert memory_best > baseline_best, (
-            f"Memory run ({memory_best}) should beat baseline ({baseline_best})"
-        )
-        assert any(h["has_memory"] for h in op2.history), "Memory was never used"
 
 
 # ===========================================================================
@@ -794,63 +733,3 @@ class TestFullEvolutionMemoryRebuildCycle:
         assert stats["processed"] == 3
         assert stats["added"] == 2
         assert stats["updated"] == 1
-
-    @pytest.mark.asyncio
-    async def test_complete_two_run_with_rebuild(self, tmp_path):
-        # Run 1: baseline evolution (no memory)
-        _reset()
-        s1 = fakeredis.FakeServer()
-        op1 = MemoryBoostOperator()
-        eng1, progs1, _ = await _evolve(s1, 5, operator=op1)
-        baseline_best = max(p.metrics["fitness"] for p in progs1)
-
-        # Fill memory from run 1 programs
-        mem, _ = _make_full_memory(
-            tmp_path,
-            ideas=[
-                {
-                    "id": f"run1-idea-{i}",
-                    "description": f"Technique discovered at fitness {p.metrics['fitness']:.1f}",
-                    "keywords": ["technique", "optimization"],
-                }
-                for i, p in enumerate(progs1[:3])
-            ],
-        )
-
-        # Rebuild creates research agent with searchable index
-        mem.rebuild()
-        assert mem.research_agent is not None
-        assert mem.export_file.exists()
-
-        # Verify search works after rebuild
-        result = mem.search("technique optimization")
-        assert any(f"run1-idea-{i}" in result for i in range(3))
-
-        # Write memory file for run 2
-        mf = tmp_path / "memory.txt"
-        mf.write_text(
-            "\n".join(f"- {c.description}" for c in mem.memory_cards.values())
-        )
-
-        # Run 2: evolution with memory
-        _reset()
-        s2 = fakeredis.FakeServer()
-        op2 = MemoryBoostOperator()
-        eng2, progs2, _ = await _evolve(
-            s2,
-            5,
-            operator=op2,
-            memory_enabled=True,
-            memory_top_n=1,
-            memory_path=str(mf),
-        )
-        memory_best = max(p.metrics["fitness"] for p in progs2)
-
-        # Memory run beats baseline
-        assert memory_best > baseline_best
-        assert any(h["has_memory"] for h in op2.history)
-        assert sum(1 for h in op2.history if h["has_memory"]) >= 1
-
-        # Reload memory in new process — persistence verified
-        mem2, _ = _make_full_memory(tmp_path)
-        assert len(mem2.memory_cards) == 3

@@ -24,11 +24,6 @@ engine_config:
   max_generations: ${max_generations}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
-  memory_enabled: ${memory_enabled}
-  memory_top_n: ${memory_top_n}
-  memory_path: ${memory_path}
-  fitness_key: ${primary_key}
-  fitness_key_higher_is_better: ${higher_is_better}
 
 metrics_tracker:
   _target_: gigaevo.utils.metrics_tracker.MetricsTracker
@@ -46,3 +41,4 @@ evolution_engine:
   writer: ${writer}
   metrics_tracker: ${metrics_tracker}
   pre_step_hook: ${pre_step_hook}
+  post_run_hook: ${ideas_tracker}

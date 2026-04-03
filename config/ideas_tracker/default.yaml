@@ -1,0 +1,18 @@
+# @package _global_
+ideas_tracker:
+  _target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
+  analyzer_type: default
+  analyzer_model: google/gemini-3-flash-preview
+  analyzer_base_url: "https://openrouter.ai/api/v1"
+  analyzer_reasoning:
+    effort: "minimal"
+  list_max_ideas: 20
+  postprocessing_type: default
+  description_rewriting: true
+  record_conversion_type: default
+  memory_write_enabled: true
+  memory_write_best_programs_percent: 5.0
+  memory_usage_tracking_enabled: true
+  checkpoint_dir: ${checkpoint_dir}
+  namespace: ${namespace}
+  redis_prefix: ${problem.name}
