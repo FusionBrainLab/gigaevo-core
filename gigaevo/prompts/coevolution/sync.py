@@ -14,6 +14,7 @@ import asyncio
 import time
 
 from loguru import logger
+from redis.asyncio import Redis as AsyncRedis
 
 
 class MainRunSyncHook:
@@ -62,7 +63,7 @@ class MainRunSyncHook:
                 "or sources=[{db, prefix}, ...]"
             )
 
-        self._redis_clients: dict[int, object] = {}
+        self._redis_clients: dict[int, AsyncRedis] = {}
 
         sources_desc = ", ".join(f"db={db} prefix={pfx!r}" for db, pfx in self._sources)
         logger.info(
@@ -72,11 +73,9 @@ class MainRunSyncHook:
             self._poll_interval,
         )
 
-    def _get_redis(self, db: int) -> object:
+    def _get_redis(self, db: int) -> AsyncRedis:
         if db not in self._redis_clients:
-            from redis import asyncio as aioredis
-
-            self._redis_clients[db] = aioredis.Redis(
+            self._redis_clients[db] = AsyncRedis(
                 host=self._host,
                 port=self._port,
                 db=db,
@@ -91,7 +90,7 @@ class MainRunSyncHook:
             try:
                 r = self._get_redis(db)
                 key = f"{prefix}:run_state"
-                raw = await r.hget(key, "engine:total_generations")  # type: ignore[attr-defined]
+                raw = await r.hget(key, "engine:total_generations")
                 gens.append(int(raw) if raw else 0)
             except Exception as exc:
                 logger.warning(

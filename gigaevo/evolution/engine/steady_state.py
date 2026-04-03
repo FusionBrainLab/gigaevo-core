@@ -52,17 +52,16 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        cfg: SteadyStateEngineConfig = self.config  # type: ignore[assignment]
-        if not isinstance(cfg, SteadyStateEngineConfig):
+        if not isinstance(self.config, SteadyStateEngineConfig):
             raise TypeError(
                 f"SteadyStateEvolutionEngine requires SteadyStateEngineConfig, "
-                f"got {type(cfg).__name__}"
+                f"got {type(self.config).__name__}"
             )
-        self._ss_config = cfg
+        self._ss_config: SteadyStateEngineConfig = self.config
 
         # Backpressure
         self._in_flight: set[str] = set()
-        self._in_flight_sema = asyncio.Semaphore(cfg.max_in_flight)
+        self._in_flight_sema = asyncio.Semaphore(self._ss_config.max_in_flight)
         self._in_flight_lock = asyncio.Lock()
 
         # Epoch refresh gating

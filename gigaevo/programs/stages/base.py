@@ -9,7 +9,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
-    TypeVar,
     Union,
     get_args,
     get_origin,
@@ -32,9 +31,6 @@ from gigaevo.programs.stages.cache_handler import (
 
 if TYPE_CHECKING:
     from gigaevo.programs.program import Program
-
-I = TypeVar("I", bound=StageIO)  # noqa: E741
-O = TypeVar("O", bound=StageIO)  # noqa: E741
 
 
 def _is_optional_type(tp: Any) -> bool:
@@ -105,8 +101,8 @@ class Stage:
           (None allowed only if OutputModel is VoidOutput)
     """
 
-    InputsModel: ClassVar[type[I]]
-    OutputModel: ClassVar[type[O]]
+    InputsModel: ClassVar[type[StageIO]]
+    OutputModel: ClassVar[type[StageIO]]
 
     # Caching behavior
     cache_handler: ClassVar[CacheHandler] = DEFAULT_CACHE
@@ -122,13 +118,13 @@ class Stage:
         if not hasattr(cls, "OutputModel") or cls.OutputModel is None:
             raise TypeError(f"{cls.__name__} must define OutputModel = Type[StageIO]")
 
-        if not issubclass(cls.InputsModel, StageIO):  # type: ignore[arg-type]
+        if not issubclass(cls.InputsModel, StageIO):
             raise TypeError(f"{cls.__name__}.InputsModel must inherit from StageIO")
-        if not issubclass(cls.OutputModel, StageIO):  # type: ignore[arg-type]
+        if not issubclass(cls.OutputModel, StageIO):
             raise TypeError(f"{cls.__name__}.OutputModel must inherit from StageIO")
 
         req, opt = [], []
-        for name, field in cls.InputsModel.model_fields.items():  # type: ignore[attr-defined]
+        for name, field in cls.InputsModel.model_fields.items():
             (
                 (_ := opt.append(name))
                 if _is_optional_type(field.annotation)
@@ -139,7 +135,7 @@ class Stage:
     def __init__(self, *, timeout: float):
         self.timeout = timeout
         self._raw_inputs: dict[str, Any] = {}
-        self._params_obj: I | None = None
+        self._params_obj: StageIO | None = None
         self._current_inputs_hash: str | None = None
 
     @property
@@ -200,7 +196,7 @@ class Stage:
         return list(cls._optional_names)
 
     def attach_inputs(self, data: Mapping[str, Any]) -> None:
-        declared = set(self.__class__.InputsModel.model_fields.keys())  # type: ignore[attr-defined]
+        declared = set(self.__class__.InputsModel.model_fields.keys())
         payload = dict(data)
         extras = set(payload.keys()) - declared
         if extras:
@@ -212,12 +208,12 @@ class Stage:
         self._params_obj = None
 
     @property
-    def params(self) -> I:
+    def params(self) -> StageIO:
         if self._params_obj is None:
             try:
                 self._params_obj = self.__class__.InputsModel.model_validate(
                     self._raw_inputs
-                )  # type: ignore[assignment]
+                )
             except PydanticValidationError as exc:
                 raise KeyError(
                     f"[{self.stage_name}] Input validation failed: {exc.errors()}"
@@ -329,6 +325,6 @@ class Stage:
             self._params_obj = None
             self._current_inputs_hash = None
 
-    async def compute(self, program: Program) -> O | ProgramStageResult | None:
+    async def compute(self, program: Program) -> StageIO | ProgramStageResult | None:
         """Override in subclasses."""
         raise NotImplementedError(f"{self.__class__.__name__} must implement compute()")

@@ -44,10 +44,10 @@ class InsightsState(TypedDict):
 
     # LLM interaction
     messages: list[BaseMessage]
-    llm_response: AIMessage | ProgramInsights
+    llm_response: AIMessage | ProgramInsights | None
 
     # Output
-    insights: ProgramInsights
+    insights: ProgramInsights | None
 
     # Metadata
     metadata: dict
@@ -156,8 +156,8 @@ class InsightsAgent(LangGraphAgent):
         initial_state: InsightsState = {
             "program": program,
             "messages": [],
-            "llm_response": None,  # type: ignore
-            "insights": None,  # type: ignore
+            "llm_response": None,
+            "insights": None,
             "metadata": {"program_id": program.id},
         }
 

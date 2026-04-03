@@ -98,7 +98,8 @@ class DAG:
         return program.short_id
 
     def _canonical_stage_name(self, stage_name: str) -> str:
-        return self.automata.topology.nodes[stage_name].stage_name  # type: ignore
+        assert self.automata.topology is not None
+        return self.automata.topology.nodes[stage_name].stage_name
 
     async def _run_internal(self, program: Program) -> None:
         pid = self._pid(program)

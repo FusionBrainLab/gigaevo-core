@@ -34,7 +34,7 @@ class ScoringState(TypedDict):
 
     # LLM interaction
     messages: list[BaseMessage]
-    llm_response: AIMessage | ProgramScore
+    llm_response: AIMessage | ProgramScore | None
 
     # Output
     score: float
@@ -132,7 +132,7 @@ class ScoringAgent(LangGraphAgent):
             "trait_description": self.trait_description,
             "max_score": self.max_score,
             "messages": [],
-            "llm_response": None,  # type: ignore
+            "llm_response": None,
             "score": 0.0,
             "metadata": {"program_id": program.id},
         }

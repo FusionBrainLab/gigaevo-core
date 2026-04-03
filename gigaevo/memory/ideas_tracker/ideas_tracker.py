@@ -15,6 +15,7 @@ from loguru import logger
 import pandas as pd
 import tqdm
 
+from gigaevo.memory.ideas_tracker.components.analyzer import IdeaAnalyzer
 from gigaevo.memory.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
 from gigaevo.memory.ideas_tracker.components.data_components import (
     IncomingIdeas,
@@ -201,13 +202,14 @@ class IdeaTracker:
         Args:
             program: Source program record (improvements and lineage metadata).
         """
+        assert isinstance(self.analyzer, IdeaAnalyzer)
         active_ideas = self.ideas_manager.ideas_groups_texts()
         inactive_ideas = self.ideas_manager.ideas_groups_texts(use_inactive=True)
         program_ideas = IncomingIdeas(program.improvements)
         classified_ideas = self.analyzer.process_ideas(
             program_ideas,
             active_ideas,
-            inactive_ideas,  # type: ignore[arg-type]
+            inactive_ideas,
         )
         sorted_ideas = sort_ideas(classified_ideas.ideas)
         for n_idea in sorted_ideas["new"]:

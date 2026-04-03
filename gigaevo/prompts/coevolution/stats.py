@@ -12,6 +12,7 @@ import hashlib
 import json
 
 from loguru import logger
+from redis.asyncio import Redis as AsyncRedis
 
 
 @dataclass
@@ -86,13 +87,11 @@ class RedisPromptStatsProvider(PromptStatsProvider):
                 "or sources=[{db, prefix}, ...]"
             )
 
-        self._redis_clients: dict[int, object] = {}
+        self._redis_clients: dict[int, AsyncRedis] = {}
 
-    def _get_redis(self, db: int) -> object:
+    def _get_redis(self, db: int) -> AsyncRedis:
         if db not in self._redis_clients:
-            from redis import asyncio as aioredis
-
-            self._redis_clients[db] = aioredis.Redis(
+            self._redis_clients[db] = AsyncRedis(
                 host=self._host,
                 port=self._port,
                 db=db,
@@ -119,7 +118,7 @@ class RedisPromptStatsProvider(PromptStatsProvider):
             try:
                 r = self._get_redis(db)
                 key = f"{prefix}:prompt_stats:{prompt_id}"
-                raw = await r.get(key)  # type: ignore[attr-defined]
+                raw = await r.get(key)
                 if raw:
                     data = json.loads(raw)
                     total_trials += int(data.get("trials", 0))

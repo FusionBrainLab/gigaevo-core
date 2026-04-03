@@ -62,7 +62,7 @@ class LangGraphStage(Stage):
         Build kwargs for the agent call from validated params.
         Default: pass through all fields from InputsModel.
         """
-        fields = self.__class__.InputsModel.model_fields  # type: ignore[attr-defined]
+        fields = self.__class__.InputsModel.model_fields
         kwargs: dict[str, Any] = {}
         for name in fields.keys():
             v = getattr(params, name)
@@ -84,7 +84,7 @@ class LangGraphStage(Stage):
         if isinstance(agent_result, self.__class__.OutputModel):
             return agent_result
 
-        out_fields = self.__class__.OutputModel.model_fields  # type: ignore[attr-defined]
+        out_fields = self.__class__.OutputModel.model_fields
 
         # Try single-field wrapper (let Pydantic validate)
         if len(out_fields) == 1:
