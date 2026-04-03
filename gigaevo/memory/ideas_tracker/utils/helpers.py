@@ -35,6 +35,7 @@ def to_float(value: Any) -> float | None:
 
 
 def as_string_list(value: Any) -> list[str]:
+    parsed: Any
     if isinstance(value, list):
         parsed = value
     elif isinstance(value, tuple):
@@ -43,7 +44,7 @@ def as_string_list(value: Any) -> list[str]:
         text = value.strip()
         if not text:
             return []
-        parsed = text  # type: ignore[assignment]
+        parsed = text
         if text[0] in "[{(":
             try:
                 parsed = json.loads(text)
@@ -51,7 +52,7 @@ def as_string_list(value: Any) -> list[str]:
                 try:
                     parsed = ast.literal_eval(text)
                 except Exception:
-                    parsed = text  # type: ignore[assignment]
+                    parsed = text
         if not isinstance(parsed, list):
             return [str(parsed).strip()] if str(parsed).strip() else []
     else:

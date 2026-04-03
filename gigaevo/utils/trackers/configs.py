@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any
 
-from pydantic import AnyUrl, BaseModel, Field
+from pydantic import BaseModel, Field
 
 
 class TBConfig(BaseModel):
@@ -22,7 +22,7 @@ class WBConfig(BaseModel):
 class RedisMetricsConfig(BaseModel):
     """Configuration for Redis metrics backend."""
 
-    redis_url: AnyUrl = Field(default="redis://localhost:6379/0")  # type: ignore[assignment]
+    redis_url: str = Field(default="redis://localhost:6379/0")
     key_prefix: str = Field(default="gigaevo:metrics")
 
     # Storage options

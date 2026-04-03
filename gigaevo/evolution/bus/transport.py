@@ -133,7 +133,7 @@ class RedisStreamTransport(Transport):
 
     async def stop(self) -> None:
         if self._redis:
-            await self._redis.aclose()
+            await self._redis.aclose()  # type: ignore[attr-defined]
             self._redis = None
 
     async def publish(self, envelope: MigrantEnvelope) -> None:
@@ -200,7 +200,7 @@ class RedisStreamTransport(Transport):
 
     async def save_cursor(self) -> None:
         if self._redis is not None:
-            await self._redis.hset(  # type: ignore[misc]
+            await self._redis.hset(
                 f"{self.stream_key}:cursors",
                 self.run_id,
                 self._last_id,
@@ -208,7 +208,7 @@ class RedisStreamTransport(Transport):
 
     async def restore_cursor(self) -> None:
         if self._redis is not None:
-            raw = await self._redis.hget(  # type: ignore[misc]
+            raw = await self._redis.hget(
                 f"{self.stream_key}:cursors",
                 self.run_id,
             )

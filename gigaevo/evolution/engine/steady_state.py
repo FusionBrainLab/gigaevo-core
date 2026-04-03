@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from typing import cast
 
 from loguru import logger
 
@@ -52,7 +53,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if not isinstance(self.config, SteadyStateEngineConfig):
+        cfg = cast(SteadyStateEngineConfig, self.config)
+        if not isinstance(cfg, SteadyStateEngineConfig):
             raise TypeError(
                 f"SteadyStateEvolutionEngine requires SteadyStateEngineConfig, "
                 f"got {type(self.config).__name__}"

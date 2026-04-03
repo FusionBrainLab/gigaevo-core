@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextvars import ContextVar
 import os
 import random
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
@@ -54,16 +54,16 @@ def _with_langfuse(
     if handler is None:
         return config
 
-    cfg: RunnableConfig = dict(config or {})  # type: ignore[assignment]
-    callbacks: list[Any] = cfg.setdefault("callbacks", [])  # type: ignore[assignment]
+    cfg: dict[str, Any] = dict(config or {})
+    callbacks: list[Any] = cfg.setdefault("callbacks", [])
     if handler not in callbacks:
         callbacks.append(handler)
 
     if model_name:
-        metadata: dict[str, Any] = cfg.setdefault("metadata", {})  # type: ignore[arg-type]
+        metadata: dict[str, Any] = cfg.setdefault("metadata", {})
         metadata["selected_model"] = model_name
 
-    return cfg
+    return cast(RunnableConfig, cfg)
 
 
 class MultiModelRouter(Runnable):

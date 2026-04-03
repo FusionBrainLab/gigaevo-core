@@ -52,7 +52,7 @@ class RedisConnection:
                     socket_timeout=self.config.connection_pool_timeout,
                     retry_on_timeout=True,
                 )
-                await r.ping()  # type: ignore[misc]
+                await r.ping()
                 logger.debug("[RedisConnection] Connected to {}", self.config.redis_url)
                 self._redis = r
 
@@ -99,7 +99,7 @@ class RedisConnection:
         r, self._redis = self._redis, None
         if r is not None:
             try:
-                await r.aclose()
+                await r.aclose()  # type: ignore[attr-defined]
             except Exception:
                 pass
             try:

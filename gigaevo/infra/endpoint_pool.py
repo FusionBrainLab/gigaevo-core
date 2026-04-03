@@ -165,7 +165,7 @@ class EndpointPool:
     def _ensure_lua(self, r: redis.Redis) -> str:
         """Load the Lua script and cache its SHA."""
         if self._lua_sha is None:
-            self._lua_sha = r.script_load(_LUA_ACQUIRE)  # type: ignore[assignment]
+            self._lua_sha = str(r.script_load(_LUA_ACQUIRE))
         assert self._lua_sha is not None  # guaranteed by branch above
         return self._lua_sha
 
@@ -318,7 +318,7 @@ class EndpointPool:
     async def close(self) -> None:
         """Close Redis connections."""
         if self._async_redis is not None:
-            await self._async_redis.aclose()
+            await self._async_redis.aclose()  # type: ignore[attr-defined]
             self._async_redis = None
         if self._sync_redis is not None:
             self._sync_redis.close()
