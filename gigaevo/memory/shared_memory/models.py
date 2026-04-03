@@ -29,7 +29,7 @@ class MemoryCard(BaseModel):
     strategy: str = ""
     last_generation: int = 0
     programs: list[str] = Field(default_factory=list)
-    aliases: list[str] = Field(default_factory=list)
+    aliases: list[Any] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     evolution_statistics: dict[str, Any] = Field(default_factory=dict)
     explanation: MemoryCardExplanation = Field(default_factory=MemoryCardExplanation)
