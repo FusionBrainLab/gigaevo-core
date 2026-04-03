@@ -220,6 +220,43 @@ class TestLoadMemoryCardsEdgeCases:
         assert len(program_cards) == 1
         assert program_cards[0].program_id == "p2"
 
+    def test_ideas_tracker_dict_aliases_preserved(self, tmp_path):
+        """Integration: ideas_tracker writes aliases as list[dict] version history.
+
+        This is the boundary where ideas_tracker output enters Pydantic land.
+        Bug #2 (PR #161): MemoryCard.aliases was list[str], crashed on list[dict].
+        Fixed by changing to list[Any].
+        """
+        aliases = [
+            {
+                "exp1-prog1": {
+                    "description": "old description",
+                    "programs": ["p1"],
+                    "explanations": ["initial"],
+                }
+            },
+        ]
+        banks = _make_banks(
+            tmp_path,
+            active_bank=[
+                {
+                    "id": "idea-1",
+                    "description": "current description",
+                    "aliases": aliases,
+                    "keywords": ["retrieval"],
+                }
+            ],
+        )
+        best = _make_best_ideas(
+            tmp_path,
+            best_ideas=[{"idea_id": "idea-1"}],
+        )
+        cards = load_memory_cards(banks, best)
+        assert len(cards) == 1
+        assert cards[0].id == "idea-1"
+        assert cards[0].aliases == aliases
+        assert isinstance(cards[0].aliases[0], dict)
+
     def test_missing_banks_file_raises(self, tmp_path):
         best = _make_best_ideas(tmp_path)
         with pytest.raises(FileNotFoundError):

@@ -357,6 +357,43 @@ class TestNormalizeEdgeCases:
         # Only explanations and summary are extracted
         assert "extra" not in MemoryCardExplanation.model_fields
 
+    def test_aliases_with_ideas_tracker_dict_format(self):
+        """Ideas tracker stores aliases as list[dict] version history, not list[str].
+
+        RecordCardExtended.aliases appends dicts like:
+            {"exp1-prog1": {"description": "old", "programs": ["p1"], "explanations": ["e"]}}
+        This must pass through normalize_memory_card without crashing (Bug #2, PR #161).
+        """
+        aliases = [
+            {
+                "exp1-prog1": {
+                    "description": "old description",
+                    "programs": ["p1", "p2"],
+                    "explanations": ["initial explanation"],
+                }
+            },
+            {
+                "exp2-prog3": {
+                    "description": "updated description",
+                    "programs": ["p3"],
+                    "explanations": ["revised"],
+                }
+            },
+        ]
+        result = normalize_memory_card(
+            {"id": "idea-1", "description": "current", "aliases": aliases}
+        )
+        assert isinstance(result, MemoryCard)
+        assert result.aliases == aliases
+        assert len(result.aliases) == 2
+        assert isinstance(result.aliases[0], dict)
+
+    def test_aliases_mixed_types(self):
+        """Aliases can mix strings and dicts (legacy + ideas_tracker)."""
+        aliases = ["simple-alias", {"exp1-prog1": {"description": "old"}}]
+        result = normalize_memory_card({"id": "idea-2", "aliases": aliases})
+        assert result.aliases == aliases
+
     def test_nested_dict_in_evolution_statistics(self):
         stats = {"nested": {"deep": True}}
         result = normalize_memory_card({"evolution_statistics": stats})
