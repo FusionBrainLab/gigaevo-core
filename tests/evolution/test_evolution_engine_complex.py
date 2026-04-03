@@ -44,6 +44,7 @@ def _engine(**overrides) -> EvolutionEngine:
     storage.count_by_status.return_value = 0
     storage.get_all_by_status.return_value = []
     storage.get_ids_by_status.return_value = []
+    storage.snapshot = MagicMock()
 
     engine = EvolutionEngine(
         storage=storage,

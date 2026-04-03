@@ -196,28 +196,28 @@ class RedisArchiveStorage(ArchiveStorage):
         async def _op(r):
             while True:
                 try:
-                    await r.watch(self._hash_key)
+                    async with r.pipeline() as pipe:
+                        await pipe.watch(self._hash_key)
 
-                    # Re-check Redis state in case of concurrent modification
-                    # (defensive; single-engine makes this unlikely)
-                    redis_id = await r.hget(self._hash_key, field)
-                    if redis_id and redis_id != (current_id or ""):
-                        # Cache was stale — reload current from Redis
-                        redis_prog = await self._storage.get(redis_id)
-                        if redis_prog and not is_better(program, redis_prog):
-                            await r.unwatch()
-                            # Fix cache to match Redis
-                            self._cache_set(field, redis_prog)
-                            return False
+                        # Re-check Redis state in case of concurrent modification
+                        # (defensive; single-engine makes this unlikely)
+                        redis_id = await pipe.hget(self._hash_key, field)
+                        if redis_id and redis_id != (current_id or ""):
+                            # Cache was stale — reload current from Redis
+                            redis_prog = await self._storage.get(redis_id)
+                            if redis_prog and not is_better(program, redis_prog):
+                                await pipe.unwatch()
+                                # Fix cache to match Redis
+                                self._cache_set(field, redis_prog)
+                                return False
 
-                    pipe = r.pipeline()
-                    pipe.multi()
-                    pipe.hset(self._hash_key, field, program.id)
-                    if redis_id and redis_id != program.id:
-                        pipe.hdel(self._reverse_key, redis_id)
-                    pipe.hset(self._reverse_key, program.id, field)
-                    await pipe.execute()
-                    return True
+                        pipe.multi()
+                        pipe.hset(self._hash_key, field, program.id)
+                        if redis_id and redis_id != program.id:
+                            pipe.hdel(self._reverse_key, redis_id)
+                        pipe.hset(self._reverse_key, program.id, field)
+                        await pipe.execute()
+                        return True
 
                 except WatchError:
                     # Invalidate cache for this cell — Redis state may

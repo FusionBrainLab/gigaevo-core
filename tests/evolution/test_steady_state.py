@@ -39,6 +39,7 @@ def _make_ss_engine(
     storage.count_by_status.return_value = 0
     storage.get_all_by_status.return_value = []
     storage.get_ids_by_status.return_value = []
+    storage.snapshot = MagicMock()
     strategy.get_program_ids.return_value = []
 
     config = SteadyStateEngineConfig(

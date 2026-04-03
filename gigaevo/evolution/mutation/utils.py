@@ -35,12 +35,7 @@ class _DocstringRemover(ast.NodeTransformer):
         if (
             node.body
             and isinstance(node.body[0], ast.Expr)
-            and isinstance(node.body[0].value, (ast.Str, ast.Constant))
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
         ):
-            # Check if it's actually a string constant (docstring)
-            if isinstance(node.body[0].value, ast.Constant) and isinstance(
-                node.body[0].value.value, str
-            ):
-                node.body.pop(0)
-            elif isinstance(node.body[0].value, ast.Str):
-                node.body.pop(0)
+            node.body.pop(0)

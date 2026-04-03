@@ -410,8 +410,12 @@ class TestAsyncLen:
 
         # Calling len() on an object whose __len__ is async gives TypeError
         # because __len__ returns a coroutine, which is not an int.
-        with pytest.raises(TypeError):
-            len(isl)
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            with pytest.raises(TypeError):
+                len(isl)
 
 
 # ===================================================================

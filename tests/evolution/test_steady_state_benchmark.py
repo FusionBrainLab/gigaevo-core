@@ -100,6 +100,7 @@ def _make_generational_engine(
     storage.count_by_status.return_value = 0
     storage.get_all_by_status.return_value = []
     storage.get_ids_by_status.return_value = []
+    storage.snapshot = MagicMock()
     strategy.get_program_ids.return_value = []
     strategy.select_elites.return_value = [_prog()]
 
@@ -140,6 +141,7 @@ def _make_steady_state_engine(
     storage.count_by_status.return_value = 0
     storage.get_all_by_status.return_value = []
     storage.get_ids_by_status.return_value = []
+    storage.snapshot = MagicMock()
     strategy.get_program_ids.return_value = []
     strategy.select_elites.return_value = [_prog()]
 

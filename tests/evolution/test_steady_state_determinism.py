@@ -108,6 +108,7 @@ class DeterministicEngine:
 
         storage.count_by_status.return_value = 0
         storage.get_all_by_status.return_value = []
+        storage.snapshot = MagicMock()
         strategy.get_program_ids.return_value = []
         strategy.add.return_value = True
 
@@ -627,6 +628,7 @@ class TestScopedDrainInvariants:
         mt.format_best_summary.return_value = ""
         storage.count_by_status.return_value = 0
         storage.get_all_by_status.return_value = []
+        storage.snapshot = MagicMock()
         strategy.get_program_ids.return_value = []
 
         config = SteadyStateEngineConfig(
@@ -662,6 +664,7 @@ class TestScopedDrainInvariants:
         mt.format_best_summary.return_value = ""
         storage.count_by_status.return_value = 0
         storage.get_all_by_status.return_value = []
+        storage.snapshot = MagicMock()
         strategy.get_program_ids.return_value = []
 
         config = SteadyStateEngineConfig(
@@ -704,6 +707,7 @@ class TestLowWatermarkEpochTrigger:
         mt.format_best_summary.return_value = ""
         storage.count_by_status.return_value = 0
         storage.get_all_by_status.return_value = []
+        storage.snapshot = MagicMock()
         strategy.get_program_ids.return_value = []
         config = SteadyStateEngineConfig(
             max_in_flight=max_in_flight,

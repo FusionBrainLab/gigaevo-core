@@ -14,6 +14,7 @@ import math
 from pathlib import Path
 import time
 from typing import Any
+import warnings
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from loguru import logger
@@ -548,13 +549,15 @@ class OptunaOptimizationStage(Stage):
             self.n_trials,
         )
         has_categorical = any(p.param_type == "categorical" for p in param_specs)
-        sampler = optuna.samplers.TPESampler(
-            n_startup_trials=n_startup,
-            multivariate=self.config.multivariate,
-            group=has_categorical,
-            constant_liar=True,
-            seed=self.config.random_state,
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning)
+            sampler = optuna.samplers.TPESampler(
+                n_startup_trials=n_startup,
+                multivariate=self.config.multivariate,
+                group=has_categorical,
+                constant_liar=True,
+                seed=self.config.random_state,
+            )
         study = optuna.create_study(
             direction=direction,
             sampler=sampler,
@@ -721,12 +724,16 @@ class OptunaOptimizationStage(Stage):
                                 ped_quantile,
                             )
                             continue
-                        importances = optuna.importance.get_param_importances(
-                            study,
-                            evaluator=PedAnovaImportanceEvaluator(
-                                target_quantile=ped_quantile
-                            ),
-                        )
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings(
+                                "ignore", category=optuna.exceptions.ExperimentalWarning
+                            )
+                            importances = optuna.importance.get_param_importances(
+                                study,
+                                evaluator=PedAnovaImportanceEvaluator(
+                                    target_quantile=ped_quantile
+                                ),
+                            )
                         avg_importance = 1.0 / max(len(importances), 1)
                         effective_ratio = (
                             self.config.importance_threshold_ratio * thresh_mult

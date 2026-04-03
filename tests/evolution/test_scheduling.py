@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from gigaevo.evolution.scheduling.feature_extractor import (
@@ -109,14 +111,16 @@ class TestCompositeFeatureExtractor:
 # ---------------------------------------------------------------------------
 
 # Real HoVer baseline (7 steps: 3 tool + 4 LLM, empty system_prompt)
-_HOVER_BASELINE = open(
-    "problems/chains/hover/static_soft/initial_programs/baseline.py"
-).read()
+_HOVER_BASELINE = (
+    pathlib.Path("problems/chains/hover/static_soft/initial_programs/baseline.py")
+    .read_text()
+)
 
 # Real HotpotQA baseline (6 steps: 2 tool + 4 LLM, empty system_prompt)
-_HOTPOTQA_BASELINE = open(
-    "problems/chains/hotpotqa/static/initial_programs/baseline.py"
-).read()
+_HOTPOTQA_BASELINE = (
+    pathlib.Path("problems/chains/hotpotqa/static/initial_programs/baseline.py")
+    .read_text()
+)
 
 
 class TestChainFeatureExtractor:

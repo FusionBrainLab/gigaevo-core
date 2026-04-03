@@ -435,7 +435,7 @@ def plot_comparison(
     _configure_plotting_style(use_latex=use_latex)
 
     # Create figure with appropriate size
-    fig, ax = plt.subplots(figsize=(figure_width, figure_height))
+    fig, ax = plt.subplots(figsize=(figure_width, figure_height), layout="tight")
 
     # Use standard matplotlib colors
     colors = MATPLOTLIB_COLORS
@@ -589,8 +589,7 @@ def plot_comparison(
     else:
         ax.legend(loc=legend_location, **legend_kwargs)
 
-    # Finalize layout
-    fig.tight_layout()
+    # Layout handled by layout="tight" in subplots()
     saved_paths: tuple[Path, Path] | None = None
     if save_plots:
         output_folder.mkdir(parents=True, exist_ok=True)
