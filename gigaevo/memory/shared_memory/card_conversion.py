@@ -45,6 +45,34 @@ class MemoryNoteProtocol(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Alias flattening
+# ---------------------------------------------------------------------------
+
+
+def _flatten_aliases(value: Any) -> list[str]:
+    """Flatten aliases from ideas_tracker format to list[str].
+
+    RecordCardExtended produces aliases as list[dict[str, dict[str, str|list[str]]]]
+    but MemoryCard expects list[str]. Extract description strings from dicts,
+    pass through strings as-is.
+    """
+    raw = _to_list(value)
+    result: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            result.append(item)
+        elif isinstance(item, dict):
+            for inner in item.values():
+                if isinstance(inner, str):
+                    result.append(inner)
+                elif isinstance(inner, dict):
+                    desc = inner.get("description", "")
+                    if isinstance(desc, str) and desc:
+                        result.append(desc)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -137,7 +165,7 @@ def normalize_memory_card(
         strategy=str(raw.get("strategy") or ""),
         last_generation=_to_int(raw.get("last_generation"), default=0),
         programs=_to_list(raw.get("programs")),
-        aliases=_to_list(raw.get("aliases")),
+        aliases=_flatten_aliases(raw.get("aliases")),
         keywords=_to_list(raw.get("keywords")),
         evolution_statistics=_evo_stats
         if isinstance((_evo_stats := raw.get("evolution_statistics")), dict)
