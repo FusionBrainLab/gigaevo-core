@@ -39,11 +39,12 @@ class TransitionInsights(BaseModel):
 class TransitionAnalysis(BaseModel):
     """Complete transition analysis output."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     from_id: str = Field(alias="from")
     to_id: str = Field(alias="to")
     parent_metrics: dict[str, float]
     child_metrics: dict[str, float]
-    model_config = ConfigDict(populate_by_name=True)
 
     diff_blocks: list[str]
     insights: TransitionInsights
@@ -59,7 +60,7 @@ class LineageState(TypedDict):
     delta: float
     diff_blocks: list[str]
     insights: TransitionInsights | list[dict]
-    full_analysis: TransitionAnalysis | dict
+    full_analysis: TransitionAnalysis | dict[str, object]
     metadata: dict
 
 
@@ -250,13 +251,15 @@ class LineageAgent(LangGraphAgent):
         parent = state["parent"]
         child = state["child"]
 
-        state["full_analysis"] = TransitionAnalysis(
-            from_id=parent.id,  # type: ignore[call-arg]
-            to_id=child.id,  # type: ignore[call-arg]
-            parent_metrics=parent.metrics,
-            child_metrics=child.metrics,
-            diff_blocks=state["diff_blocks"],
-            insights=llm_response,
+        state["full_analysis"] = TransitionAnalysis.model_validate(
+            {
+                "from_id": parent.id,
+                "to_id": child.id,
+                "parent_metrics": parent.metrics,
+                "child_metrics": child.metrics,
+                "diff_blocks": state["diff_blocks"],
+                "insights": llm_response,
+            }
         )
 
         return state

@@ -47,7 +47,7 @@ class PythonCodeExecutor[T](Stage):
     Subclasses must implement `_build_call(self, program) -> (args, kwargs)`.
     """
 
-    InputsModel = VoidInput
+    InputsModel: type[StageIO] = VoidInput
     OutputModel = Box[T]  # type: ignore[valid-type]  # bound TypeVar used as generic alias in base class
 
     def __init__(
@@ -170,7 +170,7 @@ class ContextInputModel(StageIO):
 class CallProgramFunction(PythonCodeExecutor):
     """Calls the user function in Program.code. Accepts optional input from DAG wiring."""
 
-    InputsModel = ContextInputModel  # type: ignore[assignment]  # narrowing ClassVar from base
+    InputsModel = ContextInputModel
     OutputModel = Box[Any]
 
     def _build_call(self, program: Program) -> tuple[Sequence[Any], dict[str, Any]]:
@@ -248,7 +248,7 @@ ValidatorOutput = Box[tuple[dict[str, float], Any]]
 class CallValidatorFunction(PythonCodeExecutor):
     """Loads validator file and calls function `validate(context?, program_output)`."""
 
-    InputsModel = ValidatorInput  # type: ignore[assignment]  # narrowing ClassVar from base
+    InputsModel = ValidatorInput
     OutputModel = ValidatorOutput  # metrics dict and execution artifact
 
     def __init__(self, *, path: Path, function_name: str = "validate", **kwargs: Any):

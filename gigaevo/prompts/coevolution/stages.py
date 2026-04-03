@@ -8,7 +8,7 @@ PromptInsightsStage / PromptLineageStage: cache-aware wrappers that invalidate
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -228,10 +228,10 @@ class PromptInsightsStage(InsightsStage):
     insights like "this prompt is bad" based on a dummy 0.25 fitness.
     """
 
-    InputsModel = FitnessMetricsInput  # type: ignore[assignment]
+    InputsModel = FitnessMetricsInput
 
     async def compute(self, program: Program) -> InsightsOutput | ProgramStageResult:  # type: ignore[override]
-        fm = self.params.fitness_metrics  # type: ignore[attr-defined]
+        fm = cast(FitnessMetricsInput, self.params).fitness_metrics
         if fm is not None and fm.data.get("trials", 0) == 0:
             return ProgramStageResult.skipped(
                 message="No trials yet — fitness is Beta prior, insights deferred",
@@ -250,12 +250,12 @@ class PromptLineageStage(LineageStage):
     misleading transition analysis based on dummy fitness values.
     """
 
-    InputsModel = FitnessMetricsInput  # type: ignore[assignment]
+    InputsModel = FitnessMetricsInput
 
     async def compute(
         self, program: Program
     ) -> LineageAnalysesOutput | ProgramStageResult:  # type: ignore[override]
-        fm = self.params.fitness_metrics  # type: ignore[attr-defined]
+        fm = cast(FitnessMetricsInput, self.params).fitness_metrics
         if fm is not None and fm.data.get("trials", 0) == 0:
             return ProgramStageResult.skipped(
                 message="No trials yet — fitness is Beta prior, lineage deferred",

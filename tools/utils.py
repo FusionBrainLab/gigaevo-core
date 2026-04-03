@@ -400,7 +400,7 @@ def fetch_frontier_from_redis(
 
         # Each entry is JSON: {"s": step, "v": value, "t": wall_time, "k": "scalar"}
         frontier: dict[int, float] = {}
-        for entry_json in entries:  # type: ignore[union-attr]
+        for entry_json in entries:
             try:
                 entry = json.loads(entry_json)
                 iteration = int(entry.get("s", 0))

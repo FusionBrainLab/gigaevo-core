@@ -33,8 +33,8 @@ class RelatedCollectorBase(Stage):
     Subclasses set a concrete OutputModel and override the two abstract methods.
     """
 
-    InputsModel = VoidInput
-    OutputModel = VoidOutput
+    InputsModel: type[StageIO] = VoidInput
+    OutputModel: type[StageIO] = VoidOutput
     cache_handler = NO_CACHE  # lineage-derived sets usually change over time
 
     def __init__(self, *, storage: ProgramStorage, **kwargs: Any):
@@ -56,7 +56,7 @@ class RelatedCollectorBase(Stage):
 
 @StageRegistry.register(description="Collect related Program IDs (List[str])")
 class ProgramIdsCollector(RelatedCollectorBase):
-    OutputModel = StringList  # type: ignore[assignment]  # narrowing ClassVar from base
+    OutputModel = StringList
 
     async def _process(self, program: Program, programs: list[Program]) -> StringList:
         return StringList(items=[p.id for p in programs])
@@ -354,7 +354,7 @@ async def _get_descendants(storage: ProgramStorage, program: Program) -> list[Pr
 
 @StageRegistry.register(description="Evolutionary statistics collector")
 class EvolutionaryStatisticsCollector(RelatedCollectorBase):
-    OutputModel = EvolutionaryStatistics  # type: ignore[assignment]  # narrowing ClassVar from base
+    OutputModel = EvolutionaryStatistics
 
     def __init__(self, *, metrics_context: MetricsContext, **kwargs: Any):
         super().__init__(**kwargs)

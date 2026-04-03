@@ -35,8 +35,8 @@ class LangGraphStage(Stage):
            - Defaults coerce result to OutputModel (single-field wrap or dict->validate)
     """
 
-    InputsModel = VoidInput
-    OutputModel = VoidOutput
+    InputsModel: type[StageIO] = VoidInput
+    OutputModel: type[StageIO] = VoidOutput
 
     def __init__(
         self,

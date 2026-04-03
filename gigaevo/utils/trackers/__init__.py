@@ -71,8 +71,9 @@ def get_redis() -> GenericLogger:
 def get_redis_backend() -> RedisMetricsBackend:
     """Get the Redis backend directly for query methods."""
     logger = get_redis()
-    assert isinstance(logger.backend, RedisMetricsBackend)
-    return logger.backend
+    backend = logger.backend
+    assert isinstance(backend, RedisMetricsBackend)
+    return backend
 
 
 def init_composite(*loggers: GenericLogger) -> CompositeLogger:

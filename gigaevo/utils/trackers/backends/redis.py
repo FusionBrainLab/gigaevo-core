@@ -133,7 +133,7 @@ class RedisMetricsBackend(LoggerBackend):
                     pipe.ltrim(history_key, -self.cfg.max_history_per_metric, -1)
 
             # Update metadata
-            pipe.hset(self._k_meta(), "last_update", time.time())  # type: ignore[arg-type]
+            pipe.hset(self._k_meta(), "last_update", str(time.time()))
             pipe.execute()
 
         except Exception as e:
@@ -155,15 +155,18 @@ class RedisMetricsBackend(LoggerBackend):
 
     def get_latest(self, tag: str | None = None) -> dict[str, Any]:
         """Get latest value(s). If tag is None, return all."""
-        if not self._client:
+        client = self._client
+        if client is None:
             return {}
         try:
             if tag:
-                val = self._client.hget(self._k_latest(), tag)  # type: ignore[union-attr]
-                return {tag: float(val)} if val else {}  # type: ignore[arg-type]
+                val = client.hget(self._k_latest(), tag)
+                if val is None:
+                    return {}
+                return {tag: float(str(val))}
             else:
-                data = self._client.hgetall(self._k_latest())  # type: ignore[union-attr]
-                return {k: self._parse_value(v) for k, v in data.items()}  # type: ignore[union-attr]
+                data = client.hgetall(self._k_latest())
+                return {k: self._parse_value(str(v)) for k, v in data.items()}
         except Exception as e:
             logger.warning("[RedisMetricsBackend] get_latest failed: {}", e)
             return {}
@@ -172,21 +175,23 @@ class RedisMetricsBackend(LoggerBackend):
         self, tag: str, start: int = 0, end: int = -1
     ) -> list[dict[str, Any]]:
         """Get history for a metric tag."""
-        if not self._client:
+        client = self._client
+        if client is None:
             return []
         try:
-            entries = self._client.lrange(self._k_history(tag), start, end)  # type: ignore[union-attr]
-            return [json.loads(e) for e in entries]  # type: ignore[union-attr]
+            entries = client.lrange(self._k_history(tag), start, end)
+            return [json.loads(str(e)) for e in entries]
         except Exception as e:
             logger.warning("[RedisMetricsBackend] get_history failed: {}", e)
             return []
 
     def list_metrics(self) -> list[str]:
         """List all metric tags that have been recorded."""
-        if not self._client:
+        client = self._client
+        if client is None:
             return []
         try:
-            return list(self._client.hkeys(self._k_latest()))  # type: ignore[arg-type]
+            return [str(k) for k in client.hkeys(self._k_latest())]
         except Exception as e:
             logger.warning("[RedisMetricsBackend] list_metrics failed: {}", e)
             return []

@@ -101,8 +101,8 @@ class Stage:
           (None allowed only if OutputModel is VoidOutput)
     """
 
-    InputsModel: ClassVar[type[StageIO]]
-    OutputModel: ClassVar[type[StageIO]]
+    InputsModel: type[StageIO]
+    OutputModel: type[StageIO]
 
     # Caching behavior
     cache_handler: ClassVar[CacheHandler] = DEFAULT_CACHE
@@ -125,7 +125,7 @@ class Stage:
 
         req: list[str] = []
         opt: list[str] = []
-        for name, field in cls.InputsModel.model_fields.items():  # type: ignore[attr-defined]
+        for name, field in cls.InputsModel.model_fields.items():
             if _is_optional_type(field.annotation):
                 opt.append(name)
             else:

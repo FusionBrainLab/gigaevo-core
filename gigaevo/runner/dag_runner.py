@@ -466,13 +466,7 @@ class DagRunner:
             )
         finally:
             # Eagerly release references to allow GC of heavy objects.
-            if dag.automata.topology is not None:
-                dag.automata.topology.nodes.clear()
-            dag.automata.topology = None  # type: ignore[assignment]  # intentional teardown
-            dag.automata = None  # type: ignore[assignment]  # intentional teardown
-            dag.state_manager = None  # type: ignore[assignment]  # intentional teardown
-            dag._writer = None  # type: ignore[assignment]  # intentional teardown
-            dag._stage_sema = None  # type: ignore[assignment]  # intentional teardown
+            dag.teardown()
 
         # Update scheduling predictor with actual eval duration (even for
         # failures — duration-until-failure is informative and avoids

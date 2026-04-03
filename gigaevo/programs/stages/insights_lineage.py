@@ -42,8 +42,8 @@ class LineageStage(LangGraphStage):
     as `program`, calls the lineage agent, and returns analyses (same order as parents).
     """
 
-    InputsModel = VoidInput
-    OutputModel = LineageAnalysesOutput  # type: ignore[assignment]  # narrowing ClassVar from LangGraphStage base
+    InputsModel: type[StageIO] = VoidInput
+    OutputModel: type[StageIO] = LineageAnalysesOutput
 
     def __init__(
         self,

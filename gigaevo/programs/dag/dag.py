@@ -94,6 +94,16 @@ class DAG:
                 except Exception:
                     logger.debug("[DAG][{}] Final flush failed (non-critical)", pid)
 
+    def teardown(self) -> None:
+        """Release references to heavy objects for GC."""
+        if self.automata.topology is not None:
+            self.automata.topology.nodes.clear()
+        object.__setattr__(self.automata, "topology", None)
+        object.__setattr__(self, "automata", None)
+        object.__setattr__(self, "state_manager", None)
+        object.__setattr__(self, "_writer", None)
+        object.__setattr__(self, "_stage_sema", None)
+
     def _pid(self, program: Program) -> str:
         return program.short_id
 

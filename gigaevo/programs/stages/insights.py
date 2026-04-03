@@ -32,8 +32,8 @@ class InsightsStage(LangGraphStage):
     - Injects the live Program into the agent call as `program`
     """
 
-    InputsModel = VoidInput
-    OutputModel = InsightsOutput  # type: ignore[assignment]  # narrowing ClassVar from LangGraphStage base
+    InputsModel: type[StageIO] = VoidInput
+    OutputModel: type[StageIO] = InsightsOutput
 
     def __init__(
         self,
