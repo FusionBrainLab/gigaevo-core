@@ -12,7 +12,7 @@ silently during memory write, wasting API credits.
 import json
 from pathlib import Path
 
-from gigaevo.memory.memory_write_example import load_memory_cards
+from gigaevo.memory.memory_write_example import _card_type, load_memory_cards
 from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
@@ -368,3 +368,97 @@ class TestRegression_BugPR161:
         assert result.aliases == card_input["aliases"]
         assert isinstance(result.aliases[0], dict)
         assert "exp1-prog1" in result.aliases[0]
+
+
+# ===========================================================================
+# Full main() loop simulation — Bug #3 (PR #161)
+# ===========================================================================
+
+
+class TestMainLoopSimulation:
+    """Simulate the main() loop: load_memory_cards → _card_type for each card.
+
+    Bug #3: _card_type called .get() on Pydantic models returned by load_memory_cards.
+    These tests verify the full flow works without AttributeError.
+    """
+
+    def test_full_loop_ideas_only(self, tmp_path):
+        """Simulate main() loop with idea cards from ideas_tracker."""
+        banks_path = tmp_path / "banks.json"
+        _write_json(
+            banks_path,
+            [
+                {
+                    "active_bank": [
+                        make_ideas_tracker_card(
+                            "idea-1", "Chunking", has_version_history=True
+                        ),
+                        make_ideas_tracker_card(
+                            "idea-2", "Pooling", has_version_history=False
+                        ),
+                    ]
+                }
+            ],
+        )
+        best_ideas_path = tmp_path / "best_ideas.json"
+        _write_json(
+            best_ideas_path,
+            [{"best_ideas": [{"idea_id": "idea-1"}, {"idea_id": "idea-2"}]}],
+        )
+
+        cards = load_memory_cards(banks_path, best_ideas_path)
+        # Simulate main() loop — this crashed before the fix
+        for card in cards:
+            card_type = _card_type(card)
+            assert card_type == "ideas"
+            assert isinstance(card, MemoryCard)
+
+    def test_full_loop_mixed_ideas_and_programs(self, tmp_path):
+        """Simulate main() loop with both idea and program cards."""
+        banks_path = tmp_path / "banks.json"
+        _write_json(
+            banks_path,
+            [
+                {
+                    "active_bank": [
+                        make_ideas_tracker_card(
+                            "idea-1", "Good idea", has_version_history=True
+                        ),
+                    ]
+                }
+            ],
+        )
+        best_ideas_path = tmp_path / "best_ideas.json"
+        _write_json(best_ideas_path, [{"best_ideas": [{"idea_id": "idea-1"}]}])
+        programs_path = tmp_path / "programs.json"
+        _write_json(
+            programs_path,
+            [
+                {
+                    "programs": [
+                        {
+                            "id": "prog-1",
+                            "fitness": 85.5,
+                            "code": "def f(): pass",
+                            "task_description_summary": "Task",
+                        }
+                    ]
+                }
+            ],
+        )
+
+        cards = load_memory_cards(
+            banks_path,
+            best_ideas_path,
+            programs_path=programs_path,
+            best_programs_percent=100.0,
+        )
+
+        # Simulate main() loop
+        type_counts = {"ideas": 0, "programs": 0}
+        for card in cards:
+            card_type = _card_type(card)
+            type_counts[card_type] += 1
+
+        assert type_counts["ideas"] == 1
+        assert type_counts["programs"] == 1
