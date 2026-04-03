@@ -1,55 +1,52 @@
 from __future__ import annotations
 
-import json
-
-import pandas as pd
-
 from gigaevo.memory.ideas_tracker.components.data_components import (
     ProgramRecord,
     normalize_improvements,
 )
+from gigaevo.programs.program import Program
 
 
-def convert_programs_to_records(
-    programs: pd.DataFrame, task_description: str, task_description_summary: str
-) -> tuple[list[ProgramRecord], list[str]]:
-    """
-    Convert programs DataFrame to list of ProgramRecord instances and return IDs.
+def program_to_record(
+    program: Program,
+    task_description: str,
+    task_description_summary: str,
+    fitness_key: str = "fitness",
+) -> ProgramRecord:
+    mutation_output = program.metadata.get("mutation_output", {})
+    if not isinstance(mutation_output, dict):
+        mutation_output = {}
+    return ProgramRecord(
+        id=program.id,
+        fitness=program.metrics.get(fitness_key, 0.0),
+        generation=program.lineage.generation,
+        parents=list(program.lineage.parents),
+        insights=mutation_output.get("insights_used", []),
+        improvements=normalize_improvements(mutation_output.get("changes")),
+        category="",
+        strategy=mutation_output.get("archetype", ""),
+        task_description=task_description,
+        task_description_summary=task_description_summary,
+        code=program.code,
+    )
 
-    Args:
-        programs: DataFrame containing program data with columns: program_id,
-            metric_fitness, generation, parent_ids, metadata_mutation_output.
 
-    Returns:
-        Tuple of (list of ProgramRecord instances, list of program IDs).
-    """
-    programs_processed = []
-    programs_ids = []
-    task_description_summary = task_description_summary
-    for _, program in programs.iterrows():
-        mutation_metadata = program["metadata_mutation_output"]
-        if isinstance(mutation_metadata, str):
-            mutation_metadata = json.loads(mutation_metadata)
-        parent_ids = program["parent_ids"]
-        if isinstance(parent_ids, str):
-            try:
-                parent_ids = json.loads(parent_ids)
-            except (json.JSONDecodeError, TypeError):
-                parent_ids = []
-        new_program = ProgramRecord(
-            id=program["program_id"],
-            fitness=program["metric_fitness"],
-            generation=program["generation"],
-            parents=parent_ids,
-            insights=mutation_metadata["insights_used"],
-            improvements=normalize_improvements(mutation_metadata.get("changes")),
-            category="",
-            strategy=mutation_metadata["archetype"],
-            task_description=task_description,
-            task_description_summary=task_description_summary,
-            code=str(program.get("code") or ""),
+def programs_to_records(
+    programs: list[Program],
+    task_description: str,
+    task_description_summary: str,
+    fitness_key: str = "fitness",
+) -> tuple[list[ProgramRecord], set[str]]:
+    records: list[ProgramRecord] = []
+    ids: set[str] = set()
+    for program in programs:
+        records.append(
+            program_to_record(
+                program,
+                task_description,
+                task_description_summary,
+                fitness_key=fitness_key,
+            )
         )
-        programs_processed.append(new_program)
-        programs_ids.append(program["program_id"])
-
-    return programs_processed, programs_ids
+        ids.add(program.id)
+    return records, ids

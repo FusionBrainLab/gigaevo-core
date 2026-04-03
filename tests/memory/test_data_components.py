@@ -232,15 +232,6 @@ class TestRecordListV2:
         with pytest.raises(ValueError):
             rl.get_idea("nope")
 
-    def test_exclude_inactive_ideas(self):
-        rl = RecordListV2(max_ideas=10)
-        rl.add_idea(_make_idea_dict(id="i1", last_generation=1))
-        rl.add_idea(_make_idea_dict(id="i2", last_generation=10))
-        excluded = rl.exclude_inactive_ideas(generation=10, delta=5)
-        assert len(excluded) == 1
-        assert excluded[0].id == "i1"
-        assert rl.num_ideas == 1  # i1 removed
-
 
 # ===========================================================================
 # RecordBank
@@ -304,30 +295,6 @@ class TestRecordBank:
         bank = RecordBank(list_max_ideas=5)
         with pytest.raises(ValueError):
             bank.remove_idea("nope")
-
-    def test_get_inactive_ideas(self):
-        bank = RecordBank(list_max_ideas=10)
-        bank.add_idea(
-            "old",
-            "p1",
-            generation=1,
-            category="",
-            strategy="",
-            task_description="",
-            change_motivation="",
-        )
-        bank.add_idea(
-            "new",
-            "p2",
-            generation=10,
-            category="",
-            strategy="",
-            task_description="",
-            change_motivation="",
-        )
-        inactive = bank.get_inactive_ideas(generation=10, delta=5)
-        assert len(inactive) == 1
-        assert inactive[0].description == "old"
 
     def test_all_ideas_cards(self):
         bank = RecordBank(list_max_ideas=5)

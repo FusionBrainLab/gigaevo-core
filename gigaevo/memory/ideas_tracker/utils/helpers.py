@@ -6,7 +6,10 @@ import math
 import statistics
 from typing import Any
 
-import pandas as pd
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
+from gigaevo.programs.program import Program
 
 
 def to_bool(value: Any, default: bool = False) -> bool:
@@ -64,48 +67,6 @@ def as_string_list(value: Any) -> list[str]:
         if text:
             out.append(text)
     return out
-
-
-def parse_json_like(value: Any) -> Any:
-    """Parse JSON-ish strings from CSV back to Python objects when possible."""
-    if not isinstance(value, str):
-        return value
-    text = value.strip()
-    if not text:
-        return value
-    if text[0] not in "[{":
-        return value
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            return ast.literal_eval(text)
-        except Exception:
-            return value
-
-
-def coerce_bool_series(series: pd.Series) -> pd.Series:
-    """Coerce CSV-backed truthy/falsy values into a bool series."""
-    if series.dtype == bool:
-        return series
-    normalized = series.astype(str).str.strip().str.lower()
-    return normalized.map({"true": True, "false": False, "1": True, "0": False}).fillna(
-        False
-    )
-
-
-def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize Redis/CSV data into the shape expected by IdeaTracker."""
-    result = df.copy()
-
-    if "is_root" in result.columns:
-        result["is_root"] = coerce_bool_series(result["is_root"])
-
-    for col in ("parent_ids", "children_ids", "metadata_mutation_output"):
-        if col in result.columns:
-            result[col] = result[col].apply(parse_json_like)
-
-    return result
 
 
 def median_or_none(values: list[float]) -> float | None:
@@ -212,42 +173,37 @@ def merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, 
     return merged_usage
 
 
-def build_memory_usage_updates(
-    programs_df: pd.DataFrame, task_summary: str = "Task summary unavailable"
+def build_memory_usage_updates_from_programs(
+    programs: list[Program],
+    task_summary: str = "Task summary unavailable",
+    fitness_key: str = "fitness",
 ) -> dict[str, dict[str, Any]]:
-    required_columns = {
-        "program_id",
-        "metric_fitness",
-        "parent_ids",
-        "metadata_memory_selected_idea_ids",
-    }
-    if not required_columns.issubset(programs_df.columns):
-        return {}
+    """Build per-card usage updates from Program objects.
 
-    fitness_by_program_id: dict[str, float] = {}
-    for _, row in programs_df.iterrows():
-        program_id = str(row.get("program_id") or "").strip()
-        if not program_id:
-            continue
-        fitness = to_float(row.get("metric_fitness"))
+    For each program that has memory_selected_idea_ids, compute
+    fitness_delta = child_fitness - max(parent_fitnesses) and attribute
+    that delta to each selected card.
+    """
+    fitness_by_id: dict[str, float] = {}
+    for prog in programs:
+        fitness = to_float(prog.metrics.get(fitness_key))
         if fitness is not None:
-            fitness_by_program_id[program_id] = fitness
+            fitness_by_id[prog.id] = fitness
 
     usage_by_card: dict[str, dict[str, list[float]]] = {}
-    for _, row in programs_df.iterrows():
-        selected_ids = as_string_list(row.get("metadata_memory_selected_idea_ids"))
+    for prog in programs:
+        selected_ids = as_string_list(
+            prog.metadata.get(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
+        )
         if not selected_ids:
             continue
 
-        child_fitness = to_float(row.get("metric_fitness"))
+        child_fitness = to_float(prog.metrics.get(fitness_key))
         if child_fitness is None:
             continue
 
-        parent_ids = as_string_list(row.get("parent_ids"))
         parent_fitnesses = [
-            fitness_by_program_id[parent_id]
-            for parent_id in parent_ids
-            if parent_id in fitness_by_program_id
+            fitness_by_id[pid] for pid in prog.lineage.parents if pid in fitness_by_id
         ]
         if not parent_fitnesses:
             continue

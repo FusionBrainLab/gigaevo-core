@@ -161,6 +161,10 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             raise
         finally:
             self._running = False
+            try:
+                await self._post_run_hook.on_run_complete(self.storage)
+            except Exception as e:
+                logger.error("[SteadyState] post-run hook failed: {}", e)
             logger.info("[SteadyState] Stopped")
 
     # ------------------------------------------------------------------

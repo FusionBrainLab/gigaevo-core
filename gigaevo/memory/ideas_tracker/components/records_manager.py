@@ -181,28 +181,3 @@ class RecordManager:
             )
         else:
             raise ValueError(f"No idea with id {idea_id} found!")
-
-    @staticmethod
-    def get_full_id(
-        short_id: str,
-        ideas_desc_lists: dict[int, dict[str, list[dict[str, str]] | str]],
-    ) -> str:
-        """
-        Resolve a short_id to its full UUID by searching through idea description lists.
-
-        Args:
-            short_id: Short UUID identifier (first part of full UUID).
-            ideas_desc_lists: Dictionary mapping list indices to idea data containing
-                "descriptions" key with list of idea dicts.
-
-        Returns:
-            Full UUID string if found, empty string otherwise.
-        """
-        for desc_list in ideas_desc_lists.values():
-            descriptions = desc_list["descriptions"]
-            if not isinstance(descriptions, list):
-                continue
-            for description in descriptions:
-                if description["short_id"] == short_id:
-                    return description["id"]
-        return ""

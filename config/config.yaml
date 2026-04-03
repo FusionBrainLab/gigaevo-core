@@ -1,6 +1,7 @@
 defaults:
   - experiment: base       # Base experiment setup (override with experiment=full_featured)
   - /migration_bus: disabled
+  - ideas_tracker: none    # Post-run ideas analysis (override with ideas_tracker=default)
   - _self_
 
 # Problem metadata (set via command line or problem-specific config)
@@ -8,36 +9,9 @@ problem:
   name: ???  # Required
   dir: ${hydra:runtime.cwd}/problems/${problem.name}
 
-# Optional post-run ideas analysis from Redis.
-ideas_tracker: false
-
 # Optional override for memory checkpoint directory.
-# Used by memory GAM agent when memory_enabled=true, and by ideas tracker
-# final memory write when ideas_tracker.memory_write_pipeline.enabled=true.
-# Example: checkpoint_dir=outputs/custom_memory_checkpoint
+# Used by memory GAM agent and ideas tracker memory write pipeline.
 checkpoint_dir: null
 
-# Optional override for api.namespace in config/memory.yaml.
-# Used by memory_platform / API-backed memory when api.use_api=true.
-# Example: namespace=exp9
+# Optional override for api.namespace in memory config.
 namespace: null
-
-# Optional per-generation CSV and plot exports.
-# Enable with: tracking.enabled=true
-tracking:
-  enabled: false
-  outputs_dir: outputs
-  plot_dir: outputs/run_plots
-  iteration_rolling_window: 5
-  outlier_method: percentile
-  outlier_multiplier: null
-  outlier_lower_percentile: 5.0
-  outlier_upper_percentile: 95.0
-  remove_outliers: true
-  smooth_window: 0
-  smooth_frontier_window: 0
-  annotate_frontier: true
-  frontier_annotations_max: 15
-  fitness_col: metric_fitness
-  iteration_col: metadata_iteration
-  minimize: false

@@ -1,14 +1,15 @@
 """Tests for how gigaevo core machinery interacts with the memory system.
 
-Tests the generate_mutations → mutate_single → MemorySelectorAgent pipeline,
-and the EvolutionEngine.memory_enabled flag behavior.
+Tests the mutate_single → MemorySelectorAgent pipeline and memory metadata flow.
+Memory instructions are now injected via the DAG pipeline (MemoryContextStage),
+not via explicit parameters on generate_mutations.
 """
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gigaevo.evolution.mutation.context import (
+from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
@@ -16,105 +17,12 @@ from gigaevo.evolution.mutation.context import (
 from gigaevo.programs.program import Program
 
 # ===========================================================================
-# generate_mutations with memory_instructions
+# generate_mutations basics
 # ===========================================================================
 
 
 class TestGenerateMutationsMemoryFlow:
-    """Test the generate_mutations function's memory_instructions path."""
-
-    @pytest.mark.asyncio
-    async def test_memory_instructions_passed_to_mutate_single(self):
-        """When memory_instructions is not None, it flows to mutate_single."""
-        from gigaevo.evolution.engine.mutation import generate_mutations
-
-        # Track what mutate_single receives
-        captured_calls = []
-
-        async def mock_mutate_single(parents, memory_instructions=None):
-            captured_calls.append(
-                {
-                    "parents": parents,
-                    "memory_instructions": memory_instructions,
-                }
-            )
-            # Return a valid MutationSpec-like object
-            from gigaevo.evolution.mutation.base import MutationSpec
-
-            return MutationSpec(
-                code="def solve(): return 1",
-                parents=[p.id for p in parents],
-            )
-
-        mock_mutator = MagicMock()
-        mock_mutator.mutate_single = mock_mutate_single
-
-        mock_storage = AsyncMock()
-        mock_storage.add = AsyncMock(return_value="new-prog-id")
-
-        mock_state = AsyncMock()
-
-        mock_selector = MagicMock()
-        mock_selector.create_parent_iterator.return_value = iter(
-            [[Program(code="def f(): pass", metadata={})]]
-        )
-
-        await generate_mutations(
-            [Program(code="def f(): pass", metadata={})],
-            mutator=mock_mutator,
-            storage=mock_storage,
-            state_manager=mock_state,
-            parent_selector=mock_selector,
-            limit=1,
-            iteration=5,
-            memory_instructions="Use SA for optimization",
-            memory_used=True,
-        )
-
-        assert len(captured_calls) == 1
-        assert captured_calls[0]["memory_instructions"] == "Use SA for optimization"
-
-    @pytest.mark.asyncio
-    async def test_no_memory_instructions_passed_as_none(self):
-        """When memory_instructions is None, mutate_single gets None or not called with it."""
-        from gigaevo.evolution.engine.mutation import generate_mutations
-
-        captured_calls = []
-
-        async def mock_mutate_single(parents, memory_instructions=None):
-            captured_calls.append({"memory_instructions": memory_instructions})
-            from gigaevo.evolution.mutation.base import MutationSpec
-
-            return MutationSpec(
-                code="def solve(): return 1",
-                parents=[p.id for p in parents],
-            )
-
-        mock_mutator = MagicMock()
-        mock_mutator.mutate_single = mock_mutate_single
-
-        mock_storage = AsyncMock()
-        mock_storage.add = AsyncMock(return_value="new-prog-id")
-        mock_state = AsyncMock()
-        mock_selector = MagicMock()
-        mock_selector.create_parent_iterator.return_value = iter(
-            [[Program(code="def f(): pass", metadata={})]]
-        )
-
-        await generate_mutations(
-            [Program(code="def f(): pass", metadata={})],
-            mutator=mock_mutator,
-            storage=mock_storage,
-            state_manager=mock_state,
-            parent_selector=mock_selector,
-            limit=1,
-            iteration=5,
-            memory_instructions=None,
-            memory_used=False,
-        )
-
-        assert len(captured_calls) == 1
-        assert captured_calls[0]["memory_instructions"] is None
+    """Test generate_mutations edge cases."""
 
     @pytest.mark.asyncio
     async def test_empty_elites_returns_empty(self):

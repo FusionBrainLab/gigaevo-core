@@ -217,11 +217,6 @@ class ClusterCard:
         self.members.append(card)
         self.rebuild_index_to_card()
 
-    def remove_member(self, card: RecordCardEmbedding) -> None:
-        """Remove a card by identity; does not clear card.cluster_id (caller updates)."""
-        self.members = [c for c in self.members if c is not card]
-        self.rebuild_index_to_card()
-
 
 @dataclass
 class RecordCardExtended:
@@ -461,28 +456,6 @@ class RecordListV2:
         self.num_ideas = len(self.ideas)
         return True
 
-    def import_idea(self, new_idea: RecordCardExtended) -> None:
-        """Append an existing RecordCardExtended. Raises if list is full."""
-        if self.num_ideas >= self.max_ideas:
-            raise ValueError("Can't import idea: list is full")
-        self.ideas.append(new_idea)
-        self.num_ideas = len(self.ideas)
-
-    def exclude_inactive_ideas(
-        self, generation: int, delta: int, persist_ideas: bool = False
-    ) -> list[RecordCardExtended]:
-        """Return ideas where |last_generation - generation| > delta; optionally remove them from this list."""
-        excluded_ideas = []
-        excluded_ideas_id = []
-        for idea in self.ideas:
-            if abs(idea.last_generation - generation) > delta:
-                excluded_ideas.append(idea)
-                excluded_ideas_id.append(idea.id)
-        if not persist_ideas:
-            for exc_idea_id in excluded_ideas_id:
-                self.remove_idea(exc_idea_id)
-        return excluded_ideas
-
     def all_ideas_short(self) -> list[dict[str, str]]:
         """
         Return short representation of all ideas.
@@ -508,16 +481,6 @@ class RecordListV2:
             return False
         else:
             return True
-
-    def change_max_ideas(self, new_val: int) -> None:
-        """Set max_ideas to new_val. Raises if new_val is negative or less than current size."""
-        if new_val < 0:
-            raise ValueError(f"New max_ideas value {new_val} smaller than 0")
-        if new_val < self.num_ideas:
-            raise ValueError(
-                f"New max_ideas value {new_val} smaller than size of list {self.num_ideas}"
-            )
-        self.max_ideas = new_val
 
 
 @dataclass
@@ -670,21 +633,6 @@ class RecordBank:
                 return self.ideas_lists[index].get_idea(idea_id)
         raise ValueError(f"No idea with id {idea_id} found in any list")
 
-    def get_inactive_ideas(
-        self, generation: int, delta: int, persist: bool = False
-    ) -> list[RecordCardExtended]:
-        """Return ideas where |last_generation - generation| > delta; if not persist, remove them from the bank."""
-        excluded_ideas: list[RecordCardExtended] = []
-        for list_num in range(len(self.ideas_lists)):
-            list_excluded_ideas = self.ideas_lists[list_num].exclude_inactive_ideas(
-                generation=generation, delta=delta, persist_ideas=persist
-            )
-            excluded_ideas.extend(list_excluded_ideas)
-        if not persist:
-            for card in excluded_ideas:
-                self._remove_id_from_bank(card.id)
-        return excluded_ideas
-
     def remove_idea(self, idea_id: str) -> None:
         """Remove the idea with the given id from its list and from uuids. Raises if not found."""
         if idea_id not in self.uuids:
@@ -694,10 +642,6 @@ class RecordBank:
                 self.ideas_lists[index].remove_idea(idea_id)
                 self._remove_id_from_bank(idea_id)
                 return
-
-    def bank_size(self) -> int:
-        """Return the number of RecordList instances in this bank."""
-        return self.num_lists
 
     def get_record_list(self, list_num: int) -> RecordListV2:
         """Return the RecordList at the given index. Raises if index out of range."""
