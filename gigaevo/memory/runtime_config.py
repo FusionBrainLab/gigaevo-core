@@ -8,7 +8,7 @@ from typing import Any
 _yaml: types.ModuleType | None
 
 try:
-    import yaml  # type: ignore[import-untyped]
+    import yaml as _yaml  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - defensive fallback
     _yaml = None
 
