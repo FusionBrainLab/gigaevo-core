@@ -233,7 +233,7 @@ class TestMainRunSyncHookGetRedis:
         hook = MainRunSyncHook(host="localhost", port=6379, db=5, prefix="test")
         assert hook._redis_clients == {}
 
-        with patch("gigaevo.prompts.coevolution.sync.AsyncRedis") as mock_redis_cls:
+        with patch("gigaevo.prompts.coevolution.sync.aioredis.Redis") as mock_redis_cls:
             mock_client = MagicMock()
             mock_redis_cls.return_value = mock_client
 

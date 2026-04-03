@@ -59,7 +59,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 f"SteadyStateEvolutionEngine requires SteadyStateEngineConfig, "
                 f"got {type(self.config).__name__}"
             )
-        self._ss_config: SteadyStateEngineConfig = self.config
+        self._ss_config: SteadyStateEngineConfig = cfg
 
         # Backpressure
         self._in_flight: set[str] = set()

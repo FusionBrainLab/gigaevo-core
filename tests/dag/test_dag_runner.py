@@ -606,11 +606,8 @@ class TestDagRunnerExecuteDag:
 
         await runner._execute_dag(mock_dag, prog)
 
-        # Verify cleanup: DAG internals should be nullified
-        assert mock_dag.automata is None
-        assert mock_dag.state_manager is None
-        assert mock_dag._writer is None
-        assert mock_dag._stage_sema is None
+        # Verify teardown was called to release references
+        mock_dag.teardown.assert_called_once()
 
     async def test_execute_dag_cleanup_nullifies_references(self):
         """After successful _execute_dag, DAG references are set to None."""
@@ -622,10 +619,8 @@ class TestDagRunnerExecuteDag:
 
         await runner._execute_dag(mock_dag, prog)
 
-        assert mock_dag.automata is None
-        assert mock_dag.state_manager is None
-        assert mock_dag._writer is None
-        assert mock_dag._stage_sema is None
+        # Verify teardown was called to release references
+        mock_dag.teardown.assert_called_once()
 
     async def test_execute_dag_state_update_failure_logged(self):
         """When DAG fails and set_program_state fails, state_update_failures increments."""

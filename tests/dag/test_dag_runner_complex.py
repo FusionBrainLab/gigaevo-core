@@ -397,10 +397,7 @@ class TestExecuteDagCleanup:
         await runner._execute_dag(mock_dag, prog)
 
         # Cleanup should have run
-        assert mock_dag.automata is None
-        assert mock_dag.state_manager is None
-        assert mock_dag._writer is None
-        assert mock_dag._stage_sema is None
+        mock_dag.teardown.assert_called_once()
 
         # State should be DISCARDED (due to error)
         storage.fast_state_transition.assert_called()
