@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import types
 from typing import Any
+
+_yaml: types.ModuleType | None
 
 try:
     import yaml
+
+    _yaml = yaml
 except Exception:  # pragma: no cover - defensive fallback
-    yaml = None  # type: ignore[assignment]
+    _yaml = None
 
 
 _MODULE_DIR = Path(__file__).resolve().parent
@@ -42,11 +47,11 @@ def load_settings(path: str | Path | None = None) -> dict[str, Any]:
     if not settings_path.exists():
         return {}
 
-    if yaml is None:
+    if _yaml is None:
         raise RuntimeError("PyYAML is required to read runtime settings")
 
     with settings_path.open("r", encoding="utf-8") as file_obj:
-        payload = yaml.safe_load(file_obj) or {}
+        payload = _yaml.safe_load(file_obj) or {}
 
     if not isinstance(payload, dict):
         raise ValueError(

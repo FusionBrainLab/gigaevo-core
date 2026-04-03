@@ -185,7 +185,7 @@ class IdeaAnalyzer:
         program_changes: IncomingIdeas,
         ideas_active_bank: dict[int, dict[str, list[dict[str, str]] | str]],
         inactive_ideas_bank: dict[int, dict[str, list[dict[str, str]] | str]],
-    ) -> dict[str, list[str] | dict[str, str]]:
+    ) -> IncomingIdeas:
         """
         Process ideas from a program against active and inactive idea banks.
 

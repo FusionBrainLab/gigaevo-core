@@ -55,11 +55,11 @@ class LineageState(TypedDict):
     parent: Program
     child: Program
     messages: list[BaseMessage]
-    llm_response: AIMessage | TransitionInsights
+    llm_response: AIMessage | TransitionInsights | None
     delta: float
     diff_blocks: list[str]
     insights: list[dict]
-    full_analysis: TransitionAnalysis
+    full_analysis: TransitionAnalysis | dict
     metadata: dict
 
 
@@ -280,7 +280,7 @@ class LineageAgent(LangGraphAgent):
                 "parent": parent,
                 "child": program,
                 "messages": [],
-                "llm_response": None,  # type: ignore
+                "llm_response": None,
                 "delta": 0.0,
                 "diff_blocks": [],
                 "insights": [],
@@ -289,6 +289,8 @@ class LineageAgent(LangGraphAgent):
             }
 
             final_state = await self.graph.ainvoke(initial_state)
-            analyses.append(final_state["full_analysis"])  # type: ignore
+            analysis = final_state["full_analysis"]
+            assert isinstance(analysis, TransitionAnalysis)
+            analyses.append(analysis)
 
         return analyses
