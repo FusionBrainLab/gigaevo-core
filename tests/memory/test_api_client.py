@@ -10,8 +10,9 @@ import httpx
 import pytest
 
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
+from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.utils import truncate_text
+from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # _ConceptApiClient
@@ -227,22 +228,13 @@ class TestTruncateText:
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 class TestDecideCardAction:
     def test_no_llm_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
-        result = mem._decide_card_action(
+        result = mem.dedup.decide_action(
             normalize_memory_card({"description": "test"}), [{"card_id": "c1"}]
         )
         assert result["action"] == "add"
@@ -250,7 +242,7 @@ class TestDecideCardAction:
     def test_no_candidates_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.llm_service = MagicMock()
-        result = mem._decide_card_action(
+        result = mem.dedup.decide_action(
             normalize_memory_card({"description": "test"}), []
         )
         assert result["action"] == "add"
@@ -268,9 +260,10 @@ class TestDecideCardAction:
             None,
         )
         mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
 
         candidates = [{"card_id": "existing", "final_score": 0.9}]
-        result = mem._decide_card_action(
+        result = mem.dedup.decide_action(
             normalize_memory_card({"description": "dup"}), candidates
         )
         assert result["action"] == "discard"
@@ -293,9 +286,10 @@ class TestDecideCardAction:
             (json.dumps({"action": "add"}), {}, None, None),
         ]
         mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
 
         candidates = [{"card_id": "c1", "final_score": 0.5}]
-        result = mem._decide_card_action(
+        result = mem.dedup.decide_action(
             normalize_memory_card({"description": "new"}), candidates
         )
         assert result["action"] == "add"
@@ -320,7 +314,7 @@ class TestDedupCandidatesForLlm:
         )
 
         candidates = [{"card_id": "c1", "final_score": 0.8, "scores": {}}]
-        result = mem._dedup_candidates_for_llm(candidates)
+        result = mem.dedup.format_for_llm(candidates)
         assert len(result) == 1
         assert result[0]["card_id"] == "c1"
         assert "simulated annealing" in result[0]["description"]
@@ -329,7 +323,7 @@ class TestDedupCandidatesForLlm:
     def test_missing_card_skipped(self, tmp_path):
         mem = _make_memory(tmp_path)
         candidates = [{"card_id": "nonexistent", "final_score": 0.5}]
-        result = mem._dedup_candidates_for_llm(candidates)
+        result = mem.dedup.format_for_llm(candidates)
         assert result == []
 
     def test_truncates_long_text(self, tmp_path):
@@ -341,5 +335,5 @@ class TestDedupCandidatesForLlm:
             }
         )
         candidates = [{"card_id": "c1", "final_score": 0.8, "scores": {}}]
-        result = mem._dedup_candidates_for_llm(candidates)
+        result = mem.dedup.format_for_llm(candidates)
         assert len(result[0]["description"]) <= 1200

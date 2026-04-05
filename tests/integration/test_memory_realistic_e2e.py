@@ -40,18 +40,19 @@ from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.memory.shared_memory.card_conversion import (
     is_program_card,
+    normalize_allowed_gam_tools,
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from tests.fakes.agentic_memory import (
-    FakeAMemGenerator,
     FakeResearchAgent,
     fake_build_gam_store,
     fake_build_retrievers,
     fake_load_amem_records,
-    inject_fakes_into_memory,
+    make_test_memory,
+    make_test_memory_with_agentic,
 )
 
 # ---------------------------------------------------------------------------
@@ -172,38 +173,30 @@ def _tracker():
 
 
 def _make_memory(tmp_path, **kw):
-    d = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    d.update(kw)
-    return AmemGamMemory(**d)
+    return make_test_memory(tmp_path, **kw)
 
 
 def _make_full_memory(tmp_path, ideas=None, **kw):
     # Default high rebuild_interval to avoid auto-rebuild during setup
     kw.setdefault("rebuild_interval", 9999)
-    mem = _make_memory(tmp_path, **kw)
-    fs = inject_fakes_into_memory(mem)
-    mem.generator = FakeAMemGenerator({"llm_service": MagicMock()})
+    mem, fs = make_test_memory_with_agentic(tmp_path, **kw)
 
-    def _patched_retriever():
-        mem._dump_memory()
-        recs = fake_load_amem_records(mem.export_file) or [
-            c.model_dump() for c in mem.memory_cards.values()
+    def _patched_gam_build():
+        if mem.note_sync is not None:
+            mem.note_sync.export_jsonl(mem.config.export_file)
+        recs = fake_load_amem_records(mem.config.export_file) or [
+            c.model_dump() for c in mem.card_store.cards.values()
         ]
-        ms, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)
+        ms, ps, _ = fake_build_gam_store(recs, mem.config.gam_store_dir)
         rets = fake_build_retrievers(
             ps,
-            mem.gam_store_dir / "idx",
-            mem.checkpoint_dir / "chroma",
-            allowed_tools=sorted(mem.allowed_gam_tools),
+            mem.config.gam_store_dir / "idx",
+            mem.config.checkpoint_path / "chroma",
+            allowed_tools=sorted(
+                normalize_allowed_gam_tools(mem.config.gam.allowed_tools or None)
+            ),
         )
-        return (
+        mem.gam.agent = (
             FakeResearchAgent(retrievers=rets, generator=mem.generator)
             if rets
             else None
@@ -211,15 +204,17 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
 
     def _patched_dedup():
         recs = [
-            c.model_dump() for c in mem.memory_cards.values() if not is_program_card(c)
+            c.model_dump()
+            for c in mem.card_store.cards.values()
+            if not is_program_card(c)
         ]
         if not recs:
             return {}
-        _, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)
+        _, ps, _ = fake_build_gam_store(recs, mem.config.gam_store_dir)
         rets = fake_build_retrievers(
             ps,
-            mem.gam_store_dir / "idx",
-            mem.checkpoint_dir / "chroma",
+            mem.config.gam_store_dir / "idx",
+            mem.config.checkpoint_path / "chroma",
             allowed_tools=[
                 "vector_description",
                 "vector_explanation_summary",
@@ -227,22 +222,28 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
                 "vector_description_task_description_summary",
             ],
         )
-        return {n: r for n, r in rets.items() if n in mem.allowed_gam_tools}
+        return {
+            n: r
+            for n, r in rets.items()
+            if n in normalize_allowed_gam_tools(mem.config.gam.allowed_tools or None)
+        }
 
     # Patch ALL paths BEFORE saving any cards
-    mem._load_or_create_retriever = _patched_retriever
-    mem._build_dedup_retrievers = _patched_dedup
+    mem.gam.build = _patched_gam_build
+    mem.dedup.build_retrievers = _patched_dedup
 
     def _safe_rebuild():
-        mem._persist_index()
+        mem.card_store.persist()
         if mem.memory_system is None or mem.generator is None:
             return
-        mem._dump_memory()
+        if mem.note_sync is not None:
+            mem.note_sync.export_jsonl(mem.config.export_file)
         try:
-            mem.research_agent = _patched_retriever()
+            _patched_gam_build()
+            mem.research_agent = mem.gam.agent
         except Exception:
             mem.research_agent = None
-        mem._dedup_retrievers = None
+        mem.dedup.invalidate_retrievers()
         mem._iters_after_rebuild = 0
 
     mem.rebuild = _safe_rebuild
@@ -414,7 +415,7 @@ class TestDedupPreventsIdeaBloat:
             mem.save_card({"description": f"SA annealing optimization variant {i}"})
 
         # All should be deduped against idea-1
-        assert len(mem.memory_cards) == 1
+        assert len(mem.card_store.cards) == 1
         assert mem.get_card_write_stats()["rejected"] == 5
 
     def test_genuinely_new_ideas_still_added(self, tmp_path):
@@ -434,7 +435,7 @@ class TestDedupPreventsIdeaBloat:
         mem.llm_service = mock_llm
 
         mem.save_card({"description": "quantum computing for protein folding"})
-        assert len(mem.memory_cards) == 2
+        assert len(mem.card_store.cards) == 2
 
 
 # ===========================================================================
@@ -464,7 +465,7 @@ class TestCrossExperimentTransfer:
         )
 
         # Export ideas from A
-        exported_ideas = list(mem_a.memory_cards.values())
+        exported_ideas = list(mem_a.card_store.cards.values())
 
         # Experiment B: loads ideas from A
         mem_b, _ = _make_full_memory(tmp_path / "exp_b")
@@ -477,13 +478,13 @@ class TestCrossExperimentTransfer:
         assert "expA-1" in result
 
         # Both experiments have independent memory
-        assert len(mem_a.memory_cards) == 2
-        assert len(mem_b.memory_cards) == 2
+        assert len(mem_a.card_store.cards) == 2
+        assert len(mem_b.card_store.cards) == 2
 
         # Adding to B doesn't affect A
         mem_b.save_card({"id": "expB-1", "description": "new idea for exp B"})
-        assert len(mem_a.memory_cards) == 2
-        assert len(mem_b.memory_cards) == 3
+        assert len(mem_a.card_store.cards) == 2
+        assert len(mem_b.card_store.cards) == 3
 
 
 # ===========================================================================
@@ -496,7 +497,6 @@ class TestApiSyncSimulation:
 
     def test_sync_adds_remote_cards_to_agentic_system(self, tmp_path):
         mem, fake_sys = _make_full_memory(tmp_path)
-        mem.use_api = True
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [
@@ -525,8 +525,8 @@ class TestApiSyncSimulation:
         changed = mem._sync_from_api(force_full=True)
 
         assert changed is True
-        assert "remote-1" in mem.memory_cards
-        assert "remote-2" in mem.memory_cards
+        assert "remote-1" in mem.card_store.cards
+        assert "remote-2" in mem.card_store.cards
         # Cards should also be in the agentic system
         assert fake_sys.read("remote-1") is not None
         assert fake_sys.read("remote-2") is not None
@@ -538,11 +538,10 @@ class TestApiSyncSimulation:
                 {"id": "local-1", "description": "local idea"},
             ],
         )
-        mem.use_api = True
 
         # Pre-populate entity maps as if this card came from API
-        mem.entity_by_card_id["local-1"] = "stale-entity"
-        mem.card_id_by_entity["stale-entity"] = "local-1"
+        mem.card_store.entity_by_card_id["local-1"] = "stale-entity"
+        mem.card_store.card_id_by_entity["stale-entity"] = "local-1"
 
         mock_api = MagicMock()
         # Remote has NO entities → local stale entity should be pruned
@@ -552,21 +551,20 @@ class TestApiSyncSimulation:
         mem._sync_from_api(force_full=True)
 
         # Stale entity mapping should be removed
-        assert "stale-entity" not in mem.card_id_by_entity
+        assert "stale-entity" not in mem.card_store.card_id_by_entity
         # Card itself is removed since its entity was pruned
-        assert "local-1" not in mem.memory_cards
+        assert "local-1" not in mem.card_store.cards
 
     def test_sync_skips_unchanged_versions(self, tmp_path):
         mem, _ = _make_full_memory(tmp_path)
-        mem.use_api = True
 
         # Pre-populate as if already synced
-        mem.memory_cards["c1"] = normalize_memory_card(
+        mem.card_store.cards["c1"] = normalize_memory_card(
             {"id": "c1", "description": "known"}
         )
-        mem.entity_by_card_id["c1"] = "e1"
-        mem.card_id_by_entity["e1"] = "c1"
-        mem.entity_version_by_entity["e1"] = "v1"
+        mem.card_store.entity_by_card_id["c1"] = "e1"
+        mem.card_store.card_id_by_entity["e1"] = "c1"
+        mem.card_store.entity_version["e1"] = "v1"
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [
@@ -628,7 +626,7 @@ class TestRapidSaveSearchInterleaving:
             result = mem.search(f"technique{i}")
             assert f"c{i}" not in result, f"Deleted c{i} still in search results"
 
-        assert len(mem.memory_cards) == 5
+        assert len(mem.card_store.cards) == 5
 
 
 # ===========================================================================
@@ -645,15 +643,11 @@ class TestFullEvolutionMemoryRebuildCycle:
         This test uses the REAL AmemGamMemory in local-only mode.
         If the real memory system is broken, this test fails.
         """
-        # Real AmemGamMemory — no inject_fakes, no patched rebuild
-        mem = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "real_mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
+        # Real AmemGamMemory — no monkey-patching, no patched rebuild
+        from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+
+        cfg = MemoryConfig(checkpoint_path=tmp_path / "real_mem")
+        mem = AmemGamMemory(config=cfg)
 
         # Save cards
         mem.save_card(
@@ -678,7 +672,7 @@ class TestFullEvolutionMemoryRebuildCycle:
             }
         )
 
-        assert len(mem.memory_cards) == 3
+        assert len(mem.card_store.cards) == 3
 
         # Search (local search — no research_agent in CI)
         result = mem.search("annealing optimization")
@@ -693,18 +687,11 @@ class TestFullEvolutionMemoryRebuildCycle:
         # Delete
         mem.delete("real-2")
         assert mem.get_card("real-2") is None
-        assert len(mem.memory_cards) == 2
+        assert len(mem.card_store.cards) == 2
 
         # Persist + reload (new process)
-        mem2 = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "real_mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
-        assert len(mem2.memory_cards) == 2
+        mem2 = AmemGamMemory(config=cfg)
+        assert len(mem2.card_store.cards) == 2
         assert (
             mem2.get_card("real-1").description == "enhanced SA with adaptive cooling"
         )
@@ -717,14 +704,9 @@ class TestFullEvolutionMemoryRebuildCycle:
 
     def test_unpatched_memory_stats_contract(self, tmp_path):
         """UNPATCHED: verify card_write_stats shape and behavior."""
-        mem = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "real"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
+        from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+
+        mem = AmemGamMemory(config=MemoryConfig(checkpoint_path=tmp_path / "real"))
         mem.save_card({"id": "c1", "description": "idea"})
         mem.save_card({"id": "c1", "description": "updated"})
         mem.save_card({"description": "new"})

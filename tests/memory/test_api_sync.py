@@ -12,7 +12,9 @@ from gigaevo.memory.shared_memory.card_conversion import (
     build_entity_meta,
     normalize_memory_card,
 )
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
+from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
+from gigaevo.memory.shared_memory.memory_config import ApiConfig
+from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,16 +22,7 @@ from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 def _mock_client(handler):
@@ -53,9 +46,8 @@ class TestSyncFromApi:
         assert mem._sync_from_api(force_full=False) is False
 
     def test_sync_adds_new_cards(self, tmp_path):
-        """Mocked API returns cards → they appear in memory_cards."""
+        """Mocked API returns cards → they appear in card_store.cards."""
         mem = _make_memory(tmp_path)
-        mem.use_api = True
 
         # Mock API
         mock_api = MagicMock()
@@ -78,24 +70,23 @@ class TestSyncFromApi:
 
         result = mem._sync_from_api(force_full=True)
         assert result is True
-        assert "idea-1" in mem.memory_cards
-        assert mem.entity_by_card_id.get("idea-1") == "eid-1"
-        assert mem.card_id_by_entity.get("eid-1") == "idea-1"
+        assert "idea-1" in mem.card_store.cards
+        assert mem.card_store.entity_by_card_id.get("idea-1") == "eid-1"
+        assert mem.card_store.card_id_by_entity.get("eid-1") == "idea-1"
         # Verify correct entity_id was passed to get_concept
         mock_api.get_concept.assert_called_once_with("eid-1", channel="latest")
 
     def test_sync_skips_unchanged_versions(self, tmp_path):
         """Cards with known version are skipped during incremental sync."""
         mem = _make_memory(tmp_path)
-        mem.use_api = True
 
         # Pre-populate known state
-        mem.memory_cards["idea-1"] = normalize_memory_card(
+        mem.card_store.cards["idea-1"] = normalize_memory_card(
             {"id": "idea-1", "description": "known"}
         )
-        mem.entity_by_card_id["idea-1"] = "eid-1"
-        mem.card_id_by_entity["eid-1"] = "idea-1"
-        mem.entity_version_by_entity["eid-1"] = "v1"
+        mem.card_store.entity_by_card_id["idea-1"] = "eid-1"
+        mem.card_store.card_id_by_entity["eid-1"] = "idea-1"
+        mem.card_store.entity_version["eid-1"] = "v1"
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [
@@ -113,9 +104,10 @@ class TestSyncFromApi:
 
     def test_sync_paginates(self, tmp_path):
         """API returns full pages → sync fetches next page."""
-        mem = _make_memory(tmp_path)
-        mem.use_api = True
-        mem.sync_batch_size = 2
+        mem = _make_memory(
+            tmp_path, api=ApiConfig(sync_batch_size=2, sync_on_init=False)
+        )
+        mem.api_sync = None  # force lazy re-creation with mock
 
         mock_api = MagicMock()
         # Page 1: 2 items (full page → fetch more)
@@ -159,9 +151,10 @@ class TestSyncFromApi:
 
     def test_sync_filters_by_namespace(self, tmp_path):
         """Cards from different namespaces are filtered out."""
-        mem = _make_memory(tmp_path)
-        mem.use_api = True
-        mem.namespace = "my-ns"
+        mem = _make_memory(
+            tmp_path, api=ApiConfig(namespace="my-ns", sync_on_init=False)
+        )
+        mem.api_sync = None  # force lazy re-creation with mock
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [
@@ -276,7 +269,7 @@ class TestBuildEntityMetaContent:
     """Assert specific content in entity metadata, not just types."""
 
     def test_name_from_description(self, tmp_path):
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         _make_memory(tmp_path)
         card = normalize_memory_card(
@@ -297,7 +290,7 @@ class TestBuildEntityMetaContent:
         assert "TSP" in when_to_use or "annealing" in when_to_use.lower()
 
     def test_program_card_meta(self, tmp_path):
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         _make_memory(tmp_path)
         card = normalize_memory_card(

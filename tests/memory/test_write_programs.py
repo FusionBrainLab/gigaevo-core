@@ -2,7 +2,7 @@ import json
 
 from gigaevo.memory.memory_write_example import load_memory_cards
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from tests.fakes.agentic_memory import make_test_memory
 
 
 def _write_json(path, payload):
@@ -98,15 +98,7 @@ def test_load_memory_cards_adds_top_program_cards(tmp_path):
 
 
 def test_program_cards_bypass_idea_dedup(tmp_path):
-    memory = AmemGamMemory(
-        checkpoint_path=str(tmp_path / "memory"),
-        use_api=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-        sync_on_init=False,
-        card_update_dedup_config={"enabled": True},
-    )
+    memory = make_test_memory(tmp_path, card_update_dedup_config={"enabled": True})
     memory.save_card(
         {
             "id": "idea-1",
@@ -121,7 +113,7 @@ def test_program_cards_bypass_idea_dedup(tmp_path):
     def _unexpected_call(*args, **kwargs):
         raise AssertionError("Program cards should not use idea-card dedup.")
 
-    memory._score_retrieved_candidates = _unexpected_call  # type: ignore[method-assign]
+    memory.dedup.score_candidates = _unexpected_call  # type: ignore[method-assign]
 
     card_id = memory.save_card(
         {

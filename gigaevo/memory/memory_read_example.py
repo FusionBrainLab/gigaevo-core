@@ -30,8 +30,14 @@ except ImportError:  # pragma: no cover - direct script execution fallback
 
 try:
     from .shared_memory.memory import AmemGamMemory
+    from .shared_memory.memory_config import ApiConfig, GamConfig, MemoryConfig
 except ImportError:  # pragma: no cover - direct script execution fallback
     from shared_memory.memory import AmemGamMemory  # type: ignore[no-redef]
+    from shared_memory.memory_config import (  # type: ignore[no-redef]
+        ApiConfig,
+        GamConfig,
+        MemoryConfig,
+    )
 
 
 THIS_DIR = Path(__file__).resolve().parent
@@ -120,17 +126,26 @@ Parent context:
 
 
 def main() -> None:
-    memory = AmemGamMemory(
-        checkpoint_path=str(MEMORY_DIR),
-        base_url=MEMORY_API_URL or "http://localhost:8000",
-        use_api=USE_API,
-        namespace=NAMESPACE or "default",
-        channel=CHANNEL or "latest",
-        enable_bm25=ENABLE_BM25,
-        allowed_gam_tools=ALLOWED_GAM_TOOLS,
-        gam_top_k_by_tool=GAM_TOP_K_BY_TOOL,
-        gam_pipeline_mode=GAM_PIPELINE_MODE or "default",
+    api_config = (
+        ApiConfig(
+            base_url=MEMORY_API_URL or "http://localhost:8000",
+            namespace=NAMESPACE or "default",
+            channel=CHANNEL or "latest",
+        )
+        if USE_API
+        else None
     )
+    mem_config = MemoryConfig(
+        checkpoint_path=MEMORY_DIR,
+        api=api_config,
+        gam=GamConfig(
+            enable_bm25=ENABLE_BM25,
+            allowed_tools=ALLOWED_GAM_TOOLS or [],
+            top_k_by_tool=GAM_TOP_K_BY_TOOL or {},
+            pipeline_mode=GAM_PIPELINE_MODE or "default",
+        ),
+    )
+    memory = AmemGamMemory(config=mem_config)
 
     print("\n==============================")
     print("API Memory Demo: Search")

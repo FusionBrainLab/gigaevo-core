@@ -1,27 +1,21 @@
 """Cycle 10 (final): API search paths, LLM synthesis, close().
 
-Tests _search_via_api, _synthesize_results, and close() with mocked
+Tests _search_via_api, synthesize_search_results, and close() with mocked
 self.api and self.llm_service.
 """
 
 import json
 from unittest.mock import MagicMock
 
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.card_conversion import (
+    normalize_memory_card,
+    synthesize_search_results,
+)
+from tests.fakes.agentic_memory import make_test_memory
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 # ===========================================================================
@@ -46,8 +40,6 @@ class TestSearchViaApi:
 
     def test_api_search_returns_cards(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
             "hits": [{"entity_id": "e1", "version_id": "v1"}],
@@ -70,8 +62,6 @@ class TestSearchViaApi:
 
     def test_api_search_no_hits(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {"hits": []}
         mem.api = mock_api
@@ -81,7 +71,6 @@ class TestSearchViaApi:
 
     def test_api_search_with_memory_state(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
 
         captured = {}
 
@@ -99,8 +88,6 @@ class TestSearchViaApi:
 
     def test_api_search_updates_entity_maps(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
             "hits": [{"entity_id": "e1", "version_id": "v1"}],
@@ -113,18 +100,16 @@ class TestSearchViaApi:
 
         mem._search_via_api("test")
 
-        assert mem.entity_by_card_id.get("idea-1") == "e1"
-        assert mem.card_id_by_entity.get("e1") == "idea-1"
-        version = mem.entity_version_by_entity.get("e1")
+        assert mem.card_store.entity_by_card_id.get("idea-1") == "e1"
+        assert mem.card_store.card_id_by_entity.get("e1") == "idea-1"
+        version = mem.card_store.entity_version.get("e1")
         assert version is not None and version != "", (
             f"version_id should be set from get_concept response, got {version!r}"
         )
-        assert "idea-1" in mem.memory_cards
+        assert "idea-1" in mem.card_store.cards
 
     def test_api_search_persists_to_index(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
             "hits": [{"entity_id": "e1"}],
@@ -136,14 +121,12 @@ class TestSearchViaApi:
 
         mem._search_via_api("test")
 
-        assert mem.index_file.exists()
-        data = json.loads(mem.index_file.read_text())
+        assert mem.config.index_file.exists()
+        data = json.loads(mem.config.index_file.read_text())
         assert "idea-1" in data["memory_cards"]
 
     def test_api_search_skips_empty_entity_id(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
             "hits": [
@@ -162,10 +145,8 @@ class TestSearchViaApi:
         mock_api.get_concept.assert_called_once()
 
     def test_api_search_with_synthesis_enabled(self, tmp_path):
-        """When enable_llm_synthesis=True, _synthesize_results is called."""
-        mem = _make_memory(tmp_path)
-        mem.use_api = True
-        mem.enable_llm_synthesis = True
+        """When enable_llm_synthesis=True, synthesize_search_results is called."""
+        mem = _make_memory(tmp_path, enable_llm_synthesis=True)
 
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
@@ -176,32 +157,32 @@ class TestSearchViaApi:
         }
         mem.api = mock_api
 
-        # No LLM → _synthesize_results falls back to _format_search_results
+        # No LLM → synthesize_search_results falls back to format_search_results
         result = mem._search_via_api("test")
         assert "idea-1" in result
 
 
 # ===========================================================================
-# _synthesize_results
+# synthesize_search_results (pure function)
 # ===========================================================================
 
 
 class TestSynthesizeResults:
-    """Test _synthesize_results with mocked llm_service."""
+    """Test synthesize_search_results pure function."""
 
-    def test_no_llm_falls_back_to_format(self, tmp_path):
-        mem = _make_memory(tmp_path)
+    def test_no_llm_falls_back_to_format(self):
         cards = [
             normalize_memory_card(
                 {"id": "c1", "description": "test", "category": "general"}
             )
         ]
-        result = mem._synthesize_results("query", None, cards)
+        result = synthesize_search_results(
+            query="query", memory_state=None, cards=cards, llm_service=None
+        )
         assert "c1" in result
         assert "Query: query" in result
 
-    def test_llm_returns_synthesized_answer(self, tmp_path):
-        mem = _make_memory(tmp_path)
+    def test_llm_returns_synthesized_answer(self):
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             "Based on memory card mem-1, you should use SA for optimization.",
@@ -209,59 +190,59 @@ class TestSynthesizeResults:
             None,
             None,
         )
-        mem.llm_service = mock_llm
 
         cards = [
             normalize_memory_card(
                 {"id": "mem-1", "description": "SA optimization", "category": "general"}
             )
         ]
-        result = mem._synthesize_results("how to optimize", "current state", cards)
+        result = synthesize_search_results(
+            query="how to optimize",
+            memory_state="current state",
+            cards=cards,
+            llm_service=mock_llm,
+        )
 
         assert "SA for optimization" in result
         mock_llm.generate.assert_called_once()
 
-        # Verify prompt contains query and card info
         prompt = mock_llm.generate.call_args[0][0]
         assert "how to optimize" in prompt
         assert "current state" in prompt
         assert "mem-1" in prompt
 
-    def test_llm_returns_empty_falls_back(self, tmp_path):
-        mem = _make_memory(tmp_path)
+    def test_llm_returns_empty_falls_back(self):
         mock_llm = MagicMock()
         mock_llm.generate.return_value = ("", {}, None, None)
-        mem.llm_service = mock_llm
 
         cards = [
             normalize_memory_card(
                 {"id": "c1", "description": "test", "category": "general"}
             )
         ]
-        result = mem._synthesize_results("query", None, cards)
-        # Empty LLM response → fallback to _format_search_results
+        result = synthesize_search_results(
+            query="query", memory_state=None, cards=cards, llm_service=mock_llm
+        )
         assert "c1" in result
         assert "Query: query" in result
 
-    def test_llm_exception_falls_back(self, tmp_path):
-        mem = _make_memory(tmp_path)
+    def test_llm_exception_falls_back(self):
         mock_llm = MagicMock()
         mock_llm.generate.side_effect = RuntimeError("LLM down")
-        mem.llm_service = mock_llm
 
         cards = [
             normalize_memory_card(
                 {"id": "c1", "description": "test", "category": "general"}
             )
         ]
-        result = mem._synthesize_results("query", None, cards)
+        result = synthesize_search_results(
+            query="query", memory_state=None, cards=cards, llm_service=mock_llm
+        )
         assert "c1" in result
 
-    def test_synthesize_prompt_includes_card_fields(self, tmp_path):
-        mem = _make_memory(tmp_path)
+    def test_synthesize_prompt_includes_card_fields(self):
         mock_llm = MagicMock()
         mock_llm.generate.return_value = ("answer", {}, None, None)
-        mem.llm_service = mock_llm
 
         cards = [
             normalize_memory_card(
@@ -276,7 +257,9 @@ class TestSynthesizeResults:
                 }
             )
         ]
-        mem._synthesize_results("test", None, cards)
+        synthesize_search_results(
+            query="test", memory_state=None, cards=cards, llm_service=mock_llm
+        )
 
         prompt = mock_llm.generate.call_args[0][0]
         assert "SA optimization" in prompt
@@ -327,9 +310,8 @@ class TestSearchRouting:
         assert "c1" in result  # Fell back to local search
 
     def test_search_gam_failure_with_api_falls_back_to_api_search(self, tmp_path):
-        """GAM fails + use_api=True → falls back to _search_via_api, not local."""
+        """GAM fails + api set → falls back to _search_via_api, not local."""
         mem = _make_memory(tmp_path)
-        mem.use_api = True
 
         mock_agent = MagicMock()
         mock_agent.research.side_effect = RuntimeError("GAM down")
@@ -354,8 +336,6 @@ class TestSearchRouting:
     def test_search_api_mode_syncs_first(self, tmp_path):
         """In API mode, search() calls _sync_from_api before searching."""
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = []  # Empty sync
         mock_api.search_concepts.return_value = {"hits": []}

@@ -18,8 +18,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from gigaevo.memory.memory_write_example import load_memory_cards
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.models import ProgramCard
+from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,16 +27,7 @@ from gigaevo.memory.shared_memory.models import ProgramCard
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 def _write_json(path, payload):
@@ -120,13 +111,13 @@ class TestMemoryFillAndSearch:
         assert stats["added"] == 4
 
         # Phase 2: Persist (already done by save_card) and verify on disk
-        assert mem.index_file.exists()
-        data = json.loads(mem.index_file.read_text())
+        assert mem.config.index_file.exists()
+        data = json.loads(mem.config.index_file.read_text())
         assert len(data["memory_cards"]) == 4
 
         # Phase 3: Reload from scratch (simulating new process)
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 4
+        assert len(mem2.card_store.cards) == 4
         assert mem2.get_card("idea-1") is not None
 
         # Phase 4: Search for relevant ideas
@@ -152,7 +143,7 @@ class TestMemoryFillAndSearch:
         mem.save_card(_make_idea_card("idea-1", "Use SA for local search"))
         mem.save_card(_make_program_card("prog-1", 95.0, "def solve(): return 42"))
 
-        assert len(mem.memory_cards) == 2
+        assert len(mem.card_store.cards) == 2
         idea = mem.get_card("idea-1")
         prog = mem.get_card("program-prog-1")
         assert idea.category == "general"
@@ -235,7 +226,7 @@ class TestMemoryWritePipeline:
         for card in cards:
             mem.save_card(card)
 
-        assert len(mem.memory_cards) == 2
+        assert len(mem.card_store.cards) == 2
         assert (
             mem.get_card("idea-1").description
             == "Use simulated annealing for local refinement"
@@ -509,7 +500,7 @@ class TestFullMemoryCycle:
         mem.save_card(
             _make_idea_card("idea-2", "Crossover recombination", keywords=["crossover"])
         )
-        assert len(mem.memory_cards) == 2
+        assert len(mem.card_store.cards) == 2
 
         # Update
         mem.save_card(_make_idea_card("idea-1", "Enhanced SA with adaptive cooling"))
@@ -522,11 +513,11 @@ class TestFullMemoryCycle:
         # Delete
         mem.delete("idea-2")
         assert mem.get_card("idea-2") is None
-        assert len(mem.memory_cards) == 1
+        assert len(mem.card_store.cards) == 1
 
         # Verify persistence
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 1
+        assert len(mem2.card_store.cards) == 1
         assert mem2.get_card("idea-1") is not None
         assert mem2.get_card("idea-2") is None
 
@@ -544,14 +535,14 @@ class TestFullMemoryCycle:
             None,
         )
         mem.llm_service = mock_llm
-        mem._score_retrieved_candidates = MagicMock(
+        mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.9}]
         )
 
         # Try to save duplicate
         result_id = mem.save_card({"description": "SA optimization variant"})
         assert result_id == "idea-1"  # Returned existing card
-        assert len(mem.memory_cards) == 1  # No new card added
+        assert len(mem.card_store.cards) == 1  # No new card added
         stats = mem.get_card_write_stats()
         assert stats["rejected"] == 1
 
@@ -568,7 +559,7 @@ class TestFullMemoryCycle:
             )
 
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 50
+        assert len(mem2.card_store.cards) == 50
 
         # Search for specific card
         result = mem2.search("method_42")
@@ -740,7 +731,7 @@ class TestSearchFallbackPaths:
         """_ConceptApiClient._request crashes on 200 with non-JSON body."""
         import httpx
 
-        from gigaevo.memory.shared_memory.memory import _ConceptApiClient
+        from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 
         def handler(request):
             return httpx.Response(200, text="<html>502 Bad Gateway</html>")

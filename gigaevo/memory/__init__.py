@@ -2,6 +2,9 @@
 
 Public API:
     AmemGamMemory      — main memory backend (local or API-backed)
+    MemoryConfig       — configuration for AmemGamMemory (Pydantic)
+    ApiConfig          — API connection settings
+    GamConfig          — GAM retriever settings
     MemoryCard         — general idea/insight card
     ProgramCard        — top-performing program card
     AnyCard            — union type (MemoryCard | ProgramCard)
@@ -17,6 +20,11 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.memory_config import (
+    ApiConfig,
+    GamConfig,
+    MemoryConfig,
+)
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
     ConnectedIdea,
@@ -29,12 +37,15 @@ from gigaevo.memory.shared_memory.models import (
 
 __all__ = [
     "AmemGamMemory",
+    "ApiConfig",
     "AnyCard",
     "ConnectedIdea",
+    "GamConfig",
     "GigaEvoMemoryBase",
     "LocalMemorySnapshot",
     "MemoryCard",
     "MemoryCardExplanation",
+    "MemoryConfig",
     "ProgramCard",
     "Strategy",
     "normalize_memory_card",
