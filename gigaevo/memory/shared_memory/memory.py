@@ -324,8 +324,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 if eid:
                     self.entity_version_by_entity[eid] = vid
 
-    def _persist_index(self) -> None:
-        serialized_cards = {cid: c.model_dump() for cid, c in self.memory_cards.items()}
+    def _serialize_cards(self) -> dict[str, dict[str, Any]]:
+        return {cid: c.model_dump() for cid, c in self.memory_cards.items()}
+
+    def _persist_index(
+        self, serialized_cards: dict[str, dict[str, Any]] | None = None
+    ) -> None:
+        if serialized_cards is None:
+            serialized_cards = self._serialize_cards()
         payload = {
             "entity_by_card_id": self.entity_by_card_id,
             "entity_version_by_entity": self.entity_version_by_entity,
@@ -580,9 +586,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if self._upsert_local_note_fast(card):
                 changed = True
 
-        stale_entities = [
-            eid for eid in self.card_id_by_entity if eid not in remote_entity_ids
-        ]
+        stale_entities = set(self.card_id_by_entity) - remote_entity_ids
         for entity_id in stale_entities:
             card_id = self.card_id_by_entity.pop(entity_id, "")
             self.entity_version_by_entity.pop(entity_id, None)
@@ -658,18 +662,19 @@ class AmemGamMemory(GigaEvoMemoryBase):
             pipeline_mode=self.gam_pipeline_mode,
         )
 
-    def _dump_memory(self) -> None:
+    def _dump_memory(
+        self, serialized_cards: dict[str, dict[str, Any]] | None = None
+    ) -> None:
         if self.memory_system is None:
             return
         all_ids = sorted(set(self.memory_ids) | set(self.memory_cards.keys()))
-        card_overrides_dict = {
-            cid: c.model_dump() for cid, c in self.memory_cards.items()
-        }
+        if serialized_cards is None:
+            serialized_cards = self._serialize_cards()
         export_memories_jsonl(
             self.memory_system,
             all_ids,
             self.export_file,
-            card_overrides=card_overrides_dict,
+            card_overrides=serialized_cards,
         )
 
     def _build_dedup_retrievers(self) -> dict[str, Any]:
@@ -1277,10 +1282,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return dict(self.card_write_stats)
 
     def rebuild(self) -> None:
-        self._persist_index()
+        serialized = self._serialize_cards()
+        self._persist_index(serialized_cards=serialized)
         if self.memory_system is None or self.generator is None:
             return
-        self._dump_memory()
+        self._dump_memory(serialized_cards=serialized)
         self.research_agent = self._load_or_create_retriever()
         self._dedup_retrievers = None
         self._iters_after_rebuild = 0
