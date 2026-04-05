@@ -660,14 +660,10 @@ class TestFullEvolutionMemoryRebuildCycle:
         If the real memory system is broken, this test fails.
         """
         # Real AmemGamMemory — no inject_fakes, no patched rebuild
-        mem = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "real_mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
+        from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+
+        cfg = MemoryConfig(checkpoint_path=tmp_path / "real_mem")
+        mem = AmemGamMemory(config=cfg)
 
         # Save cards
         mem.save_card(
@@ -710,14 +706,7 @@ class TestFullEvolutionMemoryRebuildCycle:
         assert len(mem.card_store.cards) == 2
 
         # Persist + reload (new process)
-        mem2 = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "real_mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
+        mem2 = AmemGamMemory(config=cfg)
         assert len(mem2.card_store.cards) == 2
         assert (
             mem2.get_card("real-1").description == "enhanced SA with adaptive cooling"
@@ -731,14 +720,9 @@ class TestFullEvolutionMemoryRebuildCycle:
 
     def test_unpatched_memory_stats_contract(self, tmp_path):
         """UNPATCHED: verify card_write_stats shape and behavior."""
-        mem = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "real"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
+        from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+
+        mem = AmemGamMemory(config=MemoryConfig(checkpoint_path=tmp_path / "real"))
         mem.save_card({"id": "c1", "description": "idea"})
         mem.save_card({"id": "c1", "description": "updated"})
         mem.save_card({"description": "new"})

@@ -78,17 +78,12 @@ def test_normalize_from_package(tmp_path):
 
 
 def test_amem_gam_memory_from_package(tmp_path):
-    """AmemGamMemory constructible from package-level import."""
+    """AmemGamMemory constructible from package-level import with MemoryConfig."""
     from gigaevo.memory import AmemGamMemory
+    from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 
-    mem = AmemGamMemory(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
+    cfg = MemoryConfig(checkpoint_path=tmp_path / "mem")
+    mem = AmemGamMemory(config=cfg)
     assert mem is not None
     mem.save_card({"id": "c1", "description": "test"})
     assert mem.get_card("c1") is not None

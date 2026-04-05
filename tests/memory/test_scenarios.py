@@ -697,22 +697,13 @@ class TestScenarioCrossTask:
     """Different tasks use separate memory namespaces via checkpoint_path."""
 
     def test_separate_checkpoint_dirs_isolate_memory(self, tmp_path):
-        mem_hover = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "hover_mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
-        mem_hotpot = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "hotpot_mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
+        from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+
+        hover_cfg = MemoryConfig(checkpoint_path=tmp_path / "hover_mem")
+        hotpot_cfg = MemoryConfig(checkpoint_path=tmp_path / "hotpot_mem")
+
+        mem_hover = AmemGamMemory(config=hover_cfg)
+        mem_hotpot = AmemGamMemory(config=hotpot_cfg)
 
         mem_hover.save_card({"id": "hover-1", "description": "HoVer retrieval idea"})
         mem_hotpot.save_card({"id": "hotpot-1", "description": "HotpotQA chain idea"})
@@ -724,14 +715,7 @@ class TestScenarioCrossTask:
         assert mem_hotpot.get_card("hover-1") is None
 
         # Reload verifies isolation
-        mem_hover2 = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "hover_mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
+        mem_hover2 = AmemGamMemory(config=hover_cfg)
         assert len(mem_hover2.card_store.cards) == 1
         assert mem_hover2.get_card("hover-1") is not None
 

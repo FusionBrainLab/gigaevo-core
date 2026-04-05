@@ -48,65 +48,18 @@ from gigaevo.memory.shared_memory.utils import looks_like_uuid
 
 
 class AmemGamMemory(GigaEvoMemoryBase):
-    """API-backed memory where API is the source of truth and local GAM is retrieval runtime.
+    """Orchestrator for card storage, search, sync, and dedup.
 
-    Accepts either a ``MemoryConfig`` object (preferred) or legacy kwargs
-    (for backward compatibility during migration).
+    Requires a ``MemoryConfig`` object for construction.
     """
 
     def __init__(
         self,
-        checkpoint_path: str | None = None,
-        base_url: str = "http://localhost:8000",
-        use_api: bool = True,
-        namespace: str = "default",
-        author: str | None = None,
-        channel: str = "latest",
-        search_limit: int = 5,
-        enable_llm_synthesis: bool = True,
-        enable_memory_evolution: bool = True,
-        enable_llm_card_enrichment: bool = True,
-        rebuild_interval: int = 10,
-        enable_bm25: bool = False,
-        sync_batch_size: int = 100,
-        sync_on_init: bool = True,
-        allowed_gam_tools: list[str] | None = None,
-        gam_top_k_by_tool: dict[str, int] | None = None,
-        gam_pipeline_mode: str = "default",
-        card_update_dedup_config: dict[str, Any] | None = None,
         *,
-        config: MemoryConfig | None = None,
+        config: MemoryConfig,
         runtime: AgenticRuntime | None = None,
-    ):
-        # --- Build MemoryConfig ---
-        if config is not None:
-            self.config = config
-        elif checkpoint_path is not None:
-            self.config = MemoryConfig.from_legacy_kwargs(
-                checkpoint_path=checkpoint_path,
-                base_url=base_url,
-                use_api=use_api,
-                namespace=namespace,
-                author=author,
-                channel=channel,
-                search_limit=search_limit,
-                enable_llm_synthesis=enable_llm_synthesis,
-                enable_memory_evolution=enable_memory_evolution,
-                enable_llm_card_enrichment=enable_llm_card_enrichment,
-                rebuild_interval=rebuild_interval,
-                enable_bm25=enable_bm25,
-                sync_batch_size=sync_batch_size,
-                sync_on_init=sync_on_init,
-                allowed_gam_tools=allowed_gam_tools,
-                gam_top_k_by_tool=gam_top_k_by_tool,
-                gam_pipeline_mode=gam_pipeline_mode,
-                card_update_dedup_config=card_update_dedup_config,
-            )
-        else:
-            raise TypeError(
-                "AmemGamMemory requires either config=MemoryConfig(...) "
-                "or checkpoint_path='...'"
-            )
+    ) -> None:
+        self.config = config
 
         # --- Derived paths ---
         cfg = self.config
@@ -116,12 +69,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.export_file = self.checkpoint_dir / "amem_exports" / "amem_memories.jsonl"
         self.gam_store_dir = self.checkpoint_dir / "gam_shared" / "amem_store"
 
-        # --- Expose config fields as instance attrs (for existing code) ---
+        # --- Expose config fields as instance attrs (for backward compat) ---
         api_cfg = cfg.api
         self.use_api = api_cfg is not None
-        self.namespace = api_cfg.namespace if api_cfg else namespace
-        self.author = api_cfg.author if api_cfg else author
-        self.channel = api_cfg.channel if api_cfg else channel
+        self.namespace = api_cfg.namespace if api_cfg else "default"
+        self.author = api_cfg.author if api_cfg else None
+        self.channel = api_cfg.channel if api_cfg else "latest"
         self.search_limit = cfg.search_limit
         self.rebuild_interval = cfg.rebuild_interval
         self.enable_bm25 = cfg.gam.enable_bm25
