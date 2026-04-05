@@ -50,6 +50,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
 
 # Re-export for backward compatibility (extracted to concept_api.py)
 from gigaevo.memory.shared_memory.card_index_store import CardIndexStore
+from gigaevo.memory.shared_memory.gam_retriever_manager import GAMRetrieverManager
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.utils import (
     looks_like_uuid,
@@ -180,6 +181,20 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.generator: GeneratorProtocol | None
         self.llm_service, self.generator = self._init_llm_service_and_generator()
         self.memory_system: AgenticMemoryProtocol | None = self._init_storage()
+
+        # GAM retriever management (moved to GAMRetrieverManager)
+        self._gam_mgr = GAMRetrieverManager(
+            generator=self.generator,
+            research_agent_cls=self._ResearchAgentCls,
+            export_file=self.export_file,
+            gam_store_dir=self.gam_store_dir,
+            checkpoint_dir=self.checkpoint_dir,
+            enable_bm25=self.enable_bm25,
+            allowed_gam_tools=self.allowed_gam_tools,
+            gam_top_k_by_tool=self.gam_top_k_by_tool,
+            gam_pipeline_mode=self.gam_pipeline_mode,
+            memory_cards_ref=self._index.memory_cards,
+        )
         self.research_agent: ResearchAgentProtocol | None = None
         self._dedup_retrievers: dict[str, Any] | None = None
 
@@ -189,7 +204,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             and self.export_file.exists()
         ):
             try:
-                self.research_agent = self._load_or_create_retriever()
+                self.research_agent = self._gam_mgr.load_or_create_retriever()
             except Exception as exc:
                 logger.debug("[Memory] Initial retriever load skipped: {}", exc)
 
@@ -620,58 +635,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return changed
 
     def _load_or_create_retriever(self) -> ResearchAgentProtocol | None:
-        if self.generator is None or self._ResearchAgentCls is None:
-            raise RuntimeError(
-                "Generator is not available. Cannot create GAM research agent."
-            )
-        try:
-            from gigaevo.memory.shared_memory.amem_gam_retriever import (
-                build_gam_store,
-                build_retrievers,
-                load_amem_records,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"GAM helper modules are unavailable: {exc}") from exc
-
-        self.gam_store_dir.mkdir(parents=True, exist_ok=True)
-        if self.export_file.exists():
-            records = load_amem_records(self.export_file)
-        else:
-            records = [c.model_dump() for c in self.memory_cards.values()]
-
-        memory_store, page_store, added = build_gam_store(records, self.gam_store_dir)
-        logger.info(
-            "[Memory] Loaded {} cards, added {} new pages.", len(records), added
-        )
-
-        retrievers = build_retrievers(
-            page_store,
-            self.gam_store_dir / "indexes",
-            self.checkpoint_dir / "chroma",
-            enable_bm25=self.enable_bm25,
-            allowed_tools=sorted(self.allowed_gam_tools),
-        )
-        retrievers = {
-            name: retriever
-            for name, retriever in retrievers.items()
-            if name in self.allowed_gam_tools
-        }
-        if not retrievers:
-            logger.info(
-                "[Memory] No GAM retrievers enabled after applying allowed_gam_tools. "
-                "GAM agentic search is disabled."
-            )
-            return None
-        return self._ResearchAgentCls(
-            page_store=page_store,
-            memory_store=memory_store,
-            retrievers=retrievers,
-            generator=self.generator,
-            max_iters=3,
-            allowed_tools=sorted(self.allowed_gam_tools),
-            top_k_by_tool=self.gam_top_k_by_tool,
-            pipeline_mode=self.gam_pipeline_mode,
-        )
+        """Backward-compat wrapper — delegates to GAMRetrieverManager."""
+        return self._gam_mgr.load_or_create_retriever()
 
     def _dump_memory(self) -> None:
         if self.memory_system is None:
