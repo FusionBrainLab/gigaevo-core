@@ -392,7 +392,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
             return f"Query: {query}\n\nNo relevant memories found."
 
         if self.config.enable_llm_synthesis:
-            return self._synthesize_results(query, memory_state, top_cards)
+            return synthesize_search_results(
+                query=query,
+                memory_state=memory_state,
+                cards=top_cards,
+                llm_service=self.llm_service,
+            )
         return format_search_results(query, top_cards)
 
     def search(self, query: str, memory_state: str | None = None) -> str:
