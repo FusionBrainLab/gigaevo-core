@@ -355,7 +355,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         store = self.card_store
         if self.use_api and self.api is not None:
-            current_entity_id = store.entity_by_card_id.get(card_id)
             response = self.api.save_concept(
                 content=content,
                 name=name,
@@ -364,24 +363,15 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 channel=self.channel,
                 namespace=self.namespace,
                 author=self.author,
-                entity_id=current_entity_id,
+                entity_id=store.entity_by_card_id.get(card_id),
             )
-
-            saved_entity_id = str(response["entity_id"])
-            if current_entity_id and current_entity_id != saved_entity_id:
-                store.card_id_by_entity.pop(current_entity_id, None)
-                store.entity_version.pop(current_entity_id, None)
-
-            store.entity_by_card_id[card_id] = saved_entity_id
-            store.card_id_by_entity[saved_entity_id] = card_id
-            store.entity_version[saved_entity_id] = str(
-                response.get("version_id") or ""
+            store.save_entity(
+                card_id,
+                str(response["entity_id"]),
+                str(response.get("version_id") or ""),
             )
         else:
-            stale_entity_id = store.entity_by_card_id.pop(card_id, None)
-            if stale_entity_id:
-                store.card_id_by_entity.pop(stale_entity_id, None)
-                store.entity_version.pop(stale_entity_id, None)
+            store.clear_entity(card_id)
         store.cards[card_id] = normalize_memory_card(card, fallback_id=card_id)
 
         if self.note_sync is not None:
@@ -596,15 +586,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
             card_id = store.card_id_by_entity.pop(entity_id, key)
             store.entity_version.pop(entity_id, None)
         else:
-            card_id = key
-            if card_id not in store.cards and key in store.card_id_by_entity:
-                card_id = store.card_id_by_entity[key]
-            if card_id not in store.cards:
+            card_id = store.resolve_card_id(key)
+            if card_id is None:
                 return False
-            entity_id = store.entity_by_card_id.get(card_id)
-            if entity_id:
-                store.card_id_by_entity.pop(entity_id, None)
-                store.entity_version.pop(entity_id, None)
+            store.clear_entity(card_id)
 
         store.entity_by_card_id.pop(card_id, None)
         store.cards.pop(card_id, None)

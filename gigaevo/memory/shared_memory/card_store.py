@@ -88,6 +88,31 @@ class CardStore:
     def get_card_for_entity(self, entity_id: str) -> str | None:
         return self.card_id_by_entity.get(entity_id)
 
+    def save_entity(self, card_id: str, entity_id: str, version: str = "") -> None:
+        """Link card to entity, cleaning up stale mapping if entity_id changed."""
+        old = self.entity_by_card_id.get(card_id)
+        if old and old != entity_id:
+            self.card_id_by_entity.pop(old, None)
+            self.entity_version.pop(old, None)
+        self.link_entity(card_id, entity_id, version)
+
+    def clear_entity(self, card_id: str) -> str | None:
+        """Remove entity mapping for a card. Returns the old entity_id."""
+        entity_id = self.entity_by_card_id.pop(card_id, None)
+        if entity_id:
+            self.card_id_by_entity.pop(entity_id, None)
+            self.entity_version.pop(entity_id, None)
+        return entity_id
+
+    def resolve_card_id(self, key: str) -> str | None:
+        """Resolve a key (card_id or entity_id) to a card_id in the store."""
+        if key in self.cards:
+            return key
+        mapped = self.card_id_by_entity.get(key)
+        if mapped and mapped in self.cards:
+            return mapped
+        return None
+
     def _load(self) -> None:
         if not self._index_file.exists():
             return
