@@ -584,16 +584,15 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self._remove_local_note(card_id)
             changed = True
 
-        if changed:
+        needs_retriever = (
+            self.research_agent is None
+            and self.memory_system is not None
+            and self.generator is not None
+        )
+        if changed or needs_retriever:
             self.rebuild()
         else:
             self._persist_index()
-            if (
-                self.research_agent is None
-                and self.memory_system is not None
-                and self.generator is not None
-            ):
-                self.rebuild()
 
         return changed
 
@@ -933,27 +932,34 @@ class AmemGamMemory(GigaEvoMemoryBase):
     ) -> list[str]:
         updated_ids: list[str] = []
         seen_ids: set[str] = set()
-        for update in updates:
-            if not isinstance(update, dict):
-                continue
-            card_id = str(update.get("card_id") or "").strip()
-            if not card_id or card_id in seen_ids:
-                continue
-            existing_card = self.memory_cards.get(card_id)
-            if existing_card is None:
-                continue
+        incoming_dict = incoming_card.model_dump()
+        try:
+            for update in updates:
+                if not isinstance(update, dict):
+                    continue
+                card_id = str(update.get("card_id") or "").strip()
+                if not card_id or card_id in seen_ids:
+                    continue
+                existing_card = self.memory_cards.get(card_id)
+                if existing_card is None:
+                    continue
 
-            existing_dict = existing_card.model_dump()
-            incoming_dict = incoming_card.model_dump()
-            merged_dict = merge_updated_card(existing_dict, incoming_dict, update)
-            merged_dict["id"] = card_id
-            merged_card = normalize_memory_card(merged_dict)
-            self._save_card_core(merged_card)
-            seen_ids.add(card_id)
-            updated_ids.append(card_id)
+                existing_dict = existing_card.model_dump()
+                merged_dict = merge_updated_card(existing_dict, incoming_dict, update)
+                merged_dict["id"] = card_id
+                merged_card = normalize_memory_card(merged_dict)
+                self._save_card_core(merged_card)
+                seen_ids.add(card_id)
+                updated_ids.append(card_id)
+        finally:
+            if updated_ids:
+                self._persist_index()
         return updated_ids
 
-    def _save_card_core(self, card: AnyCard) -> str:
+    def _save_card_core(self, card: AnyCard) -> tuple[str, bool]:
+        """Save card to storage. Returns (card_id, rebuilt) where rebuilt
+        indicates whether a periodic rebuild (which includes index persist)
+        was triggered."""
         card_id = self._ensure_card_id(card)
 
         if self.enable_llm_card_enrichment and self.memory_system is not None:
@@ -997,14 +1003,15 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.memory_cards[card_id] = normalize_memory_card(card, fallback_id=card_id)
 
         self._upsert_local_note_agentic(self.memory_cards[card_id])
-        self._persist_index()
         self._dedup_retrievers = None
 
+        rebuilt = False
         self._iters_after_rebuild += 1
         if self._iters_after_rebuild >= self.rebuild_interval:
             self.rebuild()
+            rebuilt = True
 
-        return card_id
+        return card_id, rebuilt
 
     def save_card(self, card: dict[str, Any] | AnyCard) -> str:
         normalized_card = normalize_memory_card(card)
@@ -1012,11 +1019,17 @@ class AmemGamMemory(GigaEvoMemoryBase):
         incoming_card_id = str(normalized_card.id or "").strip()
         if incoming_card_id and incoming_card_id in self.memory_cards:
             self.card_write_stats["updated"] += 1
-            return self._save_card_core(normalized_card)
+            result, rebuilt = self._save_card_core(normalized_card)
+            if not rebuilt:
+                self._persist_index()
+            return result
 
         if is_program_card(normalized_card):
             self.card_write_stats["added"] += 1
-            return self._save_card_core(normalized_card)
+            result, rebuilt = self._save_card_core(normalized_card)
+            if not rebuilt:
+                self._persist_index()
+            return result
 
         if (
             self.card_update_dedup_config.enabled
@@ -1057,7 +1070,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     return updated_ids[0]
 
         self.card_write_stats["added"] += 1
-        return self._save_card_core(normalized_card)
+        result, rebuilt = self._save_card_core(normalized_card)
+        if not rebuilt:
+            self._persist_index()
+        return result
 
     def save(self, data: str, category: str = "general") -> str:
         return self.save_card(
@@ -1175,12 +1191,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if self._upsert_local_note_fast(card):
                 local_changed = True
 
-        self._persist_index()
-        if (
+        will_rebuild = (
             local_changed
             and self.memory_system is not None
             and self.generator is not None
-        ):
+        )
+        if not will_rebuild:
+            self._persist_index()
+        if will_rebuild:
             self.rebuild()
 
         if not cards:
