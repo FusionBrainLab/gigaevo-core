@@ -539,10 +539,12 @@ def make_test_memory_with_agentic(
 
 
 def inject_fakes_into_memory(mem: Any) -> FakeAgenticMemorySystem:
-    """Replace agentic classes in an AmemGamMemory instance with fakes.
+    """Replace agentic classes in an AmemGamMemory instance with fakes (DEPRECATED).
 
-    .. deprecated:: Use ``make_test_memory_with_agentic`` instead for
-       construction-time DI.
+    .. deprecated::
+       Use ``make_test_memory_with_agentic`` instead. Constructor-time DI via
+       ``runtime`` and ``llm_service`` parameters is cleaner and eliminates
+       monkey-patching.
 
     Returns the FakeAgenticMemorySystem so tests can inspect its state.
     """
