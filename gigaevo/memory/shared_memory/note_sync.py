@@ -23,8 +23,9 @@ class NoteSync:
 
     def __init__(
         self,
+        *,
         memory_system: Any,
-        note_cls: type,
+        note_cls: type[Any],
         card_store: CardStore,
     ):
         self.memory_system = memory_system

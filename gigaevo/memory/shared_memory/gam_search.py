@@ -19,7 +19,8 @@ class GamSearch:
 
     def __init__(
         self,
-        research_agent_cls: type,
+        *,
+        research_agent_cls: type[Any],
         generator: Any,
         card_store: CardStore,
         checkpoint_dir: Path,

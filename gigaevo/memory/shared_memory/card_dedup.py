@@ -39,6 +39,7 @@ class CardDedup:
 
     def __init__(
         self,
+        *,
         card_store: CardStore,
         llm_service: Any,
         config: CardUpdateDedupConfig,

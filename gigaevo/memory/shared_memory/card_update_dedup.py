@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
 import math
 import re
 import statistics
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 QUERY_DESCRIPTION = "description"
 QUERY_EXPLANATION_SUMMARY = "explanation_summary"
@@ -20,8 +21,9 @@ QUERY_KEYS = (
 )
 
 
-@dataclass(frozen=True)
-class RetrievalWeights:
+class RetrievalWeights(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     description: float = 0.35
     explanation_summary: float = 0.2
     description_explanation_summary: float = 0.3
@@ -63,14 +65,15 @@ class RetrievalWeights:
         }
 
 
-@dataclass(frozen=True)
-class CardUpdateDedupConfig:
+class CardUpdateDedupConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     enabled: bool = False
     top_k_per_query: int = 5
     final_top_n: int = 5
     min_final_score: float = 0.0
     llm_max_retries: int = 2
-    weights: RetrievalWeights = field(default_factory=RetrievalWeights)
+    weights: RetrievalWeights = Field(default_factory=RetrievalWeights)
 
     @classmethod
     def from_mapping(cls, payload: Any) -> CardUpdateDedupConfig:

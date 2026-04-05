@@ -446,7 +446,9 @@ def inject_fakes_into_memory(mem: Any) -> FakeAgenticMemorySystem:
     mem._MemoryNoteCls = FakeMemoryNote
     mem._ResearchAgentCls = FakeResearchAgent
     mem._AMemGeneratorCls = FakeAMemGenerator
-    mem.note_sync = NoteSync(fake_system, FakeMemoryNote, mem.card_store)
+    mem.note_sync = NoteSync(
+        memory_system=fake_system, note_cls=FakeMemoryNote, card_store=mem.card_store
+    )
     return fake_system
 
 

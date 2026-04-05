@@ -6,23 +6,25 @@ with a clean factory that returns a typed bundle of resolved classes, or None.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict
 
 
-@dataclass(frozen=True)
-class AgenticRuntime:
+class AgenticRuntime(BaseModel):
     """Resolved agentic dependencies (A-MEM + GAM classes).
 
     Passed to AmemGamMemory at construction time.
     In tests, use FakeAgenticRuntime with fake classes.
     """
 
-    memory_system_cls: type
-    memory_note_cls: type
-    research_agent_cls: type
-    generator_cls: type
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    memory_system_cls: type[Any]
+    memory_note_cls: type[Any]
+    research_agent_cls: type[Any]
+    generator_cls: type[Any]
 
 
 def load_agentic_runtime() -> AgenticRuntime | None:

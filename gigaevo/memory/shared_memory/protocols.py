@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Protocol
+
+from pydantic import BaseModel
 
 from gigaevo.memory.shared_memory.card_conversion import MemoryNoteProtocol
 
@@ -28,8 +29,7 @@ class AgenticMemoryProtocol(Protocol):
     def _document_for_note(self, note: MemoryNoteProtocol) -> str: ...
 
 
-@dataclass
-class ResearchOutput:
+class ResearchOutput(BaseModel):
     """Return type of ResearchAgent.research()."""
 
     integrated_memory: str = ""

@@ -19,7 +19,7 @@ class CardStore:
     All card data lives here. Other components access cards via this store.
     """
 
-    def __init__(self, index_file: Path):
+    def __init__(self, *, index_file: Path):
         self._index_file = index_file
 
         self.cards: dict[str, AnyCard] = {}

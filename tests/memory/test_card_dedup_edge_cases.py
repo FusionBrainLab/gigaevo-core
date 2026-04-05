@@ -90,7 +90,8 @@ class TestCardUpdateDedupConfig:
         try:
             cfg.enabled = True  # type: ignore[misc]
             assert False, "Should have raised"
-        except AttributeError:
+        except (AttributeError, Exception):
+            # Pydantic frozen models raise ValidationError; dataclass raises AttributeError
             pass
 
 

@@ -166,7 +166,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self._runtime.generator_cls if self._runtime else None
         )
 
-        self.card_store = CardStore(self.index_file)
+        self.card_store = CardStore(index_file=self.index_file)
 
         self.llm_service: LLMServiceProtocol | None
         self.generator: GeneratorProtocol | None
@@ -175,7 +175,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.note_sync: NoteSync | None = None
         if self.memory_system is not None and self._MemoryNoteCls is not None:
             self.note_sync = NoteSync(
-                self.memory_system, self._MemoryNoteCls, self.card_store
+                memory_system=self.memory_system,
+                note_cls=self._MemoryNoteCls,
+                card_store=self.card_store,
             )
         self.research_agent: ResearchAgentProtocol | None = None
 

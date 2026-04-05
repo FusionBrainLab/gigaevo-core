@@ -20,6 +20,7 @@ class ApiSync:
 
     def __init__(
         self,
+        *,
         client: _ConceptApiClient,
         card_store: CardStore,
         note_sync: NoteSync | None,
