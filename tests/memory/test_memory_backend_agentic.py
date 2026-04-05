@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from tests.fakes.agentic_memory import (
     FakeAMemGenerator,
     FakeResearchAgent,
@@ -18,6 +17,7 @@ from tests.fakes.agentic_memory import (
     fake_build_retrievers,
     fake_load_amem_records,
     inject_fakes_into_memory,
+    make_test_memory,
 )
 
 # ---------------------------------------------------------------------------
@@ -26,16 +26,7 @@ from tests.fakes.agentic_memory import (
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 def _make_full_memory(tmp_path, ideas=None, **overrides):

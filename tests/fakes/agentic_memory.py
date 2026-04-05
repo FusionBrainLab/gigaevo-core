@@ -430,6 +430,37 @@ def fake_build_retrievers(
 # ---------------------------------------------------------------------------
 
 
+def make_test_memory(
+    tmp_path: Any,
+    **overrides: Any,
+) -> Any:
+    """Create an AmemGamMemory with MemoryConfig for tests.
+
+    Accepts the same overrides as legacy kwargs but builds a proper
+    MemoryConfig internally. Common overrides: search_limit, rebuild_interval,
+    card_update_dedup_config (dict).
+    """
+    from pathlib import Path
+
+    from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
+    from gigaevo.memory.shared_memory.memory import AmemGamMemory
+    from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+
+    dedup_raw = overrides.pop("card_update_dedup_config", None)
+    dedup = CardUpdateDedupConfig.from_mapping(dedup_raw or {})
+
+    config = MemoryConfig(
+        checkpoint_path=Path(str(tmp_path)) / "mem",
+        search_limit=overrides.pop("search_limit", 5),
+        rebuild_interval=overrides.pop("rebuild_interval", 10),
+        enable_llm_synthesis=overrides.pop("enable_llm_synthesis", False),
+        enable_memory_evolution=overrides.pop("enable_memory_evolution", False),
+        enable_llm_card_enrichment=overrides.pop("enable_llm_card_enrichment", False),
+        dedup=dedup,
+    )
+    return AmemGamMemory(config=config)
+
+
 def inject_fakes_into_memory(mem: Any) -> FakeAgenticMemorySystem:
     """Replace agentic classes in an AmemGamMemory instance with fakes.
 

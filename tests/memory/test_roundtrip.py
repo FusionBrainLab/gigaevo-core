@@ -18,8 +18,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from gigaevo.memory.memory_write_example import load_memory_cards
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.models import ProgramCard
+from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,16 +27,7 @@ from gigaevo.memory.shared_memory.models import ProgramCard
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 def _write_json(path, payload):

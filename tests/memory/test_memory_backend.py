@@ -16,8 +16,8 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_gam_pipeline_mode,
     normalize_gam_top_k_by_tool,
 )
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order, looks_like_uuid
+from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -25,16 +25,7 @@ from gigaevo.memory.shared_memory.utils import dedupe_keep_order, looks_like_uui
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 def _make_card(**overrides):

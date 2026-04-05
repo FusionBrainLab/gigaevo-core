@@ -12,7 +12,8 @@ from gigaevo.memory.shared_memory.card_conversion import (
     build_entity_meta,
     normalize_memory_card,
 )
-from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
+from gigaevo.memory.shared_memory.memory import _ConceptApiClient
+from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,16 +21,7 @@ from gigaevo.memory.shared_memory.memory import AmemGamMemory, _ConceptApiClient
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 def _mock_client(handler):

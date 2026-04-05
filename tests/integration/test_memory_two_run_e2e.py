@@ -60,6 +60,7 @@ from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.common import StringContainer
 from gigaevo.programs.stages.memory_context import MemoryContextStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
+from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # Helpers: deterministic mutation + code templates
@@ -250,16 +251,7 @@ async def _add_seed(storage: RedisProgramStorage) -> Program:
 
 
 def _make_memory(tmp_path, **overrides) -> AmemGamMemory:
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 def _make_selector(memory: AmemGamMemory) -> MemorySelectorAgent:
