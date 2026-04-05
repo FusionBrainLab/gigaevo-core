@@ -449,8 +449,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if not entity_id:
                 return False
             self.api.delete_concept(entity_id)
-            card_id = store.card_id_by_entity.pop(entity_id, key)
-            store.entity_version.pop(entity_id, None)
+            card_id = store.unlink_entity(entity_id) or key
         else:
             resolved = store.resolve_card_id(key)
             if resolved is None:
@@ -458,16 +457,16 @@ class AmemGamMemory(GigaEvoMemoryBase):
             card_id = resolved
             store.clear_entity(card_id)
 
-        store.entity_by_card_id.pop(card_id, None)
         store.cards.pop(card_id, None)
         if self.note_sync is not None:
             self.note_sync.remove(card_id)
         else:
             store.note_ids.discard(card_id)
-        store.persist()
 
         if self.memory_system is not None and self.generator is not None:
             self.rebuild()
+        else:
+            store.persist()
 
         return True
 

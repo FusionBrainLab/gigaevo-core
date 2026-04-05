@@ -115,16 +115,12 @@ class ApiSync:
 
             previous_card_id = store.card_id_by_entity.get(entity_id)
             if previous_card_id and previous_card_id != card_id:
-                store.entity_by_card_id.pop(previous_card_id, None)
                 store.cards.pop(previous_card_id, None)
                 self._remove_note(previous_card_id)
                 changed = True
 
-            store.card_id_by_entity[entity_id] = card_id
-            store.entity_by_card_id[card_id] = entity_id
-            store.entity_version[entity_id] = str(
-                concept.get("version_id") or remote_version or ""
-            )
+            version = str(concept.get("version_id") or remote_version or "")
+            store.save_entity(card_id, entity_id, version)
 
             old_card = store.cards.get(card_id)
             if old_card != card:
@@ -137,10 +133,8 @@ class ApiSync:
         # Remove entities no longer present on remote
         stale_entities = set(store.card_id_by_entity) - remote_entity_ids
         for entity_id in stale_entities:
-            card_id = store.card_id_by_entity.pop(entity_id, "")
-            store.entity_version.pop(entity_id, None)
+            card_id = store.unlink_entity(entity_id)
             if card_id:
-                store.entity_by_card_id.pop(card_id, None)
                 store.cards.pop(card_id, None)
                 self._remove_note(card_id)
             changed = True
@@ -189,11 +183,10 @@ class ApiSync:
             card = concept_to_card(content, fallback_id=card_id)
             card_id = store.ensure_id(card)
 
-            store.card_id_by_entity[entity_id] = card_id
-            store.entity_by_card_id[card_id] = entity_id
-            store.entity_version[entity_id] = str(
+            version = str(
                 concept.get("version_id") or hit.get("version_id") or ""
             )
+            store.save_entity(card_id, entity_id, version)
             store.cards[card_id] = card
             cards.append(card)
 
