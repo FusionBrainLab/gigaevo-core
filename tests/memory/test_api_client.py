@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.memory import _ConceptApiClient
+from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.utils import truncate_text
 from tests.fakes.agentic_memory import make_test_memory
 

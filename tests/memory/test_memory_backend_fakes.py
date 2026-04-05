@@ -346,7 +346,7 @@ class TestFullCycleWithFakes:
 
     def test_upsert_local_note_fast_direct(self, tmp_path):
         """Test _upsert_local_note_fast — the hot path used by _sync_from_api."""
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
         card = normalize_memory_card(

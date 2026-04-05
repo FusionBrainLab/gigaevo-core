@@ -9,7 +9,8 @@ Usage:
         FakeAgenticMemorySystem,
         FakeResearchAgent,
         FakeAMemGenerator,
-        inject_fakes_into_memory,
+        make_test_memory,
+        make_test_memory_with_agentic,
     )
 """
 
@@ -426,7 +427,7 @@ def fake_build_retrievers(
 
 
 # ---------------------------------------------------------------------------
-# inject_fakes_into_memory — wire fakes into AmemGamMemory
+# Test factories
 # ---------------------------------------------------------------------------
 
 
@@ -536,33 +537,6 @@ def make_test_memory_with_agentic(
     # Return the fake system so tests can inspect its state
     assert isinstance(mem.memory_system, FakeAgenticMemorySystem)
     return mem, mem.memory_system
-
-
-def inject_fakes_into_memory(mem: Any) -> FakeAgenticMemorySystem:
-    """Replace agentic classes in an AmemGamMemory instance with fakes (DEPRECATED).
-
-    .. deprecated::
-       Use ``make_test_memory_with_agentic`` instead. Constructor-time DI via
-       ``runtime`` and ``llm_service`` parameters is cleaner and eliminates
-       monkey-patching.
-
-    Returns the FakeAgenticMemorySystem so tests can inspect its state.
-    """
-    from gigaevo.memory.shared_memory.note_sync import NoteSync
-
-    fake_system = FakeAgenticMemorySystem(
-        use_gam_card_document=True,
-        llm_service=mem.llm_service,
-    )
-    mem.memory_system = fake_system
-    mem._AgenticMemorySystemCls = FakeAgenticMemorySystem
-    mem._MemoryNoteCls = FakeMemoryNote
-    mem._ResearchAgentCls = FakeResearchAgent
-    mem._AMemGeneratorCls = FakeAMemGenerator
-    mem.note_sync = NoteSync(
-        memory_system=fake_system, note_cls=FakeMemoryNote, card_store=mem.card_store
-    )
-    return fake_system
 
 
 def patch_gam_imports():

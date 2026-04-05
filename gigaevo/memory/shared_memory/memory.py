@@ -40,8 +40,6 @@ from gigaevo.memory.shared_memory.card_conversion import (
     search_cards_by_keyword,
     synthesize_search_results,
 )
-
-# Re-export for backward compatibility (extracted to concept_api.py)
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 from gigaevo.memory.shared_memory.utils import looks_like_uuid
@@ -83,23 +81,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
             logger.info("[Memory] API mode disabled. Running in local-only mode.")
 
         # --- Agentic runtime (DI or auto-detect) ---
-        self._runtime: AgenticRuntime | None
-        if runtime is not None:
-            self._runtime = runtime
-        else:
-            self._runtime = load_agentic_runtime()
-        self._AgenticMemorySystemCls: type[Any] | None = (
-            self._runtime.memory_system_cls if self._runtime else None
-        )
-        self._MemoryNoteCls: type[Any] | None = (
-            self._runtime.memory_note_cls if self._runtime else None
-        )
-        self._ResearchAgentCls: type[Any] | None = (
-            self._runtime.research_agent_cls if self._runtime else None
-        )
-        self._AMemGeneratorCls: type[Any] | None = (
-            self._runtime.generator_cls if self._runtime else None
-        )
+        rt = runtime if runtime is not None else load_agentic_runtime()
+        _system_cls = rt.memory_system_cls if rt else None
+        _note_cls = rt.memory_note_cls if rt else None
+        _agent_cls = rt.research_agent_cls if rt else None
+        _gen_cls = rt.generator_cls if rt else None
 
         self.card_store = CardStore(index_file=self.index_file)
 
@@ -111,20 +97,20 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.generator = generator
         else:
             self.llm_service, self.generator = init_llm_and_generator(
-                generator_cls=self._AMemGeneratorCls,
+                generator_cls=_gen_cls,
                 dedup_enabled=cfg.dedup.enabled,
             )
         self.memory_system: AgenticMemoryProtocol | None = init_agentic_storage(
             llm_service=self.llm_service,
-            system_cls=self._AgenticMemorySystemCls,
+            system_cls=_system_cls,
             checkpoint_dir=self.checkpoint_dir,
             enable_evolution=cfg.enable_memory_evolution,
         )
         self.note_sync: NoteSync | None = None
-        if self.memory_system is not None and self._MemoryNoteCls is not None:
+        if self.memory_system is not None and _note_cls is not None:
             self.note_sync = NoteSync(
                 memory_system=self.memory_system,
-                note_cls=self._MemoryNoteCls,
+                note_cls=_note_cls,
                 card_store=self.card_store,
             )
         self.research_agent: ResearchAgentProtocol | None = None
@@ -147,9 +133,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         # --- GAM search ---
         self.gam: GamSearch | None = None
-        if self._ResearchAgentCls is not None and self.generator is not None:
+        if _agent_cls is not None and self.generator is not None:
             self.gam = GamSearch(
-                research_agent_cls=self._ResearchAgentCls,
+                research_agent_cls=_agent_cls,
                 generator=self.generator,
                 card_store=self.card_store,
                 checkpoint_dir=self.checkpoint_dir,
@@ -289,24 +275,26 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         return card_id, rebuilt
 
+    def _save_and_persist(self, card: AnyCard) -> str:
+        """Save card and persist index unless a periodic rebuild already did."""
+        card_id, rebuilt = self._save_card_core(card)
+        if not rebuilt:
+            self.card_store.persist()
+        return card_id
+
     def save_card(self, card: dict[str, Any] | AnyCard) -> str:
         normalized_card = normalize_memory_card(card)
         store = self.card_store
         store.write_stats["processed"] += 1
         incoming_card_id = str(normalized_card.id or "").strip()
+
         if incoming_card_id and incoming_card_id in store.cards:
             store.write_stats["updated"] += 1
-            result, rebuilt = self._save_card_core(normalized_card)
-            if not rebuilt:
-                store.persist()
-            return result
+            return self._save_and_persist(normalized_card)
 
         if is_program_card(normalized_card):
             store.write_stats["added"] += 1
-            result, rebuilt = self._save_card_core(normalized_card)
-            if not rebuilt:
-                store.persist()
-            return result
+            return self._save_and_persist(normalized_card)
 
         if (
             self.config.dedup.enabled
@@ -321,18 +309,17 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self._warned_missing_card_update_llm = True
 
         if self.config.dedup.enabled and store.cards and self.llm_service is not None:
-            # Sync llm_service in case it was set post-construction (tests)
             self.dedup.llm_service = self.llm_service
-            scored_candidates = self.dedup.score_candidates(normalized_card)
-            candidates_for_llm = self.dedup.format_for_llm(scored_candidates)
-            decision = self.dedup.decide_action(normalized_card, candidates_for_llm)
+            scored = self.dedup.score_candidates(normalized_card)
+            candidates = self.dedup.format_for_llm(scored)
+            decision = self.dedup.decide_action(normalized_card, candidates)
             action = str(decision.get("action") or "add").strip().lower()
 
             if action == "discard":
-                duplicate_id = str(decision.get("duplicate_of") or "").strip()
-                if duplicate_id in store.cards:
+                dup_id = str(decision.get("duplicate_of") or "").strip()
+                if dup_id in store.cards:
                     store.write_stats["rejected"] += 1
-                    return duplicate_id
+                    return dup_id
             elif action == "update":
                 updates = decision.get("updates")
                 updated_ids = self._apply_update_actions(
@@ -345,10 +332,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     return updated_ids[0]
 
         store.write_stats["added"] += 1
-        result, rebuilt = self._save_card_core(normalized_card)
-        if not rebuilt:
-            store.persist()
-        return result
+        return self._save_and_persist(normalized_card)
 
     def save(self, data: str, category: str = "general") -> str:
         return self.save_card({"category": category, "description": data})
@@ -360,15 +344,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         cards, local_changed = sync.search(query, memory_state)
 
-        will_rebuild = (
+        if (
             local_changed
             and self.memory_system is not None
             and self.generator is not None
-        )
-        if not will_rebuild:
-            self.card_store.persist()
-        if will_rebuild:
+        ):
             self.rebuild()
+        else:
+            self.card_store.persist()
 
         if not cards:
             return f"Query: {query}\n\nNo relevant memories found."

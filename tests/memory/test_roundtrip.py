@@ -731,7 +731,7 @@ class TestSearchFallbackPaths:
         """_ConceptApiClient._request crashes on 200 with non-JSON body."""
         import httpx
 
-        from gigaevo.memory.shared_memory.memory import _ConceptApiClient
+        from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 
         def handler(request):
             return httpx.Response(200, text="<html>502 Bad Gateway</html>")
