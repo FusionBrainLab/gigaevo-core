@@ -12,17 +12,14 @@ from unittest.mock import MagicMock
 
 from gigaevo.memory.shared_memory.card_conversion import (
     normalize_allowed_gam_tools,
-    normalize_gam_pipeline_mode,
-    normalize_gam_top_k_by_tool,
 )
 from tests.fakes.agentic_memory import (
-    FakeAMemGenerator,
     FakeResearchAgent,
     fake_build_gam_store,
     fake_build_retrievers,
     fake_load_amem_records,
-    inject_fakes_into_memory,
     make_test_memory,
+    make_test_memory_with_agentic,
 )
 
 # ---------------------------------------------------------------------------
@@ -36,31 +33,8 @@ def _make_memory(tmp_path, **overrides):
 
 def _make_full_memory(tmp_path, ideas=None, **overrides):
     """Create AmemGamMemory with fake agentic system + generator + retriever patches."""
-    from gigaevo.memory.shared_memory.gam_search import GamSearch
-
-    mem = _make_memory(tmp_path, **overrides)
-    fake_sys = inject_fakes_into_memory(mem)
-    mem.generator = FakeAMemGenerator({"llm_service": MagicMock()})
-
-    # GamSearch wasn't created in __init__ (deps unavailable before fakes).
+    mem, fake_sys = make_test_memory_with_agentic(tmp_path, **overrides)
     cfg = mem.config
-    if mem.gam is None:
-        mem.gam = GamSearch(
-            research_agent_cls=mem._ResearchAgentCls,
-            generator=mem.generator,
-            card_store=mem.card_store,
-            checkpoint_dir=mem.checkpoint_dir,
-            gam_store_dir=mem.gam_store_dir,
-            export_file=mem.export_file,
-            enable_bm25=cfg.gam.enable_bm25,
-            allowed_gam_tools=normalize_allowed_gam_tools(
-                cfg.gam.allowed_tools or None
-            ),
-            gam_top_k_by_tool=normalize_gam_top_k_by_tool(
-                cfg.gam.top_k_by_tool or None
-            ),
-            gam_pipeline_mode=normalize_gam_pipeline_mode(cfg.gam.pipeline_mode),
-        )
 
     # Save ideas to populate both memory_cards and agentic system
     for idea in ideas or []:

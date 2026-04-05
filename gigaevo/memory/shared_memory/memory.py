@@ -58,6 +58,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         *,
         config: MemoryConfig,
         runtime: AgenticRuntime | None = None,
+        llm_service: LLMServiceProtocol | None = None,
+        generator: GeneratorProtocol | None = None,
     ) -> None:
         self.config = config
 
@@ -101,12 +103,17 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         self.card_store = CardStore(index_file=self.index_file)
 
+        # --- LLM + generator (DI or environment-based) ---
         self.llm_service: LLMServiceProtocol | None
         self.generator: GeneratorProtocol | None
-        self.llm_service, self.generator = init_llm_and_generator(
-            generator_cls=self._AMemGeneratorCls,
-            dedup_enabled=cfg.dedup.enabled,
-        )
+        if llm_service is not None or generator is not None:
+            self.llm_service = llm_service
+            self.generator = generator
+        else:
+            self.llm_service, self.generator = init_llm_and_generator(
+                generator_cls=self._AMemGeneratorCls,
+                dedup_enabled=cfg.dedup.enabled,
+            )
         self.memory_system: AgenticMemoryProtocol | None = init_agentic_storage(
             llm_service=self.llm_service,
             system_cls=self._AgenticMemorySystemCls,

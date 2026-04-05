@@ -472,8 +472,77 @@ def make_test_memory(
     return AmemGamMemory(config=config)
 
 
+def _get_fake_runtime() -> Any:
+    """Build an AgenticRuntime using fake classes (lazy to avoid circular imports)."""
+    from gigaevo.memory.shared_memory.agentic_runtime import AgenticRuntime
+
+    return AgenticRuntime(
+        memory_system_cls=FakeAgenticMemorySystem,
+        memory_note_cls=FakeMemoryNote,
+        research_agent_cls=FakeResearchAgent,
+        generator_cls=FakeAMemGenerator,
+    )
+
+
+def make_test_memory_with_agentic(
+    tmp_path: Any,
+    **overrides: Any,
+) -> tuple[Any, FakeAgenticMemorySystem]:
+    """Create AmemGamMemory with full fake agentic infrastructure pre-wired.
+
+    Unlike ``make_test_memory`` (local-only), this wires:
+    - FakeAgenticMemorySystem as memory_system
+    - FakeAMemGenerator as generator
+    - NoteSync with the fake system
+    - All via constructor-time DI (no monkey-patching)
+
+    Returns (memory, fake_system) so tests can inspect agentic state.
+    """
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
+    from gigaevo.memory.shared_memory.memory import AmemGamMemory
+    from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
+
+    dedup_raw = overrides.pop("card_update_dedup_config", None)
+    dedup = CardUpdateDedupConfig.from_mapping(dedup_raw or {})
+
+    api = overrides.pop("api", None)
+    gam = overrides.pop("gam", None) or GamConfig()
+
+    config = MemoryConfig(
+        checkpoint_path=Path(str(tmp_path)) / "mem",
+        search_limit=overrides.pop("search_limit", 5),
+        rebuild_interval=overrides.pop("rebuild_interval", 10),
+        enable_llm_synthesis=overrides.pop("enable_llm_synthesis", False),
+        enable_memory_evolution=overrides.pop("enable_memory_evolution", False),
+        enable_llm_card_enrichment=overrides.pop("enable_llm_card_enrichment", False),
+        api=api,
+        gam=gam,
+        dedup=dedup,
+    )
+
+    mock_llm = MagicMock()
+    fake_generator = FakeAMemGenerator({"llm_service": mock_llm})
+
+    mem = AmemGamMemory(
+        config=config,
+        runtime=_get_fake_runtime(),
+        llm_service=mock_llm,
+        generator=fake_generator,
+    )
+
+    # Return the fake system so tests can inspect its state
+    assert isinstance(mem.memory_system, FakeAgenticMemorySystem)
+    return mem, mem.memory_system
+
+
 def inject_fakes_into_memory(mem: Any) -> FakeAgenticMemorySystem:
     """Replace agentic classes in an AmemGamMemory instance with fakes.
+
+    .. deprecated:: Use ``make_test_memory_with_agentic`` instead for
+       construction-time DI.
 
     Returns the FakeAgenticMemorySystem so tests can inspect its state.
     """

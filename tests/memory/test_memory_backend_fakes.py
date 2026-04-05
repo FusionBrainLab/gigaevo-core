@@ -10,18 +10,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from gigaevo.memory.shared_memory.card_conversion import (
-    normalize_allowed_gam_tools,
-    normalize_gam_pipeline_mode,
-    normalize_gam_top_k_by_tool,
-)
 from tests.fakes.agentic_memory import (
     FakeAgenticMemorySystem,
     FakeAMemGenerator,
     FakeMemoryNote,
     FakeResearchAgent,
-    inject_fakes_into_memory,
     make_test_memory,
+    make_test_memory_with_agentic,
 )
 
 # ---------------------------------------------------------------------------
@@ -34,40 +29,18 @@ def _make_memory(tmp_path, **overrides):
 
 
 def _make_memory_with_fakes(tmp_path, **overrides):
-    """Create AmemGamMemory with fake agentic infrastructure injected."""
-    from gigaevo.memory.shared_memory.gam_search import GamSearch
+    """Create AmemGamMemory with fake agentic infrastructure (constructor DI)."""
+    mem, fake_system = make_test_memory_with_agentic(tmp_path, **overrides)
 
-    mem = _make_memory(tmp_path, **overrides)
-    fake_system = inject_fakes_into_memory(mem)
-    mem.generator = FakeAMemGenerator({"llm_service": MagicMock()})
-
-    # GamSearch wasn't created in __init__ (deps unavailable before fakes).
-    if mem.gam is None:
-        mem.gam = GamSearch(
-            research_agent_cls=mem._ResearchAgentCls,
-            generator=mem.generator,
-            card_store=mem.card_store,
-            checkpoint_dir=mem.checkpoint_dir,
-            gam_store_dir=mem.gam_store_dir,
-            export_file=mem.export_file,
-            enable_bm25=mem.config.gam.enable_bm25,
-            allowed_gam_tools=normalize_allowed_gam_tools(
-                mem.config.gam.allowed_tools or None
-            ),
-            gam_top_k_by_tool=normalize_gam_top_k_by_tool(
-                mem.config.gam.top_k_by_tool or None
-            ),
-            gam_pipeline_mode=normalize_gam_pipeline_mode(mem.config.gam.pipeline_mode),
-        )
-
-    # Patch gam.build to avoid chromadb import
+    # Patch gam.build to use fake retrievers (avoids Chroma import)
     def _fake_gam_build():
         mem.gam.agent = FakeResearchAgent(
             retrievers={"vector": fake_system.retriever},
             generator=mem.generator,
         )
 
-    mem.gam.build = _fake_gam_build
+    if mem.gam is not None:
+        mem.gam.build = _fake_gam_build
     return mem, fake_system
 
 

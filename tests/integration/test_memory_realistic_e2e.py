@@ -41,21 +41,18 @@ from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.memory.shared_memory.card_conversion import (
     is_program_card,
     normalize_allowed_gam_tools,
-    normalize_gam_pipeline_mode,
-    normalize_gam_top_k_by_tool,
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from tests.fakes.agentic_memory import (
-    FakeAMemGenerator,
     FakeResearchAgent,
     fake_build_gam_store,
     fake_build_retrievers,
     fake_load_amem_records,
-    inject_fakes_into_memory,
     make_test_memory,
+    make_test_memory_with_agentic,
 )
 
 # ---------------------------------------------------------------------------
@@ -180,32 +177,9 @@ def _make_memory(tmp_path, **kw):
 
 
 def _make_full_memory(tmp_path, ideas=None, **kw):
-    from gigaevo.memory.shared_memory.gam_search import GamSearch
-
     # Default high rebuild_interval to avoid auto-rebuild during setup
     kw.setdefault("rebuild_interval", 9999)
-    mem = _make_memory(tmp_path, **kw)
-    fs = inject_fakes_into_memory(mem)
-    mem.generator = FakeAMemGenerator({"llm_service": MagicMock()})
-
-    # GamSearch wasn't created in __init__ (deps unavailable before fakes).
-    if mem.gam is None:
-        mem.gam = GamSearch(
-            research_agent_cls=mem._ResearchAgentCls,
-            generator=mem.generator,
-            card_store=mem.card_store,
-            checkpoint_dir=mem.checkpoint_dir,
-            gam_store_dir=mem.gam_store_dir,
-            export_file=mem.export_file,
-            enable_bm25=mem.config.gam.enable_bm25,
-            allowed_gam_tools=normalize_allowed_gam_tools(
-                mem.config.gam.allowed_tools or None
-            ),
-            gam_top_k_by_tool=normalize_gam_top_k_by_tool(
-                mem.config.gam.top_k_by_tool or None
-            ),
-            gam_pipeline_mode=normalize_gam_pipeline_mode(mem.config.gam.pipeline_mode),
-        )
+    mem, fs = make_test_memory_with_agentic(tmp_path, **kw)
 
     def _patched_gam_build():
         if mem.note_sync is not None:
