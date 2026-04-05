@@ -198,21 +198,29 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.card_store.persist()
         return changed
 
+    def _apply_update_actions_from_merges(
+        self, merges: list[tuple[str, AnyCard]]
+    ) -> list[str]:
+        """Apply pre-computed merges from dedup decision."""
+        updated_ids: list[str] = []
+        for card_id, merged_card in merges:
+            try:
+                self._save_card_core(merged_card)
+                updated_ids.append(card_id)
+            except Exception as exc:
+                logger.warning("[Memory] Merge into card {!r} failed: {}", card_id, exc)
+        if updated_ids:
+            self.card_store.persist()
+        return updated_ids
+
     def _apply_update_actions(
         self,
         incoming_card: AnyCard,
         updates: list[dict[str, Any]],
     ) -> list[str]:
+        """Deprecated: Use _apply_update_actions_from_merges with precomputed merges."""
         merges = self.dedup.compute_merges(incoming_card, updates)
-        updated_ids: list[str] = []
-        try:
-            for card_id, merged_card in merges:
-                self._save_card_core(merged_card)
-                updated_ids.append(card_id)
-        finally:
-            if updated_ids:
-                self.card_store.persist()
-        return updated_ids
+        return self._apply_update_actions_from_merges(merges)
 
     def _save_card_core(self, card: AnyCard) -> tuple[str, bool]:
         """Save card to storage. Returns (card_id, rebuilt) where rebuilt
@@ -279,21 +287,16 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if dedup_ready and self.llm_service is not None:
             self.dedup.llm_service = self.llm_service
-            scored = self.dedup.score_candidates(normalized_card)
-            candidates = self.dedup.format_for_llm(scored)
-            decision = self.dedup.decide_action(normalized_card, candidates)
-            action = str(decision.get("action") or "add").strip().lower()
+            decision = self.dedup.process_incoming(normalized_card)
 
-            if action == "discard":
-                dup_id = str(decision.get("duplicate_of") or "").strip()
+            if decision.action == "discard":
                 store.write_stats["rejected"] += 1
-                return dup_id or store.ensure_id(normalized_card)
-            elif action == "update":
-                updates = decision.get("updates")
-                updated_ids = self._apply_update_actions(
-                    normalized_card,
-                    updates if isinstance(updates, list) else [],
-                )
+                if decision.duplicate_of and decision.duplicate_of in store.cards:
+                    return decision.duplicate_of
+                return store.ensure_id(normalized_card)
+
+            if decision.action == "update" and decision.merges:
+                updated_ids = self._apply_update_actions_from_merges(decision.merges)
                 if updated_ids:
                     store.write_stats["updated"] += 1
                     store.write_stats["updated_target_cards"] += len(updated_ids)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,16 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     parse_llm_card_decision,
 )
 from gigaevo.memory.shared_memory.utils import truncate_text
+
+
+@dataclasses.dataclass(frozen=True)
+class DedupDecision:
+    """Result of deduplication analysis: whether to add, discard, or update."""
+
+    action: str  # "add" | "discard" | "update"
+    reason: str
+    duplicate_of: str  # card_id for discard (may be empty/phantom)
+    merges: list[tuple[str, AnyCard]]  # (card_id, merged_card) for update
 
 
 class CardDedup:
@@ -361,6 +372,48 @@ class CardDedup:
                 cfg.llm_max_retries,
             )
         return decision
+
+    def process_incoming(self, card: AnyCard) -> DedupDecision:
+        """Full dedup pipeline: score → format → decide → compute merges.
+
+        Returns a typed DedupDecision with action and merges.
+        Called by orchestrator's save_card() method.
+        """
+        cfg = self._config
+        if not cfg.enabled:
+            return DedupDecision(
+                action="add",
+                reason="dedup disabled",
+                duplicate_of="",
+                merges=[],
+            )
+
+        scored = self.score_candidates(card)
+        if not scored:
+            return DedupDecision(
+                action="add",
+                reason="no candidates",
+                duplicate_of="",
+                merges=[],
+            )
+
+        candidates = self.format_for_llm(scored)
+        decision_dict = self.decide_action(card, candidates)
+
+        action = str(decision_dict.get("action") or "add").strip().lower()
+        merges: list[tuple[str, AnyCard]] = []
+
+        if action == "update":
+            updates = decision_dict.get("updates")
+            if isinstance(updates, list) and updates:
+                merges = self.compute_merges(card, updates)
+
+        return DedupDecision(
+            action=action,
+            reason=str(decision_dict.get("reason") or ""),
+            duplicate_of=str(decision_dict.get("duplicate_of") or "").strip(),
+            merges=merges,
+        )
 
     # --- Merge computation ---
 

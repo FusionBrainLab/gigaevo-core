@@ -174,30 +174,44 @@ class TestMergeEdgeCases:
         assert merges[0][0] == "c1"
 
     def test_apply_update_persists_partial_on_exception(self, tmp_path):
-        """G3: When _save_card_core raises on first merge, exception
-        propagates and no persist happens because no merges completed."""
+        """G3: When _save_card_core raises on first merge, the exception is
+        logged (not propagated) and remaining merges are still attempted."""
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "target1"})
+        mem.save_card({"id": "c2", "description": "target2"})
 
-        def failing_save(card):
-            raise RuntimeError("save failed")
+        call_count = 0
 
-        mem._save_card_core = failing_save
+        def failing_on_first(card):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("save failed")
+            # Second call succeeds
+            mem.card_store.cards[card.id or ""] = card
 
-        # Try to apply updates to one card
-        with pytest.raises(RuntimeError, match="save failed"):
-            mem._apply_update_actions(
-                normalize_memory_card({"description": "incoming"}),
-                updates=[
-                    {
-                        "card_id": "c1",
-                        "update_explanation": True,
-                        "explanation_append": "x",
-                    },
-                ],
-            )
+        mem._save_card_core = failing_on_first
 
-        # No updates were applied because _save_card_core raised immediately
+        # Try to apply updates to two cards, first fails
+        updated_ids = mem._apply_update_actions(
+            normalize_memory_card({"description": "incoming"}),
+            updates=[
+                {
+                    "card_id": "c1",
+                    "update_explanation": True,
+                    "explanation_append": "x",
+                },
+                {
+                    "card_id": "c2",
+                    "update_explanation": True,
+                    "explanation_append": "y",
+                },
+            ],
+        )
+
+        # c1 failed, c2 succeeded
+        assert "c1" not in updated_ids
+        assert "c2" in updated_ids
 
     def test_compute_merges_skips_non_dict_updates(self, tmp_path):
         """G4: If updates contains non-dict items, they're skipped."""
@@ -389,6 +403,79 @@ class TestNoteSyncExceptions:
 # ===========================================================================
 # Category J: Config Validation (memory_config.py)
 # ===========================================================================
+
+
+class TestMergeApiError:
+    """Tests for X3: partial merge failure during _apply_update_actions."""
+
+    def test_merge_api_error_continues_remaining_merges(self, tmp_path):
+        """X3: If _save_card_core raises on first merge, second merge should
+        still be attempted. The partial failure should be logged, not silently
+        dropped."""
+        mem = _make_memory(tmp_path)
+        mem.save_card({"id": "c1", "description": "target1"})
+        mem.save_card({"id": "c2", "description": "target2"})
+
+        call_count = 0
+        original_save = mem._save_card_core
+
+        def failing_on_first(card):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("API error on first merge")
+            return original_save(card)
+
+        mem._save_card_core = failing_on_first
+
+        updated_ids = mem._apply_update_actions(
+            normalize_memory_card({"description": "incoming"}),
+            updates=[
+                {
+                    "card_id": "c1",
+                    "update_explanation": True,
+                    "explanation_append": "new info 1",
+                },
+                {
+                    "card_id": "c2",
+                    "update_explanation": True,
+                    "explanation_append": "new info 2",
+                },
+            ],
+        )
+
+        # c2 should still be updated even though c1 failed
+        assert "c2" in updated_ids
+        # c1 was NOT added because it failed
+        assert "c1" not in updated_ids
+
+
+class TestDiscardPhantomId:
+    """Tests for X5: discard returns phantom card ID."""
+
+    def test_discard_phantom_id_returns_fallback(self, tmp_path):
+        """X5: When LLM says discard with duplicate_of pointing to a
+        nonexistent card, the returned ID should be valid (exist in store)."""
+        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
+        mem.save_card({"id": "c1", "description": "card1"})
+
+        mock_llm = MagicMock()
+        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
+
+        # Mock decide_action to return discard for a phantom card
+        mem.dedup.decide_action = MagicMock(
+            return_value={"action": "discard", "duplicate_of": "phantom-gone"}
+        )
+        mem.dedup.score_candidates = MagicMock(
+            return_value=[{"card_id": "c1", "final_score": 0.9}]
+        )
+
+        result_id = mem.save_card({"description": "new card"})
+
+        # The returned ID must be valid — either in store.cards or a fresh mem-* ID
+        # It must NOT be "phantom-gone" since that card doesn't exist
+        assert result_id != "phantom-gone"
 
 
 class TestConfigValidation:
