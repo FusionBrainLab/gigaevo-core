@@ -113,13 +113,13 @@ class TestSearchViaApi:
 
         mem._search_via_api("test")
 
-        assert mem.entity_by_card_id.get("idea-1") == "e1"
-        assert mem.card_id_by_entity.get("e1") == "idea-1"
-        version = mem.entity_version_by_entity.get("e1")
+        assert mem.card_store.entity_by_card_id.get("idea-1") == "e1"
+        assert mem.card_store.card_id_by_entity.get("e1") == "idea-1"
+        version = mem.card_store.entity_version.get("e1")
         assert version is not None and version != "", (
             f"version_id should be set from get_concept response, got {version!r}"
         )
-        assert "idea-1" in mem.memory_cards
+        assert "idea-1" in mem.card_store.cards
 
     def test_api_search_persists_to_index(self, tmp_path):
         mem = _make_memory(tmp_path)

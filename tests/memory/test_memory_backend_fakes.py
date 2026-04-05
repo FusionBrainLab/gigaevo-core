@@ -40,17 +40,35 @@ def _make_memory(tmp_path, **overrides):
 
 def _make_memory_with_fakes(tmp_path, **overrides):
     """Create AmemGamMemory with fake agentic infrastructure injected."""
+    from gigaevo.memory.shared_memory.gam_search import GamSearch
+
     mem = _make_memory(tmp_path, **overrides)
     fake_system = inject_fakes_into_memory(mem)
-    # Patch _load_or_create_retriever to avoid chromadb import
+    mem.generator = FakeAMemGenerator({"llm_service": MagicMock()})
 
-    def _fake_load_or_create_retriever():
-        return FakeResearchAgent(
+    # GamSearch wasn't created in __init__ (deps unavailable before fakes).
+    if mem.gam is None:
+        mem.gam = GamSearch(
+            research_agent_cls=mem._ResearchAgentCls,
+            generator=mem.generator,
+            card_store=mem.card_store,
+            checkpoint_dir=mem.checkpoint_dir,
+            gam_store_dir=mem.gam_store_dir,
+            export_file=mem.export_file,
+            enable_bm25=mem.enable_bm25,
+            allowed_gam_tools=mem.allowed_gam_tools,
+            gam_top_k_by_tool=mem.gam_top_k_by_tool,
+            gam_pipeline_mode=mem.gam_pipeline_mode,
+        )
+
+    # Patch gam.build to avoid chromadb import
+    def _fake_gam_build():
+        mem.gam.agent = FakeResearchAgent(
             retrievers={"vector": fake_system.retriever},
             generator=mem.generator,
         )
 
-    mem._load_or_create_retriever = _fake_load_or_create_retriever
+    mem.gam.build = _fake_gam_build
     return mem, fake_system
 
 
@@ -142,7 +160,7 @@ class TestUpsertLocalNoteAgentic:
         mem.save_card({"id": "c1", "description": "SA optimization"})
 
         # Card should exist in both memory_cards and the agentic system
-        assert "c1" in mem.memory_cards
+        assert "c1" in mem.card_store.cards
         note = fake_sys.read("c1")
         assert note is not None
         assert "SA optimization" in note.content
@@ -330,7 +348,7 @@ class TestFullCycleWithFakes:
 
         # Persist and reload
         mem2, fake_sys2 = _make_memory_with_fakes(tmp_path)
-        assert len(mem2.memory_cards) == 4
+        assert len(mem2.card_store.cards) == 4
         assert mem2.get_card("idea-2") is None
         assert mem2.get_card("idea-3") is not None
 
@@ -347,7 +365,7 @@ class TestFullCycleWithFakes:
 
         # Reload: cards in memory_cards, but agentic system is fresh/empty
         mem2, fake_sys2 = _make_memory_with_fakes(tmp_path)
-        assert "c1" in mem2.memory_cards
+        assert "c1" in mem2.card_store.cards
         assert fake_sys2.read("c1") is None  # Gap: not in agentic system
 
         # Local search still works (it reads memory_cards directly)
@@ -369,17 +387,17 @@ class TestFullCycleWithFakes:
         )
 
         # Directly call the fast upsert (normally called by _sync_from_api)
-        changed = mem._upsert_local_note_fast(card)
+        changed = mem.note_sync.upsert_fast(card)
         assert changed is True
         assert fake_sys.read("c1") is not None
         assert fake_sys.read("c1").content == "SA optimization"
 
         # Second call with same content → no change
-        changed2 = mem._upsert_local_note_fast(card)
+        changed2 = mem.note_sync.upsert_fast(card)
         assert changed2 is False
 
         # Update content → change detected
         card.description = "Updated SA optimization"
-        changed3 = mem._upsert_local_note_fast(card)
+        changed3 = mem.note_sync.upsert_fast(card)
         assert changed3 is True
         assert "Updated" in fake_sys.read("c1").content

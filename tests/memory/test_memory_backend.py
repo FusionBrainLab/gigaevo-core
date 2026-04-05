@@ -77,7 +77,7 @@ class TestAmemGamMemoryInit:
 
     def test_memory_cards_empty(self, tmp_path):
         mem = _make_memory(tmp_path)
-        assert mem.memory_cards == {}
+        assert mem.card_store.cards == {}
 
     def test_memory_system_none_without_agentic_deps(self, tmp_path):
         """In CI, A_mem/GAM imports fail → memory_system is None."""
@@ -148,7 +148,7 @@ class TestSaveCard:
         mem = _make_memory(tmp_path)
         for i in range(5):
             mem.save_card(_make_card(id=f"c{i}"))
-        assert len(mem.memory_cards) == 5
+        assert len(mem.card_store.cards) == 5
         stats = mem.get_card_write_stats()
         assert stats["processed"] == 5
         assert stats["added"] == 5
@@ -274,7 +274,7 @@ class TestSearchLocal:
         # Save then inject keywords (normalize_memory_card produces keyword field)
         mem.save_card(card)
         # Directly modify to add keywords for search
-        mem.memory_cards["c1"] = mem.memory_cards["c1"].model_copy(
+        mem.card_store.cards["c1"] = mem.card_store.cards["c1"].model_copy(
             update={"keywords": ["optimization", "local-search"]}
         )
         result = mem.search("optimization")
@@ -366,7 +366,7 @@ class TestDedup:
         mem.llm_service = mock_llm
 
         # Mock _score_retrieved_candidates to return a synthetic candidate
-        mem._score_retrieved_candidates = MagicMock(
+        mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.9}]
         )
 
@@ -388,7 +388,7 @@ class TestDedup:
             None,
         )
         mem.llm_service = mock_llm
-        mem._score_retrieved_candidates = MagicMock(
+        mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.3}]
         )
 
@@ -397,7 +397,7 @@ class TestDedup:
         assert stats["added"] == 2  # existing + new
 
     def test_dedup_only_triggers_with_existing_cards(self, tmp_path):
-        """Dedup requires self.memory_cards to be non-empty."""
+        """Dedup requires card_store.cards to be non-empty."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
         mock_llm = MagicMock()
         mem.llm_service = mock_llm
@@ -432,7 +432,7 @@ class TestIndexPersistence:
 
         # Should not crash
         mem = _make_memory(tmp_path)
-        assert mem.memory_cards == {}
+        assert mem.card_store.cards == {}
 
     def test_empty_index_file(self, tmp_path):
         mem_path = tmp_path / "mem"
@@ -441,20 +441,20 @@ class TestIndexPersistence:
         index_file.write_text("{}")
 
         mem = _make_memory(tmp_path)
-        assert mem.memory_cards == {}
+        assert mem.card_store.cards == {}
 
     def test_index_with_entity_mappings(self, tmp_path):
         """Verify entity_by_card_id and card_id_by_entity round-trip."""
         mem1 = _make_memory(tmp_path)
         mem1.save_card(_make_card(id="c1"))
         # Manually add entity mapping (normally done by API mode)
-        mem1.entity_by_card_id["c1"] = "entity-uuid"
-        mem1.card_id_by_entity["entity-uuid"] = "c1"
-        mem1._persist_index()
+        mem1.card_store.entity_by_card_id["c1"] = "entity-uuid"
+        mem1.card_store.card_id_by_entity["entity-uuid"] = "c1"
+        mem1.card_store.persist()
 
         mem2 = _make_memory(tmp_path)
-        assert mem2.entity_by_card_id.get("c1") == "entity-uuid"
-        assert mem2.card_id_by_entity.get("entity-uuid") == "c1"
+        assert mem2.card_store.entity_by_card_id.get("c1") == "entity-uuid"
+        assert mem2.card_store.card_id_by_entity.get("entity-uuid") == "c1"
 
 
 # ===========================================================================

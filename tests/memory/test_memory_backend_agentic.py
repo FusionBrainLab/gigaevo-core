@@ -40,22 +40,39 @@ def _make_memory(tmp_path, **overrides):
 
 def _make_full_memory(tmp_path, ideas=None, **overrides):
     """Create AmemGamMemory with fake agentic system + generator + retriever patches."""
+    from gigaevo.memory.shared_memory.gam_search import GamSearch
+
     mem = _make_memory(tmp_path, **overrides)
     fake_sys = inject_fakes_into_memory(mem)
     mem.generator = FakeAMemGenerator({"llm_service": MagicMock()})
+
+    # GamSearch wasn't created in __init__ (deps unavailable before fakes).
+    if mem.gam is None:
+        mem.gam = GamSearch(
+            research_agent_cls=mem._ResearchAgentCls,
+            generator=mem.generator,
+            card_store=mem.card_store,
+            checkpoint_dir=mem.checkpoint_dir,
+            gam_store_dir=mem.gam_store_dir,
+            export_file=mem.export_file,
+            enable_bm25=mem.enable_bm25,
+            allowed_gam_tools=mem.allowed_gam_tools,
+            gam_top_k_by_tool=mem.gam_top_k_by_tool,
+            gam_pipeline_mode=mem.gam_pipeline_mode,
+        )
 
     # Save ideas to populate both memory_cards and agentic system
     for idea in ideas or []:
         mem.save_card(idea)
 
-    # Patch _load_or_create_retriever to use fake GAM builders
-    def _patched_load_or_create_retriever():
-        # Export memories to JSONL (same as real _dump_memory)
-        mem._dump_memory()
+    # Patch gam.build to use fake GAM builders
+    def _patched_gam_build():
+        if mem.note_sync is not None:
+            mem.note_sync.export_jsonl(mem.export_file)
 
         records = fake_load_amem_records(mem.export_file)
         if not records:
-            records = [c.model_dump() for c in mem.memory_cards.values()]
+            records = [c.model_dump() for c in mem.card_store.cards.values()]
 
         memory_store, page_store, added = fake_build_gam_store(
             records,
@@ -68,20 +85,21 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
             allowed_tools=sorted(mem.allowed_gam_tools),
         )
         if not retrievers:
-            return None
+            mem.gam.agent = None
+            return
 
-        return FakeResearchAgent(
+        mem.gam.agent = FakeResearchAgent(
             page_store=page_store,
             memory_store=memory_store,
             retrievers=retrievers,
             generator=mem.generator,
         )
 
-    mem._load_or_create_retriever = _patched_load_or_create_retriever
+    mem.gam.build = _patched_gam_build
 
-    # Also patch _build_dedup_retrievers similarly
+    # Also patch dedup.build_retrievers similarly
     def _patched_build_dedup_retrievers():
-        records = [c.model_dump() for c in mem.memory_cards.values()]
+        records = [c.model_dump() for c in mem.card_store.cards.values()]
         records = [
             r
             for r in records
@@ -106,7 +124,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
             name: r for name, r in retrievers.items() if name in mem.allowed_gam_tools
         }
 
-    mem._build_dedup_retrievers = _patched_build_dedup_retrievers
+    mem.dedup.build_retrievers = _patched_build_dedup_retrievers
 
     return mem, fake_sys
 
@@ -199,7 +217,7 @@ class TestDedupWithRealScoring:
             }
         )
 
-        scored = mem._score_retrieved_candidates(incoming)
+        scored = mem.dedup.score_candidates(incoming)
 
         # Should find at least existing-1 as similar
         assert len(scored) > 0
@@ -225,7 +243,7 @@ class TestDedupWithRealScoring:
         from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card({"description": "SA optimization"})
-        scored = mem._score_retrieved_candidates(incoming)
+        scored = mem.dedup.score_candidates(incoming)
 
         # Program cards should be excluded from dedup scoring
         card_ids = [s["card_id"] for s in scored]
@@ -240,11 +258,11 @@ class TestDedupWithRealScoring:
         from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card({"description": "test"})
-        scored = mem._score_retrieved_candidates(incoming)
+        scored = mem.dedup.score_candidates(incoming)
         assert scored == []
 
     def test_dedup_invalidates_retrievers_on_save(self, tmp_path):
-        """_dedup_retrievers cache is cleared after save_card."""
+        """Dedup retriever cache is cleared after save_card."""
         mem, _ = _make_full_memory(
             tmp_path,
             ideas=[{"id": "i1", "description": "test"}],
@@ -252,13 +270,13 @@ class TestDedupWithRealScoring:
         )
 
         # First access builds retrievers
-        mem._dedup_retrievers = None
-        mem._resolve_vector_retriever("vector_description")
-        assert mem._dedup_retrievers is not None
+        mem.dedup.invalidate_retrievers()
+        mem.dedup.resolve_retriever("vector_description")
+        assert mem.dedup._retrievers is not None
 
         # Save new card clears cache
         mem.save_card({"id": "i2", "description": "new idea"})
-        assert mem._dedup_retrievers is None
+        assert mem.dedup._retrievers is None
 
 
 # ===========================================================================
@@ -300,7 +318,7 @@ class TestFullDedupPipeline:
         )
 
         assert result_id == "existing"
-        assert len(mem.memory_cards) == 1
+        assert len(mem.card_store.cards) == 1
         stats = mem.get_card_write_stats()
         assert stats["rejected"] == 1
 
@@ -381,7 +399,7 @@ class TestFullDedupPipeline:
         )
 
         assert result_id != "existing"
-        assert len(mem.memory_cards) == 2
+        assert len(mem.card_store.cards) == 2
         stats = mem.get_card_write_stats()
         assert stats["added"] == 2
 
@@ -399,9 +417,9 @@ class TestResolveVectorRetriever:
             card_update_dedup_config={"enabled": True},
         )
 
-        assert mem._dedup_retrievers is None
-        retriever = mem._resolve_vector_retriever("vector_description")
-        assert mem._dedup_retrievers is not None
+        assert mem.dedup._retrievers is None
+        retriever = mem.dedup.resolve_retriever("vector_description")
+        assert mem.dedup._retrievers is not None
         assert retriever is not None
 
     def test_fallback_to_vector_tool(self, tmp_path):
@@ -412,23 +430,23 @@ class TestResolveVectorRetriever:
         )
         # Set allowed tools to include "vector" which is the fallback
         mem.allowed_gam_tools = {"vector", "vector_description"}
-        mem._dedup_retrievers = None
+        mem.dedup.invalidate_retrievers()
 
         # Request a tool that might not exist
-        mem._resolve_vector_retriever("vector_nonexistent")
+        mem.dedup.resolve_retriever("vector_nonexistent")
         # Falls back to "vector" if tool not found
-        # (may or may not find it depending on what _build_dedup_retrievers returns)
+        # (may or may not find it depending on what build_retrievers returns)
 
     def test_empty_memory_returns_none(self, tmp_path):
         mem, _ = _make_full_memory(
             tmp_path, ideas=[], card_update_dedup_config={"enabled": True}
         )
-        retriever = mem._resolve_vector_retriever("vector_description")
+        retriever = mem.dedup.resolve_retriever("vector_description")
         assert retriever is None
 
 
 # ===========================================================================
-# _dump_memory
+# note_sync.export_jsonl
 # ===========================================================================
 
 
@@ -442,7 +460,7 @@ class TestDumpMemory:
             ],
         )
 
-        mem._dump_memory()
+        mem.note_sync.export_jsonl(mem.export_file)
 
         assert mem.export_file.exists()
         lines = mem.export_file.read_text().strip().split("\n")
@@ -451,6 +469,7 @@ class TestDumpMemory:
             record = json.loads(line)
             assert "id" in record or "content" in record
 
-    def test_dump_empty_when_no_system(self, tmp_path):
+    def test_dump_noop_when_no_system(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem._dump_memory()  # Should not crash with memory_system=None
+        # note_sync is None when memory_system is None
+        assert mem.note_sync is None

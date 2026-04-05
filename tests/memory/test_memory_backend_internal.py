@@ -134,25 +134,25 @@ class TestEnsureCardId:
     def test_existing_id_preserved(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({"id": "my-id", "description": "test"})
-        assert mem._ensure_card_id(card) == "my-id"
+        assert mem.card_store.ensure_id(card) == "my-id"
 
     def test_empty_id_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({"id": "", "description": "test"})
-        result = mem._ensure_card_id(card)
+        result = mem.card_store.ensure_id(card)
         assert result.startswith("mem-")
         assert card.id == result  # Mutates the card dict
 
     def test_whitespace_id_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({"id": "   ", "description": "test"})
-        result = mem._ensure_card_id(card)
+        result = mem.card_store.ensure_id(card)
         assert result.startswith("mem-")
 
     def test_no_id_key_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({"description": "test"})
-        result = mem._ensure_card_id(card)
+        result = mem.card_store.ensure_id(card)
         assert result.startswith("mem-")
 
 
@@ -292,7 +292,7 @@ class TestSaveCardBranching:
             None,
         )
         mem.llm_service = mock_llm
-        mem._score_retrieved_candidates = MagicMock(
+        mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.8}]
         )
 

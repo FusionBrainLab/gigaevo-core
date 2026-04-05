@@ -55,7 +55,7 @@ class TestBug1CorruptIndexFile:
 
         mem = _make_memory(tmp_path)
         # BUG: silently lost all data
-        assert mem.memory_cards == {}
+        assert mem.card_store.cards == {}
 
     def test_valid_index_loads_correctly(self, tmp_path):
         """Contrast: valid JSON loads fine."""
@@ -124,7 +124,8 @@ class TestBug6IDCollision:
         # Mock uuid4 to return same value twice
         fixed_uuid = uuid.UUID("12345678-1234-5678-1234-567812345678")
         with patch(
-            "gigaevo.memory.shared_memory.memory.uuid.uuid4", return_value=fixed_uuid
+            "gigaevo.memory.shared_memory.card_store.uuid.uuid4",
+            return_value=fixed_uuid,
         ):
             id1 = mem.save_card({"description": "first card"})
             id2 = mem.save_card({"description": "second card"})
@@ -133,7 +134,7 @@ class TestBug6IDCollision:
         assert id1 == id2
         # BUG: first card silently overwritten
         assert mem.get_card(id1).description == "second card"
-        assert len(mem.memory_cards) == 1  # Only one card exists
+        assert len(mem.card_store.cards) == 1  # Only one card exists
 
 
 # ===========================================================================
@@ -284,13 +285,13 @@ class TestBug7UpdateFallthrough:
             None,
         )
         mem.llm_service = mock_llm
-        mem._score_retrieved_candidates = MagicMock(
+        mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.8}]
         )
 
         # Delete the target card BEFORE the dedup processes
         # (simulating concurrent deletion)
-        del mem.memory_cards["existing"]
+        del mem.card_store.cards["existing"]
 
         # Now save a new card — dedup will try to update "existing" but it's gone
         mem.save_card({"description": "should be deduped"})

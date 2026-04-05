@@ -178,10 +178,10 @@ class TestScenarioTwoRunCycle:
 
         # --- Run 2: Load and search ---
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == len(cards)
+        assert len(mem2.card_store.cards) == len(cards)
 
         # Search for retrieval ideas — verify by card ID presence
-        idea_ids = [uid for uid in mem2.memory_cards]
+        idea_ids = [uid for uid in mem2.card_store.cards]
         result = mem2.search("evidence retrieval sorting relevance")
         # At least one idea card ID should appear in the formatted result
         matched_ids = [uid for uid in idea_ids if uid in result]
@@ -270,11 +270,11 @@ class TestScenarioIncrementalGrowth:
         ]
         for idea in gen5_ideas:
             mem.save_card(idea)
-        assert len(mem.memory_cards) == 2
+        assert len(mem.card_store.cards) == 2
 
         # Persist and reload (simulating process restart between generations)
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 2
+        assert len(mem2.card_store.cards) == 2
 
         # Generation 10: second batch
         gen10_ideas = [
@@ -293,11 +293,11 @@ class TestScenarioIncrementalGrowth:
         ]
         for idea in gen10_ideas:
             mem2.save_card(idea)
-        assert len(mem2.memory_cards) == 4
+        assert len(mem2.card_store.cards) == 4
 
         # Generation 15: update existing idea
         mem3 = _make_memory(tmp_path)
-        assert len(mem3.memory_cards) == 4
+        assert len(mem3.card_store.cards) == 4
         mem3.save_card(
             {
                 "id": "idea-g5-1",
@@ -305,7 +305,7 @@ class TestScenarioIncrementalGrowth:
             }
         )
         # Updated, not duplicated
-        assert len(mem3.memory_cards) == 4
+        assert len(mem3.card_store.cards) == 4
         card = mem3.get_card("idea-g5-1")
         assert "width=3" in card.description
 
@@ -343,7 +343,7 @@ class TestScenarioIncrementalGrowth:
 
         # Reload and verify
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 3
+        assert len(mem2.card_store.cards) == 3
 
         # Search finds ideas
         result = mem2.search("relevance sorting")
@@ -354,7 +354,7 @@ class TestScenarioIncrementalGrowth:
         # but the explicit id was "program-prog-best-1" (we set it, not auto-prefixed)
         # Let's verify by checking all cards
         prog_cards = [
-            c for c in mem2.memory_cards.values() if isinstance(c, ProgramCard)
+            c for c in mem2.card_store.cards.values() if isinstance(c, ProgramCard)
         ]
         assert len(prog_cards) == 1
         assert prog_cards[0].fitness == 95.0
@@ -374,7 +374,7 @@ class TestScenarioDedup:
         mem.save_card({"id": "idea-1", "description": "SA optimization v1"})
         mem.save_card({"id": "idea-1", "description": "SA optimization v2 (improved)"})
 
-        assert len(mem.memory_cards) == 1
+        assert len(mem.card_store.cards) == 1
         assert "v2" in mem.get_card("idea-1").description
 
         stats = mem.get_card_write_stats()
@@ -394,13 +394,13 @@ class TestScenarioDedup:
             None,
         )
         mem.llm_service = mock_llm
-        mem._score_retrieved_candidates = MagicMock(
+        mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.9}]
         )
 
         result_id = mem.save_card({"description": "Apply SA for local search"})
         assert result_id == "idea-1"
-        assert len(mem.memory_cards) == 1
+        assert len(mem.card_store.cards) == 1
         assert mem.get_card_write_stats()["rejected"] == 1
 
     def test_llm_dedup_updates_existing_card(self, tmp_path):
@@ -436,7 +436,7 @@ class TestScenarioDedup:
             None,
         )
         mem.llm_service = mock_llm
-        mem._score_retrieved_candidates = MagicMock(
+        mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.85}]
         )
 
@@ -515,7 +515,7 @@ class TestScenarioWritePipeline:
             mem.save_card(card)
 
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 5
+        assert len(mem2.card_store.cards) == 5
 
         # Search for specific method
         result = mem2.search("method_3 optimization")
@@ -548,12 +548,12 @@ class TestScenarioWritePipeline:
         mem = _make_memory(tmp_path)
         for card in cards:
             mem.save_card(card)
-        assert len(mem.memory_cards) == 3
+        assert len(mem.card_store.cards) == 3
 
         # Re-run (same IDs)
         for card in cards:
             mem.save_card(card)
-        assert len(mem.memory_cards) == 3  # No duplicates
+        assert len(mem.card_store.cards) == 3  # No duplicates
 
         stats = mem.get_card_write_stats()
         assert stats["added"] == 3
@@ -629,11 +629,11 @@ class TestScenarioIdeasToMemory:
                 }
             )
 
-        assert len(mem.memory_cards) == 2
+        assert len(mem.card_store.cards) == 2
 
         # Reload and search
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 2
+        assert len(mem2.card_store.cards) == 2
         result = mem2.search("evidence relevance sorting")
         assert "Sort evidence" in result or "relevance" in result.lower()
 
@@ -687,12 +687,12 @@ class TestScenarioDeleteAndRebuild:
 
         for cid in ids:
             mem.delete(cid)
-        assert len(mem.memory_cards) == 0
+        assert len(mem.card_store.cards) == 0
 
         # Repopulate
         mem.save_card({"id": "fresh", "description": "brand new idea"})
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 1
+        assert len(mem2.card_store.cards) == 1
         assert mem2.get_card("fresh") is not None
 
 
@@ -740,7 +740,7 @@ class TestScenarioCrossTask:
             enable_memory_evolution=False,
             enable_llm_card_enrichment=False,
         )
-        assert len(mem_hover2.memory_cards) == 1
+        assert len(mem_hover2.card_store.cards) == 1
         assert mem_hover2.get_card("hover-1") is not None
 
 
@@ -767,7 +767,7 @@ class TestScenarioErrorRecovery:
 
         # Reload: data is lost (known bug, documented)
         mem2 = _make_memory(tmp_path)
-        assert len(mem2.memory_cards) == 0
+        assert len(mem2.card_store.cards) == 0
 
     def test_save_card_with_minimal_fields(self, tmp_path):
         """Cards with only description should still work."""

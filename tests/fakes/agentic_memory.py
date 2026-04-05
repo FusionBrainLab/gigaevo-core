@@ -435,6 +435,8 @@ def inject_fakes_into_memory(mem: Any) -> FakeAgenticMemorySystem:
 
     Returns the FakeAgenticMemorySystem so tests can inspect its state.
     """
+    from gigaevo.memory.shared_memory.note_sync import NoteSync
+
     fake_system = FakeAgenticMemorySystem(
         use_gam_card_document=True,
         llm_service=mem.llm_service,
@@ -444,6 +446,7 @@ def inject_fakes_into_memory(mem: Any) -> FakeAgenticMemorySystem:
     mem._MemoryNoteCls = FakeMemoryNote
     mem._ResearchAgentCls = FakeResearchAgent
     mem._AMemGeneratorCls = FakeAMemGenerator
+    mem.note_sync = NoteSync(fake_system, FakeMemoryNote, mem.card_store)
     return fake_system
 
 

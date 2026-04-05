@@ -78,9 +78,9 @@ class TestSyncFromApi:
 
         result = mem._sync_from_api(force_full=True)
         assert result is True
-        assert "idea-1" in mem.memory_cards
-        assert mem.entity_by_card_id.get("idea-1") == "eid-1"
-        assert mem.card_id_by_entity.get("eid-1") == "idea-1"
+        assert "idea-1" in mem.card_store.cards
+        assert mem.card_store.entity_by_card_id.get("idea-1") == "eid-1"
+        assert mem.card_store.card_id_by_entity.get("eid-1") == "idea-1"
         # Verify correct entity_id was passed to get_concept
         mock_api.get_concept.assert_called_once_with("eid-1", channel="latest")
 
@@ -90,12 +90,12 @@ class TestSyncFromApi:
         mem.use_api = True
 
         # Pre-populate known state
-        mem.memory_cards["idea-1"] = normalize_memory_card(
+        mem.card_store.cards["idea-1"] = normalize_memory_card(
             {"id": "idea-1", "description": "known"}
         )
-        mem.entity_by_card_id["idea-1"] = "eid-1"
-        mem.card_id_by_entity["eid-1"] = "idea-1"
-        mem.entity_version_by_entity["eid-1"] = "v1"
+        mem.card_store.entity_by_card_id["idea-1"] = "eid-1"
+        mem.card_store.card_id_by_entity["eid-1"] = "idea-1"
+        mem.card_store.entity_version["eid-1"] = "v1"
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [
