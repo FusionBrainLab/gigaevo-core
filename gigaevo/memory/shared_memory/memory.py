@@ -5,7 +5,7 @@ from typing import Any
 from dotenv import load_dotenv
 from loguru import logger
 
-import gigaevo.memory.config as _env_config  # noqa: F401 — preserve import order vs load_dotenv()
+import gigaevo.memory.config as _env_config  # noqa: F401
 from gigaevo.memory.shared_memory.agentic_runtime import (
     AgenticRuntime,
     init_agentic_storage,
@@ -13,19 +13,6 @@ from gigaevo.memory.shared_memory.agentic_runtime import (
     load_agentic_runtime,
 )
 from gigaevo.memory.shared_memory.api_sync import ApiSync
-from gigaevo.memory.shared_memory.card_dedup import CardDedup
-from gigaevo.memory.shared_memory.card_store import CardStore
-from gigaevo.memory.shared_memory.gam_search import GamSearch
-from gigaevo.memory.shared_memory.note_sync import NoteSync
-from gigaevo.memory.shared_memory.protocols import (
-    AgenticMemoryProtocol,
-    GeneratorProtocol,
-    LLMServiceProtocol,
-    ResearchAgentProtocol,
-)
-
-load_dotenv()
-
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     GigaEvoMemoryBase,
@@ -40,9 +27,21 @@ from gigaevo.memory.shared_memory.card_conversion import (
     search_cards_by_keyword,
     synthesize_search_results,
 )
+from gigaevo.memory.shared_memory.card_dedup import CardDedup
+from gigaevo.memory.shared_memory.card_store import CardStore
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
+from gigaevo.memory.shared_memory.gam_search import GamSearch
 from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+from gigaevo.memory.shared_memory.note_sync import NoteSync
+from gigaevo.memory.shared_memory.protocols import (
+    AgenticMemoryProtocol,
+    GeneratorProtocol,
+    LLMServiceProtocol,
+    ResearchAgentProtocol,
+)
 from gigaevo.memory.shared_memory.utils import looks_like_uuid
+
+load_dotenv()
 
 
 class AmemGamMemory(GigaEvoMemoryBase):
