@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -29,12 +29,14 @@ from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.gam_search import GamSearch
 from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 from gigaevo.memory.shared_memory.note_sync import NoteSync
-from gigaevo.memory.shared_memory.protocols import (
-    AgenticMemoryProtocol,
-    GeneratorProtocol,
-    LLMServiceProtocol,
-    ResearchAgentProtocol,
-)
+
+if TYPE_CHECKING:
+    from gigaevo.memory.shared_memory.protocols import (
+        AgenticMemoryProtocol,
+        GeneratorProtocol,
+        LLMServiceProtocol,
+        ResearchAgentProtocol,
+    )
 
 load_dotenv()
 
@@ -62,6 +64,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
     @property
     def gam_store_dir(self) -> Path:
         return self.config.gam_store_dir
+
+    @property
+    def _has_agentic(self) -> bool:
+        return self.memory_system is not None and self.generator is not None
 
     def __init__(
         self,
@@ -163,12 +169,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 search_limit=cfg.search_limit,
             )
 
-        if (
-            self.memory_system is not None
-            and self.generator is not None
-            and cfg.export_file.exists()
-            and self.gam is not None
-        ):
+        if self._has_agentic and cfg.export_file.exists() and self.gam is not None:
             try:
                 self.gam.build()
                 self.research_agent = self.gam.agent
@@ -202,12 +203,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if sync is None:
             return False
         changed = sync.sync(force_full=force_full)
-        needs_retriever = (
-            self.research_agent is None
-            and self.memory_system is not None
-            and self.generator is not None
-        )
-        if changed or needs_retriever:
+        if changed or (self.research_agent is None and self._has_agentic):
             self.rebuild()
         else:
             self.card_store.persist()
@@ -283,19 +279,16 @@ class AmemGamMemory(GigaEvoMemoryBase):
             store.write_stats["added"] += 1
             return self._save_and_persist(normalized_card)
 
-        if (
-            self.config.dedup.enabled
-            and store.cards
-            and self.llm_service is None
-            and not self._warned_missing_card_update_llm
-        ):
-            logger.warning(
-                "[Memory] card_update_dedup is enabled but LLM service is unavailable. "
-                "Falling back to regular save_card behavior."
-            )
-            self._warned_missing_card_update_llm = True
+        dedup_ready = self.config.dedup.enabled and store.cards
+        if dedup_ready and self.llm_service is None:
+            if not self._warned_missing_card_update_llm:
+                logger.warning(
+                    "[Memory] card_update_dedup enabled but LLM unavailable; "
+                    "falling back to regular save_card."
+                )
+                self._warned_missing_card_update_llm = True
 
-        if self.config.dedup.enabled and store.cards and self.llm_service is not None:
+        if dedup_ready and self.llm_service is not None:
             self.dedup.llm_service = self.llm_service
             scored = self.dedup.score_candidates(normalized_card)
             candidates = self.dedup.format_for_llm(scored)
@@ -348,11 +341,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         cards, local_changed = sync.search(query, memory_state)
 
-        if (
-            local_changed
-            and self.memory_system is not None
-            and self.generator is not None
-        ):
+        if local_changed and self._has_agentic:
             self.rebuild()
         else:
             self.card_store.persist()
@@ -397,7 +386,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def rebuild(self) -> None:
         serialized = self.card_store.serialize_all()
         self.card_store.persist(serialized=serialized)
-        if self.memory_system is None or self.generator is None:
+        if not self._has_agentic:
             return
         if self.note_sync is not None:
             self.note_sync.export_jsonl(self.config.export_file, serialized)
@@ -428,7 +417,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         else:
             store.note_ids.discard(card_id)
 
-        if self.memory_system is not None and self.generator is not None:
+        if self._has_agentic:
             self.rebuild()
         else:
             store.persist()
