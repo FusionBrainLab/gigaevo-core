@@ -183,9 +183,7 @@ class ApiSync:
             card = concept_to_card(content, fallback_id=card_id)
             card_id = store.ensure_id(card)
 
-            version = str(
-                concept.get("version_id") or hit.get("version_id") or ""
-            )
+            version = str(concept.get("version_id") or hit.get("version_id") or "")
             store.save_entity(card_id, entity_id, version)
             store.cards[card_id] = card
             cards.append(card)
