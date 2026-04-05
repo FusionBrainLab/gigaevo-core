@@ -40,6 +40,9 @@ from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.memory.shared_memory.card_conversion import (
     is_program_card,
+    normalize_allowed_gam_tools,
+    normalize_gam_pipeline_mode,
+    normalize_gam_top_k_by_tool,
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
@@ -194,10 +197,14 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
             checkpoint_dir=mem.checkpoint_dir,
             gam_store_dir=mem.gam_store_dir,
             export_file=mem.export_file,
-            enable_bm25=mem.enable_bm25,
-            allowed_gam_tools=mem.allowed_gam_tools,
-            gam_top_k_by_tool=mem.gam_top_k_by_tool,
-            gam_pipeline_mode=mem.gam_pipeline_mode,
+            enable_bm25=mem.config.gam.enable_bm25,
+            allowed_gam_tools=normalize_allowed_gam_tools(
+                mem.config.gam.allowed_tools or None
+            ),
+            gam_top_k_by_tool=normalize_gam_top_k_by_tool(
+                mem.config.gam.top_k_by_tool or None
+            ),
+            gam_pipeline_mode=normalize_gam_pipeline_mode(mem.config.gam.pipeline_mode),
         )
 
     def _patched_gam_build():
@@ -211,7 +218,9 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
             ps,
             mem.gam_store_dir / "idx",
             mem.checkpoint_dir / "chroma",
-            allowed_tools=sorted(mem.allowed_gam_tools),
+            allowed_tools=sorted(
+                normalize_allowed_gam_tools(mem.config.gam.allowed_tools or None)
+            ),
         )
         mem.gam.agent = (
             FakeResearchAgent(retrievers=rets, generator=mem.generator)
@@ -239,7 +248,11 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
                 "vector_description_task_description_summary",
             ],
         )
-        return {n: r for n, r in rets.items() if n in mem.allowed_gam_tools}
+        return {
+            n: r
+            for n, r in rets.items()
+            if n in normalize_allowed_gam_tools(mem.config.gam.allowed_tools or None)
+        }
 
     # Patch ALL paths BEFORE saving any cards
     mem.gam.build = _patched_gam_build
@@ -510,7 +523,6 @@ class TestApiSyncSimulation:
 
     def test_sync_adds_remote_cards_to_agentic_system(self, tmp_path):
         mem, fake_sys = _make_full_memory(tmp_path)
-        mem.use_api = True
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [
@@ -552,7 +564,6 @@ class TestApiSyncSimulation:
                 {"id": "local-1", "description": "local idea"},
             ],
         )
-        mem.use_api = True
 
         # Pre-populate entity maps as if this card came from API
         mem.card_store.entity_by_card_id["local-1"] = "stale-entity"
@@ -572,7 +583,6 @@ class TestApiSyncSimulation:
 
     def test_sync_skips_unchanged_versions(self, tmp_path):
         mem, _ = _make_full_memory(tmp_path)
-        mem.use_api = True
 
         # Pre-populate as if already synced
         mem.card_store.cards["c1"] = normalize_memory_card(

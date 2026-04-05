@@ -34,7 +34,7 @@ class ApiConfig(BaseModel):
     namespace: str = "default"
     author: str | None = None
     channel: str = "latest"
-    sync_batch_size: int = Field(default=100, ge=10)
+    sync_batch_size: int = Field(default=100, gt=0)
     sync_on_init: bool = True
 
 

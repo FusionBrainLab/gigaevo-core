@@ -37,8 +37,6 @@ class TestSearchViaApi:
 
     def test_api_search_returns_cards(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
             "hits": [{"entity_id": "e1", "version_id": "v1"}],
@@ -61,8 +59,6 @@ class TestSearchViaApi:
 
     def test_api_search_no_hits(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {"hits": []}
         mem.api = mock_api
@@ -72,7 +68,6 @@ class TestSearchViaApi:
 
     def test_api_search_with_memory_state(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
 
         captured = {}
 
@@ -90,8 +85,6 @@ class TestSearchViaApi:
 
     def test_api_search_updates_entity_maps(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
             "hits": [{"entity_id": "e1", "version_id": "v1"}],
@@ -114,8 +107,6 @@ class TestSearchViaApi:
 
     def test_api_search_persists_to_index(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
             "hits": [{"entity_id": "e1"}],
@@ -133,8 +124,6 @@ class TestSearchViaApi:
 
     def test_api_search_skips_empty_entity_id(self, tmp_path):
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
             "hits": [
@@ -154,9 +143,7 @@ class TestSearchViaApi:
 
     def test_api_search_with_synthesis_enabled(self, tmp_path):
         """When enable_llm_synthesis=True, _synthesize_results is called."""
-        mem = _make_memory(tmp_path)
-        mem.use_api = True
-        mem.enable_llm_synthesis = True
+        mem = _make_memory(tmp_path, enable_llm_synthesis=True)
 
         mock_api = MagicMock()
         mock_api.search_concepts.return_value = {
@@ -318,9 +305,8 @@ class TestSearchRouting:
         assert "c1" in result  # Fell back to local search
 
     def test_search_gam_failure_with_api_falls_back_to_api_search(self, tmp_path):
-        """GAM fails + use_api=True → falls back to _search_via_api, not local."""
+        """GAM fails + api set → falls back to _search_via_api, not local."""
         mem = _make_memory(tmp_path)
-        mem.use_api = True
 
         mock_agent = MagicMock()
         mock_agent.research.side_effect = RuntimeError("GAM down")
@@ -345,8 +331,6 @@ class TestSearchRouting:
     def test_search_api_mode_syncs_first(self, tmp_path):
         """In API mode, search() calls _sync_from_api before searching."""
         mem = _make_memory(tmp_path)
-        mem.use_api = True
-
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = []  # Empty sync
         mock_api.search_concepts.return_value = {"hits": []}

@@ -10,12 +10,15 @@ def test_all_exports_complete():
 
     expected = {
         "AmemGamMemory",
+        "ApiConfig",
         "AnyCard",
         "ConnectedIdea",
+        "GamConfig",
         "GigaEvoMemoryBase",
         "LocalMemorySnapshot",
         "MemoryCard",
         "MemoryCardExplanation",
+        "MemoryConfig",
         "ProgramCard",
         "Strategy",
         "normalize_memory_card",
@@ -28,25 +31,31 @@ def test_import_from_package_root():
     from gigaevo.memory import (
         AmemGamMemory,
         AnyCard,
+        ApiConfig,
         ConnectedIdea,
+        GamConfig,
         GigaEvoMemoryBase,
         LocalMemorySnapshot,
         MemoryCard,
         MemoryCardExplanation,
+        MemoryConfig,
         ProgramCard,
         Strategy,
         normalize_memory_card,
     )
 
     assert AmemGamMemory is not None
+    assert ApiConfig is not None
     assert MemoryCard is not None
     assert ProgramCard is not None
     assert AnyCard is not None
     assert normalize_memory_card is not None
+    assert GamConfig is not None
     assert GigaEvoMemoryBase is not None
     assert ConnectedIdea is not None
     assert MemoryCardExplanation is not None
     assert LocalMemorySnapshot is not None
+    assert MemoryConfig is not None
     assert Strategy is not None
 
 

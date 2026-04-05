@@ -13,6 +13,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.memory import _ConceptApiClient
+from gigaevo.memory.shared_memory.memory_config import ApiConfig
 from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
@@ -47,7 +48,6 @@ class TestSyncFromApi:
     def test_sync_adds_new_cards(self, tmp_path):
         """Mocked API returns cards → they appear in memory_cards."""
         mem = _make_memory(tmp_path)
-        mem.use_api = True
 
         # Mock API
         mock_api = MagicMock()
@@ -79,7 +79,6 @@ class TestSyncFromApi:
     def test_sync_skips_unchanged_versions(self, tmp_path):
         """Cards with known version are skipped during incremental sync."""
         mem = _make_memory(tmp_path)
-        mem.use_api = True
 
         # Pre-populate known state
         mem.card_store.cards["idea-1"] = normalize_memory_card(
@@ -105,9 +104,10 @@ class TestSyncFromApi:
 
     def test_sync_paginates(self, tmp_path):
         """API returns full pages → sync fetches next page."""
-        mem = _make_memory(tmp_path)
-        mem.use_api = True
-        mem.sync_batch_size = 2
+        mem = _make_memory(
+            tmp_path, api=ApiConfig(sync_batch_size=2, sync_on_init=False)
+        )
+        mem.api_sync = None  # force lazy re-creation with mock
 
         mock_api = MagicMock()
         # Page 1: 2 items (full page → fetch more)
@@ -151,9 +151,10 @@ class TestSyncFromApi:
 
     def test_sync_filters_by_namespace(self, tmp_path):
         """Cards from different namespaces are filtered out."""
-        mem = _make_memory(tmp_path)
-        mem.use_api = True
-        mem.namespace = "my-ns"
+        mem = _make_memory(
+            tmp_path, api=ApiConfig(namespace="my-ns", sync_on_init=False)
+        )
+        mem.api_sync = None  # force lazy re-creation with mock
 
         mock_api = MagicMock()
         mock_api.list_memory_cards.return_value = [

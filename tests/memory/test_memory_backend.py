@@ -52,7 +52,7 @@ class TestAmemGamMemoryInit:
     def test_api_disabled(self, tmp_path):
         mem = _make_memory(tmp_path)
         assert mem.api is None
-        assert mem.use_api is False
+        assert mem.api is None
 
     def test_stats_start_at_zero(self, tmp_path):
         mem = _make_memory(tmp_path)

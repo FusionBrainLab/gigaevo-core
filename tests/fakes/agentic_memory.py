@@ -437,17 +437,26 @@ def make_test_memory(
     """Create an AmemGamMemory with MemoryConfig for tests.
 
     Accepts the same overrides as legacy kwargs but builds a proper
-    MemoryConfig internally. Common overrides: search_limit, rebuild_interval,
-    card_update_dedup_config (dict).
+    MemoryConfig internally.
+
+    Common overrides:
+        search_limit, rebuild_interval, enable_llm_synthesis,
+        enable_memory_evolution, enable_llm_card_enrichment,
+        card_update_dedup_config (dict),
+        api (ApiConfig instance or None),
+        gam (GamConfig instance or None).
     """
     from pathlib import Path
 
     from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
     from gigaevo.memory.shared_memory.memory import AmemGamMemory
-    from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+    from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
 
     dedup_raw = overrides.pop("card_update_dedup_config", None)
     dedup = CardUpdateDedupConfig.from_mapping(dedup_raw or {})
+
+    api = overrides.pop("api", None)
+    gam = overrides.pop("gam", None) or GamConfig()
 
     config = MemoryConfig(
         checkpoint_path=Path(str(tmp_path)) / "mem",
@@ -456,6 +465,8 @@ def make_test_memory(
         enable_llm_synthesis=overrides.pop("enable_llm_synthesis", False),
         enable_memory_evolution=overrides.pop("enable_memory_evolution", False),
         enable_llm_card_enrichment=overrides.pop("enable_llm_card_enrichment", False),
+        api=api,
+        gam=gam,
         dedup=dedup,
     )
     return AmemGamMemory(config=config)

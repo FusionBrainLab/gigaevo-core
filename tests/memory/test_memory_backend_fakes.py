@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from gigaevo.memory.shared_memory.card_conversion import (
+    normalize_allowed_gam_tools,
+    normalize_gam_pipeline_mode,
+    normalize_gam_top_k_by_tool,
+)
 from tests.fakes.agentic_memory import (
     FakeAgenticMemorySystem,
     FakeAMemGenerator,
@@ -45,10 +50,14 @@ def _make_memory_with_fakes(tmp_path, **overrides):
             checkpoint_dir=mem.checkpoint_dir,
             gam_store_dir=mem.gam_store_dir,
             export_file=mem.export_file,
-            enable_bm25=mem.enable_bm25,
-            allowed_gam_tools=mem.allowed_gam_tools,
-            gam_top_k_by_tool=mem.gam_top_k_by_tool,
-            gam_pipeline_mode=mem.gam_pipeline_mode,
+            enable_bm25=mem.config.gam.enable_bm25,
+            allowed_gam_tools=normalize_allowed_gam_tools(
+                mem.config.gam.allowed_tools or None
+            ),
+            gam_top_k_by_tool=normalize_gam_top_k_by_tool(
+                mem.config.gam.top_k_by_tool or None
+            ),
+            gam_pipeline_mode=normalize_gam_pipeline_mode(mem.config.gam.pipeline_mode),
         )
 
     # Patch gam.build to avoid chromadb import
