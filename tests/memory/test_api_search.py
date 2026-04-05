@@ -121,8 +121,8 @@ class TestSearchViaApi:
 
         mem._search_via_api("test")
 
-        assert mem.index_file.exists()
-        data = json.loads(mem.index_file.read_text())
+        assert mem.config.index_file.exists()
+        data = json.loads(mem.config.index_file.read_text())
         assert "idea-1" in data["memory_cards"]
 
     def test_api_search_skips_empty_entity_id(self, tmp_path):

@@ -183,15 +183,15 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
 
     def _patched_gam_build():
         if mem.note_sync is not None:
-            mem.note_sync.export_jsonl(mem.export_file)
-        recs = fake_load_amem_records(mem.export_file) or [
+            mem.note_sync.export_jsonl(mem.config.export_file)
+        recs = fake_load_amem_records(mem.config.export_file) or [
             c.model_dump() for c in mem.card_store.cards.values()
         ]
-        ms, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)
+        ms, ps, _ = fake_build_gam_store(recs, mem.config.gam_store_dir)
         rets = fake_build_retrievers(
             ps,
-            mem.gam_store_dir / "idx",
-            mem.checkpoint_dir / "chroma",
+            mem.config.gam_store_dir / "idx",
+            mem.config.checkpoint_path / "chroma",
             allowed_tools=sorted(
                 normalize_allowed_gam_tools(mem.config.gam.allowed_tools or None)
             ),
@@ -210,11 +210,11 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
         ]
         if not recs:
             return {}
-        _, ps, _ = fake_build_gam_store(recs, mem.gam_store_dir)
+        _, ps, _ = fake_build_gam_store(recs, mem.config.gam_store_dir)
         rets = fake_build_retrievers(
             ps,
-            mem.gam_store_dir / "idx",
-            mem.checkpoint_dir / "chroma",
+            mem.config.gam_store_dir / "idx",
+            mem.config.checkpoint_path / "chroma",
             allowed_tools=[
                 "vector_description",
                 "vector_explanation_summary",
@@ -237,7 +237,7 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
         if mem.memory_system is None or mem.generator is None:
             return
         if mem.note_sync is not None:
-            mem.note_sync.export_jsonl(mem.export_file)
+            mem.note_sync.export_jsonl(mem.config.export_file)
         try:
             _patched_gam_build()
             mem.research_agent = mem.gam.agent

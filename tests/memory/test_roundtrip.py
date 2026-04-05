@@ -111,8 +111,8 @@ class TestMemoryFillAndSearch:
         assert stats["added"] == 4
 
         # Phase 2: Persist (already done by save_card) and verify on disk
-        assert mem.index_file.exists()
-        data = json.loads(mem.index_file.read_text())
+        assert mem.config.index_file.exists()
+        data = json.loads(mem.config.index_file.read_text())
         assert len(data["memory_cards"]) == 4
 
         # Phase 3: Reload from scratch (simulating new process)

@@ -186,7 +186,7 @@ class TestIndexPersistenceContract:
     def test_index_has_required_top_level_keys(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        data = json.loads(mem.index_file.read_text())
+        data = json.loads(mem.config.index_file.read_text())
         assert "memory_cards" in data
         assert "entity_by_card_id" in data
         assert "entity_version_by_entity" in data
@@ -194,7 +194,7 @@ class TestIndexPersistenceContract:
     def test_memory_cards_indexed_by_id(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        data = json.loads(mem.index_file.read_text())
+        data = json.loads(mem.config.index_file.read_text())
         assert "c1" in data["memory_cards"]
         assert data["memory_cards"]["c1"]["description"] == "test"
 
@@ -202,7 +202,7 @@ class TestIndexPersistenceContract:
         """Persisted cards are JSON dicts (model_dump output)."""
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        data = json.loads(mem.index_file.read_text())
+        data = json.loads(mem.config.index_file.read_text())
         card_data = data["memory_cards"]["c1"]
         assert isinstance(card_data, dict)
         assert "id" in card_data

@@ -175,7 +175,7 @@ class TestBug11PersistScaling:
         sizes = []
         for i in range(20):
             mem.save_card({"id": f"c{i}", "description": f"card {i}" * 10})
-            size = mem.index_file.stat().st_size
+            size = mem.config.index_file.stat().st_size
             sizes.append(size)
 
         # Index file should grow ~linearly with card count

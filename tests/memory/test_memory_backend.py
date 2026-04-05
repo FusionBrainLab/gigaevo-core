@@ -47,7 +47,7 @@ def _make_card(**overrides):
 class TestAmemGamMemoryInit:
     def test_checkpoint_dir_created(self, tmp_path):
         mem = _make_memory(tmp_path)
-        assert mem.checkpoint_dir.exists()
+        assert mem.config.checkpoint_path.exists()
 
     def test_api_disabled(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -86,7 +86,7 @@ class TestAmemGamMemoryInit:
 
     def test_index_file_path(self, tmp_path):
         mem = _make_memory(tmp_path)
-        assert mem.index_file == mem.checkpoint_dir / "api_index.json"
+        assert mem.config.index_file == mem.config.checkpoint_path / "api_index.json"
 
 
 # ===========================================================================
@@ -167,8 +167,8 @@ class TestSaveCard:
     def test_persists_to_index_file(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card(_make_card(id="c1", description="persisted"))
-        assert mem.index_file.exists()
-        data = json.loads(mem.index_file.read_text())
+        assert mem.config.index_file.exists()
+        data = json.loads(mem.config.index_file.read_text())
         assert "c1" in data["memory_cards"]
 
 
@@ -225,7 +225,7 @@ class TestDelete:
         mem = _make_memory(tmp_path)
         mem.save_card(_make_card(id="c1"))
         mem.delete("c1")
-        data = json.loads(mem.index_file.read_text())
+        data = json.loads(mem.config.index_file.read_text())
         assert "c1" not in data["memory_cards"]
 
     def test_delete_one_of_many(self, tmp_path):

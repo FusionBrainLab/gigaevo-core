@@ -166,7 +166,7 @@ class TestScenarioTwoRunCycle:
         assert stats["rejected"] == 0
 
         # Verify persistence
-        assert mem.index_file.exists()
+        assert mem.config.index_file.exists()
 
         # --- Run 2: Load and search ---
         mem2 = _make_memory(tmp_path)
@@ -736,10 +736,10 @@ class TestScenarioErrorRecovery:
         # Write valid data first
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "important idea"})
-        assert mem.index_file.exists()
+        assert mem.config.index_file.exists()
 
         # Corrupt the index file (simulating crash mid-write)
-        mem.index_file.write_text('{"memory_cards": {"c1": {"id": "c1", "des')
+        mem.config.index_file.write_text('{"memory_cards": {"c1": {"id": "c1", "des')
 
         # Reload: data is lost (known bug, documented)
         mem2 = _make_memory(tmp_path)

@@ -43,20 +43,20 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
     # Patch gam.build to use fake GAM builders
     def _patched_gam_build():
         if mem.note_sync is not None:
-            mem.note_sync.export_jsonl(mem.export_file)
+            mem.note_sync.export_jsonl(mem.config.export_file)
 
-        records = fake_load_amem_records(mem.export_file)
+        records = fake_load_amem_records(mem.config.export_file)
         if not records:
             records = [c.model_dump() for c in mem.card_store.cards.values()]
 
         memory_store, page_store, added = fake_build_gam_store(
             records,
-            mem.gam_store_dir,
+            mem.config.gam_store_dir,
         )
         retrievers = fake_build_retrievers(
             page_store,
-            mem.gam_store_dir / "indexes",
-            mem.checkpoint_dir / "chroma",
+            mem.config.gam_store_dir / "indexes",
+            mem.config.checkpoint_path / "chroma",
             allowed_tools=sorted(
                 normalize_allowed_gam_tools(cfg.gam.allowed_tools or None)
             ),
@@ -85,11 +85,11 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
         if not records:
             return {}
 
-        _, page_store, _ = fake_build_gam_store(records, mem.gam_store_dir)
+        _, page_store, _ = fake_build_gam_store(records, mem.config.gam_store_dir)
         retrievers = fake_build_retrievers(
             page_store,
-            mem.gam_store_dir / "indexes",
-            mem.checkpoint_dir / "chroma",
+            mem.config.gam_store_dir / "indexes",
+            mem.config.checkpoint_path / "chroma",
             allowed_tools=[
                 "vector_description",
                 "vector_explanation_summary",
@@ -130,7 +130,7 @@ class TestLoadOrCreateRetriever:
         mem.rebuild()
 
         assert mem.research_agent is not None
-        assert mem.export_file.exists()
+        assert mem.config.export_file.exists()
 
     def test_research_agent_finds_cards(self, tmp_path):
         mem, _ = _make_full_memory(
@@ -439,10 +439,10 @@ class TestDumpMemory:
             ],
         )
 
-        mem.note_sync.export_jsonl(mem.export_file)
+        mem.note_sync.export_jsonl(mem.config.export_file)
 
-        assert mem.export_file.exists()
-        lines = mem.export_file.read_text().strip().split("\n")
+        assert mem.config.export_file.exists()
+        lines = mem.config.export_file.read_text().strip().split("\n")
         assert len(lines) >= 2
         for line in lines:
             record = json.loads(line)

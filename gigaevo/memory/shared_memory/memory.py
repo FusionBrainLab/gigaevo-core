@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from dotenv import load_dotenv
@@ -46,24 +45,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     Requires a ``MemoryConfig`` object for construction.
     """
-
-    # --- Convenience properties (delegate to config) ---
-
-    @property
-    def checkpoint_dir(self) -> Path:
-        return self.config.checkpoint_path
-
-    @property
-    def index_file(self) -> Path:
-        return self.config.index_file
-
-    @property
-    def export_file(self) -> Path:
-        return self.config.export_file
-
-    @property
-    def gam_store_dir(self) -> Path:
-        return self.config.gam_store_dir
 
     @property
     def _has_agentic(self) -> bool:

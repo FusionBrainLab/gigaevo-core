@@ -201,7 +201,7 @@ class TestRebuildWithFakes:
         mem.save_card({"id": "c1", "description": "test idea"})
         mem.rebuild()
 
-        assert mem.export_file.exists()
+        assert mem.config.export_file.exists()
 
     def test_rebuild_resets_counter(self, tmp_path):
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
@@ -225,7 +225,7 @@ class TestRebuildWithFakes:
 
         # After 3 saves, rebuild should have triggered and reset counter
         assert mem._iters_after_rebuild == 0
-        assert mem.export_file.exists()
+        assert mem.config.export_file.exists()
 
 
 # ===========================================================================
@@ -303,7 +303,7 @@ class TestFullCycleWithFakes:
 
         # Rebuild
         mem.rebuild()
-        assert mem.export_file.exists()
+        assert mem.config.export_file.exists()
         assert mem._iters_after_rebuild == 0
 
         # Research agent should be created after rebuild
