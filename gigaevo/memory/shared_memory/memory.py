@@ -22,7 +22,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     search_cards_by_keyword,
     synthesize_search_results,
 )
-from gigaevo.memory.shared_memory.card_dedup import CardDedup, DedupDecision
+from gigaevo.memory.shared_memory.card_dedup import CardDedup
 from gigaevo.memory.shared_memory.card_store import CardStore
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.gam_search import GamSearch
