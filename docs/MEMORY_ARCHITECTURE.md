@@ -5,7 +5,7 @@ The shared memory system (`gigaevo/memory/shared_memory/`) stores and retrieves 
 ## Module Overview
 
 ```
-AmemGamMemory (orchestrator, ~736 lines)
+AmemGamMemory (orchestrator, ~640 lines)
   ├── config: MemoryConfig           — Pydantic config (replaces 18 kwargs)
   ├── card_store: CardStore          — Card dict + entity mappings + disk persistence
   ├── note_sync: NoteSync | None     — A-MEM / Chroma bridge
@@ -19,21 +19,22 @@ AmemGamMemory (orchestrator, ~736 lines)
 
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `memory.py` | ~736 | Orchestrator: wires collaborators, coordinates save/search/rebuild |
-| `memory_config.py` | ~110 | `MemoryConfig`, `GamConfig`, `ApiConfig` (Pydantic BaseModel) |
-| `card_store.py` | ~130 | Card dict, entity mappings, JSON index persistence |
-| `note_sync.py` | ~180 | Bridges cards to A-MEM vector store (Chroma) |
+| `memory.py` | ~640 | Orchestrator: wires collaborators, coordinates save/search/rebuild |
+| `memory_config.py` | ~114 | `MemoryConfig`, `GamConfig`, `ApiConfig` (Pydantic BaseModel) |
+| `card_store.py` | ~127 | Card dict, entity mappings, JSON index persistence |
+| `note_sync.py` | ~177 | Bridges cards to A-MEM vector store (Chroma) |
 | `api_sync.py` | ~215 | Paginated fetch, full sync, search via concept API |
 | `gam_search.py` | ~100 | GAM ResearchAgent build/invalidate lifecycle |
-| `card_dedup.py` | ~400 | Vector scoring, LLM dedup decision, card merge computation |
-| `agentic_runtime.py` | ~60 | `AgenticRuntime` dataclass + `load_agentic_runtime()` factory |
+| `card_dedup.py` | ~397 | Vector scoring, LLM dedup decision, card merge computation |
+| `agentic_runtime.py` | ~58 | `AgenticRuntime` dataclass + `load_agentic_runtime()` factory |
+| `protocols.py` | ~52 | Protocol definitions for DI (LLMServiceProtocol, AgenticMemoryProtocol, etc.) |
 
-Supporting files (unchanged):
+Supporting files (enhanced):
 
 | File | Responsibility |
 |------|----------------|
 | `models.py` | Pydantic card models (`MemoryCard`, `ProgramCard`, `Explanation`) |
-| `card_conversion.py` | Pure functions: normalize, convert, format cards |
+| `card_conversion.py` | Pure functions: normalize, convert, format, search, synthesize cards |
 | `card_update_dedup.py` | Pure functions: query building, weighted scoring, LLM parsing |
 | `concept_api.py` | HTTP client for the remote Memory API |
 | `utils.py` | Small helpers (`truncate_text`, `looks_like_uuid`) |
