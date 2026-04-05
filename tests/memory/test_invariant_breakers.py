@@ -174,6 +174,25 @@ class TestBimapInvariant:
         assert "entity-1" not in store.card_id_by_entity
         _check_bimap_invariant(store)
 
+    def test_load_index_skips_orphaned_entity_version(self, tmp_path):
+        """X1: entity_version entries for entities that have no card mapping
+        are skipped during load, preventing stale version matches in sync."""
+        index_file = tmp_path / "api_index.json"
+        index_data = {
+            "memory_cards": {"real-card": {"id": "real-card", "description": "ok"}},
+            "entity_by_card_id": {"real-card": "e-real"},
+            "entity_version_by_entity": {"e-real": "v1", "e-orphan": "v99"},
+        }
+        index_file.write_text(json.dumps(index_data))
+
+        store = CardStore(index_file=index_file)
+
+        # Real entity version loaded
+        assert store.entity_version.get("e-real") == "v1"
+        # Orphaned entity version skipped
+        assert "e-orphan" not in store.entity_version
+        _check_bimap_invariant(store)
+
 
 # ===========================================================================
 # Category B: Persistence / In-Memory Divergence (memory.py)

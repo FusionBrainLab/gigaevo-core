@@ -163,10 +163,9 @@ class ApiSync:
             stale_entities = set(store.card_id_by_entity) - remote_entity_ids
             for entity_id in stale_entities:
                 card_id = store.unlink_entity(entity_id)
-                if card_id:
-                    store.cards.pop(card_id, None)
+                if card_id and store.cards.pop(card_id, None) is not None:
                     self._remove_note(card_id)
-                changed = True
+                    changed = True
 
         return changed
 
@@ -249,13 +248,16 @@ class ApiSync:
         """Delete card from API by card_id or entity_id.
 
         Returns the resolved card_id if found and deleted, None otherwise.
+        Falls back to local-only delete when card has no API entity mapping.
         """
         store = self._card_store
         entity_id = store.entity_by_card_id.get(key)
         if not entity_id and looks_like_uuid(key):
             entity_id = key
         if not entity_id:
-            return None
+            # No API entity — fall back to local resolution so local-only
+            # cards (mem-XXXX) can still be deleted.
+            return store.resolve_card_id(key)
         self.client.delete_concept(entity_id)
         return store.unlink_entity(entity_id) or key
 

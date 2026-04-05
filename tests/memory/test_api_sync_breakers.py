@@ -251,3 +251,79 @@ class TestSearchSyncInteraction:
         # Card added, persist called
         assert "c1" in mem.card_store.cards
         assert len(persist_calls) > 0
+
+    def test_stale_orphan_entity_does_not_trigger_rebuild(self, tmp_path):
+        """X2: When stale entity has no card (unlink_entity returns None),
+        changed flag should NOT be set — avoids unnecessary rebuilds."""
+        mem = _make_memory(tmp_path)
+
+        # Pre-populate with one real card+entity
+        mem.card_store.cards["c1"] = normalize_memory_card(
+            {"id": "c1", "description": "real"}
+        )
+        mem.card_store.link_entity("c1", "e1", "v1")
+        # Inject orphan entity (entity in card_id_by_entity but no card)
+        mem.card_store.card_id_by_entity["e-orphan"] = "ghost-card"
+
+        # Mock API to return e1 only — e-orphan is "stale"
+        mock_api = MagicMock()
+        mock_api.list_memory_cards.return_value = [
+            {"entity_id": "e1", "version_id": "v1", "meta": {"namespace": "default"}}
+        ]
+        mem.api = mock_api
+
+        rebuild_calls = []
+        original_rebuild = mem.rebuild
+
+        def tracked_rebuild():
+            rebuild_calls.append(True)
+            original_rebuild()
+
+        mem.rebuild = tracked_rebuild
+        mem._sync_from_api(force_full=False)
+
+        # Orphan was cleaned up but did NOT trigger rebuild
+        assert "e-orphan" not in mem.card_store.card_id_by_entity
+        assert len(rebuild_calls) == 0
+
+    def test_delete_local_only_card_with_api_sync(self, tmp_path):
+        """X4: Cards created locally (no entity mapping) can be deleted
+        even when API sync is enabled."""
+        mem = _make_memory(tmp_path)
+
+        # Save a local card (no API)
+        mem.save_card({"id": "local-card", "description": "local only"})
+        assert "local-card" in mem.card_store.cards
+
+        # Now enable API sync
+        mock_api = MagicMock()
+        mem.api = mock_api
+
+        # Delete should succeed via local resolution
+        result = mem.delete("local-card")
+        assert result is True
+        assert "local-card" not in mem.card_store.cards
+
+    def test_gam_build_failure_does_not_retry_every_search(self, tmp_path):
+        """X9: When GAM build fails, subsequent searches skip rebuild
+        until new card data arrives (circuit breaker)."""
+        mem = _make_memory(tmp_path)
+        mem.api = MagicMock()
+        mem.api.list_memory_cards.return_value = []
+
+        # Simulate agentic infrastructure
+        mem.memory_system = MagicMock()
+        mem.generator = MagicMock()
+
+        # Mock GAM to always fail
+        mem.gam = MagicMock()
+        mem.gam.build.side_effect = RuntimeError("GAM build failed")
+
+        # First sync triggers rebuild (research_agent is None + _has_agentic)
+        mem._sync_from_api(force_full=False)
+        assert mem._gam_build_failed is True
+        assert mem.gam.build.call_count == 1
+
+        # Second sync does NOT retry build (circuit breaker active)
+        mem._sync_from_api(force_full=False)
+        assert mem.gam.build.call_count == 1  # Still 1, not 2

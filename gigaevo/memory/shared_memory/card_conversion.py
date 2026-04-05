@@ -7,6 +7,7 @@ instance state. Extracted from memory.py for cleaner module structure.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -211,7 +212,8 @@ def export_memories_jsonl(
     card_overrides = card_overrides or {}
 
     unique_ids = list(dict.fromkeys(memory_ids))
-    with out_path.open("w", encoding="utf-8") as file_obj:
+    tmp_path = out_path.with_suffix(f".{os.getpid()}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as file_obj:
         for memory_id in unique_ids:
             memory_note = memory_system.read(memory_id)
             base_card = card_overrides.get(memory_id)
@@ -221,6 +223,7 @@ def export_memories_jsonl(
                 memory_note, base_card=base_card, memory_id=memory_id
             )
             file_obj.write(json.dumps(record.model_dump(), ensure_ascii=True) + "\n")
+    os.replace(str(tmp_path), str(out_path))
 
 
 # ---------------------------------------------------------------------------

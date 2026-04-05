@@ -65,6 +65,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         self._warned_missing_card_update_llm = False
         self._iters_after_rebuild = 0
+        self._gam_build_failed = False
 
         # --- API client ---
         api_cfg = cfg.api
@@ -184,7 +185,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if sync is None:
             return False
         changed = sync.sync(force_full=force_full)
-        if changed or (self.research_agent is None and self._has_agentic):
+        if changed:
+            self._gam_build_failed = False  # new data — retry build
+        needs_rebuild = changed or (
+            self.research_agent is None
+            and self._has_agentic
+            and not self._gam_build_failed
+        )
+        if needs_rebuild:
             self.rebuild()
         else:
             self.card_store.persist()
@@ -371,8 +379,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self.note_sync is not None:
             self.note_sync.export_jsonl(self.config.export_file, serialized)
         if self.gam is not None:
-            self.gam.build()
-            self.research_agent = self.gam.agent
+            try:
+                self.gam.build()
+                self.research_agent = self.gam.agent
+                self._gam_build_failed = False
+            except Exception as exc:
+                logger.warning("[Memory] GAM build failed: {}", exc)
+                self._gam_build_failed = True
         self.dedup.invalidate_retrievers()
         self._iters_after_rebuild = 0
 

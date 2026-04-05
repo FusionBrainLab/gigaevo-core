@@ -159,5 +159,5 @@ class CardStore:
             for entity_id, version_id in raw_versions.items():
                 eid = str(entity_id)
                 vid = str(version_id or "")
-                if eid:
+                if eid and eid in self.card_id_by_entity:
                     self.entity_version[eid] = vid
