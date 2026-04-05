@@ -5,10 +5,11 @@ from typing import Any
 from dotenv import load_dotenv
 from loguru import logger
 
-import gigaevo.memory.config as config
-from gigaevo.memory.openai_inference import OpenAIInferenceService
+import gigaevo.memory.config as _env_config  # noqa: F401 — preserve import order vs load_dotenv()
 from gigaevo.memory.shared_memory.agentic_runtime import (
     AgenticRuntime,
+    init_agentic_storage,
+    init_llm_and_generator,
     load_agentic_runtime,
 )
 from gigaevo.memory.shared_memory.api_sync import ApiSync
@@ -26,7 +27,6 @@ from gigaevo.memory.shared_memory.protocols import (
 load_dotenv()
 
 from gigaevo.memory.shared_memory.card_conversion import (
-    DEFAULT_MODEL_NAME,
     AnyCard,
     GigaEvoMemoryBase,
     build_entity_meta,
@@ -103,8 +103,16 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         self.llm_service: LLMServiceProtocol | None
         self.generator: GeneratorProtocol | None
-        self.llm_service, self.generator = self._init_llm_service_and_generator()
-        self.memory_system: AgenticMemoryProtocol | None = self._init_storage()
+        self.llm_service, self.generator = init_llm_and_generator(
+            generator_cls=self._AMemGeneratorCls,
+            dedup_enabled=cfg.dedup.enabled,
+        )
+        self.memory_system: AgenticMemoryProtocol | None = init_agentic_storage(
+            llm_service=self.llm_service,
+            system_cls=self._AgenticMemorySystemCls,
+            checkpoint_dir=self.checkpoint_dir,
+            enable_evolution=cfg.enable_memory_evolution,
+        )
         self.note_sync: NoteSync | None = None
         if self.memory_system is not None and self._MemoryNoteCls is not None:
             self.note_sync = NoteSync(
@@ -173,60 +181,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if api_cfg is not None and api_cfg.sync_on_init:
             self._sync_from_api(force_full=True)
-
-    def _init_llm_service_and_generator(
-        self,
-    ) -> tuple[LLMServiceProtocol | None, GeneratorProtocol | None]:
-        if self._AMemGeneratorCls is None and not self.config.dedup.enabled:
-            return None, None
-        api_key = config.OPENAI_API_KEY
-        if not api_key and config.LLM_BASE_URL:
-            # Local OpenAI-compatible servers (vLLM/LM Studio/Ollama OpenAI mode)
-            # often accept any non-empty bearer token.
-            api_key = "EMPTY"
-
-        if not api_key:
-            logger.info(
-                "[Memory] OPENAI_API_KEY/OPENROUTER_API_KEY is not set. "
-                "Agentic retrieval is disabled; API full-text fallback is available."
-            )
-            return None, None
-
-        try:
-            base_url = config.LLM_BASE_URL
-
-            llm_service = OpenAIInferenceService(
-                model_name=config.OPENROUTER_MODEL_NAME or DEFAULT_MODEL_NAME,
-                api_key=api_key,
-                base_url=base_url,
-                temperature=0.0,
-                max_tokens=0,
-                reasoning=config.OPENROUTER_REASONING,
-            )
-            if self._AMemGeneratorCls is None:
-                return llm_service, None
-            generator = self._AMemGeneratorCls({"llm_service": llm_service})
-            return llm_service, generator
-        except Exception as exc:
-            logger.warning("[Memory] Could not initialize LLM/generator: {}", exc)
-            return None, None
-
-    def _init_storage(self) -> AgenticMemoryProtocol | None:
-        if self.llm_service is None or self._AgenticMemorySystemCls is None:
-            return None
-        try:
-            return self._AgenticMemorySystemCls(
-                model_name=config.AMEM_EMBEDDING_MODEL_NAME,
-                llm_backend="custom",
-                llm_service=self.llm_service,
-                chroma_persist_dir=self.checkpoint_dir / "chroma",
-                chroma_collection_name="memories",
-                use_gam_card_document=True,
-                enable_evolution=self.config.enable_memory_evolution,
-            )
-        except Exception as exc:
-            logger.warning("[Memory] Could not initialize AgenticMemorySystem: {}", exc)
-            return None
 
     def _ensure_api_sync(self) -> ApiSync | None:
         """Lazily create ApiSync if mem.api was set post-construction."""
@@ -390,44 +344,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return result
 
     def save(self, data: str, category: str = "general") -> str:
-        return self.save_card(
-            {
-                "category": category,
-                "description": data,
-                "task_description": "",
-                "task_description_summary": "",
-                "strategy": "",
-                "last_generation": 0,
-                "programs": [],
-                "aliases": [],
-                "keywords": [],
-                "evolution_statistics": {},
-                "explanation": {"explanations": [], "summary": ""},
-                "works_with": [],
-                "links": [],
-                "usage": {},
-            }
-        )
-
-    def _synthesize_results(
-        self,
-        query: str,
-        memory_state: str | None,
-        cards: list[AnyCard],
-    ) -> str:
-        """Wrapper around pure synthesize_search_results function."""
-        try:
-            return synthesize_search_results(
-                query=query,
-                memory_state=memory_state,
-                cards=cards,
-                llm_service=self.llm_service,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[Memory] LLM synthesis failed, fallback to plain output: {}", exc
-            )
-            return format_search_results(query, cards)
+        return self.save_card({"category": category, "description": data})
 
     def _search_via_api(self, query: str, memory_state: str | None = None) -> str:
         sync = self._ensure_api_sync()
@@ -450,7 +367,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
             return f"Query: {query}\n\nNo relevant memories found."
 
         if self.config.enable_llm_synthesis:
-            return self._synthesize_results(query, memory_state, cards)
+            return synthesize_search_results(
+                query=query,
+                memory_state=memory_state,
+                cards=cards,
+                llm_service=self.llm_service,
+            )
         return format_search_results(query, cards)
 
     def _search_local_cards(self, query: str, memory_state: str | None = None) -> str:
@@ -514,6 +436,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def delete(self, memory_id: str) -> bool:
         key = str(memory_id).strip()
         store = self.card_store
+        card_id: str
         if self.api is not None:
             entity_id = store.entity_by_card_id.get(key)
             if not entity_id and looks_like_uuid(key):
@@ -524,9 +447,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
             card_id = store.card_id_by_entity.pop(entity_id, key)
             store.entity_version.pop(entity_id, None)
         else:
-            card_id = store.resolve_card_id(key)
-            if card_id is None:
+            resolved = store.resolve_card_id(key)
+            if resolved is None:
                 return False
+            card_id = resolved
             store.clear_entity(card_id)
 
         store.entity_by_card_id.pop(card_id, None)
