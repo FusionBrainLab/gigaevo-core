@@ -15,9 +15,9 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
 )
 from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
+from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,14 +39,7 @@ class TestSelectorWithRealMemory:
     """Wire MemorySelectorAgent with pre-filled local AmemGamMemory."""
 
     def _make_selector(self, tmp_path, ideas):
-        mem = AmemGamMemory(
-            checkpoint_path=str(tmp_path / "mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
+        mem = make_test_memory(tmp_path)
         for idea in ideas:
             mem.save_card(idea)
 
