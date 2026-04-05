@@ -10,6 +10,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from gigaevo.llm.agents.memory_selector import MemorySelection
 from gigaevo.programs.program import Program
 
@@ -71,9 +73,16 @@ class SelectorMemoryProvider(MemoryProvider):
         if self._selector is None:
             from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 
+            logger.info(
+                "[SelectorMemoryProvider] Creating MemorySelectorAgent "
+                "(checkpoint_dir={}, namespace={}, use_api=False)",
+                self._checkpoint_dir,
+                self._namespace,
+            )
             self._selector = MemorySelectorAgent(
                 checkpoint_dir=self._checkpoint_dir,
                 namespace=self._namespace,
+                use_api=False,
             )
         return self._selector
 

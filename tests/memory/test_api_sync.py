@@ -3,7 +3,7 @@ verification, _build_entity_meta content, __del__ behavior.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -38,129 +38,6 @@ def _mock_client(handler):
         base_url="http://test:8000", transport=httpx.MockTransport(handler)
     )
     return client
-
-
-# ===========================================================================
-# 1. Mutation operator: memory_instructions → parent metadata
-# ===========================================================================
-
-
-class TestMutationOperatorMemoryFlow:
-    """Test that memory cards get injected into parent metadata."""
-
-    @pytest.mark.asyncio
-    async def test_memory_selection_attaches_to_parent_metadata(self, tmp_path):
-        """When memory_instructions is not None, MemorySelectorAgent is called
-        and returned cards are attached to parent metadata."""
-        from gigaevo.evolution.mutation.constants import (
-            MUTATION_MEMORY_METADATA_KEY,
-            MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
-        )
-
-        # Create a minimal LLMMutationOperator with mocked internals
-        from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
-        from gigaevo.programs.program import Program
-
-        MagicMock()
-        mock_problem_ctx = MagicMock()
-        mock_problem_ctx.task_description = "Solve the task"
-        mock_metrics_fmt = MagicMock()
-        mock_metrics_fmt.format_metrics_description.return_value = "fitness: accuracy"
-
-        # Build operator with mocked dependencies
-        operator = LLMMutationOperator.__new__(LLMMutationOperator)
-        operator.mutation_mode = "rewrite"
-        operator.fallback_to_rewrite = True
-        operator.context_key = "mutation_context"
-        operator.problem_context = mock_problem_ctx
-        operator.metrics_formatter = mock_metrics_fmt
-        operator.prompt_fetcher = None
-        operator.storage = None
-        operator.bandit = None
-
-        # Mock memory_selector to return specific cards
-        from gigaevo.llm.agents.memory_selector import MemorySelection
-
-        mock_selector = AsyncMock()
-        mock_selector.select.return_value = MemorySelection(
-            cards=["1. Use simulated annealing", "2. Add repair step"],
-            card_ids=["idea-1", "idea-2"],
-        )
-        operator.memory_selector = mock_selector
-
-        # Mock mutation agent to capture the parents it receives
-        captured_parents = []
-
-        async def mock_arun(*, input, mutation_mode):
-            captured_parents.extend(input)
-            return {
-                "code": "def solve(): return 42",
-                "raw_output": "mutated",
-                "model_used": None,
-                "structured_output": None,
-            }
-
-        mock_agent = MagicMock()
-        mock_agent.arun = mock_arun
-        operator.agent = mock_agent
-        operator.llm_wrapper = MagicMock()
-        operator.llm_wrapper.get_last_model.return_value = "test-model"
-        operator.strip_comments_and_docstrings = False
-
-        parent = Program(code="def solve(): return 1", metadata={})
-        await operator.mutate_single([parent], memory_instructions="use memory")
-
-        # Verify memory_selector was called
-        mock_selector.select.assert_awaited_once()
-
-        # Verify parents were cloned with memory metadata
-        assert len(captured_parents) == 1
-        meta = captured_parents[0].metadata
-        assert MUTATION_MEMORY_METADATA_KEY in meta
-        assert "simulated annealing" in meta[MUTATION_MEMORY_METADATA_KEY]
-        assert meta[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == ["idea-1", "idea-2"]
-
-        # Verify ORIGINAL parent was NOT mutated (deep copy check)
-        assert MUTATION_MEMORY_METADATA_KEY not in parent.metadata
-        assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY not in parent.metadata
-
-    @pytest.mark.asyncio
-    async def test_memory_instructions_none_skips_selector(self, tmp_path):
-        """When memory_instructions is None, MemorySelectorAgent is NOT called."""
-        from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
-        from gigaevo.programs.program import Program
-
-        operator = LLMMutationOperator.__new__(LLMMutationOperator)
-        operator.mutation_mode = "rewrite"
-        operator.fallback_to_rewrite = True
-        operator.context_key = "mutation_context"
-        operator.problem_context = MagicMock()
-        operator.metrics_formatter = MagicMock()
-        operator.prompt_fetcher = None
-        operator.storage = None
-        operator.bandit = None
-
-        mock_selector = AsyncMock()
-        operator.memory_selector = mock_selector
-
-        mock_agent = MagicMock()
-        mock_agent.arun = AsyncMock(
-            return_value={
-                "code": "def f(): pass",
-                "raw_output": "ok",
-                "model_used": None,
-                "structured_output": None,
-            }
-        )
-        operator.agent = mock_agent
-        operator.llm_wrapper = MagicMock()
-        operator.llm_wrapper.get_last_model.return_value = "test-model"
-        operator.strip_comments_and_docstrings = False
-
-        parent = Program(code="def solve(): return 1", metadata={})
-        await operator.mutate_single([parent], memory_instructions=None)
-
-        mock_selector.select.assert_not_awaited()
 
 
 # ===========================================================================

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from loguru import logger
+
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
@@ -58,6 +60,12 @@ class MemoryContextStage(Stage):
         if selection.cards:
             program.set_metadata(
                 MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, selection.card_ids
+            )
+            logger.info(
+                "[MemoryContextStage] Selected {} card(s) for {} (ids={})",
+                len(selection.cards),
+                program.id[:8],
+                selection.card_ids,
             )
             return StringContainer(data="\n\n".join(selection.cards))
 

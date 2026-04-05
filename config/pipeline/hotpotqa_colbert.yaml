@@ -20,6 +20,7 @@ evolution_context:
   storage: ${redis_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
+  memory_provider: ${memory_provider}
 
 pipeline_builder:
   _target_: problems.chains.hotpotqa.static_colbert_f1_600.pipeline.ColBERTPipelineBuilder
