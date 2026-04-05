@@ -345,7 +345,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
             card.id = card_id
         return card_id
 
-    def _build_note_from_card(self, card: AnyCard) -> MemoryNoteProtocol:
+    def _build_note_from_card(
+        self,
+        card: AnyCard,
+        existing: MemoryNoteProtocol | None = None,
+    ) -> MemoryNoteProtocol:
         if self._MemoryNoteCls is None:
             raise RuntimeError("MemoryNote class is unavailable")
         card_id = str(card.id or "")
@@ -357,9 +361,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
         strategy = str(card.strategy or "")
         keywords = list(card.keywords or [])
         links = list(card.links or [])
-        existing = (
-            self.memory_system.read(card_id) if self.memory_system is not None else None
-        )
+        if existing is None:
+            existing = (
+                self.memory_system.read(card_id)
+                if self.memory_system is not None
+                else None
+            )
 
         return self._MemoryNoteCls(
             content=description,
@@ -402,8 +409,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self.memory_system is None:
             return False
 
-        note = self._build_note_from_card(card)
-        existing = self.memory_system.read(note.id)
+        card_id = str(card.id or "")
+        existing = self.memory_system.read(card_id)
+        note = self._build_note_from_card(card, existing=existing)
         changed = existing is None or self._note_fields_changed(
             existing,
             note.content,
