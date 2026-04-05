@@ -356,7 +356,7 @@ class TestDedup:
         )
         mem.llm_service = mock_llm
 
-        # Mock _score_retrieved_candidates to return a synthetic candidate
+        # Mock dedup.score_candidates to return a synthetic candidate
         mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.9}]
         )
@@ -393,7 +393,7 @@ class TestDedup:
         mock_llm = MagicMock()
         mem.llm_service = mock_llm
 
-        # First card — memory_cards is empty, should NOT call LLM
+        # First card — card_store.cards is empty, should NOT call LLM
         mem.save_card(_make_card(id="first"))
         mock_llm.generate.assert_not_called()
 

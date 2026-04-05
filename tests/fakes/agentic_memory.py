@@ -83,7 +83,7 @@ class FakeRetriever:
                     continue
                 jaccard = len(tokens & doc_tokens) / len(union)
                 if jaccard > 0:
-                    # Put score in meta so _score_retrieved_candidates can read it
+                    # Put score in meta so dedup.score_candidates can read it
                     hit_meta = {**meta, "score": jaccard}
                     scored.append(
                         FakeSearchResult(

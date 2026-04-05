@@ -1,9 +1,9 @@
 """Tests using fake A-MEM/GAM infrastructure.
 
 These tests cover the paths that were previously untestable without real
-Chroma/embedding dependencies: _upsert_local_note_agentic,
-_upsert_local_note_fast, _build_note_from_card, _remove_local_note,
-_dump_memory, rebuild with real data, and LLM card enrichment.
+Chroma/embedding dependencies: note_sync.upsert_agentic,
+note_sync.upsert_fast, note_sync.remove, note_sync.export_jsonl,
+rebuild with real data, and LLM card enrichment.
 """
 
 from __future__ import annotations
@@ -120,7 +120,7 @@ class TestFakeAgenticMemorySystem:
 
 
 # ===========================================================================
-# AmemGamMemory with fake agentic system: _upsert_local_note_agentic
+# AmemGamMemory with fake agentic system: note_sync.upsert_agentic
 # ===========================================================================
 
 
@@ -131,7 +131,7 @@ class TestUpsertLocalNoteAgentic:
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
         mem.save_card({"id": "c1", "description": "SA optimization"})
 
-        # Card should exist in both memory_cards and the agentic system
+        # Card should exist in both card_store.cards and the agentic system
         assert "c1" in mem.card_store.cards
         note = fake_sys.read("c1")
         assert note is not None
@@ -327,7 +327,7 @@ class TestFullCycleWithFakes:
     def test_persist_reload_agentic_system_starts_empty(self, tmp_path):
         """After reload, agentic system has no notes (only JSON index loads).
 
-        This documents a real gap: cards are in memory_cards but NOT in
+        This documents a real gap: cards are in card_store.cards but NOT in
         the agentic system until rebuild() or save_card() re-populates them.
         Search via research_agent will miss them until rebuild.
         """
@@ -335,17 +335,17 @@ class TestFullCycleWithFakes:
         mem.save_card({"id": "c1", "description": "annealing idea"})
         assert fake_sys.read("c1") is not None
 
-        # Reload: cards in memory_cards, but agentic system is fresh/empty
+        # Reload: cards in card_store.cards, but agentic system is fresh/empty
         mem2, fake_sys2 = _make_memory_with_fakes(tmp_path)
         assert "c1" in mem2.card_store.cards
         assert fake_sys2.read("c1") is None  # Gap: not in agentic system
 
-        # Local search still works (it reads memory_cards directly)
+        # Local search still works (it reads card_store.cards directly)
         result = mem2._search_local_cards("annealing")
         assert "c1" in result
 
-    def test_upsert_local_note_fast_direct(self, tmp_path):
-        """Test _upsert_local_note_fast — the hot path used by _sync_from_api."""
+    def test_upsert_fast_direct(self, tmp_path):
+        """Test note_sync.upsert_fast — the hot path used by api_sync.sync."""
         from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         mem, fake_sys = _make_memory_with_fakes(tmp_path)

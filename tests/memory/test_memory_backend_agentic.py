@@ -1,8 +1,7 @@
-"""Tests for the remaining 25% of memory.py using full fake infrastructure.
+"""Tests for agentic memory paths using full fake infrastructure.
 
-Covers: _load_or_create_retriever, _build_dedup_retrievers,
-_score_retrieved_candidates, _resolve_vector_retriever, and the full
-dedup pipeline with real scoring (not mocked _score_retrieved_candidates).
+Covers: gam.build / research_agent lifecycle, dedup.score_candidates,
+dedup retriever resolution, and the full dedup pipeline with real scoring.
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
     mem, fake_sys = make_test_memory_with_agentic(tmp_path, **overrides)
     cfg = mem.config
 
-    # Save ideas to populate both memory_cards and agentic system
+    # Save ideas to populate both card_store.cards and agentic system
     for idea in ideas or []:
         mem.save_card(idea)
 
@@ -109,7 +108,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
 
 
 # ===========================================================================
-# _load_or_create_retriever
+# GAM retriever lifecycle (gam.build / research_agent)
 # ===========================================================================
 
 
@@ -155,21 +154,21 @@ class TestLoadOrCreateRetriever:
 
     def test_empty_memory_no_research_agent(self, tmp_path):
         mem, _ = _make_full_memory(tmp_path, ideas=[])
-        # No cards → _load_or_create_retriever has nothing to index
+        # No cards → gam.build has nothing to index
         # rebuild skips agent creation since no export file and no cards
         mem.rebuild()
         # research_agent may be None with empty memory
 
 
 # ===========================================================================
-# _build_dedup_retrievers + _score_retrieved_candidates
+# dedup.build_retrievers + dedup.score_candidates
 # ===========================================================================
 
 
 class TestDedupWithRealScoring:
     """Test the full dedup pipeline with real (fake) vector scoring."""
 
-    def test_score_retrieved_candidates_finds_similar(self, tmp_path):
+    def test_score_candidates_finds_similar(self, tmp_path):
         mem, _ = _make_full_memory(
             tmp_path,
             ideas=[
@@ -384,7 +383,7 @@ class TestFullDedupPipeline:
 
 
 # ===========================================================================
-# _resolve_vector_retriever
+# dedup retriever resolution
 # ===========================================================================
 
 

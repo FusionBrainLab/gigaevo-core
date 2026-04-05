@@ -46,7 +46,7 @@ class TestSyncFromApi:
         assert mem._sync_from_api(force_full=False) is False
 
     def test_sync_adds_new_cards(self, tmp_path):
-        """Mocked API returns cards → they appear in memory_cards."""
+        """Mocked API returns cards → they appear in card_store.cards."""
         mem = _make_memory(tmp_path)
 
         # Mock API

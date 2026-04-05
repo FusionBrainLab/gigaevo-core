@@ -643,7 +643,7 @@ class TestFullEvolutionMemoryRebuildCycle:
         This test uses the REAL AmemGamMemory in local-only mode.
         If the real memory system is broken, this test fails.
         """
-        # Real AmemGamMemory — no inject_fakes, no patched rebuild
+        # Real AmemGamMemory — no monkey-patching, no patched rebuild
         from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 
         cfg = MemoryConfig(checkpoint_path=tmp_path / "real_mem")
