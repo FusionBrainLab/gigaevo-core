@@ -205,13 +205,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
     ) -> list[str]:
         merges = self.dedup.compute_merges(incoming_card, updates)
         updated_ids: list[str] = []
-        try:
-            for card_id, merged_card in merges:
+        for card_id, merged_card in merges:
+            try:
                 self._save_card_core(merged_card)
                 updated_ids.append(card_id)
-        finally:
-            if updated_ids:
-                self.card_store.persist()
+            except Exception as exc:
+                logger.warning("[Memory] Merge into card {!r} failed: {}", card_id, exc)
+        if updated_ids:
+            self.card_store.persist()
         return updated_ids
 
     def _save_card_core(self, card: AnyCard) -> tuple[str, bool]:
@@ -287,7 +288,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if action == "discard":
                 dup_id = str(decision.get("duplicate_of") or "").strip()
                 store.write_stats["rejected"] += 1
-                return dup_id or store.ensure_id(normalized_card)
+                if dup_id and dup_id in store.cards:
+                    return dup_id
+                return store.ensure_id(normalized_card)
             elif action == "update":
                 updates = decision.get("updates")
                 updated_ids = self._apply_update_actions(
