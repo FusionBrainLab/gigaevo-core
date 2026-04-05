@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from gigaevo.memory.shared_memory.card_conversion import AnyCard, concept_to_card
+from gigaevo.memory.shared_memory.card_conversion import (
+    AnyCard,
+    build_entity_meta,
+    card_to_concept_content,
+    concept_to_card,
+)
 from gigaevo.memory.shared_memory.card_store import CardStore
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.note_sync import NoteSync
+from gigaevo.memory.shared_memory.utils import looks_like_uuid
 
 
 class ApiSync:
@@ -26,6 +32,7 @@ class ApiSync:
         note_sync: NoteSync | None,
         namespace: str,
         channel: str,
+        author: str | None = None,
         sync_batch_size: int,
         search_limit: int,
     ):
@@ -34,6 +41,7 @@ class ApiSync:
         self._note_sync = note_sync
         self.namespace = namespace
         self.channel = channel
+        self.author = author
         self.sync_batch_size = sync_batch_size
         self.search_limit = search_limit
 
@@ -192,6 +200,43 @@ class ApiSync:
                 local_changed = True
 
         return cards, local_changed
+
+    # --- Card save / delete via API ---
+
+    def save_card_to_api(self, card: AnyCard, card_id: str) -> None:
+        """Save card to remote API and update entity mappings in card_store."""
+        content = card_to_concept_content(card)
+        name, tags, when_to_use = build_entity_meta(card)
+        store = self._card_store
+        response = self.client.save_concept(
+            content=content,
+            name=name,
+            tags=tags,
+            when_to_use=when_to_use,
+            channel=self.channel,
+            namespace=self.namespace,
+            author=self.author,
+            entity_id=store.entity_by_card_id.get(card_id),
+        )
+        store.save_entity(
+            card_id,
+            str(response["entity_id"]),
+            str(response.get("version_id") or ""),
+        )
+
+    def delete_from_api(self, key: str) -> str | None:
+        """Delete card from API by card_id or entity_id.
+
+        Returns the resolved card_id if found and deleted, None otherwise.
+        """
+        store = self._card_store
+        entity_id = store.entity_by_card_id.get(key)
+        if not entity_id and looks_like_uuid(key):
+            entity_id = key
+        if not entity_id:
+            return None
+        self.client.delete_concept(entity_id)
+        return store.unlink_entity(entity_id) or key
 
     # --- Internal helpers ---
 

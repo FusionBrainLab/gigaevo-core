@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -16,13 +17,8 @@ from gigaevo.memory.shared_memory.api_sync import ApiSync
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     GigaEvoMemoryBase,
-    build_entity_meta,
-    card_to_concept_content,
     format_search_results,
     is_program_card,
-    normalize_allowed_gam_tools,
-    normalize_gam_pipeline_mode,
-    normalize_gam_top_k_by_tool,
     normalize_memory_card,
     search_cards_by_keyword,
     synthesize_search_results,
@@ -39,7 +35,6 @@ from gigaevo.memory.shared_memory.protocols import (
     LLMServiceProtocol,
     ResearchAgentProtocol,
 )
-from gigaevo.memory.shared_memory.utils import looks_like_uuid
 
 load_dotenv()
 
@@ -49,6 +44,24 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     Requires a ``MemoryConfig`` object for construction.
     """
+
+    # --- Convenience properties (delegate to config) ---
+
+    @property
+    def checkpoint_dir(self) -> Path:
+        return self.config.checkpoint_path
+
+    @property
+    def index_file(self) -> Path:
+        return self.config.index_file
+
+    @property
+    def export_file(self) -> Path:
+        return self.config.export_file
+
+    @property
+    def gam_store_dir(self) -> Path:
+        return self.config.gam_store_dir
 
     def __init__(
         self,
@@ -60,13 +73,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
     ) -> None:
         self.config = config
 
-        # --- Derived paths ---
         cfg = self.config
-        self.checkpoint_dir = cfg.checkpoint_path
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.index_file = self.checkpoint_dir / "api_index.json"
-        self.export_file = self.checkpoint_dir / "amem_exports" / "amem_memories.jsonl"
-        self.gam_store_dir = self.checkpoint_dir / "gam_shared" / "amem_store"
+        cfg.checkpoint_path.mkdir(parents=True, exist_ok=True)
 
         self._warned_missing_card_update_llm = False
         self._iters_after_rebuild = 0
@@ -86,7 +94,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         _agent_cls = rt.research_agent_cls if rt else None
         _gen_cls = rt.generator_cls if rt else None
 
-        self.card_store = CardStore(index_file=self.index_file)
+        self.card_store = CardStore(index_file=cfg.index_file)
 
         # --- LLM + generator (DI or environment-based) ---
         self.llm_service: LLMServiceProtocol | None
@@ -102,7 +110,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.memory_system: AgenticMemoryProtocol | None = init_agentic_storage(
             llm_service=self.llm_service,
             system_cls=_system_cls,
-            checkpoint_dir=self.checkpoint_dir,
+            checkpoint_dir=cfg.checkpoint_path,
             enable_evolution=cfg.enable_memory_evolution,
         )
         self.note_sync: NoteSync | None = None
@@ -114,20 +122,15 @@ class AmemGamMemory(GigaEvoMemoryBase):
             )
         self.research_agent: ResearchAgentProtocol | None = None
 
-        # --- Normalized GAM settings (computed once) ---
-        _allowed_gam_tools = normalize_allowed_gam_tools(cfg.gam.allowed_tools or None)
-        _gam_top_k = normalize_gam_top_k_by_tool(cfg.gam.top_k_by_tool or None)
-        _gam_mode = normalize_gam_pipeline_mode(cfg.gam.pipeline_mode)
-
         # --- Card dedup (always created; config.enabled gates scoring) ---
         self.dedup = CardDedup(
             card_store=self.card_store,
             llm_service=self.llm_service,
             config=cfg.dedup,
-            allowed_gam_tools=_allowed_gam_tools,
-            gam_store_dir=self.gam_store_dir,
-            export_file=self.export_file,
-            checkpoint_dir=self.checkpoint_dir,
+            allowed_gam_tools=cfg.gam.normalized_allowed_tools,
+            gam_store_dir=cfg.gam_store_dir,
+            export_file=cfg.export_file,
+            checkpoint_dir=cfg.checkpoint_path,
         )
 
         # --- GAM search ---
@@ -137,13 +140,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 research_agent_cls=_agent_cls,
                 generator=self.generator,
                 card_store=self.card_store,
-                checkpoint_dir=self.checkpoint_dir,
-                gam_store_dir=self.gam_store_dir,
-                export_file=self.export_file,
+                checkpoint_dir=cfg.checkpoint_path,
+                gam_store_dir=cfg.gam_store_dir,
+                export_file=cfg.export_file,
                 enable_bm25=cfg.gam.enable_bm25,
-                allowed_gam_tools=_allowed_gam_tools,
-                gam_top_k_by_tool=_gam_top_k,
-                gam_pipeline_mode=_gam_mode,
+                allowed_gam_tools=cfg.gam.normalized_allowed_tools,
+                gam_top_k_by_tool=cfg.gam.normalized_top_k_by_tool,
+                gam_pipeline_mode=cfg.gam.normalized_pipeline_mode,
             )
 
         # --- API sync (after note_sync so it can upsert notes) ---
@@ -155,6 +158,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 note_sync=self.note_sync,
                 namespace=api_cfg.namespace,
                 channel=api_cfg.channel,
+                author=api_cfg.author,
                 sync_batch_size=api_cfg.sync_batch_size,
                 search_limit=cfg.search_limit,
             )
@@ -162,7 +166,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if (
             self.memory_system is not None
             and self.generator is not None
-            and self.export_file.exists()
+            and cfg.export_file.exists()
             and self.gam is not None
         ):
             try:
@@ -187,6 +191,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             note_sync=self.note_sync,
             namespace=api_cfg.namespace if api_cfg else "default",
             channel=api_cfg.channel if api_cfg else "latest",
+            author=api_cfg.author if api_cfg else None,
             sync_batch_size=api_cfg.sync_batch_size if api_cfg else 100,
             search_limit=self.config.search_limit,
         )
@@ -237,27 +242,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if not card.task_description:
                 card.task_description = analysis.get("context") or ""
 
-        content = card_to_concept_content(card)
-        name, tags, when_to_use = build_entity_meta(card)
-
         store = self.card_store
-        if self.api is not None:
-            api_cfg = self.config.api
-            response = self.api.save_concept(
-                content=content,
-                name=name,
-                tags=tags,
-                when_to_use=when_to_use,
-                channel=api_cfg.channel if api_cfg else "latest",
-                namespace=api_cfg.namespace if api_cfg else "default",
-                author=api_cfg.author if api_cfg else None,
-                entity_id=store.entity_by_card_id.get(card_id),
-            )
-            store.save_entity(
-                card_id,
-                str(response["entity_id"]),
-                str(response.get("version_id") or ""),
-            )
+        sync = self._ensure_api_sync()
+        if sync is not None:
+            sync.save_card_to_api(card, card_id)
         else:
             store.clear_entity(card_id)
         store.cards[card_id] = normalize_memory_card(card, fallback_id=card_id)
@@ -336,6 +324,23 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def save(self, data: str, category: str = "general") -> str:
         return self.save_card({"category": category, "description": data})
 
+    def _format_search_output(
+        self,
+        query: str,
+        cards: list[AnyCard],
+        memory_state: str | None = None,
+    ) -> str:
+        if not cards:
+            return f"Query: {query}\n\nNo relevant memories found."
+        if self.config.enable_llm_synthesis:
+            return synthesize_search_results(
+                query=query,
+                memory_state=memory_state,
+                cards=cards,
+                llm_service=self.llm_service,
+            )
+        return format_search_results(query, cards)
+
     def _search_via_api(self, query: str, memory_state: str | None = None) -> str:
         sync = self._ensure_api_sync()
         if sync is None:
@@ -352,42 +357,17 @@ class AmemGamMemory(GigaEvoMemoryBase):
         else:
             self.card_store.persist()
 
-        if not cards:
-            return f"Query: {query}\n\nNo relevant memories found."
-
-        if self.config.enable_llm_synthesis:
-            return synthesize_search_results(
-                query=query,
-                memory_state=memory_state,
-                cards=cards,
-                llm_service=self.llm_service,
-            )
-        return format_search_results(query, cards)
+        return self._format_search_output(query, cards, memory_state)
 
     def _search_local_cards(self, query: str, memory_state: str | None = None) -> str:
         """Search local cards by keyword matching."""
-        cards = self.card_store.cards
-        if not cards:
-            return f"Query: {query}\n\nNo relevant memories found."
-
         top_cards = search_cards_by_keyword(
-            cards_dict=cards,
+            cards_dict=self.card_store.cards,
             query=query,
             memory_state=memory_state,
             search_limit=self.config.search_limit,
         )
-
-        if not top_cards:
-            return f"Query: {query}\n\nNo relevant memories found."
-
-        if self.config.enable_llm_synthesis:
-            return synthesize_search_results(
-                query=query,
-                memory_state=memory_state,
-                cards=top_cards,
-                llm_service=self.llm_service,
-            )
-        return format_search_results(query, top_cards)
+        return self._format_search_output(query, top_cards, memory_state)
 
     def search(self, query: str, memory_state: str | None = None) -> str:
         if self.api is not None:
@@ -420,7 +400,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self.memory_system is None or self.generator is None:
             return
         if self.note_sync is not None:
-            self.note_sync.export_jsonl(self.export_file, serialized)
+            self.note_sync.export_jsonl(self.config.export_file, serialized)
         if self.gam is not None:
             self.gam.build()
             self.research_agent = self.gam.agent
@@ -430,15 +410,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def delete(self, memory_id: str) -> bool:
         key = str(memory_id).strip()
         store = self.card_store
-        card_id: str
-        if self.api is not None:
-            entity_id = store.entity_by_card_id.get(key)
-            if not entity_id and looks_like_uuid(key):
-                entity_id = key
-            if not entity_id:
+        sync = self._ensure_api_sync()
+        if sync is not None:
+            card_id = sync.delete_from_api(key)
+            if card_id is None:
                 return False
-            self.api.delete_concept(entity_id)
-            card_id = store.unlink_entity(entity_id) or key
         else:
             resolved = store.resolve_card_id(key)
             if resolved is None:

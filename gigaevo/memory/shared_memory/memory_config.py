@@ -11,6 +11,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.memory.shared_memory.card_conversion import (
+    normalize_allowed_gam_tools,
+    normalize_gam_pipeline_mode,
+    normalize_gam_top_k_by_tool,
+)
 from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 
 
@@ -23,6 +28,18 @@ class GamConfig(BaseModel):
     allowed_tools: list[str] = Field(default_factory=list)
     top_k_by_tool: dict[str, int] = Field(default_factory=dict)
     pipeline_mode: str = "default"
+
+    @property
+    def normalized_allowed_tools(self) -> set[str]:
+        return normalize_allowed_gam_tools(self.allowed_tools or None)
+
+    @property
+    def normalized_top_k_by_tool(self) -> dict[str, int]:
+        return normalize_gam_top_k_by_tool(self.top_k_by_tool or None)
+
+    @property
+    def normalized_pipeline_mode(self) -> str:
+        return normalize_gam_pipeline_mode(self.pipeline_mode)
 
 
 class ApiConfig(BaseModel):
@@ -56,3 +73,15 @@ class MemoryConfig(BaseModel):
     api: ApiConfig | None = None
     gam: GamConfig = Field(default_factory=GamConfig)
     dedup: CardUpdateDedupConfig = Field(default_factory=CardUpdateDedupConfig)
+
+    @property
+    def index_file(self) -> Path:
+        return self.checkpoint_path / "api_index.json"
+
+    @property
+    def export_file(self) -> Path:
+        return self.checkpoint_path / "amem_exports" / "amem_memories.jsonl"
+
+    @property
+    def gam_store_dir(self) -> Path:
+        return self.checkpoint_path / "gam_shared" / "amem_store"
