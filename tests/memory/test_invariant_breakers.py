@@ -74,13 +74,9 @@ class TestBimapInvariant:
         assert "entity-1" not in store.entity_version
         _check_bimap_invariant(store)
 
-    def test_save_entity_reuse_entity_across_cards_breaks_invariant(self, tmp_path):
-        """A2 — BUG: save_entity("card-B", "entity-1") when entity-1 was
-        linked to card-A leaves entity_by_card_id["card-A"] dangling.
-
-        save_entity only cleans the NEW card's old entity, not the OLD card
-        that previously owned this entity.
-        """
+    def test_save_entity_reuse_entity_across_cards_preserves_invariant(self, tmp_path):
+        """A2: save_entity("card-B", "entity-1") when entity-1 was linked to
+        card-A cleans up card-A's forward mapping, preserving the invariant."""
         store = _make_store(tmp_path)
         store.link_entity("card-A", "entity-1", "v1")
 
@@ -91,12 +87,9 @@ class TestBimapInvariant:
         assert store.card_id_by_entity["entity-1"] == "card-B"
         assert store.entity_by_card_id["card-B"] == "entity-1"
 
-        # BUG: Forward map for card-A still points to entity-1
-        # but reverse map says entity-1 → card-B
-        assert store.entity_by_card_id.get("card-A") == "entity-1"
-        # Documenting the broken invariant:
-        with pytest.raises(AssertionError):
-            _check_bimap_invariant(store)
+        # card-A's forward mapping was cleaned up
+        assert "card-A" not in store.entity_by_card_id
+        _check_bimap_invariant(store)
 
     def test_invariant_after_mixed_operations(self, tmp_path):
         """A3: After a sequence of mixed link/unlink/save/clear operations,
@@ -162,12 +155,9 @@ class TestBimapInvariant:
         assert store2.entity_version == {"e1": "v1", "e2": "v2"}
         _check_bimap_invariant(store2)
 
-    def test_load_index_with_dangling_entity_mapping(self, tmp_path):
-        """A7 — BUG: If api_index.json has an entity_by_card_id entry for a
-        card_id that doesn't exist in memory_cards, the mapping loads anyway.
-
-        This means entity_by_card_id has a phantom entry.
-        """
+    def test_load_index_skips_dangling_entity_mapping(self, tmp_path):
+        """A7: If api_index.json has an entity_by_card_id entry for a
+        card_id that doesn't exist in memory_cards, the mapping is skipped."""
         index_file = tmp_path / "api_index.json"
         index_data = {
             "memory_cards": {},
@@ -178,14 +168,11 @@ class TestBimapInvariant:
 
         store = CardStore(index_file=index_file)
 
-        # BUG: Dangling mapping loaded — card doesn't exist
+        # Dangling mapping was skipped during load
         assert "ghost-card" not in store.cards
-        assert store.entity_by_card_id.get("ghost-card") == "entity-1"
-        assert store.card_id_by_entity.get("entity-1") == "ghost-card"
-
-        # resolve_card_id correctly returns None (card not in store.cards)
-        assert store.resolve_card_id("entity-1") is None
-        assert store.resolve_card_id("ghost-card") is None
+        assert "ghost-card" not in store.entity_by_card_id
+        assert "entity-1" not in store.card_id_by_entity
+        _check_bimap_invariant(store)
 
 
 # ===========================================================================

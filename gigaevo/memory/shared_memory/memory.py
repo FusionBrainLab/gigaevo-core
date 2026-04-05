@@ -278,9 +278,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
             if action == "discard":
                 dup_id = str(decision.get("duplicate_of") or "").strip()
-                if dup_id in store.cards:
-                    store.write_stats["rejected"] += 1
-                    return dup_id
+                store.write_stats["rejected"] += 1
+                return dup_id or store.ensure_id(normalized_card)
             elif action == "update":
                 updates = decision.get("updates")
                 updated_ids = self._apply_update_actions(

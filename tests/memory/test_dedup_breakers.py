@@ -226,36 +226,41 @@ class TestMergeEdgeCases:
 class TestDedupOrchestrator:
     """Tests for save_card dedup flow and fallthrough logic."""
 
-    def test_discard_nonexistent_duplicate_falls_through_to_add(self, tmp_path):
-        """H1 — BUG: LLM says "discard, duplicate_of=X" but X was deleted,
-        so discard silently fails and falls through to add. The rejected stat
-        is NOT incremented."""
-        mem = _make_full_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.save_card({"id": "existing", "description": "original"})
+    def test_discard_nonexistent_duplicate_still_rejects(self, tmp_path):
+        """H1: LLM says "discard, duplicate_of=X" where X doesn't exist.
+        The card is still rejected (not added)."""
+        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
+        mem.save_card({"id": "c1", "description": "card1"})
+        mem.save_card({"id": "c2", "description": "card2"})
 
+        initial_stats = mem.get_card_write_stats()
+        initial_added = initial_stats["added"]
+        initial_rejected = initial_stats["rejected"]
+
+        # Mock LLM service so dedup can proceed
         mock_llm = MagicMock()
-        mock_llm.generate.return_value = (
-            json.dumps({"action": "discard", "duplicate_of": "existing"}),
-            {},
-            None,
-            None,
-        )
         mem.llm_service = mock_llm
         mem.dedup.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
-            return_value=[{"card_id": "existing", "final_score": 0.9}]
+
+        # Mock decide_action to return discard for a nonexistent card
+        # (simulating decision made with data that was deleted before decision)
+        mem.dedup.decide_action = MagicMock(
+            return_value={"action": "discard", "duplicate_of": "nonexistent"}
         )
 
-        # Delete the target card before dedup processes
-        del mem.card_store.cards["existing"]
+        # Mock score_candidates to return non-empty list so dedup_ready is True
+        mem.dedup.score_candidates = MagicMock(
+            return_value=[{"card_id": "c1", "final_score": 0.9}]
+        )
 
-        # Save a new card — dedup will return discard, but target doesn't exist
-        mem.save_card({"description": "should be deduped"})
+        # Save a new card — dedup will return discard for nonexistent card
+        mem.save_card({"description": "new card"})
 
         stats = mem.get_card_write_stats()
-        # BUG: Card was added instead of rejected
-        assert stats["added"] == 2  # original + new
-        assert stats["rejected"] == 0  # Should be 1, but BUG
+        # Rejected count incremented even though duplicate_of doesn't exist
+        assert stats["rejected"] == initial_rejected + 1
+        # Added count did NOT increment (card was rejected, not added)
+        assert stats["added"] == initial_added
 
     def test_update_returns_first_id_multi_target(self, tmp_path):
         """H2: When update merges into multiple cards, save_card returns the
@@ -329,14 +334,11 @@ class TestDedupOrchestrator:
 class TestNoteSyncExceptions:
     """Tests for exception handling in NoteSync upsert methods."""
 
-    def test_upsert_fast_delete_failure_leaves_duplicate_doc(self, tmp_path):
-        """I1 — BUG: If retriever.delete_document raises, the exception is
-        swallowed (try/except pass), then add_document adds a new one.
-        Result: duplicate document in the retriever.
-
-        Note: In FakeRetriever (dict-based), duplicates overwrite. In real Chroma
-        (list-based), duplicates coexist. This test verifies the swallow behavior:
-        delete raises, exception ignored, add still called."""
+    def test_upsert_fast_delete_failure_logs_warning_and_still_adds(self, tmp_path):
+        """I1: If retriever.delete_document raises, a warning is logged and
+        add_document is still called. In dict-based retrievers this overwrites;
+        in list-based (Chroma) this may leave duplicates — the warning lets
+        operators detect the issue."""
         mem, fake_sys = make_test_memory_with_agentic(tmp_path)
 
         # Track add_document calls
@@ -360,12 +362,11 @@ class TestNoteSyncExceptions:
         mem.note_sync.upsert_fast(card1)
         initial_add_count = len(add_calls)
 
-        # Upsert again with changed content — delete fails, add succeeds
+        # Upsert again with changed content — delete fails (warning logged), add succeeds
         card2 = normalize_memory_card({"id": "c1", "description": "updated"})
         mem.note_sync.upsert_fast(card2)
 
-        # BUG: Despite delete failure, add_document was still called
-        # In real Chroma, this leaves both old and new documents
+        # add_document was still called despite delete failure
         assert len(add_calls) > initial_add_count
 
     def test_upsert_agentic_update_raises_propagates(self, tmp_path):

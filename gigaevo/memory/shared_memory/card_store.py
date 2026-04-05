@@ -89,11 +89,15 @@ class CardStore:
         return self.card_id_by_entity.get(entity_id)
 
     def save_entity(self, card_id: str, entity_id: str, version: str = "") -> None:
-        """Link card to entity, cleaning up stale mapping if entity_id changed."""
+        """Link card to entity, cleaning up stale mappings if entity_id changed."""
         old = self.entity_by_card_id.get(card_id)
         if old and old != entity_id:
             self.card_id_by_entity.pop(old, None)
             self.entity_version.pop(old, None)
+        # Clean up old card that previously owned this entity
+        prev_card = self.card_id_by_entity.get(entity_id)
+        if prev_card and prev_card != card_id:
+            self.entity_by_card_id.pop(prev_card, None)
         self.link_entity(card_id, entity_id, version)
 
     def clear_entity(self, card_id: str) -> str | None:
@@ -140,6 +144,13 @@ class CardStore:
                 cid = str(card_id)
                 eid = str(entity_id)
                 if not cid or not eid:
+                    continue
+                if cid not in self.cards:
+                    logger.debug(
+                        "[Memory] Skipping dangling entity mapping: "
+                        "card_id={!r} not in cards",
+                        cid,
+                    )
                     continue
                 self.entity_by_card_id[cid] = eid
                 self.card_id_by_entity[eid] = cid

@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     MemoryNoteProtocol,
@@ -106,8 +108,12 @@ class NoteSync:
         self.memory_system.memories[note.id] = note
         try:
             self.memory_system.retriever.delete_document(note.id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "[Memory] Failed to delete document {!r} before re-add: {}",
+                note.id,
+                exc,
+            )
         self.memory_system.retriever.add_document(
             self.memory_system._document_for_note(note),
             note_metadata(note),

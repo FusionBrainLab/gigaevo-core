@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from loguru import logger
+
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     build_entity_meta,
@@ -45,17 +47,32 @@ class ApiSync:
         self.sync_batch_size = sync_batch_size
         self.search_limit = search_limit
 
-    def fetch_all_hits(self) -> list[dict[str, Any]]:
-        """Paginated fetch of all concept hits, filtered by namespace."""
+    def fetch_all_hits(self) -> tuple[list[dict[str, Any]], bool]:
+        """Paginated fetch of all concept hits, filtered by namespace.
+
+        Returns (hits, pagination_complete). ``pagination_complete`` is True
+        only when the final page was smaller than ``sync_batch_size`` (natural
+        end-of-list).  False means we may have partial results.
+        """
         hits: list[dict[str, Any]] = []
         offset = 0
+        pagination_complete = False
         while True:
-            rows = self.client.list_memory_cards(
-                limit=self.sync_batch_size,
-                offset=offset,
-                channel=self.channel,
-            )
+            try:
+                rows = self.client.list_memory_cards(
+                    limit=self.sync_batch_size,
+                    offset=offset,
+                    channel=self.channel,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Memory] API pagination interrupted at offset {}: {}",
+                    offset,
+                    exc,
+                )
+                break
             if not rows:
+                pagination_complete = True
                 break
 
             page_hits: list[dict[str, Any]] = []
@@ -72,8 +89,9 @@ class ApiSync:
             hits.extend(page_hits)
 
             if len(rows) < self.sync_batch_size:
+                pagination_complete = True
                 break
-        return hits
+        return hits, pagination_complete
 
     def sync(self, force_full: bool = False) -> bool:
         """Sync from API. Returns True if local state changed.
@@ -81,7 +99,7 @@ class ApiSync:
         The caller is responsible for calling rebuild() or persist()
         based on the return value and its own state.
         """
-        remote_hits = self.fetch_all_hits()
+        remote_hits, pagination_complete = self.fetch_all_hits()
         remote_entity_ids: set[str] = set()
         changed = False
 
@@ -138,14 +156,17 @@ class ApiSync:
             if self._upsert_note(card):
                 changed = True
 
-        # Remove entities no longer present on remote
-        stale_entities = set(store.card_id_by_entity) - remote_entity_ids
-        for entity_id in stale_entities:
-            card_id = store.unlink_entity(entity_id)
-            if card_id:
-                store.cards.pop(card_id, None)
-                self._remove_note(card_id)
-            changed = True
+        # Remove entities no longer present on remote — only safe when
+        # pagination completed fully (partial results would incorrectly
+        # mark healthy entities as stale).
+        if pagination_complete:
+            stale_entities = set(store.card_id_by_entity) - remote_entity_ids
+            for entity_id in stale_entities:
+                card_id = store.unlink_entity(entity_id)
+                if card_id:
+                    store.cards.pop(card_id, None)
+                    self._remove_note(card_id)
+                changed = True
 
         return changed
 

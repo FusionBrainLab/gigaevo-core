@@ -25,15 +25,16 @@ def _make_memory(tmp_path, **overrides):
 class TestStaleEntityCleanup:
     """Tests for api_sync.sync() stale entity removal logic."""
 
-    def test_sync_partial_results_deletes_healthy_local_entities(self, tmp_path):
-        """C1 — BUG: If API returns partial results (e.g., page 1 of 3),
-        entities from pages 2-3 are treated as stale and deleted.
+    def test_sync_partial_results_preserves_healthy_local_entities(self, tmp_path):
+        """C1: If API pagination fails mid-way (returns a full page then
+        errors on the next), stale cleanup is skipped because pagination
+        didn't complete. Entities from unseen pages are preserved."""
+        from gigaevo.memory.shared_memory.memory_config import ApiConfig
 
-        This happens because stale_entities = set(store.card_id_by_entity)
-        - remote_entity_ids. If remote_entity_ids is incomplete, healthy
-        entities appear missing.
-        """
-        mem = _make_memory(tmp_path)
+        mem = _make_memory(
+            tmp_path, api=ApiConfig(sync_batch_size=2, sync_on_init=False)
+        )
+        mem.api_sync = None  # force lazy re-creation with mock
 
         # Pre-populate store with 5 entities
         for i in range(5):
@@ -44,11 +45,23 @@ class TestStaleEntityCleanup:
             )
             mem.card_store.link_entity(card_id, entity_id, f"v{i}")
 
-        # Mock API to return only first 2 entities (simulating partial results)
+        # Mock API: page 1 returns full page (2 items = batch_size),
+        # page 2 raises (simulating network timeout).
         mock_api = MagicMock()
-        mock_api.list_memory_cards.return_value = [
-            {"entity_id": "e0", "version_id": "v0", "meta": {"namespace": "default"}},
-            {"entity_id": "e1", "version_id": "v1", "meta": {"namespace": "default"}},
+        mock_api.list_memory_cards.side_effect = [
+            [
+                {
+                    "entity_id": "e0",
+                    "version_id": "v0",
+                    "meta": {"namespace": "default"},
+                },
+                {
+                    "entity_id": "e1",
+                    "version_id": "v1",
+                    "meta": {"namespace": "default"},
+                },
+            ],
+            RuntimeError("API timeout"),
         ]
         mock_api.get_concept.side_effect = lambda eid, **kw: {
             "content": {"id": f"c{int(eid[1])}", "description": f"updated {eid}"},
@@ -58,13 +71,13 @@ class TestStaleEntityCleanup:
         mem.api = mock_api
         mem._sync_from_api(force_full=True)
 
-        # BUG: Entities e2, e3, e4 were deleted as "stale" even though
-        # they're healthy on the remote (API just returned partial results)
+        # Entities from page 1 updated, entities from page 2+ preserved
         assert "c0" in mem.card_store.cards
         assert "c1" in mem.card_store.cards
-        assert "c2" not in mem.card_store.cards  # Wrongly deleted as stale
-        assert "c3" not in mem.card_store.cards
-        assert "c4" not in mem.card_store.cards
+        # NOT deleted — stale cleanup skipped because pagination didn't complete
+        assert "c2" in mem.card_store.cards
+        assert "c3" in mem.card_store.cards
+        assert "c4" in mem.card_store.cards
 
     def test_sync_removes_card_and_note_for_stale_entity(self, tmp_path):
         """C2: When a local entity is not in remote list, its card and
