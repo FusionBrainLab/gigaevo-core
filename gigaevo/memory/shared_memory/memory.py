@@ -49,6 +49,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
 )
 
 # Re-export for backward compatibility (extracted to concept_api.py)
+from gigaevo.memory.shared_memory.card_index_store import CardIndexStore
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.utils import (
     looks_like_uuid,
@@ -172,19 +173,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._agentic_import_error: Exception | None = None
         self._load_agentic_classes()
 
-        self.memory_cards: dict[str, AnyCard] = {}
-        self.entity_by_card_id: dict[str, str] = {}
-        self.card_id_by_entity: dict[str, str] = {}
-        self.entity_version_by_entity: dict[str, str] = {}
-        self.memory_ids: set[str] = set()
-        self.card_write_stats: dict[str, int] = {
-            "processed": 0,
-            "added": 0,
-            "rejected": 0,
-            "updated": 0,
-            "updated_target_cards": 0,
-        }
-        self._load_index()
+        # Index management (moved to CardIndexStore)
+        self._index = CardIndexStore(self.index_file)
 
         self.llm_service: LLMServiceProtocol | None
         self.generator: GeneratorProtocol | None
@@ -205,6 +195,38 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if sync_on_init and self.use_api:
             self._sync_from_api(force_full=True)
+
+    # =========================================================================
+    # Backward-compat properties (will be removed after full migration)
+    # =========================================================================
+
+    @property
+    def memory_cards(self) -> dict[str, AnyCard]:
+        return self._index.memory_cards
+
+    @property
+    def entity_by_card_id(self) -> dict[str, str]:
+        return self._index.entity_by_card_id
+
+    @property
+    def card_id_by_entity(self) -> dict[str, str]:
+        return self._index.card_id_by_entity
+
+    @property
+    def entity_version_by_entity(self) -> dict[str, str]:
+        return self._index.entity_version_by_entity
+
+    @property
+    def memory_ids(self) -> set[str]:
+        return self._index.memory_ids
+
+    @property
+    def card_write_stats(self) -> dict[str, int]:
+        return self._index.card_write_stats
+
+    # =========================================================================
+    # Agentic runtime loading
+    # =========================================================================
 
     def _load_agentic_classes(self) -> None:
         try:
@@ -549,7 +571,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 content.get("id") or entity_id
             )
             card = concept_to_card(content, fallback_id=fallback_id)
-            card_id = self._ensure_card_id(card)
+            card_id = self._index._ensure_card_id(card)
 
             previous_card_id = self.card_id_by_entity.get(entity_id)
             if previous_card_id and previous_card_id != card_id:
@@ -587,7 +609,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if changed:
             self.rebuild()
         else:
-            self._persist_index()
+            self._index._persist_index()
             if (
                 self.research_agent is None
                 and self.memory_system is not None
@@ -954,7 +976,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return updated_ids
 
     def _save_card_core(self, card: AnyCard) -> str:
-        card_id = self._ensure_card_id(card)
+        card_id = self._index._ensure_card_id(card)
 
         if self.enable_llm_card_enrichment and self.memory_system is not None:
             analysis = self.memory_system.analyze_content(card.description)
@@ -997,7 +1019,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.memory_cards[card_id] = normalize_memory_card(card, fallback_id=card_id)
 
         self._upsert_local_note_agentic(self.memory_cards[card_id])
-        self._persist_index()
+        self._index._persist_index()
         self._dedup_retrievers = None
 
         self._iters_after_rebuild += 1
@@ -1162,7 +1184,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 content.get("id") or self.card_id_by_entity.get(entity_id) or entity_id
             )
             card = concept_to_card(content, fallback_id=card_id)
-            card_id = self._ensure_card_id(card)
+            card_id = self._index._ensure_card_id(card)
 
             self.card_id_by_entity[entity_id] = card_id
             self.entity_by_card_id[card_id] = entity_id
@@ -1175,7 +1197,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if self._upsert_local_note_fast(card):
                 local_changed = True
 
-        self._persist_index()
+        self._index._persist_index()
         if (
             local_changed
             and self.memory_system is not None
@@ -1251,7 +1273,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return dict(self.card_write_stats)
 
     def rebuild(self) -> None:
-        self._persist_index()
+        self._index._persist_index()
         if self.memory_system is None or self.generator is None:
             return
         self._dump_memory()
@@ -1284,7 +1306,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.entity_by_card_id.pop(card_id, None)
         self.memory_cards.pop(card_id, None)
         self._remove_local_note(card_id)
-        self._persist_index()
+        self._index._persist_index()
 
         if self.memory_system is not None and self.generator is not None:
             self.rebuild()
