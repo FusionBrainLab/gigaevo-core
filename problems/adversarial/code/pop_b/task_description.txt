@@ -1,0 +1,38 @@
+**OBJECTIVE**: Write a Python function that generates adversarial test inputs for a mathematical expression evaluator. Your goal is to produce expressions that expose bugs in parsers.
+
+**OUTPUT**: Your `entrypoint()` must return a callable `generate()` that returns a list of expression strings. Each expression must be a valid mathematical expression using:
+- Numbers (integers, floats, negative)
+- Operators: `+`, `-`, `*`, `/`
+- Parentheses: `(`, `)`
+
+**REQUIREMENTS**:
+- Generate exactly 20 test expressions.
+- Each expression must be valid Python arithmetic (evaluable by `ast.literal_eval` or Python's parser).
+- Focus on EDGE CASES that real parsers commonly get wrong:
+  - Unary minus: `-3`, `-(2+3)`, `--3`
+  - Operator precedence: `2+3*4` vs `(2+3)*4`
+  - Nested parentheses: `(((3)))`, `((1+2)*(3+4))`
+  - Division edge cases: `1/3`, `0/1`, precision issues
+  - Whitespace variations: `2 + 3`, `2+3`, ` 2  +  3 `
+  - Chained operations: `1-2-3-4`, `8/4/2`
+  - Large/small numbers: `999999*999999`, `0.001+0.002`
+  - Mixed unary and binary: `1+-2`, `1--2`, `-1*-2`
+
+**RULES**:
+- No external libraries — pure Python only.
+- Every expression you generate MUST be a valid mathematical expression.
+- DO NOT generate expressions with division by zero (these are undefined).
+- Return a LIST of strings, each being one test expression.
+
+**HINT**: The best adversarial tests target specific parser weaknesses — ambiguous operator handling, edge cases in tokenization, extreme nesting, and unusual-but-valid syntax.
+
+OUTPUT:
+```python
+def entrypoint():
+    def generate():
+        tests = [
+            # Your adversarial test expressions here
+        ]
+        return tests
+    return generate
+```
