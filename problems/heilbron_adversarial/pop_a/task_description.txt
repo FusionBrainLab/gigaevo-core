@@ -37,9 +37,11 @@ CONSTRAINTS
 - No collinear triplets
 
 HELPER FUNCTIONS (import from helper.py)
-- `get_unit_triangle()` -> (A, B, C) vertices
-- `get_smallest_triangle_area(coordinates)` -> float min_area
-- `is_inside_triangle(points, a, b, c)` -> bool
+- `get_unit_triangle()` -> tuple of 3 arrays (A, B, C), each shape (2,) - vertices of unit-area triangle
+- `get_smallest_triangle_area(coordinates)` -> float - minimum area among all C(n,3) triangles
+  - Input: (n, 2) array, Output: scalar float
+- `is_inside_triangle(points, a, b, c)` -> bool - True if all points inside/on triangle boundary
+  - Input: points shape (n, 2) or single point (2,), vertices a,b,c each shape (2,), Output: bool
 
 OUTPUT FORMAT
 Implement `def entrypoint():` that returns a (11, 2) NumPy array.

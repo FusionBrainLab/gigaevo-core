@@ -34,6 +34,8 @@ def get_smallest_triangle_area(coordinates: np.ndarray) -> float:
 def is_inside_triangle(
     points: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray
 ) -> bool:
+    # Accept both single point (2,) and batch (N,2)
+    points = np.atleast_2d(points)
     # Compute barycentric coordinates
     v0 = c - a
     v1 = b - a
