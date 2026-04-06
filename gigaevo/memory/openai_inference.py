@@ -90,6 +90,11 @@ class OpenAIInferenceService:
         return None
 
     def generate(self, data: str) -> tuple[str, Any, int | None, float | None]:
+        """Send a prompt to the LLM and return the response.
+
+        Returns:
+            Tuple of (response_text, raw_response, total_tokens, cost).
+        """
         extra_headers: dict[str, str] = {}
         if self._is_openrouter and self.openrouter_referer:
             extra_headers["HTTP-Referer"] = self.openrouter_referer

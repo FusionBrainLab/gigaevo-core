@@ -162,9 +162,9 @@ class ApiSync:
         if pagination_complete:
             stale_entities = set(store.card_id_by_entity) - remote_entity_ids
             for entity_id in stale_entities:
-                card_id = store.unlink_entity(entity_id)
-                if card_id and store.cards.pop(card_id, None) is not None:
-                    self._remove_note(card_id)
+                stale_card_id = store.unlink_entity(entity_id)
+                if stale_card_id and store.cards.pop(stale_card_id, None) is not None:
+                    self._remove_note(stale_card_id)
                     changed = True
 
         return changed

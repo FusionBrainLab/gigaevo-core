@@ -64,6 +64,13 @@ class _ConceptApiClient:
         author: str | None,
         entity_id: str | None = None,
     ) -> dict[str, Any]:
+        """Create or update a memory card via the API.
+
+        Uses POST for new cards, PUT for existing (when entity_id is given).
+
+        Returns:
+            API response with ``entity_id`` and ``version_id``.
+        """
         body = {
             "meta": {
                 "name": name,
@@ -84,6 +91,7 @@ class _ConceptApiClient:
         return result
 
     def get_concept(self, entity_id: str, channel: str = "latest") -> dict[str, Any]:
+        """Fetch a single memory card by entity ID."""
         result = self._request(
             "GET",
             f"/v1/memory-cards/{entity_id}",
@@ -100,6 +108,7 @@ class _ConceptApiClient:
         offset: int = 0,
         channel: str = "latest",
     ) -> list[dict[str, Any]]:
+        """Paginated listing of all memory cards. Returns dicts, filters non-dicts."""
         result = self._request(
             "GET",
             "/v1/memory-cards",
@@ -121,6 +130,7 @@ class _ConceptApiClient:
         namespace: str | None,
         offset: int = 0,
     ) -> dict[str, Any]:
+        """Batch semantic search. Returns ``{"hits": [...], "total": N}``."""
         query_text = str(query or "").strip()
         if not query_text:
             return {"hits": [], "total": 0}
@@ -150,4 +160,5 @@ class _ConceptApiClient:
         return {"hits": hits, "total": len(hits)}
 
     def delete_concept(self, entity_id: str) -> None:
+        """Delete a memory card by entity ID."""
         self._request("DELETE", f"/v1/memory-cards/{entity_id}")

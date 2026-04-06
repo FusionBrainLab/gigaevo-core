@@ -28,6 +28,7 @@ from gigaevo.memory.openai_inference import OpenAIInferenceService
 
 
 def load_amem_records(path: Path) -> list[dict[str, Any]]:
+    """Load A-MEM exported records from a JSONL file."""
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -39,7 +40,7 @@ def load_amem_records(path: Path) -> list[dict[str, Any]]:
 
 
 def make_card_text(record: dict[str, Any]) -> str:
-    # Support both new and legacy A-mem export schemas.
+    """Format a card record as multi-line text for the GAM page store."""
     description = record.get("description") or record.get("content") or ""
     task_description = record.get("task_description") or record.get("context") or ""
     task_description_summary = record.get("task_description_summary") or ""
@@ -82,7 +83,14 @@ def make_card_text(record: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def build_gam_store(records: list[dict[str, Any]], store_dir: Path):
+def build_gam_store(
+    records: list[dict[str, Any]], store_dir: Path
+) -> tuple[InMemoryMemoryStore, InMemoryPageStore, int]:
+    """Build GAM memory and page stores from exported records.
+
+    Returns:
+        Tuple of (memory_store, page_store, newly_added_count).
+    """
     memory_store = InMemoryMemoryStore(dir_path=str(store_dir))
     page_store = InMemoryPageStore(dir_path=str(store_dir))
 
@@ -124,8 +132,13 @@ def build_retrievers(
     chroma_collection: str = "memories",
     enable_bm25: bool = False,
     allowed_tools: list[str] | set[str] | tuple[str, ...] | None = None,
-):
-    retrievers = {}
+) -> dict[str, Any]:
+    """Build retriever index from a page store.
+
+    Returns:
+        Mapping of tool name to retriever instance.
+    """
+    retrievers: dict[str, Any] = {}
 
     vector_tool_configs = {
         "vector": {

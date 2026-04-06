@@ -27,6 +27,8 @@ from gigaevo.memory.shared_memory.utils import (
     dedupe_keep_order,
 )
 
+_ENTITY_NAME_MAX_LENGTH = 255
+
 
 class MemoryNoteProtocol(Protocol):
     """Structural type for A-MEM MemoryNote objects."""
@@ -297,7 +299,7 @@ def build_entity_meta(card: AnyCard) -> tuple[str, list[str], str]:
         description or task_description_summary or task_description or "memory card"
     )
     name = f"{card.id}: {name_seed}" if card.id else name_seed
-    name = name[:255]
+    name = name[:_ENTITY_NAME_MAX_LENGTH]
 
     tags = dedupe_keep_order(
         [
