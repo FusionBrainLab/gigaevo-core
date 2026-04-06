@@ -3,25 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
-
-
-def _ensure_memory_client_path() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
-    client_src = workspace_root / "gigaevo-memory" / "client" / "python" / "src"
-    if client_src.exists() and str(client_src) not in sys.path:
-        sys.path.insert(0, str(client_src))
-    legacy_memory_root = Path(__file__).resolve().parents[2] / "memory"
-    if legacy_memory_root.exists() and str(legacy_memory_root) not in sys.path:
-        sys.path.insert(0, str(legacy_memory_root))
-
-
-_ensure_memory_client_path()
 
 from GAM_root.gam import InMemoryMemoryStore, InMemoryPageStore
 from GAM_root.gam.retriever.base import AbsRetriever

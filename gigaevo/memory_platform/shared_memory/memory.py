@@ -2,20 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 from typing import Any
 import uuid
 
 from dotenv import load_dotenv
-
-_THIS_DIR = Path(__file__).resolve().parent
-_LEGACY_MEMORY_ROOT = _THIS_DIR.parents[2] / "memory"
-if str(_LEGACY_MEMORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(_LEGACY_MEMORY_ROOT))
-_WORKSPACE_ROOT = _THIS_DIR.parents[4]
-_MEMORY_CLIENT_SRC = _WORKSPACE_ROOT / "gigaevo-memory" / "client" / "python" / "src"
-if _MEMORY_CLIENT_SRC.exists() and str(_MEMORY_CLIENT_SRC) not in sys.path:
-    sys.path.insert(0, str(_MEMORY_CLIENT_SRC))
 
 from gigaevo.memory import config
 from gigaevo.memory.openai_inference import OpenAIInferenceService

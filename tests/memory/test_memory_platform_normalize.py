@@ -1,18 +1,10 @@
 """Tests for memory_platform.normalize_memory_card: Pydantic → dict serialization.
 
-These tests verify that memory_platform's normalize_memory_card properly
-handles Pydantic model inputs (the exact data flow from write_pipeline.py).
-
-The gigaevo_memory external package is mocked since it's not available
-in the test environment.
+Verifies that memory_platform's normalize_memory_card properly handles
+Pydantic model inputs (the exact data flow from write_pipeline.py).
 """
 
 import json
-import sys
-from types import ModuleType
-from unittest.mock import MagicMock
-
-import pytest
 
 from gigaevo.memory.shared_memory.models import (
     ConnectedIdea,
@@ -20,25 +12,7 @@ from gigaevo.memory.shared_memory.models import (
     MemoryCardExplanation,
     ProgramCard,
 )
-
-# Mock the external gigaevo_memory package before importing memory_platform
-_mock_gigaevo_memory = ModuleType("gigaevo_memory")
-_mock_gigaevo_memory.embeddings = MagicMock()
-_mock_gigaevo_memory.platform_client = MagicMock()
-_mock_gigaevo_memory.search_types = MagicMock()
-_mock_gigaevo_memory.search_types.SearchType = MagicMock()
-sys.modules.setdefault("gigaevo_memory", _mock_gigaevo_memory)
-sys.modules.setdefault("gigaevo_memory.embeddings", _mock_gigaevo_memory.embeddings)
-sys.modules.setdefault(
-    "gigaevo_memory.platform_client", _mock_gigaevo_memory.platform_client
-)
-sys.modules.setdefault(
-    "gigaevo_memory.search_types", _mock_gigaevo_memory.search_types
-)
-
-from gigaevo.memory_platform.shared_memory.memory import (  # noqa: E402
-    normalize_memory_card,
-)
+from gigaevo.memory_platform.shared_memory.memory import normalize_memory_card
 
 
 class TestNormalizeMemoryCardPydanticInput:

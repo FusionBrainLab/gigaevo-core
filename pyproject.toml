@@ -57,7 +57,8 @@ dependencies = [
     "optuna",
     "cma",
     "bm25s>=0.3.0",
-    "PyStemmer>=3.0.0"
+    "PyStemmer>=3.0.0",
+    "gigaevo-memory @ git+https://github.com/Glazkoff/gigaevo-memory.git#subdirectory=client/python",
 ]
 
 [project.optional-dependencies]
