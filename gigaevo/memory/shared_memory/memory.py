@@ -13,16 +13,18 @@ from gigaevo.memory.shared_memory.agentic_runtime import (
     load_agentic_runtime,
 )
 from gigaevo.memory.shared_memory.api_sync import ApiSync
+from gigaevo.memory.shared_memory.base import GigaEvoMemoryBase
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
-    GigaEvoMemoryBase,
-    format_search_results,
     is_program_card,
     normalize_memory_card,
+)
+from gigaevo.memory.shared_memory.card_dedup import CardDedup
+from gigaevo.memory.shared_memory.card_search import (
+    format_search_results,
     search_cards_by_keyword,
     synthesize_search_results,
 )
-from gigaevo.memory.shared_memory.card_dedup import CardDedup
 from gigaevo.memory.shared_memory.card_store import CardStore
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.gam_search import GamSearch
