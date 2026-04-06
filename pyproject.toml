@@ -58,7 +58,7 @@ dependencies = [
     "cma",
     "bm25s>=0.3.0",
     "PyStemmer>=3.0.0",
-    "gigaevo-memory @ git+https://github.com/Glazkoff/gigaevo-memory.git#subdirectory=client/python",
+    "gigaevo-memory @ git+https://github.com/Glazkoff/gigaevo-memory.git@f22f5fff7a532f87260dca4501dc6b6321857794#subdirectory=client/python",
 ]
 
 [project.optional-dependencies]
