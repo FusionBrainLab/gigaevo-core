@@ -200,6 +200,7 @@ async def _run_via_worker(
     timeout: int,
     max_memory_mb: int | None,
     max_output_size: int | None,
+    python_path: Sequence[Path | str] | None = None,
 ) -> tuple[Any, bytes, str]:
     """
     Send one length-prefixed payload to the worker and read length-prefixed response.
@@ -243,6 +244,7 @@ async def _run_via_worker(
         if monitor_task is not None and not monitor_task.done():
             monitor_task.cancel()
 
+    _prepend_sys_path(python_path)
     value = cloudpickle.loads(stdout)
     if isinstance(value, dict) and value.get("_error"):
         stderr_text = value.get("stderr", "")
@@ -327,6 +329,7 @@ async def run_exec_runner(
             timeout=timeout,
             max_memory_mb=max_memory_mb,
             max_output_size=max_output_size,
+            python_path=python_path,
         )
         await worker_pool.return_worker(worker)
         returned = True
