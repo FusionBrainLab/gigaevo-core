@@ -47,11 +47,9 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
     note_metadata,
 )
-
-# Re-export for backward compatibility (extracted to concept_api.py)
 from gigaevo.memory.shared_memory.card_index_store import CardIndexStore
-from gigaevo.memory.shared_memory.gam_retriever_manager import GAMRetrieverManager
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
+from gigaevo.memory.shared_memory.gam_retriever_manager import GAMRetrieverManager
 from gigaevo.memory.shared_memory.utils import (
     looks_like_uuid,
     truncate_text,
