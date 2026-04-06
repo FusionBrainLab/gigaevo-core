@@ -32,6 +32,7 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_updated_card,
     parse_llm_card_decision,
 )
+from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
 
 load_dotenv()
 
@@ -96,6 +97,9 @@ def normalize_memory_card(
     card: dict[str, Any] | None = None,
     fallback_id: str | None = None,
 ) -> dict[str, Any]:
+    # Handle Pydantic models from write_pipeline by converting to dict first
+    if isinstance(card, (MemoryCard, ProgramCard)):
+        card = card.model_dump()
     raw = dict(card or {})
     category = str(raw.get("category") or "general")
     program_id = str(raw.get("program_id") or "")
