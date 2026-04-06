@@ -1,0 +1,63 @@
+# @package _global_
+# Standard pipeline + FetchOpponentResultsStage for adversarial co-evolution.
+#
+# Each population is a standard GigaEvo run whose evaluate.py receives
+# pre-computed opponent results as context (via FetchOpponentResultsStage).
+# The sync hook ensures lockstep generation advancement.
+#
+# Requires at run time:
+#   opponent_redis_db=N            (DB of the opponent run)
+#   opponent_redis_prefix=...      (prefix of the opponent run)
+#
+# Usage:
+#   python run.py \
+#     problem.name=adversarial/optimizer_v2/pop_a \
+#     pipeline=adversarial_coevo redis.db=1 \
+#     opponent_redis_db=2 \
+#     opponent_redis_prefix=adversarial/optimizer_v2/pop_b
+
+opponent_redis_db: ???
+opponent_redis_prefix: ???
+
+# Sync hook: blocks this run's engine until the opponent advances by 1 gen
+pre_step_hook:
+  _target_: gigaevo.prompts.coevolution.sync.MainRunSyncHook
+  host: ${redis.host}
+  port: ${redis.port}
+  db: ${opponent_redis_db}
+  prefix: ${opponent_redis_prefix}
+  timeout: 7200.0
+  poll_interval: 5.0
+
+# Opponent archive provider: reads opponent programs from their MAP-Elites archive
+opponent_provider:
+  _target_: gigaevo.adversarial.opponent_provider.RedisOpponentArchiveProvider
+  host: ${redis.host}
+  port: ${redis.port}
+  sources:
+    - db: ${opponent_redis_db}
+      prefix: ${opponent_redis_prefix}
+  island_id: ${island_id}
+  cache_ttl: 30.0
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+  memory_provider: ${memory_provider}
+
+pipeline_builder:
+  _target_: gigaevo.adversarial.pipeline.AdversarialPipelineBuilder
+  ctx: ${evolution_context}
+  opponent_provider: ${opponent_provider}
+  n_opponents: 5
+  per_opponent_timeout: 10.0
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}

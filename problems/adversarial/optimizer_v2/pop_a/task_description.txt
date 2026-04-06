@@ -1,0 +1,31 @@
+**OBJECTIVE**: Write a Python optimization function that finds the global minimum of a black-box objective function.
+
+**INPUT**: Your function receives:
+- `f`: a callable `f(x) -> float` where `x` is a list of floats (the objective function to minimize)
+- `bounds`: a list of (low, high) tuples defining the search space for each dimension
+- `budget`: an integer — the maximum number of times you may call `f`
+
+**OUTPUT**: Return a list of floats `x_best` — the point with the lowest `f(x_best)` you found within the budget.
+
+**EXAMPLES**:
+- For a 2D quadratic `f(x) = x[0]**2 + x[1]**2` with bounds [(-5,5), (-5,5)] and budget=100, the best answer is [0.0, 0.0].
+- For Rastrigin in 2D with budget=500, a good optimizer should get close to [0.0, 0.0].
+
+**RULES**:
+- You MUST NOT call `f` more than `budget` times. Track your evaluations.
+- Dimensions range from 2 to 10.
+- All coordinates are real-valued floats within the given bounds.
+- No external libraries — pure Python only (math module is OK).
+- The objective may have many local minima — your optimizer should escape them.
+- Return the best point found, not the best value.
+
+**HINT**: Consider strategies that balance exploration (searching broadly) with exploitation (refining promising regions). Random restarts, adaptive step sizes, or population-based approaches can help escape local minima.
+
+OUTPUT:
+```python
+def entrypoint():
+    def optimizer(f, bounds, budget):
+        # Your implementation here
+        return x_best
+    return optimizer
+```

@@ -1,0 +1,44 @@
+**OBJECTIVE**: Write a Python function that defines a deceptive optimization landscape — an objective function with a known global minimum but many misleading local minima that trap standard optimizers.
+
+**OUTPUT**: Your `entrypoint()` must return a tuple of four values:
+1. `objective`: a callable `objective(x) -> float` where `x` is a list of floats
+2. `bounds`: a list of (low, high) tuples defining the search space per dimension (use 5 dimensions)
+3. `optimum`: a list of floats — the exact location of the global minimum
+4. `budget`: an integer — how many function evaluations to allow (use 500)
+
+**REQUIREMENTS**:
+- The global minimum must be at the `optimum` point you specify.
+- `objective(optimum)` should return a value close to 0.0 (or the lowest value).
+- The landscape must have local minima that are far from the global optimum.
+- Standard optimizers (random search, gradient descent) should get trapped in local minima.
+- The function must be deterministic (same input → same output).
+- No external libraries — pure Python only (math module is OK).
+- Use 5 dimensions with reasonable bounds (e.g., [-10, 10] per dimension).
+
+**HINTS FOR DECEPTIVE LANDSCAPES**:
+- Place attractive local minima far from the global optimum.
+- Use narrow basins of attraction around the global minimum.
+- Create smooth, wide basins around decoy minima to attract gradient-based methods.
+- Combine periodic functions (sin/cos) with polynomial terms.
+- The best deceptive landscapes have a gradient that actively leads away from the global optimum.
+
+**EXAMPLES of deceptive structures**:
+- A deep narrow global minimum surrounded by a ring of shallow wide local minima.
+- Multiple attractive basins arranged so the global minimum is in a "hidden" corner.
+- Rastrigin-like periodicity with a shifted, hidden global minimum.
+
+OUTPUT:
+```python
+def entrypoint():
+    import math
+    dim = 5
+    optimum = [...]  # your chosen global minimum location
+    bounds = [(-10, 10)] * dim
+    budget = 500
+
+    def objective(x):
+        # Your deceptive landscape here
+        return value
+
+    return objective, bounds, optimum, budget
+```

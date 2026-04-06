@@ -1,0 +1,37 @@
+**OBJECTIVE**: Write a Python function that evaluates a mathematical expression given as a string.
+
+**INPUT**: A string containing a mathematical expression with:
+- Integers and floating-point numbers (including negative numbers like `-3.5`)
+- Operators: `+`, `-`, `*`, `/` (standard precedence: `*` and `/` before `+` and `-`)
+- Parentheses `(` and `)` for grouping
+- Whitespace (should be ignored)
+
+**OUTPUT**: Return a float — the result of evaluating the expression.
+
+**EXAMPLES**:
+- `"2 + 3"` → `5.0`
+- `"2 + 3 * 4"` → `14.0` (multiplication before addition)
+- `"(2 + 3) * 4"` → `20.0`
+- `"-3 + 4"` → `1.0` (unary minus)
+- `"10 / 3"` → `3.3333...`
+- `"((1 + 2) * (3 + 4))"` → `21.0`
+
+**RULES**:
+- Follow standard operator precedence: `*`, `/` bind tighter than `+`, `-`.
+- Left-to-right associativity for same-precedence operators.
+- Handle unary minus: `-3`, `(-3 + 4)`, `--3` (double negation).
+- Division by zero should raise a `ValueError`.
+- Invalid expressions should raise a `ValueError`.
+- No `eval()` or `exec()` — implement a proper parser.
+- No external libraries — pure Python only.
+
+**HINT**: A recursive descent parser or the shunting-yard algorithm works well.
+
+OUTPUT:
+```python
+def entrypoint():
+    def evaluate(expression: str) -> float:
+        # Your implementation here
+        return result
+    return evaluate
+```

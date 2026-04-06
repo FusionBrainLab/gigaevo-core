@@ -1,0 +1,53 @@
+# @package _global_
+# Pipeline for adversarial co-evolution problems.
+# Uses standard pipeline + MainRunSyncHook to synchronize with opponent.
+#
+# Each population is a standard GigaEvo run whose validate.py reads the
+# opponent's MAP-Elites archive from Redis. The sync hook ensures lockstep
+# advancement: this run blocks until the opponent advances by one generation.
+#
+# Requires at run time:
+#   opponent_redis_db=N            (DB of the opponent run)
+#   opponent_redis_prefix=...      (prefix of the opponent run)
+#
+# The validate.py reads opponent programs from env vars:
+#   OPPONENT_REDIS_HOST, OPPONENT_REDIS_PORT, OPPONENT_REDIS_DB, OPPONENT_PREFIX
+#
+# Usage:
+#   python run.py \
+#     problem.name=adversarial/optimizer/pop_a \
+#     pipeline=adversarial redis.db=1 \
+#     opponent_redis_db=2 \
+#     opponent_redis_prefix=adversarial/optimizer/pop_b
+
+opponent_redis_db: ???
+opponent_redis_prefix: ???
+
+# Sync hook: blocks this run's engine until the opponent advances by 1 gen
+pre_step_hook:
+  _target_: gigaevo.prompts.coevolution.sync.MainRunSyncHook
+  host: ${redis.host}
+  port: ${redis.port}
+  db: ${opponent_redis_db}
+  prefix: ${opponent_redis_prefix}
+  timeout: 7200.0
+  poll_interval: 5.0
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+  memory_provider: ${memory_provider}
+
+pipeline_builder:
+  _target_: gigaevo.entrypoint.default_pipelines.DefaultPipelineBuilder
+  ctx: ${evolution_context}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}
