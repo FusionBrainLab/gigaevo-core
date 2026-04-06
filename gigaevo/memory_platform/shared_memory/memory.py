@@ -207,7 +207,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.allowed_gam_tools = self._normalize_allowed_gam_tools(allowed_gam_tools)
         self.gam_top_k_by_tool = self._normalize_gam_top_k_by_tool(gam_top_k_by_tool)
         self.gam_pipeline_mode = self._normalize_gam_pipeline_mode(gam_pipeline_mode)
-        self.card_update_dedup_config = CardUpdateDedupConfig.from_mapping(
+        self.card_update_dedup_config = CardUpdateDedupConfig.model_validate(
             card_update_dedup_config or {}
         )
         self.remote_vector_search_type = (

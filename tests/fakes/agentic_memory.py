@@ -454,7 +454,7 @@ def make_test_memory(
     from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
 
     dedup_raw = overrides.pop("card_update_dedup_config", None)
-    dedup = CardUpdateDedupConfig.from_mapping(dedup_raw or {})
+    dedup = CardUpdateDedupConfig.model_validate(dedup_raw or {})
 
     api = overrides.pop("api", None)
     gam = overrides.pop("gam", None) or GamConfig()
@@ -507,7 +507,7 @@ def make_test_memory_with_agentic(
     from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
 
     dedup_raw = overrides.pop("card_update_dedup_config", None)
-    dedup = CardUpdateDedupConfig.from_mapping(dedup_raw or {})
+    dedup = CardUpdateDedupConfig.model_validate(dedup_raw or {})
 
     api = overrides.pop("api", None)
     gam = overrides.pop("gam", None) or GamConfig()

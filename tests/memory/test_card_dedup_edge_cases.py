@@ -27,36 +27,36 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
 
 
 class TestCardUpdateDedupConfig:
-    def test_from_mapping_empty_dict(self):
-        cfg = CardUpdateDedupConfig.from_mapping({})
+    def test_validate_empty_dict(self):
+        cfg = CardUpdateDedupConfig.model_validate({})
         assert cfg.enabled is False
         assert cfg.top_k_per_query == 5
         assert cfg.final_top_n == 5
 
-    def test_from_mapping_enabled_bool(self):
-        cfg = CardUpdateDedupConfig.from_mapping({"enabled": True})
+    def test_validate_enabled_bool(self):
+        cfg = CardUpdateDedupConfig.model_validate({"enabled": True})
         assert cfg.enabled is True
 
-    def test_from_mapping_enabled_string_truthy(self):
+    def test_validate_enabled_string_truthy(self):
         for val in ("true", "True", "1", "yes", "on"):
-            cfg = CardUpdateDedupConfig.from_mapping({"enabled": val})
+            cfg = CardUpdateDedupConfig.model_validate({"enabled": val})
             assert cfg.enabled is True, f"Failed for {val!r}"
 
-    def test_from_mapping_enabled_string_falsy(self):
+    def test_validate_enabled_string_falsy(self):
         for val in ("false", "0", "no", "off", "random"):
-            cfg = CardUpdateDedupConfig.from_mapping({"enabled": val})
+            cfg = CardUpdateDedupConfig.model_validate({"enabled": val})
             assert cfg.enabled is False, f"Failed for {val!r}"
 
-    def test_from_mapping_non_dict(self):
-        cfg = CardUpdateDedupConfig.from_mapping("not a dict")
+    def test_validate_non_dict(self):
+        cfg = CardUpdateDedupConfig.model_validate("not a dict")
         assert cfg.enabled is False
 
-    def test_from_mapping_none(self):
-        cfg = CardUpdateDedupConfig.from_mapping(None)
+    def test_validate_none(self):
+        cfg = CardUpdateDedupConfig.model_validate(None)
         assert cfg.enabled is False
 
-    def test_from_mapping_full(self):
-        cfg = CardUpdateDedupConfig.from_mapping(
+    def test_validate_nested_format(self):
+        cfg = CardUpdateDedupConfig.model_validate(
             {
                 "enabled": True,
                 "retrieval": {
@@ -73,9 +73,25 @@ class TestCardUpdateDedupConfig:
         assert cfg.min_final_score == 0.5
         assert cfg.llm_max_retries == 5
 
-    def test_from_mapping_min_clamping(self):
+    def test_validate_flat_format(self):
+        cfg = CardUpdateDedupConfig.model_validate(
+            {
+                "enabled": True,
+                "top_k_per_query": 8,
+                "final_top_n": 2,
+                "min_final_score": 0.1,
+                "llm_max_retries": 4,
+            }
+        )
+        assert cfg.enabled is True
+        assert cfg.top_k_per_query == 8
+        assert cfg.final_top_n == 2
+        assert cfg.min_final_score == 0.1
+        assert cfg.llm_max_retries == 4
+
+    def test_validate_min_clamping(self):
         """Values below min_value are clamped."""
-        cfg = CardUpdateDedupConfig.from_mapping(
+        cfg = CardUpdateDedupConfig.model_validate(
             {
                 "enabled": True,
                 "retrieval": {"top_k_per_query": -1, "final_top_n": 0},
@@ -111,13 +127,13 @@ class TestRetrievalWeights:
         )
         assert abs(total - 1.0) < 0.01
 
-    def test_from_mapping_custom(self):
-        w = RetrievalWeights.from_mapping({"description": 0.5})
+    def test_validate_custom(self):
+        w = RetrievalWeights.model_validate({"description": 0.5})
         assert w.description == 0.5
         assert w.explanation_summary == 0.2  # default
 
-    def test_from_mapping_non_dict(self):
-        w = RetrievalWeights.from_mapping("bad")
+    def test_validate_non_dict(self):
+        w = RetrievalWeights.model_validate("bad")
         assert w.description == 0.35
 
     def test_as_score_multipliers_keys(self):
