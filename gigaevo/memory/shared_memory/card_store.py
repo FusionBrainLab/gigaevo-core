@@ -123,7 +123,7 @@ class CardStore:
 
         try:
             payload = json.loads(self._index_file.read_text(encoding="utf-8"))
-        except Exception as exc:
+        except (json.JSONDecodeError, OSError) as exc:
             logger.warning(
                 "[Memory] Could not parse index file {}: {}", self._index_file, exc
             )

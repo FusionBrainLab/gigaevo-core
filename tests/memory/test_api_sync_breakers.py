@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from tests.fakes.agentic_memory import make_test_memory
 
@@ -317,7 +318,7 @@ class TestSearchSyncInteraction:
 
         # Mock GAM to always fail
         mem.gam = MagicMock()
-        mem.gam.build.side_effect = RuntimeError("GAM build failed")
+        mem.gam.build.side_effect = MemoryRetrieverError("GAM build failed")
 
         # First sync triggers rebuild (research_agent is None + _has_agentic)
         mem._sync_from_api(force_full=False)
