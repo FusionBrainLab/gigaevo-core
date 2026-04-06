@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from gigaevo.exceptions import MemoryStorageError
+
 
 class _ConceptApiClient:
     """Small HTTP client around Memory API entity endpoints.
@@ -31,20 +33,20 @@ class _ConceptApiClient:
             response = self._http.request(method, path, **kwargs)
         except httpx.ConnectError as exc:
             host = str(self._http.base_url).rstrip("/")
-            raise RuntimeError(
+            raise MemoryStorageError(
                 f"Cannot connect to Memory API at {host}. "
                 "Start the API service or set MEMORY_API_URL to a reachable endpoint."
             ) from exc
         except httpx.TimeoutException as exc:
             host = str(self._http.base_url).rstrip("/")
-            raise RuntimeError(
+            raise MemoryStorageError(
                 f"Memory API request timed out for {host}. "
                 "Check service health and network connectivity."
             ) from exc
         if response.status_code == 204:
             return None
         if response.status_code >= 400:
-            raise RuntimeError(
+            raise MemoryStorageError(
                 f"Memory API request failed ({method} {path}): "
                 f"{response.status_code} {response.text}"
             )
@@ -62,6 +64,13 @@ class _ConceptApiClient:
         author: str | None,
         entity_id: str | None = None,
     ) -> dict[str, Any]:
+        """Create or update a memory card via the API.
+
+        Uses POST for new cards, PUT for existing (when entity_id is given).
+
+        Returns:
+            API response with ``entity_id`` and ``version_id``.
+        """
         body = {
             "meta": {
                 "name": name,
@@ -78,17 +87,18 @@ class _ConceptApiClient:
         else:
             result = self._request("POST", "/v1/memory-cards", json=body)
         if not isinstance(result, dict):
-            raise RuntimeError("Unexpected empty response from concept save")
+            raise MemoryStorageError("Unexpected empty response from concept save")
         return result
 
     def get_concept(self, entity_id: str, channel: str = "latest") -> dict[str, Any]:
+        """Fetch a single memory card by entity ID."""
         result = self._request(
             "GET",
             f"/v1/memory-cards/{entity_id}",
             params={"channel": channel},
         )
         if not isinstance(result, dict):
-            raise RuntimeError("Unexpected empty response from concept get")
+            raise MemoryStorageError("Unexpected empty response from concept get")
         return result
 
     def list_memory_cards(
@@ -98,6 +108,7 @@ class _ConceptApiClient:
         offset: int = 0,
         channel: str = "latest",
     ) -> list[dict[str, Any]]:
+        """Paginated listing of all memory cards. Returns dicts, filters non-dicts."""
         result = self._request(
             "GET",
             "/v1/memory-cards",
@@ -119,6 +130,7 @@ class _ConceptApiClient:
         namespace: str | None,
         offset: int = 0,
     ) -> dict[str, Any]:
+        """Batch semantic search. Returns ``{"hits": [...], "total": N}``."""
         query_text = str(query or "").strip()
         if not query_text:
             return {"hits": [], "total": 0}
@@ -148,4 +160,5 @@ class _ConceptApiClient:
         return {"hits": hits, "total": len(hits)}
 
     def delete_concept(self, entity_id: str) -> None:
+        """Delete a memory card by entity ID."""
         self._request("DELETE", f"/v1/memory-cards/{entity_id}")

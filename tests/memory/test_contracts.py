@@ -8,25 +8,16 @@ behavioral contract. Each test documents WHY the contract matters.
 import json
 
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.models import (
     MemoryCard,
     MemoryCardExplanation,
     ProgramCard,
 )
+from tests.fakes.agentic_memory import make_test_memory
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 # ===========================================================================
@@ -195,7 +186,7 @@ class TestIndexPersistenceContract:
     def test_index_has_required_top_level_keys(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        data = json.loads(mem.index_file.read_text())
+        data = json.loads(mem.config.index_file.read_text())
         assert "memory_cards" in data
         assert "entity_by_card_id" in data
         assert "entity_version_by_entity" in data
@@ -203,7 +194,7 @@ class TestIndexPersistenceContract:
     def test_memory_cards_indexed_by_id(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        data = json.loads(mem.index_file.read_text())
+        data = json.loads(mem.config.index_file.read_text())
         assert "c1" in data["memory_cards"]
         assert data["memory_cards"]["c1"]["description"] == "test"
 
@@ -211,7 +202,7 @@ class TestIndexPersistenceContract:
         """Persisted cards are JSON dicts (model_dump output)."""
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        data = json.loads(mem.index_file.read_text())
+        data = json.loads(mem.config.index_file.read_text())
         card_data = data["memory_cards"]["c1"]
         assert isinstance(card_data, dict)
         assert "id" in card_data

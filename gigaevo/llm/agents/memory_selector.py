@@ -59,6 +59,7 @@ class MemorySelectorAgent:
 
     @staticmethod
     def _resolve_memory_backend_class(use_api: bool) -> type[Any]:
+        """Resolve the platform backend class (API mode only)."""
         if use_api:
             from gigaevo.memory_platform import AmemGamMemory as platform_backend
 
@@ -160,31 +161,56 @@ class MemorySelectorAgent:
             sync_on_init = to_bool(
                 deep_get(settings, "runtime.sync_on_init"), default=True
             )
-            memory_backend_cls = self._resolve_memory_backend_class(use_api)
+            if use_api:
+                # Platform backend uses its own constructor (legacy kwargs)
+                memory_backend_cls = self._resolve_memory_backend_class(use_api)
+                memory = memory_backend_cls(
+                    checkpoint_path=str(memory_dir),
+                    base_url=memory_api_url,
+                    use_api=use_api,
+                    namespace=namespace,
+                    author=author,
+                    channel=channel,
+                    search_limit=search_limit,
+                    enable_llm_synthesis=runtime_enable_llm_synthesis,
+                    enable_memory_evolution=runtime_enable_memory_evolution,
+                    enable_llm_card_enrichment=runtime_fill_missing_fields,
+                    rebuild_interval=rebuild_interval,
+                    enable_bm25=enable_bm25,
+                    sync_batch_size=sync_batch_size,
+                    sync_on_init=sync_on_init,
+                    allowed_gam_tools=allowed_gam_tools,
+                    gam_top_k_by_tool=gam_top_k_by_tool,
+                    gam_pipeline_mode=gam_pipeline_mode,
+                )
+            else:
+                # Local backend uses MemoryConfig (clean API)
+                from gigaevo.memory.shared_memory.memory import AmemGamMemory
+                from gigaevo.memory.shared_memory.memory_config import (
+                    GamConfig,
+                    MemoryConfig,
+                )
 
-            memory = memory_backend_cls(
-                checkpoint_path=str(memory_dir),
-                base_url=memory_api_url,
-                use_api=use_api,
-                namespace=namespace,
-                author=author,
-                channel=channel,
-                search_limit=search_limit,
-                enable_llm_synthesis=runtime_enable_llm_synthesis,
-                enable_memory_evolution=runtime_enable_memory_evolution,
-                enable_llm_card_enrichment=runtime_fill_missing_fields,
-                rebuild_interval=rebuild_interval,
-                enable_bm25=enable_bm25,
-                sync_batch_size=sync_batch_size,
-                sync_on_init=sync_on_init,
-                allowed_gam_tools=allowed_gam_tools,
-                gam_top_k_by_tool=gam_top_k_by_tool,
-                gam_pipeline_mode=gam_pipeline_mode,
-            )
+                mem_config = MemoryConfig(
+                    checkpoint_path=memory_dir,
+                    search_limit=search_limit,
+                    rebuild_interval=rebuild_interval,
+                    enable_llm_synthesis=runtime_enable_llm_synthesis,
+                    enable_memory_evolution=runtime_enable_memory_evolution,
+                    enable_llm_card_enrichment=runtime_fill_missing_fields,
+                    gam=GamConfig(
+                        enable_bm25=enable_bm25,
+                        allowed_tools=allowed_gam_tools or [],
+                        top_k_by_tool=gam_top_k_by_tool or {},
+                        pipeline_mode=gam_pipeline_mode or "default",
+                    ),
+                )
+                memory = AmemGamMemory(config=mem_config)
+
             logger.info(
                 "[MemorySelectorAgent] Using memory backend "
                 "(class={}, use_api={}, namespace={}, channel={}, checkpoint={})",
-                memory_backend_cls.__module__,
+                type(memory).__module__,
                 use_api,
                 namespace,
                 channel,

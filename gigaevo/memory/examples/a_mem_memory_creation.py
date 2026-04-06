@@ -10,7 +10,9 @@ load_dotenv()
 
 from loguru import logger
 
-from gigaevo.memory.A_mem.agentic_memory.memory_system import AgenticMemorySystem
+from gigaevo.memory._vendor.A_mem.agentic_memory.memory_system import (
+    AgenticMemorySystem,
+)
 import gigaevo.memory.config as config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
 from gigaevo.memory.shared_memory.utils import _safe_get

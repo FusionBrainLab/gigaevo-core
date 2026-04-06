@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from GAM_root.gam.generator.base import AbsGenerator
+from gigaevo.memory._vendor.GAM_root.gam.generator.base import AbsGenerator
 
 
 class AMemGenerator(AbsGenerator):

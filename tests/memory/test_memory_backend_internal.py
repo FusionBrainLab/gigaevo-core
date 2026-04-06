@@ -1,6 +1,6 @@
 """Cycle 3: Deeper coverage for AmemGamMemory internals.
 
-Tests _apply_update_actions, _save_card_core rebuild trigger,
+Tests _apply_update_actions_from_merges, _save_card_core rebuild trigger,
 _build_entity_meta, _concept_to_card, _ensure_card_id, and
 save_card branching logic.
 """
@@ -13,28 +13,24 @@ from gigaevo.memory.shared_memory.card_conversion import (
     concept_to_card,
     normalize_memory_card,
 )
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from tests.fakes.agentic_memory import make_test_memory
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    return AmemGamMemory(**defaults)
+    return make_test_memory(tmp_path, **overrides)
 
 
 # ===========================================================================
-# _apply_update_actions
+# _apply_update_actions_from_merges (via dedup.compute_merges)
 # ===========================================================================
 
 
 class TestApplyUpdateActions:
+    def _apply(self, mem, incoming, updates):
+        """Compute merges and apply them — replaces deleted _apply_update_actions."""
+        merges = mem.dedup.compute_merges(incoming, updates)
+        return mem._apply_update_actions_from_merges(merges)
+
     def test_updates_existing_card(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "old", "programs": ["p1"]})
@@ -49,7 +45,7 @@ class TestApplyUpdateActions:
                 "explanation_append": "extra detail",
             }
         ]
-        result = mem._apply_update_actions(incoming, updates)
+        result = self._apply(mem, incoming, updates)
         assert result == ["c1"]
 
         card = mem.get_card("c1")
@@ -61,7 +57,7 @@ class TestApplyUpdateActions:
     def test_skips_missing_card(self, tmp_path):
         mem = _make_memory(tmp_path)
         updates = [{"card_id": "nonexistent", "update_explanation": True}]
-        result = mem._apply_update_actions(normalize_memory_card({}), updates)
+        result = self._apply(mem, normalize_memory_card({}), updates)
         assert result == []
 
     def test_skips_duplicate_card_id(self, tmp_path):
@@ -72,15 +68,13 @@ class TestApplyUpdateActions:
             {"card_id": "c1", "update_explanation": True, "explanation_append": "a"},
             {"card_id": "c1", "update_explanation": True, "explanation_append": "b"},
         ]
-        result = mem._apply_update_actions(normalize_memory_card({}), updates)
+        result = self._apply(mem, normalize_memory_card({}), updates)
         assert result == ["c1"]  # Only processed once
 
     def test_skips_non_dict_update(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "test"})
-        result = mem._apply_update_actions(
-            normalize_memory_card({}), ["not a dict", None]
-        )
+        result = self._apply(mem, normalize_memory_card({}), ["not a dict", None])
         assert result == []
 
     def test_multiple_target_cards(self, tmp_path):
@@ -100,7 +94,7 @@ class TestApplyUpdateActions:
                 "explanation_append": "info2",
             },
         ]
-        result = mem._apply_update_actions(normalize_memory_card({}), updates)
+        result = self._apply(mem, normalize_memory_card({}), updates)
         assert set(result) == {"c1", "c2"}
 
 
@@ -134,25 +128,25 @@ class TestEnsureCardId:
     def test_existing_id_preserved(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({"id": "my-id", "description": "test"})
-        assert mem._ensure_card_id(card) == "my-id"
+        assert mem.card_store.ensure_id(card) == "my-id"
 
     def test_empty_id_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({"id": "", "description": "test"})
-        result = mem._ensure_card_id(card)
+        result = mem.card_store.ensure_id(card)
         assert result.startswith("mem-")
         assert card.id == result  # Mutates the card dict
 
     def test_whitespace_id_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({"id": "   ", "description": "test"})
-        result = mem._ensure_card_id(card)
+        result = mem.card_store.ensure_id(card)
         assert result.startswith("mem-")
 
     def test_no_id_key_gets_generated(self, tmp_path):
         mem = _make_memory(tmp_path)
         card = normalize_memory_card({"description": "test"})
-        result = mem._ensure_card_id(card)
+        result = mem.card_store.ensure_id(card)
         assert result.startswith("mem-")
 
 
@@ -269,7 +263,7 @@ class TestSaveCardBranching:
         assert stats["added"] == 1
 
     def test_dedup_update_path(self, tmp_path):
-        """Full dedup update flow: LLM says update, _apply_update_actions runs."""
+        """Full dedup update flow: LLM says update, merges are applied."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
         mem.save_card({"id": "existing", "description": "original idea"})
 
@@ -292,7 +286,7 @@ class TestSaveCardBranching:
             None,
         )
         mem.llm_service = mock_llm
-        mem._score_retrieved_candidates = MagicMock(
+        mem.dedup.score_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.8}]
         )
 

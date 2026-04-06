@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any, Literal
 
-from A_mem.agent.agent_class import LLMService
+from gigaevo.memory._vendor.A_mem.agent.agent_class import LLMService
 from litellm import completion
 
 

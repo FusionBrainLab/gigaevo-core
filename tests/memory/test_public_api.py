@@ -10,12 +10,15 @@ def test_all_exports_complete():
 
     expected = {
         "AmemGamMemory",
+        "ApiConfig",
         "AnyCard",
         "ConnectedIdea",
+        "GamConfig",
         "GigaEvoMemoryBase",
         "LocalMemorySnapshot",
         "MemoryCard",
         "MemoryCardExplanation",
+        "MemoryConfig",
         "ProgramCard",
         "Strategy",
         "normalize_memory_card",
@@ -28,25 +31,31 @@ def test_import_from_package_root():
     from gigaevo.memory import (
         AmemGamMemory,
         AnyCard,
+        ApiConfig,
         ConnectedIdea,
+        GamConfig,
         GigaEvoMemoryBase,
         LocalMemorySnapshot,
         MemoryCard,
         MemoryCardExplanation,
+        MemoryConfig,
         ProgramCard,
         Strategy,
         normalize_memory_card,
     )
 
     assert AmemGamMemory is not None
+    assert ApiConfig is not None
     assert MemoryCard is not None
     assert ProgramCard is not None
     assert AnyCard is not None
     assert normalize_memory_card is not None
+    assert GamConfig is not None
     assert GigaEvoMemoryBase is not None
     assert ConnectedIdea is not None
     assert MemoryCardExplanation is not None
     assert LocalMemorySnapshot is not None
+    assert MemoryConfig is not None
     assert Strategy is not None
 
 
@@ -78,17 +87,12 @@ def test_normalize_from_package(tmp_path):
 
 
 def test_amem_gam_memory_from_package(tmp_path):
-    """AmemGamMemory constructible from package-level import."""
+    """AmemGamMemory constructible from package-level import with MemoryConfig."""
     from gigaevo.memory import AmemGamMemory
+    from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 
-    mem = AmemGamMemory(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
+    cfg = MemoryConfig(checkpoint_path=tmp_path / "mem")
+    mem = AmemGamMemory(config=cfg)
     assert mem is not None
     mem.save_card({"id": "c1", "description": "test"})
     assert mem.get_card("c1") is not None

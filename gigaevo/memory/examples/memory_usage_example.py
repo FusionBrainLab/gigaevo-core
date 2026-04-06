@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from shared_memory.memory import AmemGamMemory
+from shared_memory.memory_config import ApiConfig, GamConfig, MemoryConfig
 
 
 def main() -> None:
@@ -26,13 +27,15 @@ def main() -> None:
     }
     gam_pipeline_mode = os.getenv("MEMORY_GAM_PIPELINE_MODE", "default")
 
-    memory = AmemGamMemory(
-        checkpoint_path=str(checkpoint_dir),
-        base_url=memory_api_url,
-        use_api=use_api,
-        namespace=namespace,
-        gam_pipeline_mode=gam_pipeline_mode,
+    api_config = (
+        ApiConfig(base_url=memory_api_url, namespace=namespace) if use_api else None
     )
+    mem_config = MemoryConfig(
+        checkpoint_path=checkpoint_dir,
+        api=api_config,
+        gam=GamConfig(pipeline_mode=gam_pipeline_mode),
+    )
+    memory = AmemGamMemory(config=mem_config)
 
     print("\n==============================")
     print("API Memory Demo: Save + Search")

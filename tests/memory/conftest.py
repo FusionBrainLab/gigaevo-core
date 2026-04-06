@@ -4,23 +4,21 @@ from pathlib import Path
 
 import pytest
 
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from tests.fakes.agentic_memory import make_test_memory
 
 
 @pytest.fixture
 def make_memory(tmp_path: Path):
-    """Factory fixture to create AmemGamMemory instances with sensible test defaults."""
+    """Factory fixture to create AmemGamMemory instances with sensible test defaults.
+
+    Usage::
+
+        mem = make_memory()                                       # defaults
+        mem = make_memory(search_limit=10)                        # override
+        mem = make_memory(card_update_dedup_config={"enabled": True})
+    """
 
     def _make_memory(**overrides):
-        defaults = dict(
-            checkpoint_path=str(tmp_path / "mem"),
-            use_api=False,
-            sync_on_init=False,
-            enable_llm_synthesis=False,
-            enable_memory_evolution=False,
-            enable_llm_card_enrichment=False,
-        )
-        defaults.update(overrides)
-        return AmemGamMemory(**defaults)
+        return make_test_memory(tmp_path, **overrides)
 
     return _make_memory

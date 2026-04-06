@@ -1,22 +1,22 @@
 """Tests using fake A-MEM/GAM infrastructure.
 
 These tests cover the paths that were previously untestable without real
-Chroma/embedding dependencies: _upsert_local_note_agentic,
-_upsert_local_note_fast, _build_note_from_card, _remove_local_note,
-_dump_memory, rebuild with real data, and LLM card enrichment.
+Chroma/embedding dependencies: note_sync.upsert_agentic,
+note_sync.upsert_fast, note_sync.remove, note_sync.export_jsonl,
+rebuild with real data, and LLM card enrichment.
 """
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from tests.fakes.agentic_memory import (
     FakeAgenticMemorySystem,
     FakeAMemGenerator,
     FakeMemoryNote,
     FakeResearchAgent,
-    inject_fakes_into_memory,
+    make_test_memory,
+    make_test_memory_with_agentic,
 )
 
 # ---------------------------------------------------------------------------
@@ -25,32 +25,22 @@ from tests.fakes.agentic_memory import (
 
 
 def _make_memory(tmp_path, **overrides):
-    defaults = dict(
-        checkpoint_path=str(tmp_path / "mem"),
-        use_api=False,
-        sync_on_init=False,
-        enable_llm_synthesis=False,
-        enable_memory_evolution=False,
-        enable_llm_card_enrichment=False,
-    )
-    defaults.update(overrides)
-    mem = AmemGamMemory(**defaults)
-    return mem
+    return make_test_memory(tmp_path, **overrides)
 
 
 def _make_memory_with_fakes(tmp_path, **overrides):
-    """Create AmemGamMemory with fake agentic infrastructure injected."""
-    mem = _make_memory(tmp_path, **overrides)
-    fake_system = inject_fakes_into_memory(mem)
-    # Patch _load_or_create_retriever to avoid chromadb import
+    """Create AmemGamMemory with fake agentic infrastructure (constructor DI)."""
+    mem, fake_system = make_test_memory_with_agentic(tmp_path, **overrides)
 
-    def _fake_load_or_create_retriever():
-        return FakeResearchAgent(
+    # Patch gam.build to use fake retrievers (avoids Chroma import)
+    def _fake_gam_build():
+        mem.gam.agent = FakeResearchAgent(
             retrievers={"vector": fake_system.retriever},
             generator=mem.generator,
         )
 
-    mem._load_or_create_retriever = _fake_load_or_create_retriever
+    if mem.gam is not None:
+        mem.gam.build = _fake_gam_build
     return mem, fake_system
 
 
@@ -130,7 +120,7 @@ class TestFakeAgenticMemorySystem:
 
 
 # ===========================================================================
-# AmemGamMemory with fake agentic system: _upsert_local_note_agentic
+# AmemGamMemory with fake agentic system: note_sync.upsert_agentic
 # ===========================================================================
 
 
@@ -141,8 +131,8 @@ class TestUpsertLocalNoteAgentic:
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
         mem.save_card({"id": "c1", "description": "SA optimization"})
 
-        # Card should exist in both memory_cards and the agentic system
-        assert "c1" in mem.memory_cards
+        # Card should exist in both card_store.cards and the agentic system
+        assert "c1" in mem.card_store.cards
         note = fake_sys.read("c1")
         assert note is not None
         assert "SA optimization" in note.content
@@ -211,7 +201,7 @@ class TestRebuildWithFakes:
         mem.save_card({"id": "c1", "description": "test idea"})
         mem.rebuild()
 
-        assert mem.export_file.exists()
+        assert mem.config.export_file.exists()
 
     def test_rebuild_resets_counter(self, tmp_path):
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
@@ -235,7 +225,7 @@ class TestRebuildWithFakes:
 
         # After 3 saves, rebuild should have triggered and reset counter
         assert mem._iters_after_rebuild == 0
-        assert mem.export_file.exists()
+        assert mem.config.export_file.exists()
 
 
 # ===========================================================================
@@ -313,7 +303,7 @@ class TestFullCycleWithFakes:
 
         # Rebuild
         mem.rebuild()
-        assert mem.export_file.exists()
+        assert mem.config.export_file.exists()
         assert mem._iters_after_rebuild == 0
 
         # Research agent should be created after rebuild
@@ -330,14 +320,14 @@ class TestFullCycleWithFakes:
 
         # Persist and reload
         mem2, fake_sys2 = _make_memory_with_fakes(tmp_path)
-        assert len(mem2.memory_cards) == 4
+        assert len(mem2.card_store.cards) == 4
         assert mem2.get_card("idea-2") is None
         assert mem2.get_card("idea-3") is not None
 
     def test_persist_reload_agentic_system_starts_empty(self, tmp_path):
         """After reload, agentic system has no notes (only JSON index loads).
 
-        This documents a real gap: cards are in memory_cards but NOT in
+        This documents a real gap: cards are in card_store.cards but NOT in
         the agentic system until rebuild() or save_card() re-populates them.
         Search via research_agent will miss them until rebuild.
         """
@@ -345,18 +335,18 @@ class TestFullCycleWithFakes:
         mem.save_card({"id": "c1", "description": "annealing idea"})
         assert fake_sys.read("c1") is not None
 
-        # Reload: cards in memory_cards, but agentic system is fresh/empty
+        # Reload: cards in card_store.cards, but agentic system is fresh/empty
         mem2, fake_sys2 = _make_memory_with_fakes(tmp_path)
-        assert "c1" in mem2.memory_cards
+        assert "c1" in mem2.card_store.cards
         assert fake_sys2.read("c1") is None  # Gap: not in agentic system
 
-        # Local search still works (it reads memory_cards directly)
+        # Local search still works (it reads card_store.cards directly)
         result = mem2._search_local_cards("annealing")
         assert "c1" in result
 
-    def test_upsert_local_note_fast_direct(self, tmp_path):
-        """Test _upsert_local_note_fast — the hot path used by _sync_from_api."""
-        from gigaevo.memory.shared_memory.memory import normalize_memory_card
+    def test_upsert_fast_direct(self, tmp_path):
+        """Test note_sync.upsert_fast — the hot path used by api_sync.sync."""
+        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
         card = normalize_memory_card(
@@ -369,17 +359,17 @@ class TestFullCycleWithFakes:
         )
 
         # Directly call the fast upsert (normally called by _sync_from_api)
-        changed = mem._upsert_local_note_fast(card)
+        changed = mem.note_sync.upsert_fast(card)
         assert changed is True
         assert fake_sys.read("c1") is not None
         assert fake_sys.read("c1").content == "SA optimization"
 
         # Second call with same content → no change
-        changed2 = mem._upsert_local_note_fast(card)
+        changed2 = mem.note_sync.upsert_fast(card)
         assert changed2 is False
 
         # Update content → change detected
         card.description = "Updated SA optimization"
-        changed3 = mem._upsert_local_note_fast(card)
+        changed3 = mem.note_sync.upsert_fast(card)
         assert changed3 is True
         assert "Updated" in fake_sys.read("c1").content

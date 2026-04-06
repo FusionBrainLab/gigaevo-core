@@ -1,7 +1,7 @@
 """Configuration constants for the memory write pipeline.
 
 Loaded at import time from config/memory.yaml and environment variables.
-Used by memory_write_example.py and the IdeaTracker memory write pipeline.
+Used by write_pipeline.py and the IdeaTracker memory write pipeline.
 """
 
 from __future__ import annotations

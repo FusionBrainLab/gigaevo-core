@@ -7,6 +7,7 @@ instance state. Extracted from memory.py for cleaner module structure.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -25,6 +26,8 @@ from gigaevo.memory.shared_memory.utils import (
     _to_list,
     dedupe_keep_order,
 )
+
+_ENTITY_NAME_MAX_LENGTH = 255
 
 
 class MemoryNoteProtocol(Protocol):
@@ -157,7 +160,7 @@ def normalize_memory_card(
 # ---------------------------------------------------------------------------
 
 
-def memory_to_card(
+def _memory_to_card(
     memory_note: MemoryNoteProtocol | None,
     base_card: dict[str, Any] | None = None,
     memory_id: str | None = None,
@@ -211,16 +214,18 @@ def export_memories_jsonl(
     card_overrides = card_overrides or {}
 
     unique_ids = list(dict.fromkeys(memory_ids))
-    with out_path.open("w", encoding="utf-8") as file_obj:
+    tmp_path = out_path.with_suffix(f".{os.getpid()}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as file_obj:
         for memory_id in unique_ids:
             memory_note = memory_system.read(memory_id)
             base_card = card_overrides.get(memory_id)
             if memory_note is None and base_card is None:
                 continue
-            record = memory_to_card(
+            record = _memory_to_card(
                 memory_note, base_card=base_card, memory_id=memory_id
             )
             file_obj.write(json.dumps(record.model_dump(), ensure_ascii=True) + "\n")
+    os.replace(str(tmp_path), str(out_path))
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +299,7 @@ def build_entity_meta(card: AnyCard) -> tuple[str, list[str], str]:
         description or task_description_summary or task_description or "memory card"
     )
     name = f"{card.id}: {name_seed}" if card.id else name_seed
-    name = name[:255]
+    name = name[:_ENTITY_NAME_MAX_LENGTH]
 
     tags = dedupe_keep_order(
         [
@@ -365,7 +370,7 @@ def normalize_gam_pipeline_mode(gam_pipeline_mode: str | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Base class
+# API concept ↔ card conversion
 # ---------------------------------------------------------------------------
 
 
@@ -414,29 +419,3 @@ def note_metadata(note: MemoryNoteProtocol) -> dict[str, Any]:
         "tags": note.tags,
         "strategy": note.strategy,
     }
-
-
-def format_search_results(query: str, cards: list[AnyCard]) -> str:
-    """Format search results as numbered card list for MemorySelectorAgent parsing."""
-    lines = [f"Query: {query}", "", "Top relevant memory cards:"]
-    for idx, card in enumerate(cards, start=1):
-        lines.append(f"{idx}. {card.id} [{card.category}] {card.description.strip()}")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Base class
-# ---------------------------------------------------------------------------
-
-
-class GigaEvoMemoryBase:
-    """Abstract base for memory backends."""
-
-    def save(self, data: str) -> str:
-        raise NotImplementedError
-
-    def search(self, query: str) -> str:
-        raise NotImplementedError
-
-    def delete(self, memory_id: str) -> bool:
-        raise NotImplementedError

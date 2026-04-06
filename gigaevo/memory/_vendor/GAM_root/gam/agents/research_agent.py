@@ -17,15 +17,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from GAM_root.gam.generator import AbsGenerator
-from GAM_root.gam.prompts import (
+from gigaevo.memory._vendor.GAM_root.gam.generator import AbsGenerator
+from gigaevo.memory._vendor.GAM_root.gam.prompts import (
     ExperimentalDecision_PROMPT,
     GenerateRequests_PROMPT,
     InfoCheck_PROMPT,
     Integrate_PROMPT,
     Planning_PROMPT,
 )
-from GAM_root.gam.schemas import (
+from gigaevo.memory._vendor.GAM_root.gam.schemas import (
     EXPERIMENTAL_DECISION_SCHEMA,
     GENERATE_REQUESTS_SCHEMA,
     INFO_CHECK_SCHEMA,
