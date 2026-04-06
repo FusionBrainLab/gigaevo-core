@@ -12,11 +12,11 @@ silently during memory write, wasting API credits.
 import json
 from pathlib import Path
 
-from gigaevo.memory.memory_write_example import _card_type, load_memory_cards
 from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
+from gigaevo.memory.write_pipeline import _card_type, load_memory_cards
 
 
 def _write_json(path: Path, payload: dict | list) -> None:

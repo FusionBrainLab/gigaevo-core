@@ -14,7 +14,7 @@ Output (single CSV):
   One row per (idea, quartile) for quartiles Q1..Q4 plus ALL => 5 rows per idea.
 
 Run:
-  python selected_ideas_6.py --ideas banks.json --programs programs.json --output_dir out
+  python origin_analysis.py --ideas banks.json --programs programs.json --output_dir out
 
 Key args:
   --quartile_mode generation_range | generation_quantiles
