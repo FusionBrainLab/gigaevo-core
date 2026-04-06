@@ -27,13 +27,21 @@ import time
 import redis as redis_lib
 
 
+def _is_run_py_line(line: str) -> bool:
+    """Check if a ps output line is a run.py process (main repo or worktree)."""
+    if "grep" in line:
+        return False
+    # Match both direct run.py and worktree paths (e.g. .claude/worktrees/*/run.py)
+    return "run.py" in line and "redis.db=" in line
+
+
 def _find_run_pids_for_dbs(target_dbs: list[int]) -> set[int]:
     """Find PIDs of run.py processes using any of the target DBs."""
     try:
         result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
         pids: set[int] = set()
         for line in result.stdout.splitlines():
-            if "run.py" not in line or "grep" in line:
+            if not _is_run_py_line(line):
                 continue
             for db in target_dbs:
                 if f"redis.db={db}" in line:
@@ -55,7 +63,7 @@ def _find_all_run_pids() -> set[int]:
         result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
         pids: set[int] = set()
         for line in result.stdout.splitlines():
-            if "run.py" in line and "redis.db=" in line and "grep" not in line:
+            if _is_run_py_line(line):
                 parts = line.split()
                 if len(parts) > 1:
                     try:
