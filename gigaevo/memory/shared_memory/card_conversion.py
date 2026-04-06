@@ -158,7 +158,7 @@ def normalize_memory_card(
 # ---------------------------------------------------------------------------
 
 
-def memory_to_card(
+def _memory_to_card(
     memory_note: MemoryNoteProtocol | None,
     base_card: dict[str, Any] | None = None,
     memory_id: str | None = None,
@@ -219,7 +219,7 @@ def export_memories_jsonl(
             base_card = card_overrides.get(memory_id)
             if memory_note is None and base_card is None:
                 continue
-            record = memory_to_card(
+            record = _memory_to_card(
                 memory_note, base_card=base_card, memory_id=memory_id
             )
             file_obj.write(json.dumps(record.model_dump(), ensure_ascii=True) + "\n")

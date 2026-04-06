@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.memory.shared_memory.utils import dedupe_keep_order
+
 QUERY_DESCRIPTION = "description"
 QUERY_EXPLANATION_SUMMARY = "explanation_summary"
 QUERY_DESCRIPTION_EXPLANATION_SUMMARY = "description_explanation_summary"
@@ -273,13 +275,12 @@ def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
         text = re.sub(r"\s*```$", "", text)
         text = text.strip()
 
-    for candidate in (text,):
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            pass
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
 
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
     if not match:
@@ -373,18 +374,6 @@ def parse_llm_card_decision(
         "duplicate_of": duplicate_of,
         "updates": updates,
     }
-
-
-def dedupe_keep_order(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for value in values:
-        text = str(value or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        out.append(text)
-    return out
 
 
 def append_unique_text(

@@ -213,15 +213,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.card_store.persist()
         return updated_ids
 
-    def _apply_update_actions(
-        self,
-        incoming_card: AnyCard,
-        updates: list[dict[str, Any]],
-    ) -> list[str]:
-        """Deprecated: Use _apply_update_actions_from_merges with precomputed merges."""
-        merges = self.dedup.compute_merges(incoming_card, updates)
-        return self._apply_update_actions_from_merges(merges)
-
     def _save_card_core(self, card: AnyCard) -> tuple[str, bool]:
         """Save card to storage. Returns (card_id, rebuilt) where rebuilt
         indicates whether a periodic rebuild (which includes index persist)
