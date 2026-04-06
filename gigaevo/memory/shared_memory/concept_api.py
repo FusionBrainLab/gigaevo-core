@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from gigaevo.exceptions import MemoryStorageError
+
 
 class _ConceptApiClient:
     """Small HTTP client around Memory API entity endpoints.
@@ -31,20 +33,20 @@ class _ConceptApiClient:
             response = self._http.request(method, path, **kwargs)
         except httpx.ConnectError as exc:
             host = str(self._http.base_url).rstrip("/")
-            raise RuntimeError(
+            raise MemoryStorageError(
                 f"Cannot connect to Memory API at {host}. "
                 "Start the API service or set MEMORY_API_URL to a reachable endpoint."
             ) from exc
         except httpx.TimeoutException as exc:
             host = str(self._http.base_url).rstrip("/")
-            raise RuntimeError(
+            raise MemoryStorageError(
                 f"Memory API request timed out for {host}. "
                 "Check service health and network connectivity."
             ) from exc
         if response.status_code == 204:
             return None
         if response.status_code >= 400:
-            raise RuntimeError(
+            raise MemoryStorageError(
                 f"Memory API request failed ({method} {path}): "
                 f"{response.status_code} {response.text}"
             )
@@ -78,7 +80,7 @@ class _ConceptApiClient:
         else:
             result = self._request("POST", "/v1/memory-cards", json=body)
         if not isinstance(result, dict):
-            raise RuntimeError("Unexpected empty response from concept save")
+            raise MemoryStorageError("Unexpected empty response from concept save")
         return result
 
     def get_concept(self, entity_id: str, channel: str = "latest") -> dict[str, Any]:
@@ -88,7 +90,7 @@ class _ConceptApiClient:
             params={"channel": channel},
         )
         if not isinstance(result, dict):
-            raise RuntimeError("Unexpected empty response from concept get")
+            raise MemoryStorageError("Unexpected empty response from concept get")
         return result
 
     def list_memory_cards(

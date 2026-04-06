@@ -10,6 +10,7 @@ from typing import Any
 
 from loguru import logger
 
+from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     is_program_card,
@@ -93,7 +94,7 @@ class CardDedup:
         if self._export_file.exists():
             try:
                 records = load_amem_records(self._export_file)
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 records = [c.model_dump() for c in self._card_store.cards.values()]
         else:
             records = [c.model_dump() for c in self._card_store.cards.values()]
@@ -119,7 +120,7 @@ class CardDedup:
                     "vector_description_task_description_summary",
                 ],
             )
-        except Exception as exc:
+        except (MemoryRetrieverError, OSError) as exc:
             logger.warning("[Memory] Dedup retriever build failed: {}", exc)
             return {}
 

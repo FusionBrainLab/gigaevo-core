@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import (
     build_entity_meta,
     normalize_memory_card,
@@ -243,7 +244,7 @@ class TestApiClientRequestBody:
             return httpx.Response(404, text="Not Found")
 
         client = _mock_client(handler)
-        with pytest.raises(RuntimeError, match="404"):
+        with pytest.raises(MemoryStorageError, match="404"):
             client.delete_concept("nonexistent")
 
     def test_list_memory_cards_params(self):

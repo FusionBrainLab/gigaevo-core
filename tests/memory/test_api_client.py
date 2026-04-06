@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.utils import truncate_text
@@ -80,7 +81,7 @@ class TestConceptApiClientGetConcept:
             return httpx.Response(204)
 
         client = _mock_client(handler)
-        with pytest.raises(RuntimeError, match="Unexpected empty response"):
+        with pytest.raises(MemoryStorageError, match="Unexpected empty response"):
             client.get_concept("eid-1")
 
 
@@ -154,7 +155,7 @@ class TestConceptApiClientErrors:
             raise httpx.ConnectError("refused")
 
         client = _mock_client(handler)
-        with pytest.raises(RuntimeError, match="Cannot connect"):
+        with pytest.raises(MemoryStorageError, match="Cannot connect"):
             client.save_concept(
                 content={},
                 name="",
@@ -170,7 +171,7 @@ class TestConceptApiClientErrors:
             raise httpx.TimeoutException("timed out")
 
         client = _mock_client(handler)
-        with pytest.raises(RuntimeError, match="timed out"):
+        with pytest.raises(MemoryStorageError, match="timed out"):
             client.get_concept("eid-1")
 
     def test_http_400_raises(self):
@@ -178,7 +179,7 @@ class TestConceptApiClientErrors:
             return httpx.Response(400, text="Bad Request")
 
         client = _mock_client(handler)
-        with pytest.raises(RuntimeError, match="400"):
+        with pytest.raises(MemoryStorageError, match="400"):
             client.get_concept("eid-1")
 
     def test_http_500_raises(self):
@@ -186,7 +187,7 @@ class TestConceptApiClientErrors:
             return httpx.Response(500, text="Internal Server Error")
 
         client = _mock_client(handler)
-        with pytest.raises(RuntimeError, match="500"):
+        with pytest.raises(MemoryStorageError, match="500"):
             client.get_concept("eid-1")
 
     def test_close(self):
