@@ -7,8 +7,6 @@ from write_pipeline.py through the full save_card → _persist_index flow.
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from gigaevo.memory.shared_memory.models import (
     ConnectedIdea,
     MemoryCard,
@@ -19,7 +17,6 @@ from gigaevo.memory_platform.shared_memory.memory import (
     AmemGamMemory,
     normalize_memory_card,
 )
-
 
 # ---------------------------------------------------------------------------
 # normalize_memory_card: Pydantic → dict conversion
