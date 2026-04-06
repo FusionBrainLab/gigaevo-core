@@ -85,7 +85,7 @@ include = ["gigaevo*"]
 [tool.ruff]
 line-length = 88  # same as in black
 target-version = "py312"
-exclude = [".claude/worktrees", "experiments/*/top_programs_*"]
+exclude = [".claude/worktrees", "experiments/*/top_programs_*", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/"]
 
 [tool.ruff.lint]
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes
@@ -100,10 +100,10 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "__init__.py" = ["F401"]
 "problems/**/*.py" = ["E402", "E722", "E741", "F841"]
 "gigaevo/memory/ideas_tracker/run_ideas_tracker_from_csv.py" = ["E402"]
-"gigaevo/memory/shared_memory/a_mem_memory_creation.py" = ["E402"]
+"gigaevo/memory/examples/a_mem_memory_creation.py" = ["E402"]
 "gigaevo/memory/shared_memory/amem_gam_retriever.py" = ["E402"]
 "gigaevo/memory/shared_memory/memory.py" = ["E402"]
-"gigaevo/memory/shared_memory/memory_usage_example.py" = ["E402"]
+"gigaevo/memory/examples/memory_usage_example.py" = ["E402"]
 "gigaevo/memory_platform/shared_memory/memory.py" = ["E402"]
 "gigaevo/memory_platform/shared_memory/remote_gam_retriever.py" = ["E402"]
 
@@ -119,7 +119,7 @@ warn_redundant_casts = true
 strict_optional = true
 no_implicit_optional = true
 warn_no_return = true
-exclude = ["build/", "dist/", "gigaevo/memory/A_mem/", "gigaevo/memory/GAM_root/"]
+exclude = ["build/", "dist/", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/"]
 
 [[tool.mypy.overrides]]
 module = [

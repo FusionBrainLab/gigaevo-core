@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from GAM_root.gam.schemas import Hit, InMemoryPageStore
+from gigaevo.memory._vendor.GAM_root.gam.schemas import Hit, InMemoryPageStore
 
 
 class AbsRetriever(ABC):

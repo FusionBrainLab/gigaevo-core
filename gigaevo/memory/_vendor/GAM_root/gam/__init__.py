@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from GAM_root.gam.agents import ResearchAgent
-from GAM_root.gam.generator import AbsGenerator, AMemGenerator
-from GAM_root.gam.retriever import AbsRetriever, ChromaRetriever, IndexRetriever
-from GAM_root.gam.schemas import (
+from gigaevo.memory._vendor.GAM_root.gam.agents import ResearchAgent
+from gigaevo.memory._vendor.GAM_root.gam.generator import AbsGenerator, AMemGenerator
+from gigaevo.memory._vendor.GAM_root.gam.retriever import AbsRetriever, ChromaRetriever, IndexRetriever
+from gigaevo.memory._vendor.GAM_root.gam.schemas import (
     EnoughDecision,
     Hit,
     InMemoryMemoryStore,

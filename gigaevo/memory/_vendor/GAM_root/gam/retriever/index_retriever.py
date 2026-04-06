@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from GAM_root.gam.retriever.base import AbsRetriever
-from GAM_root.gam.schemas import Hit, InMemoryPageStore, Page
+from gigaevo.memory._vendor.GAM_root.gam.retriever.base import AbsRetriever
+from gigaevo.memory._vendor.GAM_root.gam.schemas import Hit, InMemoryPageStore, Page
 from loguru import logger
 
 

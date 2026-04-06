@@ -5,8 +5,8 @@ from typing import Any
 
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-from GAM_root.gam.retriever.base import AbsRetriever
-from GAM_root.gam.schemas import Hit
+from gigaevo.memory._vendor.GAM_root.gam.retriever.base import AbsRetriever
+from gigaevo.memory._vendor.GAM_root.gam.schemas import Hit
 
 
 class ChromaRetriever(AbsRetriever):

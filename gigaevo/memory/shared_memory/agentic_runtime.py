@@ -43,14 +43,14 @@ def load_agentic_runtime() -> AgenticRuntime | None:
     This is the single place where agentic imports are attempted.
     """
     try:
-        from gigaevo.memory.A_mem.agentic_memory.memory_system import (
+        from gigaevo.memory._vendor.A_mem.agentic_memory.memory_system import (
             AgenticMemorySystem as _AgenticMemorySystem,
         )
-        from gigaevo.memory.A_mem.agentic_memory.memory_system import (
+        from gigaevo.memory._vendor.A_mem.agentic_memory.memory_system import (
             MemoryNote as _MemoryNote,
         )
-        from gigaevo.memory.GAM_root.gam import ResearchAgent as _ResearchAgent
-        from gigaevo.memory.GAM_root.gam.generator import (
+        from gigaevo.memory._vendor.GAM_root.gam import ResearchAgent as _ResearchAgent
+        from gigaevo.memory._vendor.GAM_root.gam.generator import (
             AMemGenerator as _AMemGenerator,
         )
     except Exception as exc:
