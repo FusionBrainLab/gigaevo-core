@@ -16,9 +16,9 @@ from gigaevo.memory.ideas_tracker.components.data_components import (
     IncomingIdeas,
     RecordBank,
 )
-from gigaevo.memory.memory_write_example import load_memory_cards
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.models import ProgramCard
+from gigaevo.memory.write_pipeline import load_memory_cards
 from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Extended tests for memory_write_example — edge cases for load_memory_cards.
+"""Extended tests for write_pipeline — edge cases for load_memory_cards.
 
 Complements test_memory_write_program_cards.py with adversarial inputs.
 """
@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from gigaevo.memory.memory_write_example import (
+from gigaevo.memory.write_pipeline import (
     _card_type,
     _latest_snapshot,
     _top_percent_count,

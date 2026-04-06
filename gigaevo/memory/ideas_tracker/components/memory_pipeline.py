@@ -36,7 +36,7 @@ def run_memory_write_pipeline(
     logger: IdeasTrackerLogger,
 ) -> None:
     """
-    Optionally run memory_write_example.py using current run's banks/best ideas logs.
+    Optionally run write_pipeline.py using current run's banks/best ideas logs.
     """
     if not memory_write_pipeline_enabled:
         return
@@ -78,9 +78,7 @@ def run_memory_write_pipeline(
 
     try:
         os.environ.update(env_overrides)
-        memory_write_module = importlib.import_module(
-            "gigaevo.memory.memory_write_example"
-        )
+        memory_write_module = importlib.import_module("gigaevo.memory.write_pipeline")
         memory_write_module = importlib.reload(memory_write_module)
         snapshot = memory_write_module.main()
         if isinstance(snapshot, dict):

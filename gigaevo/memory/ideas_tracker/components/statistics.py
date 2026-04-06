@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 
 from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
-from gigaevo.memory.ideas_tracker.utils.selected_ideas_6 import compute_origin_analysis
+from gigaevo.memory.ideas_tracker.utils.origin_analysis import compute_origin_analysis
 
 
 def compute_evolutionary_statistics(logger: IdeasTrackerLogger) -> None:
