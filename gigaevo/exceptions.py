@@ -95,3 +95,28 @@ class MutationError(GigaEvoError):
     """Mutation failures."""
 
     pass
+
+
+# Memory subsystem
+class MemoryError(GigaEvoError):
+    """Base exception for memory subsystem errors."""
+
+    pass
+
+
+class MemoryRetrieverError(MemoryError):
+    """GAM/retriever build or initialization failures."""
+
+    pass
+
+
+class MemorySearchError(MemoryError):
+    """Memory search or retrieval failures."""
+
+    pass
+
+
+class MemoryStorageError(MemoryError):
+    """Card persistence, index I/O, or API sync failures."""
+
+    pass

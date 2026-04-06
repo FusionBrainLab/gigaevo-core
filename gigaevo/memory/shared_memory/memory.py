@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from dotenv import load_dotenv
 from loguru import logger
 
+from gigaevo.exceptions import MemoryRetrieverError
 import gigaevo.memory.config as _env_config  # noqa: F401
 from gigaevo.memory.shared_memory.agentic_runtime import (
     AgenticRuntime,
@@ -157,7 +158,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             try:
                 self.gam.build()
                 self.research_agent = self.gam.agent
-            except Exception as exc:
+            except MemoryRetrieverError as exc:
                 logger.debug("[Memory] Initial retriever load skipped: {}", exc)
 
         if api_cfg is not None and api_cfg.sync_on_init:
@@ -379,7 +380,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self.gam.build()
                 self.research_agent = self.gam.agent
                 self._gam_build_failed = False
-            except Exception as exc:
+            except MemoryRetrieverError as exc:
                 logger.warning("[Memory] GAM build failed: {}", exc)
                 self._gam_build_failed = True
         self.dedup.invalidate_retrievers()

@@ -7,6 +7,7 @@ from typing import Any
 
 from loguru import logger
 
+from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_store import CardStore
 
 
@@ -44,7 +45,12 @@ class GamSearch:
         self.agent: Any = None
 
     def build(self) -> None:
-        """Build/rebuild the ResearchAgent from exported records."""
+        """Build/rebuild the ResearchAgent from exported records.
+
+        Raises:
+            MemoryRetrieverError: If imports, store building, or retriever
+                construction fails.
+        """
         try:
             from gigaevo.memory.shared_memory.amem_gam_retriever import (
                 build_gam_store,
@@ -52,31 +58,41 @@ class GamSearch:
                 load_amem_records,
             )
         except Exception as exc:
-            raise RuntimeError(f"GAM helper modules are unavailable: {exc}") from exc
+            raise MemoryRetrieverError(
+                f"GAM helper modules are unavailable: {exc}"
+            ) from exc
 
-        self._gam_store_dir.mkdir(parents=True, exist_ok=True)
-        if self._export_file.exists():
-            records = load_amem_records(self._export_file)
-        else:
-            records = [c.model_dump() for c in self._card_store.cards.values()]
+        try:
+            self._gam_store_dir.mkdir(parents=True, exist_ok=True)
+            if self._export_file.exists():
+                records = load_amem_records(self._export_file)
+            else:
+                records = [c.model_dump() for c in self._card_store.cards.values()]
 
-        memory_store, page_store, added = build_gam_store(records, self._gam_store_dir)
-        logger.info(
-            "[Memory] Loaded {} cards, added {} new pages.", len(records), added
-        )
+            memory_store, page_store, added = build_gam_store(
+                records, self._gam_store_dir
+            )
+            logger.info(
+                "[Memory] Loaded {} cards, added {} new pages.", len(records), added
+            )
 
-        retrievers = build_retrievers(
-            page_store,
-            self._gam_store_dir / "indexes",
-            self._checkpoint_dir / "chroma",
-            enable_bm25=self._enable_bm25,
-            allowed_tools=sorted(self._allowed_gam_tools),
-        )
-        retrievers = {
-            name: retriever
-            for name, retriever in retrievers.items()
-            if name in self._allowed_gam_tools
-        }
+            retrievers = build_retrievers(
+                page_store,
+                self._gam_store_dir / "indexes",
+                self._checkpoint_dir / "chroma",
+                enable_bm25=self._enable_bm25,
+                allowed_tools=sorted(self._allowed_gam_tools),
+            )
+            retrievers = {
+                name: retriever
+                for name, retriever in retrievers.items()
+                if name in self._allowed_gam_tools
+            }
+        except MemoryRetrieverError:
+            raise
+        except Exception as exc:
+            raise MemoryRetrieverError(f"GAM retriever build failed: {exc}") from exc
+
         if not retrievers:
             logger.info(
                 "[Memory] No GAM retrievers enabled after applying allowed_gam_tools. "
