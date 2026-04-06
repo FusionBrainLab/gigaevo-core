@@ -8,7 +8,7 @@ import re
 from typing import Any
 import uuid
 
-from A_mem.agent.agent_class import LLMService
+from gigaevo.memory._vendor.A_mem.agent.agent_class import LLMService
 from loguru import logger
 
 from .llm_controller import LLMController

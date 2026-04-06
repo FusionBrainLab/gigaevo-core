@@ -14,16 +14,16 @@ from loguru import logger
 
 load_dotenv()
 
-import gigaevo.memory.config as config
-from gigaevo.memory.GAM_root.gam import (
+from gigaevo.memory._vendor.GAM_root.gam import (
     ChromaRetriever,
     IndexRetriever,
     InMemoryMemoryStore,
     InMemoryPageStore,
     ResearchAgent,
 )
-from gigaevo.memory.GAM_root.gam.generator import AMemGenerator
-from gigaevo.memory.GAM_root.gam.schemas import Page
+from gigaevo.memory._vendor.GAM_root.gam.generator import AMemGenerator
+from gigaevo.memory._vendor.GAM_root.gam.schemas import Page
+import gigaevo.memory.config as config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
 
 

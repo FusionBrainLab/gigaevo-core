@@ -1,4 +1,4 @@
-"""Shared memory backend components."""
+"""Core memory orchestrator: card storage, search, sync, and dedup."""
 
 from __future__ import annotations
 

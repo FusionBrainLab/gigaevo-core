@@ -1,5 +1,11 @@
 """GigaEvo Memory — card-based memory system for evolution-guided mutation.
 
+Subpackages:
+    shared_memory/  — Core orchestrator: card storage, search, sync, dedup
+    _vendor/        — Vendored MIT libs: A_mem (vector store), GAM_root (research agent)
+    examples/       — Standalone demo scripts (not imported by production code)
+    ideas_tracker/  — Self-contained subsystem: analyze programs -> extract ideas -> write to memory
+
 Public API:
     AmemGamMemory      — main memory backend (local or API-backed)
     MemoryConfig       — configuration for AmemGamMemory (Pydantic)
