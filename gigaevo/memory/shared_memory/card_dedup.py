@@ -32,6 +32,9 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
 )
 from gigaevo.memory.shared_memory.utils import truncate_text
 
+_MAX_SUMMARY_CHARS = 600
+_MAX_DESCRIPTION_CHARS = 1200
+
 
 @dataclasses.dataclass(frozen=True)
 class DedupDecision:
@@ -249,14 +252,17 @@ class CardDedup:
                     "final_score": float(item.get("final_score", 0.0)),
                     "scores": item.get("scores", {}),
                     "task_description_summary": truncate_text(
-                        card.task_description_summary, 600
+                        card.task_description_summary, _MAX_SUMMARY_CHARS
                     ),
-                    "description": truncate_text(card.description, 1200),
+                    "description": truncate_text(
+                        card.description, _MAX_DESCRIPTION_CHARS
+                    ),
                     "explanation_summary": truncate_text(
-                        get_explanation_summary(card_dict), 600
+                        get_explanation_summary(card_dict), _MAX_SUMMARY_CHARS
                     ),
                     "explanation_full": [
-                        truncate_text(explanation, 1200) for explanation in explanations
+                        truncate_text(explanation, _MAX_DESCRIPTION_CHARS)
+                        for explanation in explanations
                     ],
                 }
             )
@@ -291,14 +297,16 @@ class CardDedup:
         incoming_payload = {
             "id": str(incoming_card.id or "").strip(),
             "task_description_summary": truncate_text(
-                incoming_card.task_description_summary, 600
+                incoming_card.task_description_summary, _MAX_SUMMARY_CHARS
             ),
-            "description": truncate_text(incoming_card.description, 1200),
+            "description": truncate_text(
+                incoming_card.description, _MAX_DESCRIPTION_CHARS
+            ),
             "explanation_summary": truncate_text(
-                get_explanation_summary(incoming_dict), 600
+                get_explanation_summary(incoming_dict), _MAX_SUMMARY_CHARS
             ),
             "explanation_full": [
-                truncate_text(explanation, 1200)
+                truncate_text(explanation, _MAX_DESCRIPTION_CHARS)
                 for explanation in get_full_explanations(incoming_dict)
             ],
         }

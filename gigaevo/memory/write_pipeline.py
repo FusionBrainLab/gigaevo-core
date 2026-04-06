@@ -44,6 +44,8 @@ from gigaevo.memory.write_pipeline_config import (
     resolve_memory_backend_class,
 )
 
+_MAX_CONNECTED_DESCRIPTIONS = 5
+
 
 class CardMemory(Protocol):
     def get_card(self, card_id: str) -> dict[str, Any] | None: ...
@@ -324,7 +326,9 @@ def _build_program_cards(
             if isinstance(item, dict)
         ]
         connected_descriptions = [text for text in connected_descriptions if text]
-        connected_summary = "; ".join(connected_descriptions[:5])
+        connected_summary = "; ".join(
+            connected_descriptions[:_MAX_CONNECTED_DESCRIPTIONS]
+        )
         description_seed = (
             task_description_summary or task_description or "task summary unavailable"
         )
@@ -401,6 +405,7 @@ def load_memory_cards(
     usage_updates_path: Path | None = None,
     memory: CardMemory | None = None,
 ) -> list:
+    """Load idea and program cards from banks, apply usage updates and filters."""
     payload = _load_json(path)
     usage_updates = _load_usage_updates(usage_updates_path)
 
@@ -468,6 +473,7 @@ def _write_memory_write_stats(
 
 
 def main() -> dict[str, Any] | None:
+    """Load cards from banks, write to memory backend, report stats."""
     memory_backend_cls = resolve_memory_backend_class(USE_API)
     memory = memory_backend_cls(
         checkpoint_path=str(MEMORY_DIR),

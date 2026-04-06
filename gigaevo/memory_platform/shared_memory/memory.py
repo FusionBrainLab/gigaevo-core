@@ -2,20 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 from typing import Any
 import uuid
 
 from dotenv import load_dotenv
-
-_THIS_DIR = Path(__file__).resolve().parent
-_LEGACY_MEMORY_ROOT = _THIS_DIR.parents[2] / "memory"
-if str(_LEGACY_MEMORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(_LEGACY_MEMORY_ROOT))
-_WORKSPACE_ROOT = _THIS_DIR.parents[4]
-_MEMORY_CLIENT_SRC = _WORKSPACE_ROOT / "gigaevo-memory" / "client" / "python" / "src"
-if _MEMORY_CLIENT_SRC.exists() and str(_MEMORY_CLIENT_SRC) not in sys.path:
-    sys.path.insert(0, str(_MEMORY_CLIENT_SRC))
 
 from gigaevo.memory import config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
@@ -32,6 +22,7 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_updated_card,
     parse_llm_card_decision,
 )
+from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
 
 load_dotenv()
 
@@ -96,6 +87,9 @@ def normalize_memory_card(
     card: dict[str, Any] | None = None,
     fallback_id: str | None = None,
 ) -> dict[str, Any]:
+    # Handle Pydantic models from write_pipeline by converting to dict first
+    if isinstance(card, (MemoryCard, ProgramCard)):
+        card = card.model_dump()
     raw = dict(card or {})
     category = str(raw.get("category") or "general")
     program_id = str(raw.get("program_id") or "")

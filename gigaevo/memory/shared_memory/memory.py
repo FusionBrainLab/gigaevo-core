@@ -257,6 +257,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return card_id
 
     def save_card(self, card: dict[str, Any] | AnyCard) -> str:
+        """Save a memory card, with optional dedup against existing cards.
+
+        Args:
+            card: Raw dict or Pydantic card to save. Normalized internally.
+
+        Returns:
+            Card ID of the saved (or deduplicated) card.
+        """
         normalized_card = normalize_memory_card(card)
         store = self.card_store
         store.write_stats["processed"] += 1
@@ -300,6 +308,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return self._save_and_persist(normalized_card)
 
     def save(self, data: str, category: str = "general") -> str:
+        """Save a text description as a new memory card."""
         return self.save_card({"category": category, "description": data})
 
     def _format_search_output(
@@ -344,6 +353,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return self._format_search_output(query, top_cards, memory_state)
 
     def search(self, query: str, memory_state: str | None = None) -> str:
+        """Search memory cards. Tries GAM agent, then API, then local keyword match."""
         if self.api is not None:
             self._sync_from_api(force_full=False)
 
@@ -363,12 +373,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return self._search_local_cards(query, memory_state=memory_state)
 
     def get_card(self, card_id: str) -> AnyCard | None:
+        """Return a card by ID, or None if not found."""
         return self.card_store.cards.get(card_id)
 
     def get_card_write_stats(self) -> dict[str, int]:
         return dict(self.card_store.write_stats)
 
     def rebuild(self) -> None:
+        """Persist cards, re-export JSONL, rebuild GAM index and dedup retrievers."""
         serialized = self.card_store.serialize_all()
         self.card_store.persist(serialized=serialized)
         if not self._has_agentic:
@@ -387,6 +399,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._iters_after_rebuild = 0
 
     def delete(self, memory_id: str) -> bool:
+        """Delete a card by ID or entity ID. Returns True if found and removed."""
         key = str(memory_id).strip()
         store = self.card_store
         sync = self._ensure_api_sync()
