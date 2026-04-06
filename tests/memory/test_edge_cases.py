@@ -286,7 +286,7 @@ class TestBug7UpdateFallthrough:
 
         # Now save a new card — dedup will try to update "existing" but it's gone
         mem.save_card({"description": "should be deduped"})
-        # BUG: Falls through to add because _apply_update_actions returns []
+        # BUG: Falls through to add because _apply_update_actions_from_merges returns []
         stats = mem.get_card_write_stats()
         assert (
             stats["added"] >= 2

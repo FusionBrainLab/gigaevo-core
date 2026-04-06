@@ -6,7 +6,7 @@ import re
 import statistics
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order
 
@@ -24,6 +24,13 @@ QUERY_KEYS = (
 
 
 class RetrievalWeights(BaseModel):
+    """Per-query weights for multi-signal dedup retrieval scoring.
+
+    Each weight corresponds to a query type used during candidate retrieval.
+    Weights should sum to approximately 1.0.  Non-dict input or non-numeric
+    values are silently dropped so Pydantic uses field defaults.
+    """
+
     model_config = ConfigDict(frozen=True)
 
     description: float = 0.35
@@ -31,34 +38,22 @@ class RetrievalWeights(BaseModel):
     description_explanation_summary: float = 0.3
     description_task_description_summary: float = 0.15
 
+    @model_validator(mode="before")
     @classmethod
-    def from_mapping(cls, payload: Any) -> RetrievalWeights:
-        if not isinstance(payload, dict):
-            return cls()
-
-        def _to_float(value: Any, default: float) -> float:
+    def _normalize_input(cls, data: Any) -> dict[str, Any]:
+        """Accept non-dict input gracefully; coerce values to float."""
+        if not isinstance(data, dict):
+            return {}
+        result: dict[str, Any] = {}
+        for key, val in data.items():
             try:
-                return float(value)
+                result[key] = float(val)
             except (TypeError, ValueError):
-                return default
-
-        return cls(
-            description=_to_float(payload.get("description"), cls().description),
-            explanation_summary=_to_float(
-                payload.get("explanation_summary"),
-                cls().explanation_summary,
-            ),
-            description_explanation_summary=_to_float(
-                payload.get("description_explanation_summary"),
-                cls().description_explanation_summary,
-            ),
-            description_task_description_summary=_to_float(
-                payload.get("description_task_description_summary"),
-                cls().description_task_description_summary,
-            ),
-        )
+                pass  # omit → Pydantic uses field default
+        return result
 
     def as_score_multipliers(self) -> dict[str, float]:
+        """Return weights keyed by query-type constant for scoring."""
         return {
             QUERY_DESCRIPTION: self.description,
             QUERY_EXPLANATION_SUMMARY: self.explanation_summary,
@@ -67,7 +62,25 @@ class RetrievalWeights(BaseModel):
         }
 
 
+_TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
+
+
 class CardUpdateDedupConfig(BaseModel):
+    """Configuration for the card-level deduplication pipeline.
+
+    Accepts either a nested dict (as stored in YAML/env configs)::
+
+        {"enabled": True, "retrieval": {"top_k_per_query": 10}, "llm": {"max_retries": 3}}
+
+    or the flat format matching field names::
+
+        {"enabled": True, "top_k_per_query": 10, "llm_max_retries": 3}
+
+    Non-dict input returns all defaults.  Integer fields are clamped to >= 1,
+    float fields to >= 0.0.  The ``enabled`` field accepts truthy strings
+    (``"true"``, ``"1"``, ``"yes"``, ``"on"``).
+    """
+
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = False
@@ -77,76 +90,72 @@ class CardUpdateDedupConfig(BaseModel):
     llm_max_retries: int = 2
     weights: RetrievalWeights = Field(default_factory=RetrievalWeights)
 
+    @model_validator(mode="before")
     @classmethod
-    def from_mapping(cls, payload: Any) -> CardUpdateDedupConfig:
-        if not isinstance(payload, dict):
-            return cls()
+    def _normalize_input(cls, data: Any) -> dict[str, Any]:
+        """Flatten nested retrieval/llm sub-dicts and coerce types."""
+        if not isinstance(data, dict):
+            return {}
 
-        retrieval = payload.get("retrieval")
+        result: dict[str, Any] = {}
+
+        # enabled: bool or truthy string
+        enabled_raw = data.get("enabled")
+        if isinstance(enabled_raw, bool):
+            result["enabled"] = enabled_raw
+        elif enabled_raw is not None:
+            result["enabled"] = str(enabled_raw).strip().lower() in _TRUTHY_STRINGS
+
+        retrieval = data.get("retrieval", {})
         if not isinstance(retrieval, dict):
             retrieval = {}
-
-        llm = payload.get("llm")
+        llm = data.get("llm", {})
         if not isinstance(llm, dict):
             llm = {}
 
-        def _to_int(value: Any, default: int, min_value: int = 1) -> int:
+        # Int fields: prefer nested source, fall back to flat key
+        _int_fields = {
+            "top_k_per_query": (retrieval, "top_k_per_query", 1),
+            "final_top_n": (retrieval, "final_top_n", 1),
+            "llm_max_retries": (llm, "max_retries", 1),
+        }
+        for target, (source, key, min_val) in _int_fields.items():
+            raw = source.get(key)
+            if raw is None:
+                raw = data.get(target)
+            if raw is not None:
+                try:
+                    result[target] = max(min_val, int(raw))
+                except (TypeError, ValueError):
+                    pass  # omit → Pydantic uses field default
+
+        # Float field with min-0 clamping
+        raw_score = retrieval.get("min_final_score")
+        if raw_score is None:
+            raw_score = data.get("min_final_score")
+        if raw_score is not None:
             try:
-                parsed = int(value)
+                result["min_final_score"] = max(0.0, float(raw_score))
             except (TypeError, ValueError):
-                parsed = default
-            return max(min_value, parsed)
+                pass
 
-        def _to_float(value: Any, default: float, min_value: float = 0.0) -> float:
-            try:
-                parsed = float(value)
-            except (TypeError, ValueError):
-                parsed = default
-            return max(min_value, parsed)
+        # Nested weights (Pydantic + RetrievalWeights validator handles coercion)
+        raw_weights = retrieval.get("weights")
+        if raw_weights is None:
+            raw_weights = data.get("weights")
+        if raw_weights is not None:
+            result["weights"] = raw_weights
 
-        enabled_raw = payload.get("enabled")
-        enabled = False
-        if isinstance(enabled_raw, bool):
-            enabled = enabled_raw
-        elif enabled_raw is not None:
-            enabled = str(enabled_raw).strip().lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
-
-        return cls(
-            enabled=enabled,
-            top_k_per_query=_to_int(
-                retrieval.get("top_k_per_query"),
-                default=cls().top_k_per_query,
-                min_value=1,
-            ),
-            final_top_n=_to_int(
-                retrieval.get("final_top_n"),
-                default=cls().final_top_n,
-                min_value=1,
-            ),
-            min_final_score=_to_float(
-                retrieval.get("min_final_score"),
-                default=cls().min_final_score,
-                min_value=0.0,
-            ),
-            llm_max_retries=_to_int(
-                llm.get("max_retries"),
-                default=cls().llm_max_retries,
-                min_value=1,
-            ),
-            weights=RetrievalWeights.from_mapping(retrieval.get("weights")),
-        )
+        return result
 
 
 def _normalize_text(value: Any) -> str:
+    """Collapse whitespace and strip a value coerced to string."""
     return " ".join(str(value or "").split()).strip()
 
 
 def _safe_string_list(value: Any) -> list[str]:
+    """Coerce *value* to a list of non-empty stripped strings."""
     if isinstance(value, list):
         out: list[str] = []
         for item in value:
@@ -161,6 +170,11 @@ def _safe_string_list(value: Any) -> list[str]:
 
 
 def get_explanation_summary(card: dict[str, Any]) -> str:
+    """Extract the best single-line explanation summary from a card dict.
+
+    Checks ``explanation.summary``, then the last entry in
+    ``explanation.explanations``, then ``explanation`` as a bare string.
+    """
     explanation = card.get("explanation")
     if isinstance(explanation, dict):
         summary = str(explanation.get("summary") or "").strip()
@@ -177,6 +191,10 @@ def get_explanation_summary(card: dict[str, Any]) -> str:
 
 
 def get_full_explanations(card: dict[str, Any]) -> list[str]:
+    """Return all explanation strings from a card dict.
+
+    Prefers the ``explanations`` list; falls back to the single summary.
+    """
     explanation = card.get("explanation")
     if isinstance(explanation, dict):
         explanations = _safe_string_list(explanation.get("explanations"))
@@ -193,6 +211,7 @@ def _merge_labeled_text(
     first_label: str,
     second_label: str,
 ) -> str:
+    """Combine two text fragments with labels, skipping empty parts."""
     first_text = _normalize_text(first)
     second_text = _normalize_text(second)
     if first_text and second_text:
@@ -205,6 +224,7 @@ def _merge_labeled_text(
 
 
 def build_dedup_queries(card: dict[str, Any]) -> dict[str, str]:
+    """Build the four query strings used for multi-signal dedup retrieval."""
     description = _normalize_text(card.get("description"))
     explanation_summary = _normalize_text(get_explanation_summary(card))
     task_summary = _normalize_text(card.get("task_description_summary"))
@@ -233,6 +253,11 @@ def compute_weighted_candidates(
     final_top_n: int,
     min_final_score: float = 0.0,
 ) -> list[dict[str, Any]]:
+    """Rank candidate card IDs by weighted multi-query score.
+
+    Returns up to *final_top_n* candidates sorted by descending
+    weighted score, each above *min_final_score*.
+    """
     candidate_ids: set[str] = set()
     for scores in scores_by_query.values():
         candidate_ids.update(scores.keys())
@@ -266,6 +291,7 @@ def compute_weighted_candidates(
 
 
 def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
+    """Extract the first JSON object from *raw_text*, stripping markdown fences."""
     text = str(raw_text or "").strip()
     if not text:
         return None
@@ -299,6 +325,12 @@ def parse_llm_card_decision(
     *,
     candidate_ids: set[str],
 ) -> dict[str, Any] | None:
+    """Parse an LLM-generated JSON decision into a validated action dict.
+
+    Returns ``None`` if the text contains no parseable JSON.  Otherwise
+    normalises the ``action`` to one of ``add`` / ``discard`` / ``update``
+    and validates ``duplicate_of`` and ``updates`` against *candidate_ids*.
+    """
     payload = _extract_json_object(raw_text)
     if payload is None:
         return None
@@ -382,6 +414,7 @@ def append_unique_text(
     *,
     separator: str = "\n\n---\n\n",
 ) -> str:
+    """Append *added_text* to *original_text* unless it is already contained."""
     left = str(original_text or "").strip()
     right = str(added_text or "").strip()
     if not right:
@@ -394,6 +427,7 @@ def append_unique_text(
 
 
 def _safe_float(value: Any) -> float | None:
+    """Convert *value* to float, returning ``None`` for NaN/Inf/unparseable."""
     try:
         parsed = float(value)
     except (TypeError, ValueError):
@@ -404,12 +438,14 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _median_or_none(values: list[float]) -> float | None:
+    """Return the median of *values*, or ``None`` if empty."""
     if not values:
         return None
     return float(statistics.median(values))
 
 
 def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
+    """Extract per-task fitness deltas from a usage payload dict."""
     if not isinstance(usage, dict):
         return {}
     used = usage.get("used")
@@ -441,6 +477,7 @@ def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
 
 
 def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
+    """Build a canonical ``{"used": {...}}`` payload from per-task deltas."""
     entries: list[dict[str, Any]] = []
     total_deltas: list[float] = []
     for task_summary in sorted(task_to_deltas):
@@ -472,6 +509,7 @@ def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, An
 
 
 def merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, Any]:
+    """Merge two usage payloads, combining per-task fitness deltas."""
     existing_task_deltas = _extract_usage_task_deltas(existing_usage)
     incoming_task_deltas = _extract_usage_task_deltas(incoming_usage)
     if not existing_task_deltas and not incoming_task_deltas:
@@ -503,6 +541,11 @@ def merge_updated_card(
     incoming_card: dict[str, Any],
     update: dict[str, Any],
 ) -> dict[str, Any]:
+    """Merge *incoming_card* into *existing_card* using an LLM *update* spec.
+
+    Handles programs dedup, generation bumping, task description / explanation
+    appending, and usage payload merging.
+    """
     merged = dict(existing_card)
     merged["id"] = str(existing_card.get("id") or merged.get("id") or "").strip()
 
