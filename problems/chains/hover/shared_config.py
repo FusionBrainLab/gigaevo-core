@@ -4,9 +4,6 @@ import json
 import os
 from pathlib import Path
 
-from tools.no_proxy import ensure_no_proxy
-
-ensure_no_proxy()
 
 # --- LLM Configuration ---
 # All chain requests go through the LiteLLM proxy (INTERNAL_IP:4000),
