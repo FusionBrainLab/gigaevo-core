@@ -270,6 +270,8 @@ class MutationAgent(LangGraphAgent):
         Stamps prompt_id in state for downstream tracking.
         Called only when prompt_fetcher.is_dynamic is True.
         """
+        assert self._prompt_fetcher is not None
+        assert self._metrics_formatter is not None
         fetched_sys = self._prompt_fetcher.fetch("mutation", "system")
         self.system_prompt = fetched_sys.text.format(
             task_description=self._task_description,
