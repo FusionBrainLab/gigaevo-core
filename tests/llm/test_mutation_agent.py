@@ -532,3 +532,43 @@ class TestParseResponseEdgeCases:
         result = agent.parse_response(state)
         assert result["parsed_output"]["code"] == ""
         assert "error" in result["parsed_output"]
+
+
+# ---------------------------------------------------------------------------
+# TestFixJsonEscapedCode
+# ---------------------------------------------------------------------------
+
+
+class TestFixJsonEscapedCode:
+    """Tests for MutationAgent._fix_json_escaped_code (static method)."""
+
+    def test_no_escape_sequences_returns_early_unchanged(self):
+        """Code with no JSON escape sequences skips all parsing and is returned as-is."""
+        code = "def solve():\n    return 42"
+        assert MutationAgent._fix_json_escaped_code(code) == code
+
+    def test_already_valid_python_with_literal_backslash_n_unchanged(self):
+        """Valid Python that contains a literal \\n inside a string is returned unchanged."""
+        # The code has a real newline for structure AND a two-char \\n inside a string literal.
+        # ast.parse succeeds → no transformation applied.
+        code = 'def solve():\n    msg = "hello\\nworld"\n    return msg'
+        assert MutationAgent._fix_json_escaped_code(code) == code
+
+    def test_json_escaped_newlines_are_fixed(self):
+        """Two-char \\n sequences (JSON escaping) are converted to real newlines."""
+        # LLM produced \\n (two chars) instead of actual newlines → invalid Python.
+        # After replace("\\n", "\n") → valid Python → return cleaned.
+        broken = "def solve():\\n    return 42"
+        result = MutationAgent._fix_json_escaped_code(broken)
+        assert result == "def solve():\n    return 42"
+
+    def test_json_escaped_quotes_are_fixed(self):
+        """Two-char \\" sequences (JSON escaping) are converted to real quote chars."""
+        broken = 'def solve():\\n    return \\"hello\\"'
+        result = MutationAgent._fix_json_escaped_code(broken)
+        assert result == 'def solve():\n    return "hello"'
+
+    def test_unfixable_code_returned_unchanged(self):
+        """Code that remains invalid even after unescaping is returned as-is."""
+        broken = "\\n!!! not valid python !!!\\n"
+        assert MutationAgent._fix_json_escaped_code(broken) == broken
