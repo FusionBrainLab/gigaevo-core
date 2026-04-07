@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_CONTEXT_METADATA_KEY,
+    MUTATION_MEMORY_METADATA_KEY,
+)
 from gigaevo.llm.agents.mutation import (
     MutationAgent,
     MutationPromptFields,
@@ -572,3 +575,35 @@ class TestFixJsonEscapedCode:
         """Code that remains invalid even after unescaping is returned as-is."""
         broken = "\\n!!! not valid python !!!\\n"
         assert MutationAgent._fix_json_escaped_code(broken) == broken
+
+
+# ---------------------------------------------------------------------------
+# TestBuildMemoryBlock
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMemoryBlock:
+    """Tests for MutationAgent._build_memory_block."""
+
+    def setup_method(self):
+        self.agent = _make_agent()
+
+    def test_no_memory_key_returns_empty_string(self):
+        """Parents with no memory metadata key produce an empty string."""
+        parents = [_make_program(metadata={}), _make_program(metadata={})]
+        assert self.agent._build_memory_block(parents) == ""
+
+    def test_first_parent_with_memory_key_wins(self):
+        """The first parent that has a non-empty memory key is used; later parents ignored."""
+        parents = [
+            _make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "Use caching."}),
+            _make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "Should be ignored."}),
+        ]
+        result = self.agent._build_memory_block(parents)
+        assert result == "## Memory Instructions\nUse caching."
+        assert "ignored" not in result
+
+    def test_whitespace_only_memory_value_treated_as_absent(self):
+        """A memory value that is all whitespace is skipped (treated as no memory)."""
+        parents = [_make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "   "})]
+        assert self.agent._build_memory_block(parents) == ""
