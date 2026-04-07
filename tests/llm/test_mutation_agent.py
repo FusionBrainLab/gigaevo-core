@@ -11,6 +11,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_METADATA_KEY,
 )
+from gigaevo.prompts.fetcher import FetchedPrompt, PromptFetcher
 from gigaevo.llm.agents.mutation import (
     MutationAgent,
     MutationPromptFields,
@@ -640,3 +641,64 @@ class TestBuildUserPromptWithMemory:
         )
         result = agent.build_user_prompt([parent])
         assert "## Memory Instructions" not in result
+
+
+# ---------------------------------------------------------------------------
+# TestDynamicPromptFetcher
+# ---------------------------------------------------------------------------
+
+
+class TestDynamicPromptFetcher:
+    """Tests for the dynamic prompt_fetcher path inside build_prompt."""
+
+    def _make_dynamic_fetcher(
+        self,
+        system_text: str = "Dynamic: {task_description} {metrics_description}",
+        prompt_id: str = "abc123def456",
+        user_prompt_id: str | None = None,
+    ) -> MagicMock:
+        """Return a mock PromptFetcher with is_dynamic=True."""
+        fetcher = MagicMock(spec=PromptFetcher)
+        fetcher.is_dynamic = True
+
+        def _fetch(agent_name: str, prompt_type: str) -> FetchedPrompt:
+            if prompt_type == "system":
+                return FetchedPrompt(text=system_text, prompt_id=prompt_id)
+            return FetchedPrompt(text="user template {count} {parent_blocks}", prompt_id=user_prompt_id)
+
+        fetcher.fetch.side_effect = _fetch
+        return fetcher
+
+    def test_dynamic_fetcher_refreshes_system_prompt_and_stamps_prompt_id(self):
+        """Dynamic fetcher: system prompt is refreshed and prompt_id stamped in state."""
+        fetcher = self._make_dynamic_fetcher(
+            system_text="Dynamic: {task_description} {metrics_description}",
+            prompt_id="abc123def456",
+        )
+        agent = _make_agent(system_prompt="original static prompt")
+        agent._prompt_fetcher = fetcher
+        agent._task_description = "solve problems"
+        agent._metrics_formatter = MagicMock()
+        agent._metrics_formatter.format_metrics_description.return_value = "fitness: 0-1"
+
+        state = _make_state(parents=[_make_program()])
+        result = agent.build_prompt(state)
+
+        assert result["prompt_id"] == "abc123def456"
+        assert "Dynamic: solve problems fitness: 0-1" in result["system_prompt"]
+        assert "original static prompt" not in result["system_prompt"]
+
+    def test_non_dynamic_fetcher_leaves_prompt_unchanged_and_sets_prompt_id_none(self):
+        """Non-dynamic (fixed) fetcher: system prompt unchanged, prompt_id=None."""
+        fetcher = MagicMock(spec=PromptFetcher)
+        fetcher.is_dynamic = False
+
+        agent = _make_agent(system_prompt="static prompt")
+        agent._prompt_fetcher = fetcher
+
+        state = _make_state(parents=[_make_program()])
+        result = agent.build_prompt(state)
+
+        assert result["prompt_id"] is None
+        assert result["system_prompt"] == "static prompt"
+        fetcher.fetch.assert_not_called()
