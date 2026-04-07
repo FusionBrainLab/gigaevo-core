@@ -205,10 +205,9 @@ def main():
     parser.add_argument(
         "--db",
         nargs="+",
-        type=int,
         required=True,
         metavar="N",
-        help="Redis DB numbers to flush (space-separated)",
+        help="Redis DB numbers to flush (space-separated, e.g. --db 1 2 3 or --db '1 2 3')",
     )
     parser.add_argument(
         "--confirm",
@@ -224,6 +223,20 @@ def main():
     parser.add_argument("--redis-port", type=int, default=6379)
 
     args = parser.parse_args()
+
+    # Parse DB numbers: accept both --db 1 2 3 and --db "1 2 3" (single string)
+    raw_dbs: list[str] = []
+    for token in args.db:
+        raw_dbs.extend(token.split())
+    try:
+        dbs = [int(x) for x in raw_dbs]
+    except ValueError as e:
+        parser.error(f"Invalid DB number: {e}")
+    for db in dbs:
+        if not 0 <= db <= 15:
+            parser.error(f"DB number {db} out of range (0-15)")
+    args.db = dbs
+
     dry_run = not args.confirm
 
     if dry_run:
