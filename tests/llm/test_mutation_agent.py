@@ -11,7 +11,6 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_METADATA_KEY,
 )
-from gigaevo.prompts.fetcher import FetchedPrompt, PromptFetcher
 from gigaevo.llm.agents.mutation import (
     MutationAgent,
     MutationPromptFields,
@@ -19,6 +18,7 @@ from gigaevo.llm.agents.mutation import (
     MutationStructuredOutput,
 )
 from gigaevo.programs.program import Program
+from gigaevo.prompts.fetcher import FetchedPrompt, PromptFetcher
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -702,3 +702,36 @@ class TestDynamicPromptFetcher:
         assert result["prompt_id"] is None
         assert result["system_prompt"] == "static prompt"
         fetcher.fetch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestJsonTemplateGuard
+# ---------------------------------------------------------------------------
+
+
+class TestJsonTemplateGuard:
+    """Tests for the JSON-template guard in parse_response."""
+
+    def test_json_template_echoed_as_code_is_rejected(self):
+        """When LLM returns a JSON object instead of Python, parse_response captures the error."""
+        agent = _make_agent(mutation_mode="rewrite")
+        output = _make_structured_output(code='{"archetype": "x", "code": "..."}')
+        state = _make_state(mutation_mode="rewrite", structured_output=output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["code"] == ""
+        assert "JSON template" in result["parsed_output"]["error"]
+
+    def test_valid_python_starting_with_brace_is_not_rejected(self):
+        """A dict literal assigned to a variable is valid Python and must not be rejected."""
+        agent = _make_agent(mutation_mode="rewrite")
+        output = _make_structured_output(
+            code='CONFIG = {"key": 1}\n\ndef solve(x):\n    return CONFIG["key"] + x'
+        )
+        state = _make_state(mutation_mode="rewrite", structured_output=output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["code"] != ""
+        assert "error" not in result["parsed_output"]
