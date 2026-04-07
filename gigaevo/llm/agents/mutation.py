@@ -416,11 +416,7 @@ class MutationAgent(LangGraphAgent):
                 # The code field contains the diff in diff mode
                 final_code = self._apply_diff_and_extract(parent_code, code_from_llm)
             else:
-                # In rewrite mode, clean up the code (remove any remaining fences)
                 final_code = self._extract_code_block(code_from_llm)
-                # If no code block markers found, use as-is
-                if final_code == code_from_llm.strip():
-                    final_code = code_from_llm.strip()
 
             # Guard: reject code that is a JSON template echoed back instead of Python
             if "def " not in final_code and final_code.lstrip().startswith("{"):
