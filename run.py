@@ -2,7 +2,6 @@ import asyncio
 from pathlib import Path
 import time
 
-
 from dotenv import load_dotenv
 import hydra
 from hydra.utils import instantiate
