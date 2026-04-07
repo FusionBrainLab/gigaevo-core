@@ -41,7 +41,9 @@ class TestCheck22StoppingRule:
         assert "max_generations=50" in c.message
 
     def test_valid_with_metric_threshold_passes(self):
-        c = self._run("max_generations=100 OR frontier_fitness>0.90_for_3_consecutive_gens")
+        c = self._run(
+            "max_generations=100 OR frontier_fitness>0.90_for_3_consecutive_gens"
+        )
         assert c.passed
 
     def test_missing_stopping_rule_fails_critical(self):
