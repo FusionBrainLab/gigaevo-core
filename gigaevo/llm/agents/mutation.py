@@ -358,16 +358,11 @@ class MutationAgent(LangGraphAgent):
 
     def _build_memory_block(self, parents: list[Program]) -> str:
         """Build a single memory block from any parent metadata."""
-        memory_text = ""
         for parent in parents:
-            memory_instructions = parent.metadata.get(MUTATION_MEMORY_METADATA_KEY)
-            if memory_instructions:
-                memory_text = str(memory_instructions).strip()
-                if memory_text:
-                    break
-        if not memory_text:
-            return ""
-        return f"## Memory Instructions\n{memory_text}"
+            memory_text = str(parent.metadata.get(MUTATION_MEMORY_METADATA_KEY, "")).strip()
+            if memory_text:
+                return f"## Memory Instructions\n{memory_text}"
+        return ""
 
     def parse_response(self, state: MutationState) -> MutationState:
         """Parse LLM structured response to extract code and metadata.
