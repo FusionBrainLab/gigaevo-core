@@ -607,3 +607,36 @@ class TestBuildMemoryBlock:
         """A memory value that is all whitespace is skipped (treated as no memory)."""
         parents = [_make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "   "})]
         assert self.agent._build_memory_block(parents) == ""
+
+
+# ---------------------------------------------------------------------------
+# TestBuildUserPromptWithMemory
+# ---------------------------------------------------------------------------
+
+
+class TestBuildUserPromptWithMemory:
+    """Tests for build_user_prompt — memory block integration."""
+
+    def test_memory_block_appended_when_present(self):
+        """When a parent has memory instructions, they appear in the user prompt."""
+        agent = _make_agent()
+        parent = _make_program(
+            code="def solve(): return 1",
+            metadata={
+                MUTATION_CONTEXT_METADATA_KEY: "score=0.9",
+                MUTATION_MEMORY_METADATA_KEY: "Prefer vectorised ops.",
+            },
+        )
+        result = agent.build_user_prompt([parent])
+        assert "## Memory Instructions" in result
+        assert "Prefer vectorised ops." in result
+
+    def test_no_memory_block_when_absent(self):
+        """When no parent has memory instructions, the memory section is absent."""
+        agent = _make_agent()
+        parent = _make_program(
+            code="def solve(): return 1",
+            metadata={MUTATION_CONTEXT_METADATA_KEY: "score=0.9"},
+        )
+        result = agent.build_user_prompt([parent])
+        assert "## Memory Instructions" not in result
