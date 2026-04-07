@@ -432,9 +432,12 @@ class TestStepGenerationPersistence:
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
-        engine.storage.save_run_state.assert_called_once_with(
-            "engine:total_generations", 1
-        )
+        gen_calls = [
+            c for c in engine.storage.save_run_state.call_args_list
+            if c.args[0] == "engine:total_generations"
+        ]
+        assert len(gen_calls) == 1
+        assert gen_calls[0].args == ("engine:total_generations", 1)
 
     async def test_generation_counter_increments_each_step(self):
         engine = _engine()
@@ -453,9 +456,12 @@ class TestStepGenerationPersistence:
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert engine.metrics.total_generations == 3
-        # Last call should save generation 3
-        last_call = engine.storage.save_run_state.call_args_list[-1]
-        assert last_call[0] == ("engine:total_generations", 3)
+        # Last generation save should be generation 3
+        gen_calls = [
+            c for c in engine.storage.save_run_state.call_args_list
+            if c.args[0] == "engine:total_generations"
+        ]
+        assert gen_calls[-1].args == ("engine:total_generations", 3)
 
 
 # ===================================================================
