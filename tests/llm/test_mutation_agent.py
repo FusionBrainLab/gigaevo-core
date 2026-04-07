@@ -598,7 +598,9 @@ class TestBuildMemoryBlock:
         """The first parent that has a non-empty memory key is used; later parents ignored."""
         parents = [
             _make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "Use caching."}),
-            _make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "Should be ignored."}),
+            _make_program(
+                metadata={MUTATION_MEMORY_METADATA_KEY: "Should be ignored."}
+            ),
         ]
         result = self.agent._build_memory_block(parents)
         assert result == "## Memory Instructions\nUse caching."
@@ -664,7 +666,9 @@ class TestDynamicPromptFetcher:
         def _fetch(agent_name: str, prompt_type: str) -> FetchedPrompt:
             if prompt_type == "system":
                 return FetchedPrompt(text=system_text, prompt_id=prompt_id)
-            return FetchedPrompt(text="user template {count} {parent_blocks}", prompt_id=user_prompt_id)
+            return FetchedPrompt(
+                text="user template {count} {parent_blocks}", prompt_id=user_prompt_id
+            )
 
         fetcher.fetch.side_effect = _fetch
         return fetcher
@@ -679,7 +683,9 @@ class TestDynamicPromptFetcher:
         agent._prompt_fetcher = fetcher
         agent._task_description = "solve problems"
         agent._metrics_formatter = MagicMock()
-        agent._metrics_formatter.format_metrics_description.return_value = "fitness: 0-1"
+        agent._metrics_formatter.format_metrics_description.return_value = (
+            "fitness: 0-1"
+        )
 
         state = _make_state(parents=[_make_program()])
         result = agent.build_prompt(state)

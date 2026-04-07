@@ -367,7 +367,9 @@ class MutationAgent(LangGraphAgent):
     def _build_memory_block(self, parents: list[Program]) -> str:
         """Build a single memory block from any parent metadata."""
         for parent in parents:
-            memory_text = str(parent.metadata.get(MUTATION_MEMORY_METADATA_KEY, "")).strip()
+            memory_text = str(
+                parent.metadata.get(MUTATION_MEMORY_METADATA_KEY, "")
+            ).strip()
             if memory_text:
                 return f"## Memory Instructions\n{memory_text}"
         return ""
