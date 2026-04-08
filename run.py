@@ -2,10 +2,6 @@ import asyncio
 from pathlib import Path
 import time
 
-from tools.no_proxy import ensure_no_proxy
-
-ensure_no_proxy()
-
 from dotenv import load_dotenv
 import hydra
 from hydra.utils import instantiate

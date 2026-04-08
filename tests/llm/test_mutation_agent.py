@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_CONTEXT_METADATA_KEY,
+    MUTATION_MEMORY_METADATA_KEY,
+)
 from gigaevo.llm.agents.mutation import (
     MutationAgent,
     MutationPromptFields,
@@ -15,6 +18,7 @@ from gigaevo.llm.agents.mutation import (
     MutationStructuredOutput,
 )
 from gigaevo.programs.program import Program
+from gigaevo.prompts.fetcher import FetchedPrompt, PromptFetcher
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -532,3 +536,208 @@ class TestParseResponseEdgeCases:
         result = agent.parse_response(state)
         assert result["parsed_output"]["code"] == ""
         assert "error" in result["parsed_output"]
+
+
+# ---------------------------------------------------------------------------
+# TestFixJsonEscapedCode
+# ---------------------------------------------------------------------------
+
+
+class TestFixJsonEscapedCode:
+    """Tests for MutationAgent._fix_json_escaped_code (static method)."""
+
+    def test_no_escape_sequences_returns_early_unchanged(self):
+        """Code with no JSON escape sequences skips all parsing and is returned as-is."""
+        code = "def solve():\n    return 42"
+        assert MutationAgent._fix_json_escaped_code(code) == code
+
+    def test_already_valid_python_with_literal_backslash_n_unchanged(self):
+        """Valid Python that contains a literal \\n inside a string is returned unchanged."""
+        # The code has a real newline for structure AND a two-char \\n inside a string literal.
+        # ast.parse succeeds → no transformation applied.
+        code = 'def solve():\n    msg = "hello\\nworld"\n    return msg'
+        assert MutationAgent._fix_json_escaped_code(code) == code
+
+    def test_json_escaped_newlines_are_fixed(self):
+        """Two-char \\n sequences (JSON escaping) are converted to real newlines."""
+        # LLM produced \\n (two chars) instead of actual newlines → invalid Python.
+        # After replace("\\n", "\n") → valid Python → return cleaned.
+        broken = "def solve():\\n    return 42"
+        result = MutationAgent._fix_json_escaped_code(broken)
+        assert result == "def solve():\n    return 42"
+
+    def test_json_escaped_quotes_are_fixed(self):
+        """Two-char \\" sequences (JSON escaping) are converted to real quote chars."""
+        broken = 'def solve():\\n    return \\"hello\\"'
+        result = MutationAgent._fix_json_escaped_code(broken)
+        assert result == 'def solve():\n    return "hello"'
+
+    def test_unfixable_code_returned_unchanged(self):
+        """Code that remains invalid even after unescaping is returned as-is."""
+        broken = "\\n!!! not valid python !!!\\n"
+        assert MutationAgent._fix_json_escaped_code(broken) == broken
+
+
+# ---------------------------------------------------------------------------
+# TestBuildMemoryBlock
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMemoryBlock:
+    """Tests for MutationAgent._build_memory_block."""
+
+    def setup_method(self):
+        self.agent = _make_agent()
+
+    def test_no_memory_key_returns_empty_string(self):
+        """Parents with no memory metadata key produce an empty string."""
+        parents = [_make_program(metadata={}), _make_program(metadata={})]
+        assert self.agent._build_memory_block(parents) == ""
+
+    def test_first_parent_with_memory_key_wins(self):
+        """The first parent that has a non-empty memory key is used; later parents ignored."""
+        parents = [
+            _make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "Use caching."}),
+            _make_program(
+                metadata={MUTATION_MEMORY_METADATA_KEY: "Should be ignored."}
+            ),
+        ]
+        result = self.agent._build_memory_block(parents)
+        assert result == "## Memory Instructions\nUse caching."
+        assert "ignored" not in result
+
+    def test_whitespace_only_memory_value_treated_as_absent(self):
+        """A memory value that is all whitespace is skipped (treated as no memory)."""
+        parents = [_make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "   "})]
+        assert self.agent._build_memory_block(parents) == ""
+
+
+# ---------------------------------------------------------------------------
+# TestBuildUserPromptWithMemory
+# ---------------------------------------------------------------------------
+
+
+class TestBuildUserPromptWithMemory:
+    """Tests for build_user_prompt — memory block integration."""
+
+    def test_memory_block_appended_when_present(self):
+        """When a parent has memory instructions, they appear in the user prompt."""
+        agent = _make_agent()
+        parent = _make_program(
+            code="def solve(): return 1",
+            metadata={
+                MUTATION_CONTEXT_METADATA_KEY: "score=0.9",
+                MUTATION_MEMORY_METADATA_KEY: "Prefer vectorised ops.",
+            },
+        )
+        result = agent.build_user_prompt([parent])
+        assert "## Memory Instructions" in result
+        assert "Prefer vectorised ops." in result
+
+    def test_no_memory_block_when_absent(self):
+        """When no parent has memory instructions, the memory section is absent."""
+        agent = _make_agent()
+        parent = _make_program(
+            code="def solve(): return 1",
+            metadata={MUTATION_CONTEXT_METADATA_KEY: "score=0.9"},
+        )
+        result = agent.build_user_prompt([parent])
+        assert "## Memory Instructions" not in result
+
+
+# ---------------------------------------------------------------------------
+# TestDynamicPromptFetcher
+# ---------------------------------------------------------------------------
+
+
+class TestDynamicPromptFetcher:
+    """Tests for the dynamic prompt_fetcher path inside build_prompt."""
+
+    def _make_dynamic_fetcher(
+        self,
+        system_text: str = "Dynamic: {task_description} {metrics_description}",
+        prompt_id: str = "abc123def456",
+        user_prompt_id: str | None = None,
+    ) -> MagicMock:
+        """Return a mock PromptFetcher with is_dynamic=True."""
+        fetcher = MagicMock(spec=PromptFetcher)
+        fetcher.is_dynamic = True
+
+        def _fetch(agent_name: str, prompt_type: str) -> FetchedPrompt:
+            if prompt_type == "system":
+                return FetchedPrompt(text=system_text, prompt_id=prompt_id)
+            return FetchedPrompt(
+                text="user template {count} {parent_blocks}", prompt_id=user_prompt_id
+            )
+
+        fetcher.fetch.side_effect = _fetch
+        return fetcher
+
+    def test_dynamic_fetcher_refreshes_system_prompt_and_stamps_prompt_id(self):
+        """Dynamic fetcher: system prompt is refreshed and prompt_id stamped in state."""
+        fetcher = self._make_dynamic_fetcher(
+            system_text="Dynamic: {task_description} {metrics_description}",
+            prompt_id="abc123def456",
+        )
+        agent = _make_agent(system_prompt="original static prompt")
+        agent._prompt_fetcher = fetcher
+        agent._task_description = "solve problems"
+        agent._metrics_formatter = MagicMock()
+        agent._metrics_formatter.format_metrics_description.return_value = (
+            "fitness: 0-1"
+        )
+
+        state = _make_state(parents=[_make_program()])
+        result = agent.build_prompt(state)
+
+        assert result["prompt_id"] == "abc123def456"
+        assert "Dynamic: solve problems fitness: 0-1" in result["system_prompt"]
+        assert "original static prompt" not in result["system_prompt"]
+
+    def test_non_dynamic_fetcher_leaves_prompt_unchanged_and_sets_prompt_id_none(self):
+        """Non-dynamic (fixed) fetcher: system prompt unchanged, prompt_id=None."""
+        fetcher = MagicMock(spec=PromptFetcher)
+        fetcher.is_dynamic = False
+
+        agent = _make_agent(system_prompt="static prompt")
+        agent._prompt_fetcher = fetcher
+
+        state = _make_state(parents=[_make_program()])
+        result = agent.build_prompt(state)
+
+        assert result["prompt_id"] is None
+        assert result["system_prompt"] == "static prompt"
+        fetcher.fetch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestJsonTemplateGuard
+# ---------------------------------------------------------------------------
+
+
+class TestJsonTemplateGuard:
+    """Tests for the JSON-template guard in parse_response."""
+
+    def test_json_template_echoed_as_code_is_rejected(self):
+        """When LLM returns a JSON object instead of Python, parse_response captures the error."""
+        agent = _make_agent(mutation_mode="rewrite")
+        output = _make_structured_output(code='{"archetype": "x", "code": "..."}')
+        state = _make_state(mutation_mode="rewrite", structured_output=output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["code"] == ""
+        assert "JSON template" in result["parsed_output"]["error"]
+
+    def test_valid_python_starting_with_brace_is_not_rejected(self):
+        """A dict literal assigned to a variable is valid Python and must not be rejected."""
+        agent = _make_agent(mutation_mode="rewrite")
+        output = _make_structured_output(
+            code='CONFIG = {"key": 1}\n\ndef solve(x):\n    return CONFIG["key"] + x'
+        )
+        state = _make_state(mutation_mode="rewrite", structured_output=output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["code"] != ""
+        assert "error" not in result["parsed_output"]

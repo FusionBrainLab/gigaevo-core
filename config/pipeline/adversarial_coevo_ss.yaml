@@ -1,0 +1,35 @@
+# @package _global_
+# Steady-state adversarial co-evolution pipeline.
+#
+# Extends adversarial_coevo with progress-based sync (ProgressBasedSyncHook)
+# instead of generation-based sync (MainRunSyncHook). Designed for use with
+# evolution=steady_state where "generation" is an epoch boundary, not a
+# discrete batch.
+#
+# Requires at run time:
+#   opponent_redis_db=N            (DB of the opponent run)
+#   opponent_redis_prefix=...      (prefix of the opponent run)
+#
+# Usage:
+#   python run.py \
+#     problem.name=adversarial/optimizer_v2/pop_a \
+#     evolution=steady_state pipeline=adversarial_coevo_ss \
+#     redis.db=1 \
+#     opponent_redis_db=2 \
+#     opponent_redis_prefix=adversarial/optimizer_v2/pop_b
+
+defaults:
+  - adversarial_coevo
+
+# Override sync hook: progress-based instead of generation-based
+pre_step_hook:
+  _target_: gigaevo.adversarial.sync.ProgressBasedSyncHook
+  host: ${redis.host}
+  port: ${redis.port}
+  sources:
+    - db: ${opponent_redis_db}
+      prefix: ${opponent_redis_prefix}
+  min_delta: 10
+  sync_every_n_epochs: 1
+  timeout: 7200
+  poll_interval: 5.0

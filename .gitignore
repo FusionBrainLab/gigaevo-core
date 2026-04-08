@@ -1,6 +1,9 @@
 # GigaEvo .gitignore
 # Comprehensive ignore patterns for evolutionary computation project
 
+# Git worktrees (used by Claude Code for isolated feature work)
+.claude/worktrees/
+
 # MkDocs build output
 site/
 
@@ -652,3 +655,5 @@ check_openrouter_key.py
 experiments.txt
 AlgoTune-main/
 .env
+.gitnexus
+.worktrees

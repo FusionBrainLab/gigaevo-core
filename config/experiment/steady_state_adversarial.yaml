@@ -1,0 +1,28 @@
+# @package _global_
+
+# Steady-State Adversarial Co-Evolution
+# Continuous mutation/evaluation with progress-based opponent sync.
+# Two populations compete; each blocks until the opponent processes
+# min_delta programs (configurable K:1 update ratio).
+#
+# Usage:
+#   python run.py experiment=steady_state_adversarial \
+#     problem.name=adversarial/heilbron_v3/pop_a \
+#     redis.db=1 \
+#     opponent_redis_db=2 \
+#     opponent_redis_prefix=adversarial/heilbron_v3/pop_b
+
+defaults:
+  - /constants: base
+  - /redis: default
+  - /llm: single
+  - /prompts: default
+  - /prompt_fetcher: fixed
+  - /evolution: steady_state
+  - /algorithm: single_island
+  - /pipeline: adversarial_coevo_ss
+  - /runner: default
+  - /scheduling: fifo
+  - /loader: directory
+  - /logging: tensorboard
+  - /metrics: default

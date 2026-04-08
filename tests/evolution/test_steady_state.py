@@ -292,6 +292,21 @@ class TestEpochRefresh:
         engine.storage.batch_transition_by_ids.assert_called()
         engine.strategy.reindex_archive.assert_called()
 
+    async def test_persists_programs_processed(self) -> None:
+        """Epoch refresh persists programs_processed to Redis."""
+        from gigaevo.evolution.engine.core import _RUN_STATE_PROGRAMS_PROCESSED
+
+        engine = _make_ss_engine()
+        engine.metrics.programs_processed = 37
+
+        await engine._epoch_refresh()
+
+        # Verify save_run_state was called with programs_processed
+        calls = engine.storage.save_run_state.call_args_list
+        pp_calls = [c for c in calls if c.args[0] == _RUN_STATE_PROGRAMS_PROCESSED]
+        assert len(pp_calls) == 1
+        assert pp_calls[0].args[1] == 37
+
 
 # ---------------------------------------------------------------------------
 # Generation cap

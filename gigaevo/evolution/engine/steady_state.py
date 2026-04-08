@@ -30,6 +30,7 @@ from loguru import logger
 
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.core import (
+    _RUN_STATE_PROGRAMS_PROCESSED,
     _RUN_STATE_TOTAL_GENERATIONS,
     EvolutionEngine,
 )
@@ -569,6 +570,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             self.metrics.total_generations += 1
             await self.storage.save_run_state(
                 _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
+            )
+            await self.storage.save_run_state(
+                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
             )
 
             # 10. Log epoch summary

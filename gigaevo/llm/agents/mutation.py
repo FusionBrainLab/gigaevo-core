@@ -264,6 +264,24 @@ class MutationAgent(LangGraphAgent):
 
         return state
 
+    def _refresh_prompts_from_fetcher(self, state: MutationState) -> None:
+        """Refresh system and user prompts from the dynamic co-evolving fetcher.
+
+        Stamps prompt_id in state for downstream tracking.
+        Called only when prompt_fetcher.is_dynamic is True.
+        """
+        assert self._prompt_fetcher is not None
+        assert self._metrics_formatter is not None
+        fetched_sys = self._prompt_fetcher.fetch("mutation", "system")
+        self.system_prompt = fetched_sys.text.format(
+            task_description=self._task_description,
+            metrics_description=self._metrics_formatter.format_metrics_description(),
+        )
+        state["prompt_id"] = fetched_sys.prompt_id
+        fetched_user = self._prompt_fetcher.fetch("mutation", "user")
+        if fetched_user.prompt_id is not None:
+            self.user_prompt_template = fetched_user.text
+
     def build_prompt(self, state: MutationState) -> MutationState:
         """Build mutation prompt from parent programs.
 
@@ -281,22 +299,12 @@ class MutationAgent(LangGraphAgent):
         Returns:
             Updated state with messages field and optional prompt_id
         """
-        # Refresh system and user prompts from dynamic fetcher if available
         if (
             self._prompt_fetcher is not None
             and self._prompt_fetcher.is_dynamic
             and self._metrics_formatter is not None
         ):
-            fetched_sys = self._prompt_fetcher.fetch("mutation", "system")
-            self.system_prompt = fetched_sys.text.format(
-                task_description=self._task_description,
-                metrics_description=self._metrics_formatter.format_metrics_description(),
-            )
-            state["prompt_id"] = fetched_sys.prompt_id
-            # Also refresh user prompt template if a co-evolved version is available
-            fetched_user = self._prompt_fetcher.fetch("mutation", "user")
-            if fetched_user.prompt_id is not None:
-                self.user_prompt_template = fetched_user.text
+            self._refresh_prompts_from_fetcher(state)
         else:
             state["prompt_id"] = None
 
@@ -358,16 +366,13 @@ class MutationAgent(LangGraphAgent):
 
     def _build_memory_block(self, parents: list[Program]) -> str:
         """Build a single memory block from any parent metadata."""
-        memory_text = ""
         for parent in parents:
-            memory_instructions = parent.metadata.get(MUTATION_MEMORY_METADATA_KEY)
-            if memory_instructions:
-                memory_text = str(memory_instructions).strip()
-                if memory_text:
-                    break
-        if not memory_text:
-            return ""
-        return f"## Memory Instructions\n{memory_text}"
+            memory_text = str(
+                parent.metadata.get(MUTATION_MEMORY_METADATA_KEY, "")
+            ).strip()
+            if memory_text:
+                return f"## Memory Instructions\n{memory_text}"
+        return ""
 
     def parse_response(self, state: MutationState) -> MutationState:
         """Parse LLM structured response to extract code and metadata.
@@ -416,11 +421,7 @@ class MutationAgent(LangGraphAgent):
                 # The code field contains the diff in diff mode
                 final_code = self._apply_diff_and_extract(parent_code, code_from_llm)
             else:
-                # In rewrite mode, clean up the code (remove any remaining fences)
                 final_code = self._extract_code_block(code_from_llm)
-                # If no code block markers found, use as-is
-                if final_code == code_from_llm.strip():
-                    final_code = code_from_llm.strip()
 
             # Guard: reject code that is a JSON template echoed back instead of Python
             if "def " not in final_code and final_code.lstrip().startswith("{"):
