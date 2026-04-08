@@ -165,3 +165,23 @@ class TestProgramToRecord:
         records, ids = programs_to_records(progs, "task", "summary")
         assert len(records) == 3
         assert ids == {"id-0", "id-1", "id-2"}
+
+
+class TestSplitId:
+    """Tests for analyzers._split_id — protects the most fragile LLM-output parser."""
+
+    def test_split_id_from_analyzers(self) -> None:
+        # Import here to avoid failing before analyzers.py exists in Tasks 1-3
+        from gigaevo.memory.ideas_tracker.analyzers import _split_id
+
+        assert _split_id("abc123:2") == ("abc123", 2)
+
+    def test_split_id_without_sequence_defaults_to_one(self) -> None:
+        from gigaevo.memory.ideas_tracker.analyzers import _split_id
+
+        assert _split_id("[abc123]") == ("abc123", 1)
+
+    def test_split_id_strips_brackets(self) -> None:
+        from gigaevo.memory.ideas_tracker.analyzers import _split_id
+
+        assert _split_id("[abc123:3]") == ("abc123", 3)
