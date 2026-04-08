@@ -29,7 +29,7 @@ from gigaevo.memory.ideas_tracker.analyzers import (
     ClassifyingAnalyzer,
     ClusteringAnalyzer,
 )
-from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, _build_usage_payload
+from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, build_usage_payload
 from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
@@ -149,7 +149,7 @@ def _build_usage_updates(
             )
 
     return {
-        card_id: _build_usage_payload(task_deltas)
+        card_id: build_usage_payload(task_deltas)
         for card_id, task_deltas in usage_by_card.items()
     }
 

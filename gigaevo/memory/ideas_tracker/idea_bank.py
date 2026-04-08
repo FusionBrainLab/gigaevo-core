@@ -23,7 +23,7 @@ from gigaevo.memory.utils import median, to_float
 # ---------------------------------------------------------------------------
 
 
-def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
+def build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     total_deltas: list[float] = []
     for task_summary in sorted(task_to_deltas):
@@ -97,7 +97,7 @@ def merge_usage_payloads(existing: Any, incoming: Any) -> dict[str, Any]:
         for k, v in incoming.items():
             if k != "used":
                 base[k] = v
-    base["used"] = _build_usage_payload(merged)["used"]
+    base["used"] = build_usage_payload(merged)["used"]
     return base
 
 
