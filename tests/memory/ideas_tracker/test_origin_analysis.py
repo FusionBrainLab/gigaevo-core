@@ -7,6 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from gigaevo.memory.ideas_tracker.utils.origin_analysis.events import (
+    compute_descendant_metrics,
+    compute_intro_events,
+    mean_parent_fitness,
+    pick_best_parent,
+)
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.loader import (
     build_children,
     build_parents,
@@ -297,3 +303,87 @@ class TestBuildSiblingGroupsAllgens:
         groups = build_sibling_groups_allgens(SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent")
         key = ("best_parent_allgens", "p1")
         assert set(groups[key]) == {"p2", "p3"}
+
+
+EVENTS_PROGRAMS = {
+    "p1": {"generation": 0, "fitness": 0.5, "parents": []},
+    "p2": {"generation": 1, "fitness": 0.7, "parents": ["p1"]},
+    "p3": {"generation": 2, "fitness": 0.8, "parents": ["p2"]},
+}
+EVENTS_PARENTS_OF = {"p1": [], "p2": ["p1"], "p3": ["p2"]}
+PROG_TO_ORIGIN_IDEAS = {
+    "p1": {"idea_a"},
+    "p2": {"idea_a"},
+    "p3": {"idea_b"},  # idea_b not in p2 → intro event for p3
+}
+
+
+class TestPickBestParent:
+    def test_picks_highest_fitness(self):
+        programs = {
+            "a": {"fitness": 0.3},
+            "b": {"fitness": 0.8},
+        }
+        best_pid, best_fit = pick_best_parent(["a", "b"], programs)
+        assert best_pid == "b"
+        assert best_fit == pytest.approx(0.8)
+
+    def test_returns_none_for_empty(self):
+        assert pick_best_parent([], {}) is None
+
+
+class TestMeanParentFitness:
+    def test_mean_of_two(self):
+        programs = {"a": {"fitness": 0.4}, "b": {"fitness": 0.6}}
+        result = mean_parent_fitness(["a", "b"], programs)
+        assert result == pytest.approx(0.5)
+
+    def test_returns_none_for_empty(self):
+        assert mean_parent_fitness([], {}) is None
+
+
+class TestComputeIntroEvents:
+    def test_detects_intro_event(self):
+        events = compute_intro_events(
+            programs=EVENTS_PROGRAMS,
+            prog_to_origin_ideas=PROG_TO_ORIGIN_IDEAS,
+            parents_of=EVENTS_PARENTS_OF,
+            b1=0.5,
+            b2=1.5,
+            b3=2.5,
+        )
+        # p3 introduces idea_b (not in parent p2's idea set)
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.idea_id == "idea_b"
+        assert ev.child_id == "p3"
+        assert ev.quartile == "Q3"  # gen=2, b1=0.5, b2=1.5, b3=2.5 → 2 >= 1.5 and 2 < 2.5 → Q3
+
+    def test_no_event_when_idea_in_parent(self):
+        prog_to_ideas = {"p1": {"idea_a"}, "p2": {"idea_a"}, "p3": {"idea_a"}}
+        events = compute_intro_events(
+            programs=EVENTS_PROGRAMS,
+            prog_to_origin_ideas=prog_to_ideas,
+            parents_of=EVENTS_PARENTS_OF,
+            b1=0.5,
+            b2=1.5,
+            b3=2.5,
+        )
+        assert len(events) == 0
+
+
+class TestComputeDescendantMetrics:
+    def test_no_descendants(self):
+        children_of: dict[str, list[str]] = {"p1": [], "p2": [], "p3": []}
+        dm = compute_descendant_metrics(
+            child_id="p3",
+            child_gen=2,
+            programs=EVENTS_PROGRAMS,
+            children_of=children_of,
+            elite_pids=set(),
+            gmax=2,
+            k=5,
+        )
+        assert dm.desc_count_k == 0
+        assert dm.branching_factor == 0
+        assert dm.reaches_elite_k == 0.0
