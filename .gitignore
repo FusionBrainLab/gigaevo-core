@@ -381,6 +381,7 @@ coverage.xml
 # Large data files
 *.csv
 *.json
+!pyrightconfig.json
 *.jsonl
 *.pickle
 *.pkl
