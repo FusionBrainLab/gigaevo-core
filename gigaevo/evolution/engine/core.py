@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 # Redis run-state field names (used for resume persistence)
 _RUN_STATE_TOTAL_GENERATIONS = "engine:total_generations"
+_RUN_STATE_PROGRAMS_PROCESSED = "engine:programs_processed"
 
 
 class EvolutionEngine:
@@ -259,6 +260,9 @@ class EvolutionEngine:
         self.metrics.total_generations += 1
         await self.storage.save_run_state(
             _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
+        )
+        await self.storage.save_run_state(
+            _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
         )
 
         # Log generation summary for easy diagnosis
@@ -654,11 +658,15 @@ class EvolutionEngine:
             )
 
     async def restore_state(self) -> None:
-        """Restore total_generations from storage after a resume."""
+        """Restore total_generations and programs_processed from storage after a resume."""
         gen = await self.storage.load_run_state(_RUN_STATE_TOTAL_GENERATIONS)
         if gen is not None:
             self.metrics.total_generations = gen
             logger.info("[EvolutionEngine] Restored total_generations={}", gen)
+        pp = await self.storage.load_run_state(_RUN_STATE_PROGRAMS_PROCESSED)
+        if pp is not None:
+            self.metrics.programs_processed = pp
+            logger.info("[EvolutionEngine] Restored programs_processed={}", pp)
 
     def _reached_generation_cap(self) -> bool:
         cap = self.config.max_generations

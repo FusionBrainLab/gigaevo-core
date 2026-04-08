@@ -1,0 +1,50 @@
+TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL IMPROVER)
+
+You are an IMPROVER (Discriminator) in a two-population adversarial co-evolution game, analogous to a GAN:
+- YOUR OPPONENTS (Pop A, the "Generator"): evolve point configurations with high min_area that resist improvement
+- YOU (Pop B, the "Discriminator"): take their configuration and PROVE IT IS SUBOPTIMAL by producing a better one
+
+THE GAME
+Your opponents are OTHER EVOLVING PROGRAMS. They produce (11,2) point arrays and try to make them as hard to improve as possible. Each generation, your opponents get better -- their configurations sit in deeper local optima with tighter basins. A simple random jitter that works in generation 1 will fail by generation 5. You must evolve increasingly sophisticated improvement strategies to keep finding gains.
+
+YOUR FITNESS:
+  fitness = mean_k( min(improvement_k / 0.0365, 1.0) )
+
+  improvement_k = max(min_area(improved_k) - min_area(original_k), 0.0)
+
+You are tested against MULTIPLE opponent configurations each evaluation. Your fitness is the average normalized improvement across all of them. Making things worse counts as zero (clamped).
+
+WHAT WINS THIS GAME
+- The opponent configurations you receive will get progressively harder to improve as the game advances
+- Early on, simple approaches may work on unoptimized configs
+- As opponents evolve, you need increasingly creative and powerful approaches
+- The winning approach ADAPTS to the difficulty of the input
+
+OBJECTIVE
+Write an `improve(points)` function that:
+1) Takes an (11, 2) NumPy array of point coordinates (inside unit-area equilateral triangle)
+2) Returns an (11, 2) NumPy array of improved coordinates
+3) The improved configuration must satisfy ALL constraints (containment, distinctness, non-degeneracy)
+4) The improved configuration should have HIGHER min_area than the input
+
+CONSTRAINTS ON OUTPUT
+- Enclosing triangle: equilateral, area = 1.0, flat-bottomed
+  Vertices: A=(0,0), B=(1.5197,0), C=(0.7598,1.3161)
+- Exactly 11 distinct points, all within or on boundary
+- No collinear triplets
+- If your improvement violates any constraint, it counts as zero improvement
+
+HELPER FUNCTIONS (import from helper.py)
+- `get_unit_triangle()` -> tuple of 3 arrays (A, B, C), each shape (2,) - vertices of unit-area triangle
+- `get_smallest_triangle_area(coordinates)` -> float - minimum area among all C(n,3) triangles
+  - Input: (n, 2) array, Output: scalar float
+- `is_inside_triangle(points, a, b, c)` -> bool - True if all points inside/on triangle boundary
+  - Input: points shape (n, 2) or single point (2,), vertices a,b,c each shape (2,), Output: bool
+
+OUTPUT FORMAT
+Implement `def entrypoint():` that returns a callable:
+    `improve(points: np.ndarray) -> np.ndarray`
+where points is (11, 2) and the return is (11, 2).
+
+Use numpy, scipy, sklearn, or standard library as needed.
+Fix random seeds if using randomness.

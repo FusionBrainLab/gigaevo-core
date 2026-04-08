@@ -37,6 +37,9 @@ Work on any GigaEvo run — no experiment.yaml required.
 | `fitness_vs_time.py` | Fitness vs wall-clock time plots | `--run`, `--output-folder` |
 | `pareto_plot.py` | Multi-objective Pareto frontier visualization | `--run`, `--output-folder` |
 | `throughput_plot.py` | Throughput evolution curves | `--run`, `--output-folder` |
+| `csv_memory_comparison.py` | Compare CSV exports from memory experiments | `--run` (multiple), `--output-folder` |
+| `check_docs_freshness.py` | Verify documentation tables match actual files on disk | standalone (no args) |
+| `no_proxy.py` | NO_PROXY environment helper for backend access | used by `litellm.sh` and launch scripts |
 | `utils.py` | Shared utilities: `parse_run_arg`, Redis helpers | imported by other tools |
 
 ### Experiment Lifecycle Tools (`tools/experiment/`)

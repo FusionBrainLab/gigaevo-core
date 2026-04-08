@@ -13,7 +13,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import _RUN_STATE_TOTAL_GENERATIONS, EvolutionEngine
+from gigaevo.evolution.engine.core import (
+    _RUN_STATE_PROGRAMS_PROCESSED,
+    _RUN_STATE_TOTAL_GENERATIONS,
+    EvolutionEngine,
+)
 from gigaevo.evolution.strategies.elite_selectors import RandomEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
 from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
@@ -234,6 +238,45 @@ class TestEvolutionEngineRestoreState:
         steps_before = engine.metrics.total_generations
         assert engine._reached_generation_cap()
         assert engine.metrics.total_generations == steps_before  # unchanged
+
+    async def test_restores_programs_processed(self, fakeredis_storage) -> None:
+        """restore_state() loads programs_processed from Redis."""
+        await fakeredis_storage.save_run_state(_RUN_STATE_PROGRAMS_PROCESSED, 42)
+
+        engine = _make_engine(storage=fakeredis_storage)
+        assert engine.metrics.programs_processed == 0
+
+        await engine.restore_state()
+
+        assert engine.metrics.programs_processed == 42
+
+    async def test_no_saved_programs_processed_keeps_zero(
+        self, fakeredis_storage
+    ) -> None:
+        """When no programs_processed is persisted, it stays at 0."""
+        engine = _make_engine(storage=fakeredis_storage)
+        await engine.restore_state()
+        assert engine.metrics.programs_processed == 0
+
+    async def test_step_saves_programs_processed(self, fakeredis_storage) -> None:
+        """After a step, programs_processed is saved to Redis."""
+        engine = _make_engine(storage=fakeredis_storage)
+        engine.storage = fakeredis_storage
+        engine.strategy = AsyncMock()
+        engine.strategy.get_program_ids = AsyncMock(return_value=[])
+        engine.strategy.select_elites = AsyncMock(return_value=[])
+        engine._writer = MagicMock()
+        engine._writer.bind.return_value = engine._writer
+        engine.mutation_operator = AsyncMock()
+        engine._await_idle = AsyncMock()
+        engine._ingest_completed_programs = AsyncMock()
+        engine._refresh_archive_programs = AsyncMock(return_value=0)
+
+        engine.metrics.programs_processed = 15
+        await engine.step()
+
+        saved = await fakeredis_storage.load_run_state(_RUN_STATE_PROGRAMS_PROCESSED)
+        assert saved == 15
 
 
 # ---------------------------------------------------------------------------
