@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from gigaevo.memory.ideas_tracker.models import UsageEntry, UsagePayload
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order
 
 QUERY_DESCRIPTION = "description"
@@ -478,7 +479,7 @@ def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
 
 def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
     """Build a canonical ``{"used": {...}}`` payload from per-task deltas."""
-    entries: list[dict[str, Any]] = []
+    usage_entries: list[UsageEntry] = []
     total_deltas: list[float] = []
     for task_summary in sorted(task_to_deltas):
         deltas = [
@@ -488,24 +489,21 @@ def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, An
         ]
         if not deltas:
             continue
-        entries.append(
-            {
-                "task_description_summary": task_summary,
-                "used_count": len(deltas),
-                "fitness_delta_per_use": deltas,
-                "median_delta_fitness": _median_or_none(deltas),
-            }
+        usage_entries.append(
+            UsageEntry(
+                task_description_summary=task_summary,
+                used_count=len(deltas),
+                fitness_delta_per_use=deltas,
+                median_delta_fitness=_median_or_none(deltas),
+            )
         )
         total_deltas.extend(deltas)
-    return {
-        "used": {
-            "entries": entries,
-            "total": {
-                "total_used": len(total_deltas),
-                "median_delta_fitness": _median_or_none(total_deltas),
-            },
-        }
-    }
+    payload = UsagePayload(
+        entries=usage_entries,
+        total_used=len(total_deltas),
+        median_delta_fitness=_median_or_none(total_deltas),
+    )
+    return {"used": payload.model_dump()}
 
 
 def merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, Any]:

@@ -35,6 +35,7 @@ def _make_program(
     *,
     code: str = "def solve(): return 42",
     fitness: float = 0.75,
+    is_valid: float = 1.0,
     fitness_key: str = "fitness",
     generation: int = 3,
     parents: list[str] | None = None,
@@ -54,7 +55,7 @@ def _make_program(
     prog = Program(
         code=code,
         state=state,
-        metrics={fitness_key: fitness},
+        metrics={fitness_key: fitness, "is_valid": is_valid},
         metadata=metadata,
         lineage=lineage,
     )
@@ -70,6 +71,7 @@ def _make_root_program(*, fitness: float = 1.0) -> Program:
 def _make_evolved_program(
     *,
     fitness: float = 5.0,
+    is_valid: float = 1.0,
     parent_id: str = "seed-01",
     generation: int = 3,
     insights: list[str] | None = None,
@@ -83,6 +85,7 @@ def _make_evolved_program(
         mutation_output["changes"] = changes
     return _make_program(
         fitness=fitness,
+        is_valid=is_valid,
         generation=generation,
         parents=[parent_id],
         mutation_output=mutation_output,
@@ -92,11 +95,13 @@ def _make_evolved_program(
 def _make_memory_program(
     *,
     fitness: float = 8.0,
+    is_valid: float = 1.0,
     parent_id: str = "parent-a",
     card_ids: list[str] | None = None,
 ) -> Program:
     return _make_program(
         fitness=fitness,
+        is_valid=is_valid,
         generation=5,
         parents=[parent_id],
         memory_ids=card_ids or ["idea-001", "idea-002"],
@@ -184,7 +189,44 @@ class TestBuildMemoryUsageFromPrograms:
             fitness=2.0, parent_id="p1", card_ids=["dup", "dup", "dup"]
         )
         result = _build_memory_usage_updates([parent, child], "task")
-        assert result["dup"]["used"]["total"]["total_used"] == 1
+        assert result["dup"]["used"]["total_used"] == 1
+
+    def test_invalid_parent_excluded_from_delta_calculation(self) -> None:
+        """Invalid parents must not contribute to fitness_by_id (prevents sentinel pollution)."""
+        valid_parent = _make_program(
+            program_id="p1", fitness=5.0, is_valid=1.0, parents=[], generation=1
+        )
+        invalid_parent = _make_program(
+            program_id="p2", fitness=-1e5, is_valid=0.0, parents=[], generation=1
+        )
+        child = _make_memory_program(
+            fitness=6.0, is_valid=1.0, parent_id="p1", card_ids=["idea-1"]
+        )
+        result = _build_memory_usage_updates(
+            [valid_parent, invalid_parent, child], "task"
+        )
+        # Delta should be relative to valid parent only: 6.0 - 5.0 = 1.0
+        assert result["idea-1"]["used"]["entries"][0]["fitness_delta_per_use"] == [1.0]
+
+    def test_invalid_child_not_used_for_deltas(self) -> None:
+        """Invalid child programs must be skipped entirely in delta computation."""
+        parent = _make_program(program_id="p1", fitness=5.0, parents=[], generation=1)
+        invalid_child = _make_program(
+            fitness=-1e5,
+            is_valid=0.0,
+            generation=2,
+            parents=["p1"],
+            memory_ids=["card-1"],
+        )
+        valid_child = _make_memory_program(
+            fitness=7.0, is_valid=1.0, parent_id="p1", card_ids=["card-1"]
+        )
+        result = _build_memory_usage_updates(
+            [parent, invalid_child, valid_child], "task"
+        )
+        # Only valid child contributes: delta = 7.0 - 5.0 = 2.0
+        assert result["card-1"]["used"]["total_used"] == 1
+        assert result["card-1"]["used"]["entries"][0]["fitness_delta_per_use"] == [2.0]
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +369,26 @@ class TestIdeaTrackerIsPostRunHook:
         assert ClusteringAnalyzer is not None
 
 
+class TestIdeaTrackerRunMethod:
+    def test_run_with_no_programs_is_noop(self) -> None:
+        """The run() method with no args should not crash, but does nothing (bug)."""
+        tracker = _make_tracker(
+            memory_write_enabled=False, memory_usage_tracking_enabled=False
+        )
+        result = tracker.run()
+        assert result is None
+        assert len(tracker._all_records) == 0
+
+    def test_run_with_programs_processes_them(self) -> None:
+        """The run() method can process programs when passed directly."""
+        tracker = _make_tracker(
+            memory_write_enabled=False, memory_usage_tracking_enabled=False
+        )
+        programs = [_make_evolved_program(fitness=f) for f in [1.0, 2.0, 3.0]]
+        tracker.run(programs)
+        assert len(tracker._all_records) == 3
+
+
 class TestIdeaTrackerProgramFiltering:
     def test_root_programs_are_skipped(self) -> None:
         tracker = _make_tracker()
@@ -336,17 +398,47 @@ class TestIdeaTrackerProgramFiltering:
         assert len(result) == 1
         assert result[0].id == evolved.id
 
-    def test_zero_fitness_programs_are_skipped(self) -> None:
+    def test_invalid_programs_are_skipped(self) -> None:
+        """Programs with is_valid=0 must be excluded regardless of fitness value."""
         tracker = _make_tracker()
-        zero = _make_evolved_program(fitness=0.0)
-        positive = _make_evolved_program(fitness=1.0)
-        result = tracker._eligible_records([zero, positive])
+        invalid = _make_evolved_program(fitness=0.0, is_valid=0.0)
+        valid = _make_evolved_program(fitness=1.0, is_valid=1.0)
+        result = tracker._eligible_records([invalid, valid])
         assert len(result) == 1
         assert result[0].fitness == 1.0
 
-    def test_negative_fitness_programs_are_skipped(self) -> None:
+    def test_program_without_is_valid_metric_is_excluded(self) -> None:
+        """Programs missing the is_valid metric are treated as invalid."""
         tracker = _make_tracker()
-        result = tracker._eligible_records([_make_evolved_program(fitness=-3.0)])
+        prog = _make_evolved_program(fitness=5.0)
+        del prog.metrics["is_valid"]
+        result = tracker._eligible_records([prog])
+        assert result == []
+
+    def test_valid_program_with_negative_fitness_is_included(self) -> None:
+        """Valid programs with negative fitness (e.g. hexagon_improver range [-10,-3.8]) must not be excluded."""
+        tracker = _make_tracker()
+        result = tracker._eligible_records(
+            [_make_evolved_program(fitness=-3.0, is_valid=1.0)]
+        )
+        assert len(result) == 1
+        assert result[0].fitness == -3.0
+
+    def test_valid_program_with_zero_fitness_is_included(self) -> None:
+        """Valid programs with exactly zero fitness must not be excluded."""
+        tracker = _make_tracker()
+        result = tracker._eligible_records(
+            [_make_evolved_program(fitness=0.0, is_valid=1.0)]
+        )
+        assert len(result) == 1
+        assert result[0].fitness == 0.0
+
+    def test_invalid_program_excluded_despite_positive_fitness(self) -> None:
+        """A program that failed validation (is_valid=0) must be excluded even if fitness > 0."""
+        tracker = _make_tracker()
+        result = tracker._eligible_records(
+            [_make_evolved_program(fitness=5.0, is_valid=0.0)]
+        )
         assert result == []
 
     def test_duplicate_programs_are_skipped(self) -> None:
@@ -532,7 +624,9 @@ class TestEvolutionToIdeaExtraction:
         )
         seed = _make_root_program(fitness=1.0)
         gen2_good = _make_evolved_program(fitness=5.0, parent_id=seed.id, generation=2)
-        gen2_bad = _make_evolved_program(fitness=0.0, parent_id=seed.id, generation=2)
+        gen2_bad = _make_evolved_program(
+            fitness=0.0, parent_id=seed.id, generation=2, is_valid=0.0
+        )
         gen3_best = _make_evolved_program(
             fitness=8.0,
             parent_id=gen2_good.id,
@@ -576,7 +670,6 @@ class TestEvolutionToIdeaExtraction:
             [seed, child_improved, child_regressed], "HoVer fact verification"
         )
         assert "idea-1" in result
-        total = result["idea-1"]["used"]["total"]
-        assert total["total_used"] == 2
+        assert result["idea-1"]["used"]["total_used"] == 2
         deltas = result["idea-1"]["used"]["entries"][0]["fitness_delta_per_use"]
         assert sorted(deltas) == [-1.0, 5.0]

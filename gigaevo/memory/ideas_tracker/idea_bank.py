@@ -15,6 +15,8 @@ from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
     IdeaUpdate,
+    UsageEntry,
+    UsagePayload,
 )
 from gigaevo.memory.utils import median, to_float
 
@@ -24,7 +26,7 @@ from gigaevo.memory.utils import median, to_float
 
 
 def build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
-    entries: list[dict[str, Any]] = []
+    usage_entries: list[UsageEntry] = []
     total_deltas: list[float] = []
     for task_summary in sorted(task_to_deltas):
         deltas = [
@@ -34,24 +36,21 @@ def build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any
         ]
         if not deltas:
             continue
-        entries.append(
-            {
-                "task_description_summary": task_summary,
-                "used_count": len(deltas),
-                "fitness_delta_per_use": deltas,
-                "median_delta_fitness": median(deltas),
-            }
+        usage_entries.append(
+            UsageEntry(
+                task_description_summary=task_summary,
+                used_count=len(deltas),
+                fitness_delta_per_use=deltas,
+                median_delta_fitness=median(deltas),
+            )
         )
         total_deltas.extend(deltas)
-    return {
-        "used": {
-            "entries": entries,
-            "total": {
-                "total_used": len(total_deltas),
-                "median_delta_fitness": median(total_deltas),
-            },
-        }
-    }
+    payload = UsagePayload(
+        entries=usage_entries,
+        total_used=len(total_deltas),
+        median_delta_fitness=median(total_deltas),
+    )
+    return {"used": payload.model_dump()}
 
 
 def _extract_task_deltas(usage: Any) -> dict[str, list[float]]:

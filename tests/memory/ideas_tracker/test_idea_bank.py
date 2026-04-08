@@ -164,7 +164,8 @@ class TestMergeUsagePayloads:
                         "median_delta_fitness": 2.0,
                     }
                 ],
-                "total": {"total_used": 1, "median_delta_fitness": 2.0},
+                "total_used": 1,
+                "median_delta_fitness": 2.0,
             }
         }
         incoming = {
@@ -177,7 +178,8 @@ class TestMergeUsagePayloads:
                         "median_delta_fitness": 4.0,
                     }
                 ],
-                "total": {"total_used": 1, "median_delta_fitness": 4.0},
+                "total_used": 1,
+                "median_delta_fitness": 4.0,
             }
         }
         merged = merge_usage_payloads(existing, incoming)

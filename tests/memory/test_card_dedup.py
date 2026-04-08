@@ -164,7 +164,8 @@ def test_merge_usage_payloads_accumulates_per_task_and_total() -> None:
                     "median_delta_fitness": 0.1,
                 }
             ],
-            "total": {"total_used": 1, "median_delta_fitness": 0.1},
+            "total_used": 1,
+            "median_delta_fitness": 0.1,
         }
     }
     incoming_usage = {
@@ -183,14 +184,15 @@ def test_merge_usage_payloads_accumulates_per_task_and_total() -> None:
                     "median_delta_fitness": -0.2,
                 },
             ],
-            "total": {"total_used": 2, "median_delta_fitness": 0.05},
+            "total_used": 2,
+            "median_delta_fitness": 0.05,
         }
     }
 
     merged = merge_usage_payloads(existing_usage, incoming_usage)
     used = merged["used"]
-    assert used["total"]["total_used"] == 3
-    assert used["total"]["median_delta_fitness"] == 0.1
+    assert used["total_used"] == 3
+    assert used["median_delta_fitness"] == 0.1
 
     entries = {entry["task_description_summary"]: entry for entry in used["entries"]}
     assert entries["task A"]["used_count"] == 2
