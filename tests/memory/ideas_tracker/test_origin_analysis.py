@@ -1,10 +1,20 @@
 """Tests for the origin_analysis subpackage."""
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import pytest
 
+from gigaevo.memory.ideas_tracker.utils.origin_analysis.loader import (
+    build_children,
+    build_parents,
+    compute_roots_memoized,
+    invert_idea_to_programs,
+    load_ideas,
+    load_programs,
+)
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.quartiles import (
     generation_quantile_bounds,
     generation_range_bounds,
@@ -140,3 +150,109 @@ class TestGenerationToQuartile:
 
     def test_q4(self):
         assert generation_to_quartile(3, 1.0, 2.0, 3.0) == "Q4"
+
+
+def _write_json(path: Path, obj: object) -> None:
+    path.write_text(json.dumps(obj), encoding="utf-8")
+
+
+BANKS_FIXTURE = [
+    {
+        "active_bank": [
+            {"id": "idea_a", "programs": ["p1", "p2"], "description": "Idea A"},
+            {"id": "idea_b", "programs": ["p3"], "description": "Idea B"},
+        ]
+    }
+]
+
+PROGRAMS_FIXTURE = [
+    {
+        "programs": [
+            {"id": "p1", "generation": 0, "fitness": 0.5, "parents": []},
+            {"id": "p2", "generation": 1, "fitness": 0.6, "parents": ["p1"]},
+            {"id": "p3", "generation": 2, "fitness": 0.7, "parents": ["p2"]},
+            {"id": "p4", "generation": 3, "fitness": 0.8, "parents": ["p2", "p3"]},
+        ]
+    }
+]
+
+
+class TestLoadIdeas:
+    def test_loads_idea_to_programs(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        idea_to_progs, idea_desc = load_ideas(str(banks_file))
+        assert idea_to_progs["idea_a"] == {"p1", "p2"}
+        assert idea_to_progs["idea_b"] == {"p3"}
+
+    def test_loads_descriptions(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        _, idea_desc = load_ideas(str(banks_file))
+        assert idea_desc["idea_a"] == "Idea A"
+
+    def test_invalid_format_raises(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        _write_json(banks_file, {"no_active_bank": []})
+        with pytest.raises(ValueError):
+            load_ideas(str(banks_file))
+
+
+class TestLoadPrograms:
+    def test_loads_programs_by_id(self, tmp_path):
+        progs_file = tmp_path / "programs.json"
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+        programs = load_programs(str(progs_file))
+        assert set(programs.keys()) == {"p1", "p2", "p3", "p4"}
+        assert programs["p1"]["generation"] == 0
+
+    def test_deduplicates_keeps_best_fitness(self, tmp_path):
+        progs_file = tmp_path / "programs.json"
+        data = [
+            {"programs": [{"id": "p1", "generation": 0, "fitness": 0.3, "parents": []}]},
+            {"programs": [{"id": "p1", "generation": 0, "fitness": 0.9, "parents": []}]},
+        ]
+        _write_json(progs_file, data)
+        programs = load_programs(str(progs_file))
+        assert programs["p1"]["fitness"] == 0.9
+
+
+class TestBuildParentsAndChildren:
+    def test_build_parents(self, tmp_path):
+        progs_file = tmp_path / "programs.json"
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+        programs = load_programs(str(progs_file))
+        parents_of = build_parents(programs)
+        assert parents_of["p1"] == []
+        assert parents_of["p2"] == ["p1"]
+        assert set(parents_of["p4"]) == {"p2", "p3"}
+
+    def test_build_children(self, tmp_path):
+        progs_file = tmp_path / "programs.json"
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+        programs = load_programs(str(progs_file))
+        parents_of = build_parents(programs)
+        children_of = build_children(parents_of)
+        assert "p2" in children_of["p1"]
+        assert "p3" in children_of["p2"]
+
+
+class TestInvertIdeaToPrograms:
+    def test_invert(self):
+        mapping = {"idea_a": {"p1", "p2"}, "idea_b": {"p2"}}
+        prog_to_ideas = invert_idea_to_programs(mapping)
+        assert "idea_a" in prog_to_ideas["p1"]
+        assert "idea_a" in prog_to_ideas["p2"]
+        assert "idea_b" in prog_to_ideas["p2"]
+
+
+class TestComputeRootsMemoized:
+    def test_roots_of_root_is_itself(self):
+        parents_of = {"p1": [], "p2": ["p1"], "p3": ["p2"]}
+        roots = compute_roots_memoized(parents_of)
+        assert roots["p1"] == {"p1"}
+
+    def test_roots_trace_back(self):
+        parents_of = {"p1": [], "p2": ["p1"], "p3": ["p2"]}
+        roots = compute_roots_memoized(parents_of)
+        assert roots["p3"] == {"p1"}
