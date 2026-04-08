@@ -465,6 +465,15 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # rate is high.  Prevents deadlock if both populations reject everything.
         self.metrics.programs_processed += len(completed)
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
+
+        # Publish counter to Redis immediately so adversarial sync hooks can
+        # see our progress between epoch boundaries.  Without this, the counter
+        # is only updated at epoch refresh, causing the opponent to block.
+        if completed:
+            await self.storage.save_run_state(
+                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+            )
+
         handled = [p.id for p in completed]
         return added, handled
 
