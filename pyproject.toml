@@ -120,7 +120,7 @@ warn_redundant_casts = true
 strict_optional = true
 no_implicit_optional = true
 warn_no_return = true
-exclude = ["build/", "dist/", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/"]
+exclude = ["build/", "dist/", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/", "gigaevo/memory/examples/"]
 
 [[tool.mypy.overrides]]
 module = [

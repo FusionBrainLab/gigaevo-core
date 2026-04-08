@@ -78,21 +78,7 @@ def _write_runtime_memory_config(payload: dict[str, Any]) -> Path:
 
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Run the ideas tracker independently from run.py using either "
-            "an existing Redis run database or a CSV exported from it."
-        )
-    )
-    parser.add_argument(
-        "--source",
-        choices=("redis", "csv"),
-        default="redis",
-        help="Input source. Redis is the default.",
-    )
-    parser.add_argument(
-        "--csv-path",
-        default=None,
-        help="Path to CSV exported from tools/redis2pd.py. Required for --source csv.",
+        description="Run the ideas tracker independently from run.py using an existing Redis run database."
     )
     parser.add_argument(
         "--config-path",
@@ -142,13 +128,6 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    if args.source == "csv" and not args.csv_path:
-        parser.error("--csv-path is required when --source csv is used.")
-    if args.source != "csv" and args.csv_path:
-        parser.error("--csv-path may only be used with --source csv.")
-
-
 def _apply_cli_overrides(
     payload: dict[str, Any],
     *,
@@ -195,7 +174,6 @@ def _apply_cli_overrides(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_argument_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
-    _validate_args(args, parser)
 
     from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
@@ -216,11 +194,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
     os.environ["EVO_MEMORY_CONFIG_PATH"] = str(runtime_config_path)
     try:
-        tracker = IdeaTracker(config_path=runtime_config_path, logs_dir=args.logs_dir)
-        if args.source == "csv":
-            tracker.run(path_to_database=args.csv_path)
-        else:
-            tracker.run()
+        tracker = IdeaTracker(logs_dir=args.logs_dir)
+        tracker.run()
     finally:
         if previous_config_path is None:
             os.environ.pop("EVO_MEMORY_CONFIG_PATH", None)
