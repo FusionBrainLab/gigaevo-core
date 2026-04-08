@@ -8,11 +8,11 @@ timestamped directory in a single flush() call at session end.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 from datetime import datetime
 from functools import cached_property
 import json
-import math
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -21,18 +21,23 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from gigaevo.evolution.engine.hooks import PostRunHook
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
 from gigaevo.memory.ideas_tracker.analyzers import (
     Analyzer,
     ClassifyingAnalyzer,
     ClusteringAnalyzer,
 )
-from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
+from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, _build_usage_payload
 from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
     ProgramRecord,
     program_to_record,
 )
+from gigaevo.memory.utils import to_float
+from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 if TYPE_CHECKING:
@@ -44,16 +49,6 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
-
-
-def _to_float(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(parsed) or math.isinf(parsed):
-        return None
-    return parsed
 
 
 def _load_task_description(redis_prefix: str, package_path: Path) -> str:
@@ -97,15 +92,8 @@ def _build_usage_updates(
     fitness_key: str,
 ) -> dict[str, dict[str, Any]]:
     """Build per-memory-card usage payloads from program fitness deltas."""
-    from gigaevo.evolution.mutation.constants import (
-        MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
-    )
-    from gigaevo.memory.ideas_tracker.idea_bank import _build_usage_payload
-    from gigaevo.memory.ideas_tracker.idea_bank import _to_float as _f
 
     def _as_string_list(value: Any) -> list[str]:
-        import ast
-
         if isinstance(value, list):
             return [str(i).strip() for i in value if str(i).strip()]
         if isinstance(value, str):
@@ -129,18 +117,24 @@ def _build_usage_updates(
 
     fitness_by_id: dict[str, float] = {}
     for prog in programs:
-        f = _f(prog.metrics.get(fitness_key))
+        is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
+        if is_valid is None or is_valid <= 0:
+            continue
+        f = to_float(prog.metrics.get(fitness_key))
         if f is not None:
             fitness_by_id[prog.id] = f
 
     usage_by_card: dict[str, dict[str, list[float]]] = {}
     for prog in programs:
+        is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
+        if is_valid is None or is_valid <= 0:
+            continue
         selected = _as_string_list(
             prog.metadata.get(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
         )
         if not selected:
             continue
-        child_fitness = _f(prog.metrics.get(fitness_key))
+        child_fitness = to_float(prog.metrics.get(fitness_key))
         if child_fitness is None:
             continue
         parent_fitnesses = [
@@ -557,14 +551,14 @@ class IdeaTracker(PostRunHook):
         """
         Filter programs and convert to ProgramRecord.
 
-        Skips: root programs (no parents), zero/negative fitness, already-seen ids.
+        Skips: root programs (no parents), invalid programs (is_valid != 1.0), already-seen ids.
         """
         eligible: list[Program] = []
         for prog in programs:
             if not prog.lineage.parents:
                 continue
-            fitness = _to_float(prog.metrics.get(self._fitness_key))
-            if fitness is None or fitness <= 0:
+            is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
+            if is_valid is None or is_valid <= 0:
                 continue
             if prog.id in self._seen_ids:
                 continue

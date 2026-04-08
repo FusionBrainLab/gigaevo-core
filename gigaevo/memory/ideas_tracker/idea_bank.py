@@ -6,8 +6,6 @@ Also contains usage-payload helpers (build, merge) previously in utils/helpers.p
 
 from __future__ import annotations
 
-import math
-import statistics as _statistics
 from typing import Any
 from uuid import uuid4
 
@@ -18,24 +16,11 @@ from gigaevo.memory.ideas_tracker.models import (
     IdeaExplanation,
     IdeaUpdate,
 )
+from gigaevo.memory.utils import median, to_float
 
 # ---------------------------------------------------------------------------
 # Usage-payload helpers  (was utils/helpers.py)
 # ---------------------------------------------------------------------------
-
-
-def _to_float(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(parsed) or math.isinf(parsed):
-        return None
-    return parsed
-
-
-def _median(values: list[float]) -> float | None:
-    return float(_statistics.median(values)) if values else None
 
 
 def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
@@ -45,7 +30,7 @@ def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, An
         deltas = [
             d
             for raw in task_to_deltas[task_summary]
-            if (d := _to_float(raw)) is not None
+            if (d := to_float(raw)) is not None
         ]
         if not deltas:
             continue
@@ -54,7 +39,7 @@ def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, An
                 "task_description_summary": task_summary,
                 "used_count": len(deltas),
                 "fitness_delta_per_use": deltas,
-                "median_delta_fitness": _median(deltas),
+                "median_delta_fitness": median(deltas),
             }
         )
         total_deltas.extend(deltas)
@@ -63,7 +48,7 @@ def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, An
             "entries": entries,
             "total": {
                 "total_used": len(total_deltas),
-                "median_delta_fitness": _median(total_deltas),
+                "median_delta_fitness": median(total_deltas),
             },
         }
     }
@@ -88,7 +73,7 @@ def _extract_task_deltas(usage: Any) -> dict[str, list[float]]:
         raw_deltas = entry.get("fitness_delta_per_use") or entry.get("fitness_deltas")
         if not isinstance(raw_deltas, list):
             continue
-        deltas = [d for raw in raw_deltas if (d := _to_float(raw)) is not None]
+        deltas = [d for raw in raw_deltas if (d := to_float(raw)) is not None]
         if deltas:
             result.setdefault(task, []).extend(deltas)
     return result
