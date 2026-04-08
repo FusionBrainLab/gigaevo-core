@@ -160,6 +160,9 @@ class ProgressBasedSyncHook:
                     target,
                     min_progress,
                 )
+                # Reset baseline to current reality so the NEXT epoch doesn't
+                # also wait the full timeout with a stale target.
+                self._last_progress = min_progress
                 return
 
             now = time.monotonic()

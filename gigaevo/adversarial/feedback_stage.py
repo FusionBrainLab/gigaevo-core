@@ -95,6 +95,12 @@ class OpponentFeedbackStage(Stage):
             return StringContainer(data="")
 
         top_k = sorted(candidates, key=lambda o: o.fitness, reverse=True)[: self._k]
+        if len(top_k) < self._k:
+            logger.warning(
+                "[OpponentFeedback] requested k={} but only {} opponents available (sparse archive)",
+                self._k,
+                len(top_k),
+            )
         logger.info(
             "[OpponentFeedback] role={} k={} opponents selected (top fitness={:.5f})",
             self._role,
