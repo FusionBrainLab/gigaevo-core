@@ -5,14 +5,15 @@ improvement ideas from a completed evolutionary run.
 _SessionLog accumulates log entries in memory and writes all files to a
 timestamped directory in a single flush() call at session end.
 """
+
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+from functools import cached_property
 import json
 import math
 import os
-from datetime import datetime
-from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,7 +21,11 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from gigaevo.evolution.engine.hooks import PostRunHook
-from gigaevo.memory.ideas_tracker.analyzers import Analyzer, ClassifyingAnalyzer, ClusteringAnalyzer
+from gigaevo.memory.ideas_tracker.analyzers import (
+    Analyzer,
+    ClassifyingAnalyzer,
+    ClusteringAnalyzer,
+)
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
 from gigaevo.memory.ideas_tracker.models import (
     Idea,
@@ -39,6 +44,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
 
 def _to_float(value: Any) -> float | None:
     try:
@@ -91,12 +97,15 @@ def _build_usage_updates(
     fitness_key: str,
 ) -> dict[str, dict[str, Any]]:
     """Build per-memory-card usage payloads from program fitness deltas."""
-    from gigaevo.evolution.mutation.constants import MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY
+    from gigaevo.evolution.mutation.constants import (
+        MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+    )
     from gigaevo.memory.ideas_tracker.idea_bank import _build_usage_payload
     from gigaevo.memory.ideas_tracker.idea_bank import _to_float as _f
 
     def _as_string_list(value: Any) -> list[str]:
         import ast
+
         if isinstance(value, list):
             return [str(i).strip() for i in value if str(i).strip()]
         if isinstance(value, str):
@@ -108,7 +117,11 @@ def _build_usage_updates(
                     return [str(i).strip() for i in json.loads(text) if str(i).strip()]
                 except Exception:
                     try:
-                        return [str(i).strip() for i in ast.literal_eval(text) if str(i).strip()]
+                        return [
+                            str(i).strip()
+                            for i in ast.literal_eval(text)
+                            if str(i).strip()
+                        ]
                     except Exception:
                         pass
             return [text]
@@ -122,18 +135,24 @@ def _build_usage_updates(
 
     usage_by_card: dict[str, dict[str, list[float]]] = {}
     for prog in programs:
-        selected = _as_string_list(prog.metadata.get(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY))
+        selected = _as_string_list(
+            prog.metadata.get(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
+        )
         if not selected:
             continue
         child_fitness = _f(prog.metrics.get(fitness_key))
         if child_fitness is None:
             continue
-        parent_fitnesses = [fitness_by_id[pid] for pid in prog.lineage.parents if pid in fitness_by_id]
+        parent_fitnesses = [
+            fitness_by_id[pid] for pid in prog.lineage.parents if pid in fitness_by_id
+        ]
         if not parent_fitnesses:
             continue
         delta = child_fitness - max(parent_fitnesses)
         for card_id in list(dict.fromkeys(selected)):
-            usage_by_card.setdefault(card_id, {}).setdefault(task_summary, []).append(delta)
+            usage_by_card.setdefault(card_id, {}).setdefault(task_summary, []).append(
+                delta
+            )
 
     return {
         card_id: _build_usage_payload(task_deltas)
@@ -166,11 +185,13 @@ async def _enrich_ideas(
             except Exception:
                 pass
 
-        return idea.model_copy(update={
-            "keywords": keywords,
-            "explanation": IdeaExplanation(entries=entries, summary=summary),
-            "task_description_summary": task_summary,
-        })
+        return idea.model_copy(
+            update={
+                "keywords": keywords,
+                "explanation": IdeaExplanation(entries=entries, summary=summary),
+                "task_description_summary": task_summary,
+            }
+        )
 
     return list(await asyncio.gather(*[_enrich_one(idea) for idea in ideas]))
 
@@ -212,12 +233,17 @@ def _run_write_pipeline(
     }
     if programs_path and programs_path.exists():
         env_overrides["MEMORY_PROGRAMS_PATH"] = str(programs_path)
-    if memory_usage_tracking_enabled and usage_updates_path and usage_updates_path.exists():
+    if (
+        memory_usage_tracking_enabled
+        and usage_updates_path
+        and usage_updates_path.exists()
+    ):
         env_overrides["MEMORY_USAGE_UPDATES_PATH"] = str(usage_updates_path)
 
     previous = {k: os.environ.get(k) for k in env_overrides}
     try:
         import importlib
+
         os.environ.update(env_overrides)
         mod = importlib.import_module("gigaevo.memory.write_pipeline")
         mod = importlib.reload(mod)
@@ -226,9 +252,9 @@ def _run_write_pipeline(
             stats = snapshot.get("stats", {})
             if isinstance(stats, dict):
                 logger.info(
-                    f"Memory write: processed={stats.get('processed',0)}, "
-                    f"added={stats.get('added',0)}, updated={stats.get('updated',0)}, "
-                    f"rejected={stats.get('rejected',0)}"
+                    f"Memory write: processed={stats.get('processed', 0)}, "
+                    f"added={stats.get('added', 0)}, updated={stats.get('updated', 0)}, "
+                    f"rejected={stats.get('rejected', 0)}"
                 )
     finally:
         for k, v in previous.items():
@@ -241,6 +267,7 @@ def _run_write_pipeline(
 # ---------------------------------------------------------------------------
 # _SessionLog
 # ---------------------------------------------------------------------------
+
 
 class _SessionLog:
     """
@@ -303,20 +330,28 @@ class _SessionLog:
             "\n\n".join(self._entries), encoding="utf-8"
         )
 
-        banks_data = [{
-            "active_bank": [i.model_dump() for i in bank.all_ideas()],
-            "timestamp": ts,
-        }]
+        banks_data = [
+            {
+                "active_bank": [i.model_dump() for i in bank.all_ideas()],
+                "timestamp": ts,
+            }
+        ]
         self.banks_file.write_text(json.dumps(banks_data, indent=2), encoding="utf-8")
 
-        programs_data = [{
-            "timestamp": ts,
-            "programs": [r.model_dump() for r in records],
-        }]
-        self.programs_file.write_text(json.dumps(programs_data, indent=2), encoding="utf-8")
+        programs_data = [
+            {
+                "timestamp": ts,
+                "programs": [r.model_dump() for r in records],
+            }
+        ]
+        self.programs_file.write_text(
+            json.dumps(programs_data, indent=2), encoding="utf-8"
+        )
 
         self.usage_updates_file.write_text(
-            json.dumps([{"timestamp": ts, "usage_updates": self._usage_updates}], indent=2),
+            json.dumps(
+                [{"timestamp": ts, "usage_updates": self._usage_updates}], indent=2
+            ),
             encoding="utf-8",
         )
 
@@ -328,7 +363,10 @@ class _SessionLog:
             return
         try:
             import pandas as pd
-            from gigaevo.memory.ideas_tracker.utils.origin_analysis import compute_origin_analysis
+
+            from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
+                compute_origin_analysis,
+            )
 
             df_summary, df_best_ideas = compute_origin_analysis(
                 banks_path=str(self.banks_file),
@@ -380,6 +418,7 @@ class _SessionLog:
 # ---------------------------------------------------------------------------
 # IdeaTracker
 # ---------------------------------------------------------------------------
+
 
 class IdeaTracker(PostRunHook):
     """
@@ -435,7 +474,8 @@ class IdeaTracker(PostRunHook):
             )
 
         resolved_logs = (
-            Path(logs_dir) if logs_dir is not None
+            Path(logs_dir)
+            if logs_dir is not None
             else Path(__file__).resolve().parent / "logs"
         )
         resolved_logs.mkdir(parents=True, exist_ok=True)
@@ -475,7 +515,9 @@ class IdeaTracker(PostRunHook):
     async def _run(self, programs: list[Program]) -> None:
         """Full pipeline: filter → analyse → enrich → log → write."""
         if self._memory_usage_tracking_enabled:
-            usage_updates = _build_usage_updates(programs, self._task_summary, self._fitness_key)
+            usage_updates = _build_usage_updates(
+                programs, self._task_summary, self._fitness_key
+            )
             self._log.record_usage_updates(usage_updates)
         else:
             usage_updates = {}
@@ -488,7 +530,9 @@ class IdeaTracker(PostRunHook):
         if self._memory_usage_tracking_enabled and usage_updates:
             self._bank.apply_usage_updates(usage_updates)
 
-        enriched = await _enrich_ideas(self._bank.all_ideas(), self._analyzer, self._task_summary)
+        enriched = await _enrich_ideas(
+            self._bank.all_ideas(), self._analyzer, self._task_summary
+        )
         for idea in enriched:
             self._bank.enrich(
                 idea.id,
@@ -527,7 +571,9 @@ class IdeaTracker(PostRunHook):
             eligible.append(prog)
 
         records = [
-            program_to_record(p, self._task_description, self._task_summary, self._fitness_key)
+            program_to_record(
+                p, self._task_description, self._task_summary, self._fitness_key
+            )
             for p in eligible
         ]
         self._all_records.extend(records)

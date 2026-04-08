@@ -5,6 +5,7 @@ Three layers, from fastest to slowest:
 2. OOP contract tests — PostRunHook ABC, NullPostRunHook, Hydra composability
 3. Integration tests — EvolutionEngine → PostRunHook → IdeaTracker pipeline
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -20,7 +21,6 @@ from gigaevo.memory.ideas_tracker.models import (
     program_to_record,
     programs_to_records,
 )
-from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
 from gigaevo.programs.program import Lineage, Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -51,7 +51,13 @@ def _make_program(
     parent_list = parents or (["parent-1"] if generation > 1 else [])
     parent_uuids = [_uuid(p) if isinstance(p, str) else p for p in parent_list]
     lineage = Lineage(parents=parent_uuids, generation=max(generation, 1))
-    prog = Program(code=code, state=state, metrics={fitness_key: fitness}, metadata=metadata, lineage=lineage)
+    prog = Program(
+        code=code,
+        state=state,
+        metrics={fitness_key: fitness},
+        metadata=metadata,
+        lineage=lineage,
+    )
     if program_id is not None:
         object.__setattr__(prog, "id", _uuid(program_id))
     return prog
@@ -75,21 +81,40 @@ def _make_evolved_program(
         mutation_output["insights_used"] = insights
     if changes is not None:
         mutation_output["changes"] = changes
-    return _make_program(fitness=fitness, generation=generation, parents=[parent_id], mutation_output=mutation_output)
+    return _make_program(
+        fitness=fitness,
+        generation=generation,
+        parents=[parent_id],
+        mutation_output=mutation_output,
+    )
 
 
-def _make_memory_program(*, fitness: float = 8.0, parent_id: str = "parent-a", card_ids: list[str] | None = None) -> Program:
-    return _make_program(fitness=fitness, generation=5, parents=[parent_id], memory_ids=card_ids or ["idea-001", "idea-002"])
+def _make_memory_program(
+    *,
+    fitness: float = 8.0,
+    parent_id: str = "parent-a",
+    card_ids: list[str] | None = None,
+) -> Program:
+    return _make_program(
+        fitness=fitness,
+        generation=5,
+        parents=[parent_id],
+        memory_ids=card_ids or ["idea-001", "idea-002"],
+    )
 
 
 # ---------------------------------------------------------------------------
 # Helper: _build_usage_updates (was build_memory_usage_updates_from_programs)
 # ---------------------------------------------------------------------------
 
+
 def _build_memory_usage_updates(programs, task_summary="", fitness_key="fitness"):
     """Thin wrapper so tests don't need to import the internal helper directly."""
     from gigaevo.memory.ideas_tracker.ideas_tracker import _build_usage_updates
-    return _build_usage_updates(programs, task_summary or "Task summary unavailable", fitness_key)
+
+    return _build_usage_updates(
+        programs, task_summary or "Task summary unavailable", fitness_key
+    )
 
 
 class TestBuildMemoryUsageFromPrograms:
@@ -101,8 +126,12 @@ class TestBuildMemoryUsageFromPrograms:
         assert _build_memory_usage_updates(progs) == {}
 
     def test_single_card_usage_computes_delta(self) -> None:
-        parent = _make_program(program_id="parent-a", fitness=5.0, parents=[], generation=1)
-        child = _make_memory_program(fitness=8.0, parent_id="parent-a", card_ids=["idea-1"])
+        parent = _make_program(
+            program_id="parent-a", fitness=5.0, parents=[], generation=1
+        )
+        child = _make_memory_program(
+            fitness=8.0, parent_id="parent-a", card_ids=["idea-1"]
+        )
         result = _build_memory_usage_updates([parent, child], "test task")
         assert "idea-1" in result
         entries = result["idea-1"]["used"]["entries"]
@@ -119,23 +148,41 @@ class TestBuildMemoryUsageFromPrograms:
 
     def test_multiple_cards_per_program(self) -> None:
         parent = _make_program(program_id="p1", fitness=4.0, parents=[], generation=1)
-        child = _make_memory_program(fitness=6.0, parent_id="p1", card_ids=["a", "b", "c"])
+        child = _make_memory_program(
+            fitness=6.0, parent_id="p1", card_ids=["a", "b", "c"]
+        )
         result = _build_memory_usage_updates([parent, child], "t")
         assert set(result.keys()) == {"a", "b", "c"}
 
     def test_missing_parent_fitness_skips_program(self) -> None:
-        child = _make_memory_program(fitness=8.0, parent_id="unknown-parent", card_ids=["c1"])
+        child = _make_memory_program(
+            fitness=8.0, parent_id="unknown-parent", card_ids=["c1"]
+        )
         assert _build_memory_usage_updates([child], "task") == {}
 
     def test_custom_fitness_key(self) -> None:
-        parent = _make_program(program_id="p1", fitness=3.0, fitness_key="accuracy", parents=[], generation=1)
-        child = _make_program(fitness=5.0, fitness_key="accuracy", generation=3, parents=["p1"], memory_ids=["c1"])
+        parent = _make_program(
+            program_id="p1",
+            fitness=3.0,
+            fitness_key="accuracy",
+            parents=[],
+            generation=1,
+        )
+        child = _make_program(
+            fitness=5.0,
+            fitness_key="accuracy",
+            generation=3,
+            parents=["p1"],
+            memory_ids=["c1"],
+        )
         result = _build_memory_usage_updates([parent, child], "task", "accuracy")
         assert "c1" in result
 
     def test_duplicate_card_ids_deduplicated(self) -> None:
         parent = _make_program(program_id="p1", fitness=1.0, parents=[], generation=1)
-        child = _make_memory_program(fitness=2.0, parent_id="p1", card_ids=["dup", "dup", "dup"])
+        child = _make_memory_program(
+            fitness=2.0, parent_id="p1", card_ids=["dup", "dup", "dup"]
+        )
         result = _build_memory_usage_updates([parent, child], "task")
         assert result["dup"]["used"]["total"]["total_used"] == 1
 
@@ -144,9 +191,17 @@ class TestBuildMemoryUsageFromPrograms:
 # records_converter tests (now in models.py)
 # ---------------------------------------------------------------------------
 
+
 class TestProgramToRecord:
     def test_basic_field_mapping(self) -> None:
-        prog = _make_evolved_program(fitness=7.5, generation=4, parent_id="p1", insights=["Use BFS"], changes=["Added BFS traversal"], archetype="exploration")
+        prog = _make_evolved_program(
+            fitness=7.5,
+            generation=4,
+            parent_id="p1",
+            insights=["Use BFS"],
+            changes=["Added BFS traversal"],
+            archetype="exploration",
+        )
         record = program_to_record(prog, "Solve TSP", "TSP optimisation")
         assert record.id == prog.id
         assert record.fitness == 7.5
@@ -197,6 +252,7 @@ class TestProgramsToRecords:
 # PostRunHook ABC
 # ---------------------------------------------------------------------------
 
+
 class TestPostRunHookABC:
     def test_cannot_instantiate_abc(self) -> None:
         with pytest.raises(TypeError):
@@ -208,6 +264,7 @@ class TestPostRunHookABC:
     def test_concrete_subclass_must_implement_on_run_complete(self) -> None:
         class Incomplete(PostRunHook):
             pass
+
         with pytest.raises(TypeError):
             Incomplete()
 
@@ -229,17 +286,21 @@ class TestNullPostRunHook:
 # IdeaTracker as PostRunHook
 # ---------------------------------------------------------------------------
 
+
 def _make_tracker(**kwargs):
-    from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
     from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer
+    from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
     mock_llm_clients = (MagicMock(), MagicMock(), False)
-    with patch(
-        "gigaevo.memory.ideas_tracker.llm._init_clients",
-        return_value=mock_llm_clients,
-    ), patch(
-        "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-        return_value="Test summary",
+    with (
+        patch(
+            "gigaevo.memory.ideas_tracker.llm._init_clients",
+            return_value=mock_llm_clients,
+        ),
+        patch(
+            "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
+            return_value="Test summary",
+        ),
     ):
         analyzer = ClassifyingAnalyzer(model="mock-model")
         return IdeaTracker(analyzer=analyzer, task_description="Test task", **kwargs)
@@ -248,16 +309,20 @@ def _make_tracker(**kwargs):
 class TestIdeaTrackerIsPostRunHook:
     def test_is_subclass_of_post_run_hook(self) -> None:
         from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
+
         assert issubclass(IdeaTracker, PostRunHook)
 
     def test_instantiates_with_analyzer(self) -> None:
         tracker = _make_tracker()
-        from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
         assert isinstance(tracker, PostRunHook)
         assert tracker._fitness_key == "fitness"
 
     def test_analyzer_types_importable(self) -> None:
-        from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer, ClusteringAnalyzer
+        from gigaevo.memory.ideas_tracker.analyzers import (
+            ClassifyingAnalyzer,
+            ClusteringAnalyzer,
+        )
+
         assert ClassifyingAnalyzer is not None
         assert ClusteringAnalyzer is not None
 
@@ -309,7 +374,9 @@ class TestIdeaTrackerProgramFiltering:
 
 class TestIdeaTrackerOnRunComplete:
     def _make_tracker_with_mocked_run(self):
-        tracker = _make_tracker(memory_write_enabled=False, memory_usage_tracking_enabled=False)
+        tracker = _make_tracker(
+            memory_write_enabled=False, memory_usage_tracking_enabled=False
+        )
         tracker._run = AsyncMock()
         return tracker
 
@@ -333,6 +400,7 @@ class TestIdeaTrackerOnRunComplete:
     @pytest.mark.asyncio
     async def test_storage_excludes_stage_results(self) -> None:
         from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
+
         tracker = self._make_tracker_with_mocked_run()
         storage = AsyncMock()
         storage.get_all.return_value = [_make_evolved_program()]
@@ -342,7 +410,9 @@ class TestIdeaTrackerOnRunComplete:
 
 class TestIdeaTrackerLegacyRun:
     def _make_tracker_with_mocked_run(self):
-        tracker = _make_tracker(memory_write_enabled=False, memory_usage_tracking_enabled=False)
+        tracker = _make_tracker(
+            memory_write_enabled=False, memory_usage_tracking_enabled=False
+        )
         tracker._run = MagicMock()
         return tracker
 
@@ -360,6 +430,7 @@ class TestIdeaTrackerLegacyRun:
 # ---------------------------------------------------------------------------
 # EvolutionEngine ↔ PostRunHook integration
 # ---------------------------------------------------------------------------
+
 
 def _make_engine(*, post_run_hook=None, max_generations=1):
     storage = AsyncMock()
@@ -415,6 +486,7 @@ class TestHydraComposability:
 
     def test_default_yaml_target_is_idea_tracker(self) -> None:
         from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
+
         assert issubclass(IdeaTracker, PostRunHook)
 
     def test_engine_accepts_both_hook_types(self) -> None:
@@ -425,6 +497,7 @@ class TestHydraComposability:
 
     def test_post_run_hook_in_engine_signature(self) -> None:
         import inspect
+
         sig = inspect.signature(EvolutionEngine.__init__)
         assert "post_run_hook" in sig.parameters
 
@@ -432,6 +505,7 @@ class TestHydraComposability:
 # ---------------------------------------------------------------------------
 # Full pipeline E2E
 # ---------------------------------------------------------------------------
+
 
 class TestEvolutionToIdeaExtraction:
     @pytest.mark.asyncio
@@ -444,6 +518,7 @@ class TestEvolutionToIdeaExtraction:
         class RecordingHook(PostRunHook):
             async def on_run_complete(self, stor) -> None:
                 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
+
                 programs = await stor.get_all(exclude=EXCLUDE_STAGE_RESULTS)
                 captured.extend(programs)
 
@@ -452,13 +527,19 @@ class TestEvolutionToIdeaExtraction:
 
     @pytest.mark.asyncio
     async def test_program_filtering_in_tracker_context(self) -> None:
-        tracker = _make_tracker(memory_write_enabled=False, memory_usage_tracking_enabled=False)
+        tracker = _make_tracker(
+            memory_write_enabled=False, memory_usage_tracking_enabled=False
+        )
         seed = _make_root_program(fitness=1.0)
         gen2_good = _make_evolved_program(fitness=5.0, parent_id=seed.id, generation=2)
         gen2_bad = _make_evolved_program(fitness=0.0, parent_id=seed.id, generation=2)
         gen3_best = _make_evolved_program(
-            fitness=8.0, parent_id=gen2_good.id, generation=3,
-            insights=["Use BFS for hops"], changes=["Replaced DFS with BFS"], archetype="exploitation",
+            fitness=8.0,
+            parent_id=gen2_good.id,
+            generation=3,
+            insights=["Use BFS for hops"],
+            changes=["Replaced DFS with BFS"],
+            archetype="exploitation",
         )
         records = tracker._eligible_records([seed, gen2_good, gen2_bad, gen3_best])
         assert len(records) == 2
@@ -474,10 +555,26 @@ class TestEvolutionToIdeaExtraction:
 
     @pytest.mark.asyncio
     async def test_memory_usage_tracked_after_evolution(self) -> None:
-        seed = _make_program(program_id="seed-01", fitness=2.0, parents=[], generation=1)
-        child_improved = _make_program(program_id="child-01", fitness=7.0, generation=2, parents=["seed-01"], memory_ids=["idea-1"])
-        child_regressed = _make_program(program_id="child-02", fitness=1.0, generation=2, parents=["seed-01"], memory_ids=["idea-1"])
-        result = _build_memory_usage_updates([seed, child_improved, child_regressed], "HoVer fact verification")
+        seed = _make_program(
+            program_id="seed-01", fitness=2.0, parents=[], generation=1
+        )
+        child_improved = _make_program(
+            program_id="child-01",
+            fitness=7.0,
+            generation=2,
+            parents=["seed-01"],
+            memory_ids=["idea-1"],
+        )
+        child_regressed = _make_program(
+            program_id="child-02",
+            fitness=1.0,
+            generation=2,
+            parents=["seed-01"],
+            memory_ids=["idea-1"],
+        )
+        result = _build_memory_usage_updates(
+            [seed, child_improved, child_regressed], "HoVer fact verification"
+        )
         assert "idea-1" in result
         total = result["idea-1"]["used"]["total"]
         assert total["total_used"] == 2
