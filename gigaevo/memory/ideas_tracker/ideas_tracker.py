@@ -11,7 +11,6 @@ import asyncio
 import json
 import math
 import os
-import statistics as _statistics
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
@@ -349,8 +348,8 @@ class _SessionLog:
         # Inject per-idea stats into banks.json
         stats_by_idea: dict[str, dict] = {}
         for _, row in df_summary.iterrows():
-            idea_id = row["idea_id"]
-            quartile = row["quartile"]
+            idea_id = str(row["idea_id"])
+            quartile = str(row["quartile"])
             metrics = {
                 k: (v if pd.notna(v) else None)
                 for k, v in row.drop(["idea_id", "quartile", "description"]).items()
