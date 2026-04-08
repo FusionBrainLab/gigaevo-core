@@ -5,19 +5,20 @@ Analyzer      — Protocol that both analysers implement.
 ClassifyingAnalyzer — Sequential per-program LLM classification against the idea bank.
 ClusteringAnalyzer  — Batch embedding + DBSCAN + async LLM refinement pipeline.
 """
+
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import json
 import re
 import time
-import uuid
-from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+import uuid
 
-import numpy as np
 from dotenv import load_dotenv
 from loguru import logger
+import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
 from tqdm import tqdm
@@ -40,6 +41,7 @@ load_dotenv()
 # Protocol
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class Analyzer(Protocol):
     """
@@ -55,7 +57,9 @@ class Analyzer(Protocol):
         """Extract and classify improvement ideas from a batch of program records."""
         ...
 
-    async def analyze_async(self, records: list[ProgramRecord], bank: IdeaBank) -> AnalysisResult:
+    async def analyze_async(
+        self, records: list[ProgramRecord], bank: IdeaBank
+    ) -> AnalysisResult:
         """Async version of analyze — used by IdeaTracker._run to avoid asyncio nesting."""
         ...
 
@@ -71,6 +75,7 @@ class Analyzer(Protocol):
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
 
 def _split_id(idea_ref: str) -> tuple[str, int]:
     """
@@ -90,6 +95,7 @@ def _split_id(idea_ref: str) -> tuple[str, int]:
 # ClassifyingAnalyzer  (was IdeaAnalyzer)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _PendingIdeas:
     """
@@ -97,6 +103,7 @@ class _PendingIdeas:
 
     Private to ClassifyingAnalyzer — not exported.
     """
+
     items: list[dict[str, Any]] = field(default_factory=list)
     mapping: dict[int, str] = field(default_factory=dict)
 
@@ -128,7 +135,9 @@ class _PendingIdeas:
     def mark_classified(self, seq_num: int, target_id: str, rewrite: bool) -> None:
         desc = self.mapping.get(seq_num)
         if desc is None:
-            logger.warning(f"ClassifyingAnalyzer: no pending idea at position {seq_num}")
+            logger.warning(
+                f"ClassifyingAnalyzer: no pending idea at position {seq_num}"
+            )
             return
         for item in self.items:
             if item["description"] == desc:
@@ -205,21 +214,25 @@ class ClassifyingAnalyzer:
             self._apply_pending_to_result(pending, record, result)
         return result
 
-    async def analyze_async(self, records: list[ProgramRecord], bank: IdeaBank) -> AnalysisResult:
+    async def analyze_async(
+        self, records: list[ProgramRecord], bank: IdeaBank
+    ) -> AnalysisResult:
         """Async wrapper — runs synchronous analyze() in a thread pool to avoid blocking."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.analyze, records, bank)
 
-    def _classify_against_bank(
-        self, pending: _PendingIdeas, chunks: list
-    ) -> None:
+    def _classify_against_bank(self, pending: _PendingIdeas, chunks: list) -> None:
         """Classify pending ideas against each bank chunk, updating pending in place."""
         for chunk in chunks:
             if pending.unclassified_count == 0:
                 break
             unclassified_text = pending.as_numbered_text()
             prompt = f" Existing Ideas: \n {chunk.text} \n Incoming Ideas: \n {unclassified_text}"
-            parsed: dict[str, list[Any]] = {"present_ideas": [], "new_ideas": [], "updated_ideas": []}
+            parsed: dict[str, list[Any]] = {
+                "present_ideas": [],
+                "new_ideas": [],
+                "updated_ideas": [],
+            }
             for _ in range(self._retry_attempts):
                 try:
                     raw = self._llm.call("classify_ext", prompt, self._reasoning)
@@ -255,34 +268,45 @@ class ClassifyingAnalyzer:
         """Convert classified/unclassified pending items into AnalysisResult entries."""
         for item in pending.items:
             if not item["classified"]:
-                result.new_ideas.append(Idea(
-                    description=item["description"],
-                    strategy=record.strategy,
-                    task_description=record.task_description,
-                    last_generation=record.generation,
-                    programs=[record.id],
-                    explanation=IdeaExplanation(entries=[item["motivation"]] if item["motivation"] else []),
-                ))
+                result.new_ideas.append(
+                    Idea(
+                        description=item["description"],
+                        strategy=record.strategy,
+                        task_description=record.task_description,
+                        last_generation=record.generation,
+                        programs=[record.id],
+                        explanation=IdeaExplanation(
+                            entries=[item["motivation"]] if item["motivation"] else []
+                        ),
+                    )
+                )
             elif item["rewrite"]:
-                result.updates.append(IdeaUpdate(
-                    idea_id=item["target_id"],
-                    programs=[record.id],
-                    generation=record.generation,
-                    new_description=item["description"] if self._description_rewriting else None,
-                    motivation=item["motivation"] or None,
-                ))
+                result.updates.append(
+                    IdeaUpdate(
+                        idea_id=item["target_id"],
+                        programs=[record.id],
+                        generation=record.generation,
+                        new_description=item["description"]
+                        if self._description_rewriting
+                        else None,
+                        motivation=item["motivation"] or None,
+                    )
+                )
             else:
-                result.updates.append(IdeaUpdate(
-                    idea_id=item["target_id"],
-                    programs=[record.id],
-                    generation=record.generation,
-                    motivation=item["motivation"] or None,
-                ))
+                result.updates.append(
+                    IdeaUpdate(
+                        idea_id=item["target_id"],
+                        programs=[record.id],
+                        generation=record.generation,
+                        motivation=item["motivation"] or None,
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------
 # ClusteringAnalyzer  (was IdeaAnalyzerFast)
 # ---------------------------------------------------------------------------
+
 
 def _extract_json_object(text: str) -> dict[str, Any]:
     """Parse a JSON object from model output, allowing surrounding prose or fences."""
@@ -345,7 +369,9 @@ class IdeaCluster:
         self._rebuild_index()
 
     def numbered_text(self) -> str:
-        return "".join(f"{i+1}) {c.description} \n" for i, c in enumerate(self.members))
+        return "".join(
+            f"{i + 1}) {c.description} \n" for i, c in enumerate(self.members)
+        )
 
     def numbered_groups(self, subgroup_size: int) -> list[str]:
         if subgroup_size < 1:
@@ -358,7 +384,9 @@ class IdeaCluster:
         groups: list[str] = []
         for i in range(0, n, subgroup_size):
             chunk = self.members[i : i + subgroup_size]
-            groups.append("".join(f"{i+j+1}) {c.description} \n" for j, c in enumerate(chunk)))
+            groups.append(
+                "".join(f"{i + j + 1}) {c.description} \n" for j, c in enumerate(chunk))
+            )
         return groups
 
 
@@ -410,7 +438,9 @@ class ClusteringAnalyzer:
         self._max_attempts = max_attempts
         self._max_rounds = max_rounds
         self._subgroup_size = refine_subgroup_size
-        self._llm = LLMClient(model=model, base_url=base_url, max_concurrent=llm_max_concurrent)
+        self._llm = LLMClient(
+            model=model, base_url=base_url, max_concurrent=llm_max_concurrent
+        )
         self._embed_model = SentenceTransformer(embeddings_model)
         self._benchmark_times: list[float] = []
         self._benchmark_clusters: list[int] = []
@@ -432,7 +462,9 @@ class ClusteringAnalyzer:
         """
         return AnalysisResult(new_ideas=asyncio.run(self._run_async(records)))
 
-    async def analyze_async(self, records: list[ProgramRecord], bank: IdeaBank) -> AnalysisResult:
+    async def analyze_async(
+        self, records: list[ProgramRecord], bank: IdeaBank
+    ) -> AnalysisResult:
         """Async implementation — runs the full embed/cluster/refine pipeline."""
         return AnalysisResult(new_ideas=await self._run_async(records))
 
@@ -458,25 +490,33 @@ class ClusteringAnalyzer:
         cards: list[EmbeddedIdea] = []
         for record in records:
             for imp in record.improvements:
-                cards.append(EmbeddedIdea(
-                    description=str(imp.get("description", "")),
-                    source_program_id=record.id,
-                    change_motivation=str(imp.get("explanation", "")),
-                ))
+                cards.append(
+                    EmbeddedIdea(
+                        description=str(imp.get("description", "")),
+                        source_program_id=record.id,
+                        change_motivation=str(imp.get("explanation", "")),
+                    )
+                )
         return cards
 
     def _embed(self, cards: list[EmbeddedIdea]) -> None:
         texts = [c.description for c in cards]
         for start in range(0, len(texts), self._batch_size):
             batch = texts[start : start + self._batch_size]
-            vecs = self._embed_model.encode(batch, convert_to_numpy=True, show_progress_bar=False)
+            vecs = self._embed_model.encode(
+                batch, convert_to_numpy=True, show_progress_bar=False
+            )
             for i, vec in enumerate(vecs):
                 cards[start + i].embedding = vec.astype(np.float64).tolist()
 
     def _mean_center(self, members: list[EmbeddedIdea]) -> list[float]:
         if not members:
             return []
-        return np.array([m.embedding for m in members], dtype=np.float64).mean(axis=0).tolist()
+        return (
+            np.array([m.embedding for m in members], dtype=np.float64)
+            .mean(axis=0)
+            .tolist()
+        )
 
     def _build_clusters(self, cards: list[EmbeddedIdea]) -> list[IdeaCluster]:
         n = len(cards)
@@ -490,9 +530,15 @@ class ClusteringAnalyzer:
         mat = np.array([c.embedding for c in cards], dtype=np.float64)
         norms = np.linalg.norm(mat, axis=1, keepdims=True)
         mat = mat / np.where(norms == 0, 1.0, norms)
-        labels = DBSCAN(
-            eps=self._dbscan_eps, min_samples=self._dbscan_min_samples, metric="cosine"
-        ).fit(mat).labels_
+        labels = (
+            DBSCAN(
+                eps=self._dbscan_eps,
+                min_samples=self._dbscan_min_samples,
+                metric="cosine",
+            )
+            .fit(mat)
+            .labels_
+        )
 
         clusters: list[IdeaCluster] = []
         for label in sorted(set(labels.tolist())):
@@ -522,11 +568,13 @@ class ClusteringAnalyzer:
             eligible = [c for c in clusters if c.size >= 2 and c.has_changed]
             if not eligible:
                 break
-            pairs = list(zip(
-                eligible,
-                await asyncio.gather(*[self._refine_cluster(c) for c in eligible]),
-                strict=True,
-            ))
+            pairs = list(
+                zip(
+                    eligible,
+                    await asyncio.gather(*[self._refine_cluster(c) for c in eligible]),
+                    strict=True,
+                )
+            )
             changed = self._apply_refinements(clusters, pairs)
             pbar.update(1)
             pbar.set_postfix(clusters=len(clusters))
@@ -545,19 +593,27 @@ class ClusteringAnalyzer:
         if not groups:
             return None
 
-        async def run_subgroup(gi: int, text: str) -> tuple[list[int], list[int]] | None:
+        async def run_subgroup(
+            gi: int, text: str
+        ) -> tuple[list[int], list[int]] | None:
             i0 = gi * sg
             start, end = i0 + 1, i0 + min(sg, n - i0)
             for _ in range(self._max_attempts):
                 try:
-                    raw = await self._llm.call_async("cluster_fast_refine", text, self._reasoning)
+                    raw = await self._llm.call_async(
+                        "cluster_fast_refine", text, self._reasoning
+                    )
                     data = _extract_json_object(raw)
-                    return _validate_partition(data.get("included", []), data.get("rejected", []), start, end)
+                    return _validate_partition(
+                        data.get("included", []), data.get("rejected", []), start, end
+                    )
                 except (json.JSONDecodeError, ValueError, KeyError, TypeError):
                     continue
             return None
 
-        parts = await asyncio.gather(*[run_subgroup(gi, t) for gi, t in enumerate(groups)])
+        parts = await asyncio.gather(
+            *[run_subgroup(gi, t) for gi, t in enumerate(groups)]
+        )
         if any(p is None for p in parts):
             return None
         merged_inc: list[int] = []
@@ -623,15 +679,25 @@ class ClusteringAnalyzer:
         task_description = prog.task_description if prog else ""
         gen = prog.generation if prog else 0
 
-        all_gens = [records_by_id[m.source_program_id].generation for m in members if m.source_program_id in records_by_id]
+        all_gens = [
+            records_by_id[m.source_program_id].generation
+            for m in members
+            if m.source_program_id in records_by_id
+        ]
         last_gen = max(all_gens) if all_gens else gen
 
-        programs = list(dict.fromkeys(m.source_program_id for m in members if m.source_program_id))
+        programs = list(
+            dict.fromkeys(m.source_program_id for m in members if m.source_program_id)
+        )
         motivations = [m.change_motivation for m in members if m.change_motivation]
-        other_descriptions = [m.description for m in members if m is not rep and m.description]
+        other_descriptions = [
+            m.description for m in members if m is not rep and m.description
+        ]
 
         if len(members) > 1:
-            desc = await self._synthesise_description(rep.description, other_descriptions, motivations)
+            desc = await self._synthesise_description(
+                rep.description, other_descriptions, motivations
+            )
             description = desc or rep.description
         else:
             description = rep.description
@@ -649,7 +715,9 @@ class ClusteringAnalyzer:
         text = cluster.numbered_text()
         for _ in range(self._max_attempts):
             try:
-                raw = await self._llm.call_async("cluster_fast_representative", text, self._reasoning)
+                raw = await self._llm.call_async(
+                    "cluster_fast_representative", text, self._reasoning
+                )
                 data = _extract_json_object(raw)
                 idx = int(data["representative_index"])
                 if 1 <= idx <= cluster.size:
@@ -659,7 +727,10 @@ class ClusteringAnalyzer:
         return None
 
     async def _synthesise_description(
-        self, rep_description: str, other_descriptions: list[str], motivations: list[str]
+        self,
+        rep_description: str,
+        other_descriptions: list[str],
+        motivations: list[str],
     ) -> str:
         all_desc = "".join(f"{k}) {d} \n" for k, d in enumerate(other_descriptions))
         all_motiv = "".join(f"{k}) {m} \n" for k, m in enumerate(motivations))
@@ -670,7 +741,9 @@ class ClusteringAnalyzer:
         }
         for _ in range(self._max_attempts):
             try:
-                return await self._llm.call_async("cluster_desc_synth", prompt, self._reasoning)
+                return await self._llm.call_async(
+                    "cluster_desc_synth", prompt, self._reasoning
+                )
             except Exception as e:
                 logger.error(f"ClusteringAnalyzer desc_synth failed: {e}")
         return ""
