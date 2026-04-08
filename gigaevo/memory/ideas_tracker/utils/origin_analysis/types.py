@@ -1,4 +1,5 @@
 """Shared dataclasses for the origin analysis pipeline."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

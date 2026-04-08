@@ -1,4 +1,5 @@
 """JSON loading, graph construction, and root ancestry computation."""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -54,7 +55,11 @@ def load_programs(path: str) -> dict[str, dict]:
 
     if isinstance(data, list):
         for snap in data:
-            if isinstance(snap, dict) and "programs" in snap and isinstance(snap["programs"], list):
+            if (
+                isinstance(snap, dict)
+                and "programs" in snap
+                and isinstance(snap["programs"], list)
+            ):
                 for p in snap["programs"]:
                     if not isinstance(p, dict) or "id" not in p:
                         continue
@@ -65,7 +70,11 @@ def load_programs(path: str) -> dict[str, dict]:
                 pid = str(snap["id"])
                 if pid not in programs or fit_of(snap) > fit_of(programs[pid]):
                     programs[pid] = snap
-    elif isinstance(data, dict) and "programs" in data and isinstance(data["programs"], list):
+    elif (
+        isinstance(data, dict)
+        and "programs" in data
+        and isinstance(data["programs"], list)
+    ):
         for p in data["programs"]:
             if not isinstance(p, dict) or "id" not in p:
                 continue

@@ -1,4 +1,5 @@
 """Pure mathematical helpers for origin analysis. No I/O, no pandas."""
+
 from __future__ import annotations
 
 import bisect

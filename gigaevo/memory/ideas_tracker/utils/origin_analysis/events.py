@@ -1,4 +1,5 @@
 """Intro event detection and descendant metric computation."""
+
 from __future__ import annotations
 
 from collections import deque
@@ -176,7 +177,9 @@ def compute_descendant_metrics(
                 desc_count += 1
 
     time_to_peak = float(best_gen - child_gen) if best_gen is not None else float("nan")
-    time_to_elite = float(best_time_to_elite) if best_time_to_elite is not None else float("nan")
+    time_to_elite = (
+        float(best_time_to_elite) if best_time_to_elite is not None else float("nan")
+    )
 
     return DescMetrics(
         desc_max_fit_k=float(best_fit) if best_fit != float("-inf") else float("nan"),
