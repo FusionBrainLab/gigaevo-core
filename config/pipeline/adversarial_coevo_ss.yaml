@@ -21,7 +21,9 @@
 defaults:
   - adversarial_coevo
 
-# Override sync hook: progress-based instead of generation-based
+# Override sync hook: progress-based instead of generation-based.
+# Note: db/prefix keys from adversarial_coevo (MainRunSyncHook) leak through
+# Hydra config merge. ProgressBasedSyncHook absorbs them via **kwargs.
 pre_step_hook:
   _target_: gigaevo.adversarial.sync.ProgressBasedSyncHook
   host: ${redis.host}

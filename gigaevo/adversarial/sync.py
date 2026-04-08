@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from loguru import logger
 from redis import asyncio as aioredis
@@ -50,6 +51,7 @@ class ProgressBasedSyncHook:
         sync_every_n_epochs: int = 1,
         timeout: float = 7200.0,
         poll_interval: float = 5.0,
+        **kwargs: Any,  # absorb extra keys from Hydra config inheritance
     ):
         if not sources:
             raise ValueError("ProgressBasedSyncHook requires at least one source")
