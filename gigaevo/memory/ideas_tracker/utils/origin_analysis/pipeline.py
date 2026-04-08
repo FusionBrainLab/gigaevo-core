@@ -52,7 +52,10 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.statistics import (
     percentile_rank,
     robust_median,
 )
-from gigaevo.memory.ideas_tracker.utils.origin_analysis.types import AnalysisResult
+from gigaevo.memory.ideas_tracker.utils.origin_analysis.types import (
+    AnalysisResult,
+    DescMetrics,
+)
 
 
 def analyse(
@@ -166,7 +169,7 @@ def analyse(
         b3=b3,
     )
 
-    desc_cache: dict[str, object] = {}
+    desc_cache: dict[str, DescMetrics] = {}
     event_rows = []
     eps = 1e-12
 
