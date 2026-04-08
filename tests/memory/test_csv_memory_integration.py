@@ -52,12 +52,14 @@ def _make_row(
     memory_ids: list[str] | None = None,
 ) -> dict:
     """Build a CSV row dict with UUID-format IDs (required by Program validation)."""
-    mo = mutation_output or {"archetype": "exploitation", "changes": [], "insights_used": []}
+    mo = mutation_output or {
+        "archetype": "exploitation",
+        "changes": [],
+        "insights_used": [],
+    }
     default_parents = [_uid("seed-001")]
     resolved_parents = (
-        [_uid(p) for p in parent_ids]
-        if parent_ids is not None
-        else default_parents
+        [_uid(p) for p in parent_ids] if parent_ids is not None else default_parents
     )
     row: dict = {
         "program_id": _uid(program_id),
@@ -110,11 +112,16 @@ class TestCsvToIdeaTrackerFlow:
     def test_evolved_programs_produce_log_files(self, tmp_path: Path) -> None:
         """Full flow: CSV → load → tracker.run() → log files created."""
         csv_path = tmp_path / "evolution_data.csv"
-        _write_csv(csv_path, [
-            _make_row(program_id="prog-001", parent_ids=[], generation=1),  # root, skipped
-            _make_row(program_id="prog-002", fitness=0.8),
-            _make_row(program_id="prog-003", fitness=0.9),
-        ])
+        _write_csv(
+            csv_path,
+            [
+                _make_row(
+                    program_id="prog-001", parent_ids=[], generation=1
+                ),  # root, skipped
+                _make_row(program_id="prog-002", fitness=0.8),
+                _make_row(program_id="prog-003", fitness=0.9),
+            ],
+        )
 
         programs = load_programs_from_csv(csv_path)
         assert len(programs) == 3
@@ -135,9 +142,12 @@ class TestCsvToIdeaTrackerFlow:
     def test_root_programs_are_excluded_from_analysis(self, tmp_path: Path) -> None:
         """Programs with no parents must not reach _eligible_records."""
         csv_path = tmp_path / "data.csv"
-        _write_csv(csv_path, [
-            _make_row(program_id="root", parent_ids=[], generation=1),
-        ])
+        _write_csv(
+            csv_path,
+            [
+                _make_row(program_id="root", parent_ids=[], generation=1),
+            ],
+        )
         programs = load_programs_from_csv(csv_path)
         tracker = _make_tracker(tmp_path)
         with _TASK_PATCH:
@@ -147,9 +157,12 @@ class TestCsvToIdeaTrackerFlow:
     def test_invalid_programs_excluded(self, tmp_path: Path) -> None:
         """Programs with is_valid=0.0 must not be processed."""
         csv_path = tmp_path / "data.csv"
-        _write_csv(csv_path, [
-            _make_row(program_id="bad", is_valid=0.0, fitness=-1e5),
-        ])
+        _write_csv(
+            csv_path,
+            [
+                _make_row(program_id="bad", is_valid=0.0, fitness=-1e5),
+            ],
+        )
         programs = load_programs_from_csv(csv_path)
         tracker = _make_tracker(tmp_path)
         with _TASK_PATCH:
@@ -159,9 +172,12 @@ class TestCsvToIdeaTrackerFlow:
     def test_negative_fitness_programs_are_valid(self, tmp_path: Path) -> None:
         """Negative fitness is valid — only is_valid=0 means invalid."""
         csv_path = tmp_path / "data.csv"
-        _write_csv(csv_path, [
-            _make_row(program_id="p1", fitness=-0.5, is_valid=1.0),
-        ])
+        _write_csv(
+            csv_path,
+            [
+                _make_row(program_id="p1", fitness=-0.5, is_valid=1.0),
+            ],
+        )
         programs = load_programs_from_csv(csv_path)
         tracker = _make_tracker(tmp_path)
         with _TASK_PATCH:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from gigaevo.memory.utils import median, parse_cell, to_float
 
 
@@ -49,14 +50,14 @@ class TestParseCell:
         assert result == {"key": "value"}
 
     def test_json_list_string(self) -> None:
-        result = parse_cell('[1, 2, 3]')
+        result = parse_cell("[1, 2, 3]")
         assert result == [1, 2, 3]
 
     def test_plain_string_unchanged(self) -> None:
         assert parse_cell("hello") == "hello"
 
     def test_invalid_json_returns_original_string(self) -> None:
-        s = '[not valid json{]'
+        s = "[not valid json{]"
         assert parse_cell(s) == s
 
     def test_empty_string_unchanged(self) -> None:
