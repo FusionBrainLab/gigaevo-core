@@ -9,8 +9,11 @@ deleted along with the source code they tested.
 The replacement types are: IdeaBank (idea_bank.py), Idea/ProgramRecord (models.py).
 """
 
+import pytest
 
 from gigaevo.memory.ideas_tracker.models import (
+    UsageEntry,
+    UsagePayload,
     normalize_improvement_item,
     normalize_improvements,
 )
@@ -84,3 +87,72 @@ class TestNormalizeImprovements:
         result = normalize_improvements("single idea")
         assert len(result) == 1
         assert result[0]["description"] == "single idea"
+
+
+# ===========================================================================
+# UsageEntry and UsagePayload
+# ===========================================================================
+
+
+class TestUsageModels:
+    def test_usage_entry_fields(self) -> None:
+        entry = UsageEntry(
+            task_description_summary="Multi-hop QA",
+            used_count=3,
+            fitness_delta_per_use=[0.05, 0.02, -0.01],
+            median_delta_fitness=0.02,
+        )
+        assert entry.task_description_summary == "Multi-hop QA"
+        assert entry.used_count == 3
+        assert entry.fitness_delta_per_use == [0.05, 0.02, -0.01]
+        assert entry.median_delta_fitness == pytest.approx(0.02)
+
+    def test_usage_entry_none_median(self) -> None:
+        entry = UsageEntry(
+            task_description_summary="Task",
+            used_count=0,
+            fitness_delta_per_use=[],
+            median_delta_fitness=None,
+        )
+        assert entry.median_delta_fitness is None
+
+    def test_usage_payload_model(self) -> None:
+        payload = UsagePayload(
+            entries=[
+                UsageEntry(
+                    task_description_summary="Task A",
+                    used_count=2,
+                    fitness_delta_per_use=[0.1, 0.2],
+                    median_delta_fitness=0.15,
+                )
+            ],
+            total_used=2,
+            median_delta_fitness=0.15,
+        )
+        assert len(payload.entries) == 1
+        assert payload.total_used == 2
+        assert payload.median_delta_fitness == pytest.approx(0.15)
+
+    def test_usage_payload_defaults(self) -> None:
+        payload = UsagePayload()
+        assert payload.entries == []
+        assert payload.total_used == 0
+        assert payload.median_delta_fitness is None
+
+    def test_usage_payload_serialization_roundtrip(self) -> None:
+        payload = UsagePayload(
+            entries=[
+                UsageEntry(
+                    task_description_summary="task",
+                    used_count=1,
+                    fitness_delta_per_use=[0.5],
+                    median_delta_fitness=0.5,
+                )
+            ],
+            total_used=1,
+            median_delta_fitness=0.5,
+        )
+        data = payload.model_dump()
+        restored = UsagePayload.model_validate(data)
+        assert restored.total_used == 1
+        assert restored.entries[0].task_description_summary == "task"
