@@ -2,18 +2,19 @@
 from __future__ import annotations
 
 import math
+
 import pytest
 
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.statistics import (
-    robust_median,
-    robust_quantile,
-    mad,
-    percentile_rank,
     elite_threshold_by_top_k,
+    mad,
+    nancount,
     nanmedian,
     nanquantile,
     nanrate_bool,
-    nancount,
+    percentile_rank,
+    robust_median,
+    robust_quantile,
 )
 
 
