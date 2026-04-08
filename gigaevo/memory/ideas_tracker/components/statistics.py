@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 
 from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
-from gigaevo.memory.ideas_tracker.utils.origin_analysis import compute_origin_analysis
+from gigaevo.memory.ideas_tracker.utils.origin_analysis import analyse
 
 
 def compute_evolutionary_statistics(logger: IdeasTrackerLogger) -> None:
@@ -26,10 +26,12 @@ def compute_evolutionary_statistics(logger: IdeasTrackerLogger) -> None:
         return
 
     try:
-        df_summary, df_best_ideas = compute_origin_analysis(
+        result = analyse(
             banks_path=str(banks_path),
             programs_path=str(programs_path),
         )
+        df_summary = result.summary_df
+        df_best_ideas = result.best_ideas_df
     except RuntimeError as exc:
         if str(exc) == "No valid programs with numeric generation and fitness found.":
             return
