@@ -216,11 +216,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
     os.environ["EVO_MEMORY_CONFIG_PATH"] = str(runtime_config_path)
     try:
-        tracker = IdeaTracker(config_path=runtime_config_path, logs_dir=args.logs_dir)
-        if args.source == "csv":
-            tracker.run(path_to_database=args.csv_path)
-        else:
-            tracker.run()
+        tracker = IdeaTracker(logs_dir=args.logs_dir)
+        tracker.run()
     finally:
         if previous_config_path is None:
             os.environ.pop("EVO_MEMORY_CONFIG_PATH", None)
