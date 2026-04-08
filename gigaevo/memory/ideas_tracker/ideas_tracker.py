@@ -262,6 +262,7 @@ class IdeaTracker(PostRunHook):
             self.ideas_manager.record_bank.import_idea_extended(prog, is_forced=True)
 
     def _process_program(self, program: ProgramRecord) -> None:
+        assert isinstance(self.analyzer, IdeaAnalyzer)
         active_ideas = self.ideas_manager.ideas_groups_texts()
         inactive_ideas = self.ideas_manager.ideas_groups_texts(use_inactive=True)
         program_ideas = IncomingIdeas(program.improvements)
