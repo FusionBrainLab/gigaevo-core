@@ -5,6 +5,11 @@ import math
 
 import pytest
 
+from gigaevo.memory.ideas_tracker.utils.origin_analysis.quartiles import (
+    generation_quantile_bounds,
+    generation_range_bounds,
+    generation_to_quartile,
+)
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.statistics import (
     elite_threshold_by_top_k,
     mad,
@@ -100,3 +105,38 @@ class TestNanHelpers:
 
     def test_nancount(self):
         assert nancount([1.0, float("nan"), 3.0]) == 2
+
+
+class TestGenerationQuantileBounds:
+    def test_symmetric_list(self):
+        b1, b2, b3 = generation_quantile_bounds([0, 1, 2, 3, 4, 5, 6, 7])
+        assert b1 == 2.0
+        assert b2 == 4.0  # q=0.5, idx=round(0.5*7)=round(3.5)=4 (banker's rounding)
+        assert b3 == 5.0
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError):
+            generation_quantile_bounds([])
+
+
+class TestGenerationRangeBounds:
+    def test_gens_0_to_3(self):
+        b1, b2, b3 = generation_range_bounds([0, 1, 2, 3])
+        # gmin=0, gmax=3, span=4; b1=1.0, b2=2.0, b3=3.0
+        assert b1 == pytest.approx(1.0)
+        assert b2 == pytest.approx(2.0)
+        assert b3 == pytest.approx(3.0)
+
+
+class TestGenerationToQuartile:
+    def test_q1(self):
+        assert generation_to_quartile(0, 1.0, 2.0, 3.0) == "Q1"
+
+    def test_q2(self):
+        assert generation_to_quartile(1, 1.0, 2.0, 3.0) == "Q2"
+
+    def test_q3(self):
+        assert generation_to_quartile(2, 1.0, 2.0, 3.0) == "Q3"
+
+    def test_q4(self):
+        assert generation_to_quartile(3, 1.0, 2.0, 3.0) == "Q4"
