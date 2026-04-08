@@ -3,6 +3,7 @@ IdeaBank: stores and manages Idea objects for an IdeaTracker session.
 
 Also contains usage-payload helpers (build, merge) previously in utils/helpers.py.
 """
+
 from __future__ import annotations
 
 import math
@@ -18,10 +19,10 @@ from gigaevo.memory.ideas_tracker.models import (
     IdeaUpdate,
 )
 
-
 # ---------------------------------------------------------------------------
 # Usage-payload helpers  (was utils/helpers.py)
 # ---------------------------------------------------------------------------
+
 
 def _to_float(value: Any) -> float | None:
     try:
@@ -41,15 +42,21 @@ def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, An
     entries: list[dict[str, Any]] = []
     total_deltas: list[float] = []
     for task_summary in sorted(task_to_deltas):
-        deltas = [d for raw in task_to_deltas[task_summary] if (d := _to_float(raw)) is not None]
+        deltas = [
+            d
+            for raw in task_to_deltas[task_summary]
+            if (d := _to_float(raw)) is not None
+        ]
         if not deltas:
             continue
-        entries.append({
-            "task_description_summary": task_summary,
-            "used_count": len(deltas),
-            "fitness_delta_per_use": deltas,
-            "median_delta_fitness": _median(deltas),
-        })
+        entries.append(
+            {
+                "task_description_summary": task_summary,
+                "used_count": len(deltas),
+                "fitness_delta_per_use": deltas,
+                "median_delta_fitness": _median(deltas),
+            }
+        )
         total_deltas.extend(deltas)
     return {
         "used": {
@@ -92,7 +99,11 @@ def merge_usage_payloads(existing: Any, incoming: Any) -> dict[str, Any]:
     existing_deltas = _extract_task_deltas(existing)
     incoming_deltas = _extract_task_deltas(incoming)
     if not existing_deltas and not incoming_deltas:
-        return dict(existing) if isinstance(existing, dict) else (dict(incoming) if isinstance(incoming, dict) else {})
+        return (
+            dict(existing)
+            if isinstance(existing, dict)
+            else (dict(incoming) if isinstance(incoming, dict) else {})
+        )
     merged: dict[str, list[float]] = {k: list(v) for k, v in existing_deltas.items()}
     for task, deltas in incoming_deltas.items():
         merged.setdefault(task, []).extend(deltas)
@@ -108,6 +119,7 @@ def merge_usage_payloads(existing: Any, incoming: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # IdeaBank
 # ---------------------------------------------------------------------------
+
 
 class IdeaBank:
     """
@@ -168,7 +180,9 @@ class IdeaBank:
             patches["aliases"] = idea.aliases + [archive_entry]
             patches["description"] = upd.new_description
 
-        new_entries = idea.explanation.entries + ([upd.motivation] if upd.motivation else [])
+        new_entries = idea.explanation.entries + (
+            [upd.motivation] if upd.motivation else []
+        )
         patches["explanation"] = IdeaExplanation(
             entries=new_entries,
             summary=idea.explanation.summary,
@@ -190,14 +204,16 @@ class IdeaBank:
         if idx is None:
             return False
         idea = self._ideas[idx]
-        self._ideas[idx] = idea.model_copy(update={
-            "keywords": keywords,
-            "explanation": IdeaExplanation(
-                entries=idea.explanation.entries,
-                summary=summary,
-            ),
-            "task_description_summary": task_summary,
-        })
+        self._ideas[idx] = idea.model_copy(
+            update={
+                "keywords": keywords,
+                "explanation": IdeaExplanation(
+                    entries=idea.explanation.entries,
+                    summary=summary,
+                ),
+                "task_description_summary": task_summary,
+            }
+        )
         return True
 
     def apply_usage_updates(self, usage_updates: dict[str, dict[str, Any]]) -> None:
@@ -242,7 +258,9 @@ class IdeaBank:
                 }
                 for idea in batch
             ]
-            text = "".join(f"[{s['short_id']}]: {s['description']} \n " for s in short_ids)
+            text = "".join(
+                f"[{s['short_id']}]: {s['description']} \n " for s in short_ids
+            )
             chunks.append(ClassificationChunk(text=text, short_ids=short_ids))
         return chunks
 

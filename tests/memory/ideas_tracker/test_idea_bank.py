@@ -1,8 +1,7 @@
 # tests/memory/ideas_tracker/test_idea_bank.py
 """Tests for gigaevo.memory.ideas_tracker.idea_bank.IdeaBank."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, merge_usage_payloads
 from gigaevo.memory.ideas_tracker.models import (
@@ -119,7 +118,9 @@ class TestIdeaBankEnrich:
         bank = IdeaBank()
         idea = _idea("Some idea")
         bank.add(idea)
-        bank.enrich(idea.id, keywords=["bfs", "graph"], summary="Uses BFS", task_summary="TSP")
+        bank.enrich(
+            idea.id, keywords=["bfs", "graph"], summary="Uses BFS", task_summary="TSP"
+        )
         enriched = bank.get(idea.id)
         assert enriched.keywords == ["bfs", "graph"]
         assert enriched.explanation.summary == "Uses BFS"
@@ -153,8 +154,32 @@ class TestIdeaBankChunks:
 
 class TestMergeUsagePayloads:
     def test_merge_combines_deltas(self) -> None:
-        existing = {"used": {"entries": [{"task_description_summary": "task", "fitness_delta_per_use": [2.0], "used_count": 1, "median_delta_fitness": 2.0}], "total": {"total_used": 1, "median_delta_fitness": 2.0}}}
-        incoming = {"used": {"entries": [{"task_description_summary": "task", "fitness_delta_per_use": [4.0], "used_count": 1, "median_delta_fitness": 4.0}], "total": {"total_used": 1, "median_delta_fitness": 4.0}}}
+        existing = {
+            "used": {
+                "entries": [
+                    {
+                        "task_description_summary": "task",
+                        "fitness_delta_per_use": [2.0],
+                        "used_count": 1,
+                        "median_delta_fitness": 2.0,
+                    }
+                ],
+                "total": {"total_used": 1, "median_delta_fitness": 2.0},
+            }
+        }
+        incoming = {
+            "used": {
+                "entries": [
+                    {
+                        "task_description_summary": "task",
+                        "fitness_delta_per_use": [4.0],
+                        "used_count": 1,
+                        "median_delta_fitness": 4.0,
+                    }
+                ],
+                "total": {"total_used": 1, "median_delta_fitness": 4.0},
+            }
+        }
         merged = merge_usage_payloads(existing, incoming)
         deltas = merged["used"]["entries"][0]["fitness_delta_per_use"]
         assert sorted(deltas) == [2.0, 4.0]

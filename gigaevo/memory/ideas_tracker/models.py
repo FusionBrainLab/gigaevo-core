@@ -5,6 +5,7 @@ All cross-module data-transfer types are Pydantic BaseModel, providing
 validation and serialisation via model_dump(). IdeaCluster is a plain
 class — it is a mutable working object internal to ClusteringAnalyzer.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,12 +18,25 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 _DESCRIPTION_KEYS = (
-    "description", "summary", "title", "change", "what_changed",
-    "pattern", "improvement", "name",
+    "description",
+    "summary",
+    "title",
+    "change",
+    "what_changed",
+    "pattern",
+    "improvement",
+    "name",
 )
 _EXPLANATION_KEYS = (
-    "explanation", "rationale", "reason", "why", "motivation",
-    "expected_effect", "impact", "details", "justification",
+    "explanation",
+    "rationale",
+    "reason",
+    "why",
+    "motivation",
+    "expected_effect",
+    "impact",
+    "details",
+    "justification",
 )
 
 
@@ -47,14 +61,25 @@ def normalize_improvement_item(idea: Any) -> dict[str, str]:
         stripped = idea.strip()
         return {"description": stripped or "Unspecified change", "explanation": ""}
     if not isinstance(idea, dict):
-        return {"description": _stringify(idea) or "Unspecified change", "explanation": ""}
+        return {
+            "description": _stringify(idea) or "Unspecified change",
+            "explanation": "",
+        }
 
     description = next(
-        (_stringify(idea[k]) for k in _DESCRIPTION_KEYS if k in idea and _stringify(idea[k])),
+        (
+            _stringify(idea[k])
+            for k in _DESCRIPTION_KEYS
+            if k in idea and _stringify(idea[k])
+        ),
         "",
     )
     explanation = next(
-        (_stringify(idea[k]) for k in _EXPLANATION_KEYS if k in idea and _stringify(idea[k])),
+        (
+            _stringify(idea[k])
+            for k in _EXPLANATION_KEYS
+            if k in idea and _stringify(idea[k])
+        ),
         "",
     )
     extras = [
@@ -83,6 +108,7 @@ def normalize_improvements(ideas: Any) -> list[dict[str, str]]:
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
+
 
 class IdeaExplanation(BaseModel):
     """Accumulated motivations and synthesised usage summary for an Idea."""
@@ -180,6 +206,7 @@ class ClassificationChunk(BaseModel):
 # ---------------------------------------------------------------------------
 # Program → ProgramRecord conversion
 # ---------------------------------------------------------------------------
+
 
 def program_to_record(
     program: Any,

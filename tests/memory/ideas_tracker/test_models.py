@@ -1,19 +1,14 @@
 # tests/memory/ideas_tracker/test_models.py
 """Tests for gigaevo.memory.ideas_tracker.models."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from gigaevo.memory.ideas_tracker.models import (
     AnalysisResult,
-    ClassificationChunk,
-    EmbeddedIdea,
     Idea,
-    IdeaExplanation,
     IdeaUpdate,
-    ProgramRecord,
     normalize_improvement_item,
     normalize_improvements,
     program_to_record,
@@ -27,12 +22,16 @@ class TestNormalizeImprovementItem:
         assert result == {"description": "Use BFS traversal", "explanation": ""}
 
     def test_dict_with_description_and_explanation(self) -> None:
-        result = normalize_improvement_item({"description": "Add cache", "explanation": "reduces calls"})
+        result = normalize_improvement_item(
+            {"description": "Add cache", "explanation": "reduces calls"}
+        )
         assert result["description"] == "Add cache"
         assert result["explanation"] == "reduces calls"
 
     def test_dict_with_alternative_description_key(self) -> None:
-        result = normalize_improvement_item({"summary": "Switched algo", "reason": "faster"})
+        result = normalize_improvement_item(
+            {"summary": "Switched algo", "reason": "faster"}
+        )
         assert result["description"] == "Switched algo"
         assert result["explanation"] == "faster"
 
