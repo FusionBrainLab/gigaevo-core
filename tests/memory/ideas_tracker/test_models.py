@@ -49,6 +49,10 @@ class TestNormalizeImprovementItem:
         result = normalize_improvement_item(None)
         assert result["description"] == "Unspecified change"
 
+    def test_whitespace_only_string_returns_unspecified(self) -> None:
+        result = normalize_improvement_item("   ")
+        assert result["description"] == "Unspecified change"
+
 
 class TestNormalizeImprovements:
     def test_none_returns_empty_list(self) -> None:

@@ -44,7 +44,8 @@ def _stringify(value: Any) -> str:
 def normalize_improvement_item(idea: Any) -> dict[str, str]:
     """Coerce a mutation change payload into {"description": ..., "explanation": ...}."""
     if isinstance(idea, str):
-        return {"description": idea.strip(), "explanation": ""}
+        stripped = idea.strip()
+        return {"description": stripped or "Unspecified change", "explanation": ""}
     if not isinstance(idea, dict):
         return {"description": _stringify(idea) or "Unspecified change", "explanation": ""}
 
