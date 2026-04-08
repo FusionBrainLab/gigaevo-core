@@ -1,12 +1,15 @@
 """Tests for the origin_analysis subpackage."""
+
 from __future__ import annotations
 
 import json
 import math
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
+from gigaevo.memory.ideas_tracker.utils.origin_analysis import AnalysisResult, analyse
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.events import (
     compute_descendant_metrics,
     compute_intro_events,
@@ -219,8 +222,16 @@ class TestLoadPrograms:
     def test_deduplicates_keeps_best_fitness(self, tmp_path):
         progs_file = tmp_path / "programs.json"
         data = [
-            {"programs": [{"id": "p1", "generation": 0, "fitness": 0.3, "parents": []}]},
-            {"programs": [{"id": "p1", "generation": 0, "fitness": 0.9, "parents": []}]},
+            {
+                "programs": [
+                    {"id": "p1", "generation": 0, "fitness": 0.3, "parents": []}
+                ]
+            },
+            {
+                "programs": [
+                    {"id": "p1", "generation": 0, "fitness": 0.9, "parents": []}
+                ]
+            },
         ]
         _write_json(progs_file, data)
         programs = load_programs(str(progs_file))
@@ -286,13 +297,17 @@ SIBLING_PARENTS_OF = {
 
 class TestBuildSiblingGroups:
     def test_groups_children_of_same_parent(self):
-        groups = build_sibling_groups(SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent", 0)
+        groups = build_sibling_groups(
+            SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent", 0
+        )
         # p2 and p3 share best_parent p1 at generation 1
         key = ("best_parent", "p1", 1)
         assert set(groups[key]) == {"p2", "p3"}
 
     def test_gen_window_buckets_generations(self):
-        groups = build_sibling_groups(SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent", 1)
+        groups = build_sibling_groups(
+            SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent", 1
+        )
         # gen_window=1: bucket = gen // 2; gen=1 -> bucket=0
         key_gen1 = ("best_parent", "p1", 0)
         assert set(groups[key_gen1]) == {"p2", "p3"}
@@ -300,7 +315,9 @@ class TestBuildSiblingGroups:
 
 class TestBuildSiblingGroupsAllgens:
     def test_groups_ignoring_generation(self):
-        groups = build_sibling_groups_allgens(SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent")
+        groups = build_sibling_groups_allgens(
+            SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent"
+        )
         key = ("best_parent_allgens", "p1")
         assert set(groups[key]) == {"p2", "p3"}
 
@@ -357,7 +374,9 @@ class TestComputeIntroEvents:
         ev = events[0]
         assert ev.idea_id == "idea_b"
         assert ev.child_id == "p3"
-        assert ev.quartile == "Q3"  # gen=2, b1=0.5, b2=1.5, b3=2.5 → 2 >= 1.5 and 2 < 2.5 → Q3
+        assert (
+            ev.quartile == "Q3"
+        )  # gen=2, b1=0.5, b2=1.5, b3=2.5 → 2 >= 1.5 and 2 < 2.5 → Q3
 
     def test_no_event_when_idea_in_parent(self):
         prog_to_ideas = {"p1": {"idea_a"}, "p2": {"idea_a"}, "p3": {"idea_a"}}
@@ -387,3 +406,45 @@ class TestComputeDescendantMetrics:
         assert dm.desc_count_k == 0
         assert dm.branching_factor == 0
         assert dm.reaches_elite_k == 0.0
+
+
+class TestPipelineEndToEnd:
+    def test_returns_analysis_result(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        progs_file = tmp_path / "programs.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+
+        result = analyse(str(banks_file), str(progs_file))
+
+        assert isinstance(result, AnalysisResult)
+        assert isinstance(result.summary_df, pd.DataFrame)
+        assert isinstance(result.best_ideas_df, pd.DataFrame)
+
+    def test_summary_has_five_rows_per_idea(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        progs_file = tmp_path / "programs.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+
+        result = analyse(str(banks_file), str(progs_file))
+
+        # 2 ideas × 5 quartile rows each = 10 rows
+        assert len(result.summary_df) == 10
+
+    def test_summary_has_expected_columns(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        progs_file = tmp_path / "programs.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+
+        result = analyse(str(banks_file), str(progs_file))
+
+        for col in [
+            "idea_id",
+            "quartile",
+            "intro_events",
+            "IntroGain_best_median",
+            "description",
+        ]:
+            assert col in result.summary_df.columns
