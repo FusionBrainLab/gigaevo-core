@@ -12,10 +12,8 @@ from dataclasses import dataclass, field
 import json
 from unittest.mock import MagicMock
 
-from gigaevo.memory.ideas_tracker.components.data_components import (
-    IncomingIdeas,
-    RecordBank,
-)
+from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
+from gigaevo.memory.ideas_tracker.models import Idea
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.models import ProgramCard
 from gigaevo.memory.write_pipeline import load_memory_cards
@@ -83,37 +81,40 @@ class TestScenarioTwoRunCycle:
         ]
 
         # Simulate IdeaTracker classification: extract ideas from improvements
-        ideas_bank = RecordBank(list_max_ideas=20)
-        ideas_bank.add_idea(
-            "Sort evidence by relevance score before hop selection",
-            "prog-1",
-            generation=15,
-            category="retrieval",
-            strategy="exploitation",
-            task_description="Multi-hop fact verification",
-            change_motivation="Sorting improves evidence chain quality",
+        ideas_bank = IdeaBank()
+        ideas_bank.add(
+            Idea(
+                description="Sort evidence by relevance score before hop selection",
+                programs=["prog-1"],
+                last_generation=15,
+                category="retrieval",
+                strategy="exploitation",
+                task_description="Multi-hop fact verification",
+            )
         )
-        ideas_bank.add_idea(
-            "Filter low-confidence hops using threshold 0.5",
-            "prog-2",
-            generation=12,
-            category="filtering",
-            strategy="exploration",
-            task_description="Multi-hop fact verification",
-            change_motivation="Reduces noise in multi-hop chains",
+        ideas_bank.add(
+            Idea(
+                description="Filter low-confidence hops using threshold 0.5",
+                programs=["prog-2"],
+                last_generation=12,
+                category="filtering",
+                strategy="exploration",
+                task_description="Multi-hop fact verification",
+            )
         )
-        ideas_bank.add_idea(
-            "Limit retrieval depth to 3 hops maximum",
-            "prog-3",
-            generation=8,
-            category="retrieval",
-            strategy="exploitation",
-            task_description="Multi-hop fact verification",
-            change_motivation="Prevents over-retrieval degradation",
+        ideas_bank.add(
+            Idea(
+                description="Limit retrieval depth to 3 hops maximum",
+                programs=["prog-3"],
+                last_generation=8,
+                category="retrieval",
+                strategy="exploitation",
+                task_description="Multi-hop fact verification",
+            )
         )
 
         # Write banks.json and best_ideas.json (IdeaTracker output)
-        all_ideas = ideas_bank.all_ideas_cards()
+        all_ideas = ideas_bank.all_ideas()
         active_bank = []
         for idea in all_ideas:
             active_bank.append(
@@ -123,7 +124,7 @@ class TestScenarioTwoRunCycle:
                     "task_description": idea.task_description,
                     "task_description_summary": "HoVer verification",
                     "programs": idea.programs,
-                    "explanation": idea.explanation,
+                    "explanation": idea.explanation.model_dump(),
                     "strategy": idea.strategy,
                     "category": idea.category,
                 }
@@ -553,71 +554,54 @@ class TestScenarioWritePipeline:
 
 
 # ===========================================================================
-# Scenario 5: IncomingIdeas → RecordBank → memory write
+# Scenario 5: IdeaBank → memory write
 # ===========================================================================
 
 
 class TestScenarioIdeasToMemory:
     """Simulate ideas classification → bank → memory card write."""
 
-    def test_incoming_ideas_classified_and_saved(self, tmp_path):
-        """Classify incoming ideas, add to bank, then save to memory."""
-        # Programs produce improvements (raw LLM output)
-        raw_improvements = [
-            {
-                "description": "Sort evidence by relevance",
-                "explanation": "Better chain quality",
-            },
-            {
-                "description": "Filter noise from retrieval",
-                "explanation": "Reduces false positives",
-            },
-            {
-                "description": "Sort evidence by relevance",
-                "explanation": "Duplicate of first",
-            },
-        ]
+    def test_ideas_classified_and_saved(self, tmp_path):
+        """Add classified ideas to IdeaBank, then save to memory."""
+        # Simulate classifier output: 2 new ideas (third was duplicate, skipped)
+        bank = IdeaBank()
+        bank.add(
+            Idea(
+                description="Sort evidence by relevance",
+                programs=["prog-1"],
+                last_generation=5,
+                category="retrieval",
+                strategy="exploitation",
+                task_description="HoVer verification",
+            )
+        )
+        bank.add(
+            Idea(
+                description="Filter noise from retrieval",
+                programs=["prog-1"],
+                last_generation=5,
+                category="retrieval",
+                strategy="exploitation",
+                task_description="HoVer verification",
+            )
+        )
 
-        # Classify via IncomingIdeas
-        incoming = IncomingIdeas(raw_improvements)
-        assert incoming.new_ideas_count == 3
-
-        # First idea: new
-        # Second idea: new
-        # Third idea: duplicate of first (classifier would mark it)
-        incoming.update_idea(3, target_idea_id="some-existing-id", rewrite=False)
-        assert incoming.new_ideas_count == 2
-        assert incoming.present_ideas_count == 1
-
-        # Add new ideas to bank
-        bank = RecordBank(list_max_ideas=20)
-        for idea in incoming.ideas:
-            if not idea["classified"]:
-                bank.add_idea(
-                    description=idea["description"],
-                    linked_program="prog-1",
-                    generation=5,
-                    category="retrieval",
-                    strategy="exploitation",
-                    task_description="HoVer verification",
-                    change_motivation=idea["change_motivation"],
-                )
-
-        assert len(bank.uuids) == 2
+        all_ideas = bank.all_ideas()
+        assert len(all_ideas) == 2
 
         # Write bank ideas to memory
         mem = _make_memory(tmp_path)
-        for card in bank.all_ideas_cards():
+        for idea in all_ideas:
             mem.save_card(
                 {
-                    "id": card.id,
-                    "description": card.description,
-                    "task_description": card.task_description,
+                    "id": idea.id,
+                    "description": idea.description,
+                    "task_description": idea.task_description,
                     "task_description_summary": "HoVer",
-                    "strategy": card.strategy,
-                    "category": card.category,
-                    "explanation": card.explanation,
-                    "programs": card.programs,
+                    "strategy": idea.strategy,
+                    "category": idea.category,
+                    "explanation": idea.explanation.model_dump(),
+                    "programs": idea.programs,
                 }
             )
 
