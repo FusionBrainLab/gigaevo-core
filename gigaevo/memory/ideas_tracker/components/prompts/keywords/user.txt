@@ -1,2 +1,0 @@
-Extract keywords from the following text:
-<INSERT>
