@@ -102,7 +102,7 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         if total <= 0:
             return random.sample(self._cache, n)
         weights = [f / total for f in fitnesses]
-        indices = set()
+        indices: set[int] = set()
         attempts = 0
         while len(indices) < n and attempts < n * 10:
             idx = random.choices(range(len(self._cache)), weights=weights, k=1)[0]

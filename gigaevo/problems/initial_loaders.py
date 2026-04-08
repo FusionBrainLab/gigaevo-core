@@ -112,10 +112,10 @@ class RedisTopProgramsLoader:
                 copy.metrics = deepcopy(program.metrics)
                 copy.stage_results = deepcopy(program.stage_results)
                 for child in program.lineage.children:
-                    if child.id in all_ids:
+                    if child in all_ids:
                         copy.lineage.children.append(child)
                 for parent in program.lineage.parents:
-                    if parent.id in all_ids:
+                    if parent in all_ids:
                         copy.lineage.parents.append(parent)
                 await storage.add(copy)
                 added.append(copy)
