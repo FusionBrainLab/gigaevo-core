@@ -20,6 +20,10 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.quartiles import (
     generation_range_bounds,
     generation_to_quartile,
 )
+from gigaevo.memory.ideas_tracker.utils.origin_analysis.siblings import (
+    build_sibling_groups,
+    build_sibling_groups_allgens,
+)
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.statistics import (
     elite_threshold_by_top_k,
     mad,
@@ -256,3 +260,40 @@ class TestComputeRootsMemoized:
         parents_of = {"p1": [], "p2": ["p1"], "p3": ["p2"]}
         roots = compute_roots_memoized(parents_of)
         assert roots["p3"] == {"p1"}
+
+
+SIBLING_PROGRAMS = {
+    "p1": {"generation": 0, "fitness": 0.5, "parents": []},
+    "p2": {"generation": 1, "fitness": 0.6, "parents": ["p1"]},
+    "p3": {"generation": 1, "fitness": 0.4, "parents": ["p1"]},
+    "p4": {"generation": 2, "fitness": 0.7, "parents": ["p2"]},
+    "p5": {"generation": 2, "fitness": 0.3, "parents": ["p2"]},
+}
+SIBLING_PARENTS_OF = {
+    "p1": [],
+    "p2": ["p1"],
+    "p3": ["p1"],
+    "p4": ["p2"],
+    "p5": ["p2"],
+}
+
+
+class TestBuildSiblingGroups:
+    def test_groups_children_of_same_parent(self):
+        groups = build_sibling_groups(SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent", 0)
+        # p2 and p3 share best_parent p1 at generation 1
+        key = ("best_parent", "p1", 1)
+        assert set(groups[key]) == {"p2", "p3"}
+
+    def test_gen_window_buckets_generations(self):
+        groups = build_sibling_groups(SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent", 1)
+        # gen_window=1: bucket = gen // 2; gen=1 -> bucket=0
+        key_gen1 = ("best_parent", "p1", 0)
+        assert set(groups[key_gen1]) == {"p2", "p3"}
+
+
+class TestBuildSiblingGroupsAllgens:
+    def test_groups_ignoring_generation(self):
+        groups = build_sibling_groups_allgens(SIBLING_PROGRAMS, SIBLING_PARENTS_OF, "best_parent")
+        key = ("best_parent_allgens", "p1")
+        assert set(groups[key]) == {"p2", "p3"}
