@@ -3,12 +3,17 @@
 
 from __future__ import annotations
 
-from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, merge_usage_payloads
+from gigaevo.memory.ideas_tracker.idea_bank import (
+    IdeaBank,
+    build_usage_payload,
+    merge_usage_payloads,
+)
 from gigaevo.memory.ideas_tracker.models import (
     AnalysisResult,
     Idea,
     IdeaExplanation,
     IdeaUpdate,
+    UsagePayload,
 )
 
 
@@ -150,6 +155,44 @@ class TestIdeaBankChunks:
         assert "Cache calls" in chunk.text
         assert len(chunk.short_ids) == 1
         assert "short_id" in chunk.short_ids[0]
+
+
+class TestBuildUsagePayload:
+    def test_empty_input_produces_empty_used(self) -> None:
+        result = build_usage_payload({})
+        used = result["used"]
+        assert used["entries"] == []
+        assert used["total_used"] == 0
+        assert used["median_delta_fitness"] is None
+
+    def test_single_task_flat_structure(self) -> None:
+        result = build_usage_payload({"task A": [1.0, 3.0]})
+        used = result["used"]
+        assert "total" not in used, "nested 'total' subdict must be gone"
+        assert used["total_used"] == 2
+        assert used["median_delta_fitness"] == 2.0
+        entry = used["entries"][0]
+        assert entry["task_description_summary"] == "task A"
+        assert entry["used_count"] == 2
+        assert sorted(entry["fitness_delta_per_use"]) == [1.0, 3.0]
+
+    def test_output_validates_as_usage_payload(self) -> None:
+        result = build_usage_payload({"task": [0.5, 1.5]})
+        payload = UsagePayload.model_validate(result["used"])
+        assert payload.total_used == 2
+        assert len(payload.entries) == 1
+        assert payload.entries[0].task_description_summary == "task"
+
+    def test_nan_and_inf_filtered(self) -> None:
+        result = build_usage_payload({"task": [float("nan"), float("inf"), 1.0]})
+        used = result["used"]
+        assert used["total_used"] == 1
+        assert used["entries"][0]["fitness_delta_per_use"] == [1.0]
+
+    def test_tasks_sorted_alphabetically(self) -> None:
+        result = build_usage_payload({"zzz": [1.0], "aaa": [2.0]})
+        summaries = [e["task_description_summary"] for e in result["used"]["entries"]]
+        assert summaries == ["aaa", "zzz"]
 
 
 class TestMergeUsagePayloads:
