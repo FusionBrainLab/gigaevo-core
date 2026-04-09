@@ -13,7 +13,32 @@ import random
 import time
 
 from loguru import logger
+import numpy as np
 from redis import asyncio as aioredis  # noqa: I001
+from scipy.special import softmax
+
+from gigaevo.evolution.strategies.utils import weighted_sample_without_replacement
+
+
+def _softmax_weights(fitnesses: list[float]) -> list[float]:
+    """Softmax weights with min-max normalization and auto-temperature.
+
+    Mirrors ``FitnessProportionalEliteSelector._compute_weights`` exactly so
+    that opponent sampling uses the same distribution as parent selection.
+
+    - Normalises fitnesses to [0, 1] (scale- and shift-invariant).
+    - Auto-temperature = max(std(normalised), 0.01).
+    - Falls back to uniform when all fitnesses are identical.
+    """
+    arr = np.asarray(fitnesses, dtype=np.float64)
+    fitness_range = float(np.ptp(arr))
+    if fitness_range < 1e-10:
+        n = len(arr)
+        return [1.0 / n] * n
+    arr = (arr - arr.min()) / fitness_range
+    std = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
+    temp = max(std, 0.01)
+    return softmax(arr / temp).tolist()
 
 
 @dataclass
@@ -84,7 +109,13 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         return self._redis_clients[db]
 
     async def get_opponents(self, n: int = 5) -> list[OpponentProgram]:
-        """Fetch up to n opponents, fitness-proportional sampling."""
+        """Fetch up to n opponents using softmax fitness-proportional sampling.
+
+        Sampling mirrors ``FitnessProportionalEliteSelector``: fitnesses are
+        min-max normalised to [0, 1], softmax is applied with auto-temperature
+        (``max(std(normalised), 0.01)``), and selection is without replacement.
+        This keeps opponent sampling consistent with parent selection.
+        """
         now = time.monotonic()
         if not self._cache or (now - self._cache_time) > self._cache_ttl:
             await self._refresh_cache()
@@ -96,19 +127,15 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         if len(self._cache) <= n:
             return list(self._cache)
 
-        # Fitness-proportional sampling (shift to positive)
-        fitnesses = [max(o.fitness, 0.0) for o in self._cache]
-        total = sum(fitnesses)
-        if total <= 0:
+        fitnesses = [o.fitness for o in self._cache]
+        if not all(np.isfinite(f) for f in fitnesses):
+            logger.warning(
+                "[OpponentProvider] non-finite fitness detected; falling back to uniform sampling"
+            )
             return random.sample(self._cache, n)
-        weights = [f / total for f in fitnesses]
-        indices: set[int] = set()
-        attempts = 0
-        while len(indices) < n and attempts < n * 10:
-            idx = random.choices(range(len(self._cache)), weights=weights, k=1)[0]
-            indices.add(idx)
-            attempts += 1
-        return [self._cache[i] for i in indices]
+
+        weights = _softmax_weights(fitnesses)
+        return weighted_sample_without_replacement(self._cache, weights, n)
 
     async def _refresh_cache(self) -> None:
         """Read all opponent programs from all source archives."""

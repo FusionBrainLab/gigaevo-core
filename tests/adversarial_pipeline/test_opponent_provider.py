@@ -157,6 +157,60 @@ class TestRedisOpponentArchiveProvider:
 
 
 # ---------------------------------------------------------------------------
+# Tests: _softmax_weights
+# ---------------------------------------------------------------------------
+
+
+class TestSoftmaxWeights:
+    def test_identical_fitnesses_returns_uniform(self):
+        from gigaevo.adversarial.opponent_provider import _softmax_weights
+
+        weights = _softmax_weights([0.5, 0.5, 0.5])
+        assert len(weights) == 3
+        assert abs(weights[0] - 1 / 3) < 1e-6
+
+    def test_weights_sum_to_one(self):
+        from gigaevo.adversarial.opponent_provider import _softmax_weights
+
+        weights = _softmax_weights([0.1, 0.5, 0.9])
+        assert abs(sum(weights) - 1.0) < 1e-9
+
+    def test_higher_fitness_gets_higher_weight(self):
+        from gigaevo.adversarial.opponent_provider import _softmax_weights
+
+        weights = _softmax_weights([0.1, 0.5, 0.9])
+        assert weights[2] > weights[1] > weights[0]
+
+    def test_negative_fitnesses_handled(self):
+        from gigaevo.adversarial.opponent_provider import _softmax_weights
+
+        weights = _softmax_weights([-1.0, 0.0, 1.0])
+        assert abs(sum(weights) - 1.0) < 1e-9
+        assert weights[2] > weights[0]
+
+    @pytest.mark.asyncio
+    async def test_nonfinite_fitness_fallback(self):
+        """Non-finite fitness triggers uniform fallback."""
+        import math
+        import time
+
+        provider = RedisOpponentArchiveProvider(
+            host="localhost", port=6379, sources=[{"db": 1, "prefix": "test"}]
+        )
+        provider._cache = [
+            OpponentProgram(program_id="p0", code="c0", fitness=math.nan),
+            OpponentProgram(program_id="p1", code="c1", fitness=0.5),
+            OpponentProgram(program_id="p2", code="c2", fitness=0.8),
+            OpponentProgram(program_id="p3", code="c3", fitness=0.3),
+            OpponentProgram(program_id="p4", code="c4", fitness=0.6),
+            OpponentProgram(program_id="p5", code="c5", fitness=0.9),
+        ]
+        provider._cache_time = time.monotonic()
+        result = await provider.get_opponents(3)
+        assert len(result) == 3
+
+
+# ---------------------------------------------------------------------------
 # Tests: OpponentProgram dataclass
 # ---------------------------------------------------------------------------
 
