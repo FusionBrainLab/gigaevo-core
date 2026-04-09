@@ -5,8 +5,10 @@ from write_pipeline.py through the full save_card → _persist_index flow.
 """
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 from gigaevo.memory.shared_memory.models import (
     ConnectedIdea,
     MemoryCard,
@@ -124,8 +126,6 @@ def _make_platform_memory(tmp_path):
     with patch.object(AmemGamMemory, "__init__", lambda self, **kw: None):
         mem = AmemGamMemory.__new__(AmemGamMemory)
 
-    from pathlib import Path
-
     mem.checkpoint_dir = Path(tmp_path)
     mem.index_file = mem.checkpoint_dir / "platform_index.json"
     mem.gam_store_dir = mem.checkpoint_dir / "gam_shared" / "platform_store"
@@ -146,8 +146,6 @@ def _make_platform_memory(tmp_path):
     mem.gam_pipeline_mode = "default"
     mem.remote_vector_search_type = "vector"
     mem.remote_hybrid_weights = (0.4, 0.6)
-
-    from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 
     mem.card_update_dedup_config = CardUpdateDedupConfig()
 

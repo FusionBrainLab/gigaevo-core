@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.memory_config import ApiConfig
 from tests.fakes.agentic_memory import make_test_memory
 
 
@@ -30,8 +31,6 @@ class TestStaleEntityCleanup:
         """C1: If API pagination fails mid-way (returns a full page then
         errors on the next), stale cleanup is skipped because pagination
         didn't complete. Entities from unseen pages are preserved."""
-        from gigaevo.memory.shared_memory.memory_config import ApiConfig
-
         mem = _make_memory(
             tmp_path, api=ApiConfig(sync_batch_size=2, sync_on_init=False)
         )

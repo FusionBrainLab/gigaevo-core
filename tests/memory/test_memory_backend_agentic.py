@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 from gigaevo.memory.shared_memory.card_conversion import (
     normalize_allowed_gam_tools,
+    normalize_memory_card,
 )
 from tests.fakes.agentic_memory import (
     FakeResearchAgent,
@@ -187,8 +188,6 @@ class TestDedupWithRealScoring:
         )
 
         # Score candidates for a similar card
-        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-
         incoming = normalize_memory_card(
             {
                 "description": "simulated annealing optimization for local search",
@@ -218,8 +217,6 @@ class TestDedupWithRealScoring:
             card_update_dedup_config={"enabled": True},
         )
 
-        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-
         incoming = normalize_memory_card({"description": "SA optimization"})
         scored = mem.dedup.score_candidates(incoming)
 
@@ -232,8 +229,6 @@ class TestDedupWithRealScoring:
             tmp_path,
             ideas=[{"id": "i1", "description": "test"}],
         )
-
-        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 
         incoming = normalize_memory_card({"description": "test"})
         scored = mem.dedup.score_candidates(incoming)

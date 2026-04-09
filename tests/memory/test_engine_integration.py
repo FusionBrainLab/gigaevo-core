@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from gigaevo.evolution.engine.mutation import generate_mutations
+from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
@@ -25,8 +27,6 @@ class TestGenerateMutationsMemoryFlow:
 
     @pytest.mark.asyncio
     async def test_empty_elites_returns_empty(self):
-        from gigaevo.evolution.engine.mutation import generate_mutations
-
         result = await generate_mutations(
             [],
             mutator=MagicMock(),
@@ -73,8 +73,6 @@ class TestProgramMetadataRoundtrip:
 
     def test_mutation_spec_metadata_key_constants(self):
         """MutationSpec metadata key constants are accessible."""
-        from gigaevo.evolution.mutation.base import MutationSpec
-
         assert hasattr(MutationSpec, "META_MODEL")
         assert hasattr(MutationSpec, "META_OUTPUT")
         assert hasattr(MutationSpec, "META_PROMPT_ID")

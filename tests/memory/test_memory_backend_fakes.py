@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from tests.fakes.agentic_memory import (
     FakeAgenticMemorySystem,
     FakeAMemGenerator,
@@ -346,8 +347,6 @@ class TestFullCycleWithFakes:
 
     def test_upsert_fast_direct(self, tmp_path):
         """Test note_sync.upsert_fast — the hot path used by api_sync.sync."""
-        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
         card = normalize_memory_card(
             {
