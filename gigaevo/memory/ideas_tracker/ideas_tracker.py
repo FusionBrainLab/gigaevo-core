@@ -88,7 +88,11 @@ def _summarise_task_description(analyzer: Analyzer, task_description: str) -> st
         parsed = json.loads(raw)
         summary = str(parsed.get("summary", "")).strip()
         return summary or text[:240].strip()
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "[Memory] Task description summarization failed, using truncated text: {}",
+            exc,
+        )
         return text[:240].strip()
 
 

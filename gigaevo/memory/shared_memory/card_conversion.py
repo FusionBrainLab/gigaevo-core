@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
+from loguru import logger
+
 from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
@@ -98,7 +100,10 @@ def _normalize_usage(raw_usage: Any) -> UsagePayload:
         return UsagePayload()
     try:
         return UsagePayload.model_validate(raw_usage)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "[Memory] UsagePayload validation failed, using empty payload: {}", exc
+        )
         return UsagePayload()
 
 
