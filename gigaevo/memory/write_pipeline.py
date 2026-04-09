@@ -21,6 +21,7 @@ from gigaevo.memory.shared_memory.memory_config import (
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
 from gigaevo.memory.utils import to_float
 from gigaevo.memory.write_pipeline_config import PipelineConfig, load_config
+from gigaevo.programs.metrics.context import VALIDITY_KEY
 
 _MAX_CONNECTED_DESCRIPTIONS = 5
 
@@ -206,12 +207,12 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
         best_entry = best_by_id.get(idea_id, {})
         if bank_card is None:
             missing_cards.append(idea_id)
-            bank_card = {"id": idea_id}
+            continue
         selected_cards.append(_merge_best_idea_metrics(bank_card, best_entry))
 
     if missing_cards:
         logger.warning(
-            "{} best_ideas IDs were missing in banks and were written as minimal cards.",
+            "{} best_ideas IDs were missing in banks and were skipped.",
             len(missing_cards),
         )
 
@@ -249,6 +250,9 @@ def _build_program_cards(
         program_id = str(program.get("id") or program.get("program_id") or "").strip()
         fitness = to_float(program.get("fitness"))
         if not program_id or fitness is None:
+            continue
+        is_valid = to_float(program.get(VALIDITY_KEY))
+        if is_valid is None or is_valid <= 0:
             continue
         enriched = dict(program)
         enriched["program_id"] = program_id

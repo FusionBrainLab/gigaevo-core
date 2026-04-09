@@ -60,6 +60,7 @@ def test_load_memory_cards_adds_top_program_cards(tmp_path):
                     {
                         "id": f"prog-{idx}",
                         "fitness": float(idx),
+                        "is_valid": 1.0,
                         "generation": idx,
                         "strategy": "hybrid",
                         "task_description": "Solve the task.",

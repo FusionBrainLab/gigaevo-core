@@ -487,6 +487,7 @@ class TestScenarioWritePipeline:
                 {
                     "id": f"prog-{i}",
                     "fitness": 90.0 - i * 5,
+                    "is_valid": 1.0,
                     "generation": 10 + i,
                     "code": f"def solve_{i}(x):\n    return x[:{i + 1}]\n",
                     "task_description": "Multi-hop fact verification on HoVer",

@@ -237,6 +237,7 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
                         {
                             "id": "prog-1",
                             "fitness": 85.5,
+                            "is_valid": 1.0,
                             "code": "def f(): pass",
                             "task_description_summary": "Task",
                         }
@@ -265,8 +266,8 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         assert prog.program_id == "prog-1"
         assert prog.fitness == 85.5
 
-    def test_e2e_missing_idea_creates_minimal_card(self, tmp_path):
-        """If best_ideas references missing idea, create minimal card."""
+    def test_e2e_missing_idea_is_skipped(self, tmp_path):
+        """If best_ideas references an idea absent from banks, skip it — no ghost cards."""
         banks_path = tmp_path / "banks.json"
         _write_json(banks_path, [{"active_bank": []}])
 
@@ -286,10 +287,7 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         )
 
         cards = load_memory_cards(banks_path, best_ideas_path)
-        assert len(cards) == 1
-        assert cards[0].id == "missing-idea"
-        # Aliases should be empty (no active_bank entry)
-        assert cards[0].aliases == []
+        assert cards == []
 
     def test_e2e_complex_nested_structures_survive(self, tmp_path):
         """Test that deeply nested structures (common in ideas_tracker) survive."""
@@ -441,6 +439,7 @@ class TestMainLoopSimulation:
                         {
                             "id": "prog-1",
                             "fitness": 85.5,
+                            "is_valid": 1.0,
                             "code": "def f(): pass",
                             "task_description_summary": "Task",
                         }

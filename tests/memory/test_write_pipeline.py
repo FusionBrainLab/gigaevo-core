@@ -155,15 +155,29 @@ class TestLoadMemoryCardsEdgeCases:
         program_cards = [c for c in cards if c.category == "program"]
         assert program_cards == []
 
-    def test_best_idea_missing_from_bank_creates_minimal_card(self, tmp_path):
+    def test_best_idea_missing_from_bank_is_skipped(self, tmp_path):
+        """best_ideas ID not present in banks.json must be skipped — no ghost cards."""
         banks = _make_banks(tmp_path, active_bank=[])
         best = _make_best_ideas(
             tmp_path,
             best_ideas=[{"idea_id": "missing-1", "description": "desc"}],
         )
         cards = load_memory_cards(banks, best)
+        assert cards == []
+
+    def test_best_idea_present_in_bank_is_included(self, tmp_path):
+        """An idea that exists in both best_ideas and banks must be returned."""
+        banks = _make_banks(
+            tmp_path,
+            active_bank=[{"id": "real-1", "description": "real idea"}],
+        )
+        best = _make_best_ideas(
+            tmp_path,
+            best_ideas=[{"idea_id": "real-1", "fitness": 0.9}],
+        )
+        cards = load_memory_cards(banks, best)
         assert len(cards) == 1
-        assert cards[0].id == "missing-1"
+        assert cards[0].id == "real-1"
 
     def test_programs_sorted_by_fitness(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
@@ -174,18 +188,21 @@ class TestLoadMemoryCardsEdgeCases:
                 {
                     "id": "p1",
                     "fitness": 50.0,
+                    "is_valid": 1.0,
                     "code": "a",
                     "task_description_summary": "t",
                 },
                 {
                     "id": "p2",
                     "fitness": 90.0,
+                    "is_valid": 1.0,
                     "code": "b",
                     "task_description_summary": "t",
                 },
                 {
                     "id": "p3",
                     "fitness": 70.0,
+                    "is_valid": 1.0,
                     "code": "c",
                     "task_description_summary": "t",
                 },
@@ -208,6 +225,7 @@ class TestLoadMemoryCardsEdgeCases:
                 {
                     "id": "p2",
                     "fitness": 80.0,
+                    "is_valid": 1.0,
                     "code": "b",
                     "task_description_summary": "t",
                 },
@@ -219,6 +237,66 @@ class TestLoadMemoryCardsEdgeCases:
         program_cards = [c for c in cards if c.category == "program"]
         assert len(program_cards) == 1
         assert program_cards[0].program_id == "p2"
+
+    def test_invalid_program_skipped(self, tmp_path):
+        """Programs with is_valid=0 must not be written to memory."""
+        banks = _make_banks(tmp_path, active_bank=[])
+        best = _make_best_ideas(tmp_path, best_ideas=[])
+        programs = _make_programs(
+            tmp_path,
+            programs=[
+                {
+                    "id": "p-invalid",
+                    "fitness": 90.0,
+                    "is_valid": 0.0,
+                    "code": "a",
+                    "task_description_summary": "t",
+                },
+                {
+                    "id": "p-valid",
+                    "fitness": 80.0,
+                    "is_valid": 1.0,
+                    "code": "b",
+                    "task_description_summary": "t",
+                },
+            ],
+        )
+        cards = load_memory_cards(
+            banks, best, programs_path=programs, best_programs_percent=100.0
+        )
+        program_cards = [c for c in cards if c.category == "program"]
+        assert len(program_cards) == 1
+        assert program_cards[0].program_id == "p-valid"
+
+    def test_program_missing_is_valid_skipped(self, tmp_path):
+        """Programs without is_valid field are treated as invalid and skipped."""
+        banks = _make_banks(tmp_path, active_bank=[])
+        best = _make_best_ideas(tmp_path, best_ideas=[])
+        programs = _make_programs(
+            tmp_path,
+            programs=[
+                {
+                    "id": "p-no-validity",
+                    "fitness": 85.0,
+                    "code": "a",
+                    "task_description_summary": "t",
+                    # no is_valid field
+                },
+                {
+                    "id": "p-valid",
+                    "fitness": 75.0,
+                    "is_valid": 1.0,
+                    "code": "b",
+                    "task_description_summary": "t",
+                },
+            ],
+        )
+        cards = load_memory_cards(
+            banks, best, programs_path=programs, best_programs_percent=100.0
+        )
+        program_cards = [c for c in cards if c.category == "program"]
+        assert len(program_cards) == 1
+        assert program_cards[0].program_id == "p-valid"
 
     def test_ideas_tracker_dict_aliases_preserved(self, tmp_path):
         """Integration: ideas_tracker writes aliases as list[dict] version history.

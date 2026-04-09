@@ -276,6 +276,7 @@ class TestMemoryWritePipeline:
                         {
                             "id": "prog-1",
                             "fitness": 90.0,
+                            "is_valid": 1.0,
                             "code": "def solve():\n    return 42\n",
                             "task_description": "Solve TSP",
                             "task_description_summary": "TSP",
