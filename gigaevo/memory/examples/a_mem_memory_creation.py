@@ -15,6 +15,7 @@ from gigaevo.memory._vendor.A_mem.agentic_memory.memory_system import (
 )
 import gigaevo.memory.config as config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.utils import (
     _safe_get,
     _to_int,
@@ -63,45 +64,6 @@ def summarize_diff(before, after, label="Memory evolution check"):
         a = _safe_get(after, f, None)
         if b != a:
             logger.debug("* {} changed: before={} after={}", f, b, a)
-
-
-def normalize_memory_card(
-    card: dict[str, Any] | None = None,
-    fallback_id: str | None = None,
-) -> dict[str, Any]:
-    card = dict(card or {})
-    explanation = card.get("explanation")
-    if not isinstance(explanation, dict):
-        explanation = {}
-
-    normalized = {
-        "id": str(card.get("id") or fallback_id or ""),
-        "category": str(card.get("category") or "general"),
-        "description": str(card.get("description") or card.get("content") or ""),
-        "task_description": str(
-            card.get("task_description") or card.get("context") or ""
-        ),
-        "task_description_summary": str(
-            card.get("task_description_summary") or card.get("context_summary") or ""
-        ),
-        "strategy": str(card.get("strategy") or ""),
-        "last_generation": _to_int(card.get("last_generation"), default=0),
-        "programs": _to_list(card.get("programs")),
-        "aliases": _to_list(card.get("aliases")),
-        "keywords": _to_list(card.get("keywords")),
-        "evolution_statistics": card.get("evolution_statistics")
-        if isinstance(card.get("evolution_statistics"), dict)
-        else {},
-        "explanation": {
-            "explanations": _to_list(explanation.get("explanations")),
-            "summary": str(explanation.get("summary") or ""),
-        },
-        "works_with": _to_list(card.get("works_with")),
-        "links": _to_list(card.get("links")),
-        "usage": card.get("usage") if isinstance(card.get("usage"), dict) else {},
-    }
-
-    return normalized
 
 
 def _memory_to_dict(
