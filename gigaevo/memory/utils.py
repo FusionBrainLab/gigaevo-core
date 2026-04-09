@@ -6,6 +6,7 @@ They live here so each module does not duplicate the definitions.
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import statistics
@@ -65,3 +66,35 @@ def median(values: list[float]) -> float | None:
         Median as a float, or ``None`` if the list is empty.
     """
     return float(statistics.median(values)) if values else None
+
+
+def parse_string_list(value: Any) -> list[str]:
+    """Parse a list of strings from various encoded forms.
+
+    Handles: list, JSON-encoded list, AST-encoded list, bare string.
+    Returns an empty list for None, empty string, or non-parseable input.
+
+    Args:
+        value: Input to parse. May be a list, JSON string, AST string, or bare string.
+
+    Returns:
+        A list of stripped non-empty strings.
+    """
+    if isinstance(value, list):
+        return [str(i).strip() for i in value if str(i).strip()]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text[0] in "[{(":
+            try:
+                return [str(i).strip() for i in json.loads(text) if str(i).strip()]
+            except Exception:
+                try:
+                    return [
+                        str(i).strip() for i in ast.literal_eval(text) if str(i).strip()
+                    ]
+                except Exception:
+                    pass
+        return [text]
+    return []

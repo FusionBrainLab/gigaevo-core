@@ -81,17 +81,30 @@ class CardLoader:
             OSError: If file cannot be read.
         """
         cards: list[dict[str, Any]] = []
-        for line in self.export_file.read_text().strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                card = json.loads(line)
-                if isinstance(card, dict):
-                    cards.append(card)
-            except json.JSONDecodeError:
-                logger.debug("[CardLoader] Skipping malformed line in export: {}", line)
-                continue
+        malformed = 0
+        total = 0
+        with open(self.export_file) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line.strip():
+                    continue
+                total += 1
+                try:
+                    card = json.loads(line)
+                    if isinstance(card, dict):
+                        cards.append(card)
+                except json.JSONDecodeError:
+                    malformed += 1
+                    logger.debug(
+                        "[CardLoader] Skipping malformed line in export: {}", line
+                    )
+                    continue
+        if malformed > 0 and total > 0 and malformed / total > 0.05:
+            logger.warning(
+                "[CardLoader] High export corruption: {}/{} lines malformed",
+                malformed,
+                total,
+            )
         return cards
 
     def _load_from_store(self) -> list[dict[str, Any]]:

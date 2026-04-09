@@ -9,6 +9,10 @@ from loguru import logger
 
 from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_store import CardStore
+from gigaevo.memory.shared_memory.protocols import (
+    GeneratorProtocol,
+    ResearchAgentProtocol,
+)
 
 
 class GamSearch:
@@ -22,7 +26,7 @@ class GamSearch:
         self,
         *,
         research_agent_cls: type[Any],
-        generator: Any,
+        generator: GeneratorProtocol,
         card_store: CardStore,
         checkpoint_dir: Path,
         gam_store_dir: Path,
@@ -42,9 +46,9 @@ class GamSearch:
         self._allowed_gam_tools = allowed_gam_tools
         self._gam_top_k_by_tool = gam_top_k_by_tool
         self._gam_pipeline_mode = gam_pipeline_mode
-        self.agent: Any = None
+        self.agent: ResearchAgentProtocol | None = None
 
-    def build(self) -> None:
+    def build_research_agent(self) -> None:
         """Build/rebuild the ResearchAgent from exported records.
 
         Raises:
@@ -112,6 +116,6 @@ class GamSearch:
             pipeline_mode=self._gam_pipeline_mode,
         )
 
-    def invalidate(self) -> None:
-        """Clear the agent so it will be rebuilt on next build() call."""
+    def clear_research_agent(self) -> None:
+        """Clear the agent so it will be rebuilt on next build_research_agent() call."""
         self.agent = None

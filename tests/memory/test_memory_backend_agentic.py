@@ -1,6 +1,6 @@
 """Tests for agentic memory paths using full fake infrastructure.
 
-Covers: gam.build / research_agent lifecycle, dedup.score_candidates,
+Covers: gam.build / research_agent lifecycle, dedup.score_duplicate_candidates,
 dedup retriever resolution, and the full dedup pipeline with real scoring.
 """
 
@@ -72,9 +72,9 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
             generator=mem.generator,
         )
 
-    mem.gam.build = _patched_gam_build
+    mem.gam.build_research_agent = _patched_gam_build
 
-    # Also patch dedup.build_retrievers similarly
+    # Also patch dedup.build_dedup_retrievers similarly
     def _patched_build_dedup_retrievers():
         records = [c.model_dump() for c in mem.card_store.cards.values()]
         records = [
@@ -103,7 +103,7 @@ def _make_full_memory(tmp_path, ideas=None, **overrides):
             if name in normalize_allowed_gam_tools(cfg.gam.allowed_tools or None)
         }
 
-    mem.dedup.build_retrievers = _patched_build_dedup_retrievers
+    mem.dedup.build_dedup_retrievers = _patched_build_dedup_retrievers
 
     return mem, fake_sys
 
@@ -162,14 +162,14 @@ class TestLoadOrCreateRetriever:
 
 
 # ===========================================================================
-# dedup.build_retrievers + dedup.score_candidates
+# dedup.build_dedup_retrievers + dedup.score_duplicate_candidates
 # ===========================================================================
 
 
 class TestDedupWithRealScoring:
     """Test the full dedup pipeline with real (fake) vector scoring."""
 
-    def test_score_candidates_finds_similar(self, tmp_path):
+    def test_score_duplicate_candidates_finds_similar(self, tmp_path):
         mem, _ = _make_full_memory(
             tmp_path,
             ideas=[
@@ -194,7 +194,7 @@ class TestDedupWithRealScoring:
             }
         )
 
-        scored = mem.dedup.score_candidates(incoming)
+        scored = mem.dedup.score_duplicate_candidates(incoming)
 
         # Should find at least existing-1 as similar
         assert len(scored) > 0
@@ -218,7 +218,7 @@ class TestDedupWithRealScoring:
         )
 
         incoming = normalize_memory_card({"description": "SA optimization"})
-        scored = mem.dedup.score_candidates(incoming)
+        scored = mem.dedup.score_duplicate_candidates(incoming)
 
         # Program cards should be excluded from dedup scoring
         card_ids = [s["card_id"] for s in scored]
@@ -231,7 +231,7 @@ class TestDedupWithRealScoring:
         )
 
         incoming = normalize_memory_card({"description": "test"})
-        scored = mem.dedup.score_candidates(incoming)
+        scored = mem.dedup.score_duplicate_candidates(incoming)
         assert scored == []
 
     def test_dedup_invalidates_retrievers_on_save(self, tmp_path):
@@ -244,7 +244,7 @@ class TestDedupWithRealScoring:
 
         # First access builds retrievers
         mem.dedup.invalidate_retrievers()
-        mem.dedup.resolve_retriever("vector_description")
+        mem.dedup.get_vector_retriever("vector_description")
         assert mem.dedup._retrievers is not None
 
         # Save new card clears cache
@@ -391,7 +391,7 @@ class TestResolveVectorRetriever:
         )
 
         assert mem.dedup._retrievers is None
-        retriever = mem.dedup.resolve_retriever("vector_description")
+        retriever = mem.dedup.get_vector_retriever("vector_description")
         assert mem.dedup._retrievers is not None
         assert retriever is not None
 
@@ -406,15 +406,15 @@ class TestResolveVectorRetriever:
         mem.dedup.invalidate_retrievers()
 
         # Request a tool that might not exist
-        mem.dedup.resolve_retriever("vector_nonexistent")
+        mem.dedup.get_vector_retriever("vector_nonexistent")
         # Falls back to "vector" if tool not found
-        # (may or may not find it depending on what build_retrievers returns)
+        # (may or may not find it depending on what build_dedup_retrievers returns)
 
     def test_empty_memory_returns_none(self, tmp_path):
         mem, _ = _make_full_memory(
             tmp_path, ideas=[], card_update_dedup_config={"enabled": True}
         )
-        retriever = mem.dedup.resolve_retriever("vector_description")
+        retriever = mem.dedup.get_vector_retriever("vector_description")
         assert retriever is None
 
 
@@ -446,3 +446,44 @@ class TestDumpMemory:
         mem = _make_memory(tmp_path)
         # note_sync is None when memory_system is None
         assert mem.note_sync is None
+
+
+# ---------------------------------------------------------------------------
+# Task 9: NoteSync.sync_card_to_amem_with_evolution calls add_note for new cards
+# ---------------------------------------------------------------------------
+
+
+def test_note_sync_sync_card_to_amem_with_evolution_calls_add_note_for_new_card(
+    tmp_path,
+):
+    """NoteSync.sync_card_to_amem_with_evolution must call memory_system.add_note for new cards."""
+    from unittest.mock import MagicMock
+
+    from gigaevo.memory.shared_memory.card_store import CardStore
+    from gigaevo.memory.shared_memory.models import MemoryCard
+    from gigaevo.memory.shared_memory.note_sync import NoteSync
+
+    card_store = CardStore(index_file=tmp_path / "index.json")
+
+    mock_memory = MagicMock()
+    mock_memory.read.return_value = None  # card doesn't exist yet
+    mock_memory.add_note.return_value = "new-note-id"
+
+    note_sync = NoteSync(
+        memory_system=mock_memory,
+        note_cls=MagicMock(),
+        card_store=card_store,
+    )
+
+    card = MemoryCard(
+        id="card-001",
+        description="test card description",
+        category="general",
+    )
+
+    note_sync.sync_card_to_amem_with_evolution(card)
+
+    mock_memory.add_note.assert_called_once()
+    call_kwargs = mock_memory.add_note.call_args
+    assert call_kwargs is not None
+    assert call_kwargs.kwargs.get("id") == "card-001"

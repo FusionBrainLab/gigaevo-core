@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
@@ -304,7 +305,8 @@ def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
             return parsed
-    except Exception:
+    except json.JSONDecodeError:
+        logger.debug("[CardUpdateDedup] Failed to parse JSON from text: {}", text[:100])
         pass
 
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
@@ -312,7 +314,11 @@ def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
         return None
     try:
         parsed = json.loads(match.group(0))
-    except Exception:
+    except json.JSONDecodeError:
+        logger.debug(
+            "[CardUpdateDedup] Failed to parse JSON from extracted match: {}",
+            match.group(0)[:100],
+        )
         return None
     if isinstance(parsed, dict):
         return parsed
@@ -389,14 +395,31 @@ def parse_llm_card_decision(
 
     if action == "update" and not updates:
         if duplicate_of:
+            logger.warning(
+                "[CardUpdateDedup] LLM returned 'update' with no valid updates; "
+                "downgrading to 'discard' (duplicate_of={!r})",
+                duplicate_of,
+            )
             action = "discard"
         else:
+            logger.warning(
+                "[CardUpdateDedup] LLM returned 'update' with no valid updates "
+                "or duplicate_of; downgrading to 'add'"
+            )
             action = "add"
 
     if action == "discard" and not duplicate_of:
         if updates:
+            logger.warning(
+                "[CardUpdateDedup] LLM returned 'discard' with no duplicate_of "
+                "but has updates; upgrading to 'update'"
+            )
             action = "update"
         else:
+            logger.warning(
+                "[CardUpdateDedup] LLM returned 'discard' with no duplicate_of; "
+                "downgrading to 'add'"
+            )
             action = "add"
 
     return {

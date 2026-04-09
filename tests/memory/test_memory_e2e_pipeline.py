@@ -16,7 +16,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
-from gigaevo.memory.write_pipeline import _card_type, load_memory_cards
+from gigaevo.memory.write_pipeline import _classify_card_type, load_memory_cards
 
 
 def _write_json(path: Path, payload: dict | list) -> None:
@@ -237,6 +237,7 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
                         {
                             "id": "prog-1",
                             "fitness": 85.5,
+                            "is_valid": 1.0,
                             "code": "def f(): pass",
                             "task_description_summary": "Task",
                         }
@@ -265,8 +266,8 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         assert prog.program_id == "prog-1"
         assert prog.fitness == 85.5
 
-    def test_e2e_missing_idea_creates_minimal_card(self, tmp_path):
-        """If best_ideas references missing idea, create minimal card."""
+    def test_e2e_missing_idea_is_skipped(self, tmp_path):
+        """If best_ideas references an idea absent from banks, skip it — no ghost cards."""
         banks_path = tmp_path / "banks.json"
         _write_json(banks_path, [{"active_bank": []}])
 
@@ -286,10 +287,7 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         )
 
         cards = load_memory_cards(banks_path, best_ideas_path)
-        assert len(cards) == 1
-        assert cards[0].id == "missing-idea"
-        # Aliases should be empty (no active_bank entry)
-        assert cards[0].aliases == []
+        assert cards == []
 
     def test_e2e_complex_nested_structures_survive(self, tmp_path):
         """Test that deeply nested structures (common in ideas_tracker) survive."""
@@ -378,9 +376,9 @@ class TestRegression_BugPR161:
 
 
 class TestMainLoopSimulation:
-    """Simulate the main() loop: load_memory_cards → _card_type for each card.
+    """Simulate the main() loop: load_memory_cards → _classify_card_type for each card.
 
-    Bug #3: _card_type called .get() on Pydantic models returned by load_memory_cards.
+    Bug #3: _classify_card_type called .get() on Pydantic models returned by load_memory_cards.
     These tests verify the full flow works without AttributeError.
     """
 
@@ -411,7 +409,7 @@ class TestMainLoopSimulation:
         cards = load_memory_cards(banks_path, best_ideas_path)
         # Simulate main() loop — this crashed before the fix
         for card in cards:
-            card_type = _card_type(card)
+            card_type = _classify_card_type(card)
             assert card_type == "ideas"
             assert isinstance(card, MemoryCard)
 
@@ -441,6 +439,7 @@ class TestMainLoopSimulation:
                         {
                             "id": "prog-1",
                             "fitness": 85.5,
+                            "is_valid": 1.0,
                             "code": "def f(): pass",
                             "task_description_summary": "Task",
                         }
@@ -459,8 +458,120 @@ class TestMainLoopSimulation:
         # Simulate main() loop
         type_counts = {"ideas": 0, "programs": 0}
         for card in cards:
-            card_type = _card_type(card)
+            card_type = _classify_card_type(card)
             type_counts[card_type] += 1
 
         assert type_counts["ideas"] == 1
         assert type_counts["programs"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 7: write_pipeline.main() full loop with file I/O
+# ---------------------------------------------------------------------------
+
+
+def test_write_pipeline_main_full_loop(tmp_path):
+    """Full-loop: write banks.json → call main() → memory gets cards."""
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from gigaevo.memory.write_pipeline import main
+    from gigaevo.memory.write_pipeline_config import PipelineConfig
+
+    # Use the same active_bank format that load_memory_cards expects
+    banks_data = [
+        {
+            "active_bank": [
+                {
+                    "id": "idea-1",
+                    "description": "Use beam search for decoding",
+                    "category": "general",
+                    "keywords": ["beam", "search"],
+                    "last_generation": 3,
+                }
+            ]
+        }
+    ]
+    best_ideas_data = [{"best_ideas": [{"idea_id": "idea-1"}]}]
+
+    banks_file = tmp_path / "banks.json"
+    best_ideas_file = tmp_path / "best_ideas.json"
+    memory_dir = tmp_path / "memory"
+
+    banks_file.write_text(json.dumps(banks_data))
+    best_ideas_file.write_text(json.dumps(best_ideas_data))
+    memory_dir.mkdir()
+
+    saved_cards = []
+
+    class FakeMemory:
+        def __init__(self, **kwargs):
+            pass
+
+        def save_card(self, card):
+            saved_cards.append(card)
+            return getattr(card, "id", "fake-id")
+
+        def get_card(self, mid):
+            return None
+
+        def search(self, query, **kw):
+            return ""
+
+        def delete(self, mid):
+            return True
+
+        def rebuild(self):
+            pass
+
+        def close(self):
+            pass
+
+        def get_card_write_stats(self):
+            return {
+                "processed": len(saved_cards),
+                "added": len(saved_cards),
+                "updated": 0,
+                "rejected": 0,
+                "updated_target_cards": 0,
+            }
+
+    cfg = MagicMock(spec=PipelineConfig)
+    cfg.banks_path = banks_file
+    cfg.best_ideas_path = best_ideas_file
+    cfg.programs_path = None
+    cfg.usage_updates_path = None
+    cfg.use_api = False
+    cfg.memory_dir = memory_dir
+    cfg.search_limit = 5
+    cfg.rebuild_interval = 10
+    cfg.enable_llm_synthesis = False
+    cfg.should_evolve = False
+    cfg.fill_missing_fields_with_llm = False
+    cfg.enable_bm25 = False
+    cfg.allowed_gam_tools = []
+    cfg.gam_top_k_by_tool = {}
+    cfg.gam_pipeline_mode = "default"
+    cfg.card_update_dedup_config = {}
+    cfg.best_programs_percent = 5.0
+    cfg.sync_batch_size = 100
+    cfg.sync_on_init = True
+    cfg.channel = "latest"
+    cfg.author = None
+    cfg.namespace = "default"
+    cfg.enable_usage_tracking = False
+    cfg.settings_path = tmp_path / "settings.yaml"
+
+    with (
+        patch("gigaevo.memory.write_pipeline.load_config", return_value=cfg),
+        patch("gigaevo.memory.write_pipeline.AmemGamMemory", FakeMemory),
+    ):
+        result = main(
+            banks_path=banks_file,
+            best_ideas_path=best_ideas_file,
+        )
+
+    assert len(saved_cards) >= 1, f"Expected at least 1 card written, got {saved_cards}"
+    card_ids = [getattr(c, "id", None) for c in saved_cards]
+    assert "idea-1" in card_ids, f"Expected idea-1 in saved cards, got {card_ids}"
+    assert result is not None

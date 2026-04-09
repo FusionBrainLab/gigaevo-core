@@ -56,7 +56,7 @@ def load_agentic_runtime() -> AgenticRuntime | None:
         from gigaevo.memory._vendor.GAM_root.gam.generator import (
             AMemGenerator as _AMemGenerator,
         )
-    except Exception as exc:
+    except ImportError as exc:
         logger.info(
             "[Memory] Agentic runtime dependencies unavailable: {}. "
             "Falling back to API full-text mode.",
@@ -101,7 +101,7 @@ def init_llm_and_generator(
             api_key=api_key,
             base_url=env_config.LLM_BASE_URL,
             temperature=0.0,
-            max_tokens=0,
+            max_tokens=None,
             reasoning=env_config.OPENROUTER_REASONING,
         )
         if generator_cls is None:

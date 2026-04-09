@@ -387,7 +387,7 @@ class TestScenarioDedup:
             None,
         )
         mem.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.9}]
         )
 
@@ -429,7 +429,7 @@ class TestScenarioDedup:
             None,
         )
         mem.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.85}]
         )
 
@@ -487,6 +487,7 @@ class TestScenarioWritePipeline:
                 {
                     "id": f"prog-{i}",
                     "fitness": 90.0 - i * 5,
+                    "is_valid": 1.0,
                     "generation": 10 + i,
                     "code": f"def solve_{i}(x):\n    return x[:{i + 1}]\n",
                     "task_description": "Multi-hop fact verification on HoVer",

@@ -146,3 +146,33 @@ class TestMemoryProviderIsABC:
     def test_cannot_instantiate_base(self) -> None:
         with pytest.raises(TypeError):
             MemoryProvider()  # type: ignore[abstract]
+
+
+# ---------------------------------------------------------------------------
+# Task 9: SelectorMemoryProvider select_cards calls underlying selector
+# ---------------------------------------------------------------------------
+
+
+def test_selector_memory_provider_select_cards_calls_selector():
+    """SelectorMemoryProvider.select_cards lazy-inits selector and delegates select."""
+    import asyncio
+
+    mock_selector = AsyncMock()
+    mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
+
+    with patch(
+        "gigaevo.memory.provider.MemorySelectorAgent",
+        return_value=mock_selector,
+    ):
+        provider = SelectorMemoryProvider(max_cards=3)
+        prog = _make_program()
+        result = asyncio.run(
+            provider.select_cards(
+                prog,
+                task_description="test task",
+                metrics_description="fitness",
+            )
+        )
+
+    mock_selector.select.assert_called_once()
+    assert isinstance(result, MemorySelection)

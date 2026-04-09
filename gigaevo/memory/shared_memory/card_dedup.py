@@ -90,14 +90,14 @@ class CardDedup:
 
     # --- Retriever building ---
 
-    def build_retrievers(self) -> dict[str, Any]:
+    def build_dedup_retrievers(self) -> dict[str, Any]:
         """Build dedup retriever index from exported records."""
         try:
             from gigaevo.memory.shared_memory.amem_gam_retriever import (
                 build_gam_store,
                 build_retrievers,
             )
-        except (ImportError, OSError) as exc:
+        except ImportError as exc:
             logger.warning("[Memory] Dedup retriever import failed: {}", exc)
             return {}
 
@@ -135,12 +135,12 @@ class CardDedup:
             if name in self._allowed_gam_tools
         }
 
-    def resolve_retriever(self, tool_name: str) -> Any:
+    def get_vector_retriever(self, tool_name: str) -> Any:
         """Resolve a retriever by tool name, building lazily if needed."""
         if self._retrievers is None:
             with self._retrievers_lock:
                 if self._retrievers is None:  # double-checked locking
-                    self._retrievers = self.build_retrievers()
+                    self._retrievers = self.build_dedup_retrievers()
         retrievers = self._retrievers or {}
         if not retrievers:
             return None
@@ -152,7 +152,7 @@ class CardDedup:
 
     # --- Scoring ---
 
-    def score_candidates(
+    def score_duplicate_candidates(
         self,
         card: AnyCard,
         resolve_retriever_fn: Callable[[str], Any] | None = None,
@@ -160,13 +160,13 @@ class CardDedup:
         """Score existing cards against incoming card via vector search.
 
         ``resolve_retriever_fn`` resolves tool names to retrievers.
-        If not provided, uses ``self.resolve_retriever``.
+        If not provided, uses ``self.get_vector_retriever``.
         """
         cfg = self._config
         if not cfg.enabled or not self._card_store.cards:
             return []
 
-        resolver = resolve_retriever_fn or self.resolve_retriever
+        resolver = resolve_retriever_fn or self.get_vector_retriever
 
         query_by_key = build_dedup_queries(card.model_dump())
         tool_by_key = {
@@ -235,7 +235,7 @@ class CardDedup:
 
     # --- LLM formatting ---
 
-    def format_for_llm(
+    def format_dedup_candidates_for_llm(
         self, scored_candidates: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         """Format scored candidates for the LLM dedup prompt."""
@@ -275,7 +275,7 @@ class CardDedup:
 
     # --- LLM decision ---
 
-    def decide_action(
+    def ask_llm_for_dedup_decision(
         self,
         incoming_card: AnyCard,
         candidates_for_llm: list[dict[str, Any]],
@@ -395,7 +395,7 @@ class CardDedup:
             )
         return decision
 
-    def process_incoming(self, card: AnyCard) -> DedupDecision:
+    def run_dedup_on_incoming_card(self, card: AnyCard) -> DedupDecision:
         """Full dedup pipeline: score → format → decide → compute merges.
 
         Returns a typed DedupDecision with action and merges.
@@ -410,7 +410,7 @@ class CardDedup:
                 merges=[],
             )
 
-        scored = self.score_candidates(card)
+        scored = self.score_duplicate_candidates(card)
         if not scored:
             return DedupDecision(
                 action="add",
@@ -419,8 +419,8 @@ class CardDedup:
                 merges=[],
             )
 
-        candidates = self.format_for_llm(scored)
-        decision_dict = self.decide_action(card, candidates)
+        candidates = self.format_dedup_candidates_for_llm(scored)
+        decision_dict = self.ask_llm_for_dedup_decision(card, candidates)
 
         action = str(decision_dict.get("action") or "add").strip().lower()
         merges: list[tuple[str, AnyCard]] = []
@@ -428,7 +428,7 @@ class CardDedup:
         if action == "update":
             updates = decision_dict.get("updates")
             if isinstance(updates, list) and updates:
-                merges = self.compute_merges(card, updates)
+                merges = self.compute_card_merge_updates(card, updates)
 
         return DedupDecision(
             action=action,
@@ -439,7 +439,7 @@ class CardDedup:
 
     # --- Merge computation ---
 
-    def compute_merges(
+    def compute_card_merge_updates(
         self,
         incoming_card: AnyCard,
         updates: list[dict[str, Any]],

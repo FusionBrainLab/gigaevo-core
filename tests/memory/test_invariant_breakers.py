@@ -216,13 +216,13 @@ class TestPersistenceDivergence:
 
         card = normalize_memory_card({"id": "test-card", "description": "test"})
         with pytest.raises(RuntimeError, match="API error"):
-            mem._save_card_core(card)
+            mem._insert_new_card(card)
 
         # Card is NOT in memory — the exception interrupted before line 228
         assert "test-card" not in mem.card_store.cards
 
     def test_note_sync_raises_card_in_memory_not_in_vector(self, tmp_path):
-        """B2: If upsert_agentic raises AFTER store.cards is updated,
+        """B2: If sync_card_to_amem_with_evolution raises AFTER store.cards is updated,
         the card is in memory but NOT in the vector store."""
         mem, _ = make_test_memory_with_agentic(tmp_path)
         assert mem.note_sync is not None
@@ -230,11 +230,11 @@ class TestPersistenceDivergence:
         def failing_upsert(card):
             raise RuntimeError("Chroma write failed")
 
-        mem.note_sync.upsert_agentic = failing_upsert
+        mem.note_sync.sync_card_to_amem_with_evolution = failing_upsert
 
         card = normalize_memory_card({"id": "orphan", "description": "test"})
         with pytest.raises(RuntimeError, match="Chroma write failed"):
-            mem._save_card_core(card)
+            mem._insert_new_card(card)
 
         # Card IS in memory (line 228 executed before line 231)
         assert "orphan" in mem.card_store.cards
@@ -242,17 +242,17 @@ class TestPersistenceDivergence:
         assert "orphan" not in mem.note_sync.memory_system.memories
 
     def test_rebuild_triggered_skips_redundant_persist(self, tmp_path):
-        """B3: When _save_card_core triggers periodic rebuild, _save_and_persist
+        """B3: When _insert_new_card triggers periodic rebuild, _save_new_card_and_flush
         correctly skips the extra persist() call."""
         mem = _make_memory(tmp_path, rebuild_interval=1)
 
         with patch.object(
             mem.card_store, "persist", wraps=mem.card_store.persist
         ) as spy:
-            mem._save_and_persist(
+            mem._save_new_card_and_flush(
                 normalize_memory_card({"id": "c1", "description": "test"})
             )
-            # rebuild() calls persist once, _save_and_persist should NOT call again
+            # rebuild() calls persist once, _save_new_card_and_flush should NOT call again
             # persist is called inside rebuild() via card_store.persist(serialized=...)
             assert spy.call_count == 1
 

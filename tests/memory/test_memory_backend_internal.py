@@ -1,6 +1,6 @@
 """Cycle 3: Deeper coverage for AmemGamMemory internals.
 
-Tests _apply_update_actions_from_merges, _save_card_core rebuild trigger,
+Tests _apply_dedup_merge_updates, _insert_new_card rebuild trigger,
 _build_entity_meta, _concept_to_card, _ensure_card_id, and
 save_card branching logic.
 """
@@ -21,15 +21,15 @@ def _make_memory(tmp_path, **overrides):
 
 
 # ===========================================================================
-# _apply_update_actions_from_merges (via dedup.compute_merges)
+# _apply_dedup_merge_updates (via dedup.compute_card_merge_updates)
 # ===========================================================================
 
 
 class TestApplyUpdateActions:
     def _apply(self, mem, incoming, updates):
         """Compute merges and apply them — replaces deleted _apply_update_actions."""
-        merges = mem.dedup.compute_merges(incoming, updates)
-        return mem._apply_update_actions_from_merges(merges)
+        merges = mem.dedup.compute_card_merge_updates(incoming, updates)
+        return mem._apply_dedup_merge_updates(merges)
 
     def test_updates_existing_card(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -99,7 +99,7 @@ class TestApplyUpdateActions:
 
 
 # ===========================================================================
-# _save_card_core rebuild trigger
+# _insert_new_card rebuild trigger
 # ===========================================================================
 
 
@@ -286,7 +286,7 @@ class TestSaveCardBranching:
             None,
         )
         mem.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.8}]
         )
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from dotenv import load_dotenv
+if TYPE_CHECKING:
+    import types
+
 from loguru import logger
 
 from gigaevo.exceptions import MemoryRetrieverError
@@ -40,8 +42,6 @@ if TYPE_CHECKING:
         LLMServiceProtocol,
         ResearchAgentProtocol,
     )
-
-load_dotenv()
 
 
 class AmemGamMemory(GigaEvoMemoryBase):
@@ -163,7 +163,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if self._has_agentic and cfg.export_file.exists() and self.gam is not None:
             try:
-                self.gam.build()
+                self.gam.build_research_agent()
                 self.research_agent = self.gam.agent
             except MemoryRetrieverError as exc:
                 logger.debug("[Memory] Initial retriever load skipped: {}", exc)
@@ -173,7 +173,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         self._state.mark_ready()
 
-    def _ensure_api_sync(self) -> ApiSync | None:
+    def _get_api_sync(self) -> ApiSync | None:
         """Lazily create ApiSync if mem.api was set post-construction."""
         if self.api_sync is not None:
             return self.api_sync
@@ -193,7 +193,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return self.api_sync
 
     def _sync_from_api(self, force_full: bool = False) -> bool:
-        sync = self._ensure_api_sync()
+        sync = self._get_api_sync()
         if sync is None:
             return False
         changed = sync.sync(force_full=force_full)
@@ -210,14 +210,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.card_store.persist()
         return changed
 
-    def _apply_update_actions_from_merges(
+    def _apply_dedup_merge_updates(
         self, merges: list[tuple[str, AnyCard]]
     ) -> list[str]:
         """Apply pre-computed merges from dedup decision."""
         updated_ids: list[str] = []
         for card_id, merged_card in merges:
             try:
-                self._save_card_core(merged_card)
+                self._insert_new_card(merged_card)
                 updated_ids.append(card_id)
             except Exception as exc:
                 logger.warning("[Memory] Merge into card {!r} failed: {}", card_id, exc)
@@ -225,7 +225,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.card_store.persist()
         return updated_ids
 
-    def _save_card_core(self, card: AnyCard) -> tuple[str, bool]:
+    def _insert_new_card(self, card: AnyCard) -> tuple[str, bool]:
         """Save card to storage. Returns (card_id, rebuilt) where rebuilt
         indicates whether a periodic rebuild (which includes index persist)
         was triggered."""
@@ -242,7 +242,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 card = card.model_copy(update=enrichments)
 
         store = self.card_store
-        sync = self._ensure_api_sync()
+        sync = self._get_api_sync()
         if sync is not None:
             sync.save_card_to_api(card, card_id)
         else:
@@ -250,7 +250,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         store.cards[card_id] = normalize_memory_card(card, fallback_id=card_id)
 
         if self.note_sync is not None:
-            self.note_sync.upsert_agentic(store.cards[card_id])
+            self.note_sync.sync_card_to_amem_with_evolution(store.cards[card_id])
         self.dedup.invalidate_retrievers()
 
         rebuilt = False
@@ -261,9 +261,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         return card_id, rebuilt
 
-    def _save_and_persist(self, card: AnyCard) -> str:
+    def _save_new_card_and_flush(self, card: AnyCard) -> str:
         """Save card and persist index unless a periodic rebuild already did."""
-        card_id, rebuilt = self._save_card_core(card)
+        card_id, rebuilt = self._insert_new_card(card)
         if not rebuilt:
             self.card_store.persist()
         return card_id
@@ -284,11 +284,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if incoming_card_id and incoming_card_id in store.cards:
             store.write_stats["updated"] += 1
-            return self._save_and_persist(normalized_card)
+            return self._save_new_card_and_flush(normalized_card)
 
         if is_program_card(normalized_card):
             store.write_stats["added"] += 1
-            return self._save_and_persist(normalized_card)
+            return self._save_new_card_and_flush(normalized_card)
 
         dedup_ready = self.config.dedup.enabled and store.cards
         if dedup_ready and self.llm_service is None:
@@ -301,7 +301,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if dedup_ready and self.llm_service is not None:
             self.dedup.llm_service = self.llm_service
-            decision = self.dedup.process_incoming(normalized_card)
+            decision = self.dedup.run_dedup_on_incoming_card(normalized_card)
 
             if decision.action == "discard":
                 store.write_stats["rejected"] += 1
@@ -310,14 +310,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 return store.ensure_id(normalized_card)
 
             if decision.action == "update" and decision.merges:
-                updated_ids = self._apply_update_actions_from_merges(decision.merges)
+                updated_ids = self._apply_dedup_merge_updates(decision.merges)
                 if updated_ids:
                     store.write_stats["updated"] += 1
                     store.write_stats["updated_target_cards"] += len(updated_ids)
                     return updated_ids[0]
 
         store.write_stats["added"] += 1
-        return self._save_and_persist(normalized_card)
+        return self._save_new_card_and_flush(normalized_card)
 
     def save(self, data: str, category: str = "general") -> str:
         """Save a text description as a new memory card."""
@@ -341,7 +341,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return format_search_results(query, cards)
 
     def _search_via_api(self, query: str, memory_state: str | None = None) -> str:
-        sync = self._ensure_api_sync()
+        sync = self._get_api_sync()
         if sync is None:
             return self._search_local_cards(query, memory_state)
 
@@ -405,14 +405,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
             if track_state:
                 self._state.mark_building()
             try:
-                self.gam.build()
+                self.gam.build_research_agent()
                 self.research_agent = self.gam.agent
                 self._gam_build_failed = False
                 if track_state:
                     self._state.mark_ready()
             except MemoryRetrieverError as exc:
                 logger.warning("[Memory] GAM build failed: {}", exc)
-                self.gam.invalidate()
+                self.gam.clear_research_agent()
                 self.research_agent = None
                 self._gam_build_failed = True
                 if track_state:
@@ -424,7 +424,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         """Delete a card by ID or entity ID. Returns True if found and removed."""
         key = str(memory_id).strip()
         store = self.card_store
-        sync = self._ensure_api_sync()
+        sync = self._get_api_sync()
         if sync is not None:
             card_id = sync.delete_from_api(key)
             if card_id is None:
@@ -460,7 +460,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: Any,
+        exc_tb: types.TracebackType | None,
     ) -> None:
         if self._iters_after_rebuild > 0:
             try:

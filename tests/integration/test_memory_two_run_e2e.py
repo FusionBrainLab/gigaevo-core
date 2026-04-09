@@ -47,7 +47,7 @@ from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 from gigaevo.memory.ideas_tracker.ideas_tracker import (
-    _build_usage_updates as build_memory_usage_updates_from_programs,
+    _compute_usage_updates_from_program_selection as build_memory_usage_updates_from_programs,
 )
 from gigaevo.memory.ideas_tracker.models import (
     programs_to_records,

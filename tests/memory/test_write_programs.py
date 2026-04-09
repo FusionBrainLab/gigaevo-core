@@ -60,6 +60,7 @@ def test_load_memory_cards_adds_top_program_cards(tmp_path):
                     {
                         "id": f"prog-{idx}",
                         "fitness": float(idx),
+                        "is_valid": 1.0,
                         "generation": idx,
                         "strategy": "hybrid",
                         "task_description": "Solve the task.",
@@ -112,7 +113,7 @@ def test_program_cards_bypass_idea_dedup(tmp_path):
     def _unexpected_call(*args, **kwargs):
         raise AssertionError("Program cards should not use idea-card dedup.")
 
-    memory.dedup.score_candidates = _unexpected_call  # type: ignore[method-assign]
+    memory.dedup.score_duplicate_candidates = _unexpected_call  # type: ignore[method-assign]
 
     card_id = memory.save_card(
         {

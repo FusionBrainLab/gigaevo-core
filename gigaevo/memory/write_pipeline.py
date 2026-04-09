@@ -21,6 +21,7 @@ from gigaevo.memory.shared_memory.memory_config import (
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
 from gigaevo.memory.utils import to_float
 from gigaevo.memory.write_pipeline_config import PipelineConfig, load_config
+from gigaevo.programs.metrics.context import VALIDITY_KEY
 
 _MAX_CONNECTED_DESCRIPTIONS = 5
 
@@ -37,7 +38,7 @@ def _load_json(path: Path) -> Any:
         return json.load(f)
 
 
-def _latest_snapshot(payload: Any, required_key: str) -> dict[str, Any]:
+def _extract_latest_snapshot(payload: Any, required_key: str) -> dict[str, Any]:
     if isinstance(payload, dict):
         if required_key in payload:
             return payload
@@ -62,7 +63,7 @@ def _top_percent_count(total: int, percent: float) -> int:
     return max(1, ceil(total * (percent / 100.0)))
 
 
-def _card_type(card: dict[str, Any] | AnyCard) -> str:
+def _classify_card_type(card: dict[str, Any] | AnyCard) -> str:
     if isinstance(card, ProgramCard):
         return "programs"
     if isinstance(card, dict):
@@ -125,7 +126,7 @@ def _load_usage_updates(path: Path | None) -> dict[str, dict[str, Any]]:
 
 def _parse_best_ideas(path: Path) -> tuple[list[str], dict[str, dict[str, Any]]]:
     payload = _load_json(path)
-    snapshot = _latest_snapshot(payload, "best_ideas")
+    snapshot = _extract_latest_snapshot(payload, "best_ideas")
     best_ideas = snapshot.get("best_ideas")
     if not isinstance(best_ideas, list):
         raise ValueError(
@@ -150,7 +151,7 @@ def _parse_best_ideas(path: Path) -> tuple[list[str], dict[str, dict[str, Any]]]
 
 def _parse_programs(path: Path) -> list[dict[str, Any]]:
     payload = _load_json(path)
-    snapshot = _latest_snapshot(payload, "programs")
+    snapshot = _extract_latest_snapshot(payload, "programs")
     programs = snapshot.get("programs")
     if not isinstance(programs, list):
         raise ValueError(
@@ -159,7 +160,7 @@ def _parse_programs(path: Path) -> list[dict[str, Any]]:
     return [program for program in programs if isinstance(program, dict)]
 
 
-def _merge_best_idea_metrics(
+def _merge_best_idea_metrics_into_card(
     card: dict[str, Any], best_entry: dict[str, Any]
 ) -> dict[str, Any]:
     merged = dict(card)
@@ -186,7 +187,7 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
         raise FileNotFoundError(f"Best ideas file not found: {best_ideas_path}")
 
     payload = _load_json(path)
-    snapshot = _latest_snapshot(payload, "active_bank")
+    snapshot = _extract_latest_snapshot(payload, "active_bank")
     active_bank = snapshot.get("active_bank")
     if not isinstance(active_bank, list):
         raise ValueError(f"Invalid banks format in {path}: expected 'active_bank' list")
@@ -206,12 +207,12 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
         best_entry = best_by_id.get(idea_id, {})
         if bank_card is None:
             missing_cards.append(idea_id)
-            bank_card = {"id": idea_id}
-        selected_cards.append(_merge_best_idea_metrics(bank_card, best_entry))
+            continue
+        selected_cards.append(_merge_best_idea_metrics_into_card(bank_card, best_entry))
 
     if missing_cards:
         logger.warning(
-            "{} best_ideas IDs were missing in banks and were written as minimal cards.",
+            "{} best_ideas IDs were missing in banks and were skipped.",
             len(missing_cards),
         )
 
@@ -220,14 +221,14 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
 
 def _load_latest_bank_cards(path: Path) -> list[dict[str, Any]]:
     payload = _load_json(path)
-    snapshot = _latest_snapshot(payload, "active_bank")
+    snapshot = _extract_latest_snapshot(payload, "active_bank")
     active_bank = snapshot.get("active_bank")
     if not isinstance(active_bank, list):
         raise ValueError(f"Invalid banks format in {path}: expected 'active_bank' list")
     return [card for card in active_bank if isinstance(card, dict)]
 
 
-def _build_program_cards(
+def _build_program_cards_from_top_programs(
     *,
     programs_path: Path | None,
     banks_path: Path,
@@ -249,6 +250,11 @@ def _build_program_cards(
         program_id = str(program.get("id") or program.get("program_id") or "").strip()
         fitness = to_float(program.get("fitness"))
         if not program_id or fitness is None:
+            continue
+        # Absent is_valid means ideas_tracker already pre-filtered (valid-only).
+        # Only skip when is_valid is explicitly 0 (raw Redis export path).
+        is_valid = to_float(program.get(VALIDITY_KEY))
+        if is_valid is not None and is_valid <= 0:
             continue
         enriched = dict(program)
         enriched["program_id"] = program_id
@@ -334,7 +340,7 @@ def _build_program_cards(
     return cards
 
 
-def _apply_usage_updates_to_cards(
+def _apply_usage_updates_to_card_list(
     cards: list[dict[str, Any]],
     *,
     usage_updates: dict[str, dict[str, Any]],
@@ -403,13 +409,13 @@ def load_memory_cards(
         )
 
     if usage_updates and memory is not None:
-        cards = _apply_usage_updates_to_cards(
+        cards = _apply_usage_updates_to_card_list(
             cards,
             usage_updates=usage_updates,
             memory=memory,
         )
 
-    all_cards = cards + _build_program_cards(
+    all_cards = cards + _build_program_cards_from_top_programs(
         programs_path=programs_path,
         banks_path=path,
         best_programs_percent=best_programs_percent,
@@ -421,16 +427,16 @@ def _write_memory_write_stats(
     *,
     stats_path: Path,
     input_cards_count: int,
-    input_card_type_counts: dict[str, int],
+    input_classify_card_type_counts: dict[str, int],
     write_stats: dict[str, int],
-    write_stats_by_card_type: dict[str, dict[str, int]],
+    write_stats_by_classify_card_type: dict[str, dict[str, int]],
 ) -> dict[str, Any]:
     snapshot = {
         "timestamp_utc": datetime.now(UTC).isoformat(),
         "input_cards_count": int(input_cards_count),
-        "input_card_type_counts": input_card_type_counts,
+        "input_classify_card_type_counts": input_classify_card_type_counts,
         "stats": write_stats,
-        "stats_by_card_type": write_stats_by_card_type,
+        "stats_by_classify_card_type": write_stats_by_classify_card_type,
     }
 
     existing: list[dict[str, Any]] = []
@@ -470,7 +476,7 @@ def main(
     _best_ideas_path = best_ideas_path or cfg.best_ideas_path
     _programs_path = programs_path or cfg.programs_path
     _usage_updates_path = (
-        usage_updates_path if banks_path is not None else cfg.usage_updates_path
+        usage_updates_path if usage_updates_path is not None else cfg.usage_updates_path
     )
 
     # Build configuration based on use_api flag
@@ -538,20 +544,20 @@ def main(
         else:
             logger.info("Writing in local-only mode (checkpoint={})", cfg.memory_dir)
 
-        write_stats_by_card_type = {
+        write_stats_by_classify_card_type = {
             "ideas": _zero_write_stats(),
             "programs": _zero_write_stats(),
         }
         try:
             for idx, card in enumerate(memory_cards, start=1):
-                card_type = _card_type(card)
+                card_type = _classify_card_type(card)
                 before_stats = memory.get_card_write_stats()
                 memory_id = memory.save_card(card)
                 after_stats = memory.get_card_write_stats()
                 stat_diff = _diff_write_stats(before_stats, after_stats)
                 for stat_name, stat_value in stat_diff.items():
-                    write_stats_by_card_type[card_type][stat_name] = int(
-                        write_stats_by_card_type[card_type].get(stat_name, 0)
+                    write_stats_by_classify_card_type[card_type][stat_name] = int(
+                        write_stats_by_classify_card_type[card_type].get(stat_name, 0)
                     ) + int(stat_value)
                 stored = memory.get_card(memory_id)
                 logger.debug(
@@ -568,10 +574,12 @@ def main(
         logger.info("Local API index saved in: {}", cfg.memory_dir / "api_index.json")
 
         write_stats = memory.get_card_write_stats()
-        input_card_type_counts = {
-            "ideas": sum(1 for card in memory_cards if _card_type(card) == "ideas"),
+        input_classify_card_type_counts = {
+            "ideas": sum(
+                1 for card in memory_cards if _classify_card_type(card) == "ideas"
+            ),
             "programs": sum(
-                1 for card in memory_cards if _card_type(card) == "programs"
+                1 for card in memory_cards if _classify_card_type(card) == "programs"
             ),
         }
         logger.info(
@@ -582,14 +590,14 @@ def main(
             write_stats.get("added", 0),
             write_stats.get("updated", 0),
             write_stats.get("rejected", 0),
-            write_stats_by_card_type["ideas"].get("processed", 0),
-            write_stats_by_card_type["ideas"].get("added", 0),
-            write_stats_by_card_type["ideas"].get("updated", 0),
-            write_stats_by_card_type["ideas"].get("rejected", 0),
-            write_stats_by_card_type["programs"].get("processed", 0),
-            write_stats_by_card_type["programs"].get("added", 0),
-            write_stats_by_card_type["programs"].get("updated", 0),
-            write_stats_by_card_type["programs"].get("rejected", 0),
+            write_stats_by_classify_card_type["ideas"].get("processed", 0),
+            write_stats_by_classify_card_type["ideas"].get("added", 0),
+            write_stats_by_classify_card_type["ideas"].get("updated", 0),
+            write_stats_by_classify_card_type["ideas"].get("rejected", 0),
+            write_stats_by_classify_card_type["programs"].get("processed", 0),
+            write_stats_by_classify_card_type["programs"].get("added", 0),
+            write_stats_by_classify_card_type["programs"].get("updated", 0),
+            write_stats_by_classify_card_type["programs"].get("rejected", 0),
             write_stats.get("updated_target_cards", 0),
         )
 
@@ -597,9 +605,9 @@ def main(
         snapshot = _write_memory_write_stats(
             stats_path=stats_path,
             input_cards_count=len(memory_cards),
-            input_card_type_counts=input_card_type_counts,
+            input_classify_card_type_counts=input_classify_card_type_counts,
             write_stats=write_stats,
-            write_stats_by_card_type=write_stats_by_card_type,
+            write_stats_by_classify_card_type=write_stats_by_classify_card_type,
         )
         logger.info("Memory write stats saved to: {}", stats_path)
         return snapshot

@@ -356,8 +356,8 @@ class TestDedup:
         )
         mem.llm_service = mock_llm
 
-        # Mock dedup.score_candidates to return a synthetic candidate
-        mem.dedup.score_candidates = MagicMock(
+        # Mock dedup.score_duplicate_candidates to return a synthetic candidate
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.9}]
         )
 
@@ -379,7 +379,7 @@ class TestDedup:
             None,
         )
         mem.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.3}]
         )
 
