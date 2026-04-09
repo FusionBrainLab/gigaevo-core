@@ -114,6 +114,9 @@ class NoteSync:
             self._card_store.note_ids.add(note.id)
             return False
 
+        # Direct dict write bypasses LLM evolution — intentional for the fast path.
+        # AgenticMemoryProtocol has no public write-without-LLM method, so we access
+        # the backing store directly here.
         self.memory_system.memories[note.id] = note
         try:
             self.memory_system.retriever.delete_document(note.id)
@@ -124,7 +127,7 @@ class NoteSync:
                 exc,
             )
         self.memory_system.retriever.add_document(
-            self.memory_system._document_for_note(note),
+            self.memory_system.document_for_note(note),
             note_metadata(note),
             note.id,
         )
