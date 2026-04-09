@@ -11,6 +11,11 @@ Receives:
 Selection fitness = sigmoid resistance = mean(sigmoid(-delta_i / T)), T=Q_MAX/9
     near 1 when D fails to improve, near 0 when D strongly improves.
 
+    delta_i = post_quality - raw_quality  (signed, no clamp)
+    Positive delta → D improved config → resistance < 0.5
+    Negative delta → D worsened config → resistance > 0.5
+    Zero delta → no change → resistance = 0.5
+
 GAN analogy: G's only gradient comes from D. Quality (actual min_area) emerges
 indirectly — configs that are near-optimal are hardest for D to improve.
 """
@@ -96,7 +101,7 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
                 deltas.append(0.0)
                 continue
             post_q = float(get_smallest_triangle_area(improved))
-            delta = max(post_q - raw_quality, 0.0)
+            delta = post_q - raw_quality  # signed: negative when D worsens config
             resistance_scores.append(_sigmoid(-delta / _T))
             deltas.append(delta)
         except Exception:
