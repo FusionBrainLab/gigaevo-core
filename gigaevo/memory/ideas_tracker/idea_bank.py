@@ -6,7 +6,8 @@ Also contains usage-payload helpers (build, merge) previously in utils/helpers.p
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from uuid import uuid4
 
 from gigaevo.memory.ideas_tracker.models import (
