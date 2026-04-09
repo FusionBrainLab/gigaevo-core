@@ -17,6 +17,8 @@ from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.memory_config import ApiConfig
 from tests.fakes.agentic_memory import make_test_memory
 
+# Note: normalize_memory_card is imported at top-level for contract tests below
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -270,8 +272,6 @@ class TestBuildEntityMetaContent:
     """Assert specific content in entity metadata, not just types."""
 
     def test_name_from_description(self, tmp_path):
-        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-
         _make_memory(tmp_path)
         card = normalize_memory_card(
             {
@@ -291,8 +291,6 @@ class TestBuildEntityMetaContent:
         assert "TSP" in when_to_use or "annealing" in when_to_use.lower()
 
     def test_program_card_meta(self, tmp_path):
-        from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-
         _make_memory(tmp_path)
         card = normalize_memory_card(
             {
