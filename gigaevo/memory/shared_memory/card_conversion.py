@@ -21,11 +21,11 @@ from gigaevo.memory.shared_memory.models import (
 from gigaevo.memory.shared_memory.utils import (
     _safe_get,
     _str_or_empty,
-    _to_float,
     _to_int,
     _to_list,
     dedupe_keep_order,
 )
+from gigaevo.memory.utils import to_float
 
 _ENTITY_NAME_MAX_LENGTH = 255
 
@@ -117,7 +117,7 @@ def normalize_memory_card(
                 raw.get("task_description_summary") or raw.get("context_summary") or ""
             ),
             description=str(raw.get("description") or raw.get("content") or ""),
-            fitness=_to_float(raw.get("fitness"), default=None),
+            fitness=to_float(raw.get("fitness"), default=None),
             code=str(raw.get("code") or ""),
             connected_ideas=_to_list(raw.get("connected_ideas")),
             keywords=_to_list(raw.get("keywords")),

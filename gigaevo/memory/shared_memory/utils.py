@@ -24,12 +24,6 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _to_float(value: Any, default: float | None = None) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
 
 def _str_or_empty(value: Any) -> str:
     """Convert to string, preserving falsy-but-valid values like 0."""
