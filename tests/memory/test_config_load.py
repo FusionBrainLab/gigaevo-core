@@ -5,8 +5,6 @@ from __future__ import annotations
 import importlib
 import sys
 
-import pytest
-
 
 def _reload_config(monkeypatch, extra_env: dict | None = None):
     """Reload config module with clean env."""
@@ -54,10 +52,22 @@ class TestConfigConstants:
         """config.py must NOT import from runtime_config except resolve_settings_path."""
         import ast
         import pathlib
+
         src = pathlib.Path("gigaevo/memory/config.py").read_text()
         tree = ast.parse(src)
-        forbidden = {"deep_get", "load_settings", "to_str", "to_bool", "to_int", "to_list"}
+        forbidden = {
+            "deep_get",
+            "load_settings",
+            "to_str",
+            "to_bool",
+            "to_int",
+            "to_list",
+        }
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module and "runtime_config" in node.module:
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module
+                and "runtime_config" in node.module
+            ):
                 names = {alias.name for alias in node.names}
                 assert not names & forbidden, f"Forbidden import: {names & forbidden}"
