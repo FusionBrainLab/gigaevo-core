@@ -19,7 +19,6 @@ from gigaevo.memory.runtime_config import (
     to_list,
     to_str,
 )
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 THIS_DIR = Path(__file__).resolve().parent
 SETTINGS_PATH = resolve_settings_path()
@@ -153,16 +152,3 @@ BEST_PROGRAMS_PERCENT = max(
 )
 
 
-def resolve_memory_backend_class(use_api: bool):
-    """Resolve the correct AmemGamMemory class based on use_api flag."""
-    if use_api:
-        try:
-            from gigaevo.memory_platform import AmemGamMemory as platform_backend
-        except Exception as exc:
-            raise RuntimeError(
-                "api.use_api=true selected the platform-backed memory backend, "
-                "but gigaevo.memory_platform could not be imported."
-            ) from exc
-        return platform_backend
-
-    return AmemGamMemory

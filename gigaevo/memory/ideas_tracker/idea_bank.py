@@ -117,7 +117,7 @@ class IdeaBank:
 
     def __init__(self, chunk_size: int = 5) -> None:
         self._ideas: list[Idea] = []
-        self._ids: set[str] = set()
+        self._id_index: dict[str, int] = {}  # O(1) id → list-index lookup
         self._chunk_size = chunk_size
 
     # ------------------------------------------------------------------
@@ -126,10 +126,10 @@ class IdeaBank:
 
     def add(self, idea: Idea) -> None:
         """Append an Idea. Reassigns id if it already exists in the bank."""
-        if idea.id in self._ids:
+        if idea.id in self._id_index:
             idea = idea.model_copy(update={"id": str(uuid4())})
+        self._id_index[idea.id] = len(self._ideas)
         self._ideas.append(idea)
-        self._ids.add(idea.id)
 
     def apply(self, result: AnalysisResult) -> None:
         """Add all new_ideas and apply all updates from an AnalysisResult."""
@@ -253,6 +253,4 @@ class IdeaBank:
     # ------------------------------------------------------------------
 
     def _index(self, idea_id: str) -> int | None:
-        if idea_id not in self._ids:
-            return None
-        return next((i for i, x in enumerate(self._ideas) if x.id == idea_id), None)
+        return self._id_index.get(idea_id)

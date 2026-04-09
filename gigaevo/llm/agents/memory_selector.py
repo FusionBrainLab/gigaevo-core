@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
@@ -11,6 +10,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from loguru import logger
+from pydantic import BaseModel, ConfigDict
 
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.programs.program import Program
@@ -26,14 +26,19 @@ try:
         to_list,
         to_str,
     )
+    from gigaevo.memory.shared_memory.memory import AmemGamMemory
+    from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
 except Exception as exc:
     _RUNTIME_IMPORT_ERROR: Exception | None = exc
 else:
     _RUNTIME_IMPORT_ERROR = None
 
 
-@dataclass
-class MemorySelection:
+class MemorySelection(BaseModel):
+    """Result of memory card selection for mutation guidance."""
+
+    model_config = ConfigDict(frozen=True)
+
     cards: list[str]
     card_ids: list[str]
 
@@ -184,13 +189,7 @@ class MemorySelectorAgent:
                     gam_pipeline_mode=gam_pipeline_mode,
                 )
             else:
-                # Local backend uses MemoryConfig (clean API)
-                from gigaevo.memory.shared_memory.memory import AmemGamMemory
-                from gigaevo.memory.shared_memory.memory_config import (
-                    GamConfig,
-                    MemoryConfig,
-                )
-
+                # Local backend uses MemoryConfig
                 mem_config = MemoryConfig(
                     checkpoint_path=memory_dir,
                     search_limit=search_limit,
