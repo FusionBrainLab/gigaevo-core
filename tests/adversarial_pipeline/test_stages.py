@@ -29,6 +29,13 @@ class FakeProvider(OpponentArchiveProvider):
     async def get_opponents(self, n: int = 5) -> list[OpponentProgram]:
         return self._opponents[:n]
 
+    async def get_top_k(
+        self, k: int, *, higher_is_better: bool = True
+    ) -> list[OpponentProgram]:
+        return sorted(
+            self._opponents, key=lambda o: o.fitness, reverse=higher_is_better
+        )[:k]
+
     async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
         id_map = {o.program_id: o.code for o in self._opponents}
         return [id_map[i] for i in ids if i in id_map]

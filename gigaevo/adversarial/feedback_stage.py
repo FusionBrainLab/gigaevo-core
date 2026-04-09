@@ -77,24 +77,26 @@ class OpponentFeedbackStage(Stage):
         opponent_provider: OpponentArchiveProvider,
         k: int = 3,
         role: Literal["constructor", "improver"] = "constructor",
+        higher_is_better: bool = True,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self._provider = opponent_provider
         self._k = k
         self._role = role
+        self._higher_is_better = higher_is_better
 
     async def compute(self, program: Program) -> StringContainer:  # noqa: ARG002
-        # Oversample so we can pick top-K after sorting
-        candidates = await self._provider.get_opponents(n=self._k * 5)
+        top_k = await self._provider.get_top_k(
+            self._k, higher_is_better=self._higher_is_better
+        )
 
-        if not candidates:
+        if not top_k:
             logger.info(
                 "[OpponentFeedback] no opponents in archive (cold start) — skipping feedback"
             )
             return StringContainer(data="")
 
-        top_k = sorted(candidates, key=lambda o: o.fitness, reverse=True)[: self._k]
         if len(top_k) < self._k:
             logger.warning(
                 "[OpponentFeedback] requested k={} but only {} opponents available (sparse archive)",

@@ -63,6 +63,26 @@ class OpponentArchiveProvider(ABC):
         ...
 
     @abstractmethod
+    async def get_top_k(
+        self, k: int, *, higher_is_better: bool = True
+    ) -> list[OpponentProgram]:
+        """Return the top-k opponents by fitness (deterministic, not stochastic).
+
+        Unlike get_opponents(), this always returns the globally best k programs
+        from the current cache — suitable for mutation prompt feedback where the
+        LLM should see the strongest rivals.
+
+        Args:
+            k: Number of opponents to return.
+            higher_is_better: If True (default), highest fitness = strongest rival.
+                Set to False for metrics where lower values are better.
+
+        Returns:
+            List of up to k OpponentProgram sorted by fitness (desc if higher_is_better).
+        """
+        ...
+
+    @abstractmethod
     async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
         """Return codes for the given opponent program IDs.
 
@@ -185,6 +205,17 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
 
         weights = _softmax_weights(fitnesses)
         return weighted_sample_without_replacement(self._cache, weights, n)
+
+    async def get_top_k(
+        self, k: int, *, higher_is_better: bool = True
+    ) -> list[OpponentProgram]:
+        now = time.monotonic()
+        if not self._cache or (now - self._cache_time) > self._cache_ttl:
+            await self._refresh_cache()
+            self._cache_time = now
+        return sorted(self._cache, key=lambda o: o.fitness, reverse=higher_is_better)[
+            :k
+        ]
 
     async def _refresh_cache(self) -> None:
         """Read all opponent programs from all source archives."""
