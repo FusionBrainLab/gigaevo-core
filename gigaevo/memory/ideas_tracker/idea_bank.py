@@ -25,7 +25,7 @@ from gigaevo.memory.utils import median, to_float
 # ---------------------------------------------------------------------------
 
 
-def build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
+def build_usage_payload(task_to_deltas: dict[str, list[float]]) -> UsagePayload:
     usage_entries: list[UsageEntry] = []
     total_deltas: list[float] = []
     for task_summary in sorted(task_to_deltas):
@@ -45,15 +45,22 @@ def build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any
             )
         )
         total_deltas.extend(deltas)
-    payload = UsagePayload(
+    return UsagePayload(
         entries=usage_entries,
         total_used=len(total_deltas),
-        median_delta_fitness=median(total_deltas),
+        median_delta_fitness=median(total_deltas) if total_deltas else None,
     )
-    return {"used": payload.model_dump()}
 
 
-def _extract_task_deltas(usage: Any) -> dict[str, list[float]]:
+def _extract_task_deltas(usage: UsagePayload | Any) -> dict[str, list[float]]:
+    if isinstance(usage, UsagePayload):
+        result: dict[str, list[float]] = {}
+        for entry in usage.entries:
+            deltas = [d for d in entry.fitness_delta_per_use if d is not None]
+            if deltas:
+                result.setdefault(entry.task_description_summary, []).extend(deltas)
+        return result
+    # Legacy dict path: {"used": {"entries": [...]}}
     if not isinstance(usage, dict):
         return {}
     used = usage.get("used")
@@ -62,7 +69,7 @@ def _extract_task_deltas(usage: Any) -> dict[str, list[float]]:
     entries = used.get("entries")
     if not isinstance(entries, list):
         return {}
-    result: dict[str, list[float]] = {}
+    result = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -78,26 +85,20 @@ def _extract_task_deltas(usage: Any) -> dict[str, list[float]]:
     return result
 
 
-def merge_usage_payloads(existing: Any, incoming: Any) -> dict[str, Any]:
-    """Merge two usage-payload dicts, combining per-task fitness-delta lists."""
+def merge_usage_payloads(existing: Any, incoming: Any) -> UsagePayload:
+    """Merge two usage payloads, combining per-task fitness-delta lists."""
     existing_deltas = _extract_task_deltas(existing)
     incoming_deltas = _extract_task_deltas(incoming)
     if not existing_deltas and not incoming_deltas:
-        return (
-            dict(existing)
-            if isinstance(existing, dict)
-            else (dict(incoming) if isinstance(incoming, dict) else {})
-        )
+        if isinstance(existing, UsagePayload):
+            return existing
+        if isinstance(incoming, UsagePayload):
+            return incoming
+        return UsagePayload()
     merged: dict[str, list[float]] = {k: list(v) for k, v in existing_deltas.items()}
     for task, deltas in incoming_deltas.items():
         merged.setdefault(task, []).extend(deltas)
-    base: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
-    if isinstance(incoming, dict):
-        for k, v in incoming.items():
-            if k != "used":
-                base[k] = v
-    base["used"] = build_usage_payload(merged)["used"]
-    return base
+    return build_usage_payload(merged)
 
 
 # ---------------------------------------------------------------------------

@@ -480,7 +480,7 @@ def merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, 
         for key, value in incoming_usage.items():
             if key != "used":
                 merged_usage[key] = value
-    merged_usage["used"] = build_usage_payload(merged_task_deltas)["used"]
+    merged_usage["used"] = build_usage_payload(merged_task_deltas).model_dump()
     return merged_usage
 
 

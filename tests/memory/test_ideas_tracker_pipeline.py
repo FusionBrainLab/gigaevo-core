@@ -143,17 +143,17 @@ class TestBuildMemoryUsageFromPrograms:
         )
         result = _build_memory_usage_updates([parent, child], "test task")
         assert "idea-1" in result
-        entries = result["idea-1"]["used"]["entries"]
-        assert len(entries) == 1
-        assert entries[0]["used_count"] == 1
-        assert entries[0]["fitness_delta_per_use"] == [3.0]
-        assert entries[0]["median_delta_fitness"] == 3.0
+        payload = result["idea-1"]
+        assert len(payload.entries) == 1
+        assert payload.entries[0].used_count == 1
+        assert payload.entries[0].fitness_delta_per_use == [3.0]
+        assert payload.entries[0].median_delta_fitness == 3.0
 
     def test_negative_delta_included(self) -> None:
         parent = _make_program(program_id="p1", fitness=10.0, parents=[], generation=1)
         child = _make_memory_program(fitness=7.0, parent_id="p1", card_ids=["c1"])
         result = _build_memory_usage_updates([parent, child], "task")
-        assert result["c1"]["used"]["entries"][0]["fitness_delta_per_use"] == [-3.0]
+        assert result["c1"].entries[0].fitness_delta_per_use == [-3.0]
 
     def test_multiple_cards_per_program(self) -> None:
         parent = _make_program(program_id="p1", fitness=4.0, parents=[], generation=1)
@@ -193,7 +193,7 @@ class TestBuildMemoryUsageFromPrograms:
             fitness=2.0, parent_id="p1", card_ids=["dup", "dup", "dup"]
         )
         result = _build_memory_usage_updates([parent, child], "task")
-        assert result["dup"]["used"]["total_used"] == 1
+        assert result["dup"].total_used == 1
 
     def test_invalid_parent_excluded_from_delta_calculation(self) -> None:
         """Invalid parents must not contribute to fitness_by_id (prevents sentinel pollution)."""
@@ -210,7 +210,7 @@ class TestBuildMemoryUsageFromPrograms:
             [valid_parent, invalid_parent, child], "task"
         )
         # Delta should be relative to valid parent only: 6.0 - 5.0 = 1.0
-        assert result["idea-1"]["used"]["entries"][0]["fitness_delta_per_use"] == [1.0]
+        assert result["idea-1"].entries[0].fitness_delta_per_use == [1.0]
 
     def test_invalid_child_not_used_for_deltas(self) -> None:
         """Invalid child programs must be skipped entirely in delta computation."""
@@ -229,8 +229,8 @@ class TestBuildMemoryUsageFromPrograms:
             [parent, invalid_child, valid_child], "task"
         )
         # Only valid child contributes: delta = 7.0 - 5.0 = 2.0
-        assert result["card-1"]["used"]["total_used"] == 1
-        assert result["card-1"]["used"]["entries"][0]["fitness_delta_per_use"] == [2.0]
+        assert result["card-1"].total_used == 1
+        assert result["card-1"].entries[0].fitness_delta_per_use == [2.0]
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +656,6 @@ class TestEvolutionToIdeaExtraction:
             [seed, child_improved, child_regressed], "HoVer fact verification"
         )
         assert "idea-1" in result
-        assert result["idea-1"]["used"]["total_used"] == 2
-        deltas = result["idea-1"]["used"]["entries"][0]["fitness_delta_per_use"]
+        assert result["idea-1"].total_used == 2
+        deltas = result["idea-1"].entries[0].fitness_delta_per_use
         assert sorted(deltas) == [-1.0, 5.0]
