@@ -111,7 +111,7 @@ def _normalize_connected_ideas(raw_list: Any) -> list[ConnectedIdea]:
             result.append(item)
         elif isinstance(item, dict):
             try:
-                result.append(ConnectedIdea(**item))
+                result.append(ConnectedIdea.model_validate(item))
             except Exception:
                 # Skip invalid items
                 pass

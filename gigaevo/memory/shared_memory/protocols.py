@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from gigaevo.memory.shared_memory.card_conversion import MemoryNoteProtocol
 
@@ -31,6 +31,8 @@ class AgenticMemoryProtocol(Protocol):
 
 class ResearchOutput(BaseModel):
     """Return type of ResearchAgent.research()."""
+
+    model_config = ConfigDict(extra="forbid")
 
     integrated_memory: str = ""
     raw_memory: dict[str, Any] | None = None

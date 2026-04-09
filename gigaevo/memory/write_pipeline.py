@@ -15,6 +15,11 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_usage_payloads,
 )
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.memory_config import (
+    ApiConfig,
+    GamConfig,
+    MemoryConfig,
+)
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
 from gigaevo.memory.utils import to_float
 from gigaevo.memory.write_pipeline_config import (
@@ -475,12 +480,6 @@ def _write_memory_write_stats(
 
 def main() -> dict[str, Any] | None:
     """Load cards from banks, write to memory backend, report stats."""
-    from gigaevo.memory.shared_memory.memory_config import (
-        ApiConfig,
-        GamConfig,
-        MemoryConfig,
-    )
-
     # Build configuration based on use_api flag
     api_config = None
     if USE_API:
