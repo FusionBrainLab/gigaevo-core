@@ -269,29 +269,35 @@ class TestLoadMemoryCardsEdgeCases:
         with pytest.raises(ValueError):
             load_memory_cards(path, best)
 
-    def test_usage_updates_path_respects_caller_override(self, tmp_path):
-        """Regression: usage_updates_path should use caller's value if provided (or config fallback).
 
-        Bug (line 472-474): checked `banks_path is not None` instead of `usage_updates_path is not None`.
-        This meant passing a custom banks_path would accidentally overwrite the default usage_updates_path logic.
-        """
-        from pathlib import Path
+# ===========================================================================
+# usage_updates_path regression test (top-level function)
+# ===========================================================================
 
-        config_usage_path = Path("/config/usage_updates.json")
-        caller_usage_path = Path("/caller/usage_updates.json")
 
-        # When caller provides explicit usage_updates_path, use it
-        _usage_updates_path = (
-            caller_usage_path if caller_usage_path is not None else config_usage_path
-        )
-        assert _usage_updates_path == caller_usage_path, (
-            "Caller's usage_updates_path should be used when provided"
-        )
+def test_usage_updates_path_respects_caller_override(tmp_path):
+    """Regression: usage_updates_path should use caller's value if provided (or config fallback).
 
-        # When caller provides None, use config default
-        _usage_updates_path = (
-            None if None is not None else config_usage_path
-        )
-        assert _usage_updates_path == config_usage_path, (
-            "Config's usage_updates_path should be used when caller passes None"
-        )
+    Bug (line 472-474): checked `banks_path is not None` instead of `usage_updates_path is not None`.
+    This meant passing a custom banks_path would accidentally overwrite the default usage_updates_path logic.
+    """
+    from pathlib import Path
+
+    config_usage_path = Path("/config/usage_updates.json")
+    caller_usage_path = Path("/caller/usage_updates.json")
+
+    # When caller provides explicit usage_updates_path, use it
+    _usage_updates_path = (
+        caller_usage_path if caller_usage_path is not None else config_usage_path
+    )
+    assert _usage_updates_path == caller_usage_path, (
+        "Caller's usage_updates_path should be used when provided"
+    )
+
+    # When caller provides None, use config default
+    _usage_updates_path = (
+        None if None is not None else config_usage_path
+    )
+    assert _usage_updates_path == config_usage_path, (
+        "Config's usage_updates_path should be used when caller passes None"
+    )
