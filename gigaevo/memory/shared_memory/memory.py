@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from dotenv import load_dotenv
 from loguru import logger
 
 from gigaevo.exceptions import MemoryRetrieverError
@@ -40,8 +39,6 @@ if TYPE_CHECKING:
         LLMServiceProtocol,
         ResearchAgentProtocol,
     )
-
-load_dotenv()
 
 
 class AmemGamMemory(GigaEvoMemoryBase):

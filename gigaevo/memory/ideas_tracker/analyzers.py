@@ -16,7 +16,6 @@ import time
 from typing import Any, Protocol, runtime_checkable
 import uuid
 
-from dotenv import load_dotenv
 from loguru import logger
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -33,8 +32,6 @@ from gigaevo.memory.ideas_tracker.models import (
     IdeaUpdate,
     ProgramRecord,
 )
-
-load_dotenv()
 
 
 # ---------------------------------------------------------------------------
@@ -635,7 +632,6 @@ class ClusteringAnalyzer:
         merged_inc: list[int] = []
         merged_rej: list[int] = []
         for p in parts:
-            assert p is not None
             merged_inc.extend(p[0])
             merged_rej.extend(p[1])
         return merged_inc, merged_rej
