@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    import types
+
 from loguru import logger
 
 from gigaevo.exceptions import MemoryRetrieverError
@@ -457,7 +460,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: Any,
+        exc_tb: types.TracebackType | None,
     ) -> None:
         if self._iters_after_rebuild > 0:
             try:
