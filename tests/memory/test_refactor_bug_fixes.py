@@ -421,3 +421,100 @@ class TestGamSearchInvalidateOnBuildFailure:
         mock_gam.invalidate.assert_not_called()
         assert mem.research_agent is mock_agent
         assert mem._gam_build_failed is False
+
+
+# ---------------------------------------------------------------------------
+# 6. parse_string_list helper tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_string_list_from_list():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list(["a", "b"]) == ["a", "b"]
+
+
+def test_parse_string_list_from_json_string():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list('["x", "y"]') == ["x", "y"]
+
+
+def test_parse_string_list_from_ast_string():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list("['x', 'y']") == ["x", "y"]
+
+
+def test_parse_string_list_bare_string():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list("hello") == ["hello"]
+
+
+def test_parse_string_list_empty():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list("") == []
+    assert parse_string_list(None) == []
+    assert parse_string_list([]) == []
+
+
+def test_parse_string_list_with_whitespace():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list(["  a  ", "b"]) == ["a", "b"]
+    assert parse_string_list('[ "x" , "y" ]') == ["x", "y"]
+
+
+# ---------------------------------------------------------------------------
+# 7. _run ordering — LLM not called when no eligible programs
+# ---------------------------------------------------------------------------
+
+
+def _make_invalid_program(pid: str = "p1") -> MagicMock:
+    """Program that is_valid=0 — skipped by eligibility filter."""
+    from gigaevo.programs.program import Program
+
+    prog = MagicMock(spec=Program)
+    prog.lineage = MagicMock()
+    prog.lineage.parents = ["parent-1"]
+    # is_valid=0 → filtered out by _eligible_records
+    prog.metrics = {"is_valid": 0.0}
+    prog.id = pid
+    return prog
+
+
+def test_no_llm_call_when_no_eligible_programs(tmp_path):
+    """_run should not access _task_summary (LLM) when no eligible programs."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
+
+    task_summary_accessed = []
+
+    class TrackedTracker(IdeaTracker):
+        @property  # type: ignore[override]
+        def _task_summary(self) -> str:
+            task_summary_accessed.append(True)
+            return "summary"
+
+    with patch("gigaevo.memory.ideas_tracker.ideas_tracker.ClassifyingAnalyzer"):
+        tracker = TrackedTracker(
+            task_description="test task",
+            memory_write_enabled=False,
+            memory_usage_tracking_enabled=True,
+            logs_dir=tmp_path,
+        )
+        # Mock the analyzer
+        tracker._analyzer = MagicMock()
+        tracker._analyzer.analyze_async = AsyncMock(return_value=MagicMock(ideas=[]))
+
+        # All programs are invalid — should be filtered out completely
+        programs = [_make_invalid_program(f"p{i}") for i in range(3)]
+        asyncio.run(tracker._run(programs))
+
+        assert task_summary_accessed == [], (
+            "_task_summary (LLM) must not be called when no eligible/valid programs exist"
+        )
