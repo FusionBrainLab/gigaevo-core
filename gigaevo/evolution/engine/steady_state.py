@@ -106,9 +106,12 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self._run_start_time = time.monotonic()
         self._run_start_gen = self.metrics.total_generations
 
-        # Persist initial epoch counter so status tools can read it immediately
+        # Persist initial counters so status tools and sync hooks can read immediately
         await self.storage.save_run_state(
             _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
+        )
+        await self.storage.save_run_state(
+            _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
         )
 
         try:
@@ -116,6 +119,12 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             await self._await_idle()
             await self._ingest_completed_programs(mutation_ids=None)
             self.storage.snapshot.bump(incremental=True)
+
+            # Publish programs_processed after seed ingestion so adversarial
+            # sync hooks can see our progress before the first hook call.
+            await self.storage.save_run_state(
+                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+            )
 
             # Call pre_step_hook once at startup (mirrors parent's per-step call)
             if self._pre_step_hook:
@@ -451,8 +460,20 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     e,
                 )
 
-        self.metrics.programs_processed += added
+        # Count ALL evaluated programs (not just accepted) so the adversarial
+        # sync hook's programs_processed counter advances even when rejection
+        # rate is high.  Prevents deadlock if both populations reject everything.
+        self.metrics.programs_processed += len(completed)
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
+
+        # Publish counter to Redis immediately so adversarial sync hooks can
+        # see our progress between epoch boundaries.  Without this, the counter
+        # is only updated at epoch refresh, causing the opponent to block.
+        if completed:
+            await self.storage.save_run_state(
+                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+            )
+
         handled = [p.id for p in completed]
         return added, handled
 
@@ -533,6 +554,14 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # 3. Gate mutation loop for the brief refresh window
             self._mutation_gate.clear()
 
+            # 3a. Publish programs_processed to Redis BEFORE the sync hook.
+            # Without this, adversarial ProgressBasedSyncHook deadlocks: both
+            # populations block at the hook waiting for the other's counter to
+            # advance, but the counter is only written at step 9 (after the hook).
+            await self.storage.save_run_state(
+                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+            )
+
             # 4. Pre-step hook (called once per epoch, mirrors parent's per-step call)
             if self._pre_step_hook:
                 await self._pre_step_hook()
@@ -571,9 +600,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             await self.storage.save_run_state(
                 _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
             )
-            await self.storage.save_run_state(
-                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
-            )
+            # programs_processed already saved at step 3a before sync hook
 
             # 10. Log epoch summary
             epoch_elapsed = time.monotonic() - epoch_t0

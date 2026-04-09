@@ -57,7 +57,7 @@ class GamSearch:
                 build_retrievers,
                 load_amem_records,
             )
-        except Exception as exc:
+        except ImportError as exc:
             raise MemoryRetrieverError(
                 f"GAM helper modules are unavailable: {exc}"
             ) from exc

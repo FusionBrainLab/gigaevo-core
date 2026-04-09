@@ -6,6 +6,7 @@ from typing import Any
 
 from loguru import logger
 
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     build_entity_meta,
@@ -64,7 +65,7 @@ class ApiSync:
                     offset=offset,
                     channel=self.channel,
                 )
-            except Exception as exc:
+            except (MemoryStorageError, OSError) as exc:
                 logger.warning(
                     "[Memory] API pagination interrupted at offset {}: {}",
                     offset,
@@ -81,7 +82,7 @@ class ApiSync:
                 row_namespace = None
                 if isinstance(meta, dict):
                     row_namespace = meta.get("namespace")
-                if self.namespace and row_namespace not in (None, "", self.namespace):
+                if self.namespace and row_namespace != self.namespace:
                     continue
                 page_hits.append(row)
 

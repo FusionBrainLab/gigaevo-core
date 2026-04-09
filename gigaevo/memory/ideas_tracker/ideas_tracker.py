@@ -1,148 +1,504 @@
-"""Ideas Tracker: extract and rank improvement ideas from evolutionary program runs.
+"""
+IdeaTracker: PostRunHook that extracts, classifies, enriches, and stores
+improvement ideas from a completed evolutionary run.
 
-``IdeaTracker`` is a ``PostRunHook`` — the evolution engine calls
-``on_run_complete(storage)`` after the generation loop finishes.  It works
-directly with ``Program`` objects (no DataFrame conversion).
+_SessionLog accumulates log entries in memory and writes all files to a
+timestamped directory in a single flush() call at session end.
 """
 
 from __future__ import annotations
 
+import ast
 import asyncio
+from datetime import datetime
+from functools import cached_property
+import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from dotenv import load_dotenv
 from loguru import logger
-import tqdm
+import pandas as pd
 
 from gigaevo.evolution.engine.hooks import PostRunHook
-from gigaevo.memory.ideas_tracker.components.analyzer import IdeaAnalyzer
-from gigaevo.memory.ideas_tracker.components.analyzer_f import IdeaAnalyzerFast
-from gigaevo.memory.ideas_tracker.components.data_components import (
-    IncomingIdeas,
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
+from gigaevo.memory.ideas_tracker.analyzers import (
+    Analyzer,
+    ClassifyingAnalyzer,
+    ClusteringAnalyzer,
+)
+from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, build_usage_payload
+from gigaevo.memory.ideas_tracker.models import (
+    Idea,
+    IdeaExplanation,
     ProgramRecord,
+    UsagePayload,
+    program_to_record,
 )
-from gigaevo.memory.ideas_tracker.components.fabrics.analyzer_fabric import (
-    create_analyzer,
+from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
+    analyse as _analyse_origins,
 )
-from gigaevo.memory.ideas_tracker.components.fabrics.postprocessing_fabric import (
-    create_postprocessing,
-)
-from gigaevo.memory.ideas_tracker.components.memory_pipeline import (
-    apply_memory_usage_updates_to_idea_banks,
-    run_memory_write_pipeline,
-)
-from gigaevo.memory.ideas_tracker.components.records_manager import RecordManager
-from gigaevo.memory.ideas_tracker.components.statistics import (
-    compute_evolutionary_statistics,
-)
-from gigaevo.memory.ideas_tracker.components.summary import summarize_task_description
-from gigaevo.memory.ideas_tracker.utils.helpers import (
-    build_memory_usage_updates_from_programs,
-    sort_ideas,
-    to_float,
-)
-from gigaevo.memory.ideas_tracker.utils.it_logger import IdeasTrackerLogger
-from gigaevo.memory.ideas_tracker.utils.records_converter import programs_to_records
-from gigaevo.memory.ideas_tracker.utils.task_description_loader import (
-    load_task_description,
-)
+from gigaevo.memory.utils import to_float
+from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
 
+load_dotenv()
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_task_description(redis_prefix: str, package_path: Path) -> str:
+    """Load task_description.txt from the matching problems/ directory."""
+    prefix = (redis_prefix or "").replace("/", "_")
+    if not prefix:
+        return "No description available"
+    problems_root = package_path.parents[3] / "problems"
+    try:
+        for root, dirs, _ in os.walk(problems_root):
+            if "initial_programs" in dirs:
+                leaf = Path(root)
+                split = leaf.parts.index("problems") + 1
+                name = "_".join(leaf.parts[split:])
+                if name == prefix:
+                    candidate = leaf / "task_description.txt"
+                    if candidate.is_file():
+                        return candidate.read_text(encoding="utf-8").strip()
+    except Exception as exc:
+        logger.warning(
+            "[Memory] Failed to read task description for prefix {!r}: {}", prefix, exc
+        )
+    return "No description available"
+
+
+def _summarise_task_description(analyzer: Analyzer, task_description: str) -> str:
+    """Ask the LLM for a compact summary of the task description."""
+    text = str(task_description or "").strip()
+    if not text:
+        return "Task summary unavailable"
+    try:
+        raw = analyzer.call("task_description_summary", text)
+        parsed = json.loads(raw)
+        summary = str(parsed.get("summary", "")).strip()
+        return summary or text[:240].strip()
+    except Exception as exc:
+        logger.warning(
+            "[Memory] Task description summarization failed, using truncated text: {}",
+            exc,
+        )
+        return text[:240].strip()
+
+
+def _build_usage_updates(
+    programs: list[Program],
+    task_summary: str,
+    fitness_key: str,
+) -> dict[str, UsagePayload]:
+    """Build per-memory-card usage payloads from program fitness deltas."""
+
+    def _as_string_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(i).strip() for i in value if str(i).strip()]
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            if text[0] in "[{(":
+                try:
+                    return [str(i).strip() for i in json.loads(text) if str(i).strip()]
+                except Exception:
+                    try:
+                        return [
+                            str(i).strip()
+                            for i in ast.literal_eval(text)
+                            if str(i).strip()
+                        ]
+                    except Exception:
+                        pass
+            return [text]
+        return []
+
+    fitness_by_id: dict[str, float] = {}
+    for prog in programs:
+        is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
+        if is_valid is None or is_valid <= 0:
+            continue
+        f = to_float(prog.metrics.get(fitness_key))
+        if f is not None:
+            fitness_by_id[prog.id] = f
+
+    usage_by_card: dict[str, dict[str, list[float]]] = {}
+    for prog in programs:
+        is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
+        if is_valid is None or is_valid <= 0:
+            continue
+        selected = _as_string_list(
+            prog.metadata.get(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
+        )
+        if not selected:
+            continue
+        child_fitness = to_float(prog.metrics.get(fitness_key))
+        if child_fitness is None:
+            continue
+        parent_fitnesses = [
+            fitness_by_id[pid] for pid in prog.lineage.parents if pid in fitness_by_id
+        ]
+        if not parent_fitnesses:
+            continue
+        delta = child_fitness - max(parent_fitnesses)
+        for card_id in list(dict.fromkeys(selected)):
+            usage_by_card.setdefault(card_id, {}).setdefault(task_summary, []).append(
+                delta
+            )
+
+    return {
+        card_id: build_usage_payload(task_deltas)
+        for card_id, task_deltas in usage_by_card.items()
+    }
+
+
+async def _enrich_ideas(
+    ideas: list[Idea], analyzer: Analyzer, task_summary: str
+) -> list[Idea]:
+    """Enrich all ideas concurrently with keywords and explanation summaries."""
+
+    async def _enrich_one(idea: Idea) -> Idea:
+        keywords: list[str] = []
+        try:
+            kw_raw = await analyzer.call_async("keywords", idea.description)
+            keywords = json.loads(kw_raw).get("keywords", [])
+        except Exception as exc:
+            logger.warning(
+                "[Memory] Keyword extraction failed for idea {!r}: {}", idea.id, exc
+            )
+
+        summary = ""
+        entries = idea.explanation.entries
+        if len(entries) == 1:
+            summary = entries[0]
+        elif len(entries) > 1:
+            explanations_text = "\n".join(f"- {e}" for e in entries)
+            try:
+                sum_raw = await analyzer.call_async("usage_summary", explanations_text)
+                summary = json.loads(sum_raw).get("summary", "")
+            except Exception as exc:
+                logger.warning(
+                    "[Memory] Summary generation failed for idea {!r}: {}", idea.id, exc
+                )
+
+        return idea.model_copy(
+            update={
+                "keywords": keywords,
+                "explanation": IdeaExplanation(entries=entries, summary=summary),
+                "task_description_summary": task_summary,
+            }
+        )
+
+    return list(await asyncio.gather(*[_enrich_one(idea) for idea in ideas]))
+
+
+def _run_write_pipeline(
+    enabled: bool,
+    banks_path: Path | None,
+    best_ideas_path: Path | None,
+    programs_path: Path | None,
+    usage_updates_path: Path | None,
+    memory_usage_tracking_enabled: bool,
+    config_path: Path | None = None,
+) -> None:
+    """Optionally trigger the downstream memory write pipeline."""
+    if not enabled:
+        return
+    if banks_path is None or best_ideas_path is None:
+        logger.warning("Memory write pipeline skipped: log paths unavailable.")
+        return
+    if not banks_path.exists():
+        logger.warning("Memory write pipeline skipped: missing {}.", banks_path)
+        return
+
+    try:
+        with best_ideas_path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        has_snapshot = isinstance(payload, list) and any(
+            isinstance(i, dict) and "best_ideas" in i for i in payload
+        )
+    except Exception:
+        has_snapshot = False
+
+    if not has_snapshot:
+        logger.warning("Memory write pipeline skipped: no best_ideas snapshot.")
+        return
+
+    effective_programs_path = (
+        programs_path if (programs_path and programs_path.exists()) else None
+    )
+    effective_usage_updates_path = (
+        usage_updates_path
+        if (
+            memory_usage_tracking_enabled
+            and usage_updates_path
+            and usage_updates_path.exists()
+        )
+        else None
+    )
+
+    from gigaevo.memory.write_pipeline import main as _write_main
+
+    snapshot = _write_main(
+        banks_path=banks_path,
+        best_ideas_path=best_ideas_path,
+        programs_path=effective_programs_path,
+        usage_updates_path=effective_usage_updates_path,
+        config_path=config_path,
+    )
+    if isinstance(snapshot, dict):
+        stats = snapshot.get("stats", {})
+        if isinstance(stats, dict):
+            logger.info(
+                "Memory write: processed={}, added={}, updated={}, rejected={}",
+                stats.get("processed", 0),
+                stats.get("added", 0),
+                stats.get("updated", 0),
+                stats.get("rejected", 0),
+            )
+
+
+# ---------------------------------------------------------------------------
+# _SessionLog
+# ---------------------------------------------------------------------------
+
+
+class _SessionLog:
+    """
+    Accumulates log entries in memory during a tracker run and writes all
+    files to a timestamped session directory in a single flush() call.
+
+    Replaces the per-event read-modify-write pattern of IdeasTrackerLogger.
+    Files written: log.txt, banks.json, programs.json, best_ideas.json,
+    memory_usage_updates.json.
+    """
+
+    def __init__(self, logs_dir: Path) -> None:
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.session_dir: Path = logs_dir / ts
+        self._entries: list[str] = []
+        self._usage_updates: dict[str, UsagePayload] = {}
+
+    # ------ file paths ------
+    @property
+    def banks_file(self) -> Path:
+        return self.session_dir / "banks.json"
+
+    @property
+    def programs_file(self) -> Path:
+        return self.session_dir / "programs.json"
+
+    @property
+    def best_ideas_file(self) -> Path:
+        return self.session_dir / "best_ideas.json"
+
+    @property
+    def usage_updates_file(self) -> Path:
+        return self.session_dir / "memory_usage_updates.json"
+
+    # ------ recording ------
+
+    def record(self, action: str, **params: Any) -> None:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = [f"[{ts}]: {action}"]
+        for k, v in params.items():
+            lines.append(f"  {k}: {v}")
+        self._entries.append("\n".join(lines))
+
+    def record_usage_updates(self, updates: dict[str, UsagePayload]) -> None:
+        self._usage_updates = updates
+
+    # ------ flush ------
+
+    def flush(
+        self,
+        bank: IdeaBank,
+        *,
+        records: list[ProgramRecord],
+    ) -> None:
+        """Write all accumulated data to the timestamped session directory."""
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        (self.session_dir / "log.txt").write_text(
+            "\n\n".join(self._entries), encoding="utf-8"
+        )
+
+        banks_data = [
+            {
+                "active_bank": [i.model_dump() for i in bank.all_ideas()],
+                "timestamp": ts,
+            }
+        ]
+        self.banks_file.write_text(json.dumps(banks_data, indent=2), encoding="utf-8")
+
+        programs_data = [
+            {
+                "timestamp": ts,
+                "programs": [r.model_dump() for r in records],
+            }
+        ]
+        self.programs_file.write_text(
+            json.dumps(programs_data, indent=2), encoding="utf-8"
+        )
+
+        self.usage_updates_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": ts,
+                        "usage_updates": {
+                            card_id: payload.model_dump()
+                            for card_id, payload in self._usage_updates.items()
+                        },
+                    }
+                ],
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        self._compute_and_write_statistics()
+
+    def _compute_and_write_statistics(self) -> None:
+        """Run origin analysis and inject per-idea statistics into banks.json."""
+        if not self.banks_file.exists() or not self.programs_file.exists():
+            return
+        try:
+            _result = _analyse_origins(
+                banks_path=str(self.banks_file),
+                programs_path=str(self.programs_file),
+            )
+            df_summary = _result.summary_df
+            df_best_ideas = _result.best_ideas_df
+        except RuntimeError as exc:
+            if "No valid programs" in str(exc):
+                return
+            raise
+        except Exception as exc:
+            logger.warning("Could not compute evolutionary statistics: {}", exc)
+            return
+
+        if df_summary.empty:
+            return
+
+        # Inject per-idea stats into banks.json
+        stats_by_idea: dict[str, dict] = {}
+        for _, row in df_summary.iterrows():
+            idea_id = str(row["idea_id"])
+            quartile = str(row["quartile"])
+            metrics = {
+                k: (v if pd.notna(v) else None)
+                for k, v in row.drop(["idea_id", "quartile", "description"]).items()
+            }
+            stats_by_idea.setdefault(idea_id, {})[quartile] = metrics
+
+        banks_data = json.loads(self.banks_file.read_text(encoding="utf-8"))
+        for snapshot in banks_data:
+            if not isinstance(snapshot, dict):
+                continue
+            for idea in snapshot.get("active_bank", []):
+                if isinstance(idea, dict) and idea.get("id") in stats_by_idea:
+                    idea["evolution_statistics"] = stats_by_idea[idea["id"]]
+        self.banks_file.write_text(json.dumps(banks_data, indent=2), encoding="utf-8")
+
+        # Write best_ideas.json
+        best_ideas = [
+            {k: (v if pd.notna(v) else None) for k, v in row.items()}
+            for _, row in df_best_ideas.iterrows()
+        ]
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.best_ideas_file.write_text(
+            json.dumps([{"timestamp": ts, "best_ideas": best_ideas}], indent=2),
+            encoding="utf-8",
+        )
+
+
+# ---------------------------------------------------------------------------
+# IdeaTracker
+# ---------------------------------------------------------------------------
+
 
 class IdeaTracker(PostRunHook):
-    """PostRunHook that analyses programs and classifies improvement ideas.
+    """
+    PostRunHook that extracts, classifies, enriches, and stores improvement
+    ideas from a completed evolutionary run.
 
-    Instantiated via Hydra (``ideas_tracker=default`` or ``fast``).
-    Accepts ``list[Program]`` directly — no DataFrame conversion.
+    Instantiated by Hydra. Accepts a ClassifyingAnalyzer or ClusteringAnalyzer —
+    both implement the Analyzer protocol, so the pipeline is identical for both.
+
+    Args:
+        analyzer: The idea analyser to use. If None, defaults to ClassifyingAnalyzer
+            with its own default model — useful for the CLI entry point.
+        task_description: Human-readable description of the current task. If empty,
+            loaded from the matching problems/ directory using redis_prefix.
+        redis_prefix: Redis key prefix (e.g. "chains/hotpotqa/static") used to
+            locate the task_description.txt file when task_description is empty.
+        chunk_size: Number of ideas per LLM classification batch.
+        memory_write_enabled: If True, trigger the downstream memory write pipeline.
+        memory_usage_tracking_enabled: If True, compute fitness deltas for memory cards.
+        fitness_key: Metric key to use as fitness (default "fitness").
+        logs_dir: Directory for timestamped session logs. Defaults to
+            gigaevo/memory/ideas_tracker/logs/.
     """
 
     def __init__(
         self,
         *,
+        analyzer: ClassifyingAnalyzer | ClusteringAnalyzer | None = None,
         task_description: str = "",
-        analyzer_type: str = "default",
-        analyzer_model: str = "google/gemini-3-flash-preview",
-        analyzer_base_url: str = "https://openrouter.ai/api/v1",
-        analyzer_reasoning: dict[str, Any] | None = None,
-        analyzer_fast_settings: dict[str, Any] | None = None,
-        list_max_ideas: int = 20,
-        postprocessing_type: str = "default",
-        description_rewriting: bool = True,
-        record_conversion_type: str = "default",
+        redis_prefix: str = "",
+        chunk_size: int = 5,
         memory_write_enabled: bool = True,
-        memory_write_best_programs_percent: float = 5.0,
         memory_usage_tracking_enabled: bool = True,
         fitness_key: str = "fitness",
-        checkpoint_dir: str | None = None,
-        namespace: str | None = None,
-        redis_prefix: str = "",
         logs_dir: str | Path | None = None,
+        config_path: Path | None = None,
     ) -> None:
-        # Config
-        self.memory_write_enabled = memory_write_enabled
-        self.memory_write_best_programs_percent = memory_write_best_programs_percent
-        self.memory_usage_tracking_enabled = memory_usage_tracking_enabled
+        if analyzer is None:
+            analyzer = ClassifyingAnalyzer()
+
+        self._analyzer: ClassifyingAnalyzer | ClusteringAnalyzer = analyzer
+        self._bank = IdeaBank(chunk_size=chunk_size)
         self._fitness_key = fitness_key
-        self.analyzer_pipeline_type = analyzer_type
-        self._record_conversion_type = record_conversion_type
+        self._memory_write_enabled = memory_write_enabled
+        self._memory_usage_tracking_enabled = memory_usage_tracking_enabled
+        self._config_path = config_path
+        self._all_records: list[ProgramRecord] = []
+        self._seen_ids: set[str] = set()
 
-        # Logger
-        self.logger = IdeasTrackerLogger(
-            Path(__file__).resolve(),
-            logs_dir=logs_dir,
-        )
-
-        # Idea manager
-        self.ideas_manager = RecordManager(list_max_ideas=list_max_ideas)
-        self.ideas_manager.logger = self.logger
-
-        # Analyzer
-        analyzer_config: dict[str, Any] = {
-            "type": analyzer_type,
-            "model": analyzer_model,
-            "base_url": analyzer_base_url,
-        }
-        if analyzer_reasoning is not None:
-            analyzer_config["reasoning"] = analyzer_reasoning
-        if analyzer_fast_settings is not None:
-            analyzer_config["analyzer_fast_settings"] = analyzer_fast_settings
-        self.analyzer = create_analyzer(analyzer_config)
-        if hasattr(self.analyzer, "description_rewriting"):
-            self.analyzer.description_rewriting = description_rewriting
-        self.analyzer.logger = self.logger
-
-        # Postprocessing
-        self.postprocessing = create_postprocessing({"type": postprocessing_type})
-
-        # Task description
         if task_description:
-            self.task_description = task_description
+            self._task_description = task_description
         else:
-            self.task_description = load_task_description(
+            self._task_description = _load_task_description(
                 redis_prefix, Path(__file__).resolve()
             )
 
-        # Internal state
-        self.programs_card: list[ProgramRecord] = []
-        self.programs_ids: set[str] = set()
-        self.memory_usage_updates_by_card: dict[str, dict[str, Any]] = {}
-
-        # Compute and cache task summary
-        self._task_description_summary_cache: str = ""
-        self._get_task_description_summary()
-
-        # Init log
-        self.logger.log_init(
-            component="IdeaTracker",
-            model_name=self.analyzer.model,
-            list_max_ideas=list_max_ideas,
-            memory_write_enabled=memory_write_enabled,
-            memory_write_best_programs_percent=memory_write_best_programs_percent,
-            memory_usage_tracking_enabled=memory_usage_tracking_enabled,
+        resolved_logs = (
+            Path(logs_dir)
+            if logs_dir is not None
+            else Path(__file__).resolve().parent / "logs"
         )
+        resolved_logs.mkdir(parents=True, exist_ok=True)
+        self._log = _SessionLog(resolved_logs)
+
+    @cached_property
+    def _task_summary(self) -> str:
+        """Computed once on first access; cached for the lifetime of this instance."""
+        return _summarise_task_description(self._analyzer, self._task_description)
 
     # ------------------------------------------------------------------
     # PostRunHook interface
@@ -154,185 +510,87 @@ class IdeaTracker(PostRunHook):
         if not programs:
             logger.warning("IdeaTracker: no programs in storage, skipping.")
             return
-        self._run_on_programs(programs)
+        await self._run(programs)
 
     # ------------------------------------------------------------------
     # CLI entry point
     # ------------------------------------------------------------------
 
     def run(self, programs: list[Program] | None = None) -> None:
-        """CLI entry: accepts ``list[Program]`` directly."""
+        """CLI entry: accepts list[Program] directly."""
         if not programs:
             return
-        self._run_on_programs(programs)
+        asyncio.run(self._run(programs))
 
     # ------------------------------------------------------------------
     # Core pipeline
     # ------------------------------------------------------------------
 
-    def _run_on_programs(self, programs: list[Program]) -> None:
-        """Core pipeline: filter, analyze, enrich, log, write."""
-        if self.memory_usage_tracking_enabled:
-            self.memory_usage_updates_by_card = (
-                build_memory_usage_updates_from_programs(
-                    programs,
-                    self._get_task_description_summary(),
-                    fitness_key=self._fitness_key,
-                )
+    async def _run(self, programs: list[Program]) -> None:
+        """Full pipeline: filter → analyse → enrich → log → write."""
+        if self._memory_usage_tracking_enabled:
+            usage_updates = _build_usage_updates(
+                programs, self._task_summary, self._fitness_key
             )
-            self.logger.log_memory_usage_updates(self.memory_usage_updates_by_card)
+            self._log.record_usage_updates(usage_updates)
         else:
-            self.memory_usage_updates_by_card = {}
+            usage_updates = {}
 
-        new_programs_processed = self._get_new_programs(programs)
+        records = self._eligible_records(programs)
 
-        if self.analyzer_pipeline_type == "default":
-            self._default_analyzer_pipeline(new_programs_processed)
-        else:
-            self._fast_analyzer_pipeline(new_programs_processed)
+        result = await self._analyzer.analyze_async(records, self._bank)
+        self._bank.apply(result)
 
-        if self.memory_usage_tracking_enabled and self.memory_usage_updates_by_card:
-            apply_memory_usage_updates_to_idea_banks(
-                self.ideas_manager.record_bank, self.memory_usage_updates_by_card
+        if self._memory_usage_tracking_enabled and usage_updates:
+            self._bank.apply_usage_updates(usage_updates)
+
+        enriched = await _enrich_ideas(
+            self._bank.all_ideas(), self._analyzer, self._task_summary
+        )
+        for idea in enriched:
+            self._bank.enrich(
+                idea.id,
+                keywords=idea.keywords,
+                summary=idea.explanation.summary,
+                task_summary=self._task_summary,
             )
 
-        self._enrich_ideas()
-        self.logger.dump_final_state(self.ideas_manager)
-        self.logger.log_programs(self._programs_to_dicts())
-        compute_evolutionary_statistics(self.logger)
-        run_memory_write_pipeline(
-            self.memory_write_enabled,
-            self.memory_usage_tracking_enabled,
-            self.logger,
+        self._log.record("pipeline_complete", total_ideas=len(self._bank.all_ideas()))
+        self._log.flush(self._bank, records=self._all_records)
+
+        _run_write_pipeline(
+            self._memory_write_enabled,
+            self._log.banks_file,
+            self._log.best_ideas_file,
+            self._log.programs_file,
+            self._log.usage_updates_file,
+            self._memory_usage_tracking_enabled,
+            config_path=self._config_path,
         )
 
-    # ------------------------------------------------------------------
-    # Program filtering
-    # ------------------------------------------------------------------
+    def _eligible_records(self, programs: list[Program]) -> list[ProgramRecord]:
+        """
+        Filter programs and convert to ProgramRecord.
 
-    def _get_new_programs(self, programs: list[Program]) -> list[ProgramRecord]:
-        """Filter roots, zero/negative fitness, duplicates; convert to records."""
-        new_programs: list[Program] = []
+        Skips: root programs (no parents), invalid programs (is_valid != 1.0), already-seen ids.
+        """
+        eligible: list[Program] = []
         for prog in programs:
             if not prog.lineage.parents:
                 continue
-            fitness = to_float(prog.metrics.get(self._fitness_key))
-            if fitness is None or fitness <= 0:
+            is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
+            if is_valid is None or is_valid <= 0:
                 continue
-            if prog.id in self.programs_ids:
+            if prog.id in self._seen_ids:
                 continue
-            new_programs.append(prog)
+            eligible.append(prog)
 
-        task_summary = self._get_task_description_summary()
-        records, ids = programs_to_records(
-            new_programs,
-            self.task_description,
-            task_summary,
-            fitness_key=self._fitness_key,
-        )
-        self.programs_card.extend(records)
-        self.programs_ids.update(ids)
-        return records
-
-    # ------------------------------------------------------------------
-    # Analyzer pipelines
-    # ------------------------------------------------------------------
-
-    def _default_analyzer_pipeline(self, new_programs: list[ProgramRecord]) -> None:
-        if not isinstance(self.analyzer, IdeaAnalyzer):
-            raise TypeError(
-                "default analyzer pipeline requires IdeaAnalyzer (not IdeaAnalyzerFast)"
+        records = [
+            program_to_record(
+                p, self._task_description, self._task_summary, self._fitness_key
             )
-        pbar = tqdm.tqdm(total=len(new_programs), leave=False)
-        for prog in new_programs:
-            self._process_program(prog)
-            pbar.update(1)
-        pbar.close()
-
-    def _fast_analyzer_pipeline(self, new_programs: list[ProgramRecord]) -> None:
-        if not isinstance(self.analyzer, IdeaAnalyzerFast):
-            raise TypeError("fast analyzer pipeline requires IdeaAnalyzerFast")
-        is_async_conversion = self._record_conversion_type == "fast"
-        processed_programs = asyncio.run(
-            self.analyzer.run(
-                new_programs, record_extended_multi_async=is_async_conversion
-            )
-        )
-        for prog in processed_programs:
-            self.ideas_manager.record_bank.import_idea_extended(prog, is_forced=True)
-
-    def _process_program(self, program: ProgramRecord) -> None:
-        assert isinstance(self.analyzer, IdeaAnalyzer)
-        active_ideas = self.ideas_manager.ideas_groups_texts()
-        inactive_ideas = self.ideas_manager.ideas_groups_texts(use_inactive=True)
-        program_ideas = IncomingIdeas(program.improvements)
-        classified_ideas = self.analyzer.process_ideas(
-            program_ideas,
-            active_ideas,
-            inactive_ideas,
-        )
-        sorted_ideas = sort_ideas(classified_ideas.ideas)
-        for n_idea in sorted_ideas["new"]:
-            self.ideas_manager.add_new_idea(
-                description=n_idea["description"],
-                linked_program=program.id,
-                generation=program.generation,
-                category=program.category,
-                strategy=program.strategy,
-                task_description=program.task_description,
-                change_motivation=n_idea["change_motivation"],
-            )
-        for idea_r in sorted_ideas["rewrite"]:
-            self.ideas_manager.modify_idea(
-                idea_r["target_idea_id"],
-                [program.id],
-                program.generation,
-                idea_r["description"],
-                idea_r["change_motivation"],
-            )
-        for idea_u in sorted_ideas["update"]:
-            self.ideas_manager.modify_idea(
-                idea_u["target_idea_id"],
-                [program.id],
-                program.generation,
-                None,
-                idea_u["change_motivation"],
-            )
-
-    # ------------------------------------------------------------------
-    # Enrichment
-    # ------------------------------------------------------------------
-
-    def _enrich_ideas(self) -> None:
-        all_uuids = list(self.ideas_manager.record_bank.uuids)
-        all_ideas = [
-            self.ideas_manager.record_bank.get_idea(uuid) for uuid in all_uuids
+            for p in eligible
         ]
-        task_summary = self._get_task_description_summary()
-        result = self.postprocessing(all_ideas, self.analyzer, task_summary)
-        if asyncio.iscoroutine(result):
-            enriched_ideas = asyncio.run(result)
-        else:
-            enriched_ideas = result
-        for idea in enriched_ideas:
-            self.ideas_manager.enrich_idea_metadata(
-                idea.id,
-                idea.keywords,
-                idea.explanation["summary"],
-                task_summary,
-            )
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _get_task_description_summary(self) -> str:
-        cached = self._task_description_summary_cache
-        if cached:
-            return cached
-        summary = summarize_task_description(self.analyzer, self.task_description)
-        self._task_description_summary_cache = summary
-        return summary
-
-    def _programs_to_dicts(self) -> list[dict[str, Any]]:
-        return [prog.to_dict() for prog in self.programs_card]
+        self._all_records.extend(records)
+        self._seen_ids.update(p.id for p in eligible)
+        return records

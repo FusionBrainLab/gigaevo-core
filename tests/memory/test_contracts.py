@@ -7,7 +7,16 @@ behavioral contract. Each test documents WHY the contract matters.
 
 import json
 
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_METADATA_KEY,
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
+from gigaevo.llm.agents.memory_selector import MemorySelection
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.card_update_dedup import (
+    parse_llm_card_decision,
+)
 from gigaevo.memory.shared_memory.models import (
     MemoryCard,
     MemoryCardExplanation,
@@ -60,7 +69,7 @@ class TestNormalizeCardContract:
         assert isinstance(card.explanation.summary, str)
         assert isinstance(card.works_with, list)
         assert isinstance(card.links, list)
-        assert isinstance(card.usage, dict)
+        assert isinstance(card.usage, UsagePayload)
 
     def test_program_card_field_types(self):
         card = normalize_memory_card(
@@ -271,10 +280,6 @@ class TestWriteStatsContract:
 
 class TestDedupDecisionContract:
     def test_parse_decision_shape(self):
-        from gigaevo.memory.shared_memory.card_update_dedup import (
-            parse_llm_card_decision,
-        )
-
         result = parse_llm_card_decision(
             json.dumps({"action": "add"}),
             candidate_ids={"c1"},
@@ -282,10 +287,6 @@ class TestDedupDecisionContract:
         assert set(result.keys()) == {"action", "reason", "duplicate_of", "updates"}
 
     def test_parse_decision_actions(self):
-        from gigaevo.memory.shared_memory.card_update_dedup import (
-            parse_llm_card_decision,
-        )
-
         for action in ("add", "discard", "update"):
             if action == "discard":
                 text = json.dumps({"action": action, "duplicate_of": "c1"})
@@ -315,8 +316,6 @@ class TestDedupDecisionContract:
 
 class TestMemorySelectionContract:
     def test_memory_selection_shape(self):
-        from gigaevo.llm.agents.memory_selector import MemorySelection
-
         sel = MemorySelection(cards=["1. idea"], card_ids=["id-1"])
         assert isinstance(sel.cards, list)
         assert isinstance(sel.card_ids, list)
@@ -329,10 +328,5 @@ class TestMemorySelectionContract:
 
 class TestMutationMetadataKeysContract:
     def test_metadata_key_values(self):
-        from gigaevo.evolution.mutation.constants import (
-            MUTATION_MEMORY_METADATA_KEY,
-            MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
-        )
-
         assert MUTATION_MEMORY_METADATA_KEY == "mutation_memory"
         assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY == "memory_selected_idea_ids"

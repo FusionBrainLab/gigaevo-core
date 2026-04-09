@@ -3,13 +3,15 @@
 Pin down the exact normalization behavior so refactoring can be validated.
 """
 
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.models import (
     MemoryCard,
     MemoryCardExplanation,
     ProgramCard,
 )
-from gigaevo.memory.shared_memory.utils import _to_float, _to_int, _to_list
+from gigaevo.memory.shared_memory.utils import _to_int, _to_list
+from gigaevo.memory.utils import to_float
 
 # ===========================================================================
 # _to_list
@@ -69,44 +71,40 @@ class TestToInt:
 
 
 # ===========================================================================
-# _to_float
+# to_float (canonical — filters NaN/Inf)
 # ===========================================================================
 
 
 class TestToFloat:
     def test_valid_float(self):
-        assert _to_float(3.14) == 3.14
+        assert to_float(3.14) == 3.14
 
     def test_valid_string(self):
-        assert _to_float("2.5") == 2.5
+        assert to_float("2.5") == 2.5
 
     def test_int_promoted(self):
-        assert _to_float(7) == 7.0
+        assert to_float(7) == 7.0
 
     def test_invalid_returns_default_none(self):
-        assert _to_float("abc") is None
+        assert to_float("abc") is None
 
     def test_invalid_custom_default(self):
-        assert _to_float("abc", default=0.0) == 0.0
+        assert to_float("abc", default=0.0) == 0.0
 
     def test_none_returns_default(self):
-        assert _to_float(None) is None
+        assert to_float(None) is None
 
     def test_empty_string(self):
-        assert _to_float("") is None
+        assert to_float("") is None
 
     def test_negative(self):
-        assert _to_float("-1.5") == -1.5
+        assert to_float("-1.5") == -1.5
 
-    def test_inf(self):
-        import math
+    def test_inf_filtered(self):
+        assert to_float("inf") is None
 
-        assert math.isinf(_to_float("inf"))
-
-    def test_nan(self):
-        import math
-
-        assert math.isnan(_to_float("nan"))
+    def test_nan_filtered(self):
+        assert to_float("nan") is None
 
 
 # ===========================================================================
@@ -177,14 +175,14 @@ class TestNormalizeGeneralCard:
         result = normalize_memory_card({"evolution_statistics": stats})
         assert result.evolution_statistics == stats
 
-    def test_usage_non_dict_becomes_empty(self):
+    def test_usage_non_dict_becomes_default(self):
         result = normalize_memory_card({"usage": [1, 2]})
-        assert result.usage == {}
+        assert result.usage == UsagePayload()
 
-    def test_usage_dict_preserved(self):
+    def test_usage_invalid_dict_becomes_default(self):
         usage = {"count": 3}
         result = normalize_memory_card({"usage": usage})
-        assert result.usage == usage
+        assert result.usage == UsagePayload()
 
     def test_lists_coerced_via_to_list(self):
         result = normalize_memory_card({"programs": "single"})

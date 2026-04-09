@@ -1,119 +1,48 @@
+"""Runtime config path helpers for the memory module.
+
+Provides only path resolution utilities.  All type-coercion helpers
+(``to_bool``, ``to_int``, ``to_str``, ``to_list``, ``deep_get``,
+``load_settings``) were removed; config loading uses OmegaConf directly.
+"""
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
-import types
-from typing import Any
 
-_yaml: types.ModuleType | None
-
-try:
-    import yaml as _yaml  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover - defensive fallback
-    _yaml = None
+_THIS_DIR = Path(__file__).resolve().parent
 
 
-_MODULE_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _MODULE_DIR.parent
-_DEFAULT_SETTINGS_PATHS = (
-    _PROJECT_ROOT / "config" / "memory.yaml",
-    _MODULE_DIR / "config.yaml",
-)
+def resolve_settings_path(settings_path: str | Path | None = None) -> Path:
+    """Return the settings YAML path.
+
+    Priority: explicit argument → EVO_MEMORY_CONFIG_PATH env var →
+    EVO_MEMORY_SETTINGS_PATH env var → default memory_backend.yaml.
+    """
+    if settings_path is not None:
+        return Path(settings_path)
+    env_primary = os.getenv("EVO_MEMORY_CONFIG_PATH")
+    if env_primary:
+        return Path(env_primary)
+    env_fallback = os.getenv("EVO_MEMORY_SETTINGS_PATH")
+    if env_fallback:
+        return Path(env_fallback)
+    return _THIS_DIR.parents[2] / "config" / "memory_backend.yaml"
 
 
-def resolve_settings_path(path: str | Path | None = None) -> Path:
-    if path is not None:
-        return Path(path)
+def resolve_local_path(
+    base: Path,
+    raw: str | None,
+    default_relative: str,
+) -> Path:
+    """Resolve *raw* relative to *base*.
 
-    from_env = os.getenv("EVO_MEMORY_CONFIG_PATH")
-    if from_env:
-        return Path(from_env)
-
-    from_env = os.getenv("EVO_MEMORY_SETTINGS_PATH")
-    if from_env:
-        return Path(from_env)
-
-    for candidate in _DEFAULT_SETTINGS_PATHS:
-        if candidate.exists():
-            return candidate
-
-    return _DEFAULT_SETTINGS_PATHS[0]
-
-
-def load_settings(path: str | Path | None = None) -> dict[str, Any]:
-    settings_path = resolve_settings_path(path)
-    if not settings_path.exists():
-        return {}
-
-    if _yaml is None:
-        raise RuntimeError("PyYAML is required to read runtime settings")
-
-    with settings_path.open("r", encoding="utf-8") as file_obj:
-        payload = _yaml.safe_load(file_obj) or {}
-
-    if not isinstance(payload, dict):
-        raise ValueError(
-            f"Invalid settings format in {settings_path}: expected a mapping"
-        )
-
-    return payload
-
-
-def deep_get(payload: dict[str, Any], dotted_key: str, default: Any = None) -> Any:
-    cursor: Any = payload
-    for part in dotted_key.split("."):
-        if not isinstance(cursor, dict) or part not in cursor:
-            return default
-        cursor = cursor[part]
-    return cursor
-
-
-def to_bool(value: Any, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    if isinstance(value, (int, float)):
-        return bool(value)
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def to_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def to_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    if isinstance(value, str):
-        return [part.strip() for part in value.split(",") if part.strip()]
-    return [value]
-
-
-def to_str(value: Any, default: str | None = "") -> str | None:
-    if value is None:
-        return default
-    return str(value)
-
-
-def resolve_local_path(base_dir: Path, value: Any, default_relative: str) -> Path:
-    raw_val = to_str(value, default=default_relative)
-    raw = raw_val.strip() if raw_val else default_relative
+    If *raw* is empty or None, returns ``base / default_relative``.
+    Absolute paths are returned as-is.
+    """
     if not raw:
-        raw = default_relative
-    path = Path(raw)
-    if not path.is_absolute():
-        path = base_dir / path
-    return path
+        return base / default_relative
+    p = Path(raw)
+    if p.is_absolute():
+        return p
+    return base / p

@@ -1,95 +1,92 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
+from omegaconf import OmegaConf
 
-try:
-    from .runtime_config import deep_get, load_settings, to_str
-except ImportError:  # pragma: no cover - script-style import fallback
-    from runtime_config import deep_get, load_settings, to_str  # type: ignore[no-redef]
+from gigaevo.memory.runtime_config import resolve_settings_path
 
-# Always load env from repository root, regardless of process cwd.
+# Load repo-root .env. override=False: .env sets defaults, not overrides.
 load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
+@dataclass
+class _HuggingFaceSchema:
+    etag_timeout: str = "60"
+    download_timeout: str = "300"
+
+
+@dataclass
+class _ModelsSchema:
+    openrouter_model_name: str = "openai/gpt-4.1-mini"
+    amem_embedding_model_name: str = "all-MiniLM-L6-v2"
+    gam_dense_retriever_model_name: str = "BAAI/bge-m3"
+    openai_base_url: str = ""
+    llm_base_url: str = ""
+
+
 def _normalize_env(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return value.strip().strip('"').strip("'")
-
-
-_SETTINGS = load_settings()
-
-
-def _set_env_default(name: str, value: str | None) -> None:
+    """Strip quotes and whitespace; return None for blank values."""
     if not value:
-        return
-    if not os.getenv(name):
-        os.environ[name] = value
+        return None
+    stripped = value.strip().strip('"').strip("'")
+    return stripped or None
 
 
-def _configure_huggingface_download_env() -> None:
-    hf_settings = deep_get(_SETTINGS, "downloads.huggingface", default={})
-    if not isinstance(hf_settings, dict):
-        hf_settings = {}
+def _merge_section(cfg: Any, dotted_key: str, schema_cls: type) -> dict[str, Any]:
+    raw = OmegaConf.select(cfg, dotted_key) or {}
+    merged = OmegaConf.merge(OmegaConf.structured(schema_cls), raw)
+    return OmegaConf.to_container(merged, resolve=True)  # type: ignore[return-value]
 
-    etag_timeout = to_str(
-        deep_get(hf_settings, "etag_timeout"),
-        default="60",
+
+def _configure_huggingface_env(hf: dict[str, Any]) -> None:
+    if not os.getenv("HF_HUB_ETAG_TIMEOUT"):
+        os.environ["HF_HUB_ETAG_TIMEOUT"] = str(hf["etag_timeout"])
+    if not os.getenv("HF_HUB_DOWNLOAD_TIMEOUT"):
+        os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = str(hf["download_timeout"])
+
+
+def _load() -> tuple[dict[str, Any], dict[str, Any]]:
+    settings_path = resolve_settings_path()
+    cfg = (
+        OmegaConf.load(settings_path)
+        if settings_path.exists()
+        else OmegaConf.create({})
     )
-    download_timeout = to_str(
-        deep_get(hf_settings, "download_timeout"),
-        default="300",
+    hf = _merge_section(cfg, "downloads.huggingface", _HuggingFaceSchema)
+    _configure_huggingface_env(hf)
+    models: dict[str, Any] = _merge_section(cfg, "models", _ModelsSchema)
+    reasoning_raw = OmegaConf.select(cfg, "reasoning")
+    reasoning: dict[str, Any] = (
+        OmegaConf.to_container(reasoning_raw, resolve=True)  # type: ignore[assignment]
+        if reasoning_raw is not None
+        else {}
     )
-
-    _set_env_default("HF_HUB_ETAG_TIMEOUT", etag_timeout)
-    _set_env_default("HF_HUB_DOWNLOAD_TIMEOUT", download_timeout)
+    return models, reasoning if isinstance(reasoning, dict) else {}
 
 
-_configure_huggingface_download_env()
+_models, _reasoning = _load()
 
 OPENAI_API_KEY = _normalize_env(
-    os.getenv("OPENAI_API_KEY")
-    or os.getenv("OPENROUTER_API_KEY")
-    or to_str(deep_get(_SETTINGS, "models.openai_api_key"), default=None)
-    or to_str(deep_get(_SETTINGS, "models.openrouter_api_key"), default=None)
+    os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
 )
 OPENROUTER_API_KEY = _normalize_env(
-    os.getenv("OPENROUTER_API_KEY")
-    or os.getenv("OPENAI_API_KEY")
-    or to_str(deep_get(_SETTINGS, "models.openrouter_api_key"), default=None)
-    or to_str(deep_get(_SETTINGS, "models.openai_api_key"), default=None)
+    os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
 )
-
-_DEFAULT_MODEL_NAME = "openai/gpt-4.1-mini"
-
-OPENROUTER_MODEL_NAME = os.getenv(
-    "OPENROUTER_MODEL_NAME",
-    to_str(
-        deep_get(_SETTINGS, "models.openrouter_model_name"),
-        default=_DEFAULT_MODEL_NAME,
-    ),
+OPENROUTER_MODEL_NAME: str = os.getenv("OPENROUTER_MODEL_NAME") or str(
+    _models["openrouter_model_name"]
 )
 LLM_BASE_URL = _normalize_env(
     os.getenv("OPENAI_BASE_URL")
     or os.getenv("LLM_BASE_URL")
     or os.getenv("BASE_URL")
-    or to_str(deep_get(_SETTINGS, "models.openai_base_url"), default=None)
-    or to_str(deep_get(_SETTINGS, "models.llm_base_url"), default=None)
+    or str(_models["openai_base_url"] or "")
+    or str(_models["llm_base_url"] or "")
 )
-
-_OPENROUTER_REASONING = deep_get(_SETTINGS, "reasoning", default={})
-if not isinstance(_OPENROUTER_REASONING, dict):
-    _OPENROUTER_REASONING = {}
-OPENROUTER_REASONING: dict[str, object] = _OPENROUTER_REASONING
-
-AMEM_EMBEDDING_MODEL_NAME = to_str(
-    deep_get(_SETTINGS, "models.amem_embedding_model_name"),
-    default="all-MiniLM-L6-v2",
-)
-GAM_DENSE_RETRIEVER_MODEL_NAME = to_str(
-    deep_get(_SETTINGS, "models.gam_dense_retriever_model_name"),
-    default="BAAI/bge-m3",
-)
+OPENROUTER_REASONING: dict[str, object] = _reasoning
+AMEM_EMBEDDING_MODEL_NAME: str = str(_models["amem_embedding_model_name"])
+GAM_DENSE_RETRIEVER_MODEL_NAME: str = str(_models["gam_dense_retriever_model_name"])

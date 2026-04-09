@@ -1,0 +1,59 @@
+# @package _global_
+# Adversarial co-evolution pipeline with bidirectional opponent feedback.
+#
+# Extends adversarial_coevo_ss (steady-state sync) by adding OpponentFeedbackStage,
+# which injects top-K opponent source codes into the mutation prompt. This gives
+# both Constructor and Improver populations access to each other's strategies
+# (analogous to GAN gradient flow between Generator and Discriminator).
+#
+# Experiment: heilbron/adversarial-v2 (K=1 vs K=3 bidirectional feedback)
+#
+# Requires at run time:
+#   opponent_redis_db=N            (DB of the opponent run)
+#   opponent_redis_prefix=...      (prefix of the opponent run)
+#   pipeline.opponent_feedback_k=N (number of opponent codes to inject, e.g. 1 or 3)
+#   pipeline.population_role=...   (optional; "constructor" for pop_a, "improver" for pop_b)
+#
+# Treatment verification:
+#   - Log line "OPPONENT ATTACK REPORT" (constructor) or "TARGET ANALYSIS REPORT" (improver)
+#     should appear in mutations after gen 3 (once archive is non-empty)
+#   - Log line "[OpponentFeedback] role=" should appear with correct K and role
+#
+# Usage (pop_a, K=3):
+#   python run.py \
+#     problem.name=heilbron_adversarial/pop_a \
+#     evolution=steady_state pipeline=adversarial_coevo_feedback \
+#     redis.db=1 \
+#     opponent_redis_db=2 \
+#     opponent_redis_prefix=heilbron_adversarial/pop_b \
+#     pipeline_builder.per_opponent_timeout=300 \
+#     pipeline.opponent_feedback_k=3
+#
+# Usage (pop_b / improver, K=3):
+#   python run.py \
+#     problem.name=heilbron_adversarial/pop_b \
+#     evolution=steady_state pipeline=adversarial_coevo_feedback \
+#     redis.db=2 \
+#     opponent_redis_db=1 \
+#     opponent_redis_prefix=heilbron_adversarial/pop_a \
+#     pipeline_builder.per_opponent_timeout=300 \
+#     pipeline.opponent_feedback_k=3 \
+#     pipeline.population_role=improver
+
+defaults:
+  - adversarial_coevo_ss
+
+# Bidirectional feedback parameters (required overrides at launch)
+opponent_feedback_k: ???
+population_role: "constructor"  # override to "improver" for pop_b runs
+
+pipeline_builder:
+  _target_: gigaevo.adversarial.feedback_pipeline.AdversarialFeedbackPipelineBuilder
+  ctx: ${evolution_context}
+  opponent_provider: ${opponent_provider}
+  n_opponents: 5
+  per_opponent_timeout: 10.0
+  opponent_feedback_k: ${opponent_feedback_k}
+  population_role: ${population_role}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}

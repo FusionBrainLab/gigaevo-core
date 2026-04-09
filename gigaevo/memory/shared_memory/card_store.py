@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import threading
 from typing import Any
 import uuid
 
 from loguru import logger
 
 from gigaevo.memory.shared_memory.card_conversion import AnyCard, normalize_memory_card
+from gigaevo.memory.shared_memory.utils import _str_or_empty
 
 
 class CardStore:
@@ -34,53 +36,60 @@ class CardStore:
             "updated": 0,
             "updated_target_cards": 0,
         }
+        self._lock = threading.RLock()
         self._load()
 
     def get(self, card_id: str) -> AnyCard | None:
         return self.cards.get(card_id)
 
     def put(self, card_id: str, card: AnyCard) -> None:
-        self.cards[card_id] = card
+        with self._lock:
+            self.cards[card_id] = card
 
     def remove(self, card_id: str) -> AnyCard | None:
-        return self.cards.pop(card_id, None)
+        with self._lock:
+            return self.cards.pop(card_id, None)
 
     def ensure_id(self, card: AnyCard) -> str:
-        card_id = str(card.id or "").strip()
-        if not card_id:
-            card_id = f"mem-{uuid.uuid4().hex[:12]}"
-            card.id = card_id
-        return card_id
+        with self._lock:
+            card_id = _str_or_empty(card.id).strip()
+            if not card_id:
+                card_id = f"mem-{uuid.uuid4().hex[:12]}"
+                card.id = card_id
+            return card_id
 
     def serialize_all(self) -> dict[str, dict[str, Any]]:
         return {cid: c.model_dump() for cid, c in self.cards.items()}
 
     def persist(self, serialized: dict[str, dict[str, Any]] | None = None) -> None:
-        if serialized is None:
-            serialized = self.serialize_all()
-        payload = {
-            "entity_by_card_id": self.entity_by_card_id,
-            "entity_version_by_entity": self.entity_version,
-            "memory_cards": serialized,
-        }
-        tmp_file = self._index_file.with_suffix(f".{os.getpid()}.tmp")
-        tmp_file.write_text(
-            json.dumps(payload, ensure_ascii=True, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(str(tmp_file), str(self._index_file))
+        with self._lock:
+            if serialized is None:
+                serialized = self.serialize_all()
+            payload = {
+                "entity_by_card_id": self.entity_by_card_id,
+                "entity_version_by_entity": self.entity_version,
+                "memory_cards": serialized,
+            }
+            tmp_file = self._index_file.with_suffix(f".{os.getpid()}.tmp")
+            tmp_file.write_text(
+                json.dumps(payload, ensure_ascii=True, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(str(tmp_file), str(self._index_file))
 
     def link_entity(self, card_id: str, entity_id: str, version: str = "") -> None:
-        self.entity_by_card_id[card_id] = entity_id
-        self.card_id_by_entity[entity_id] = card_id
-        self.entity_version[entity_id] = version
+        with self._lock:
+            self.entity_by_card_id[card_id] = entity_id
+            self.card_id_by_entity[entity_id] = card_id
+            self.entity_version[entity_id] = version
 
     def unlink_entity(self, entity_id: str) -> str | None:
-        card_id = self.card_id_by_entity.pop(entity_id, None)
-        self.entity_version.pop(entity_id, None)
-        if card_id:
-            self.entity_by_card_id.pop(card_id, None)
-        return card_id
+        with self._lock:
+            card_id = self.card_id_by_entity.pop(entity_id, None)
+            self.entity_version.pop(entity_id, None)
+            if card_id:
+                self.entity_by_card_id.pop(card_id, None)
+            return card_id
 
     def get_entity_for_card(self, card_id: str) -> str | None:
         return self.entity_by_card_id.get(card_id)
@@ -90,23 +99,25 @@ class CardStore:
 
     def save_entity(self, card_id: str, entity_id: str, version: str = "") -> None:
         """Link card to entity, cleaning up stale mappings if entity_id changed."""
-        old = self.entity_by_card_id.get(card_id)
-        if old and old != entity_id:
-            self.card_id_by_entity.pop(old, None)
-            self.entity_version.pop(old, None)
-        # Clean up old card that previously owned this entity
-        prev_card = self.card_id_by_entity.get(entity_id)
-        if prev_card and prev_card != card_id:
-            self.entity_by_card_id.pop(prev_card, None)
-        self.link_entity(card_id, entity_id, version)
+        with self._lock:
+            old = self.entity_by_card_id.get(card_id)
+            if old and old != entity_id:
+                self.card_id_by_entity.pop(old, None)
+                self.entity_version.pop(old, None)
+            # Clean up old card that previously owned this entity
+            prev_card = self.card_id_by_entity.get(entity_id)
+            if prev_card and prev_card != card_id:
+                self.entity_by_card_id.pop(prev_card, None)
+            self.link_entity(card_id, entity_id, version)
 
     def clear_entity(self, card_id: str) -> str | None:
         """Remove entity mapping for a card. Returns the old entity_id."""
-        entity_id = self.entity_by_card_id.pop(card_id, None)
-        if entity_id:
-            self.card_id_by_entity.pop(entity_id, None)
-            self.entity_version.pop(entity_id, None)
-        return entity_id
+        with self._lock:
+            entity_id = self.entity_by_card_id.pop(card_id, None)
+            if entity_id:
+                self.card_id_by_entity.pop(entity_id, None)
+                self.entity_version.pop(entity_id, None)
+            return entity_id
 
     def resolve_card_id(self, key: str) -> str | None:
         """Resolve a key (card_id or entity_id) to a card_id in the store."""
@@ -137,7 +148,6 @@ class CardStore:
             for card_id, card in raw_cards.items():
                 cid = str(card_id)
                 self.cards[cid] = normalize_memory_card(card, fallback_id=cid)
-                self.note_ids.add(cid)
 
         if isinstance(raw_map, dict):
             for card_id, entity_id in raw_map.items():

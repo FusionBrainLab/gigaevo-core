@@ -125,8 +125,9 @@ class TestProgressBasedSyncHookCall:
 
         await hook()
 
-        # Should have proceeded after timeout despite not meeting min_delta
-        assert hook._last_progress == 0  # not updated on timeout
+        # Should have proceeded after timeout and reset baseline to current
+        # reality so the next epoch doesn't also wait the full timeout
+        assert hook._last_progress == 5  # updated to current min_progress
 
     async def test_multi_source_takes_minimum(self):
         """With multiple sources, blocks on the slowest opponent."""

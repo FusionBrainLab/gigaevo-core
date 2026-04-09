@@ -30,6 +30,7 @@ from gigaevo.memory.shared_memory.card_store import CardStore
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.gam_search import GamSearch
 from gigaevo.memory.shared_memory.memory_config import MemoryConfig
+from gigaevo.memory.shared_memory.memory_state import MemoryState
 from gigaevo.memory.shared_memory.note_sync import NoteSync
 
 if TYPE_CHECKING:
@@ -53,6 +54,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def _has_agentic(self) -> bool:
         return self.memory_system is not None and self.generator is not None
 
+    @property
+    def is_ready(self) -> bool:
+        """True if memory is fully initialized and ready for operations."""
+        return self._state.is_ready
+
     def __init__(
         self,
         *,
@@ -69,6 +75,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._warned_missing_card_update_llm = False
         self._iters_after_rebuild = 0
         self._gam_build_failed = False
+        self._state = MemoryState()
 
         # --- API client ---
         api_cfg = cfg.api
@@ -164,6 +171,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if api_cfg is not None and api_cfg.sync_on_init:
             self._sync_from_api(force_full=True)
 
+        self._state.mark_ready()
+
     def _ensure_api_sync(self) -> ApiSync | None:
         """Lazily create ApiSync if mem.api was set post-construction."""
         if self.api_sync is not None:
@@ -224,10 +233,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if self.config.enable_llm_card_enrichment and self.memory_system is not None:
             analysis = self.memory_system.analyze_content(card.description)
+            enrichments: dict[str, Any] = {}
             if not card.keywords:
-                card.keywords = analysis.get("keywords") or []
+                enrichments["keywords"] = analysis.get("keywords") or []
             if not card.task_description:
-                card.task_description = analysis.get("context") or ""
+                enrichments["task_description"] = analysis.get("context") or ""
+            if enrichments:
+                card = card.model_copy(update=enrichments)
 
         store = self.card_store
         sync = self._ensure_api_sync()
@@ -388,13 +400,23 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self.note_sync is not None:
             self.note_sync.export_jsonl(self.config.export_file, serialized)
         if self.gam is not None:
+            # Track state only when already ready (not during initialization)
+            track_state = self._state.current == "ready"
+            if track_state:
+                self._state.mark_building()
             try:
                 self.gam.build()
                 self.research_agent = self.gam.agent
                 self._gam_build_failed = False
+                if track_state:
+                    self._state.mark_ready()
             except MemoryRetrieverError as exc:
                 logger.warning("[Memory] GAM build failed: {}", exc)
+                self.gam.invalidate()
+                self.research_agent = None
                 self._gam_build_failed = True
+                if track_state:
+                    self._state.mark_error(f"GAM build failed: {exc}")
         self.dedup.invalidate_retrievers()
         self._iters_after_rebuild = 0
 
@@ -443,6 +465,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self._iters_after_rebuild > 0:
             try:
                 self.rebuild()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "[Memory] Final rebuild during context exit failed; "
+                    "some changes may not be persisted: {}",
+                    exc,
+                )
         self.close()

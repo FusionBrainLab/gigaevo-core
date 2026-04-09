@@ -16,10 +16,13 @@ interrupted at any point.
 from __future__ import annotations
 
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from gigaevo.entrypoint.evolution_context import EvolutionContext
+from gigaevo.evolution.engine.mutation import generate_mutations
+from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
@@ -29,13 +32,17 @@ from gigaevo.evolution.mutation.context import (
     MemoryMutationContext,
     MetricsMutationContext,
 )
+from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
 from gigaevo.llm.agents.memory_selector import MemorySelection
 from gigaevo.memory.provider import NullMemoryProvider, SelectorMemoryProvider
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.common import FloatDictContainer, StringContainer
-from gigaevo.programs.stages.memory_context import MemoryContextStage
+from gigaevo.programs.stages.memory_context import (
+    MemoryContextInputs,
+    MemoryContextStage,
+)
 from gigaevo.programs.stages.mutation_context import (
     MutationContextInputs,
     MutationContextStage,
@@ -277,9 +284,6 @@ class TestMemoryUsedAutoDerivation:
     @pytest.mark.asyncio
     async def test_parent_with_memory_ids_sets_memory_used_true(self) -> None:
         """When parent has MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, child gets memory_used=True."""
-        from gigaevo.evolution.engine.mutation import generate_mutations
-        from gigaevo.evolution.mutation.base import MutationSpec
-
         captured_programs: list[Program] = []
 
         async def mock_mutate(parents, **kwargs):
@@ -329,9 +333,6 @@ class TestMemoryUsedAutoDerivation:
     @pytest.mark.asyncio
     async def test_parent_without_memory_ids_sets_memory_used_false(self) -> None:
         """When parent has NO memory card IDs, child gets memory_used=False."""
-        from gigaevo.evolution.engine.mutation import generate_mutations
-        from gigaevo.evolution.mutation.base import MutationSpec
-
         captured_programs: list[Program] = []
 
         async def mock_mutate(parents, **kwargs):
@@ -378,9 +379,6 @@ class TestMemoryUsedAutoDerivation:
     @pytest.mark.asyncio
     async def test_mixed_parents_any_with_memory_sets_true(self) -> None:
         """If ANY parent has memory IDs, child gets memory_used=True."""
-        from gigaevo.evolution.engine.mutation import generate_mutations
-        from gigaevo.evolution.mutation.base import MutationSpec
-
         captured_programs: list[Program] = []
 
         async def mock_mutate(parents, **kwargs):
@@ -432,9 +430,6 @@ class TestMemoryUsedAutoDerivation:
     @pytest.mark.asyncio
     async def test_parent_with_empty_card_ids_sets_false(self) -> None:
         """Empty card_ids list is falsy → memory_used=False."""
-        from gigaevo.evolution.engine.mutation import generate_mutations
-        from gigaevo.evolution.mutation.base import MutationSpec
-
         captured_programs: list[Program] = []
 
         async def mock_mutate(parents, **kwargs):
@@ -490,8 +485,6 @@ class TestMutationOperatorIgnoresMemory:
     @pytest.mark.asyncio
     async def test_mutate_single_signature_accepts_kwargs(self) -> None:
         """mutate_single can be called with extra kwargs (backward compat)."""
-        from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
-
         operator = LLMMutationOperator.__new__(LLMMutationOperator)
         operator.mutation_mode = "rewrite"
         operator.fallback_to_rewrite = True
@@ -593,8 +586,6 @@ class TestPipelineWiringInvariants:
         """MemoryContextStage is always added to DefaultPipelineBuilder,
         regardless of provider type."""
         # memory_provider is accessed via EvolutionContext (not a constructor param)
-        from gigaevo.entrypoint.evolution_context import EvolutionContext
-
         assert "memory_provider" in EvolutionContext.model_fields
 
     def test_null_provider_is_default(self) -> None:
@@ -611,8 +602,6 @@ class TestPipelineWiringInvariants:
 
     def test_memory_context_inputs_is_empty(self) -> None:
         """MemoryContextStage has no required upstream inputs."""
-        from gigaevo.programs.stages.memory_context import MemoryContextInputs
-
         # Should be instantiable with no arguments
         inputs = MemoryContextInputs()
         assert inputs is not None
@@ -717,11 +706,7 @@ class TestHydraConfigContracts:
 
     def test_selector_provider_passes_checkpoint_dir_to_agent(self) -> None:
         """checkpoint_dir flows to MemorySelectorAgent constructor."""
-        from unittest.mock import patch
-
-        with patch(
-            "gigaevo.llm.agents.memory_selector.MemorySelectorAgent"
-        ) as mock_cls:
+        with patch("gigaevo.memory.provider.MemorySelectorAgent") as mock_cls:
             mock_instance = AsyncMock()
             mock_instance.select.return_value = MemorySelection(cards=[], card_ids=[])
             mock_cls.return_value = mock_instance

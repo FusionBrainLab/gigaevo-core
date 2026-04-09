@@ -1,6 +1,7 @@
 import json
 
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.models import ProgramCard
 from gigaevo.memory.write_pipeline import load_memory_cards
 from tests.fakes.agentic_memory import make_test_memory
 
@@ -92,9 +93,7 @@ def test_load_memory_cards_adds_top_program_cards(tmp_path):
     assert len(program_card.connected_ideas) == 2
     assert program_card.connected_ideas[0].idea_id == "idea-1"
     assert program_card.connected_ideas[1].idea_id == "idea-2"
-    from gigaevo.memory.shared_memory.models import ProgramCard as PC
-
-    assert isinstance(program_card, PC)
+    assert isinstance(program_card, ProgramCard)
 
 
 def test_program_cards_bypass_idea_dedup(tmp_path):

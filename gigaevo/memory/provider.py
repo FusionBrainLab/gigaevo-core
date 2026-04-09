@@ -8,15 +8,11 @@ The provider is a strategy object injected into the DAG pipeline via Hydra.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from gigaevo.llm.agents.memory_selector import MemorySelection
+from gigaevo.llm.agents.memory_selector import MemorySelection, MemorySelectorAgent
 from gigaevo.programs.program import Program
-
-if TYPE_CHECKING:
-    from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 
 
 class MemoryProvider(ABC):
@@ -71,8 +67,6 @@ class SelectorMemoryProvider(MemoryProvider):
 
     def _get_selector(self) -> MemorySelectorAgent:
         if self._selector is None:
-            from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
             logger.info(
                 "[SelectorMemoryProvider] Creating MemorySelectorAgent "
                 "(checkpoint_dir={}, namespace={}, use_api=False)",

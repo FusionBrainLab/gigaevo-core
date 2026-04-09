@@ -1,86 +1,36 @@
+"""Example: search the memory backend using the same query format as MemorySelectorAgent.
+
+Run with:
+    PYTHONPATH=. $GIGAEVO_PYTHON gigaevo/memory/examples/memory_read_example.py
+"""
+
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-try:
-    from .runtime_config import (
-        deep_get,
-        load_settings,
-        resolve_local_path,
-        resolve_settings_path,
-        to_bool,
-        to_int,
-        to_list,
-        to_str,
-    )
-except ImportError:  # pragma: no cover - direct script execution fallback
-    from runtime_config import (  # type: ignore[no-redef]
-        deep_get,
-        load_settings,
-        resolve_local_path,
-        resolve_settings_path,
-        to_bool,
-        to_int,
-        to_list,
-        to_str,
-    )
-
-try:
-    from .shared_memory.memory import AmemGamMemory
-    from .shared_memory.memory_config import ApiConfig, GamConfig, MemoryConfig
-except ImportError:  # pragma: no cover - direct script execution fallback
-    from shared_memory.memory import AmemGamMemory  # type: ignore[no-redef]
-    from shared_memory.memory_config import (  # type: ignore[no-redef]
-        ApiConfig,
-        GamConfig,
-        MemoryConfig,
-    )
-
-
-THIS_DIR = Path(__file__).resolve().parent
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=True)
-
-SETTINGS_PATH = resolve_settings_path()
-SETTINGS = load_settings(SETTINGS_PATH)
-
-MEMORY_DIR = resolve_local_path(
-    THIS_DIR,
-    deep_get(SETTINGS, "paths.checkpoint_dir"),
-    default_relative="memory_usage_store/api_exp4",
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.memory_config import (
+    ApiConfig,
+    GamConfig,
+    MemoryConfig,
 )
-MEMORY_API_URL = os.getenv(
-    "MEMORY_API_URL",
-    to_str(deep_get(SETTINGS, "api.base_url"), default="http://localhost:8000"),
-)
-NAMESPACE = os.getenv(
-    "MEMORY_NAMESPACE",
-    to_str(deep_get(SETTINGS, "api.namespace"), default="exp6"),
-)
-USE_API = to_bool(
-    os.getenv("MEMORY_USE_API"),
-    default=to_bool(deep_get(SETTINGS, "api.use_api"), default=True),
-)
-CHANNEL = to_str(deep_get(SETTINGS, "api.channel"), default="latest")
-ENABLE_BM25 = to_bool(deep_get(SETTINGS, "gam.enable_bm25"), default=False)
-ALLOWED_GAM_TOOLS = [
-    str(tool).strip() for tool in to_list(deep_get(SETTINGS, "gam.allowed_tools"))
-]
-GAM_PIPELINE_MODE = to_str(
-    os.getenv("MEMORY_GAM_PIPELINE_MODE"),
-    default=to_str(deep_get(SETTINGS, "gam.pipeline_mode"), default="default"),
-)
-RAW_GAM_TOP_K_BY_TOOL = deep_get(SETTINGS, "gam.top_k_by_tool", default={})
-if isinstance(RAW_GAM_TOP_K_BY_TOOL, dict):
-    GAM_TOP_K_BY_TOOL = {
-        str(tool).strip(): max(1, to_int(value, default=5))
-        for tool, value in RAW_GAM_TOP_K_BY_TOOL.items()
-        if str(tool).strip()
-    }
-else:
-    GAM_TOP_K_BY_TOOL = {}
+from gigaevo.memory.write_pipeline_config import load_config
+
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env", override=True)
+
+_cfg = load_config()
+
+MEMORY_DIR = _cfg.memory_dir
+MEMORY_API_URL = str(_cfg.memory_api_url)
+NAMESPACE = _cfg.namespace
+USE_API = _cfg.use_api
+CHANNEL = _cfg.channel
+ENABLE_BM25 = _cfg.enable_bm25
+ALLOWED_GAM_TOOLS = list(_cfg.allowed_gam_tools)
+GAM_PIPELINE_MODE = _cfg.gam_pipeline_mode or "default"
+GAM_TOP_K_BY_TOOL = dict(_cfg.gam_top_k_by_tool)
 
 
 def _build_memory_selector_style_request() -> str:
@@ -142,7 +92,7 @@ def main() -> None:
             enable_bm25=ENABLE_BM25,
             allowed_tools=ALLOWED_GAM_TOOLS or [],
             top_k_by_tool=GAM_TOP_K_BY_TOOL or {},
-            pipeline_mode=GAM_PIPELINE_MODE or "default",
+            pipeline_mode=GAM_PIPELINE_MODE,
         ),
     )
     memory = AmemGamMemory(config=mem_config)
@@ -150,7 +100,7 @@ def main() -> None:
     print("\n==============================")
     print("API Memory Demo: Search")
     print("==============================\n")
-    print(f"Config file: {SETTINGS_PATH}")
+    print(f"Config file: {_cfg.settings_path}")
     print(f"Using API: {USE_API}")
 
     query = _build_memory_selector_style_request()

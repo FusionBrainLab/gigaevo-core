@@ -66,25 +66,54 @@ Summary lines:
     )
     parser.add_argument("--redis-host", default="localhost")
     parser.add_argument("--redis-port", type=int, default=6379)
+    parser.add_argument(
+        "--metric",
+        type=str,
+        default="fitness",
+        metavar="METRIC",
+        help=(
+            "Metric name to read from Redis (default: fitness). "
+            "Used to construct the Redis key and to auto-detect non-monotonic metrics. "
+            "If the metric name contains 'adversarial', monotonic improvement tracking "
+            "is suppressed automatically."
+        ),
+    )
+    parser.add_argument(
+        "--non-monotonic",
+        action="store_true",
+        default=False,
+        help=(
+            "Suppress the 'Last improvement' summary line. "
+            "Use for adversarial fitness metrics that are non-stationary "
+            "(opponents evolve, so cummax is misleading). "
+            "Also triggered automatically when --metric contains 'adversarial'."
+        ),
+    )
     args = parser.parse_args()
 
     prefix, db, label = parse_run_arg(args.run)
     r = redis_lib.Redis(host=args.redis_host, port=args.redis_port, db=db)
 
+    metric = args.metric
+    # Auto-detect non-monotonic: adversarial metrics change as opponents evolve
+    non_monotonic = args.non_monotonic or "adversarial" in metric.lower()
+
     try:
         # Per-gen mean fitness: one entry per valid program, s=generation, v=running_mean
         gen_mean_entries = _read_list(
-            r, f"{prefix}:metrics:history:program_metrics:valid_gen_fitness_mean"
+            r,
+            f"{prefix}:metrics:history:program_metrics:valid_gen_{metric}_mean",
         )
         # Frontier improvements: one entry per improvement, s=iteration(≈gen), v=frontier_value
         frontier_entries = _read_list(
-            r, f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness"
+            r,
+            f"{prefix}:metrics:history:program_metrics:valid_frontier_{metric}",
         )
     finally:
         r.close()
 
     if not gen_mean_entries:
-        print(f"No data found for {label} (prefix={prefix}, db={db})")
+        print(f"No data found for {label} (prefix={prefix}, db={db}, metric={metric})")
         sys.exit(1)
 
     # Build per-gen info from gen_mean_entries.
@@ -143,7 +172,10 @@ Summary lines:
     max_gen = sorted_gens[-1]
     gen_width = max(len(str(max_gen)), 3)
 
-    print(f"Trajectory: {label}  (prefix={prefix}, db={db})")
+    metric_note = " [non-stationary]" if non_monotonic else ""
+    print(
+        f"Trajectory: {label}  (prefix={prefix}, db={db}, metric={metric}{metric_note})"
+    )
     print()
     for gen in sorted_gens:
         info = gen_info[gen]
@@ -158,26 +190,32 @@ Summary lines:
 
     print()
 
-    # Last improvement summary
-    # Walk frontier_points to find monotonic improvements
-    improvement_points: list[tuple[int, float]] = []
-    running_max: float | None = None
-    for s, v in frontier_points:
-        if running_max is None or v > running_max:
-            improvement_points.append((s, v))
-            running_max = v
-
-    if len(improvement_points) >= 2:
-        last_s, last_v = improvement_points[-1]
-        prev_s, prev_v = improvement_points[-2]
-        delta = (last_v - prev_v) * 100
+    # Last improvement summary — suppressed for non-monotonic (adversarial) metrics
+    if non_monotonic:
         print(
-            f"  Last improvement: gen {last_s}"
-            f" ({prev_v * 100:.1f}% \u2192 {last_v * 100:.1f}%, +{delta:.1f}pp)"
+            f"  Note: metric '{metric}' is non-stationary (adversarial); "
+            "no monotonic improvement tracking."
         )
-    elif len(improvement_points) == 1:
-        last_s, last_v = improvement_points[0]
-        print(f"  Last improvement: gen {last_s} (\u2192 {last_v * 100:.1f}%)")
+    else:
+        # Walk frontier_points to find monotonic improvements
+        improvement_points: list[tuple[int, float]] = []
+        running_max: float | None = None
+        for s, v in frontier_points:
+            if running_max is None or v > running_max:
+                improvement_points.append((s, v))
+                running_max = v
+
+        if len(improvement_points) >= 2:
+            last_s, last_v = improvement_points[-1]
+            prev_s, prev_v = improvement_points[-2]
+            delta = (last_v - prev_v) * 100
+            print(
+                f"  Last improvement: gen {last_s}"
+                f" ({prev_v * 100:.1f}% \u2192 {last_v * 100:.1f}%, +{delta:.1f}pp)"
+            )
+        elif len(improvement_points) == 1:
+            last_s, last_v = improvement_points[0]
+            print(f"  Last improvement: gen {last_s} (\u2192 {last_v * 100:.1f}%)")
 
     # Acceptance rate over last 10 gens:
     # = frontier improvements in that window / total valid programs in that window

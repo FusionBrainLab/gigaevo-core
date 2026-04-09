@@ -86,6 +86,10 @@ class TestConnectedIdea:
         ci = ConnectedIdea(idea_id="i1", description="SA optimization")
         assert ci.idea_id == "i1"
 
-    def test_extra_fields_allowed(self):
-        ci = ConnectedIdea(idea_id="i1", description="d", score=0.9)
-        assert ci.idea_id == "i1"
+    def test_extra_fields_forbidden(self):
+        """ConnectedIdea forbids extra fields for schema consistency."""
+        from pydantic_core import ValidationError
+        import pytest
+
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            ConnectedIdea(idea_id="i1", description="d", score=0.9)

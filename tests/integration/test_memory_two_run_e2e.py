@@ -46,10 +46,10 @@ from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-from gigaevo.memory.ideas_tracker.utils.helpers import (
-    build_memory_usage_updates_from_programs,
+from gigaevo.memory.ideas_tracker.ideas_tracker import (
+    _build_usage_updates as build_memory_usage_updates_from_programs,
 )
-from gigaevo.memory.ideas_tracker.utils.records_converter import (
+from gigaevo.memory.ideas_tracker.models import (
     programs_to_records,
 )
 from gigaevo.memory.provider import MemoryProvider, SelectorMemoryProvider
@@ -279,7 +279,7 @@ def _make_run_a_programs() -> list[Program]:
     child1 = Program(
         code="def entrypoint():\n    return sort(evidence)",
         state=ProgramState.DONE,
-        metrics={"fitness": 5.0},
+        metrics={"fitness": 5.0, "is_valid": 1.0},
         metadata={
             "mutation_output": {
                 "archetype": "exploitation",
@@ -296,7 +296,7 @@ def _make_run_a_programs() -> list[Program]:
     child2 = Program(
         code="def entrypoint():\n    return bfs(graph)",
         state=ProgramState.DONE,
-        metrics={"fitness": 7.0},
+        metrics={"fitness": 7.0, "is_valid": 1.0},
         metadata={
             "mutation_output": {
                 "archetype": "exploration",
@@ -313,7 +313,7 @@ def _make_run_a_programs() -> list[Program]:
     child3 = Program(
         code="def entrypoint():\n    return combine(bfs, sort)",
         state=ProgramState.DONE,
-        metrics={"fitness": 9.0},
+        metrics={"fitness": 9.0, "is_valid": 1.0},
         metadata={
             "mutation_output": {
                 "archetype": "exploitation",
@@ -354,11 +354,11 @@ class TestTwoRunMemoryLifecycle:
         # 1. IdeaTracker filters programs and converts to records
         with (
             patch(
-                "gigaevo.memory.ideas_tracker.components.fabrics.llm_clients_fabric._create_llm_clients",
+                "gigaevo.memory.ideas_tracker.llm._init_clients",
                 return_value=(MagicMock(), MagicMock(), False),
             ),
             patch(
-                "gigaevo.memory.ideas_tracker.ideas_tracker.summarize_task_description",
+                "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
                 return_value="Multi-hop fact verification",
             ),
         ):
@@ -370,7 +370,7 @@ class TestTwoRunMemoryLifecycle:
                 memory_usage_tracking_enabled=False,
             )
 
-        records = tracker._get_new_programs(run_a_programs)
+        records = tracker._eligible_records(run_a_programs)
         # Root (no parents) is filtered, 3 children remain
         assert len(records) == 3
         assert all(r.fitness > 0 for r in records)
@@ -381,7 +381,9 @@ class TestTwoRunMemoryLifecycle:
         assert best_record.strategy == "exploitation"
 
         # 2. Memory usage tracking works with real programs
-        usage = build_memory_usage_updates_from_programs(run_a_programs, "HoVer")
+        usage = build_memory_usage_updates_from_programs(
+            run_a_programs, "HoVer", "fitness"
+        )
         # No memory cards were used in Run A, so usage is empty
         assert usage == {}
 
@@ -546,7 +548,7 @@ class TestTwoRunMemoryLifecycle:
         parent = Program(
             code="def f(): pass",
             state=ProgramState.DONE,
-            metrics={"fitness": 3.0},
+            metrics={"fitness": 3.0, "is_valid": 1.0},
             metadata={},
             lineage=Lineage(parents=[], generation=1),
         )
@@ -554,22 +556,22 @@ class TestTwoRunMemoryLifecycle:
         child = Program(
             code="def f(): return sorted(x)",
             state=ProgramState.DONE,
-            metrics={"fitness": 8.0},
+            metrics={"fitness": 8.0, "is_valid": 1.0},
             metadata={"memory_selected_idea_ids": ["idea-sort", "idea-bfs"]},
             lineage=Lineage(parents=[parent.id], generation=2),
         )
 
         usage = build_memory_usage_updates_from_programs(
-            [parent, child], "HoVer verification"
+            [parent, child], "HoVer verification", "fitness"
         )
 
         # Both cards get attributed the same delta (8.0 - 3.0 = 5.0)
         assert "idea-sort" in usage
         assert "idea-bfs" in usage
 
-        sort_total = usage["idea-sort"]["used"]["total"]
-        assert sort_total["total_used"] == 1
-        assert sort_total["median_delta_fitness"] == 5.0
+        sort_payload = usage["idea-sort"]
+        assert sort_payload.total_used == 1
+        assert sort_payload.median_delta_fitness == 5.0
 
     @pytest.mark.asyncio
     async def test_post_run_hook_fires_after_run_b(self, tmp_path) -> None:
@@ -639,11 +641,11 @@ class TestRunAIdeaTrackerProgramNative:
         """IdeaTracker._get_new_programs filters roots and zero-fitness."""
         with (
             patch(
-                "gigaevo.memory.ideas_tracker.components.fabrics.llm_clients_fabric._create_llm_clients",
+                "gigaevo.memory.ideas_tracker.llm._init_clients",
                 return_value=(MagicMock(), MagicMock(), False),
             ),
             patch(
-                "gigaevo.memory.ideas_tracker.ideas_tracker.summarize_task_description",
+                "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
                 return_value="Summary",
             ),
         ):
@@ -656,25 +658,25 @@ class TestRunAIdeaTrackerProgramNative:
             )
 
         programs = _make_run_a_programs()
-        records = tracker._get_new_programs(programs)
+        records = tracker._eligible_records(programs)
 
         # Root (seed, no parents) is filtered
         assert len(records) == 3
         # All records have positive fitness
         assert all(r.fitness > 0 for r in records)
         # IDs tracked for deduplication
-        assert len(tracker.programs_ids) == 3
+        assert len(tracker._seen_ids) == 3
 
     @pytest.mark.asyncio
     async def test_on_run_complete_calls_pipeline(self) -> None:
         """on_run_complete fetches programs from storage and runs pipeline."""
         with (
             patch(
-                "gigaevo.memory.ideas_tracker.components.fabrics.llm_clients_fabric._create_llm_clients",
+                "gigaevo.memory.ideas_tracker.llm._init_clients",
                 return_value=(MagicMock(), MagicMock(), False),
             ),
             patch(
-                "gigaevo.memory.ideas_tracker.ideas_tracker.summarize_task_description",
+                "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
                 return_value="Summary",
             ),
         ):
@@ -686,14 +688,14 @@ class TestRunAIdeaTrackerProgramNative:
                 memory_usage_tracking_enabled=False,
             )
 
-        tracker._run_on_programs = MagicMock()
+        tracker._run = AsyncMock()
 
         storage = AsyncMock()
         storage.get_all.return_value = _make_run_a_programs()
 
         await tracker.on_run_complete(storage)
 
-        tracker._run_on_programs.assert_called_once()
+        tracker._run.assert_called_once()
         # Programs passed to pipeline
-        passed = tracker._run_on_programs.call_args[0][0]
+        passed = tracker._run.call_args[0][0]
         assert len(passed) == 4  # seed + 3 children

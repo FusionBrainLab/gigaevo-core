@@ -11,6 +11,9 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
+from loguru import logger
+
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
     ConnectedIdea,
@@ -21,11 +24,11 @@ from gigaevo.memory.shared_memory.models import (
 from gigaevo.memory.shared_memory.utils import (
     _safe_get,
     _str_or_empty,
-    _to_float,
     _to_int,
     _to_list,
     dedupe_keep_order,
 )
+from gigaevo.memory.utils import to_float
 
 _ENTITY_NAME_MAX_LENGTH = 255
 
@@ -89,6 +92,41 @@ DEFAULT_GAM_TOP_K_BY_TOOL = {
 # ---------------------------------------------------------------------------
 
 
+def _normalize_usage(raw_usage: Any) -> UsagePayload:
+    """Convert raw usage data to UsagePayload, with graceful fallback."""
+    if isinstance(raw_usage, UsagePayload):
+        return raw_usage
+    if not isinstance(raw_usage, dict):
+        return UsagePayload()
+    try:
+        return UsagePayload.model_validate(raw_usage)
+    except Exception as exc:
+        logger.warning(
+            "[Memory] UsagePayload validation failed, using empty payload: {}", exc
+        )
+        return UsagePayload()
+
+
+def _normalize_connected_ideas(raw_list: Any) -> list[ConnectedIdea]:
+    """Convert raw connected_ideas to typed ConnectedIdea list."""
+    items = _to_list(raw_list)
+    result: list[ConnectedIdea] = []
+    for item in items:
+        if isinstance(item, ConnectedIdea):
+            result.append(item)
+        elif isinstance(item, dict):
+            try:
+                result.append(ConnectedIdea.model_validate(item))
+            except Exception as exc:
+                logger.debug(
+                    "[card_conversion] Skipping invalid ConnectedIdea item {!r}: {}",
+                    item,
+                    exc,
+                )
+        # else: skip non-dict, non-ConnectedIdea items
+    return result
+
+
 def normalize_memory_card(
     card: dict[str, Any] | AnyCard | None = None,
     fallback_id: str | None = None,
@@ -117,9 +155,9 @@ def normalize_memory_card(
                 raw.get("task_description_summary") or raw.get("context_summary") or ""
             ),
             description=str(raw.get("description") or raw.get("content") or ""),
-            fitness=_to_float(raw.get("fitness"), default=None),
+            fitness=to_float(raw.get("fitness"), default=None),
             code=str(raw.get("code") or ""),
-            connected_ideas=_to_list(raw.get("connected_ideas")),
+            connected_ideas=_normalize_connected_ideas(raw.get("connected_ideas")),
             keywords=_to_list(raw.get("keywords")),
             strategy=str(raw.get("strategy") or ""),
             links=_to_list(raw.get("links")),
@@ -151,7 +189,7 @@ def normalize_memory_card(
         ),
         works_with=_to_list(raw.get("works_with")),
         links=_to_list(raw.get("links")),
-        usage=_usage if isinstance((_usage := raw.get("usage")), dict) else {},
+        usage=_normalize_usage(raw.get("usage")),
     )
 
 
@@ -245,10 +283,7 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
             "description": card.description,
             "fitness": card.fitness,
             "code": card.code,
-            "connected_ideas": [
-                ci.model_dump() if isinstance(ci, ConnectedIdea) else ci
-                for ci in card.connected_ideas
-            ],
+            "connected_ideas": [ci.model_dump() for ci in card.connected_ideas],
         }
 
     explanation = card.explanation
@@ -280,7 +315,7 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
         else None,
         "works_with": dedupe_keep_order(list(card.works_with)),
         "links": dedupe_keep_order(list(card.links)),
-        "usage": card.usage if isinstance(card.usage, dict) else None,
+        "usage": card.usage.model_dump(),
     }
 
 

@@ -14,6 +14,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     note_metadata,
 )
 from gigaevo.memory.shared_memory.card_store import CardStore
+from gigaevo.memory.shared_memory.protocols import AgenticMemoryProtocol
 
 
 class NoteSync:
@@ -26,7 +27,7 @@ class NoteSync:
     def __init__(
         self,
         *,
-        memory_system: Any,
+        memory_system: AgenticMemoryProtocol,
         note_cls: type[Any],
         card_store: CardStore,
     ):
@@ -34,49 +35,57 @@ class NoteSync:
         self._note_cls = note_cls
         self._card_store = card_store
 
+    @staticmethod
+    def _card_to_note_kwargs(card: AnyCard) -> dict[str, Any]:
+        """Extract note-relevant fields from a card for A-MEM sync."""
+        context = (
+            str(card.task_description or card.task_description_summary or "").strip()
+            or "General"
+        )
+        return {
+            "content": str(card.description or ""),
+            "category": str(card.category or "general"),
+            "context": context,
+            "strategy": str(card.strategy or ""),
+            "keywords": list(card.keywords or []),
+            "links": list(card.links or []),
+        }
+
     def build_note(
         self,
         card: AnyCard,
         existing: MemoryNoteProtocol | None = None,
     ) -> MemoryNoteProtocol:
         card_id = str(card.id or "")
-        description = str(card.description or "")
-        context = str(
-            card.task_description or card.task_description_summary or "General"
-        )
-        category = str(card.category or "general")
-        strategy = str(card.strategy or "")
-        keywords = list(card.keywords or [])
-        links = list(card.links or [])
         if existing is None:
             existing = self.memory_system.read(card_id)
-
+        note_kwargs = self._card_to_note_kwargs(card)
         return self._note_cls(
-            content=description,
+            content=note_kwargs["content"],
             id=card_id,
-            keywords=keywords,
-            links=links,
+            keywords=note_kwargs["keywords"],
+            links=note_kwargs["links"],
             retrieval_count=(existing.retrieval_count if existing is not None else 0),
             timestamp=(existing.timestamp if existing is not None else None),
             last_accessed=(existing.last_accessed if existing is not None else None),
-            context=context or "General",
+            context=note_kwargs["context"],
             evolution_history=(
                 existing.evolution_history if existing is not None else None
             ),
-            category=category,
+            category=note_kwargs["category"],
             tags=(existing.tags if existing is not None else []),
-            strategy=strategy,
+            strategy=note_kwargs["strategy"],
         )
 
     @staticmethod
     def fields_changed(
         existing: MemoryNoteProtocol,
-        content: Any,
-        category: Any,
-        context: Any,
-        strategy: Any,
-        keywords: Any,
-        links: Any,
+        content: str,
+        category: str,
+        context: str,
+        strategy: str,
+        keywords: list[str],
+        links: list[str],
     ) -> bool:
         return (
             existing.content != content
@@ -105,6 +114,9 @@ class NoteSync:
             self._card_store.note_ids.add(note.id)
             return False
 
+        # Direct dict write bypasses LLM evolution — intentional for the fast path.
+        # AgenticMemoryProtocol has no public write-without-LLM method, so we access
+        # the backing store directly here.
         self.memory_system.memories[note.id] = note
         try:
             self.memory_system.retriever.delete_document(note.id)
@@ -115,7 +127,7 @@ class NoteSync:
                 exc,
             )
         self.memory_system.retriever.add_document(
-            self.memory_system._document_for_note(note),
+            self.memory_system.document_for_note(note),
             note_metadata(note),
             note.id,
         )
@@ -128,35 +140,24 @@ class NoteSync:
         if not card_id:
             return False
 
-        description = str(card.description or "")
-        kwargs = {
-            "category": str(card.category or "general"),
-            "keywords": list(card.keywords or []),
-            "context": str(
-                card.task_description or card.task_description_summary or "General"
-            ),
-            "strategy": str(card.strategy or ""),
-            "links": list(card.links or []),
-            "tags": [],
-        }
-
+        note_kwargs = self._card_to_note_kwargs(card)
         existing = self.memory_system.read(card_id)
         if existing is None:
-            self.memory_system.add_note(id=card_id, content=description, **kwargs)
+            self.memory_system.add_note(id=card_id, tags=[], **note_kwargs)
         else:
             changed = self.fields_changed(
                 existing,
-                description,
-                kwargs["category"],
-                kwargs["context"],
-                kwargs["strategy"],
-                kwargs["keywords"],
-                kwargs["links"],
+                note_kwargs["content"],
+                note_kwargs["category"],
+                note_kwargs["context"],
+                note_kwargs["strategy"],
+                note_kwargs["keywords"],
+                note_kwargs["links"],
             )
             if not changed:
                 self._card_store.note_ids.add(card_id)
                 return False
-            self.memory_system.update(card_id, content=description, **kwargs)
+            self.memory_system.update(card_id, tags=[], **note_kwargs)
 
         self._card_store.note_ids.add(card_id)
         return True

@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from loguru import logger
+
 from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard
 
 
@@ -118,7 +120,9 @@ def synthesize_search_results(
         text = str(text or "").strip()
         if text:
             return text
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "[Memory] LLM synthesis failed, falling back to keyword results: {}", exc
+        )
 
     return format_search_results(query, cards)

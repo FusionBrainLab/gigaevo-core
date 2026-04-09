@@ -12,13 +12,13 @@ class GigaEvoMemoryBase(ABC):
     """
 
     @abstractmethod
-    def save(self, data: str) -> str:
-        """Persist a text observation and return a card identifier."""
+    def save(self, data: str, category: str = "general") -> str:
+        """Save a text description as a new memory card."""
         ...
 
     @abstractmethod
-    def search(self, query: str) -> str:
-        """Search memory and return a formatted result string."""
+    def search(self, query: str, memory_state: str | None = None) -> str:
+        """Search memory cards."""
         ...
 
     @abstractmethod

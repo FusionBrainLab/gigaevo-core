@@ -8,8 +8,9 @@ import re
 from typing import Any
 import uuid
 
-from gigaevo.memory._vendor.A_mem.agent.agent_class import LLMService
 from loguru import logger
+
+from gigaevo.memory._vendor.A_mem.agent.agent_class import LLMService
 
 from .llm_controller import LLMController
 from .retrievers import ChromaRetriever, PersistentChromaRetriever
@@ -206,7 +207,7 @@ class AgenticMemorySystem:
         ]
         return "\n".join(parts)
 
-    def _document_for_note(self, note: MemoryNote) -> str:
+    def document_for_note(self, note: MemoryNote) -> str:
         if self._use_gam_card_document:
             return self._build_gam_card_text(note)
         return note.content
@@ -402,7 +403,7 @@ class AgenticMemorySystem:
             "tags": note.tags,
             "strategy": note.strategy,
         }
-        self.retriever.add_document(self._document_for_note(note), metadata, note.id)
+        self.retriever.add_document(self.document_for_note(note), metadata, note.id)
 
         if evo_label:
             self.evo_cnt += 1
@@ -432,7 +433,7 @@ class AgenticMemorySystem:
                 "strategy": memory.strategy,
             }
             self.retriever.add_document(
-                self._document_for_note(memory), metadata, memory.id
+                self.document_for_note(memory), metadata, memory.id
             )
 
     def find_related_memories(self, query: str, k: int = 5) -> tuple[str, list[int]]:
@@ -547,7 +548,7 @@ class AgenticMemorySystem:
         # Delete and re-add to update
         self.retriever.delete_document(memory_id)
         self.retriever.add_document(
-            document=self._document_for_note(note),
+            document=self.document_for_note(note),
             metadata=metadata,
             doc_id=memory_id,
         )

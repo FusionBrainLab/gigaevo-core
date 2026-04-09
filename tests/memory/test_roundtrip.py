@@ -11,12 +11,20 @@ All tests run without OPENAI_API_KEY, Redis, Chroma, or network.
 """
 
 import asyncio
+import copy
 from dataclasses import dataclass, field
 import json
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
+from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
+from gigaevo.memory.shared_memory.card_update_dedup import (
+    merge_updated_card,
+    parse_llm_card_decision,
+)
+from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.models import ProgramCard
 from gigaevo.memory.write_pipeline import load_memory_cards
 from tests.fakes.agentic_memory import make_test_memory
@@ -311,8 +319,6 @@ class TestMemorySelectorIntegration:
 
     def _make_selector_with_memory(self, tmp_path, ideas):
         """Create a MemorySelectorAgent with pre-filled local memory."""
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         mem = _make_memory(tmp_path)
         for idea in ideas:
             mem.save_card(idea)
@@ -355,8 +361,6 @@ class TestMemorySelectorIntegration:
 
     @pytest.mark.asyncio
     async def test_select_with_no_memory_returns_empty(self, tmp_path):
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         selector._search_lock = asyncio.Lock()
         selector._backend_error = "test: no backend"
@@ -394,8 +398,6 @@ class TestMemorySelectorIntegration:
         assert selection.card_ids == []
 
     def test_build_request_format(self, tmp_path):
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         selector._search_lock = asyncio.Lock()
         selector._backend_error = None
@@ -421,8 +423,6 @@ class TestMemorySelectorIntegration:
         assert "Return exactly 3 concise ideas" in query
 
     def test_parse_search_result_numbered(self, tmp_path):
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         result = (
             "Query: test\n\n"
@@ -435,16 +435,12 @@ class TestMemorySelectorIntegration:
         assert "simulated annealing" in cards[0]
 
     def test_parse_search_result_no_relevant(self, tmp_path):
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         result = "Query: test\n\nNo relevant memories found."
         cards = selector._parse_search_result(result, max_cards=3)
         assert cards == []
 
     def test_extract_card_ids_from_text(self, tmp_path):
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         text = (
             "Top relevant memory cards:\n"
@@ -456,8 +452,6 @@ class TestMemorySelectorIntegration:
         assert "idea-2" in ids
 
     def test_extract_card_ids_from_raw_memory(self, tmp_path):
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         raw_memory = {
             "final_decision": {
@@ -471,8 +465,6 @@ class TestMemorySelectorIntegration:
         assert ids == ["idea-1", "idea-2"]
 
     def test_merge_card_ids_dedupes(self, tmp_path):
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         merged = selector._merge_card_ids(
             primary=["idea-1", "idea-2"],
@@ -591,8 +583,6 @@ class TestSearchFallbackPaths:
 
     def test_search_with_ids_fallback_to_plain_search(self, tmp_path):
         """When research_agent is None, _search_with_ids falls to memory.search()."""
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         mem = _make_memory(tmp_path)
         mem.save_card(
             _make_idea_card(
@@ -613,8 +603,6 @@ class TestSearchFallbackPaths:
 
     def test_search_with_ids_gam_path(self, tmp_path):
         """When research_agent exists, _search_with_ids uses it."""
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         mem = _make_memory(tmp_path)
         mem.save_card(_make_idea_card("idea-1", "annealing"))
 
@@ -640,8 +628,6 @@ class TestSearchFallbackPaths:
 
     def test_search_with_ids_gam_failure_falls_back(self, tmp_path):
         """When research_agent.research() raises, falls back to plain search."""
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         mem = _make_memory(tmp_path)
         mem.save_card(
             _make_idea_card("idea-1", "annealing optimization", keywords=["annealing"])
@@ -664,10 +650,6 @@ class TestSearchFallbackPaths:
         existing card's explanation.explanations is NOT mutated.
         However, the top-level dict IS shallow-copied, so other nested
         dicts (usage, evolution_statistics) could be mutated."""
-        import copy
-
-        from gigaevo.memory.shared_memory.card_update_dedup import merge_updated_card
-
         existing = {
             "id": "c1",
             "description": "original",
@@ -695,10 +677,6 @@ class TestSearchFallbackPaths:
         """FIXED: parse_llm_card_decision returns None for garbage input,
         enabling the retry loop in _decide_card_action to work correctly.
         """
-        from gigaevo.memory.shared_memory.card_update_dedup import (
-            parse_llm_card_decision,
-        )
-
         garbage_inputs = [
             "",
             "I don't know",
@@ -714,12 +692,6 @@ class TestSearchFallbackPaths:
 
     def test_parse_llm_card_decision_returns_dict_for_valid_json(self):
         """Valid JSON with action field returns a dict."""
-        import json
-
-        from gigaevo.memory.shared_memory.card_update_dedup import (
-            parse_llm_card_decision,
-        )
-
         result = parse_llm_card_decision(
             json.dumps({"action": "add"}),
             candidate_ids={"c1"},
@@ -729,9 +701,6 @@ class TestSearchFallbackPaths:
 
     def test_http_200_non_json_raises(self):
         """_ConceptApiClient._request crashes on 200 with non-JSON body."""
-        import httpx
-
-        from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 
         def handler(request):
             return httpx.Response(200, text="<html>502 Bad Gateway</html>")

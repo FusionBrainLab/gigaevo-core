@@ -22,6 +22,8 @@ import re
 from typing import Any
 import uuid
 
+from gigaevo.memory.shared_memory.protocols import ResearchOutput
+
 # ---------------------------------------------------------------------------
 # FakeMemoryNote — mirrors A_mem.agentic_memory.memory_system.MemoryNote
 # ---------------------------------------------------------------------------
@@ -152,7 +154,7 @@ class FakeAgenticMemorySystem:
             strategy=kwargs.get("strategy", ""),
         )
         self.memories[note_id] = note
-        doc = self._document_for_note(note)
+        doc = self.document_for_note(note)
         self.retriever.add_document(doc, self._note_metadata(note), note_id)
         return note_id
 
@@ -166,7 +168,7 @@ class FakeAgenticMemorySystem:
             if key in kwargs:
                 setattr(note, key, kwargs[key])
         note.last_accessed = datetime.now(UTC).strftime("%Y%m%d%H%M")
-        doc = self._document_for_note(note)
+        doc = self.document_for_note(note)
         self.retriever.delete_document(memory_id)
         self.retriever.add_document(doc, self._note_metadata(note), memory_id)
         return True
@@ -188,7 +190,7 @@ class FakeAgenticMemorySystem:
             "tags": [],
         }
 
-    def _document_for_note(self, note: FakeMemoryNote) -> str:
+    def document_for_note(self, note: FakeMemoryNote) -> str:
         if self._use_gam_card_document:
             return f"id: {note.id}\ncontent: {note.content}\nkeywords: {note.keywords}"
         return note.content
@@ -220,9 +222,7 @@ class FakeAMemGenerator:
     def generate_single(
         self,
         prompt: str | None = None,
-        messages: list | None = None,
-        schema: dict | None = None,
-        extra_params: dict | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         return {"text": "Generated response", "json": None, "response": None}
 
@@ -240,12 +240,6 @@ class FakeAMemGenerator:
 # ---------------------------------------------------------------------------
 # FakeResearchAgent — mirrors GAM_root.gam.ResearchAgent
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class FakeResearchOutput:
-    integrated_memory: str = ""
-    raw_memory: dict = field(default_factory=dict)
 
 
 class FakeResearchAgent:
@@ -266,9 +260,7 @@ class FakeResearchAgent:
         self._retrievers = retrievers or {}
         self._generator = generator
 
-    def research(
-        self, request: str, memory_state: str | None = None
-    ) -> FakeResearchOutput:
+    def research(self, request: str, memory_state: str | None = None) -> ResearchOutput:
         """Search all retrievers and format results."""
         all_results = []
         for name, retriever in self._retrievers.items():
@@ -278,7 +270,7 @@ class FakeResearchAgent:
                     all_results.extend(hits[0])
 
         if not all_results:
-            return FakeResearchOutput(
+            return ResearchOutput(
                 integrated_memory="No relevant memories found.",
                 raw_memory={},
             )
@@ -289,7 +281,7 @@ class FakeResearchAgent:
             lines.append(f"{i}. {hit.page_id} [general] {hit.meta.get('content', '')}")
             card_ids.append(hit.page_id)
 
-        return FakeResearchOutput(
+        return ResearchOutput(
             integrated_memory="\n".join(lines),
             raw_memory={
                 "final_decision": {
@@ -549,8 +541,8 @@ def patch_gam_imports():
     """
     import types
 
-    fake_module = types.ModuleType("shared_memory.amem_gam_retriever")
+    fake_module = types.ModuleType("gigaevo.memory.shared_memory.amem_gam_retriever")
     fake_module.build_gam_store = fake_build_gam_store  # type: ignore[attr-defined]
     fake_module.build_retrievers = fake_build_retrievers  # type: ignore[attr-defined]
     fake_module.load_amem_records = fake_load_amem_records  # type: ignore[attr-defined]
-    return {"shared_memory.amem_gam_retriever": fake_module}
+    return {"gigaevo.memory.shared_memory.amem_gam_retriever": fake_module}

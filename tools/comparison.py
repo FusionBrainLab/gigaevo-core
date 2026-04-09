@@ -996,6 +996,19 @@ async def main():
         help="Open interactive display window after saving (requires a display; sets MPLBACKEND)",
     )
 
+    # === Adversarial Mode ===
+    adv_group = parser.add_argument_group("Adversarial Mode")
+    adv_group.add_argument(
+        "--adversarial",
+        action="store_true",
+        default=False,
+        help=(
+            "Adversarial mode: plot current-gen fitness values instead of cummax frontier. "
+            "Use for adversarial fitness metrics where cummax is misleading because opponents "
+            "evolve over time. Default: False (backward-compatible cummax frontier)."
+        ),
+    )
+
     args = parser.parse_args()
     output_folder = Path(args.output_folder)
 
@@ -1035,19 +1048,47 @@ async def main():
             )
             continue
 
-        # Try to fetch the authoritative frontier from Redis metrics history.
-        # This handles NO_CACHE stage re-evaluations correctly (metric changes).
-        prepared_df = add_frontier_from_redis_to_dataframe(
-            prepared_df,
-            redis_host=cfg.redis_host,
-            redis_port=cfg.redis_port,
-            redis_db=cfg.redis_db,
-            redis_prefix=cfg.redis_prefix,
-            metric_key=args.fitness_col,
-            iteration_col=args.iteration_col,
-        )
+        if args.adversarial:
+            # Adversarial mode: replace cummax frontier_fitness with per-iteration
+            # current-gen max (non-cumulative).  Opponents evolve over time, so the
+            # cummax frontier freezes a snapshot against opponents that no longer exist.
+            # We overwrite the frontier_fitness column that prepare_iteration_dataframe
+            # already computed with cummax; no Redis fetch needed.
+            iter_col = args.iteration_col
+            fitness_col = args.fitness_col
+            if args.minimize:
+                per_iter_current = (
+                    prepared_df.groupby(iter_col)[fitness_col].min().sort_index()
+                )
+            else:
+                per_iter_current = (
+                    prepared_df.groupby(iter_col)[fitness_col].max().sort_index()
+                )
+            current_gen_map = per_iter_current.to_dict()
+            prepared_df = prepared_df.copy()
+            prepared_df["frontier_fitness"] = prepared_df[iter_col].map(current_gen_map)
+        else:
+            # Try to fetch the authoritative frontier from Redis metrics history.
+            # This handles NO_CACHE stage re-evaluations correctly (metric changes).
+            prepared_df = add_frontier_from_redis_to_dataframe(
+                prepared_df,
+                redis_host=cfg.redis_host,
+                redis_port=cfg.redis_port,
+                redis_db=cfg.redis_db,
+                redis_prefix=cfg.redis_prefix,
+                metric_key=args.fitness_col,
+                iteration_col=args.iteration_col,
+            )
 
         prepared.append((cfg.display_label(), prepared_df))
+
+    # Choose y-axis label based on mode
+    effective_ylabel = args.ylabel
+    if effective_ylabel is None:
+        if args.adversarial:
+            effective_ylabel = "Adversarial fitness (current gen)"
+        else:
+            effective_ylabel = "Frontier fitness (cummax)"
 
     plot_comparison(
         prepared,
@@ -1070,7 +1111,7 @@ async def main():
         legend_location=args.legend_location,
         title=args.title,
         xlabel=args.xlabel,
-        ylabel=args.ylabel,
+        ylabel=effective_ylabel,
         aggregate_iterations=not args.no_aggregate,
         show_plot=args.show,
     )

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import dataclasses
 import json
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict
 
 from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_conversion import (
@@ -16,6 +17,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     is_program_card,
     normalize_memory_card,
 )
+from gigaevo.memory.shared_memory.card_loader import CardLoader
 from gigaevo.memory.shared_memory.card_store import CardStore
 from gigaevo.memory.shared_memory.card_update_dedup import (
     QUERY_DESCRIPTION,
@@ -30,15 +32,20 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_updated_card,
     parse_llm_card_decision,
 )
-from gigaevo.memory.shared_memory.utils import truncate_text
+from gigaevo.memory.shared_memory.protocols import LLMServiceProtocol
+from gigaevo.memory.shared_memory.utils import (
+    _str_or_empty,
+    truncate_text,
+)
 
 _MAX_SUMMARY_CHARS = 600
 _MAX_DESCRIPTION_CHARS = 1200
 
 
-@dataclasses.dataclass(frozen=True)
-class DedupDecision:
+class DedupDecision(BaseModel):
     """Result of deduplication analysis: whether to add, discard, or update."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     action: str  # "add" | "discard" | "update"
     reason: str
@@ -56,7 +63,7 @@ class CardDedup:
         self,
         *,
         card_store: CardStore,
-        llm_service: Any,
+        llm_service: LLMServiceProtocol | None,
         config: CardUpdateDedupConfig,
         allowed_gam_tools: set[str],
         gam_store_dir: Path,
@@ -71,13 +78,15 @@ class CardDedup:
         self._export_file = export_file
         self._checkpoint_dir = checkpoint_dir
         self._retrievers: dict[str, Any] | None = None
+        self._retrievers_lock = Lock()
 
     @property
     def config(self) -> CardUpdateDedupConfig:
         return self._config
 
     def invalidate_retrievers(self) -> None:
-        self._retrievers = None
+        with self._retrievers_lock:
+            self._retrievers = None
 
     # --- Retriever building ---
 
@@ -87,25 +96,18 @@ class CardDedup:
             from gigaevo.memory.shared_memory.amem_gam_retriever import (
                 build_gam_store,
                 build_retrievers,
-                load_amem_records,
             )
         except (ImportError, OSError) as exc:
             logger.warning("[Memory] Dedup retriever import failed: {}", exc)
             return {}
 
         self._gam_store_dir.mkdir(parents=True, exist_ok=True)
-        if self._export_file.exists():
-            try:
-                records = load_amem_records(self._export_file)
-            except (json.JSONDecodeError, OSError):
-                records = [c.model_dump() for c in self._card_store.cards.values()]
-        else:
-            records = [c.model_dump() for c in self._card_store.cards.values()]
-        records = [
-            r
-            for r in records
-            if str(r.get("category", "")).strip().lower() != "program"
-        ]
+        loader = CardLoader(
+            export_file=self._export_file,
+            card_store=self._card_store,
+            include_programs=False,
+        )
+        records = loader.load()
         if not records:
             return {}
 
@@ -136,7 +138,9 @@ class CardDedup:
     def resolve_retriever(self, tool_name: str) -> Any:
         """Resolve a retriever by tool name, building lazily if needed."""
         if self._retrievers is None:
-            self._retrievers = self.build_retrievers()
+            with self._retrievers_lock:
+                if self._retrievers is None:  # double-checked locking
+                    self._retrievers = self.build_retrievers()
         retrievers = self._retrievers or {}
         if not retrievers:
             return None
@@ -176,7 +180,7 @@ class CardDedup:
         cards = self._card_store.cards
 
         for query_key, query_text in query_by_key.items():
-            text = str(query_text or "").strip()
+            text = _str_or_empty(query_text).strip()
             if not text:
                 continue
 
@@ -204,12 +208,13 @@ class CardDedup:
 
             query_scores: dict[str, float] = {}
             for hit in hits:
-                card_id = str(getattr(hit, "page_id", "") or "").strip()
+                card_id = _str_or_empty(getattr(hit, "page_id", "")).strip()
                 if not card_id or card_id not in cards:
                     continue
                 if is_program_card(cards[card_id]):
                     continue
-                meta = getattr(hit, "meta", {}) or {}
+                meta_raw = getattr(hit, "meta", {})
+                meta: dict[str, Any] = meta_raw if isinstance(meta_raw, dict) else {}
                 try:
                     score = float(meta.get("score", 0.0))
                 except (TypeError, ValueError):
@@ -237,7 +242,7 @@ class CardDedup:
         payload: list[dict[str, Any]] = []
         cards = self._card_store.cards
         for item in scored_candidates:
-            card_id = str(item.get("card_id") or "").strip()
+            card_id = _str_or_empty(item.get("card_id")).strip()
             if not card_id:
                 continue
             card = cards.get(card_id)
@@ -286,16 +291,16 @@ class CardDedup:
             return default_decision
 
         candidate_ids = {
-            str(item.get("card_id") or "").strip()
+            _str_or_empty(item.get("card_id")).strip()
             for item in candidates_for_llm
-            if str(item.get("card_id") or "").strip()
+            if _str_or_empty(item.get("card_id")).strip()
         }
         if not candidate_ids:
             return default_decision
 
         incoming_dict = incoming_card.model_dump()
         incoming_payload = {
-            "id": str(incoming_card.id or "").strip(),
+            "id": _str_or_empty(incoming_card.id).strip(),
             "task_description_summary": truncate_text(
                 incoming_card.task_description_summary, _MAX_SUMMARY_CHARS
             ),
@@ -380,6 +385,14 @@ class CardDedup:
                 attempt + 1,
                 cfg.llm_max_retries,
             )
+        else:
+            # All retries exhausted without a valid JSON response — fall back to add
+            logger.warning(
+                "[Memory] Dedup LLM failed all {} attempts, defaulting to action=add "
+                "for card {!r}",
+                cfg.llm_max_retries,
+                _str_or_empty(incoming_card.id).strip(),
+            )
         return decision
 
     def process_incoming(self, card: AnyCard) -> DedupDecision:
@@ -420,7 +433,7 @@ class CardDedup:
         return DedupDecision(
             action=action,
             reason=str(decision_dict.get("reason") or ""),
-            duplicate_of=str(decision_dict.get("duplicate_of") or "").strip(),
+            duplicate_of=_str_or_empty(decision_dict.get("duplicate_of")).strip(),
             merges=merges,
         )
 
@@ -443,7 +456,7 @@ class CardDedup:
         for update in updates:
             if not isinstance(update, dict):
                 continue
-            card_id = str(update.get("card_id") or "").strip()
+            card_id = _str_or_empty(update.get("card_id")).strip()
             if not card_id or card_id in seen_ids:
                 continue
             existing_card = cards.get(card_id)

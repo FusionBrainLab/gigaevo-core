@@ -53,8 +53,9 @@ def main() -> None:
 
     print("Saved cards:")
     for memory_id in memory_ids:
-        card = memory.get_card(memory_id) or {}
-        print(f"- {memory_id}: {card.get('description', '')}")
+        card = memory.get_card(memory_id)
+        description = card.description if card is not None else ""
+        print(f"- {memory_id}: {description}")
 
     question = "How should I turn a vague onboarding goal into measurable implementation steps?"
     print(f"\nQuestion: {question}\n")

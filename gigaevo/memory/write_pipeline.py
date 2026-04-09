@@ -8,47 +8,25 @@ from typing import Any, Protocol
 
 from loguru import logger
 
-from gigaevo.memory.runtime_config import to_bool
+from gigaevo.exceptions import MemoryStorageError
+from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_update_dedup import (
-    _safe_float,
-    merge_usage_payloads,
+from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.memory_config import (
+    ApiConfig,
+    GamConfig,
+    MemoryConfig,
 )
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
-from gigaevo.memory.write_pipeline_config import (
-    ALLOWED_GAM_TOOLS,
-    AUTHOR,
-    BANKS_PATH,
-    BEST_IDEAS_PATH,
-    BEST_PROGRAMS_PERCENT,
-    CARD_UPDATE_DEDUP_CONFIG,
-    CHANNEL,
-    ENABLE_BM25,
-    ENABLE_LLM_SYNTHESIS,
-    ENABLE_USAGE_TRACKING,
-    FILL_MISSING_FIELDS_WITH_LLM,
-    GAM_PIPELINE_MODE,
-    GAM_TOP_K_BY_TOOL,
-    MEMORY_API_URL,
-    MEMORY_DIR,
-    NAMESPACE,
-    PROGRAMS_PATH,
-    REBUILD_INTERVAL,
-    SEARCH_LIMIT,
-    SETTINGS_PATH,
-    SHOULD_EVOLVE,
-    SYNC_BATCH_SIZE,
-    SYNC_ON_INIT,
-    USAGE_UPDATES_PATH,
-    USE_API,
-    resolve_memory_backend_class,
-)
+from gigaevo.memory.utils import to_float
+from gigaevo.memory.write_pipeline_config import PipelineConfig, load_config
 
 _MAX_CONNECTED_DESCRIPTIONS = 5
 
 
 class CardMemory(Protocol):
-    def get_card(self, card_id: str) -> dict[str, Any] | None: ...
+    def get_card(self, card_id: str) -> AnyCard | None: ...
 
 
 def _load_json(path: Path) -> Any:
@@ -269,7 +247,7 @@ def _build_program_cards(
     eligible_programs: list[dict[str, Any]] = []
     for program in programs:
         program_id = str(program.get("id") or program.get("program_id") or "").strip()
-        fitness = _safe_float(program.get("fitness"))
+        fitness = to_float(program.get("fitness"))
         if not program_id or fitness is None:
             continue
         enriched = dict(program)
@@ -376,15 +354,15 @@ def _apply_usage_updates_to_cards(
         current_card = cards_by_id.get(card_id)
         if current_card is None:
             existing = memory.get_card(card_id)
-            if not isinstance(existing, dict):
+            if existing is None:
                 missing_card_ids.append(card_id)
                 continue
-            current_card = dict(existing)
+            current_card = existing.model_dump()
 
         current_card["usage"] = merge_usage_payloads(
             current_card.get("usage"),
             usage_update,
-        )
+        ).model_dump()
         cards_by_id[card_id] = current_card
 
     if missing_card_ids:
@@ -463,7 +441,12 @@ def _write_memory_write_stats(
                 existing = [item for item in raw if isinstance(item, dict)]
             elif isinstance(raw, dict):
                 existing = [raw]
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "[Memory] Failed to load existing write stats from {}: {}",
+                stats_path,
+                exc,
+            )
             existing = []
 
     existing.append(snapshot)
@@ -472,124 +455,156 @@ def _write_memory_write_stats(
     return snapshot
 
 
-def main() -> dict[str, Any] | None:
+def main(
+    *,
+    banks_path: Path | None = None,
+    best_ideas_path: Path | None = None,
+    programs_path: Path | None = None,
+    usage_updates_path: Path | None = None,
+    config_path: Path | None = None,
+) -> dict[str, Any] | None:
     """Load cards from banks, write to memory backend, report stats."""
-    memory_backend_cls = resolve_memory_backend_class(USE_API)
-    memory = memory_backend_cls(
-        checkpoint_path=str(MEMORY_DIR),
-        base_url=MEMORY_API_URL,
-        use_api=USE_API,
-        namespace=NAMESPACE,
-        channel=CHANNEL,
-        author=AUTHOR,
-        search_limit=SEARCH_LIMIT,
-        enable_llm_synthesis=ENABLE_LLM_SYNTHESIS,
-        enable_memory_evolution=SHOULD_EVOLVE,
-        enable_llm_card_enrichment=FILL_MISSING_FIELDS_WITH_LLM,
-        rebuild_interval=REBUILD_INTERVAL,
-        enable_bm25=ENABLE_BM25,
-        sync_batch_size=SYNC_BATCH_SIZE,
-        sync_on_init=SYNC_ON_INIT,
-        allowed_gam_tools=ALLOWED_GAM_TOOLS,
-        gam_top_k_by_tool=GAM_TOP_K_BY_TOOL,
-        gam_pipeline_mode=GAM_PIPELINE_MODE,
-        card_update_dedup_config=CARD_UPDATE_DEDUP_CONFIG,
+    cfg: PipelineConfig = load_config(config_path)
+
+    _banks_path = banks_path or cfg.banks_path
+    _best_ideas_path = best_ideas_path or cfg.best_ideas_path
+    _programs_path = programs_path or cfg.programs_path
+    _usage_updates_path = (
+        usage_updates_path if banks_path is not None else cfg.usage_updates_path
     )
+
+    # Build configuration based on use_api flag
+    api_config = None
+    if cfg.use_api:
+        api_config = ApiConfig(
+            base_url=str(cfg.memory_api_url or "http://localhost:8000"),
+            namespace=str(cfg.namespace or "default"),
+            channel=str(cfg.channel or "latest"),
+            author=cfg.author,
+            sync_batch_size=cfg.sync_batch_size,
+            sync_on_init=cfg.sync_on_init,
+        )
+
+    config = MemoryConfig(
+        checkpoint_path=cfg.memory_dir,
+        search_limit=cfg.search_limit,
+        rebuild_interval=cfg.rebuild_interval,
+        enable_llm_synthesis=cfg.enable_llm_synthesis,
+        enable_memory_evolution=cfg.should_evolve,
+        enable_llm_card_enrichment=cfg.fill_missing_fields_with_llm,
+        api=api_config,
+        gam=GamConfig(
+            enable_bm25=cfg.enable_bm25,
+            allowed_tools=cfg.allowed_gam_tools,
+            top_k_by_tool=cfg.gam_top_k_by_tool,
+            pipeline_mode=str(cfg.gam_pipeline_mode or "default"),
+        ),
+        dedup=CardUpdateDedupConfig.model_validate(cfg.card_update_dedup_config),
+    )
+
+    memory = AmemGamMemory(config=config)
 
     logger.info("API Memory Demo: Card Write")
     logger.info(
         "Config: file={} evolution={} llm_fill={} usage_tracking={} dedup={}",
-        SETTINGS_PATH,
-        SHOULD_EVOLVE,
-        FILL_MISSING_FIELDS_WITH_LLM,
-        ENABLE_USAGE_TRACKING,
-        to_bool(CARD_UPDATE_DEDUP_CONFIG.get("enabled"), default=False),
+        cfg.settings_path,
+        cfg.should_evolve,
+        cfg.fill_missing_fields_with_llm,
+        cfg.enable_usage_tracking,
+        bool(cfg.card_update_dedup_config.get("enabled")),
     )
-
-    if not BANKS_PATH.exists():
-        raise FileNotFoundError(f"Banks file not found: {BANKS_PATH}")
-    memory_cards = load_memory_cards(
-        BANKS_PATH,
-        best_ideas_path=BEST_IDEAS_PATH,
-        programs_path=PROGRAMS_PATH,
-        best_programs_percent=BEST_PROGRAMS_PERCENT,
-        usage_updates_path=USAGE_UPDATES_PATH,
-        memory=memory,
-    )
-    logger.info(
-        "Loaded {} cards from banks: {} (filtered by: {})",
-        len(memory_cards),
-        BANKS_PATH,
-        BEST_IDEAS_PATH,
-    )
-    if USE_API:
-        logger.info("Writing to API: {} (namespace={})", MEMORY_API_URL, NAMESPACE)
-    else:
-        logger.info("Writing in local-only mode (checkpoint={})", MEMORY_DIR)
 
     try:
+        if not _banks_path.exists():
+            raise FileNotFoundError(f"Banks file not found: {_banks_path}")
+        memory_cards = load_memory_cards(
+            _banks_path,
+            best_ideas_path=_best_ideas_path,
+            programs_path=_programs_path,
+            best_programs_percent=cfg.best_programs_percent,
+            usage_updates_path=_usage_updates_path,
+            memory=memory,
+        )
+        logger.info(
+            "Loaded {} cards from banks: {} (filtered by: {})",
+            len(memory_cards),
+            _banks_path,
+            _best_ideas_path,
+        )
+        if cfg.use_api:
+            logger.info(
+                "Writing to API: {} (namespace={})", cfg.memory_api_url, cfg.namespace
+            )
+        else:
+            logger.info("Writing in local-only mode (checkpoint={})", cfg.memory_dir)
+
         write_stats_by_card_type = {
             "ideas": _zero_write_stats(),
             "programs": _zero_write_stats(),
         }
-        for idx, card in enumerate(memory_cards, start=1):
-            card_type = _card_type(card)
-            before_stats = memory.get_card_write_stats()
-            memory_id = memory.save_card(card)
-            after_stats = memory.get_card_write_stats()
-            stat_diff = _diff_write_stats(before_stats, after_stats)
-            for stat_name, stat_value in stat_diff.items():
-                write_stats_by_card_type[card_type][stat_name] = int(
-                    write_stats_by_card_type[card_type].get(stat_name, 0)
-                ) + int(stat_value)
-            stored = memory.get_card(memory_id) or {}
-            logger.debug(
-                "[{:03d}] saved {}: {}",
-                idx,
-                memory_id,
-                stored.get("description", "")[:110],
-            )
-    except RuntimeError as exc:
-        logger.error("Write failed: {}", exc)
-        return None
+        try:
+            for idx, card in enumerate(memory_cards, start=1):
+                card_type = _card_type(card)
+                before_stats = memory.get_card_write_stats()
+                memory_id = memory.save_card(card)
+                after_stats = memory.get_card_write_stats()
+                stat_diff = _diff_write_stats(before_stats, after_stats)
+                for stat_name, stat_value in stat_diff.items():
+                    write_stats_by_card_type[card_type][stat_name] = int(
+                        write_stats_by_card_type[card_type].get(stat_name, 0)
+                    ) + int(stat_value)
+                stored = memory.get_card(memory_id)
+                logger.debug(
+                    "[{:03d}] saved {}: {}",
+                    idx,
+                    memory_id,
+                    (stored.description if stored is not None else "")[:110],
+                )
+        except (RuntimeError, MemoryStorageError) as exc:
+            logger.error("Write failed: {}", exc)
+            return None
 
-    memory.rebuild()
-    logger.info("Local API index saved in: {}", MEMORY_DIR / "api_index.json")
+        memory.rebuild()
+        logger.info("Local API index saved in: {}", cfg.memory_dir / "api_index.json")
 
-    write_stats = memory.get_card_write_stats()
-    input_card_type_counts = {
-        "ideas": sum(1 for card in memory_cards if _card_type(card) == "ideas"),
-        "programs": sum(1 for card in memory_cards if _card_type(card) == "programs"),
-    }
-    logger.info(
-        "Write stats: processed={} added={} updated={} rejected={} "
-        "ideas(proc={} add={} upd={} rej={}) "
-        "programs(proc={} add={} upd={} rej={}) updated_target_cards={}",
-        write_stats.get("processed", 0),
-        write_stats.get("added", 0),
-        write_stats.get("updated", 0),
-        write_stats.get("rejected", 0),
-        write_stats_by_card_type["ideas"].get("processed", 0),
-        write_stats_by_card_type["ideas"].get("added", 0),
-        write_stats_by_card_type["ideas"].get("updated", 0),
-        write_stats_by_card_type["ideas"].get("rejected", 0),
-        write_stats_by_card_type["programs"].get("processed", 0),
-        write_stats_by_card_type["programs"].get("added", 0),
-        write_stats_by_card_type["programs"].get("updated", 0),
-        write_stats_by_card_type["programs"].get("rejected", 0),
-        write_stats.get("updated_target_cards", 0),
-    )
+        write_stats = memory.get_card_write_stats()
+        input_card_type_counts = {
+            "ideas": sum(1 for card in memory_cards if _card_type(card) == "ideas"),
+            "programs": sum(
+                1 for card in memory_cards if _card_type(card) == "programs"
+            ),
+        }
+        logger.info(
+            "Write stats: processed={} added={} updated={} rejected={} "
+            "ideas(proc={} add={} upd={} rej={}) "
+            "programs(proc={} add={} upd={} rej={}) updated_target_cards={}",
+            write_stats.get("processed", 0),
+            write_stats.get("added", 0),
+            write_stats.get("updated", 0),
+            write_stats.get("rejected", 0),
+            write_stats_by_card_type["ideas"].get("processed", 0),
+            write_stats_by_card_type["ideas"].get("added", 0),
+            write_stats_by_card_type["ideas"].get("updated", 0),
+            write_stats_by_card_type["ideas"].get("rejected", 0),
+            write_stats_by_card_type["programs"].get("processed", 0),
+            write_stats_by_card_type["programs"].get("added", 0),
+            write_stats_by_card_type["programs"].get("updated", 0),
+            write_stats_by_card_type["programs"].get("rejected", 0),
+            write_stats.get("updated_target_cards", 0),
+        )
 
-    stats_path = BANKS_PATH.parent / "memory_write_stats.json"
-    snapshot = _write_memory_write_stats(
-        stats_path=stats_path,
-        input_cards_count=len(memory_cards),
-        input_card_type_counts=input_card_type_counts,
-        write_stats=write_stats,
-        write_stats_by_card_type=write_stats_by_card_type,
-    )
-    logger.info("Memory write stats saved to: {}", stats_path)
-    return snapshot
+        stats_path = _banks_path.parent / "memory_write_stats.json"
+        snapshot = _write_memory_write_stats(
+            stats_path=stats_path,
+            input_cards_count=len(memory_cards),
+            input_card_type_counts=input_card_type_counts,
+            write_stats=write_stats,
+            write_stats_by_card_type=write_stats_by_card_type,
+        )
+        logger.info("Memory write stats saved to: {}", stats_path)
+        return snapshot
+    finally:
+        memory.close()
 
 
 if __name__ == "__main__":

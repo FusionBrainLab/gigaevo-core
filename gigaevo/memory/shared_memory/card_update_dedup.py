@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import math
 import re
-import statistics
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order
 
 QUERY_DESCRIPTION = "description"
@@ -31,7 +30,7 @@ class RetrievalWeights(BaseModel):
     values are silently dropped so Pydantic uses field defaults.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     description: float = 0.35
     explanation_summary: float = 0.2
@@ -81,7 +80,7 @@ class CardUpdateDedupConfig(BaseModel):
     (``"true"``, ``"1"``, ``"yes"``, ``"on"``).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     enabled: bool = False
     top_k_per_query: int = 5
@@ -426,116 +425,6 @@ def append_unique_text(
     return f"{left}{separator}{right}"
 
 
-def _safe_float(value: Any) -> float | None:
-    """Convert *value* to float, returning ``None`` for NaN/Inf/unparseable."""
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(parsed) or math.isinf(parsed):
-        return None
-    return parsed
-
-
-def _median_or_none(values: list[float]) -> float | None:
-    """Return the median of *values*, or ``None`` if empty."""
-    if not values:
-        return None
-    return float(statistics.median(values))
-
-
-def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
-    """Extract per-task fitness deltas from a usage payload dict."""
-    if not isinstance(usage, dict):
-        return {}
-    used = usage.get("used")
-    if not isinstance(used, dict):
-        return {}
-    entries = used.get("entries")
-    if not isinstance(entries, list):
-        return {}
-
-    task_to_deltas: dict[str, list[float]] = {}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        task_summary = str(entry.get("task_description_summary") or "").strip()
-        if not task_summary:
-            continue
-        raw_deltas = entry.get("fitness_delta_per_use")
-        if raw_deltas is None:
-            raw_deltas = entry.get("fitness_deltas")
-        if not isinstance(raw_deltas, list):
-            continue
-        deltas = [
-            parsed for raw in raw_deltas if (parsed := _safe_float(raw)) is not None
-        ]
-        if not deltas:
-            continue
-        task_to_deltas.setdefault(task_summary, []).extend(deltas)
-    return task_to_deltas
-
-
-def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
-    """Build a canonical ``{"used": {...}}`` payload from per-task deltas."""
-    entries: list[dict[str, Any]] = []
-    total_deltas: list[float] = []
-    for task_summary in sorted(task_to_deltas):
-        deltas = [
-            parsed
-            for raw in task_to_deltas.get(task_summary, [])
-            if (parsed := _safe_float(raw)) is not None
-        ]
-        if not deltas:
-            continue
-        entries.append(
-            {
-                "task_description_summary": task_summary,
-                "used_count": len(deltas),
-                "fitness_delta_per_use": deltas,
-                "median_delta_fitness": _median_or_none(deltas),
-            }
-        )
-        total_deltas.extend(deltas)
-    return {
-        "used": {
-            "entries": entries,
-            "total": {
-                "total_used": len(total_deltas),
-                "median_delta_fitness": _median_or_none(total_deltas),
-            },
-        }
-    }
-
-
-def merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, Any]:
-    """Merge two usage payloads, combining per-task fitness deltas."""
-    existing_task_deltas = _extract_usage_task_deltas(existing_usage)
-    incoming_task_deltas = _extract_usage_task_deltas(incoming_usage)
-    if not existing_task_deltas and not incoming_task_deltas:
-        if isinstance(existing_usage, dict):
-            return dict(existing_usage)
-        if isinstance(incoming_usage, dict):
-            return dict(incoming_usage)
-        return {}
-
-    merged_task_deltas: dict[str, list[float]] = {
-        task: list(deltas) for task, deltas in existing_task_deltas.items()
-    }
-    for task_summary, deltas in incoming_task_deltas.items():
-        merged_task_deltas.setdefault(task_summary, []).extend(deltas)
-
-    merged_usage: dict[str, Any] = (
-        dict(existing_usage) if isinstance(existing_usage, dict) else {}
-    )
-    if isinstance(incoming_usage, dict):
-        for key, value in incoming_usage.items():
-            if key != "used":
-                merged_usage[key] = value
-    merged_usage["used"] = _build_usage_payload(merged_task_deltas)["used"]
-    return merged_usage
-
-
 def merge_updated_card(
     existing_card: dict[str, Any],
     incoming_card: dict[str, Any],
@@ -610,5 +499,5 @@ def merge_updated_card(
     merged["usage"] = merge_usage_payloads(
         existing_card.get("usage"),
         incoming_card.get("usage"),
-    )
+    ).model_dump()
     return merged

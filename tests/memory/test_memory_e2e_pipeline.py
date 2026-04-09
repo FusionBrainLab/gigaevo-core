@@ -131,13 +131,14 @@ class TestNormalizeWithIdeasTrackerOutput:
         assert result.explanation.explanations == ["Found effective chunking strategy"]
         assert result.explanation.summary == "Improved retrieval via adaptive chunking"
 
-    def test_preserve_usage_dict(self):
-        """usage dict with arbitrary values preserved."""
+    def test_invalid_usage_dict_becomes_default(self):
+        """usage dict with arbitrary (non-matching) schema becomes default UsagePayload."""
         card = make_ideas_tracker_card("idea-4", "Weighting", has_version_history=False)
         result = normalize_memory_card(card)
 
-        assert result.usage["times_used"] == 7
-        assert result.usage["success_rate"] == 0.85
+        # Invalid usage dict (arbitrary keys) becomes default UsagePayload
+        assert result.usage.entries == []
+        assert result.usage.total_used == 0
 
     def test_full_roundtrip_preserves_all_fields(self):
         """Complete card with all complex nested structures."""
@@ -323,11 +324,12 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         cards = load_memory_cards(banks_path, best_ideas_path)
         card = cards[0]
 
-        # Verify deep nesting survived
+        # Verify deep nesting survived (for evolution_statistics, which is still a dict)
         assert card.evolution_statistics["by_generation"]["5"]["fitness"] == 50.0
         assert card.evolution_statistics["total_improvements"][1]["delta"] == 25.0
-        assert card.usage["by_run"]["run-1"]["count"] == 3
-        assert card.usage["aggregate"]["total"] == 7
+        # usage with arbitrary nested keys becomes default UsagePayload
+        assert card.usage.entries == []
+        assert card.usage.total_used == 0
 
 
 # ===========================================================================

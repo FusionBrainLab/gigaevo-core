@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from loguru import logger
 from redis import asyncio as aioredis
@@ -34,7 +35,9 @@ class ProgressBasedSyncHook:
         port: Redis port
         sources: List of {"db": int, "prefix": str} — opponent run(s).
             Must be non-empty.
-        min_delta: Minimum programs opponent must process between syncs (default: 10)
+        min_delta: Minimum programs opponent must process between syncs (default: 10).
+            MUST be <= max_mutations_per_generation to avoid deadlock when both
+            populations wait for each other to advance.
         sync_every_n_epochs: Only sync every N epochs (default: 1).
             Set to K for K:1 asymmetric updates.
         timeout: Maximum seconds to wait before proceeding anyway (default: 7200)
@@ -50,6 +53,7 @@ class ProgressBasedSyncHook:
         sync_every_n_epochs: int = 1,
         timeout: float = 7200.0,
         poll_interval: float = 5.0,
+        **kwargs: Any,  # absorb extra keys from Hydra config inheritance
     ):
         if not sources:
             raise ValueError("ProgressBasedSyncHook requires at least one source")
@@ -156,6 +160,9 @@ class ProgressBasedSyncHook:
                     target,
                     min_progress,
                 )
+                # Reset baseline to current reality so the NEXT epoch doesn't
+                # also wait the full timeout with a stale target.
+                self._last_progress = min_progress
                 return
 
             now = time.monotonic()

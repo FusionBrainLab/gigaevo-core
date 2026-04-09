@@ -7,6 +7,7 @@ memory.py, a_mem_memory_creation.py, and other submodules.
 from __future__ import annotations
 
 from typing import Any
+import uuid
 
 
 def _to_list(value: Any) -> list[Any]:
@@ -24,13 +25,6 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _to_float(value: Any, default: float | None = None) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _str_or_empty(value: Any) -> str:
     """Convert to string, preserving falsy-but-valid values like 0."""
     if value is None:
@@ -44,12 +38,10 @@ def _safe_get(obj: Any, name: str, default: Any = None) -> Any:
 
 def looks_like_uuid(value: str) -> bool:
     """Check if a string looks like a UUID (hex or dashed format)."""
-    import uuid as _uuid
-
     try:
-        _uuid.UUID(value)
+        uuid.UUID(value)
         return True
-    except Exception:
+    except ValueError:
         return False
 
 
