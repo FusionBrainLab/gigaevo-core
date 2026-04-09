@@ -58,6 +58,7 @@ class AdversarialFeedbackPipelineBuilder(AdversarialPipelineBuilder):
         n_opponents: int = 5,
         per_opponent_timeout: float = 10.0,
         fallback_dir: str = "fallback",
+        archive_reeval: bool = True,
         *,
         dag_timeout: float = 3600.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
@@ -68,6 +69,7 @@ class AdversarialFeedbackPipelineBuilder(AdversarialPipelineBuilder):
             n_opponents,
             per_opponent_timeout,
             fallback_dir,
+            archive_reeval,
             dag_timeout=dag_timeout,
             stage_timeout=stage_timeout,
         )
