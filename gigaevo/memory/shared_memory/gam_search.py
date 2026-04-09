@@ -48,7 +48,7 @@ class GamSearch:
         self._gam_pipeline_mode = gam_pipeline_mode
         self.agent: ResearchAgentProtocol | None = None
 
-    def build(self) -> None:
+    def build_research_agent(self) -> None:
         """Build/rebuild the ResearchAgent from exported records.
 
         Raises:
@@ -116,6 +116,6 @@ class GamSearch:
             pipeline_mode=self._gam_pipeline_mode,
         )
 
-    def invalidate(self) -> None:
-        """Clear the agent so it will be rebuilt on next build() call."""
+    def clear_research_agent(self) -> None:
+        """Clear the agent so it will be rebuilt on next build_research_agent() call."""
         self.agent = None

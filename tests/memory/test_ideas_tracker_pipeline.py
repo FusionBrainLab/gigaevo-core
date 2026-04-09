@@ -22,7 +22,10 @@ from gigaevo.memory.ideas_tracker.analyzers import (
     ClassifyingAnalyzer,
     ClusteringAnalyzer,
 )
-from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker, _build_usage_updates
+from gigaevo.memory.ideas_tracker.ideas_tracker import (
+    IdeaTracker,
+    _compute_usage_updates_from_program_selection,
+)
 from gigaevo.memory.ideas_tracker.models import (
     program_to_record,
     programs_to_records,
@@ -115,13 +118,13 @@ def _make_memory_program(
 
 
 # ---------------------------------------------------------------------------
-# Helper: _build_usage_updates (was build_memory_usage_updates_from_programs)
+# Helper: _compute_usage_updates_from_program_selection (was build_memory_usage_updates_from_programs)
 # ---------------------------------------------------------------------------
 
 
 def _build_memory_usage_updates(programs, task_summary="", fitness_key="fitness"):
-    """Thin wrapper around _build_usage_updates with sensible test defaults."""
-    return _build_usage_updates(
+    """Thin wrapper around _compute_usage_updates_from_program_selection with sensible test defaults."""
+    return _compute_usage_updates_from_program_selection(
         programs, task_summary or "Task summary unavailable", fitness_key
     )
 

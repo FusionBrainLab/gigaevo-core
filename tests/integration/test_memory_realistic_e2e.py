@@ -229,8 +229,8 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
         }
 
     # Patch ALL paths BEFORE saving any cards
-    mem.gam.build = _patched_gam_build
-    mem.dedup.build_retrievers = _patched_dedup
+    mem.gam.build_research_agent = _patched_gam_build
+    mem.dedup.build_dedup_retrievers = _patched_dedup
 
     def _safe_rebuild():
         mem.card_store.persist()

@@ -16,7 +16,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
-from gigaevo.memory.write_pipeline import _card_type, load_memory_cards
+from gigaevo.memory.write_pipeline import _classify_card_type, load_memory_cards
 
 
 def _write_json(path: Path, payload: dict | list) -> None:
@@ -376,9 +376,9 @@ class TestRegression_BugPR161:
 
 
 class TestMainLoopSimulation:
-    """Simulate the main() loop: load_memory_cards → _card_type for each card.
+    """Simulate the main() loop: load_memory_cards → _classify_card_type for each card.
 
-    Bug #3: _card_type called .get() on Pydantic models returned by load_memory_cards.
+    Bug #3: _classify_card_type called .get() on Pydantic models returned by load_memory_cards.
     These tests verify the full flow works without AttributeError.
     """
 
@@ -409,7 +409,7 @@ class TestMainLoopSimulation:
         cards = load_memory_cards(banks_path, best_ideas_path)
         # Simulate main() loop — this crashed before the fix
         for card in cards:
-            card_type = _card_type(card)
+            card_type = _classify_card_type(card)
             assert card_type == "ideas"
             assert isinstance(card, MemoryCard)
 
@@ -458,7 +458,7 @@ class TestMainLoopSimulation:
         # Simulate main() loop
         type_counts = {"ideas": 0, "programs": 0}
         for card in cards:
-            card_type = _card_type(card)
+            card_type = _classify_card_type(card)
             type_counts[card_type] += 1
 
         assert type_counts["ideas"] == 1

@@ -127,7 +127,9 @@ class ApiSync:
                     and self._note_sync.memory_system.read(known_card_id) is None
                     and known_card_id in store.cards
                 ):
-                    if self._note_sync.upsert_fast(store.cards[known_card_id]):
+                    if self._note_sync.sync_card_to_amem_fast(
+                        store.cards[known_card_id]
+                    ):
                         changed = True
                 store.note_ids.add(known_card_id)
                 continue
@@ -267,7 +269,7 @@ class ApiSync:
     def _upsert_note(self, card: AnyCard) -> bool:
         if self._note_sync is None:
             return False
-        return self._note_sync.upsert_fast(card)
+        return self._note_sync.sync_card_to_amem_fast(card)
 
     def _remove_note(self, card_id: str) -> bool:
         if self._note_sync is not None:

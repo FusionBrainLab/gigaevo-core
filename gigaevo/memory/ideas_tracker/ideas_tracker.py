@@ -92,7 +92,7 @@ def _summarise_task_description(analyzer: Analyzer, task_description: str) -> st
         return text[:240].strip()
 
 
-def _build_usage_updates(
+def _compute_usage_updates_from_program_selection(
     programs: list[Program],
     task_summary: str,
     fitness_key: str,
@@ -137,7 +137,7 @@ def _build_usage_updates(
     }
 
 
-async def _enrich_ideas(
+async def _enrich_ideas_with_keywords_and_summaries(
     ideas: list[Idea], analyzer: Analyzer, task_summary: str
 ) -> list[Idea]:
     """Enrich all ideas concurrently with keywords and explanation summaries."""
@@ -509,7 +509,7 @@ class IdeaTracker(PostRunHook):
             for p in programs
         )
         if self._memory_usage_tracking_enabled and _has_valid_fitness:
-            usage_updates = _build_usage_updates(
+            usage_updates = _compute_usage_updates_from_program_selection(
                 programs, self._task_summary, self._fitness_key
             )
             self._log.record_usage_updates(usage_updates)
@@ -524,7 +524,7 @@ class IdeaTracker(PostRunHook):
 
         # Only enrich ideas if there are eligible records to process
         if records:
-            enriched = await _enrich_ideas(
+            enriched = await _enrich_ideas_with_keywords_and_summaries(
                 self._bank.all_ideas(), self._analyzer, self._task_summary
             )
             for idea in enriched:

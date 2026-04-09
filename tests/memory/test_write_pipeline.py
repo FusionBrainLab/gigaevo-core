@@ -8,8 +8,8 @@ import json
 import pytest
 
 from gigaevo.memory.write_pipeline import (
-    _card_type,
-    _latest_snapshot,
+    _classify_card_type,
+    _extract_latest_snapshot,
     _top_percent_count,
     load_memory_cards,
 )
@@ -38,13 +38,13 @@ def _make_programs(tmp_path, programs=None):
 
 
 # ===========================================================================
-# _latest_snapshot
+# _extract_latest_snapshot
 # ===========================================================================
 
 
 class TestLatestSnapshot:
     def test_dict_with_key(self):
-        result = _latest_snapshot({"active_bank": [1]}, "active_bank")
+        result = _extract_latest_snapshot({"active_bank": [1]}, "active_bank")
         assert result == {"active_bank": [1]}
 
     def test_list_takes_last(self):
@@ -52,20 +52,20 @@ class TestLatestSnapshot:
             {"active_bank": [1]},
             {"active_bank": [2]},
         ]
-        result = _latest_snapshot(payload, "active_bank")
+        result = _extract_latest_snapshot(payload, "active_bank")
         assert result["active_bank"] == [2]
 
     def test_missing_key_raises(self):
         with pytest.raises(ValueError, match="Missing key"):
-            _latest_snapshot({"other": 1}, "active_bank")
+            _extract_latest_snapshot({"other": 1}, "active_bank")
 
     def test_list_no_matching_key_raises(self):
         with pytest.raises(ValueError, match="No snapshot"):
-            _latest_snapshot([{"other": 1}], "active_bank")
+            _extract_latest_snapshot([{"other": 1}], "active_bank")
 
     def test_invalid_type_raises(self):
         with pytest.raises(ValueError, match="Invalid snapshot"):
-            _latest_snapshot("string", "active_bank")
+            _extract_latest_snapshot("string", "active_bank")
 
 
 # ===========================================================================
@@ -91,22 +91,22 @@ class TestTopPercentCount:
 
 
 # ===========================================================================
-# _card_type
+# _classify_card_type
 # ===========================================================================
 
 
 class TestCardType:
     def test_program_by_category(self):
-        assert _card_type({"category": "program"}) == "programs"
+        assert _classify_card_type({"category": "program"}) == "programs"
 
     def test_program_by_program_id(self):
-        assert _card_type({"program_id": "p1"}) == "programs"
+        assert _classify_card_type({"program_id": "p1"}) == "programs"
 
     def test_idea(self):
-        assert _card_type({"category": "general"}) == "ideas"
+        assert _classify_card_type({"category": "general"}) == "ideas"
 
     def test_empty(self):
-        assert _card_type({}) == "ideas"
+        assert _classify_card_type({}) == "ideas"
 
 
 # ===========================================================================

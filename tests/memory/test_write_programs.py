@@ -113,7 +113,7 @@ def test_program_cards_bypass_idea_dedup(tmp_path):
     def _unexpected_call(*args, **kwargs):
         raise AssertionError("Program cards should not use idea-card dedup.")
 
-    memory.dedup.score_candidates = _unexpected_call  # type: ignore[method-assign]
+    memory.dedup.score_duplicate_candidates = _unexpected_call  # type: ignore[method-assign]
 
     card_id = memory.save_card(
         {
