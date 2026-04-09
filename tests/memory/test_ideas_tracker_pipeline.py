@@ -659,3 +659,57 @@ class TestEvolutionToIdeaExtraction:
         assert result["idea-1"].total_used == 2
         deltas = result["idea-1"].entries[0].fitness_delta_per_use
         assert sorted(deltas) == [-1.0, 5.0]
+
+
+# ---------------------------------------------------------------------------
+# Task 8: IdeaTracker._run() writes banks.json via flush
+# ---------------------------------------------------------------------------
+
+
+def test_ideas_tracker_run_writes_banks_file(tmp_path):
+    """IdeaTracker._run writes banks.json to a timestamped session dir."""
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
+    from gigaevo.memory.ideas_tracker.models import AnalysisResult
+
+    prog = MagicMock()
+    prog.id = "prog-aaa"
+    prog.lineage = MagicMock()
+    prog.lineage.parents = ["prog-seed"]
+    prog.lineage.generation = 2
+    prog.metrics = {"is_valid": 1.0, "fitness": 0.65}
+    prog.code = "def solve(x): return x"
+    prog.metadata = {}
+
+    stub_analyzer = MagicMock()
+    stub_analyzer.analyze_async = AsyncMock(
+        return_value=AnalysisResult(new_ideas=[], updates=[])
+    )
+    stub_analyzer.call_async = AsyncMock(return_value="{}")
+
+    tracker = IdeaTracker(
+        analyzer=stub_analyzer,
+        task_description="solve test problems",
+        memory_write_enabled=False,
+        memory_usage_tracking_enabled=False,
+        logs_dir=tmp_path,
+    )
+
+    asyncio.run(tracker._run([prog]))
+
+    log_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
+    assert len(log_dirs) >= 1, (
+        f"Expected a session log directory, got: {list(tmp_path.iterdir())}"
+    )
+    session_dir = log_dirs[0]
+    banks_file = session_dir / "banks.json"
+    assert banks_file.exists(), f"banks.json not found in {session_dir}"
+
+    data = json.loads(banks_file.read_text())
+    assert isinstance(data, list) and len(data) >= 1
+    assert "active_bank" in data[0], (
+        f"Expected 'active_bank' key, got: {list(data[0].keys())}"
+    )

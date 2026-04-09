@@ -446,3 +446,42 @@ class TestDumpMemory:
         mem = _make_memory(tmp_path)
         # note_sync is None when memory_system is None
         assert mem.note_sync is None
+
+
+# ---------------------------------------------------------------------------
+# Task 9: NoteSync.upsert_agentic calls add_note for new cards
+# ---------------------------------------------------------------------------
+
+
+def test_note_sync_upsert_agentic_calls_add_note_for_new_card(tmp_path):
+    """NoteSync.upsert_agentic must call memory_system.add_note for new cards."""
+    from unittest.mock import MagicMock
+
+    from gigaevo.memory.shared_memory.card_store import CardStore
+    from gigaevo.memory.shared_memory.models import MemoryCard
+    from gigaevo.memory.shared_memory.note_sync import NoteSync
+
+    card_store = CardStore(index_file=tmp_path / "index.json")
+
+    mock_memory = MagicMock()
+    mock_memory.read.return_value = None  # card doesn't exist yet
+    mock_memory.add_note.return_value = "new-note-id"
+
+    note_sync = NoteSync(
+        memory_system=mock_memory,
+        note_cls=MagicMock(),
+        card_store=card_store,
+    )
+
+    card = MemoryCard(
+        id="card-001",
+        description="test card description",
+        category="general",
+    )
+
+    note_sync.upsert_agentic(card)
+
+    mock_memory.add_note.assert_called_once()
+    call_kwargs = mock_memory.add_note.call_args
+    assert call_kwargs is not None
+    assert call_kwargs.kwargs.get("id") == "card-001"
