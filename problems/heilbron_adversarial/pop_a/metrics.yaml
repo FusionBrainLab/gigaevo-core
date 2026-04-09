@@ -40,7 +40,7 @@ specs:
     significant_change: 0.01
     sentinel_value: -1.0
   resistance:
-    description: "Resistance to improvement = 1 - mean_normalized_delta across opponents"
+    description: "Fraction of opponents that failed to improve the config (binary: 1 if delta==0, 0 otherwise)"
     decimals: 5
     is_primary: false
     higher_is_better: true
