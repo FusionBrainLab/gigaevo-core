@@ -21,14 +21,14 @@ def _make_memory(tmp_path, **overrides):
 
 
 # ===========================================================================
-# _apply_update_actions_from_merges (via dedup.compute_merges)
+# _apply_update_actions_from_merges (via dedup.compute_card_merge_updates)
 # ===========================================================================
 
 
 class TestApplyUpdateActions:
     def _apply(self, mem, incoming, updates):
         """Compute merges and apply them — replaces deleted _apply_update_actions."""
-        merges = mem.dedup.compute_merges(incoming, updates)
+        merges = mem.dedup.compute_card_merge_updates(incoming, updates)
         return mem._apply_update_actions_from_merges(merges)
 
     def test_updates_existing_card(self, tmp_path):

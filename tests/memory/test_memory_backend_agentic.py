@@ -1,6 +1,6 @@
 """Tests for agentic memory paths using full fake infrastructure.
 
-Covers: gam.build / research_agent lifecycle, dedup.score_candidates,
+Covers: gam.build / research_agent lifecycle, dedup.score_duplicate_candidates,
 dedup retriever resolution, and the full dedup pipeline with real scoring.
 """
 
@@ -162,7 +162,7 @@ class TestLoadOrCreateRetriever:
 
 
 # ===========================================================================
-# dedup.build_retrievers + dedup.score_candidates
+# dedup.build_retrievers + dedup.score_duplicate_candidates
 # ===========================================================================
 
 
@@ -194,7 +194,7 @@ class TestDedupWithRealScoring:
             }
         )
 
-        scored = mem.dedup.score_candidates(incoming)
+        scored = mem.dedup.score_duplicate_candidates(incoming)
 
         # Should find at least existing-1 as similar
         assert len(scored) > 0
@@ -218,7 +218,7 @@ class TestDedupWithRealScoring:
         )
 
         incoming = normalize_memory_card({"description": "SA optimization"})
-        scored = mem.dedup.score_candidates(incoming)
+        scored = mem.dedup.score_duplicate_candidates(incoming)
 
         # Program cards should be excluded from dedup scoring
         card_ids = [s["card_id"] for s in scored]
@@ -231,7 +231,7 @@ class TestDedupWithRealScoring:
         )
 
         incoming = normalize_memory_card({"description": "test"})
-        scored = mem.dedup.score_candidates(incoming)
+        scored = mem.dedup.score_duplicate_candidates(incoming)
         assert scored == []
 
     def test_dedup_invalidates_retrievers_on_save(self, tmp_path):
@@ -244,7 +244,7 @@ class TestDedupWithRealScoring:
 
         # First access builds retrievers
         mem.dedup.invalidate_retrievers()
-        mem.dedup.resolve_retriever("vector_description")
+        mem.dedup.get_vector_retriever("vector_description")
         assert mem.dedup._retrievers is not None
 
         # Save new card clears cache
@@ -391,7 +391,7 @@ class TestResolveVectorRetriever:
         )
 
         assert mem.dedup._retrievers is None
-        retriever = mem.dedup.resolve_retriever("vector_description")
+        retriever = mem.dedup.get_vector_retriever("vector_description")
         assert mem.dedup._retrievers is not None
         assert retriever is not None
 
@@ -406,7 +406,7 @@ class TestResolveVectorRetriever:
         mem.dedup.invalidate_retrievers()
 
         # Request a tool that might not exist
-        mem.dedup.resolve_retriever("vector_nonexistent")
+        mem.dedup.get_vector_retriever("vector_nonexistent")
         # Falls back to "vector" if tool not found
         # (may or may not find it depending on what build_retrievers returns)
 
@@ -414,7 +414,7 @@ class TestResolveVectorRetriever:
         mem, _ = _make_full_memory(
             tmp_path, ideas=[], card_update_dedup_config={"enabled": True}
         )
-        retriever = mem.dedup.resolve_retriever("vector_description")
+        retriever = mem.dedup.get_vector_retriever("vector_description")
         assert retriever is None
 
 

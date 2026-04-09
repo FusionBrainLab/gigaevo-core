@@ -250,7 +250,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         store.cards[card_id] = normalize_memory_card(card, fallback_id=card_id)
 
         if self.note_sync is not None:
-            self.note_sync.upsert_agentic(store.cards[card_id])
+            self.note_sync.sync_card_to_amem_with_evolution(store.cards[card_id])
         self.dedup.invalidate_retrievers()
 
         rebuilt = False
@@ -301,7 +301,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if dedup_ready and self.llm_service is not None:
             self.dedup.llm_service = self.llm_service
-            decision = self.dedup.process_incoming(normalized_card)
+            decision = self.dedup.run_dedup_on_incoming_card(normalized_card)
 
             if decision.action == "discard":
                 store.write_stats["rejected"] += 1

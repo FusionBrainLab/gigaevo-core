@@ -3,7 +3,7 @@
 Covers:
 1. State mutation fix: _save_card_core uses model_copy, not direct mutation
 2. Namespace filtering fix: api_sync excludes None/empty namespace rows when namespace is set
-3. Dedup meta type guard: score_candidates handles non-dict meta safely
+3. Dedup meta type guard: score_duplicate_candidates handles non-dict meta safely
 4. LLM retry fallback logging: warning logged when all retries fail
 5. gam_search.invalidate wired: rebuild() calls invalidate() on GAM build failure
 """
@@ -186,7 +186,7 @@ class _FakeHit:
 
 
 class TestDedupMetaTypeGuard:
-    """score_candidates must safely handle non-dict meta values."""
+    """score_duplicate_candidates must safely handle non-dict meta values."""
 
     def _make_dedup(self, tmp_path) -> Any:
         from gigaevo.memory.shared_memory.card_dedup import CardDedup
@@ -230,7 +230,9 @@ class TestDedupMetaTypeGuard:
         incoming = normalize_memory_card(
             {"description": "similar card", "category": "general"}
         )
-        candidates = dedup.score_candidates(incoming, resolve_retriever_fn=_resolve_x)
+        candidates = dedup.score_duplicate_candidates(
+            incoming, resolve_retriever_fn=_resolve_x
+        )
         assert isinstance(candidates, list)
 
     def test_none_meta_does_not_crash(self, tmp_path):
@@ -251,7 +253,9 @@ class TestDedupMetaTypeGuard:
         incoming = normalize_memory_card(
             {"description": "similar card", "category": "general"}
         )
-        candidates = dedup.score_candidates(incoming, resolve_retriever_fn=_resolve_y)
+        candidates = dedup.score_duplicate_candidates(
+            incoming, resolve_retriever_fn=_resolve_y
+        )
         assert isinstance(candidates, list)
 
     def test_dict_meta_with_score_works(self, tmp_path):
@@ -272,7 +276,9 @@ class TestDedupMetaTypeGuard:
         incoming = normalize_memory_card(
             {"description": "similar card", "category": "general"}
         )
-        candidates = dedup.score_candidates(incoming, resolve_retriever_fn=_resolve_z)
+        candidates = dedup.score_duplicate_candidates(
+            incoming, resolve_retriever_fn=_resolve_z
+        )
         # card-z should appear as a candidate
         assert any(c["card_id"] == "card-z" for c in candidates)
 
@@ -283,7 +289,7 @@ class TestDedupMetaTypeGuard:
 
 
 class TestDedupLLMRetryFallback:
-    """decide_action logs a warning when all retries are exhausted."""
+    """ask_llm_for_dedup_decision logs a warning when all retries are exhausted."""
 
     def _make_dedup_with_failing_llm(self, tmp_path, num_retries: int = 2) -> Any:
         from gigaevo.memory.shared_memory.card_dedup import CardDedup
@@ -316,7 +322,7 @@ class TestDedupLLMRetryFallback:
         # Provide a candidate so the LLM is actually called
         candidates = [{"card_id": "card-existing"}]
 
-        result = dedup.decide_action(incoming, candidates)
+        result = dedup.ask_llm_for_dedup_decision(incoming, candidates)
 
         # When all retries fail, should default to add
         assert result["action"] == "add"
@@ -347,7 +353,7 @@ class TestDedupLLMRetryFallback:
         )
         candidates = [{"card_id": "card-e1"}]
 
-        result = dedup.decide_action(incoming, candidates)
+        result = dedup.ask_llm_for_dedup_decision(incoming, candidates)
 
         # When all retries fail on bad JSON, should default to add
         assert result["action"] == "add"

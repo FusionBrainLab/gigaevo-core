@@ -40,7 +40,7 @@ class TestDedupLLMFailures:
     """Tests for LLM response parsing and retry logic in dedup decisions."""
 
     def test_all_retries_exhausted_defaults_to_add(self, tmp_path):
-        """F1: When LLM returns unparseable text on all retries, decide_action
+        """F1: When LLM returns unparseable text on all retries, ask_llm_for_dedup_decision
         returns default {"action": "add"}."""
         mem = _make_full_memory(
             tmp_path,
@@ -55,7 +55,7 @@ class TestDedupLLMFailures:
         # Pre-formatted candidates list (bypassing score_candidates)
         candidates = [{"card_id": "existing", "final_score": 0.8}]
 
-        decision = mem.dedup.decide_action(
+        decision = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "new card"}), candidates
         )
 
@@ -64,7 +64,7 @@ class TestDedupLLMFailures:
         assert mock_llm.generate.call_count == 2
 
     def test_llm_exception_on_every_call_defaults_to_add(self, tmp_path):
-        """F2: When LLM raises an exception on every call, decide_action
+        """F2: When LLM raises an exception on every call, ask_llm_for_dedup_decision
         returns default {"action": "add"} without propagating exception."""
         mem = _make_full_memory(tmp_path, card_update_dedup_config={"enabled": True})
         mem.save_card({"id": "existing", "description": "original"})
@@ -74,7 +74,7 @@ class TestDedupLLMFailures:
         mem.dedup.llm_service = mock_llm
 
         candidates = [{"card_id": "existing", "final_score": 0.8}]
-        decision = mem.dedup.decide_action(
+        decision = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "new"}), candidates
         )
 
@@ -101,7 +101,7 @@ class TestDedupLLMFailures:
         ]
         mem.dedup.llm_service = mock_llm
 
-        decision = mem.dedup.decide_action(
+        decision = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "duplicate"}),
             [{"card_id": "existing", "final_score": 0.8}],
         )
@@ -110,7 +110,7 @@ class TestDedupLLMFailures:
         assert mock_llm.generate.call_count == 2
 
     def test_empty_candidates_returns_default_without_llm(self, tmp_path):
-        """F4: When candidates_for_llm is empty, decide_action returns default
+        """F4: When candidates_for_llm is empty, ask_llm_for_dedup_decision returns default
         without calling the LLM."""
         mem = _make_full_memory(tmp_path, card_update_dedup_config={"enabled": True})
 
@@ -118,7 +118,7 @@ class TestDedupLLMFailures:
         mem.llm_service = mock_llm
         mem.dedup.llm_service = mock_llm
 
-        decision = mem.dedup.decide_action(
+        decision = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "new"}), []
         )
 
@@ -133,7 +133,7 @@ class TestDedupLLMFailures:
 
 
 class TestMergeEdgeCases:
-    """Tests for CardDedup.compute_merges and _apply_update_actions_from_merges."""
+    """Tests for CardDedup.compute_card_merge_updates and _apply_update_actions_from_merges."""
 
     def test_compute_merges_skips_deleted_card(self, tmp_path):
         """G1: If an update targets a card_id that's no longer in store.cards,
@@ -148,7 +148,7 @@ class TestMergeEdgeCases:
         updates = [
             {"card_id": "c2", "update_explanation": True, "explanation_append": "new"}
         ]
-        merges = mem.dedup.compute_merges(
+        merges = mem.dedup.compute_card_merge_updates(
             normalize_memory_card({"description": "incoming"}), updates
         )
 
@@ -165,7 +165,7 @@ class TestMergeEdgeCases:
             {"card_id": "c1", "update_explanation": True, "explanation_append": "1"},
             {"card_id": "c1", "update_explanation": True, "explanation_append": "2"},
         ]
-        merges = mem.dedup.compute_merges(
+        merges = mem.dedup.compute_card_merge_updates(
             normalize_memory_card({"description": "incoming"}), updates
         )
 
@@ -203,7 +203,7 @@ class TestMergeEdgeCases:
                 "explanation_append": "y",
             },
         ]
-        merges = mem.dedup.compute_merges(incoming, updates)
+        merges = mem.dedup.compute_card_merge_updates(incoming, updates)
 
         mem._save_card_core = failing_on_first
 
@@ -225,7 +225,7 @@ class TestMergeEdgeCases:
             42,
             {"card_id": "c1", "update_explanation": True},
         ]
-        merges = mem.dedup.compute_merges(
+        merges = mem.dedup.compute_card_merge_updates(
             normalize_memory_card({"description": "incoming"}), updates
         )
 
@@ -257,9 +257,9 @@ class TestDedupOrchestrator:
         mem.llm_service = mock_llm
         mem.dedup.llm_service = mock_llm
 
-        # Mock decide_action to return discard for a nonexistent card
+        # Mock ask_llm_for_dedup_decision to return discard for a nonexistent card
         # (simulating decision made with data that was deleted before decision)
-        mem.dedup.decide_action = MagicMock(
+        mem.dedup.ask_llm_for_dedup_decision = MagicMock(
             return_value={"action": "discard", "duplicate_of": "nonexistent"}
         )
 
@@ -374,18 +374,18 @@ class TestNoteSyncExceptions:
 
         # Upsert a card
         card1 = normalize_memory_card({"id": "c1", "description": "original"})
-        mem.note_sync.upsert_fast(card1)
+        mem.note_sync.sync_card_to_amem_fast(card1)
         initial_add_count = len(add_calls)
 
         # Upsert again with changed content — delete fails (warning logged), add succeeds
         card2 = normalize_memory_card({"id": "c1", "description": "updated"})
-        mem.note_sync.upsert_fast(card2)
+        mem.note_sync.sync_card_to_amem_fast(card2)
 
         # add_document was still called despite delete failure
         assert len(add_calls) > initial_add_count
 
     def test_upsert_agentic_update_raises_propagates(self, tmp_path):
-        """I2: Unlike upsert_fast, upsert_agentic does NOT have try/except,
+        """I2: Unlike sync_card_to_amem_fast, sync_card_to_amem_with_evolution does NOT have try/except,
         so exceptions from memory_system.update() propagate."""
         mem, fake_sys = make_test_memory_with_agentic(tmp_path)
         mem.save_card({"id": "existing", "description": "original"})
@@ -398,7 +398,7 @@ class TestNoteSyncExceptions:
 
         card = normalize_memory_card({"id": "existing", "description": "updated"})
         with pytest.raises(RuntimeError, match="update failed"):
-            mem.note_sync.upsert_agentic(card)
+            mem.note_sync.sync_card_to_amem_with_evolution(card)
 
 
 # ===========================================================================
@@ -440,7 +440,7 @@ class TestMergeApiError:
                 "explanation_append": "new info 2",
             },
         ]
-        merges = mem.dedup.compute_merges(incoming, updates)
+        merges = mem.dedup.compute_card_merge_updates(incoming, updates)
 
         mem._save_card_core = failing_on_first
 
@@ -465,8 +465,8 @@ class TestDiscardPhantomId:
         mem.llm_service = mock_llm
         mem.dedup.llm_service = mock_llm
 
-        # Mock decide_action to return discard for a phantom card
-        mem.dedup.decide_action = MagicMock(
+        # Mock ask_llm_for_dedup_decision to return discard for a phantom card
+        mem.dedup.ask_llm_for_dedup_decision = MagicMock(
             return_value={"action": "discard", "duplicate_of": "phantom-gone"}
         )
         mem.dedup.score_candidates = MagicMock(

@@ -2,7 +2,7 @@
 
 These tests cover the paths that were previously untestable without real
 Chroma/embedding dependencies: note_sync.upsert_agentic,
-note_sync.upsert_fast, note_sync.remove, note_sync.export_jsonl,
+note_sync.sync_card_to_amem_fast, note_sync.remove, note_sync.export_jsonl,
 rebuild with real data, and LLM card enrichment.
 """
 
@@ -346,7 +346,7 @@ class TestFullCycleWithFakes:
         assert "c1" in result
 
     def test_upsert_fast_direct(self, tmp_path):
-        """Test note_sync.upsert_fast — the hot path used by api_sync.sync."""
+        """Test note_sync.sync_card_to_amem_fast — the hot path used by api_sync.sync."""
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
         card = normalize_memory_card(
             {
@@ -358,17 +358,17 @@ class TestFullCycleWithFakes:
         )
 
         # Directly call the fast upsert (normally called by _sync_from_api)
-        changed = mem.note_sync.upsert_fast(card)
+        changed = mem.note_sync.sync_card_to_amem_fast(card)
         assert changed is True
         assert fake_sys.read("c1") is not None
         assert fake_sys.read("c1").content == "SA optimization"
 
         # Second call with same content → no change
-        changed2 = mem.note_sync.upsert_fast(card)
+        changed2 = mem.note_sync.sync_card_to_amem_fast(card)
         assert changed2 is False
 
         # Update content → change detected
         card.description = "Updated SA optimization"
-        changed3 = mem.note_sync.upsert_fast(card)
+        changed3 = mem.note_sync.sync_card_to_amem_fast(card)
         assert changed3 is True
         assert "Updated" in fake_sys.read("c1").content

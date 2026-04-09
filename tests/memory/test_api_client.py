@@ -235,7 +235,7 @@ def _make_memory(tmp_path, **overrides):
 class TestDecideCardAction:
     def test_no_llm_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
-        result = mem.dedup.decide_action(
+        result = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "test"}), [{"card_id": "c1"}]
         )
         assert result["action"] == "add"
@@ -243,7 +243,7 @@ class TestDecideCardAction:
     def test_no_candidates_returns_add(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.llm_service = MagicMock()
-        result = mem.dedup.decide_action(
+        result = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "test"}), []
         )
         assert result["action"] == "add"
@@ -264,7 +264,7 @@ class TestDecideCardAction:
         mem.dedup.llm_service = mock_llm
 
         candidates = [{"card_id": "existing", "final_score": 0.9}]
-        result = mem.dedup.decide_action(
+        result = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "dup"}), candidates
         )
         assert result["action"] == "discard"
@@ -290,7 +290,7 @@ class TestDecideCardAction:
         mem.dedup.llm_service = mock_llm
 
         candidates = [{"card_id": "c1", "final_score": 0.5}]
-        result = mem.dedup.decide_action(
+        result = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "new"}), candidates
         )
         assert result["action"] == "add"
@@ -315,7 +315,7 @@ class TestDedupCandidatesForLlm:
         )
 
         candidates = [{"card_id": "c1", "final_score": 0.8, "scores": {}}]
-        result = mem.dedup.format_for_llm(candidates)
+        result = mem.dedup.format_dedup_candidates_for_llm(candidates)
         assert len(result) == 1
         assert result[0]["card_id"] == "c1"
         assert "simulated annealing" in result[0]["description"]
@@ -324,7 +324,7 @@ class TestDedupCandidatesForLlm:
     def test_missing_card_skipped(self, tmp_path):
         mem = _make_memory(tmp_path)
         candidates = [{"card_id": "nonexistent", "final_score": 0.5}]
-        result = mem.dedup.format_for_llm(candidates)
+        result = mem.dedup.format_dedup_candidates_for_llm(candidates)
         assert result == []
 
     def test_truncates_long_text(self, tmp_path):
@@ -336,5 +336,5 @@ class TestDedupCandidatesForLlm:
             }
         )
         candidates = [{"card_id": "c1", "final_score": 0.8, "scores": {}}]
-        result = mem.dedup.format_for_llm(candidates)
+        result = mem.dedup.format_dedup_candidates_for_llm(candidates)
         assert len(result[0]["description"]) <= 1200

@@ -36,7 +36,7 @@ class NoteSync:
         self._card_store = card_store
 
     @staticmethod
-    def _card_to_note_kwargs(card: AnyCard) -> dict[str, Any]:
+    def _extract_note_fields_from_card(card: AnyCard) -> dict[str, Any]:
         """Extract note-relevant fields from a card for A-MEM sync."""
         context = (
             str(card.task_description or card.task_description_summary or "").strip()
@@ -51,7 +51,7 @@ class NoteSync:
             "links": list(card.links or []),
         }
 
-    def build_note(
+    def create_or_update_note(
         self,
         card: AnyCard,
         existing: MemoryNoteProtocol | None = None,
@@ -59,7 +59,7 @@ class NoteSync:
         card_id = str(card.id or "")
         if existing is None:
             existing = self.memory_system.read(card_id)
-        note_kwargs = self._card_to_note_kwargs(card)
+        note_kwargs = self._extract_note_fields_from_card(card)
         return self._note_cls(
             content=note_kwargs["content"],
             id=card_id,
@@ -78,7 +78,7 @@ class NoteSync:
         )
 
     @staticmethod
-    def fields_changed(
+    def note_differs_from_card(
         existing: MemoryNoteProtocol,
         content: str,
         category: str,
@@ -96,12 +96,12 @@ class NoteSync:
             or existing.links != links
         )
 
-    def upsert_fast(self, card: AnyCard) -> bool:
+    def sync_card_to_amem_fast(self, card: AnyCard) -> bool:
         """Synchronize card into local A-MEM/Chroma without LLM evolution."""
         card_id = str(card.id or "")
         existing = self.memory_system.read(card_id)
-        note = self.build_note(card, existing=existing)
-        changed = existing is None or self.fields_changed(
+        note = self.create_or_update_note(card, existing=existing)
+        changed = existing is None or self.note_differs_from_card(
             existing,
             note.content,
             note.category,
@@ -134,18 +134,18 @@ class NoteSync:
         self._card_store.note_ids.add(note.id)
         return True
 
-    def upsert_agentic(self, card: AnyCard) -> bool:
+    def sync_card_to_amem_with_evolution(self, card: AnyCard) -> bool:
         """Add/update card in local A-MEM using the agentic add/update path."""
         card_id = str(card.id or "").strip()
         if not card_id:
             return False
 
-        note_kwargs = self._card_to_note_kwargs(card)
+        note_kwargs = self._extract_note_fields_from_card(card)
         existing = self.memory_system.read(card_id)
         if existing is None:
             self.memory_system.add_note(id=card_id, tags=[], **note_kwargs)
         else:
-            changed = self.fields_changed(
+            changed = self.note_differs_from_card(
                 existing,
                 note_kwargs["content"],
                 note_kwargs["category"],
