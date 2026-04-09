@@ -101,7 +101,7 @@ def init_llm_and_generator(
             api_key=api_key,
             base_url=env_config.LLM_BASE_URL,
             temperature=0.0,
-            max_tokens=0,
+            max_tokens=None,
             reasoning=env_config.OPENROUTER_REASONING,
         )
         if generator_cls is None:

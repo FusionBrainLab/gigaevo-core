@@ -16,7 +16,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from dotenv import load_dotenv
 from loguru import logger
 import pandas as pd
 
@@ -46,9 +45,6 @@ from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
-
-load_dotenv()
-
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
