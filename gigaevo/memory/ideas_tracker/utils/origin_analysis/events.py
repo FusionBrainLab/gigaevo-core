@@ -25,7 +25,7 @@ def pick_best_parent(
             continue
         try:
             f = float(p.get("fitness", float("nan")))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if math.isfinite(f) and f > best_fit:
             best_fit = f
@@ -43,7 +43,7 @@ def mean_parent_fitness(parents: list[str], programs: dict[str, dict]) -> float 
             continue
         try:
             f = float(p.get("fitness", float("nan")))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if math.isfinite(f):
             fits.append(f)
@@ -82,7 +82,7 @@ def compute_intro_events(
         gen_child = pchild.get("generation", None)
         try:
             f_child = float(pchild.get("fitness", float("nan")))
-        except Exception:
+        except (TypeError, ValueError):
             f_child = float("nan")
         if not (isinstance(gen_child, int) and math.isfinite(f_child)):
             continue
@@ -144,7 +144,7 @@ def compute_descendant_metrics(
             continue
         try:
             f = float(fit)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if not math.isfinite(f):
             continue
