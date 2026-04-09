@@ -17,6 +17,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     is_program_card,
     normalize_memory_card,
 )
+from gigaevo.memory.shared_memory.card_loader import CardLoader
 from gigaevo.memory.shared_memory.card_store import CardStore
 from gigaevo.memory.shared_memory.card_update_dedup import (
     QUERY_DESCRIPTION,
@@ -95,25 +96,18 @@ class CardDedup:
             from gigaevo.memory.shared_memory.amem_gam_retriever import (
                 build_gam_store,
                 build_retrievers,
-                load_amem_records,
             )
         except (ImportError, OSError) as exc:
             logger.warning("[Memory] Dedup retriever import failed: {}", exc)
             return {}
 
         self._gam_store_dir.mkdir(parents=True, exist_ok=True)
-        if self._export_file.exists():
-            try:
-                records = load_amem_records(self._export_file)
-            except (json.JSONDecodeError, OSError):
-                records = [c.model_dump() for c in self._card_store.cards.values()]
-        else:
-            records = [c.model_dump() for c in self._card_store.cards.values()]
-        records = [
-            r
-            for r in records
-            if str(r.get("category", "")).strip().lower() != "program"
-        ]
+        loader = CardLoader(
+            export_file=self._export_file,
+            card_store=self._card_store,
+            include_programs=False,
+        )
+        records = loader.load()
         if not records:
             return {}
 
