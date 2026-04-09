@@ -48,7 +48,7 @@ _MAX_CONNECTED_DESCRIPTIONS = 5
 
 
 class CardMemory(Protocol):
-    def get_card(self, card_id: str) -> dict[str, Any] | None: ...
+    def get_card(self, card_id: str) -> AnyCard | None: ...
 
 
 def _load_json(path: Path) -> Any:
@@ -376,10 +376,10 @@ def _apply_usage_updates_to_cards(
         current_card = cards_by_id.get(card_id)
         if current_card is None:
             existing = memory.get_card(card_id)
-            if not isinstance(existing, dict):
+            if existing is None:
                 missing_card_ids.append(card_id)
                 continue
-            current_card = dict(existing)
+            current_card = existing.model_dump()
 
         current_card["usage"] = merge_usage_payloads(
             current_card.get("usage"),
