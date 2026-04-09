@@ -1,27 +1,91 @@
-# Evo Memory Agent (API-Backed Copy)
+# GigaEvo Memory System
 
-This package adapts `evo_memory_agent` to the main repository Memory API schema.
+Core components:
+- **AmemGamMemory** (`shared_memory/memory.py`): Main orchestrator — saves cards, searches memory, manages lifecycle
+- **CardStore** (`shared_memory/card_store.py`): In-memory card catalog with persistence to disk
+- **NoteSync** (`shared_memory/note_sync.py`): Bridges cards ↔ local A-MEM vector store (Chroma)
+- **GamSearch** (`shared_memory/gam_search.py`): Builds + manages agentic retriever (ResearchAgent)
+- **CardDedup** (`shared_memory/card_dedup.py`): LLM-scored duplicate detection before writes
+- **ApiSync** (`shared_memory/api_sync.py`): Optional API backend for remote concept sync
 
-It wraps local A-MEM + GAM retrieval with API-backed persistence:
-- Source of truth: API concepts (`/v1/concepts`)
-- Local runtime: synchronized A-MEM notes + GAM retrievers
-- Local mapping/index: `api_index.json` in the chosen checkpoint directory
+API-backed mode wraps local A-MEM + GAM retrieval with cloud persistence:
+- **Source of truth**: Remote API concepts (`/v1/concepts`)
+- **Local runtime**: Synchronized A-MEM notes + GAM retrievers in Chroma vectors
+- **Local cache**: `api_index.json` + `amem_exports/` + `gam_shared/` directories
 
-## How It Works
+## Memory Flow for New Users
 
-`AmemGamMemory` (`shared_memory/memory.py`) is the main entrypoint.
+### Writing a Memory (Step 1)
 
-### High-level flow
+```
+your code calls:  memory.save_card({"description": "...", ...})
+       ↓
+AmemGamMemory checks:
+  - Is dedup enabled? Run CardDedup (vector search + LLM scoring) to decide:
+    ├─ "add" → save as new card
+    ├─ "discard" → skip this card
+    └─ "update" → merge into existing card
+       ↓
+   normalize card (use CardStore to assign/verify IDs)
+       ↓
+   (optional) write to API if MEMORY_USE_API=true
+       ↓
+   store in CardStore (in-memory + persisted to disk)
+       ↓
+   sync with A-MEM (NoteSync exports JSONL → Chroma)
+       ↓
+periodic rebuild (every N writes, or after API sync):
+  - re-export all cards to JSONL
+  - rebuild GAM index (ResearchAgent for agentic retrieval)
+```
 
-1. `save_card(...)` normalizes a memory card and persists it as a concept entity in the API (when `MEMORY_USE_API=true`).
-2. Optional card update/dedup pipeline (config: `card_update_dedup` in `config/memory.yaml`) can run before write:
-   - multi-query vector retrieval (`description`, `explanation summary`, and two combined fields)
-   - weighted rerank
-   - LLM decision: `add` / `discard` / `update`
-3. The saved card is also upserted into local A-MEM runtime for retrieval.
-4. `search(...)` first performs incremental sync from API, then tries GAM agentic retrieval.
-5. If GAM is unavailable/fails, it falls back to API full-text search.
-6. If API mode is disabled, it falls back to local lexical search over cached cards.
+### Searching Memory (Step 2)
+
+```
+your code calls:  memory.search(query)
+       ↓
+AmemGamMemory routes through fallback chain:
+  1. GAM agentic search (if ResearchAgent available)
+     └─ calls GAM ResearchAgent.research(query)
+          └─ semantic retrieval via Chroma vectors
+               └─ returns structured answer with memories
+  
+  2. [fallback] API full-text search (if API mode enabled)
+     └─ calls API /v1/search endpoint
+  
+  3. [fallback] Local lexical search (always available)
+     └─ token-overlap matching over CardStore.cards
+       ↓
+   optional: LLM synthesis (if enabled)
+     └─ summarizes results into natural answer
+       ↓
+   return results to caller
+```
+
+### Complete Lifecycle in Code
+
+```python
+# Initialize with optional API backend
+mem = AmemGamMemory(
+    config=MemoryConfig(...),
+    # Optional: set llm_service, generator, runtime for agentic features
+)
+
+# 1. Write
+mem.save_card({
+    "id": "idea_1",
+    "description": "Simulated annealing for optimization",
+    "category": "strategy"
+})  # → dedup checked, stored locally, synced to A-MEM
+
+# 2. Search
+results = mem.search("how to escape local minima?")
+# → tries GAM → API → local, returns ranked cards
+
+# 3. Manage lifecycle
+mem.rebuild()  # force export + retriever rebuild
+mem.close()    # clean shutdown
+```
 
 ### Data ownership model
 
