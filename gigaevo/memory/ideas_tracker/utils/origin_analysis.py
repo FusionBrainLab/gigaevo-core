@@ -1287,14 +1287,15 @@ def main():
     best_csv = out_dir / (Path(args.output_name).stem + "_best_ideas.csv")
     df_best_ideas.to_csv(best_csv, index=False)
 
-    logger.info(f"Wrote (filtered best ideas, deduped per idea_id): {best_csv}")
+    logger.info("Wrote (filtered best ideas, deduped per idea_id): {}", best_csv)
     logger.debug(
-        f"Sanity check (first 15 rows of best ideas):\n{df_best_ideas.head(15).to_string(index=False)}"
+        "Sanity check (first 15 rows of best ideas):\n{}",
+        df_best_ideas.head(15).to_string(index=False),
     )
 
-    logger.info(f"Wrote: {out_csv}")
+    logger.info("Wrote: {}", out_csv)
     logger.debug(
-        f"Sanity check (first 15 rows):\n{df_out.head(15).to_string(index=False)}"
+        "Sanity check (first 15 rows):\n{}", df_out.head(15).to_string(index=False)
     )
 
 
