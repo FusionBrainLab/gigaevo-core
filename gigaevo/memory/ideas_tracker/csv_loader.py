@@ -53,7 +53,7 @@ def _row_to_program(row: dict[str, Any]) -> Program:
         id=program_id,
         code=code,
         state=ProgramState.DONE,
-        lineage=Lineage(parents=parents, generation=generation),
+        lineage=Lineage(parents=parents, generation=generation, mutation=None),
         metrics=metrics,
         metadata=metadata,
     )

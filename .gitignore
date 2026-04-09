@@ -4,6 +4,11 @@
 # Git worktrees (used by Claude Code for isolated feature work)
 .claude/worktrees/
 
+# Claude Code auto-generated / ephemeral files
+.claude/scheduled_tasks.lock
+docs/superpowers/
+graphify-out/
+
 # MkDocs build output
 site/
 

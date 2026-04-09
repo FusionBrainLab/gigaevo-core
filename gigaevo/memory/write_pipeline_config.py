@@ -161,7 +161,7 @@ def load_config(settings_path: Path | None = None) -> PipelineConfig:
 
     raw_dedup = OmegaConf.select(file_cfg, "card_update_dedup")
     dedup: dict[str, Any] = (
-        OmegaConf.to_container(raw_dedup, resolve=True)  # type: ignore[arg-type]
+        OmegaConf.to_container(raw_dedup, resolve=True)  # type: ignore[arg-type,assignment]
         if raw_dedup is not None
         else {}
     )

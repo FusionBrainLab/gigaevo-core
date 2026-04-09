@@ -6,7 +6,7 @@ Also contains usage-payload helpers (build, merge) previously in utils/helpers.p
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 from uuid import uuid4
 
 from gigaevo.memory.ideas_tracker.models import (
@@ -219,7 +219,7 @@ class IdeaBank:
         return True
 
     def apply_usage_updates(
-        self, usage_updates: dict[str, UsagePayload | dict[str, Any]]
+        self, usage_updates: Mapping[str, UsagePayload | dict[str, Any]]
     ) -> None:
         """Merge per-card usage payloads into matching ideas."""
         for i, idea in enumerate(self._ideas):
