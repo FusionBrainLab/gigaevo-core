@@ -173,7 +173,7 @@ def _patch_gam_build_with_fakes(mem: AmemGamMemory) -> None:
         )
 
     if mem.gam is not None:
-        mem.gam.build = _fake_build  # type: ignore[method-assign]
+        mem.gam.build_research_agent = _fake_build  # type: ignore[method-assign]
 
 
 class TestMemorySearchAMemPath:

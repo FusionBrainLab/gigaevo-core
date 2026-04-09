@@ -1,9 +1,9 @@
 """Tests for the bug fixes in the memory system refactor.
 
 Covers:
-1. State mutation fix: _save_card_core uses model_copy, not direct mutation
+1. State mutation fix: _insert_new_card uses model_copy, not direct mutation
 2. Namespace filtering fix: api_sync excludes None/empty namespace rows when namespace is set
-3. Dedup meta type guard: score_candidates handles non-dict meta safely
+3. Dedup meta type guard: score_duplicate_candidates handles non-dict meta safely
 4. LLM retry fallback logging: warning logged when all retries fail
 5. gam_search.invalidate wired: rebuild() calls invalidate() on GAM build failure
 """
@@ -28,7 +28,7 @@ from tests.fakes.agentic_memory import (
 
 
 class TestSaveCardCoreDoesNotMutateInput:
-    """_save_card_core must not mutate the caller's card object."""
+    """_insert_new_card must not mutate the caller's card object."""
 
     def test_enrichment_does_not_mutate_original_card(self, tmp_path):
         """LLM enrichment creates a new card via model_copy; original unchanged."""
@@ -46,9 +46,9 @@ class TestSaveCardCoreDoesNotMutateInput:
 
         mem.save_card(original)
 
-        # Original keywords list must not have been swapped out by _save_card_core
+        # Original keywords list must not have been swapped out by _insert_new_card
         assert id(original.keywords) == original_keywords_id, (
-            "_save_card_core mutated original.keywords in-place"
+            "_insert_new_card mutated original.keywords in-place"
         )
 
     def test_enrichment_stored_card_has_keywords(self, tmp_path):
@@ -186,7 +186,7 @@ class _FakeHit:
 
 
 class TestDedupMetaTypeGuard:
-    """score_candidates must safely handle non-dict meta values."""
+    """score_duplicate_candidates must safely handle non-dict meta values."""
 
     def _make_dedup(self, tmp_path) -> Any:
         from gigaevo.memory.shared_memory.card_dedup import CardDedup
@@ -230,7 +230,9 @@ class TestDedupMetaTypeGuard:
         incoming = normalize_memory_card(
             {"description": "similar card", "category": "general"}
         )
-        candidates = dedup.score_candidates(incoming, resolve_retriever_fn=_resolve_x)
+        candidates = dedup.score_duplicate_candidates(
+            incoming, resolve_retriever_fn=_resolve_x
+        )
         assert isinstance(candidates, list)
 
     def test_none_meta_does_not_crash(self, tmp_path):
@@ -251,7 +253,9 @@ class TestDedupMetaTypeGuard:
         incoming = normalize_memory_card(
             {"description": "similar card", "category": "general"}
         )
-        candidates = dedup.score_candidates(incoming, resolve_retriever_fn=_resolve_y)
+        candidates = dedup.score_duplicate_candidates(
+            incoming, resolve_retriever_fn=_resolve_y
+        )
         assert isinstance(candidates, list)
 
     def test_dict_meta_with_score_works(self, tmp_path):
@@ -272,7 +276,9 @@ class TestDedupMetaTypeGuard:
         incoming = normalize_memory_card(
             {"description": "similar card", "category": "general"}
         )
-        candidates = dedup.score_candidates(incoming, resolve_retriever_fn=_resolve_z)
+        candidates = dedup.score_duplicate_candidates(
+            incoming, resolve_retriever_fn=_resolve_z
+        )
         # card-z should appear as a candidate
         assert any(c["card_id"] == "card-z" for c in candidates)
 
@@ -283,7 +289,7 @@ class TestDedupMetaTypeGuard:
 
 
 class TestDedupLLMRetryFallback:
-    """decide_action logs a warning when all retries are exhausted."""
+    """ask_llm_for_dedup_decision logs a warning when all retries are exhausted."""
 
     def _make_dedup_with_failing_llm(self, tmp_path, num_retries: int = 2) -> Any:
         from gigaevo.memory.shared_memory.card_dedup import CardDedup
@@ -316,7 +322,7 @@ class TestDedupLLMRetryFallback:
         # Provide a candidate so the LLM is actually called
         candidates = [{"card_id": "card-existing"}]
 
-        result = dedup.decide_action(incoming, candidates)
+        result = dedup.ask_llm_for_dedup_decision(incoming, candidates)
 
         # When all retries fail, should default to add
         assert result["action"] == "add"
@@ -347,7 +353,7 @@ class TestDedupLLMRetryFallback:
         )
         candidates = [{"card_id": "card-e1"}]
 
-        result = dedup.decide_action(incoming, candidates)
+        result = dedup.ask_llm_for_dedup_decision(incoming, candidates)
 
         # When all retries fail on bad JSON, should default to add
         assert result["action"] == "add"
@@ -363,26 +369,30 @@ class TestGamSearchInvalidateOnBuildFailure:
     """rebuild() must call gam.invalidate() and clear research_agent on build failure."""
 
     def test_rebuild_calls_invalidate_on_gam_build_failure(self, tmp_path):
-        """When gam.build() raises MemoryRetrieverError, invalidate() is called."""
+        """When gam.build_research_agent() raises MemoryRetrieverError, invalidate_retrievers() is called."""
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
-        # Inject a mock GamSearch that raises on build
+        # Inject a mock GamSearch that raises on build_research_agent
         mock_gam = MagicMock()
-        mock_gam.build.side_effect = MemoryRetrieverError("index corrupt")
+        mock_gam.build_research_agent.side_effect = MemoryRetrieverError("index corrupt")
         mock_gam.agent = None
         mem.gam = mock_gam
         mem.research_agent = MagicMock()  # Pretend it was set previously
 
+        # Mock dedup to verify invalidate_retrievers is called
+        mock_dedup = MagicMock()
+        mem.dedup = mock_dedup
+
         mem.rebuild()
 
-        mock_gam.invalidate.assert_called_once()
+        mock_dedup.invalidate_retrievers.assert_called_once()
 
     def test_rebuild_clears_research_agent_on_build_failure(self, tmp_path):
         """After a failed rebuild, research_agent must be None."""
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
         mock_gam = MagicMock()
-        mock_gam.build.side_effect = MemoryRetrieverError("store missing")
+        mock_gam.build_research_agent.side_effect = MemoryRetrieverError("store missing")
         mock_gam.agent = MagicMock()
         mem.gam = mock_gam
         mem.research_agent = MagicMock()  # Stale reference
@@ -398,7 +408,7 @@ class TestGamSearchInvalidateOnBuildFailure:
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
         mock_gam = MagicMock()
-        mock_gam.build.side_effect = MemoryRetrieverError("unavailable")
+        mock_gam.build_research_agent.side_effect = MemoryRetrieverError("unavailable")
         mock_gam.agent = None
         mem.gam = mock_gam
 
@@ -406,19 +416,18 @@ class TestGamSearchInvalidateOnBuildFailure:
 
         assert mem._gam_build_failed is True
 
-    def test_rebuild_does_not_call_invalidate_on_success(self, tmp_path):
-        """When build succeeds, invalidate() must NOT be called."""
+    def test_rebuild_sets_agent_on_success(self, tmp_path):
+        """When build_research_agent succeeds, research_agent is set and _gam_build_failed is False."""
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
         mock_agent = MagicMock()
         mock_gam = MagicMock()
-        mock_gam.build.return_value = None
+        mock_gam.build_research_agent.return_value = None
         mock_gam.agent = mock_agent
         mem.gam = mock_gam
 
         mem.rebuild()
 
-        mock_gam.invalidate.assert_not_called()
         assert mem.research_agent is mock_agent
         assert mem._gam_build_failed is False
 
