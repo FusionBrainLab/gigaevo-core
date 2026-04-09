@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import dataclasses
 import json
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict
 
 from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_conversion import (
@@ -36,9 +36,10 @@ _MAX_SUMMARY_CHARS = 600
 _MAX_DESCRIPTION_CHARS = 1200
 
 
-@dataclasses.dataclass(frozen=True)
-class DedupDecision:
+class DedupDecision(BaseModel):
     """Result of deduplication analysis: whether to add, discard, or update."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     action: str  # "add" | "discard" | "update"
     reason: str

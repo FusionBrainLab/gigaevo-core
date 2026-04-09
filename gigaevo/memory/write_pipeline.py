@@ -542,12 +542,12 @@ def main() -> dict[str, Any] | None:
                 write_stats_by_card_type[card_type][stat_name] = int(
                     write_stats_by_card_type[card_type].get(stat_name, 0)
                 ) + int(stat_value)
-            stored = memory.get_card(memory_id) or {}
+            stored = memory.get_card(memory_id)
             logger.debug(
                 "[{:03d}] saved {}: {}",
                 idx,
                 memory_id,
-                stored.get("description", "")[:110],
+                (stored.description if stored is not None else "")[:110],
             )
     except RuntimeError as exc:
         logger.error("Write failed: {}", exc)
