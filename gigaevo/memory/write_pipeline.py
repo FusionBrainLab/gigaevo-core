@@ -11,8 +11,10 @@ from loguru import logger
 from gigaevo.memory.runtime_config import to_bool
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_update_dedup import (
+    CardUpdateDedupConfig,
     merge_usage_payloads,
 )
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
 from gigaevo.memory.utils import to_float
 from gigaevo.memory.write_pipeline_config import (
@@ -41,7 +43,6 @@ from gigaevo.memory.write_pipeline_config import (
     SYNC_ON_INIT,
     USAGE_UPDATES_PATH,
     USE_API,
-    resolve_memory_backend_class,
 )
 
 _MAX_CONNECTED_DESCRIPTIONS = 5
@@ -474,27 +475,42 @@ def _write_memory_write_stats(
 
 def main() -> dict[str, Any] | None:
     """Load cards from banks, write to memory backend, report stats."""
-    memory_backend_cls = resolve_memory_backend_class(USE_API)
-    memory = memory_backend_cls(
-        checkpoint_path=str(MEMORY_DIR),
-        base_url=MEMORY_API_URL,
-        use_api=USE_API,
-        namespace=NAMESPACE,
-        channel=CHANNEL,
-        author=AUTHOR,
+    from gigaevo.memory.shared_memory.memory_config import (
+        ApiConfig,
+        GamConfig,
+        MemoryConfig,
+    )
+
+    # Build configuration based on use_api flag
+    api_config = None
+    if USE_API:
+        api_config = ApiConfig(
+            base_url=str(MEMORY_API_URL or "http://localhost:8000"),
+            namespace=str(NAMESPACE or "default"),
+            channel=str(CHANNEL or "latest"),
+            author=AUTHOR,
+            sync_batch_size=SYNC_BATCH_SIZE,
+            sync_on_init=SYNC_ON_INIT,
+        )
+
+    config = MemoryConfig(
+        checkpoint_path=MEMORY_DIR,
         search_limit=SEARCH_LIMIT,
+        rebuild_interval=REBUILD_INTERVAL,
         enable_llm_synthesis=ENABLE_LLM_SYNTHESIS,
         enable_memory_evolution=SHOULD_EVOLVE,
         enable_llm_card_enrichment=FILL_MISSING_FIELDS_WITH_LLM,
-        rebuild_interval=REBUILD_INTERVAL,
-        enable_bm25=ENABLE_BM25,
-        sync_batch_size=SYNC_BATCH_SIZE,
-        sync_on_init=SYNC_ON_INIT,
-        allowed_gam_tools=ALLOWED_GAM_TOOLS,
-        gam_top_k_by_tool=GAM_TOP_K_BY_TOOL,
-        gam_pipeline_mode=GAM_PIPELINE_MODE,
-        card_update_dedup_config=CARD_UPDATE_DEDUP_CONFIG,
+        api=api_config,
+        gam=GamConfig(
+            enable_bm25=ENABLE_BM25,
+            allowed_tools=ALLOWED_GAM_TOOLS,
+            top_k_by_tool=GAM_TOP_K_BY_TOOL,
+            pipeline_mode=str(GAM_PIPELINE_MODE or "default"),
+        ),
+        dedup=CardUpdateDedupConfig(**CARD_UPDATE_DEDUP_CONFIG),
     )
+
+    memory = AmemGamMemory(config=config)
 
     logger.info("API Memory Demo: Card Write")
     logger.info(
