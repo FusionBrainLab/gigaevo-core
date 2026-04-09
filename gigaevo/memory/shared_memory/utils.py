@@ -41,7 +41,7 @@ def looks_like_uuid(value: str) -> bool:
     try:
         uuid.UUID(value)
         return True
-    except Exception:
+    except ValueError:
         return False
 
 

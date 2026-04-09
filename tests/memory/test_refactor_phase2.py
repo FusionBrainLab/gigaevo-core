@@ -84,6 +84,23 @@ class TestCardLoader:
 
         assert isinstance(cards, list)
 
+    def test_does_not_mutate_caller_exclude_categories(self, tmp_path):
+        """CardLoader must not mutate the caller's exclude_categories set."""
+        from gigaevo.memory.shared_memory.card_loader import CardLoader
+
+        caller_set = {"foo"}
+        export_file = tmp_path / "export.jsonl"
+        export_file.write_text("")  # empty file
+
+        CardLoader(
+            export_file=export_file,
+            exclude_categories=caller_set,
+            include_programs=False,
+        )
+
+        assert "program" not in caller_set, "CardLoader must not mutate caller's set"
+        assert caller_set == {"foo"}, "original set must be unmodified"
+
 
 class TestMemoryState:
     def test_initial_state_is_initializing(self):

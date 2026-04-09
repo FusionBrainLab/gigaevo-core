@@ -45,7 +45,7 @@ class CardLoader:
         self.export_file = export_file
         self.card_store = card_store
         self.include_programs = include_programs
-        self.exclude_categories = exclude_categories or set()
+        self.exclude_categories = set(exclude_categories or ())
         if not include_programs:
             self.exclude_categories.add("program")
 
@@ -79,7 +79,6 @@ class CardLoader:
 
         Raises:
             OSError: If file cannot be read.
-            json.JSONDecodeError: If any line contains invalid JSON.
         """
         cards: list[dict[str, Any]] = []
         for line in self.export_file.read_text().strip().split("\n"):
