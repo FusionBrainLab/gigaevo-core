@@ -55,6 +55,7 @@ pipeline_builder:
   opponent_provider: ${opponent_provider}
   n_opponents: 5
   per_opponent_timeout: 10.0
+  archive_reeval: true
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}
 

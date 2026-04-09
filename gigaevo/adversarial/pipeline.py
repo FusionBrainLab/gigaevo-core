@@ -1,7 +1,15 @@
 """Adversarial co-evolution pipeline builder.
 
-Extends DefaultPipelineBuilder -- inherits all standard stages, then adds
-FetchOpponentResultsStage wired as context to CallValidatorFunction.
+Extends DefaultPipelineBuilder — adds two adversarial stages:
+
+  FetchOpponentIdsStage (NO_CACHE)
+    Samples fresh opponent IDs on every DAG run.
+
+  FetchOpponentResultsStage (InputHashCache)
+    Executes opponent code; reruns only when opponent IDs change.
+    Cache key = hash of opponent IDs → automatic re-evaluation when
+    the archive changes, without any engine-level hooks.
+
 CallValidatorFunction is reconfigured to call evaluate.py (not validate.py).
 """
 
@@ -10,7 +18,7 @@ from __future__ import annotations
 from loguru import logger
 
 from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
-from gigaevo.adversarial.stages import FetchOpponentResultsStage
+from gigaevo.adversarial.stages import FetchOpponentIdsStage, FetchOpponentResultsStage
 from gigaevo.entrypoint.constants import (
     DEFAULT_SIMPLE_STAGE_TIMEOUT,
     MAX_MEMORY_MB,
@@ -23,10 +31,11 @@ from gigaevo.programs.stages.python_executors.execution import CallValidatorFunc
 
 
 class AdversarialPipelineBuilder(DefaultPipelineBuilder):
-    """Standard pipeline + FetchOpponentResultsStage for adversarial co-evolution.
+    """Standard pipeline + two adversarial stages for co-evolution.
 
     Inherits DefaultPipelineBuilder (gets all standard stages + edges + deps).
-    Adds FetchOpponentResultsStage and wires it as context to CallValidatorFunction.
+    Adds FetchOpponentIdsStage → FetchOpponentResultsStage wired as context
+    to CallValidatorFunction.
     """
 
     def __init__(
@@ -36,6 +45,7 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         n_opponents: int = 5,
         per_opponent_timeout: float = 10.0,
         fallback_dir: str = "fallback",
+        archive_reeval: bool = True,
         *,
         dag_timeout: float = 3600.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
@@ -43,7 +53,11 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         super().__init__(ctx, dag_timeout=dag_timeout, stage_timeout=stage_timeout)
         fallback_codes = self._load_fallback_codes(fallback_dir)
         self._add_adversarial_stages(
-            opponent_provider, n_opponents, per_opponent_timeout, fallback_codes
+            opponent_provider,
+            n_opponents,
+            per_opponent_timeout,
+            fallback_codes,
+            archive_reeval,
         )
 
     def _load_fallback_codes(self, fallback_dir: str) -> list[str]:
@@ -63,6 +77,7 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         n_opponents: int,
         per_opponent_timeout: float,
         fallback_codes: list[str],
+        archive_reeval: bool = True,
     ) -> None:
         problem_dir = self.ctx.problem_ctx.problem_dir
         stage_timeout = self._stage_timeout
@@ -80,8 +95,21 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
             ),
         )
 
-        # Add FetchOpponentResultsStage
+        # Stage 1: FetchOpponentIdsStage — always fresh, NO_CACHE
+        self.add_stage(
+            "FetchOpponentIdsStage",
+            lambda: FetchOpponentIdsStage(
+                opponent_provider=provider,
+                n_opponents=n_opponents,
+                timeout=stage_timeout,
+            ),
+        )
+
+        # Stage 2: FetchOpponentResultsStage
+        # archive_reeval=True  → InputHashCache (reruns only when opponent IDs change)
+        # archive_reeval=False → NO_CACHE (always reruns — adversarial-v2 baseline)
         total_timeout = per_opponent_timeout * n_opponents + 30
+        _archive_reeval = archive_reeval  # capture for lambda closure
         self.add_stage(
             "FetchOpponentResultsStage",
             lambda: FetchOpponentResultsStage(
@@ -92,16 +120,25 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
                 python_path=[problem_dir.resolve()],
                 max_memory_mb=MAX_MEMORY_MB,
                 timeout=total_timeout,
+                archive_reeval=_archive_reeval,
             ),
         )
 
-        # Wire opponent results as context to CallValidatorFunction
+        # Wire IDs → eval → validator
+        self.add_data_flow_edge(
+            "FetchOpponentIdsStage", "FetchOpponentResultsStage", "opponent_ids"
+        )
         self.add_data_flow_edge(
             "FetchOpponentResultsStage", "CallValidatorFunction", "context"
         )
 
-        # FetchOpponentResultsStage runs after validation (parallel with CallProgramFunction)
+        # FetchOpponentIdsStage runs after ValidateCodeStage (parallel with CallProgramFunction)
+        self.add_exec_dep(
+            "FetchOpponentIdsStage",
+            ExecutionOrderDependency.on_success("ValidateCodeStage"),
+        )
+        # FetchOpponentResultsStage depends on FetchOpponentIdsStage (via data flow)
         self.add_exec_dep(
             "FetchOpponentResultsStage",
-            ExecutionOrderDependency.on_success("ValidateCodeStage"),
+            ExecutionOrderDependency.on_success("FetchOpponentIdsStage"),
         )

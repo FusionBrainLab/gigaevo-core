@@ -6,14 +6,26 @@ Receives:
 
 Fitness = mean normalized improvement across opponent configurations
     actual_fitness = best post-improvement min_area achieved (for paper reporting)
+
+soft_fitness (IV2):
+    SOFT_FITNESS=False (default): binary scoring — max(delta, 0) / Q_MAX
+    SOFT_FITNESS=True: sigmoid scoring — sigmoid(delta / T), T=Q_MAX/9
+    Controlled by GIGAEVO_SOFT_FITNESS=1 environment variable.
 """
 
 from __future__ import annotations
+
+import math
+import os
 
 from helper import get_smallest_triangle_area, get_unit_triangle, is_inside_triangle
 import numpy as np
 
 Q_MAX = 0.0365
+_SOFT_T = Q_MAX / 9  # sigmoid temperature ≈ 0.004
+
+# Controlled via GIGAEVO_SOFT_FITNESS=1 env var
+SOFT_FITNESS: bool = os.environ.get("GIGAEVO_SOFT_FITNESS", "0") == "1"
 
 INVALID = {
     "fitness": -1.0,
@@ -25,6 +37,28 @@ INVALID = {
     "max_post_quality": -1.0,
     "n_opponents": 0.0,
 }
+
+
+def _sigmoid(x: float) -> float:
+    """Numerically stable sigmoid."""
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    exp_x = math.exp(x)
+    return exp_x / (1.0 + exp_x)
+
+
+def _score_delta(delta: float) -> float:
+    """Score an improvement delta.
+
+    SOFT_FITNESS=False: binary max(delta, 0) / Q_MAX (clipped to [0, 1])
+    SOFT_FITNESS=True:  sigmoid(delta / T), T=Q_MAX/9
+        - delta=0  → 0.50 (neutral; zero improvement gets partial credit)
+        - delta=+T → sigmoid(1) ≈ 0.73
+        - delta=-T → sigmoid(-1) ≈ 0.27 (worsening is penalised)
+    """
+    if SOFT_FITNESS:
+        return _sigmoid(delta / _SOFT_T)
+    return min(max(delta, 0.0) / Q_MAX, 1.0)
 
 
 def _validate_config(points: object) -> np.ndarray | None:
@@ -52,7 +86,7 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
     if not opponent_results:
         return INVALID
 
-    deltas_norm = []
+    scores = []
     pre_qualities = []
     post_qualities = []
 
@@ -67,25 +101,27 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
             improved = improve_fn(config.copy())
             improved = _validate_config(improved)
             if improved is None:
-                deltas_norm.append(0.0)
+                scores.append(_score_delta(0.0))
                 pre_qualities.append(pre_q)
                 post_qualities.append(pre_q)
                 continue
             post_q = float(get_smallest_triangle_area(improved))
-            delta = max(post_q - pre_q, 0.0)
-            deltas_norm.append(min(delta / Q_MAX, 1.0))
+            delta = post_q - pre_q
+            scores.append(_score_delta(delta))
             pre_qualities.append(pre_q)
             post_qualities.append(post_q)
         except Exception:
-            deltas_norm.append(0.0)
+            scores.append(_score_delta(0.0))
             pre_qualities.append(pre_q)
             post_qualities.append(pre_q)
 
-    if not deltas_norm:
+    if not scores:
         return INVALID
 
-    fitness = sum(deltas_norm) / len(deltas_norm)
-    mean_improvement_raw = sum(d * Q_MAX for d in deltas_norm) / len(deltas_norm)
+    fitness = sum(scores) / len(scores)
+    mean_improvement_raw = sum(
+        max(post - pre, 0.0) for pre, post in zip(pre_qualities, post_qualities)
+    ) / len(scores)
 
     return {
         "fitness": float(fitness),
@@ -95,5 +131,5 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
         "mean_pre_quality": float(sum(pre_qualities) / len(pre_qualities)),
         "mean_post_quality": float(sum(post_qualities) / len(post_qualities)),
         "max_post_quality": float(max(post_qualities)),
-        "n_opponents": float(len(deltas_norm)),
+        "n_opponents": float(len(scores)),
     }

@@ -62,6 +62,20 @@ class OpponentArchiveProvider(ABC):
         """
         ...
 
+    @abstractmethod
+    async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
+        """Return codes for the given opponent program IDs.
+
+        Called by FetchOpponentResultsStage after FetchOpponentIdsStage has
+        sampled fresh opponent IDs.  Implementations should serve codes from
+        an already-warm internal cache (no extra Redis round-trips needed).
+
+        Returns:
+            List of code strings for IDs found; IDs not in the archive are
+            silently skipped.
+        """
+        ...
+
 
 class RedisOpponentArchiveProvider(OpponentArchiveProvider):
     """Reads opponent programs from MAP-Elites archive(s) in Redis.
@@ -107,6 +121,41 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
                 decode_responses=True,
             )
         return self._redis_clients[db]
+
+    async def get_opponents_seeded(self, n: int, seed: int) -> list[OpponentProgram]:
+        """Deterministic opponent sampling — same seed + same archive → same result.
+
+        Used for re-evaluation fingerprinting: replaying the seed against the
+        current archive reveals whether the sampled opponent set has changed.
+
+        Falls back to uniform sampling if any fitness is non-finite.
+        """
+        now = time.monotonic()
+        if not self._cache or (now - self._cache_time) > self._cache_ttl:
+            await self._refresh_cache()
+            self._cache_time = now
+
+        if not self._cache:
+            return []
+
+        if len(self._cache) <= n:
+            return list(self._cache)
+
+        fitnesses = [o.fitness for o in self._cache]
+        rng = np.random.default_rng(seed)
+
+        if not all(np.isfinite(f) for f in fitnesses):
+            indices = rng.choice(len(self._cache), size=n, replace=False)
+            return [self._cache[int(i)] for i in indices]
+
+        weights = _softmax_weights(fitnesses)
+        indices = rng.choice(
+            len(self._cache),
+            size=n,
+            replace=False,
+            p=weights,
+        )
+        return [self._cache[int(i)] for i in indices]
 
     async def get_opponents(self, n: int = 5) -> list[OpponentProgram]:
         """Fetch up to n opponents using softmax fitness-proportional sampling.
@@ -192,3 +241,15 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
             len(opponents),
             len(self._sources),
         )
+
+    async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
+        """Return codes from the in-memory cache for the given IDs.
+
+        No Redis round-trips — reads the cache populated by the most recent
+        ``get_opponents()`` call (guaranteed fresh since FetchOpponentIdsStage
+        runs before FetchOpponentResultsStage in the same DAG execution).
+
+        IDs not found in the cache are silently skipped.
+        """
+        id_set = set(ids)
+        return [o.code for o in self._cache if o.program_id in id_set]

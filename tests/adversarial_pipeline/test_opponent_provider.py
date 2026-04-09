@@ -27,6 +27,10 @@ class FakeOpponentProvider(OpponentArchiveProvider):
     async def get_opponents(self, n: int = 5) -> list[OpponentProgram]:
         return self._programs[:n]
 
+    async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
+        id_map = {p.program_id: p.code for p in self._programs}
+        return [id_map[i] for i in ids if i in id_map]
+
 
 def _make_program_json(code: str, fitness: float = 0.5) -> str:
     return json.dumps({"code": code, "metrics": {"fitness": fitness}})
@@ -154,6 +158,62 @@ class TestRedisOpponentArchiveProvider:
 
         result = await provider.get_opponents(10)
         assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_codes_by_ids_returns_matching_codes(self):
+        """get_codes_by_ids serves from in-memory cache without Redis I/O."""
+        import time
+
+        provider = RedisOpponentArchiveProvider(
+            host="localhost",
+            port=6379,
+            sources=[{"db": 1, "prefix": "test"}],
+        )
+        provider._cache = [
+            OpponentProgram(program_id="p0", code="code_p0", fitness=0.5),
+            OpponentProgram(program_id="p1", code="code_p1", fitness=0.8),
+            OpponentProgram(program_id="p2", code="code_p2", fitness=0.3),
+        ]
+        provider._cache_time = time.monotonic()
+
+        codes = await provider.get_codes_by_ids(["p0", "p2"])
+        assert set(codes) == {"code_p0", "code_p2"}
+
+    @pytest.mark.asyncio
+    async def test_get_codes_by_ids_skips_unknown_ids(self):
+        """IDs not in cache are silently skipped."""
+        import time
+
+        provider = RedisOpponentArchiveProvider(
+            host="localhost",
+            port=6379,
+            sources=[{"db": 1, "prefix": "test"}],
+        )
+        provider._cache = [
+            OpponentProgram(program_id="p0", code="code_p0", fitness=0.5),
+        ]
+        provider._cache_time = time.monotonic()
+
+        codes = await provider.get_codes_by_ids(["p0", "does_not_exist"])
+        assert codes == ["code_p0"]
+
+    @pytest.mark.asyncio
+    async def test_get_codes_by_ids_empty_ids_returns_empty(self):
+        """Empty IDs list returns empty codes list."""
+        import time
+
+        provider = RedisOpponentArchiveProvider(
+            host="localhost",
+            port=6379,
+            sources=[{"db": 1, "prefix": "test"}],
+        )
+        provider._cache = [
+            OpponentProgram(program_id="p0", code="code_p0", fitness=0.5),
+        ]
+        provider._cache_time = time.monotonic()
+
+        codes = await provider.get_codes_by_ids([])
+        assert codes == []
 
 
 # ---------------------------------------------------------------------------
