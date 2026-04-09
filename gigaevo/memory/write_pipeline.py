@@ -470,7 +470,7 @@ def main(
     _best_ideas_path = best_ideas_path or cfg.best_ideas_path
     _programs_path = programs_path or cfg.programs_path
     _usage_updates_path = (
-        usage_updates_path if banks_path is not None else cfg.usage_updates_path
+        usage_updates_path if usage_updates_path is not None else cfg.usage_updates_path
     )
 
     # Build configuration based on use_api flag
