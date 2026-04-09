@@ -140,7 +140,7 @@ class _PendingIdeas:
         desc = self.mapping.get(seq_num)
         if desc is None:
             logger.warning(
-                f"ClassifyingAnalyzer: no pending idea at position {seq_num}"
+                "ClassifyingAnalyzer: no pending idea at position {}", seq_num
             )
             return
         for item in self.items:
@@ -222,7 +222,7 @@ class ClassifyingAnalyzer:
         self, records: list[ProgramRecord], bank: IdeaBank
     ) -> AnalysisResult:
         """Async wrapper — runs synchronous analyze() in a thread pool to avoid blocking."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.analyze, records, bank)
 
     def _classify_against_bank(self, pending: _PendingIdeas, chunks: list) -> None:

@@ -117,9 +117,12 @@ def _normalize_connected_ideas(raw_list: Any) -> list[ConnectedIdea]:
         elif isinstance(item, dict):
             try:
                 result.append(ConnectedIdea.model_validate(item))
-            except Exception:
-                # Skip invalid items
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "[card_conversion] Skipping invalid ConnectedIdea item {!r}: {}",
+                    item,
+                    exc,
+                )
         # else: skip non-dict, non-ConnectedIdea items
     return result
 

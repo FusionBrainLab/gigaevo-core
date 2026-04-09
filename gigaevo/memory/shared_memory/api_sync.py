@@ -6,6 +6,7 @@ from typing import Any
 
 from loguru import logger
 
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     build_entity_meta,
@@ -64,7 +65,7 @@ class ApiSync:
                     offset=offset,
                     channel=self.channel,
                 )
-            except Exception as exc:
+            except (MemoryStorageError, OSError) as exc:
                 logger.warning(
                     "[Memory] API pagination interrupted at offset {}: {}",
                     offset,

@@ -258,9 +258,11 @@ def _run_write_pipeline(
             stats = snapshot.get("stats", {})
             if isinstance(stats, dict):
                 logger.info(
-                    f"Memory write: processed={stats.get('processed', 0)}, "
-                    f"added={stats.get('added', 0)}, updated={stats.get('updated', 0)}, "
-                    f"rejected={stats.get('rejected', 0)}"
+                    "Memory write: processed={}, added={}, updated={}, rejected={}",
+                    stats.get("processed", 0),
+                    stats.get("added", 0),
+                    stats.get("updated", 0),
+                    stats.get("rejected", 0),
                 )
     finally:
         for k, v in previous.items():

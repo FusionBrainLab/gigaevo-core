@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from gigaevo.exceptions import MemoryRetrieverError
+from gigaevo.exceptions import MemoryRetrieverError, MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory_config import ApiConfig
 from tests.fakes.agentic_memory import make_test_memory
@@ -61,7 +61,7 @@ class TestStaleEntityCleanup:
                     "meta": {"namespace": "default"},
                 },
             ],
-            RuntimeError("API timeout"),
+            MemoryStorageError("API timeout"),
         ]
         mock_api.get_concept.side_effect = lambda eid, **kw: {
             "content": {"id": f"c{int(eid[1])}", "description": f"updated {eid}"},
