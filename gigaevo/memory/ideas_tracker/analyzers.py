@@ -246,13 +246,20 @@ class ClassifyingAnalyzer:
                     logger.error(f"ClassifyingAnalyzer classify error: {e}")
 
             for ref in parsed.get("present_ideas", []):
+                if not isinstance(ref, str):
+                    continue
                 short_id, seq = _split_id(ref)
                 full_id = self._resolve_id(short_id, chunk.short_ids)
                 if full_id:
                     pending.mark_classified(seq, full_id, False)
 
             for item in parsed.get("updated_ideas", []):
-                short_id, seq = _split_id(item["id"])
+                if not isinstance(item, dict):
+                    continue
+                item_id = item.get("id")
+                if not isinstance(item_id, str):
+                    continue
+                short_id, seq = _split_id(item_id)
                 full_id = self._resolve_id(short_id, chunk.short_ids)
                 if full_id:
                     pending.mark_classified(seq, full_id, True)

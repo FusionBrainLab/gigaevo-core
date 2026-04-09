@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
-from gigaevo.memory.ideas_tracker.analyzers import _split_id
+from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer, _split_id
 from gigaevo.memory.ideas_tracker.models import (
     AnalysisResult,
+    ClassificationChunk,
     Idea,
     IdeaUpdate,
     normalize_improvement_item,
@@ -186,3 +188,75 @@ class TestSplitId:
 
     def test_empty_sequence_defaults_to_one(self) -> None:
         assert _split_id("abc123:") == ("abc123", 1)
+
+
+class TestClassifyAgainstBankMalformedLLMOutput:
+    """Regression tests for graceful handling of malformed LLM JSON responses.
+
+    Bug: present_ideas may contain non-strings; updated_ideas may contain
+    non-dicts or dicts without "id". Both caused KeyError / AttributeError
+    before the defensive guards were added.
+    """
+
+    def _make_analyzer_with_response(self, raw_json: str) -> ClassifyingAnalyzer:
+        """Create a ClassifyingAnalyzer whose LLM always returns raw_json."""
+        analyzer = ClassifyingAnalyzer.__new__(ClassifyingAnalyzer)
+        analyzer.model = "mock"
+        analyzer._reasoning = {}
+        analyzer._retry_attempts = 1
+        analyzer._description_rewriting = False
+        llm = MagicMock()
+        llm.call.return_value = raw_json
+        analyzer._llm = llm
+        return analyzer
+
+    def _make_chunk(self, short_id: str = "abc123") -> ClassificationChunk:
+        return ClassificationChunk(
+            text=f"[{short_id}]: Some idea description \n ",
+            short_ids=[{"id": f"{short_id}-full-uuid", "short_id": short_id, "description": "Some idea"}],
+        )
+
+    def _make_pending(self) -> object:
+        """Create a _PendingIdeas from one improvement."""
+        from gigaevo.memory.ideas_tracker.analyzers import _PendingIdeas
+        return _PendingIdeas.from_improvements([{"description": "Add cache", "explanation": "faster"}])
+
+    def test_present_ideas_with_none_entries_does_not_crash(self) -> None:
+        """present_ideas: [null, 123] should be silently skipped (not crash)."""
+        raw = json.dumps({"present_ideas": [None, 123, {"nested": "dict"}], "new_ideas": [], "updated_ideas": []})
+        analyzer = self._make_analyzer_with_response(raw)
+        pending = self._make_pending()
+        analyzer._classify_against_bank(pending, [self._make_chunk()])
+        # No exception raised; all entries were silently skipped
+
+    def test_updated_ideas_with_non_dict_entries_does_not_crash(self) -> None:
+        """updated_ideas: [null, "abc123:1", 42] should be skipped (not crash)."""
+        raw = json.dumps({"present_ideas": [], "new_ideas": [], "updated_ideas": [None, "abc123:1", 42]})
+        analyzer = self._make_analyzer_with_response(raw)
+        pending = self._make_pending()
+        analyzer._classify_against_bank(pending, [self._make_chunk()])
+
+    def test_updated_ideas_with_missing_id_key_does_not_crash(self) -> None:
+        """updated_ideas: [{"not_id": "abc123:1"}] should be skipped."""
+        raw = json.dumps({"present_ideas": [], "new_ideas": [], "updated_ideas": [{"not_id": "abc123:1"}]})
+        analyzer = self._make_analyzer_with_response(raw)
+        pending = self._make_pending()
+        analyzer._classify_against_bank(pending, [self._make_chunk()])
+
+    def test_updated_ideas_with_non_string_id_does_not_crash(self) -> None:
+        """updated_ideas: [{"id": null}] should be skipped."""
+        raw = json.dumps({"present_ideas": [], "new_ideas": [], "updated_ideas": [{"id": None}, {"id": 123}]})
+        analyzer = self._make_analyzer_with_response(raw)
+        pending = self._make_pending()
+        analyzer._classify_against_bank(pending, [self._make_chunk()])
+
+    def test_valid_present_idea_still_classifies(self) -> None:
+        """Ensure the fix doesn't break the happy path."""
+        chunk = self._make_chunk("abc123")
+        full_id = chunk.short_ids[0]["id"]
+        raw = json.dumps({"present_ideas": ["abc123:1"], "new_ideas": [], "updated_ideas": []})
+        analyzer = self._make_analyzer_with_response(raw)
+        pending = self._make_pending()
+        analyzer._classify_against_bank(pending, [chunk])
+        assert pending.items[0]["classified"] is True
+        assert pending.items[0]["target_id"] == full_id
