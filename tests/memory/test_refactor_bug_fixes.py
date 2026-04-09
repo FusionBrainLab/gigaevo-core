@@ -374,7 +374,9 @@ class TestGamSearchInvalidateOnBuildFailure:
 
         # Inject a mock GamSearch that raises on build_research_agent
         mock_gam = MagicMock()
-        mock_gam.build_research_agent.side_effect = MemoryRetrieverError("index corrupt")
+        mock_gam.build_research_agent.side_effect = MemoryRetrieverError(
+            "index corrupt"
+        )
         mock_gam.agent = None
         mem.gam = mock_gam
         mem.research_agent = MagicMock()  # Pretend it was set previously
@@ -392,7 +394,9 @@ class TestGamSearchInvalidateOnBuildFailure:
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
         mock_gam = MagicMock()
-        mock_gam.build_research_agent.side_effect = MemoryRetrieverError("store missing")
+        mock_gam.build_research_agent.side_effect = MemoryRetrieverError(
+            "store missing"
+        )
         mock_gam.agent = MagicMock()
         mem.gam = mock_gam
         mem.research_agent = MagicMock()  # Stale reference
