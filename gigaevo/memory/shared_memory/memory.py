@@ -443,6 +443,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self._iters_after_rebuild > 0:
             try:
                 self.rebuild()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "[Memory] Final rebuild during context exit failed; "
+                    "some changes may not be persisted: {}",
+                    exc,
+                )
         self.close()

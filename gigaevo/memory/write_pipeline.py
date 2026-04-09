@@ -469,7 +469,12 @@ def _write_memory_write_stats(
                 existing = [item for item in raw if isinstance(item, dict)]
             elif isinstance(raw, dict):
                 existing = [raw]
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "[Memory] Failed to load existing write stats from {}: {}",
+                stats_path,
+                exc,
+            )
             existing = []
 
     existing.append(snapshot)
