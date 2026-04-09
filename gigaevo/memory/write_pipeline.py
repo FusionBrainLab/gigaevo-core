@@ -8,12 +8,10 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
 from gigaevo.memory.runtime_config import to_bool
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_update_dedup import (
-    CardUpdateDedupConfig,
-    merge_usage_payloads,
-)
+from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.memory_config import (
     ApiConfig,
@@ -511,7 +509,7 @@ def main() -> dict[str, Any] | None:
             top_k_by_tool=GAM_TOP_K_BY_TOOL,
             pipeline_mode=str(GAM_PIPELINE_MODE or "default"),
         ),
-        dedup=CardUpdateDedupConfig(**CARD_UPDATE_DEDUP_CONFIG),
+        dedup=CardUpdateDedupConfig.model_validate(CARD_UPDATE_DEDUP_CONFIG),
     )
 
     memory = AmemGamMemory(config=config)
