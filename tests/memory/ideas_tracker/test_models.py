@@ -213,17 +213,32 @@ class TestClassifyAgainstBankMalformedLLMOutput:
     def _make_chunk(self, short_id: str = "abc123") -> ClassificationChunk:
         return ClassificationChunk(
             text=f"[{short_id}]: Some idea description \n ",
-            short_ids=[{"id": f"{short_id}-full-uuid", "short_id": short_id, "description": "Some idea"}],
+            short_ids=[
+                {
+                    "id": f"{short_id}-full-uuid",
+                    "short_id": short_id,
+                    "description": "Some idea",
+                }
+            ],
         )
 
     def _make_pending(self) -> object:
         """Create a _PendingIdeas from one improvement."""
         from gigaevo.memory.ideas_tracker.analyzers import _PendingIdeas
-        return _PendingIdeas.from_improvements([{"description": "Add cache", "explanation": "faster"}])
+
+        return _PendingIdeas.from_improvements(
+            [{"description": "Add cache", "explanation": "faster"}]
+        )
 
     def test_present_ideas_with_none_entries_does_not_crash(self) -> None:
         """present_ideas: [null, 123] should be silently skipped (not crash)."""
-        raw = json.dumps({"present_ideas": [None, 123, {"nested": "dict"}], "new_ideas": [], "updated_ideas": []})
+        raw = json.dumps(
+            {
+                "present_ideas": [None, 123, {"nested": "dict"}],
+                "new_ideas": [],
+                "updated_ideas": [],
+            }
+        )
         analyzer = self._make_analyzer_with_response(raw)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
@@ -231,21 +246,39 @@ class TestClassifyAgainstBankMalformedLLMOutput:
 
     def test_updated_ideas_with_non_dict_entries_does_not_crash(self) -> None:
         """updated_ideas: [null, "abc123:1", 42] should be skipped (not crash)."""
-        raw = json.dumps({"present_ideas": [], "new_ideas": [], "updated_ideas": [None, "abc123:1", 42]})
+        raw = json.dumps(
+            {
+                "present_ideas": [],
+                "new_ideas": [],
+                "updated_ideas": [None, "abc123:1", 42],
+            }
+        )
         analyzer = self._make_analyzer_with_response(raw)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
 
     def test_updated_ideas_with_missing_id_key_does_not_crash(self) -> None:
         """updated_ideas: [{"not_id": "abc123:1"}] should be skipped."""
-        raw = json.dumps({"present_ideas": [], "new_ideas": [], "updated_ideas": [{"not_id": "abc123:1"}]})
+        raw = json.dumps(
+            {
+                "present_ideas": [],
+                "new_ideas": [],
+                "updated_ideas": [{"not_id": "abc123:1"}],
+            }
+        )
         analyzer = self._make_analyzer_with_response(raw)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
 
     def test_updated_ideas_with_non_string_id_does_not_crash(self) -> None:
         """updated_ideas: [{"id": null}] should be skipped."""
-        raw = json.dumps({"present_ideas": [], "new_ideas": [], "updated_ideas": [{"id": None}, {"id": 123}]})
+        raw = json.dumps(
+            {
+                "present_ideas": [],
+                "new_ideas": [],
+                "updated_ideas": [{"id": None}, {"id": 123}],
+            }
+        )
         analyzer = self._make_analyzer_with_response(raw)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
@@ -254,7 +287,9 @@ class TestClassifyAgainstBankMalformedLLMOutput:
         """Ensure the fix doesn't break the happy path."""
         chunk = self._make_chunk("abc123")
         full_id = chunk.short_ids[0]["id"]
-        raw = json.dumps({"present_ideas": ["abc123:1"], "new_ideas": [], "updated_ideas": []})
+        raw = json.dumps(
+            {"present_ideas": ["abc123:1"], "new_ideas": [], "updated_ideas": []}
+        )
         analyzer = self._make_analyzer_with_response(raw)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [chunk])

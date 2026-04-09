@@ -33,32 +33,38 @@ class TestE2EMemoryFlow:
         )
 
         # Step 2: Build and apply usage
-        usage1 = build_usage_payload({
-            "task-alpha": [0.5, 0.6],
-            "task-beta": [0.3],
-        })
+        usage1 = build_usage_payload(
+            {
+                "task-alpha": [0.5, 0.6],
+                "task-beta": [0.3],
+            }
+        )
         idea_with_usage = idea.model_copy(update={"usage": usage1})
 
         # Step 3: Store in bank and merge additional usage
         bank = IdeaBank()
         bank.add(idea_with_usage)
 
-        usage2 = build_usage_payload({
-            "task-alpha": [0.2],
-            "task-gamma": [0.8, 0.9],
-        })
+        usage2 = build_usage_payload(
+            {
+                "task-alpha": [0.2],
+                "task-gamma": [0.8, 0.9],
+            }
+        )
         bank.apply_usage_updates({idea.id: usage2})
         updated_idea = bank.get(idea.id)
 
         # Step 4: Convert to card dict (serialization)
         card_dict = card_to_concept_content(
-            card=normalize_memory_card({
-                "id": idea.id,
-                "description": idea.description,
-                "task_description": idea.task_description,
-                "task_description_summary": idea.task_description_summary,
-                "usage": updated_idea.usage.model_dump(),
-            })
+            card=normalize_memory_card(
+                {
+                    "id": idea.id,
+                    "description": idea.description,
+                    "task_description": idea.task_description,
+                    "task_description_summary": idea.task_description_summary,
+                    "usage": updated_idea.usage.model_dump(),
+                }
+            )
         )
 
         # Verify serialized usage is a dict
