@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-import os
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -201,27 +200,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_config_path = _write_runtime_memory_config(runtime_payload)
 
-    previous_config_path = os.environ.get("EVO_MEMORY_CONFIG_PATH")
-    os.environ["EVO_MEMORY_CONFIG_PATH"] = str(runtime_config_path)
-    try:
-        tracker = IdeaTracker(
-            logs_dir=args.logs_dir, redis_prefix=args.redis_prefix or ""
+    tracker = IdeaTracker(
+        logs_dir=args.logs_dir,
+        redis_prefix=args.redis_prefix or "",
+        config_path=runtime_config_path,
+    )
+    if args.csv_path is not None:
+        programs = load_programs_from_csv(args.csv_path)
+    else:
+        programs = load_programs_from_redis(
+            host=args.redis_host or "localhost",
+            port=args.redis_port or 6379,
+            db=args.redis_db or 0,
+            prefix=args.redis_prefix or "",
         )
-        if args.csv_path is not None:
-            programs = load_programs_from_csv(args.csv_path)
-        else:
-            programs = load_programs_from_redis(
-                host=args.redis_host or "localhost",
-                port=args.redis_port or 6379,
-                db=args.redis_db or 0,
-                prefix=args.redis_prefix or "",
-            )
-        tracker.run(programs)
-    finally:
-        if previous_config_path is None:
-            os.environ.pop("EVO_MEMORY_CONFIG_PATH", None)
-        else:
-            os.environ["EVO_MEMORY_CONFIG_PATH"] = previous_config_path
+    tracker.run(programs)
 
     return 0
 

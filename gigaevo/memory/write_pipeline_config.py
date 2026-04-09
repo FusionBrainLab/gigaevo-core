@@ -1,152 +1,236 @@
-"""Configuration constants for the memory write pipeline.
+"""Configuration loader for the memory write pipeline.
 
-Loaded at import time from config/memory.yaml and environment variables.
-Used by write_pipeline.py and the IdeaTracker memory write pipeline.
+``load_config(settings_path)`` is the public API.
+
+Config is loaded lazily via OmegaConf, which resolves ``${oc.env:VAR,default}``
+interpolations declared in the YAML file.  All defaults live in the schema
+dataclasses below — no manual ``to_bool``/``to_int``/``.get(key, default)``
+needed, OmegaConf enforces types automatically when merging a structured
+schema with the loaded YAML.
 """
 
 from __future__ import annotations
 
-import os
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from gigaevo.memory.runtime_config import (
-    deep_get,
-    load_settings,
-    resolve_local_path,
-    resolve_settings_path,
-    to_bool,
-    to_int,
-    to_list,
-    to_str,
-)
+from omegaconf import OmegaConf
+
+from gigaevo.memory.runtime_config import resolve_local_path, resolve_settings_path
 
 THIS_DIR = Path(__file__).resolve().parent
-SETTINGS_PATH = resolve_settings_path()
-SETTINGS = load_settings(SETTINGS_PATH)
 
-_BANKS_DIR = resolve_local_path(
-    THIS_DIR,
-    deep_get(SETTINGS, "paths.banks_dir"),
-    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02",
-)
+_DEFAULT_LOGS_REL = "../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02"
 
-MEMORY_DIR = resolve_local_path(
-    THIS_DIR,
-    deep_get(SETTINGS, "paths.checkpoint_dir"),
-    default_relative="memory_usage_store/api_exp1",
-)
-BANKS_PATH = resolve_local_path(
-    THIS_DIR,
-    (
-        os.getenv("MEMORY_BANKS_PATH")
-        or deep_get(SETTINGS, "paths.banks_path")
-        or str(_BANKS_DIR / "banks.json")
-    ),
-    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/banks.json",
-)
-BEST_IDEAS_PATH = resolve_local_path(
-    THIS_DIR,
-    (
-        os.getenv("MEMORY_BEST_IDEAS_PATH")
-        or deep_get(SETTINGS, "paths.best_ideas_path")
-        or str(_BANKS_DIR / "best_ideas.json")
-    ),
-    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/best_ideas.json",
-)
-PROGRAMS_PATH = resolve_local_path(
-    THIS_DIR,
-    (
-        os.getenv("MEMORY_PROGRAMS_PATH")
-        or deep_get(SETTINGS, "paths.programs_path")
-        or str(BANKS_PATH.parent / "programs.json")
-    ),
-    default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/programs.json",
-)
-ENABLE_USAGE_TRACKING = to_bool(
-    deep_get(SETTINGS, "ideas_tracker.usage_tracking.enabled"),
-    default=True,
-)
-_USAGE_UPDATES_RAW_PATH = (
-    (
-        os.getenv("MEMORY_USAGE_UPDATES_PATH")
-        or deep_get(SETTINGS, "paths.memory_usage_updates_path")
+# ---------------------------------------------------------------------------
+# OmegaConf section schemas — define defaults and enforce types
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _PathsSchema:
+    checkpoint_dir: str = "memory_usage_store/api_exp1"
+    banks_dir: str = _DEFAULT_LOGS_REL
+    # Empty string means "derive from banks_dir"; overridden via ${oc.env:...}
+    banks_path: str = ""
+    best_ideas_path: str = ""
+    programs_path: str = ""
+    memory_usage_updates_path: str = ""
+
+
+@dataclass
+class _ApiSchema:
+    base_url: str = "http://localhost:8000"
+    namespace: str = "default"
+    use_api: bool = False
+    channel: str = "latest"
+    author: str | None = None
+
+
+@dataclass
+class _RuntimeSchema:
+    enable_llm_synthesis: bool = False
+    should_evolve: bool = True
+    fill_missing_fields_with_llm: bool = False
+    search_limit: int = 5
+    rebuild_interval: int = 10
+    sync_batch_size: int = 100
+    sync_on_init: bool = True
+
+
+@dataclass
+class _GamSchema:
+    enable_bm25: bool = False
+    pipeline_mode: str = "default"
+    allowed_tools: list = field(default_factory=list)
+    top_k_by_tool: dict = field(default_factory=dict)
+
+
+@dataclass
+class _PipelineSchema:
+    enabled: bool = True
+    best_programs_percent: float = 5.0
+
+
+@dataclass
+class _UsageTrackingSchema:
+    enabled: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Public config object
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PipelineConfig:
+    """All configuration values for the memory write pipeline.
+
+    Constructed by ``load_config()`` — do not instantiate directly.
+    """
+
+    settings_path: Path
+    banks_path: Path
+    best_ideas_path: Path
+    programs_path: Path
+    usage_updates_path: Path | None
+    memory_dir: Path
+    enable_usage_tracking: bool
+    memory_api_url: str
+    namespace: str
+    use_api: bool
+    channel: str
+    author: str | None
+    enable_llm_synthesis: bool
+    should_evolve: bool
+    fill_missing_fields_with_llm: bool
+    search_limit: int
+    rebuild_interval: int
+    sync_batch_size: int
+    sync_on_init: bool
+    enable_bm25: bool
+    allowed_gam_tools: list[str] = field(default_factory=list)
+    gam_pipeline_mode: str = "default"
+    gam_top_k_by_tool: dict[str, int] = field(default_factory=dict)
+    card_update_dedup_config: dict[str, Any] = field(default_factory=dict)
+    best_programs_percent: float = 5.0
+
+
+# ---------------------------------------------------------------------------
+# Loader
+# ---------------------------------------------------------------------------
+
+
+def _merge_section(file_cfg: Any, key: str, schema_cls: type) -> Any:
+    """Merge ``file_cfg[key]`` into a structured schema, returning a plain dict."""
+    raw = file_cfg.get(key) or {}
+    merged = OmegaConf.merge(OmegaConf.structured(schema_cls), raw)
+    return OmegaConf.to_container(merged, resolve=True)
+
+
+def _resolve_path(base: Path, raw: str, default_relative: str) -> Path:
+    """Resolve raw path string (empty → use default_relative)."""
+    return resolve_local_path(
+        base, raw.strip() or None, default_relative=default_relative
     )
-    if ENABLE_USAGE_TRACKING
-    else None
-)
-USAGE_UPDATES_PATH = (
-    resolve_local_path(
+
+
+def load_config(settings_path: Path | None = None) -> PipelineConfig:
+    """Load pipeline config from *settings_path* (or the env-var / default).
+
+    OmegaConf resolves ``${oc.env:VAR,default}`` nodes declared in the YAML
+    at call time.  The structured schemas above enforce Python types — no
+    manual type-conversion helpers needed.
+    """
+    _settings_path = resolve_settings_path(settings_path)
+    file_cfg = OmegaConf.load(_settings_path)
+
+    paths: dict[str, Any] = _merge_section(file_cfg, "paths", _PathsSchema)
+    api: dict[str, Any] = _merge_section(file_cfg, "api", _ApiSchema)
+    runtime: dict[str, Any] = _merge_section(file_cfg, "runtime", _RuntimeSchema)
+    gam: dict[str, Any] = _merge_section(file_cfg, "gam", _GamSchema)
+
+    it_raw = OmegaConf.select(file_cfg, "ideas_tracker") or {}
+    pipeline: dict[str, Any] = _merge_section(
+        it_raw, "memory_write_pipeline", _PipelineSchema
+    )
+    usage_tracking: dict[str, Any] = _merge_section(
+        it_raw, "usage_tracking", _UsageTrackingSchema
+    )
+
+    raw_dedup = OmegaConf.select(file_cfg, "card_update_dedup")
+    dedup: dict[str, Any] = (
+        OmegaConf.to_container(raw_dedup, resolve=True)  # type: ignore[arg-type]
+        if raw_dedup is not None
+        else {}
+    )
+
+    # -- Derived paths -------------------------------------------------------
+    banks_dir = _resolve_path(THIS_DIR, paths["banks_dir"], _DEFAULT_LOGS_REL)
+    memory_dir = _resolve_path(
+        THIS_DIR, paths["checkpoint_dir"], "memory_usage_store/api_exp1"
+    )
+
+    banks_path = _resolve_path(
         THIS_DIR,
-        _USAGE_UPDATES_RAW_PATH,
-        default_relative="../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02/memory_usage_updates.json",
+        paths["banks_path"] or str(banks_dir / "banks.json"),
+        f"{_DEFAULT_LOGS_REL}/banks.json",
     )
-    if _USAGE_UPDATES_RAW_PATH
-    else None
-)
+    best_ideas_path = _resolve_path(
+        THIS_DIR,
+        paths["best_ideas_path"] or str(banks_dir / "best_ideas.json"),
+        f"{_DEFAULT_LOGS_REL}/best_ideas.json",
+    )
+    programs_path = _resolve_path(
+        THIS_DIR,
+        paths["programs_path"] or str(banks_path.parent / "programs.json"),
+        f"{_DEFAULT_LOGS_REL}/programs.json",
+    )
 
-MEMORY_API_URL = os.getenv(
-    "MEMORY_API_URL",
-    to_str(deep_get(SETTINGS, "api.base_url"), default="http://localhost:8000"),
-)
-NAMESPACE = os.getenv(
-    "MEMORY_NAMESPACE",
-    to_str(deep_get(SETTINGS, "api.namespace"), default="exp7"),
-)
-USE_API = to_bool(
-    os.getenv("MEMORY_USE_API"),
-    default=to_bool(deep_get(SETTINGS, "api.use_api"), default=True),
-)
-CHANNEL = to_str(deep_get(SETTINGS, "api.channel"), default="latest")
-AUTHOR = (to_str(deep_get(SETTINGS, "api.author"), default="") or "").strip() or None
-
-ENABLE_LLM_SYNTHESIS = to_bool(
-    deep_get(SETTINGS, "runtime.enable_llm_synthesis"), default=False
-)
-SHOULD_EVOLVE = to_bool(deep_get(SETTINGS, "runtime.should_evolve"), default=True)
-FILL_MISSING_FIELDS_WITH_LLM = to_bool(
-    deep_get(SETTINGS, "runtime.fill_missing_fields_with_llm"),
-    default=False,
-)
-SEARCH_LIMIT = max(1, to_int(deep_get(SETTINGS, "runtime.search_limit"), default=5))
-REBUILD_INTERVAL = max(
-    1, to_int(deep_get(SETTINGS, "runtime.rebuild_interval"), default=10)
-)
-SYNC_BATCH_SIZE = max(
-    10, to_int(deep_get(SETTINGS, "runtime.sync_batch_size"), default=100)
-)
-SYNC_ON_INIT = to_bool(deep_get(SETTINGS, "runtime.sync_on_init"), default=True)
-
-ENABLE_BM25 = to_bool(deep_get(SETTINGS, "gam.enable_bm25"), default=False)
-ALLOWED_GAM_TOOLS = [
-    str(tool).strip() for tool in to_list(deep_get(SETTINGS, "gam.allowed_tools"))
-]
-GAM_PIPELINE_MODE = to_str(
-    os.getenv("MEMORY_GAM_PIPELINE_MODE"),
-    default=to_str(deep_get(SETTINGS, "gam.pipeline_mode"), default="default"),
-)
-RAW_GAM_TOP_K_BY_TOOL = deep_get(SETTINGS, "gam.top_k_by_tool", default={})
-if isinstance(RAW_GAM_TOP_K_BY_TOOL, dict):
-    GAM_TOP_K_BY_TOOL = {
-        str(tool).strip(): max(1, to_int(value, default=5))
-        for tool, value in RAW_GAM_TOP_K_BY_TOOL.items()
-        if str(tool).strip()
-    }
-else:
-    GAM_TOP_K_BY_TOOL = {}
-
-RAW_CARD_UPDATE_DEDUP = deep_get(SETTINGS, "card_update_dedup", default={})
-if isinstance(RAW_CARD_UPDATE_DEDUP, dict):
-    CARD_UPDATE_DEDUP_CONFIG = RAW_CARD_UPDATE_DEDUP
-else:
-    CARD_UPDATE_DEDUP_CONFIG = {}
-BEST_PROGRAMS_PERCENT = max(
-    0.0,
-    float(
-        deep_get(
-            SETTINGS,
-            "ideas_tracker.memory_write_pipeline.best_programs_percent",
-            default=5.0,
+    enable_usage_tracking: bool = usage_tracking["enabled"]
+    raw_usage = paths["memory_usage_updates_path"].strip()
+    usage_updates_path: Path | None = (
+        _resolve_path(
+            THIS_DIR, raw_usage, f"{_DEFAULT_LOGS_REL}/memory_usage_updates.json"
         )
-        or 0.0
-    ),
-)
+        if (enable_usage_tracking and raw_usage)
+        else None
+    )
+
+    # -- GAM top-k (int coercion) --------------------------------------------
+    gam_top_k_by_tool: dict[str, int] = {
+        str(k): max(1, int(v))
+        for k, v in (gam["top_k_by_tool"] or {}).items()
+        if str(k).strip()
+    }
+
+    return PipelineConfig(
+        settings_path=_settings_path,
+        banks_path=banks_path,
+        best_ideas_path=best_ideas_path,
+        programs_path=programs_path,
+        usage_updates_path=usage_updates_path,
+        memory_dir=memory_dir,
+        enable_usage_tracking=enable_usage_tracking,
+        memory_api_url=str(api["base_url"]),
+        namespace=str(api["namespace"]),
+        use_api=bool(api["use_api"]),
+        channel=str(api["channel"]),
+        author=(str(api["author"]).strip() or None) if api["author"] else None,
+        enable_llm_synthesis=bool(runtime["enable_llm_synthesis"]),
+        should_evolve=bool(runtime["should_evolve"]),
+        fill_missing_fields_with_llm=bool(runtime["fill_missing_fields_with_llm"]),
+        search_limit=max(1, int(runtime["search_limit"])),
+        rebuild_interval=max(1, int(runtime["rebuild_interval"])),
+        sync_batch_size=max(10, int(runtime["sync_batch_size"])),
+        sync_on_init=bool(runtime["sync_on_init"]),
+        enable_bm25=bool(gam["enable_bm25"]),
+        allowed_gam_tools=[
+            str(t).strip() for t in (gam["allowed_tools"] or []) if str(t).strip()
+        ],
+        gam_pipeline_mode=str(gam["pipeline_mode"]),
+        gam_top_k_by_tool=gam_top_k_by_tool,
+        card_update_dedup_config=dedup if isinstance(dedup, dict) else {},
+        best_programs_percent=max(0.0, float(pipeline["best_programs_percent"])),
+    )

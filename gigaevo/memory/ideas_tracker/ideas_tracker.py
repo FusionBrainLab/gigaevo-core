@@ -210,6 +210,7 @@ def _run_write_pipeline(
     programs_path: Path | None,
     usage_updates_path: Path | None,
     memory_usage_tracking_enabled: bool,
+    config_path: Path | None = None,
 ) -> None:
     """Optionally trigger the downstream memory write pipeline."""
     if not enabled:
@@ -254,6 +255,7 @@ def _run_write_pipeline(
         best_ideas_path=best_ideas_path,
         programs_path=effective_programs_path,
         usage_updates_path=effective_usage_updates_path,
+        config_path=config_path,
     )
     if isinstance(snapshot, dict):
         stats = snapshot.get("stats", {})
@@ -460,6 +462,7 @@ class IdeaTracker(PostRunHook):
         memory_usage_tracking_enabled: bool = True,
         fitness_key: str = "fitness",
         logs_dir: str | Path | None = None,
+        config_path: Path | None = None,
     ) -> None:
         if analyzer is None:
             analyzer = ClassifyingAnalyzer()
@@ -469,6 +472,7 @@ class IdeaTracker(PostRunHook):
         self._fitness_key = fitness_key
         self._memory_write_enabled = memory_write_enabled
         self._memory_usage_tracking_enabled = memory_usage_tracking_enabled
+        self._config_path = config_path
         self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
 
@@ -557,6 +561,7 @@ class IdeaTracker(PostRunHook):
             self._log.programs_file,
             self._log.usage_updates_file,
             self._memory_usage_tracking_enabled,
+            config_path=self._config_path,
         )
 
     def _eligible_records(self, programs: list[Program]) -> list[ProgramRecord]:

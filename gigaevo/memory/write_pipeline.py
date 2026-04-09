@@ -10,7 +10,6 @@ from loguru import logger
 
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
-from gigaevo.memory.runtime_config import to_bool
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
@@ -21,33 +20,7 @@ from gigaevo.memory.shared_memory.memory_config import (
 )
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
 from gigaevo.memory.utils import to_float
-from gigaevo.memory.write_pipeline_config import (
-    ALLOWED_GAM_TOOLS,
-    AUTHOR,
-    BANKS_PATH,
-    BEST_IDEAS_PATH,
-    BEST_PROGRAMS_PERCENT,
-    CARD_UPDATE_DEDUP_CONFIG,
-    CHANNEL,
-    ENABLE_BM25,
-    ENABLE_LLM_SYNTHESIS,
-    ENABLE_USAGE_TRACKING,
-    FILL_MISSING_FIELDS_WITH_LLM,
-    GAM_PIPELINE_MODE,
-    GAM_TOP_K_BY_TOOL,
-    MEMORY_API_URL,
-    MEMORY_DIR,
-    NAMESPACE,
-    PROGRAMS_PATH,
-    REBUILD_INTERVAL,
-    SEARCH_LIMIT,
-    SETTINGS_PATH,
-    SHOULD_EVOLVE,
-    SYNC_BATCH_SIZE,
-    SYNC_ON_INIT,
-    USAGE_UPDATES_PATH,
-    USE_API,
-)
+from gigaevo.memory.write_pipeline_config import PipelineConfig, load_config
 
 _MAX_CONNECTED_DESCRIPTIONS = 5
 
@@ -488,42 +461,45 @@ def main(
     best_ideas_path: Path | None = None,
     programs_path: Path | None = None,
     usage_updates_path: Path | None = None,
+    config_path: Path | None = None,
 ) -> dict[str, Any] | None:
     """Load cards from banks, write to memory backend, report stats."""
-    _banks_path = banks_path or BANKS_PATH
-    _best_ideas_path = best_ideas_path or BEST_IDEAS_PATH
-    _programs_path = programs_path or PROGRAMS_PATH
+    cfg: PipelineConfig = load_config(config_path)
+
+    _banks_path = banks_path or cfg.banks_path
+    _best_ideas_path = best_ideas_path or cfg.best_ideas_path
+    _programs_path = programs_path or cfg.programs_path
     _usage_updates_path = (
-        usage_updates_path if banks_path is not None else USAGE_UPDATES_PATH
+        usage_updates_path if banks_path is not None else cfg.usage_updates_path
     )
 
     # Build configuration based on use_api flag
     api_config = None
-    if USE_API:
+    if cfg.use_api:
         api_config = ApiConfig(
-            base_url=str(MEMORY_API_URL or "http://localhost:8000"),
-            namespace=str(NAMESPACE or "default"),
-            channel=str(CHANNEL or "latest"),
-            author=AUTHOR,
-            sync_batch_size=SYNC_BATCH_SIZE,
-            sync_on_init=SYNC_ON_INIT,
+            base_url=str(cfg.memory_api_url or "http://localhost:8000"),
+            namespace=str(cfg.namespace or "default"),
+            channel=str(cfg.channel or "latest"),
+            author=cfg.author,
+            sync_batch_size=cfg.sync_batch_size,
+            sync_on_init=cfg.sync_on_init,
         )
 
     config = MemoryConfig(
-        checkpoint_path=MEMORY_DIR,
-        search_limit=SEARCH_LIMIT,
-        rebuild_interval=REBUILD_INTERVAL,
-        enable_llm_synthesis=ENABLE_LLM_SYNTHESIS,
-        enable_memory_evolution=SHOULD_EVOLVE,
-        enable_llm_card_enrichment=FILL_MISSING_FIELDS_WITH_LLM,
+        checkpoint_path=cfg.memory_dir,
+        search_limit=cfg.search_limit,
+        rebuild_interval=cfg.rebuild_interval,
+        enable_llm_synthesis=cfg.enable_llm_synthesis,
+        enable_memory_evolution=cfg.should_evolve,
+        enable_llm_card_enrichment=cfg.fill_missing_fields_with_llm,
         api=api_config,
         gam=GamConfig(
-            enable_bm25=ENABLE_BM25,
-            allowed_tools=ALLOWED_GAM_TOOLS,
-            top_k_by_tool=GAM_TOP_K_BY_TOOL,
-            pipeline_mode=str(GAM_PIPELINE_MODE or "default"),
+            enable_bm25=cfg.enable_bm25,
+            allowed_tools=cfg.allowed_gam_tools,
+            top_k_by_tool=cfg.gam_top_k_by_tool,
+            pipeline_mode=str(cfg.gam_pipeline_mode or "default"),
         ),
-        dedup=CardUpdateDedupConfig.model_validate(CARD_UPDATE_DEDUP_CONFIG),
+        dedup=CardUpdateDedupConfig.model_validate(cfg.card_update_dedup_config),
     )
 
     memory = AmemGamMemory(config=config)
@@ -531,11 +507,11 @@ def main(
     logger.info("API Memory Demo: Card Write")
     logger.info(
         "Config: file={} evolution={} llm_fill={} usage_tracking={} dedup={}",
-        SETTINGS_PATH,
-        SHOULD_EVOLVE,
-        FILL_MISSING_FIELDS_WITH_LLM,
-        ENABLE_USAGE_TRACKING,
-        to_bool(CARD_UPDATE_DEDUP_CONFIG.get("enabled"), default=False),
+        cfg.settings_path,
+        cfg.should_evolve,
+        cfg.fill_missing_fields_with_llm,
+        cfg.enable_usage_tracking,
+        bool(cfg.card_update_dedup_config.get("enabled")),
     )
 
     try:
@@ -545,7 +521,7 @@ def main(
             _banks_path,
             best_ideas_path=_best_ideas_path,
             programs_path=_programs_path,
-            best_programs_percent=BEST_PROGRAMS_PERCENT,
+            best_programs_percent=cfg.best_programs_percent,
             usage_updates_path=_usage_updates_path,
             memory=memory,
         )
@@ -555,10 +531,12 @@ def main(
             _banks_path,
             _best_ideas_path,
         )
-        if USE_API:
-            logger.info("Writing to API: {} (namespace={})", MEMORY_API_URL, NAMESPACE)
+        if cfg.use_api:
+            logger.info(
+                "Writing to API: {} (namespace={})", cfg.memory_api_url, cfg.namespace
+            )
         else:
-            logger.info("Writing in local-only mode (checkpoint={})", MEMORY_DIR)
+            logger.info("Writing in local-only mode (checkpoint={})", cfg.memory_dir)
 
         write_stats_by_card_type = {
             "ideas": _zero_write_stats(),
@@ -587,7 +565,7 @@ def main(
             return None
 
         memory.rebuild()
-        logger.info("Local API index saved in: {}", MEMORY_DIR / "api_index.json")
+        logger.info("Local API index saved in: {}", cfg.memory_dir / "api_index.json")
 
         write_stats = memory.get_card_write_stats()
         input_card_type_counts = {

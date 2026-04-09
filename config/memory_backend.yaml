@@ -6,11 +6,16 @@
 paths:
   checkpoint_dir: memory_usage_store/api_exp4
   banks_dir: ../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02
+  # Optional path overrides — empty string means "derive from banks_dir".
+  banks_path: ${oc.env:MEMORY_BANKS_PATH,}
+  best_ideas_path: ${oc.env:MEMORY_BEST_IDEAS_PATH,}
+  programs_path: ${oc.env:MEMORY_PROGRAMS_PATH,}
+  memory_usage_updates_path: ${oc.env:MEMORY_USAGE_UPDATES_PATH,}
 
 api:
-  base_url: http://localhost:8000
-  namespace: exp9
-  use_api: false
+  base_url: ${oc.env:MEMORY_API_URL,http://localhost:8000}
+  namespace: ${oc.env:MEMORY_NAMESPACE,exp9}
+  use_api: ${oc.env:MEMORY_USE_API,false}
   channel: latest
   author: null
 
@@ -33,7 +38,7 @@ gam:
   enable_bm25: false
 
   # default | experimental
-  pipeline_mode: experimental
+  pipeline_mode: ${oc.env:MEMORY_GAM_PIPELINE_MODE,experimental}
 
   # Supported tools:
   # page_index, keyword, vector,

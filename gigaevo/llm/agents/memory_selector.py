@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 import re
 from typing import Any
@@ -13,25 +12,10 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
+from gigaevo.memory.write_pipeline_config import load_config as _load_memory_config
 from gigaevo.programs.program import Program
-
-try:
-    from gigaevo.memory.runtime_config import (
-        deep_get,
-        load_settings,
-        resolve_local_path,
-        resolve_settings_path,
-        to_bool,
-        to_int,
-        to_list,
-        to_str,
-    )
-    from gigaevo.memory.shared_memory.memory import AmemGamMemory
-    from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
-except Exception as exc:
-    _RUNTIME_IMPORT_ERROR: Exception | None = exc
-else:
-    _RUNTIME_IMPORT_ERROR = None
 
 
 class MemorySelection(BaseModel):
@@ -75,133 +59,59 @@ class MemorySelectorAgent:
         return legacy_backend
 
     def _create_memory_backend(self) -> Any | None:
-        if _RUNTIME_IMPORT_ERROR is not None:
-            message = (
-                "gigaevo.memory is unavailable"
-                f"{': ' + str(_RUNTIME_IMPORT_ERROR) if _RUNTIME_IMPORT_ERROR else ''}"
-            )
-            self._backend_error = message
-            logger.warning("[MemorySelectorAgent] {}", message)
-            return None
-
         try:
             repo_root = Path(__file__).resolve().parents[3]
-            memory_api_root = repo_root / "gigaevo.memory"
             load_dotenv(dotenv_path=repo_root / ".env", override=True)
 
-            settings_path = resolve_settings_path()
-            settings = load_settings(settings_path)
+            cfg = _load_memory_config()
 
+            # Apply instance-level overrides
             memory_dir = (
                 Path(self._checkpoint_dir_override)
                 if self._checkpoint_dir_override
-                else resolve_local_path(
-                    memory_api_root,
-                    deep_get(settings, "paths.checkpoint_dir"),
-                    default_relative="memory_usage_store/api_exp4",
-                )
+                else cfg.memory_dir
             )
-            memory_api_url = os.getenv(
-                "MEMORY_API_URL",
-                to_str(
-                    deep_get(settings, "api.base_url"), default="http://localhost:8000"
-                ),
-            )
-            namespace = self._namespace_override or os.getenv(
-                "MEMORY_NAMESPACE",
-                to_str(deep_get(settings, "api.namespace"), default="default"),
-            )
-            channel = to_str(deep_get(settings, "api.channel"), default="latest")
-            author = to_str(deep_get(settings, "api.author"), default=None)
-            if self._use_api_override is not None:
-                use_api = self._use_api_override
-            else:
-                use_api = to_bool(
-                    os.getenv("MEMORY_USE_API"),
-                    default=to_bool(deep_get(settings, "api.use_api"), default=True),
-                )
-            enable_bm25 = to_bool(deep_get(settings, "gam.enable_bm25"), default=False)
-            allowed_gam_tools = [
-                str(tool).strip()
-                for tool in to_list(deep_get(settings, "gam.allowed_tools"))
-                if str(tool).strip()
-            ]
-            gam_pipeline_mode = to_str(
-                os.getenv("MEMORY_GAM_PIPELINE_MODE"),
-                default=to_str(
-                    deep_get(settings, "gam.pipeline_mode"), default="default"
-                ),
+            namespace = self._namespace_override or cfg.namespace
+            use_api = (
+                self._use_api_override
+                if self._use_api_override is not None
+                else cfg.use_api
             )
 
-            raw_top_k_by_tool = deep_get(settings, "gam.top_k_by_tool", default={})
-            gam_top_k_by_tool: dict[str, int] = {}
-            if isinstance(raw_top_k_by_tool, dict):
-                for tool_name, raw_value in raw_top_k_by_tool.items():
-                    tool = str(tool_name).strip()
-                    if not tool:
-                        continue
-                    value = max(1, to_int(raw_value, default=5))
-                    gam_top_k_by_tool[tool] = value
-
-            runtime_enable_llm_synthesis = to_bool(
-                deep_get(settings, "runtime.enable_llm_synthesis"), default=True
-            )
-            runtime_enable_memory_evolution = to_bool(
-                deep_get(settings, "runtime.should_evolve"), default=True
-            )
-            runtime_fill_missing_fields = to_bool(
-                deep_get(settings, "runtime.fill_missing_fields_with_llm"), default=True
-            )
-            search_limit = max(
-                1, to_int(deep_get(settings, "runtime.search_limit"), default=5)
-            )
-            rebuild_interval = max(
-                1,
-                to_int(deep_get(settings, "runtime.rebuild_interval"), default=10),
-            )
-            sync_batch_size = max(
-                10,
-                to_int(deep_get(settings, "runtime.sync_batch_size"), default=100),
-            )
-            sync_on_init = to_bool(
-                deep_get(settings, "runtime.sync_on_init"), default=True
-            )
             if use_api:
-                # Platform backend uses its own constructor (legacy kwargs)
                 memory_backend_cls = self._resolve_memory_backend_class(use_api)
                 memory = memory_backend_cls(
                     checkpoint_path=str(memory_dir),
-                    base_url=memory_api_url,
+                    base_url=cfg.memory_api_url,
                     use_api=use_api,
                     namespace=namespace,
-                    author=author,
-                    channel=channel,
-                    search_limit=search_limit,
-                    enable_llm_synthesis=runtime_enable_llm_synthesis,
-                    enable_memory_evolution=runtime_enable_memory_evolution,
-                    enable_llm_card_enrichment=runtime_fill_missing_fields,
-                    rebuild_interval=rebuild_interval,
-                    enable_bm25=enable_bm25,
-                    sync_batch_size=sync_batch_size,
-                    sync_on_init=sync_on_init,
-                    allowed_gam_tools=allowed_gam_tools,
-                    gam_top_k_by_tool=gam_top_k_by_tool,
-                    gam_pipeline_mode=gam_pipeline_mode,
+                    author=cfg.author,
+                    channel=cfg.channel,
+                    search_limit=cfg.search_limit,
+                    enable_llm_synthesis=cfg.enable_llm_synthesis,
+                    enable_memory_evolution=cfg.should_evolve,
+                    enable_llm_card_enrichment=cfg.fill_missing_fields_with_llm,
+                    rebuild_interval=cfg.rebuild_interval,
+                    enable_bm25=cfg.enable_bm25,
+                    sync_batch_size=cfg.sync_batch_size,
+                    sync_on_init=cfg.sync_on_init,
+                    allowed_gam_tools=cfg.allowed_gam_tools,
+                    gam_top_k_by_tool=cfg.gam_top_k_by_tool,
+                    gam_pipeline_mode=cfg.gam_pipeline_mode,
                 )
             else:
-                # Local backend uses MemoryConfig
                 mem_config = MemoryConfig(
                     checkpoint_path=memory_dir,
-                    search_limit=search_limit,
-                    rebuild_interval=rebuild_interval,
-                    enable_llm_synthesis=runtime_enable_llm_synthesis,
-                    enable_memory_evolution=runtime_enable_memory_evolution,
-                    enable_llm_card_enrichment=runtime_fill_missing_fields,
+                    search_limit=cfg.search_limit,
+                    rebuild_interval=cfg.rebuild_interval,
+                    enable_llm_synthesis=cfg.enable_llm_synthesis,
+                    enable_memory_evolution=cfg.should_evolve,
+                    enable_llm_card_enrichment=cfg.fill_missing_fields_with_llm,
                     gam=GamConfig(
-                        enable_bm25=enable_bm25,
-                        allowed_tools=allowed_gam_tools or [],
-                        top_k_by_tool=gam_top_k_by_tool or {},
-                        pipeline_mode=gam_pipeline_mode or "default",
+                        enable_bm25=cfg.enable_bm25,
+                        allowed_tools=cfg.allowed_gam_tools,
+                        top_k_by_tool=cfg.gam_top_k_by_tool,
+                        pipeline_mode=cfg.gam_pipeline_mode or "default",
                     ),
                 )
                 memory = AmemGamMemory(config=mem_config)
@@ -212,7 +122,7 @@ class MemorySelectorAgent:
                 type(memory).__module__,
                 use_api,
                 namespace,
-                channel,
+                cfg.channel,
                 memory_dir,
             )
             return memory
