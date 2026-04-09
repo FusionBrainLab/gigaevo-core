@@ -10,7 +10,6 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     CardUpdateDedupConfig,
     RetrievalWeights,
     _extract_json_object,
-    _safe_float,
     append_unique_text,
     compute_weighted_candidates,
     dedupe_keep_order,
@@ -20,6 +19,7 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_usage_payloads,
     parse_llm_card_decision,
 )
+from gigaevo.memory.utils import to_float
 
 # ===========================================================================
 # CardUpdateDedupConfig
@@ -500,31 +500,31 @@ class TestMergeUsagePayloads:
 
 
 # ===========================================================================
-# _safe_float
+# to_float (formerly _safe_float)
 # ===========================================================================
 
 
-class TestSafeFloat:
+class TestToFloat:
     def test_valid(self):
-        assert _safe_float(3.14) == 3.14
+        assert to_float(3.14) == 3.14
 
     def test_string(self):
-        assert _safe_float("2.5") == 2.5
+        assert to_float("2.5") == 2.5
 
     def test_nan(self):
-        assert _safe_float(float("nan")) is None
+        assert to_float(float("nan")) is None
 
     def test_inf(self):
-        assert _safe_float(float("inf")) is None
+        assert to_float(float("inf")) is None
 
     def test_neg_inf(self):
-        assert _safe_float(float("-inf")) is None
+        assert to_float(float("-inf")) is None
 
     def test_none(self):
-        assert _safe_float(None) is None
+        assert to_float(None) is None
 
     def test_invalid(self):
-        assert _safe_float("abc") is None
+        assert to_float("abc") is None
 
 
 # ===========================================================================

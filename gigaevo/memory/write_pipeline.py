@@ -11,10 +11,10 @@ from loguru import logger
 from gigaevo.memory.runtime_config import to_bool
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_update_dedup import (
-    _safe_float,
     merge_usage_payloads,
 )
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
+from gigaevo.memory.utils import to_float
 from gigaevo.memory.write_pipeline_config import (
     ALLOWED_GAM_TOOLS,
     AUTHOR,
@@ -269,7 +269,7 @@ def _build_program_cards(
     eligible_programs: list[dict[str, Any]] = []
     for program in programs:
         program_id = str(program.get("id") or program.get("program_id") or "").strip()
-        fitness = _safe_float(program.get("fitness"))
+        fitness = to_float(program.get("fitness"))
         if not program_id or fitness is None:
             continue
         enriched = dict(program)

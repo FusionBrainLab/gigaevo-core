@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-import math
 import re
-import statistics
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gigaevo.memory.ideas_tracker.models import UsageEntry, UsagePayload
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order
+from gigaevo.memory.utils import median, to_float
 
 QUERY_DESCRIPTION = "description"
 QUERY_EXPLANATION_SUMMARY = "explanation_summary"
@@ -427,24 +426,6 @@ def append_unique_text(
     return f"{left}{separator}{right}"
 
 
-def _safe_float(value: Any) -> float | None:
-    """Convert *value* to float, returning ``None`` for NaN/Inf/unparseable."""
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(parsed) or math.isinf(parsed):
-        return None
-    return parsed
-
-
-def _median_or_none(values: list[float]) -> float | None:
-    """Return the median of *values*, or ``None`` if empty."""
-    if not values:
-        return None
-    return float(statistics.median(values))
-
-
 def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
     """Extract per-task fitness deltas from a usage payload dict."""
     if not isinstance(usage, dict):
@@ -468,9 +449,7 @@ def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
             raw_deltas = entry.get("fitness_deltas")
         if not isinstance(raw_deltas, list):
             continue
-        deltas = [
-            parsed for raw in raw_deltas if (parsed := _safe_float(raw)) is not None
-        ]
+        deltas = [parsed for raw in raw_deltas if (parsed := to_float(raw)) is not None]
         if not deltas:
             continue
         task_to_deltas.setdefault(task_summary, []).extend(deltas)
@@ -485,7 +464,7 @@ def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, An
         deltas = [
             parsed
             for raw in task_to_deltas.get(task_summary, [])
-            if (parsed := _safe_float(raw)) is not None
+            if (parsed := to_float(raw)) is not None
         ]
         if not deltas:
             continue
@@ -494,14 +473,14 @@ def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, An
                 task_description_summary=task_summary,
                 used_count=len(deltas),
                 fitness_delta_per_use=deltas,
-                median_delta_fitness=_median_or_none(deltas),
+                median_delta_fitness=median(deltas),
             )
         )
         total_deltas.extend(deltas)
     payload = UsagePayload(
         entries=usage_entries,
         total_used=len(total_deltas),
-        median_delta_fitness=_median_or_none(total_deltas),
+        median_delta_fitness=median(total_deltas),
     )
     return {"used": payload.model_dump()}
 
