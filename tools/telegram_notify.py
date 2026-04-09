@@ -21,13 +21,13 @@ Setup: see docs/setup/telegram-bot.md
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 import os
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
 
-import requests
 from dotenv import load_dotenv
+import requests
 
 load_dotenv()  # auto-load TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID from .env
 
@@ -181,7 +181,7 @@ def gate_results_signoff(exp_name: str, verdict: str, effect_summary: str) -> Ap
 
 def post_fitness_update(exp_name: str, gen: int, fitness: float, label: str = "") -> None:
     """Hourly fitness update from watchdog."""
-    ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    ts = datetime.now(datetime.UTC).strftime("%H:%M UTC")
     run_label = f" ({label})" if label else ""
     msg = (
         f"📈 *{exp_name}*{run_label}\n"

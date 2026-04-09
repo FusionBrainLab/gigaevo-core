@@ -20,13 +20,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
 import yaml
-
 
 PROJ = Path(__file__).parent.parent
 INFRA_PATH = PROJ / "experiments" / "infrastructure.yaml"
@@ -73,10 +72,10 @@ def check_gpu_load(server_ip: str, ssh_user: str = "jovyan") -> float | None:
         )
         if result.returncode != 0:
             return None
-        lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+        lines = [ln.strip() for ln in result.stdout.strip().splitlines() if ln.strip()]
         if not lines:
             return None
-        loads = [float(l) for l in lines if l.isdigit()]
+        loads = [float(ln) for ln in lines if ln.isdigit()]
         return sum(loads) / len(loads) if loads else None
     except (subprocess.TimeoutExpired, ValueError, Exception):
         return None
