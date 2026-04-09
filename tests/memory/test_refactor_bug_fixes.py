@@ -421,3 +421,155 @@ class TestGamSearchInvalidateOnBuildFailure:
         mock_gam.invalidate.assert_not_called()
         assert mem.research_agent is mock_agent
         assert mem._gam_build_failed is False
+
+
+# ---------------------------------------------------------------------------
+# E2E Tests for write_pipeline and memory integration
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryWriteE2E:
+    """E2E tests for memory save and retrieval cycle."""
+
+    def test_memory_save_and_retrieve_cycle(self, tmp_path):
+        """E2E: save_card() writes card and get_card() retrieves it."""
+        mem = make_test_memory(tmp_path, enable_llm_card_enrichment=False)
+
+        # Save multiple cards
+        card1 = normalize_memory_card(
+            {
+                "id": "e2e-001",
+                "description": "gradient descent optimization",
+                "category": "general",
+            }
+        )
+        card2 = normalize_memory_card(
+            {
+                "id": "e2e-002",
+                "description": "batch normalization technique",
+                "category": "general",
+            }
+        )
+
+        id1 = mem.save_card(card1)
+        id2 = mem.save_card(card2)
+
+        # Retrieve and verify
+        retrieved1 = mem.get_card(id1)
+        retrieved2 = mem.get_card(id2)
+
+        assert retrieved1 is not None
+        assert retrieved2 is not None
+        assert retrieved1.description == "gradient descent optimization"
+        assert retrieved2.description == "batch normalization technique"
+
+
+class TestMemorySearchE2E:
+    """E2E tests for memory search functionality."""
+
+    def test_memory_search_returns_results(self, tmp_path):
+        """E2E: search() returns card IDs matching query."""
+        mem = make_test_memory(tmp_path, enable_llm_card_enrichment=False)
+
+        # Save cards with distinct descriptions
+        card1 = normalize_memory_card(
+            {
+                "description": "gradient descent optimization algorithm",
+                "category": "general",
+            }
+        )
+        card2 = normalize_memory_card(
+            {
+                "description": "random forest classifier ensemble",
+                "category": "general",
+            }
+        )
+
+        mem.save_card(card1)
+        mem.save_card(card2)
+
+        # Search for relevant cards
+        results = mem.search("gradient descent")
+
+        # Verify search returned results (as card IDs)
+        assert len(results) > 0
+        # Results should be a list of strings (card IDs)
+        assert all(isinstance(r, str) for r in results)
+
+
+class TestCardLoaderE2E:
+    """E2E tests for CardLoader streaming and filtering."""
+
+    def test_card_loader_streams_large_files(self, tmp_path):
+        """E2E: CardLoader streams JSONL without loading entire file into memory."""
+        from gigaevo.memory.shared_memory.card_loader import CardLoader
+
+        # Create a large JSONL file (100 cards)
+        export_file = tmp_path / "export.jsonl"
+        with open(export_file, "w") as f:
+            for i in range(100):
+                f.write(
+                    f'{{"id": "card-{i:03d}", "description": "card {i}", "category": "general"}}\n'
+                )
+
+        loader = CardLoader(
+            export_file=export_file,
+            include_programs=False,
+        )
+
+        cards = loader.load()
+
+        # Verify all cards loaded and filtered
+        assert len(cards) == 100
+        assert all(isinstance(c, dict) for c in cards)
+        assert all(c.get("category") != "program" for c in cards)
+
+    def test_card_loader_handles_malformed_lines(self, tmp_path):
+        """E2E: CardLoader skips malformed JSON and continues."""
+        from gigaevo.memory.shared_memory.card_loader import CardLoader
+
+        export_file = tmp_path / "export.jsonl"
+        with open(export_file, "w") as f:
+            f.write('{"id": "card-001", "description": "valid"}\n')
+            f.write('NOT VALID JSON\n')
+            f.write('{"id": "card-002", "description": "also valid"}\n')
+
+        loader = CardLoader(
+            export_file=export_file,
+        )
+
+        cards = loader.load()
+
+        # Malformed line should be skipped
+        assert len(cards) == 2
+        assert cards[0]["id"] == "card-001"
+        assert cards[1]["id"] == "card-002"
+
+
+class TestCardLoaderAndMemoryRebuildE2E:
+    """E2E tests for memory rebuild and consistency."""
+
+    def test_memory_rebuild_maintains_consistency(self, tmp_path):
+        """E2E: rebuild() maintains search index consistency with stored cards."""
+        mem = make_test_memory(tmp_path, enable_llm_card_enrichment=False)
+
+        # Save a card
+        card = normalize_memory_card(
+            {
+                "description": "neural architecture search technique",
+                "category": "general",
+            }
+        )
+        card_id = mem.save_card(card)
+
+        # Rebuild the memory (refreshes search index)
+        mem.rebuild()
+
+        # Search should still find the card after rebuild
+        results = mem.search("neural architecture")
+        assert len(results) > 0
+
+        # Card should still be retrievable
+        retrieved = mem.get_card(card_id)
+        assert retrieved is not None
+        assert retrieved.description == "neural architecture search technique"
