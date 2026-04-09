@@ -23,13 +23,14 @@ from tests.fakes.agentic_memory import (
     make_test_memory_with_agentic,
 )
 
-
 # ===========================================================================
 # Helpers
 # ===========================================================================
 
 
-def _make_pipeline_cfg(tmp_path: Path, banks_path: Path, best_ideas_path: Path) -> MagicMock:
+def _make_pipeline_cfg(
+    tmp_path: Path, banks_path: Path, best_ideas_path: Path
+) -> MagicMock:
     """Build a PipelineConfig mock pointing all I/O to tmp_path."""
     cfg = MagicMock()
     cfg.banks_path = banks_path
@@ -153,7 +154,9 @@ def _patch_gam_build_with_fakes(mem: AmemGamMemory) -> None:
         records = fake_load_amem_records(mem.config.export_file)
         if not records:
             records = [c.model_dump() for c in mem.card_store.cards.values()]
-        memory_store, page_store, _ = fake_build_gam_store(records, mem.config.gam_store_dir)
+        memory_store, page_store, _ = fake_build_gam_store(
+            records, mem.config.gam_store_dir
+        )
         retrievers = fake_build_retrievers(
             page_store,
             mem.config.gam_store_dir / "indexes",
@@ -223,7 +226,10 @@ class TestMemorySearchAMemPath:
 
         mem.save_card(
             normalize_memory_card(
-                {"description": "batch normalization layer technique", "category": "general"}
+                {
+                    "description": "batch normalization layer technique",
+                    "category": "general",
+                }
             )
         )
         mem.rebuild()
@@ -303,7 +309,9 @@ class TestFullPipelineE2E:
         banks_path = tmp_path / "banks.json"
         best_ideas_path = tmp_path / "best_ideas.json"
         self._write_banks(banks_path, ideas)
-        self._write_best_ideas(best_ideas_path, ["pipeline-idea-001", "pipeline-idea-002"])
+        self._write_best_ideas(
+            best_ideas_path, ["pipeline-idea-001", "pipeline-idea-002"]
+        )
 
         cfg = _make_pipeline_cfg(tmp_path, banks_path, best_ideas_path)
 
@@ -379,4 +387,6 @@ class TestFullPipelineE2E:
         # filtered-001 is in best_ideas → must be stored
         assert mem.get_card("filtered-001") is not None, "Best idea must be written"
         # filtered-002 is NOT in best_ideas → should be absent
-        assert mem.get_card("filtered-002") is None, "Non-best idea must be filtered out"
+        assert mem.get_card("filtered-002") is None, (
+            "Non-best idea must be filtered out"
+        )
