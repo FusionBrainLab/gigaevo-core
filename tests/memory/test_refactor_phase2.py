@@ -1,6 +1,7 @@
 """Tests for memory system refactoring Phase 2: CardLoader utility.
 
 Task 1: Extract card loading utilities into CardLoader class.
+Task 2: Create memory state machine (MemoryState).
 """
 
 from __future__ import annotations
@@ -8,7 +9,10 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.memory_state import MemoryState, MemoryStateError
 
 
 class TestCardLoader:
@@ -79,3 +83,44 @@ class TestCardLoader:
         cards = loader.load()  # Should not raise
 
         assert isinstance(cards, list)
+
+
+class TestMemoryState:
+    def test_initial_state_is_initializing(self):
+        """New MemoryState starts in initializing."""
+        state = MemoryState()
+        assert state.current == "initializing"
+
+    def test_transition_to_ready(self):
+        """Can transition from initializing to ready."""
+        state = MemoryState()
+        state.mark_ready()
+        assert state.current == "ready"
+
+    def test_transition_to_error(self):
+        """Can transition to error state with reason."""
+        state = MemoryState()
+        state.mark_error("API unavailable")
+        assert state.current == "error"
+        assert state.error_reason == "API unavailable"
+
+    def test_transition_to_building(self):
+        """Can transition to building state after ready."""
+        state = MemoryState()
+        state.mark_ready()
+        state.mark_building()
+        assert state.current == "building"
+
+    def test_invalid_transition_raises(self):
+        """Invalid transitions raise MemoryStateError."""
+        state = MemoryState()
+        state.mark_ready()
+        with pytest.raises(MemoryStateError):
+            state.mark_initializing()  # Can't go back to initializing from ready
+
+    def test_is_ready_property(self):
+        """is_ready property reflects current state."""
+        state = MemoryState()
+        assert not state.is_ready
+        state.mark_ready()
+        assert state.is_ready
