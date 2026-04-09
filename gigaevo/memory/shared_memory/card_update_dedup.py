@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
@@ -304,7 +305,8 @@ def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
             return parsed
-    except Exception:
+    except json.JSONDecodeError:
+        logger.debug("[CardUpdateDedup] Failed to parse JSON from text: {}", text[:100])
         pass
 
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
@@ -312,7 +314,11 @@ def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
         return None
     try:
         parsed = json.loads(match.group(0))
-    except Exception:
+    except json.JSONDecodeError:
+        logger.debug(
+            "[CardUpdateDedup] Failed to parse JSON from extracted match: {}",
+            match.group(0)[:100],
+        )
         return None
     if isinstance(parsed, dict):
         return parsed
