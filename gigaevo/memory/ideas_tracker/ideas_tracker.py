@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from dotenv import load_dotenv
 from loguru import logger
+import pandas as pd
 
 from gigaevo.evolution.engine.hooks import PostRunHook
 from gigaevo.evolution.mutation.constants import (
@@ -36,6 +37,7 @@ from gigaevo.memory.ideas_tracker.models import (
     ProgramRecord,
     program_to_record,
 )
+from gigaevo.memory.ideas_tracker.utils.origin_analysis import compute_origin_analysis
 from gigaevo.memory.utils import to_float
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
@@ -356,12 +358,6 @@ class _SessionLog:
         if not self.banks_file.exists() or not self.programs_file.exists():
             return
         try:
-            import pandas as pd
-
-            from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
-                compute_origin_analysis,
-            )
-
             df_summary, df_best_ideas = compute_origin_analysis(
                 banks_path=str(self.banks_file),
                 programs_path=str(self.programs_file),
