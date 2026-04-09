@@ -8,6 +8,7 @@ Three layers, from fastest to slowest:
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
@@ -26,7 +27,7 @@ from gigaevo.memory.ideas_tracker.models import (
     program_to_record,
     programs_to_records,
 )
-from gigaevo.programs.program import Lineage, Program
+from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Lineage, Program
 from gigaevo.programs.program_state import ProgramState
 
 _TEST_NAMESPACE = uuid.NAMESPACE_DNS
@@ -484,8 +485,6 @@ class TestIdeaTrackerOnRunComplete:
 
     @pytest.mark.asyncio
     async def test_storage_excludes_stage_results(self) -> None:
-        from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
-
         tracker = self._make_tracker_with_mocked_run()
         storage = AsyncMock()
         storage.get_all.return_value = [_make_evolved_program()]
@@ -570,8 +569,6 @@ class TestHydraComposability:
         assert isinstance(hook, PostRunHook)
 
     def test_default_yaml_target_is_idea_tracker(self) -> None:
-        from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
-
         assert issubclass(IdeaTracker, PostRunHook)
 
     def test_engine_accepts_both_hook_types(self) -> None:
@@ -581,8 +578,6 @@ class TestHydraComposability:
         assert engine2._post_run_hook is not None
 
     def test_post_run_hook_in_engine_signature(self) -> None:
-        import inspect
-
         sig = inspect.signature(EvolutionEngine.__init__)
         assert "post_run_hook" in sig.parameters
 
@@ -602,8 +597,6 @@ class TestEvolutionToIdeaExtraction:
 
         class RecordingHook(PostRunHook):
             async def on_run_complete(self, stor) -> None:
-                from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
-
                 programs = await stor.get_all(exclude=EXCLUDE_STAGE_RESULTS)
                 captured.extend(programs)
 
