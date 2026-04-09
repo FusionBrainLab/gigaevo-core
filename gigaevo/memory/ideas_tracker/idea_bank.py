@@ -201,7 +201,9 @@ class IdeaBank:
         )
         return True
 
-    def apply_usage_updates(self, usage_updates: dict[str, dict[str, Any]]) -> None:
+    def apply_usage_updates(
+        self, usage_updates: dict[str, UsagePayload | dict[str, Any]]
+    ) -> None:
         """Merge per-card usage payloads into matching ideas."""
         for i, idea in enumerate(self._ideas):
             update = usage_updates.get(str(idea.id or ""))

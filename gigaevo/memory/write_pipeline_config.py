@@ -150,5 +150,3 @@ BEST_PROGRAMS_PERCENT = max(
         or 0.0
     ),
 )
-
-

@@ -11,8 +11,8 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
-from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.llm.agents.memory_selector import MemorySelection
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_update_dedup import (
     parse_llm_card_decision,
