@@ -7,11 +7,11 @@ results via an LLM service.
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from loguru import logger
 
 from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard
+from gigaevo.memory.shared_memory.protocols import LLMServiceProtocol
 
 
 def format_search_results(query: str, cards: list[AnyCard]) -> str:
@@ -71,7 +71,7 @@ def synthesize_search_results(
     query: str,
     memory_state: str | None,
     cards: list[AnyCard],
-    llm_service: Any | None,
+    llm_service: LLMServiceProtocol | None,
 ) -> str:
     """Use LLM to synthesize search results, or fall back to plain format.
 
