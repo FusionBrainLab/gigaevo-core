@@ -100,6 +100,23 @@ def _normalize_usage(raw_usage: Any) -> UsagePayload:
         return UsagePayload()
 
 
+def _normalize_connected_ideas(raw_list: Any) -> list[ConnectedIdea]:
+    """Convert raw connected_ideas to typed ConnectedIdea list."""
+    items = _to_list(raw_list)
+    result: list[ConnectedIdea] = []
+    for item in items:
+        if isinstance(item, ConnectedIdea):
+            result.append(item)
+        elif isinstance(item, dict):
+            try:
+                result.append(ConnectedIdea(**item))
+            except Exception:
+                # Skip invalid items
+                pass
+        # else: skip non-dict, non-ConnectedIdea items
+    return result
+
+
 def normalize_memory_card(
     card: dict[str, Any] | AnyCard | None = None,
     fallback_id: str | None = None,
@@ -130,7 +147,7 @@ def normalize_memory_card(
             description=str(raw.get("description") or raw.get("content") or ""),
             fitness=to_float(raw.get("fitness"), default=None),
             code=str(raw.get("code") or ""),
-            connected_ideas=_to_list(raw.get("connected_ideas")),
+            connected_ideas=_normalize_connected_ideas(raw.get("connected_ideas")),
             keywords=_to_list(raw.get("keywords")),
             strategy=str(raw.get("strategy") or ""),
             links=_to_list(raw.get("links")),

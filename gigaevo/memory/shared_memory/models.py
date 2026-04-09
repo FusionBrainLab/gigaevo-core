@@ -62,7 +62,7 @@ class ProgramCard(BaseModel):
     description: str = ""
     fitness: float | None = None
     code: str = ""
-    connected_ideas: list[ConnectedIdea | dict[str, Any]] = Field(default_factory=list)
+    connected_ideas: list[ConnectedIdea] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     strategy: str = ""
     links: list[str] = Field(default_factory=list)
