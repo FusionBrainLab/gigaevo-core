@@ -224,10 +224,13 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if self.config.enable_llm_card_enrichment and self.memory_system is not None:
             analysis = self.memory_system.analyze_content(card.description)
+            enrichments: dict[str, Any] = {}
             if not card.keywords:
-                card.keywords = analysis.get("keywords") or []
+                enrichments["keywords"] = analysis.get("keywords") or []
             if not card.task_description:
-                card.task_description = analysis.get("context") or ""
+                enrichments["task_description"] = analysis.get("context") or ""
+            if enrichments:
+                card = card.model_copy(update=enrichments)
 
         store = self.card_store
         sync = self._ensure_api_sync()
@@ -394,6 +397,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self._gam_build_failed = False
             except MemoryRetrieverError as exc:
                 logger.warning("[Memory] GAM build failed: {}", exc)
+                self.gam.invalidate()
+                self.research_agent = None
                 self._gam_build_failed = True
         self.dedup.invalidate_retrievers()
         self._iters_after_rebuild = 0

@@ -81,7 +81,7 @@ class ApiSync:
                 row_namespace = None
                 if isinstance(meta, dict):
                     row_namespace = meta.get("namespace")
-                if self.namespace and row_namespace not in (None, "", self.namespace):
+                if self.namespace and row_namespace != self.namespace:
                     continue
                 page_hits.append(row)
 

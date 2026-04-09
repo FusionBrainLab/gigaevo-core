@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import json
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from loguru import logger
@@ -76,13 +77,15 @@ class CardDedup:
         self._export_file = export_file
         self._checkpoint_dir = checkpoint_dir
         self._retrievers: dict[str, Any] | None = None
+        self._retrievers_lock = Lock()
 
     @property
     def config(self) -> CardUpdateDedupConfig:
         return self._config
 
     def invalidate_retrievers(self) -> None:
-        self._retrievers = None
+        with self._retrievers_lock:
+            self._retrievers = None
 
     # --- Retriever building ---
 
@@ -141,7 +144,9 @@ class CardDedup:
     def resolve_retriever(self, tool_name: str) -> Any:
         """Resolve a retriever by tool name, building lazily if needed."""
         if self._retrievers is None:
-            self._retrievers = self.build_retrievers()
+            with self._retrievers_lock:
+                if self._retrievers is None:  # double-checked locking
+                    self._retrievers = self.build_retrievers()
         retrievers = self._retrievers or {}
         if not retrievers:
             return None
@@ -214,7 +219,8 @@ class CardDedup:
                     continue
                 if is_program_card(cards[card_id]):
                     continue
-                meta = getattr(hit, "meta", {}) or {}
+                meta_raw = getattr(hit, "meta", {})
+                meta: dict[str, Any] = meta_raw if isinstance(meta_raw, dict) else {}
                 try:
                     score = float(meta.get("score", 0.0))
                 except (TypeError, ValueError):
@@ -384,6 +390,14 @@ class CardDedup:
                 "[Memory] Dedup LLM returned no valid JSON (attempt {}/{})",
                 attempt + 1,
                 cfg.llm_max_retries,
+            )
+        else:
+            # All retries exhausted without a valid JSON response — fall back to add
+            logger.warning(
+                "[Memory] Dedup LLM failed all {} attempts, defaulting to action=add "
+                "for card {!r}",
+                cfg.llm_max_retries,
+                _str_or_empty(incoming_card.id).strip(),
             )
         return decision
 

@@ -49,7 +49,7 @@ class _ConceptApiClient:
             raise MemoryStorageError(
                 f"Memory API request failed ({method} {path}): "
                 f"{response.status_code} {response.text}"
-            )
+            ) from None
         return response.json()
 
     def save_concept(
