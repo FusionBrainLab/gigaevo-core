@@ -71,8 +71,10 @@ def _load_task_description(redis_prefix: str, package_path: Path) -> str:
                     candidate = leaf / "task_description.txt"
                     if candidate.is_file():
                         return candidate.read_text(encoding="utf-8").strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "[Memory] Failed to read task description for prefix {!r}: {}", prefix, exc
+        )
     return "No description available"
 
 
@@ -168,8 +170,10 @@ async def _enrich_ideas(
         try:
             kw_raw = await analyzer.call_async("keywords", idea.description)
             keywords = json.loads(kw_raw).get("keywords", [])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "[Memory] Keyword extraction failed for idea {!r}: {}", idea.id, exc
+            )
 
         summary = ""
         entries = idea.explanation.entries
@@ -180,8 +184,10 @@ async def _enrich_ideas(
             try:
                 sum_raw = await analyzer.call_async("usage_summary", explanations_text)
                 summary = json.loads(sum_raw).get("summary", "")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "[Memory] Summary generation failed for idea {!r}: {}", idea.id, exc
+                )
 
         return idea.model_copy(
             update={
