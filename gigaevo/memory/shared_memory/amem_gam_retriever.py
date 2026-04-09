@@ -184,8 +184,8 @@ def build_retrievers(
             index_retriever.build(page_store)
             retrievers["page_index"] = index_retriever
             logger.debug("[Memory] Index retriever ready")
-        except Exception as e:
-            logger.warning("[Memory] Index retriever init failed: {}", e)
+        except Exception as exc:
+            logger.warning("[Memory] Index retriever init failed: {}", exc)
 
     for tool_name, extra in vector_tool_configs.items():
         if tool_name not in allowed:
@@ -199,9 +199,9 @@ def build_retrievers(
             }
             retrievers[tool_name] = ChromaRetriever(chroma_config)
             logger.debug("[Memory] Chroma retriever ready: {}", tool_name)
-        except Exception as e:
+        except Exception as exc:
             logger.warning(
-                "[Memory] Chroma retriever init for '{}' failed: {}", tool_name, e
+                "[Memory] Chroma retriever init for '{}' failed: {}", tool_name, exc
             )
 
     if enable_bm25 and "keyword" in allowed:
@@ -213,8 +213,8 @@ def build_retrievers(
             bm25_retriever.build(page_store)
             retrievers["keyword"] = bm25_retriever
             logger.debug("[Memory] BM25 retriever ready")
-        except Exception as e:
-            logger.warning("[Memory] BM25 retriever init failed: {}", e)
+        except Exception as exc:
+            logger.warning("[Memory] BM25 retriever init failed: {}", exc)
 
     return retrievers
 

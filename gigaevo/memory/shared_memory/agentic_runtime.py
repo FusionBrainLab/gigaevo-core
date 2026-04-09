@@ -31,7 +31,7 @@ class AgenticRuntime(BaseModel):
     In tests, use FakeAgenticRuntime with fake classes.
     """
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     memory_system_cls: type[Any]
     memory_note_cls: type[Any]

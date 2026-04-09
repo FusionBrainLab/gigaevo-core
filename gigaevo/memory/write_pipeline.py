@@ -526,90 +526,95 @@ def main() -> dict[str, Any] | None:
         to_bool(CARD_UPDATE_DEDUP_CONFIG.get("enabled"), default=False),
     )
 
-    if not BANKS_PATH.exists():
-        raise FileNotFoundError(f"Banks file not found: {BANKS_PATH}")
-    memory_cards = load_memory_cards(
-        BANKS_PATH,
-        best_ideas_path=BEST_IDEAS_PATH,
-        programs_path=PROGRAMS_PATH,
-        best_programs_percent=BEST_PROGRAMS_PERCENT,
-        usage_updates_path=USAGE_UPDATES_PATH,
-        memory=memory,
-    )
-    logger.info(
-        "Loaded {} cards from banks: {} (filtered by: {})",
-        len(memory_cards),
-        BANKS_PATH,
-        BEST_IDEAS_PATH,
-    )
-    if USE_API:
-        logger.info("Writing to API: {} (namespace={})", MEMORY_API_URL, NAMESPACE)
-    else:
-        logger.info("Writing in local-only mode (checkpoint={})", MEMORY_DIR)
-
     try:
+        if not BANKS_PATH.exists():
+            raise FileNotFoundError(f"Banks file not found: {BANKS_PATH}")
+        memory_cards = load_memory_cards(
+            BANKS_PATH,
+            best_ideas_path=BEST_IDEAS_PATH,
+            programs_path=PROGRAMS_PATH,
+            best_programs_percent=BEST_PROGRAMS_PERCENT,
+            usage_updates_path=USAGE_UPDATES_PATH,
+            memory=memory,
+        )
+        logger.info(
+            "Loaded {} cards from banks: {} (filtered by: {})",
+            len(memory_cards),
+            BANKS_PATH,
+            BEST_IDEAS_PATH,
+        )
+        if USE_API:
+            logger.info("Writing to API: {} (namespace={})", MEMORY_API_URL, NAMESPACE)
+        else:
+            logger.info("Writing in local-only mode (checkpoint={})", MEMORY_DIR)
+
         write_stats_by_card_type = {
             "ideas": _zero_write_stats(),
             "programs": _zero_write_stats(),
         }
-        for idx, card in enumerate(memory_cards, start=1):
-            card_type = _card_type(card)
-            before_stats = memory.get_card_write_stats()
-            memory_id = memory.save_card(card)
-            after_stats = memory.get_card_write_stats()
-            stat_diff = _diff_write_stats(before_stats, after_stats)
-            for stat_name, stat_value in stat_diff.items():
-                write_stats_by_card_type[card_type][stat_name] = int(
-                    write_stats_by_card_type[card_type].get(stat_name, 0)
-                ) + int(stat_value)
-            stored = memory.get_card(memory_id)
-            logger.debug(
-                "[{:03d}] saved {}: {}",
-                idx,
-                memory_id,
-                (stored.description if stored is not None else "")[:110],
-            )
-    except RuntimeError as exc:
-        logger.error("Write failed: {}", exc)
-        return None
+        try:
+            for idx, card in enumerate(memory_cards, start=1):
+                card_type = _card_type(card)
+                before_stats = memory.get_card_write_stats()
+                memory_id = memory.save_card(card)
+                after_stats = memory.get_card_write_stats()
+                stat_diff = _diff_write_stats(before_stats, after_stats)
+                for stat_name, stat_value in stat_diff.items():
+                    write_stats_by_card_type[card_type][stat_name] = int(
+                        write_stats_by_card_type[card_type].get(stat_name, 0)
+                    ) + int(stat_value)
+                stored = memory.get_card(memory_id)
+                logger.debug(
+                    "[{:03d}] saved {}: {}",
+                    idx,
+                    memory_id,
+                    (stored.description if stored is not None else "")[:110],
+                )
+        except RuntimeError as exc:
+            logger.error("Write failed: {}", exc)
+            return None
 
-    memory.rebuild()
-    logger.info("Local API index saved in: {}", MEMORY_DIR / "api_index.json")
+        memory.rebuild()
+        logger.info("Local API index saved in: {}", MEMORY_DIR / "api_index.json")
 
-    write_stats = memory.get_card_write_stats()
-    input_card_type_counts = {
-        "ideas": sum(1 for card in memory_cards if _card_type(card) == "ideas"),
-        "programs": sum(1 for card in memory_cards if _card_type(card) == "programs"),
-    }
-    logger.info(
-        "Write stats: processed={} added={} updated={} rejected={} "
-        "ideas(proc={} add={} upd={} rej={}) "
-        "programs(proc={} add={} upd={} rej={}) updated_target_cards={}",
-        write_stats.get("processed", 0),
-        write_stats.get("added", 0),
-        write_stats.get("updated", 0),
-        write_stats.get("rejected", 0),
-        write_stats_by_card_type["ideas"].get("processed", 0),
-        write_stats_by_card_type["ideas"].get("added", 0),
-        write_stats_by_card_type["ideas"].get("updated", 0),
-        write_stats_by_card_type["ideas"].get("rejected", 0),
-        write_stats_by_card_type["programs"].get("processed", 0),
-        write_stats_by_card_type["programs"].get("added", 0),
-        write_stats_by_card_type["programs"].get("updated", 0),
-        write_stats_by_card_type["programs"].get("rejected", 0),
-        write_stats.get("updated_target_cards", 0),
-    )
+        write_stats = memory.get_card_write_stats()
+        input_card_type_counts = {
+            "ideas": sum(1 for card in memory_cards if _card_type(card) == "ideas"),
+            "programs": sum(
+                1 for card in memory_cards if _card_type(card) == "programs"
+            ),
+        }
+        logger.info(
+            "Write stats: processed={} added={} updated={} rejected={} "
+            "ideas(proc={} add={} upd={} rej={}) "
+            "programs(proc={} add={} upd={} rej={}) updated_target_cards={}",
+            write_stats.get("processed", 0),
+            write_stats.get("added", 0),
+            write_stats.get("updated", 0),
+            write_stats.get("rejected", 0),
+            write_stats_by_card_type["ideas"].get("processed", 0),
+            write_stats_by_card_type["ideas"].get("added", 0),
+            write_stats_by_card_type["ideas"].get("updated", 0),
+            write_stats_by_card_type["ideas"].get("rejected", 0),
+            write_stats_by_card_type["programs"].get("processed", 0),
+            write_stats_by_card_type["programs"].get("added", 0),
+            write_stats_by_card_type["programs"].get("updated", 0),
+            write_stats_by_card_type["programs"].get("rejected", 0),
+            write_stats.get("updated_target_cards", 0),
+        )
 
-    stats_path = BANKS_PATH.parent / "memory_write_stats.json"
-    snapshot = _write_memory_write_stats(
-        stats_path=stats_path,
-        input_cards_count=len(memory_cards),
-        input_card_type_counts=input_card_type_counts,
-        write_stats=write_stats,
-        write_stats_by_card_type=write_stats_by_card_type,
-    )
-    logger.info("Memory write stats saved to: {}", stats_path)
-    return snapshot
+        stats_path = BANKS_PATH.parent / "memory_write_stats.json"
+        snapshot = _write_memory_write_stats(
+            stats_path=stats_path,
+            input_cards_count=len(memory_cards),
+            input_card_type_counts=input_card_type_counts,
+            write_stats=write_stats,
+            write_stats_by_card_type=write_stats_by_card_type,
+        )
+        logger.info("Memory write stats saved to: {}", stats_path)
+        return snapshot
+    finally:
+        memory.close()
 
 
 if __name__ == "__main__":
