@@ -11,6 +11,7 @@ import uuid
 from loguru import logger
 
 from gigaevo.memory.shared_memory.card_conversion import AnyCard, normalize_memory_card
+from gigaevo.memory.shared_memory.utils import _str_or_empty
 
 
 class CardStore:
@@ -46,7 +47,7 @@ class CardStore:
         return self.cards.pop(card_id, None)
 
     def ensure_id(self, card: AnyCard) -> str:
-        card_id = str(card.id or "").strip()
+        card_id = _str_or_empty(card.id).strip()
         if not card_id:
             card_id = f"mem-{uuid.uuid4().hex[:12]}"
             card.id = card_id

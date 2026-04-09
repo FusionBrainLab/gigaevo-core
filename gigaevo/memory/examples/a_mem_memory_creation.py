@@ -15,7 +15,11 @@ from gigaevo.memory._vendor.A_mem.agentic_memory.memory_system import (
 )
 import gigaevo.memory.config as config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
-from gigaevo.memory.shared_memory.utils import _safe_get
+from gigaevo.memory.shared_memory.utils import (
+    _safe_get,
+    _to_int,
+    _to_list,
+)
 
 
 def pretty_print_memory(mem, title=None):
@@ -59,21 +63,6 @@ def summarize_diff(before, after, label="Memory evolution check"):
         a = _safe_get(after, f, None)
         if b != a:
             logger.debug("* {} changed: before={} after={}", f, b, a)
-
-
-def _to_list(value: Any) -> list:
-    if isinstance(value, list):
-        return value
-    if value is None:
-        return []
-    return [value]
-
-
-def _to_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def normalize_memory_card(

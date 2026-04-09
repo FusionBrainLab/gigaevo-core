@@ -30,7 +30,11 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_updated_card,
     parse_llm_card_decision,
 )
-from gigaevo.memory.shared_memory.utils import truncate_text
+from gigaevo.memory.shared_memory.protocols import LLMServiceProtocol
+from gigaevo.memory.shared_memory.utils import (
+    _str_or_empty,
+    truncate_text,
+)
 
 _MAX_SUMMARY_CHARS = 600
 _MAX_DESCRIPTION_CHARS = 1200
@@ -57,7 +61,7 @@ class CardDedup:
         self,
         *,
         card_store: CardStore,
-        llm_service: Any,
+        llm_service: LLMServiceProtocol | None,
         config: CardUpdateDedupConfig,
         allowed_gam_tools: set[str],
         gam_store_dir: Path,
@@ -177,7 +181,7 @@ class CardDedup:
         cards = self._card_store.cards
 
         for query_key, query_text in query_by_key.items():
-            text = str(query_text or "").strip()
+            text = _str_or_empty(query_text).strip()
             if not text:
                 continue
 
@@ -205,7 +209,7 @@ class CardDedup:
 
             query_scores: dict[str, float] = {}
             for hit in hits:
-                card_id = str(getattr(hit, "page_id", "") or "").strip()
+                card_id = _str_or_empty(getattr(hit, "page_id", "")).strip()
                 if not card_id or card_id not in cards:
                     continue
                 if is_program_card(cards[card_id]):
@@ -238,7 +242,7 @@ class CardDedup:
         payload: list[dict[str, Any]] = []
         cards = self._card_store.cards
         for item in scored_candidates:
-            card_id = str(item.get("card_id") or "").strip()
+            card_id = _str_or_empty(item.get("card_id")).strip()
             if not card_id:
                 continue
             card = cards.get(card_id)
@@ -287,16 +291,16 @@ class CardDedup:
             return default_decision
 
         candidate_ids = {
-            str(item.get("card_id") or "").strip()
+            _str_or_empty(item.get("card_id")).strip()
             for item in candidates_for_llm
-            if str(item.get("card_id") or "").strip()
+            if _str_or_empty(item.get("card_id")).strip()
         }
         if not candidate_ids:
             return default_decision
 
         incoming_dict = incoming_card.model_dump()
         incoming_payload = {
-            "id": str(incoming_card.id or "").strip(),
+            "id": _str_or_empty(incoming_card.id).strip(),
             "task_description_summary": truncate_text(
                 incoming_card.task_description_summary, _MAX_SUMMARY_CHARS
             ),
@@ -421,7 +425,7 @@ class CardDedup:
         return DedupDecision(
             action=action,
             reason=str(decision_dict.get("reason") or ""),
-            duplicate_of=str(decision_dict.get("duplicate_of") or "").strip(),
+            duplicate_of=_str_or_empty(decision_dict.get("duplicate_of")).strip(),
             merges=merges,
         )
 
@@ -444,7 +448,7 @@ class CardDedup:
         for update in updates:
             if not isinstance(update, dict):
                 continue
-            card_id = str(update.get("card_id") or "").strip()
+            card_id = _str_or_empty(update.get("card_id")).strip()
             if not card_id or card_id in seen_ids:
                 continue
             existing_card = cards.get(card_id)
