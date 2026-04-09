@@ -11,6 +11,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.llm.agents.memory_selector import MemorySelection
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_update_dedup import (
@@ -68,7 +69,7 @@ class TestNormalizeCardContract:
         assert isinstance(card.explanation.summary, str)
         assert isinstance(card.works_with, list)
         assert isinstance(card.links, list)
-        assert isinstance(card.usage, dict)
+        assert isinstance(card.usage, UsagePayload)
 
     def test_program_card_field_types(self):
         card = normalize_memory_card(

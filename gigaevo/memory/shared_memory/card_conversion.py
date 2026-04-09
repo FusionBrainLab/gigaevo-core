@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
     ConnectedIdea,
@@ -89,6 +90,16 @@ DEFAULT_GAM_TOP_K_BY_TOOL = {
 # ---------------------------------------------------------------------------
 
 
+def _normalize_usage(raw_usage: Any) -> UsagePayload:
+    """Convert raw usage data to UsagePayload, with graceful fallback."""
+    if not isinstance(raw_usage, dict):
+        return UsagePayload()
+    try:
+        return UsagePayload(**raw_usage)
+    except Exception:
+        return UsagePayload()
+
+
 def normalize_memory_card(
     card: dict[str, Any] | AnyCard | None = None,
     fallback_id: str | None = None,
@@ -151,7 +162,7 @@ def normalize_memory_card(
         ),
         works_with=_to_list(raw.get("works_with")),
         links=_to_list(raw.get("links")),
-        usage=_usage if isinstance((_usage := raw.get("usage")), dict) else {},
+        usage=_normalize_usage(raw.get("usage")),
     )
 
 

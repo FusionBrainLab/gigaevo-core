@@ -6,6 +6,7 @@ Pin down validation behavior: required fields, defaults, extra="forbid".
 from pydantic import ValidationError
 import pytest
 
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.models import (
     LocalMemorySnapshot,
     MemoryCard,
@@ -60,7 +61,7 @@ class TestMemoryCard:
         assert c.explanation.summary == ""
         assert c.works_with == []
         assert c.links == []
-        assert c.usage == {}
+        assert c.usage == UsagePayload()
 
     def test_full_card(self):
         c = MemoryCard(
@@ -78,7 +79,6 @@ class TestMemoryCard:
             explanation=MemoryCardExplanation(explanations=["e"], summary="s"),
             works_with=["w1"],
             links=["l1"],
-            usage={"u": 1},
         )
         assert c.strategy == "exploration"
         assert c.last_generation == 5

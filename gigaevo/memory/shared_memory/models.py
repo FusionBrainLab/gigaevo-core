@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.memory.ideas_tracker.models import UsagePayload
+
 Strategy = Literal["exploration", "exploitation", "hybrid"]
 
 
@@ -35,7 +37,7 @@ class MemoryCard(BaseModel):
     explanation: MemoryCardExplanation = Field(default_factory=MemoryCardExplanation)
     works_with: list[str] = Field(default_factory=list)
     links: list[str] = Field(default_factory=list)
-    usage: dict[str, Any] = Field(default_factory=dict)
+    usage: UsagePayload = Field(default_factory=UsagePayload)
 
 
 class ConnectedIdea(BaseModel):
