@@ -670,3 +670,55 @@ class TestMemoryRebuildE2E:
         retrieved = mem.get_card(card_id)
         assert retrieved is not None
         assert retrieved.description == "neural architecture search technique"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: CardLoader streaming + card_update_dedup JSON logging
+# ---------------------------------------------------------------------------
+
+
+def test_card_loader_reads_jsonl_line_by_line(tmp_path, monkeypatch):
+    """CardLoader._load_from_export must not read the entire file at once."""
+    from gigaevo.memory.shared_memory.card_loader import CardLoader
+
+    jsonl = tmp_path / "export.jsonl"
+    jsonl.write_text('{"id": "a"}\n{"id": "b"}\n')
+
+    loader = CardLoader(export_file=jsonl)
+
+    read_text_called = []
+    original_read_text = type(jsonl).read_text
+
+    def tracking_read_text(self, *a, **kw):
+        read_text_called.append(self)
+        return original_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(type(jsonl), "read_text", tracking_read_text)
+    cards = loader._load_from_export()
+
+    assert read_text_called == [], (
+        "_load_from_export must not call Path.read_text(); use open() for streaming"
+    )
+    assert len(cards) == 2
+
+
+def test_extract_json_object_logs_debug_on_failure():
+    """_extract_json_object must log at debug level when JSON parse fails."""
+    import io
+
+    from loguru import logger as _logger
+
+    from gigaevo.memory.shared_memory.card_update_dedup import _extract_json_object
+
+    log_output = io.StringIO()
+    handler_id = _logger.add(log_output, level="DEBUG", format="{message}")
+    try:
+        result = _extract_json_object("not json at all !!!!")
+    finally:
+        _logger.remove(handler_id)
+
+    assert result is None
+    output = log_output.getvalue().lower()
+    assert "parse" in output or "json" in output, (
+        "_extract_json_object should log at DEBUG when it cannot parse JSON"
+    )
