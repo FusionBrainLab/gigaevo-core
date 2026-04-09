@@ -12,14 +12,16 @@ silently treated as empty, causing incoming deltas to be lost.
 
 from __future__ import annotations
 
-import uuid
+import json
 from typing import Any
+import uuid
 
 from gigaevo.memory.ideas_tracker.idea_bank import (
+    IdeaBank,
     build_usage_payload,
     merge_usage_payloads,
 )
-from gigaevo.memory.ideas_tracker.ideas_tracker import _build_usage_updates
+from gigaevo.memory.ideas_tracker.ideas_tracker import _build_usage_updates, _SessionLog
 from gigaevo.memory.ideas_tracker.models import Idea, UsagePayload
 from gigaevo.programs.program import Lineage, Program
 from gigaevo.programs.program_state import ProgramState
@@ -222,3 +224,50 @@ class TestMergeUsagePayloadsWithObjects:
         assert merged.total_used == existing.total_used
         assert merged.entries == existing.entries
         assert merged.median_delta_fitness == existing.median_delta_fitness
+
+
+class TestSessionLogFlushSerialization:
+    """_SessionLog.flush() must serialize UsagePayload to JSON without crashing."""
+
+    def test_flush_with_usage_payload_does_not_crash(self, tmp_path) -> None:
+        log = _SessionLog(tmp_path)
+        bank = IdeaBank()
+        usage = {"card-1": _make_single_task_payload("task-A", [1.0, 3.0])}
+
+        log.record_usage_updates(usage)
+        log.flush(bank, records=[])
+
+        assert log.usage_updates_file.exists()
+
+    def test_flush_usage_updates_file_is_valid_json(self, tmp_path) -> None:
+        log = _SessionLog(tmp_path)
+        bank = IdeaBank()
+        log.record_usage_updates({"card-1": _make_multi_task_payload()})
+        log.flush(bank, records=[])
+
+        content = json.loads(log.usage_updates_file.read_text())
+        assert isinstance(content, list)
+        assert len(content) == 1
+        assert "usage_updates" in content[0]
+
+    def test_flush_usage_updates_payload_has_correct_schema(self, tmp_path) -> None:
+        log = _SessionLog(tmp_path)
+        bank = IdeaBank()
+        log.record_usage_updates({"card-1": _make_single_task_payload("task-A", [2.0])})
+        log.flush(bank, records=[])
+
+        data = json.loads(log.usage_updates_file.read_text())
+        usage = data[0]["usage_updates"]["card-1"]
+        assert "entries" in usage
+        assert "total_used" in usage
+        assert usage["total_used"] == 1
+        assert usage["entries"][0]["task_description_summary"] == "task-A"
+        assert usage["entries"][0]["fitness_delta_per_use"] == [2.0]
+
+    def test_flush_empty_usage_updates_writes_empty_dict(self, tmp_path) -> None:
+        log = _SessionLog(tmp_path)
+        bank = IdeaBank()
+        log.flush(bank, records=[])
+
+        data = json.loads(log.usage_updates_file.read_text())
+        assert data[0]["usage_updates"] == {}

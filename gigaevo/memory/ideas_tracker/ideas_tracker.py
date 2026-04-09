@@ -279,7 +279,7 @@ class _SessionLog:
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.session_dir: Path = logs_dir / ts
         self._entries: list[str] = []
-        self._usage_updates: dict[str, Any] = {}
+        self._usage_updates: dict[str, UsagePayload] = {}
 
     # ------ file paths ------
     @property
@@ -307,7 +307,7 @@ class _SessionLog:
             lines.append(f"  {k}: {v}")
         self._entries.append("\n".join(lines))
 
-    def record_usage_updates(self, updates: dict[str, Any]) -> None:
+    def record_usage_updates(self, updates: dict[str, UsagePayload]) -> None:
         self._usage_updates = updates
 
     # ------ flush ------
@@ -346,7 +346,16 @@ class _SessionLog:
 
         self.usage_updates_file.write_text(
             json.dumps(
-                [{"timestamp": ts, "usage_updates": self._usage_updates}], indent=2
+                [
+                    {
+                        "timestamp": ts,
+                        "usage_updates": {
+                            card_id: payload.model_dump()
+                            for card_id, payload in self._usage_updates.items()
+                        },
+                    }
+                ],
+                indent=2,
             ),
             encoding="utf-8",
         )
