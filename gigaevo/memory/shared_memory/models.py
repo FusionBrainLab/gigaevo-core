@@ -41,7 +41,7 @@ class MemoryCard(BaseModel):
 class ConnectedIdea(BaseModel):
     """Reference to an idea card linked to a program."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     idea_id: str = ""
     description: str = ""

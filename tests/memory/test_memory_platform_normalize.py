@@ -35,8 +35,8 @@ class TestNormalizeMemoryCardPydanticInput:
             description="Top evolved program",
             fitness=95.0,
             connected_ideas=[
-                ConnectedIdea(card_id="idea-1", description="Use annealing"),
-                ConnectedIdea(card_id="idea-2", description="Chunking"),
+                ConnectedIdea(idea_id="idea-1", description="Use annealing"),
+                ConnectedIdea(idea_id="idea-2", description="Chunking"),
             ],
         )
         result = normalize_memory_card(card)
@@ -81,7 +81,7 @@ class TestNormalizeMemoryCardPydanticInput:
             fitness=88.5,
             code="def solve(): pass",
             connected_ideas=[
-                ConnectedIdea(card_id="i1", description="idea one"),
+                ConnectedIdea(idea_id="i1", description="idea one"),
             ],
             keywords=["solver", "evolution"],
         )
@@ -89,7 +89,7 @@ class TestNormalizeMemoryCardPydanticInput:
         text = json.dumps(result, ensure_ascii=True, indent=2)
         parsed = json.loads(text)
         assert parsed["id"] == "prog-2"
-        assert parsed["connected_ideas"][0]["card_id"] == "i1"
+        assert parsed["connected_ideas"][0]["idea_id"] == "i1"
 
     def test_memory_card_roundtrip(self):
         card = MemoryCard(
@@ -191,7 +191,7 @@ class TestSaveCardPydanticFlow:
             description="Top evolved program",
             fitness=95.0,
             connected_ideas=[
-                ConnectedIdea(card_id="idea-1", description="Use annealing"),
+                ConnectedIdea(idea_id="idea-1", description="Use annealing"),
             ],
         )
         card_id = mem.save_card(card)
@@ -202,7 +202,7 @@ class TestSaveCardPydanticFlow:
         assert card_id in payload["memory_cards"]
         stored = payload["memory_cards"][card_id]
         assert isinstance(stored["connected_ideas"][0], dict)
-        assert stored["connected_ideas"][0]["card_id"] == "idea-1"
+        assert stored["connected_ideas"][0]["idea_id"] == "idea-1"
 
     def test_save_memory_card_persists_explanation(self, tmp_path):
         mem = _make_platform_memory(tmp_path)
@@ -230,7 +230,7 @@ class TestSaveCardPydanticFlow:
                 description="program",
                 fitness=90.0,
                 connected_ideas=[
-                    ConnectedIdea(card_id="i1", description="d1"),
+                    ConnectedIdea(idea_id="i1", description="d1"),
                 ],
             ),
             MemoryCard(
@@ -259,7 +259,7 @@ class TestSaveCardPydanticFlow:
             description="test",
             fitness=50.0,
             connected_ideas=[
-                ConnectedIdea(card_id="c1", description="d1"),
+                ConnectedIdea(idea_id="c1", description="d1"),
             ],
         )
         mem.save_card(card)
@@ -280,7 +280,7 @@ class TestSaveCardPydanticFlow:
             description="test program",
             fitness=80.0,
             connected_ideas=[
-                ConnectedIdea(card_id="i1", description="linked idea"),
+                ConnectedIdea(idea_id="i1", description="linked idea"),
             ],
         )
         mem.save_card(card)
@@ -292,6 +292,6 @@ class TestSaveCardPydanticFlow:
         assert "prog-1" in mem2.memory_cards
         stored = mem2.memory_cards["prog-1"]
         assert isinstance(stored, dict)
-        assert stored["connected_ideas"][0]["card_id"] == "i1"
+        assert stored["connected_ideas"][0]["idea_id"] == "i1"
         # Must still be serializable after reload
         json.dumps(stored)
