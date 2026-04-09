@@ -113,6 +113,8 @@ def normalize_improvements(ideas: Any) -> list[dict[str, str]]:
 class IdeaExplanation(BaseModel):
     """Accumulated motivations and synthesised usage summary for an Idea."""
 
+    model_config = ConfigDict(extra="forbid")
+
     entries: list[str] = Field(default_factory=list)
     summary: str = ""
 
@@ -158,6 +160,8 @@ class Idea(BaseModel):
     and an explanation summary after initial classification.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     id: str = Field(default_factory=lambda: str(uuid4()))
     description: str
     category: str = ""
@@ -180,6 +184,8 @@ class ProgramRecord(BaseModel):
     analysers need (no stage results, no raw execution data).
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     fitness: float
     generation: int
@@ -194,6 +200,8 @@ class ProgramRecord(BaseModel):
 
 class IdeaUpdate(BaseModel):
     """Instruction to update an existing Idea already present in IdeaBank."""
+
+    model_config = ConfigDict(extra="forbid")
 
     idea_id: str
     programs: list[str] = Field(default_factory=list)
@@ -210,6 +218,8 @@ class AnalysisResult(BaseModel):
     updates: modifications to apply to ideas already in the bank.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     new_ideas: list[Idea] = Field(default_factory=list)
     updates: list[IdeaUpdate] = Field(default_factory=list)
 
@@ -221,6 +231,8 @@ class EmbeddedIdea(BaseModel):
     Used internally by ClusteringAnalyzer during the embed → cluster → refine pipeline.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     id: str = Field(default_factory=lambda: str(uuid4()))
     description: str
     source_program_id: str = ""
@@ -231,6 +243,8 @@ class EmbeddedIdea(BaseModel):
 
 class ClassificationChunk(BaseModel):
     """A chunk of IdeaBank ideas prepared for one LLM classification call."""
+
+    model_config = ConfigDict(extra="forbid")
 
     text: str
     short_ids: list[dict[str, str]]
