@@ -71,11 +71,15 @@ class CardStore:
                 "memory_cards": serialized,
             }
             tmp_file = self._index_file.with_suffix(f".{os.getpid()}.tmp")
-            tmp_file.write_text(
-                json.dumps(payload, ensure_ascii=True, indent=2),
-                encoding="utf-8",
-            )
-            os.replace(str(tmp_file), str(self._index_file))
+            try:
+                tmp_file.write_text(
+                    json.dumps(payload, ensure_ascii=True, indent=2),
+                    encoding="utf-8",
+                )
+                os.replace(str(tmp_file), str(self._index_file))
+            except Exception:
+                tmp_file.unlink(missing_ok=True)
+                raise
 
     def link_entity(self, card_id: str, entity_id: str, version: str = "") -> None:
         with self._lock:
