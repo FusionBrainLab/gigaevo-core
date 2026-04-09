@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
 from gigaevo.memory.runtime_config import to_bool
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
@@ -19,7 +20,6 @@ from gigaevo.memory.shared_memory.memory_config import (
     MemoryConfig,
 )
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
-from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.utils import to_float
 from gigaevo.memory.write_pipeline_config import (
     ALLOWED_GAM_TOOLS,

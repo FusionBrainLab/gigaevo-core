@@ -22,6 +22,8 @@ import re
 from typing import Any
 import uuid
 
+from gigaevo.memory.shared_memory.protocols import ResearchOutput
+
 # ---------------------------------------------------------------------------
 # FakeMemoryNote — mirrors A_mem.agentic_memory.memory_system.MemoryNote
 # ---------------------------------------------------------------------------
@@ -220,9 +222,7 @@ class FakeAMemGenerator:
     def generate_single(
         self,
         prompt: str | None = None,
-        messages: list | None = None,
-        schema: dict | None = None,
-        extra_params: dict | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         return {"text": "Generated response", "json": None, "response": None}
 
@@ -240,12 +240,6 @@ class FakeAMemGenerator:
 # ---------------------------------------------------------------------------
 # FakeResearchAgent — mirrors GAM_root.gam.ResearchAgent
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class FakeResearchOutput:
-    integrated_memory: str = ""
-    raw_memory: dict = field(default_factory=dict)
 
 
 class FakeResearchAgent:
@@ -266,9 +260,7 @@ class FakeResearchAgent:
         self._retrievers = retrievers or {}
         self._generator = generator
 
-    def research(
-        self, request: str, memory_state: str | None = None
-    ) -> FakeResearchOutput:
+    def research(self, request: str, memory_state: str | None = None) -> ResearchOutput:
         """Search all retrievers and format results."""
         all_results = []
         for name, retriever in self._retrievers.items():
@@ -278,7 +270,7 @@ class FakeResearchAgent:
                     all_results.extend(hits[0])
 
         if not all_results:
-            return FakeResearchOutput(
+            return ResearchOutput(
                 integrated_memory="No relevant memories found.",
                 raw_memory={},
             )
@@ -289,7 +281,7 @@ class FakeResearchAgent:
             lines.append(f"{i}. {hit.page_id} [general] {hit.meta.get('content', '')}")
             card_ids.append(hit.page_id)
 
-        return FakeResearchOutput(
+        return ResearchOutput(
             integrated_memory="\n".join(lines),
             raw_memory={
                 "final_decision": {

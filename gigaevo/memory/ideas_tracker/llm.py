@@ -128,6 +128,21 @@ class LLMClient:
             logger.error("LLMClient.call({!r}) failed: {}", step, exc)
             return ""
 
+    def close(self) -> None:
+        """Close the synchronous HTTP client."""
+        self._sync.close()
+
+    async def aclose(self) -> None:
+        """Close both sync and async HTTP clients."""
+        self._sync.close()
+        await self._async.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     async def call_async(
         self,
         step: str,
