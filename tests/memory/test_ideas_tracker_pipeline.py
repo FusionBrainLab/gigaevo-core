@@ -17,6 +17,11 @@ import pytest
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.engine.hooks import NullPostRunHook, PostRunHook
+from gigaevo.memory.ideas_tracker.analyzers import (
+    ClassifyingAnalyzer,
+    ClusteringAnalyzer,
+)
+from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker, _build_usage_updates
 from gigaevo.memory.ideas_tracker.models import (
     program_to_record,
     programs_to_records,
@@ -114,9 +119,7 @@ def _make_memory_program(
 
 
 def _build_memory_usage_updates(programs, task_summary="", fitness_key="fitness"):
-    """Thin wrapper so tests don't need to import the internal helper directly."""
-    from gigaevo.memory.ideas_tracker.ideas_tracker import _build_usage_updates
-
+    """Thin wrapper around _build_usage_updates with sensible test defaults."""
     return _build_usage_updates(
         programs, task_summary or "Task summary unavailable", fitness_key
     )
@@ -330,9 +333,6 @@ class TestNullPostRunHook:
 
 
 def _make_tracker(**kwargs):
-    from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer
-    from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
-
     mock_llm_clients = (MagicMock(), MagicMock(), False)
     with (
         patch(
@@ -350,8 +350,6 @@ def _make_tracker(**kwargs):
 
 class TestIdeaTrackerIsPostRunHook:
     def test_is_subclass_of_post_run_hook(self) -> None:
-        from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
-
         assert issubclass(IdeaTracker, PostRunHook)
 
     def test_instantiates_with_analyzer(self) -> None:
@@ -360,11 +358,6 @@ class TestIdeaTrackerIsPostRunHook:
         assert tracker._fitness_key == "fitness"
 
     def test_analyzer_types_importable(self) -> None:
-        from gigaevo.memory.ideas_tracker.analyzers import (
-            ClassifyingAnalyzer,
-            ClusteringAnalyzer,
-        )
-
         assert ClassifyingAnalyzer is not None
         assert ClusteringAnalyzer is not None
 
