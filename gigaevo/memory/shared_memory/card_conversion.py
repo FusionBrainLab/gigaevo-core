@@ -92,6 +92,8 @@ DEFAULT_GAM_TOP_K_BY_TOOL = {
 
 def _normalize_usage(raw_usage: Any) -> UsagePayload:
     """Convert raw usage data to UsagePayload, with graceful fallback."""
+    if isinstance(raw_usage, UsagePayload):
+        return raw_usage
     if not isinstance(raw_usage, dict):
         return UsagePayload()
     try:
@@ -273,10 +275,7 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
             "description": card.description,
             "fitness": card.fitness,
             "code": card.code,
-            "connected_ideas": [
-                ci.model_dump() if isinstance(ci, ConnectedIdea) else ci
-                for ci in card.connected_ideas
-            ],
+            "connected_ideas": [ci.model_dump() for ci in card.connected_ideas],
         }
 
     explanation = card.explanation
@@ -308,7 +307,7 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
         else None,
         "works_with": dedupe_keep_order(list(card.works_with)),
         "links": dedupe_keep_order(list(card.links)),
-        "usage": card.usage if isinstance(card.usage, dict) else None,
+        "usage": card.usage.model_dump(),
     }
 
 

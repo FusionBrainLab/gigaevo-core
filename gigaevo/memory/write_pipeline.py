@@ -385,7 +385,7 @@ def _apply_usage_updates_to_cards(
         current_card["usage"] = merge_usage_payloads(
             current_card.get("usage"),
             usage_update,
-        )
+        ).model_dump()
         cards_by_id[card_id] = current_card
 
     if missing_card_ids:

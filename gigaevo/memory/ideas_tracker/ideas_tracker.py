@@ -36,6 +36,7 @@ from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
     ProgramRecord,
+    UsagePayload,
     program_to_record,
 )
 from gigaevo.memory.ideas_tracker.utils.origin_analysis import compute_origin_analysis
@@ -93,7 +94,7 @@ def _build_usage_updates(
     programs: list[Program],
     task_summary: str,
     fitness_key: str,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, UsagePayload]:
     """Build per-memory-card usage payloads from program fitness deltas."""
 
     def _as_string_list(value: Any) -> list[str]:
