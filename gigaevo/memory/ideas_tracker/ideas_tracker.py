@@ -28,7 +28,6 @@ from gigaevo.evolution.mutation.constants import (
 from gigaevo.memory.ideas_tracker.analyzers import (
     Analyzer,
     ClassifyingAnalyzer,
-    ClusteringAnalyzer,
 )
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, build_usage_payload
 from gigaevo.memory.ideas_tracker.models import (

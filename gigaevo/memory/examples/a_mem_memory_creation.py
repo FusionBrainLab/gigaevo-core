@@ -18,7 +18,6 @@ from gigaevo.memory.openai_inference import OpenAIInferenceService
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.utils import (
     _safe_get,
-    _to_int,
     _to_list,
 )
 

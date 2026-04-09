@@ -531,7 +531,7 @@ class TestCardLoaderE2E:
         export_file = tmp_path / "export.jsonl"
         with open(export_file, "w") as f:
             f.write('{"id": "card-001", "description": "valid"}\n')
-            f.write('NOT VALID JSON\n')
+            f.write("NOT VALID JSON\n")
             f.write('{"id": "card-002", "description": "also valid"}\n')
 
         loader = CardLoader(
