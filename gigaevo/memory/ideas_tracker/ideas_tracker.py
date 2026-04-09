@@ -12,6 +12,7 @@ import ast
 import asyncio
 from datetime import datetime
 from functools import cached_property
+import importlib
 import json
 import os
 from pathlib import Path
@@ -238,8 +239,6 @@ def _run_write_pipeline(
 
     previous = {k: os.environ.get(k) for k in env_overrides}
     try:
-        import importlib
-
         os.environ.update(env_overrides)
         mod = importlib.import_module("gigaevo.memory.write_pipeline")
         mod = importlib.reload(mod)

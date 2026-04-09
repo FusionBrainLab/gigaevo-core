@@ -19,6 +19,7 @@ from gigaevo.memory.runtime_config import (
     to_list,
     to_str,
 )
+from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
 THIS_DIR = Path(__file__).resolve().parent
 SETTINGS_PATH = resolve_settings_path()
@@ -164,6 +165,4 @@ def resolve_memory_backend_class(use_api: bool):
             ) from exc
         return platform_backend
 
-    from gigaevo.memory.shared_memory.memory import AmemGamMemory as legacy_backend
-
-    return legacy_backend
+    return AmemGamMemory

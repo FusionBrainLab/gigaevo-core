@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from gigaevo.memory.ideas_tracker.csv_loader import load_programs_from_csv
+from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 from gigaevo.memory.ideas_tracker.redis_loader import load_programs_from_redis
 
 
@@ -185,8 +186,6 @@ def _apply_cli_overrides(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_argument_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
-
-    from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
     config_path = Path(args.config_path) if args.config_path else None
     runtime_payload = _build_runtime_memory_payload(config_path)

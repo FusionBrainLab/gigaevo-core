@@ -12,9 +12,11 @@ from dataclasses import dataclass, field
 import json
 from unittest.mock import MagicMock
 
+from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
 from gigaevo.memory.ideas_tracker.models import Idea
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
+from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 from gigaevo.memory.shared_memory.models import ProgramCard
 from gigaevo.memory.write_pipeline import load_memory_cards
 from tests.fakes.agentic_memory import make_test_memory
@@ -191,8 +193,6 @@ class TestScenarioTwoRunCycle:
 
     def test_memory_guides_mutation(self, tmp_path):
         """Full cycle: fill memory → MemorySelectorAgent.select() → cards in mutation."""
-        from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
         banks, best_ideas, _, _ = self._create_ideas_from_programs(tmp_path)
         cards = load_memory_cards(banks, best_ideas)
 
@@ -681,8 +681,6 @@ class TestScenarioCrossTask:
     """Different tasks use separate memory namespaces via checkpoint_path."""
 
     def test_separate_checkpoint_dirs_isolate_memory(self, tmp_path):
-        from gigaevo.memory.shared_memory.memory_config import MemoryConfig
-
         hover_cfg = MemoryConfig(checkpoint_path=tmp_path / "hover_mem")
         hotpot_cfg = MemoryConfig(checkpoint_path=tmp_path / "hotpot_mem")
 

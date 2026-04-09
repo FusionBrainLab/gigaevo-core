@@ -105,9 +105,7 @@ class TestSelectorMemoryProvider:
     @pytest.mark.asyncio
     async def test_init_creates_selector_lazily(self) -> None:
         """SelectorMemoryProvider defers MemorySelectorAgent creation to first use."""
-        with patch(
-            "gigaevo.llm.agents.memory_selector.MemorySelectorAgent"
-        ) as mock_cls:
+        with patch("gigaevo.memory.provider.MemorySelectorAgent") as mock_cls:
             mock_instance = AsyncMock()
             mock_instance.select.return_value = MemorySelection(cards=[], card_ids=[])
             mock_cls.return_value = mock_instance
@@ -127,9 +125,7 @@ class TestSelectorMemoryProvider:
     @pytest.mark.asyncio
     async def test_selector_reused_across_calls(self) -> None:
         """Once created, the same selector instance is reused."""
-        with patch(
-            "gigaevo.llm.agents.memory_selector.MemorySelectorAgent"
-        ) as mock_cls:
+        with patch("gigaevo.memory.provider.MemorySelectorAgent") as mock_cls:
             mock_instance = AsyncMock()
             mock_instance.select.return_value = MemorySelection(cards=[], card_ids=[])
             mock_cls.return_value = mock_instance

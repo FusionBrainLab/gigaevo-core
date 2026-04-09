@@ -706,9 +706,7 @@ class TestHydraConfigContracts:
 
     def test_selector_provider_passes_checkpoint_dir_to_agent(self) -> None:
         """checkpoint_dir flows to MemorySelectorAgent constructor."""
-        with patch(
-            "gigaevo.llm.agents.memory_selector.MemorySelectorAgent"
-        ) as mock_cls:
+        with patch("gigaevo.memory.provider.MemorySelectorAgent") as mock_cls:
             mock_instance = AsyncMock()
             mock_instance.select.return_value = MemorySelection(cards=[], card_ids=[])
             mock_cls.return_value = mock_instance
