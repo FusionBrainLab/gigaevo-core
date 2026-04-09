@@ -38,7 +38,9 @@ from gigaevo.memory.ideas_tracker.models import (
     UsagePayload,
     program_to_record,
 )
-from gigaevo.memory.ideas_tracker.utils.origin_analysis import analyse as _analyse_origins
+from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
+    analyse as _analyse_origins,
+)
 from gigaevo.memory.utils import to_float
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
