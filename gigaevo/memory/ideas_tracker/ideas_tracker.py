@@ -12,7 +12,6 @@ import ast
 import asyncio
 from datetime import datetime
 from functools import cached_property
-import importlib
 import json
 import os
 from pathlib import Path
@@ -235,41 +234,37 @@ def _run_write_pipeline(
         logger.warning("Memory write pipeline skipped: no best_ideas snapshot.")
         return
 
-    env_overrides = {
-        "MEMORY_BANKS_PATH": str(banks_path),
-        "MEMORY_BEST_IDEAS_PATH": str(best_ideas_path),
-    }
-    if programs_path and programs_path.exists():
-        env_overrides["MEMORY_PROGRAMS_PATH"] = str(programs_path)
-    if (
-        memory_usage_tracking_enabled
-        and usage_updates_path
-        and usage_updates_path.exists()
-    ):
-        env_overrides["MEMORY_USAGE_UPDATES_PATH"] = str(usage_updates_path)
+    effective_programs_path = (
+        programs_path if (programs_path and programs_path.exists()) else None
+    )
+    effective_usage_updates_path = (
+        usage_updates_path
+        if (
+            memory_usage_tracking_enabled
+            and usage_updates_path
+            and usage_updates_path.exists()
+        )
+        else None
+    )
 
-    previous = {k: os.environ.get(k) for k in env_overrides}
-    try:
-        os.environ.update(env_overrides)
-        mod = importlib.import_module("gigaevo.memory.write_pipeline")
-        mod = importlib.reload(mod)
-        snapshot = mod.main()
-        if isinstance(snapshot, dict):
-            stats = snapshot.get("stats", {})
-            if isinstance(stats, dict):
-                logger.info(
-                    "Memory write: processed={}, added={}, updated={}, rejected={}",
-                    stats.get("processed", 0),
-                    stats.get("added", 0),
-                    stats.get("updated", 0),
-                    stats.get("rejected", 0),
-                )
-    finally:
-        for k, v in previous.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+    from gigaevo.memory.write_pipeline import main as _write_main
+
+    snapshot = _write_main(
+        banks_path=banks_path,
+        best_ideas_path=best_ideas_path,
+        programs_path=effective_programs_path,
+        usage_updates_path=effective_usage_updates_path,
+    )
+    if isinstance(snapshot, dict):
+        stats = snapshot.get("stats", {})
+        if isinstance(stats, dict):
+            logger.info(
+                "Memory write: processed={}, added={}, updated={}, rejected={}",
+                stats.get("processed", 0),
+                stats.get("added", 0),
+                stats.get("updated", 0),
+                stats.get("rejected", 0),
+            )
 
 
 # ---------------------------------------------------------------------------

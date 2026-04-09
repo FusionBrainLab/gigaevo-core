@@ -242,8 +242,13 @@ class ClassifyingAnalyzer:
                     raw = self._llm.call("classify_ext", prompt, self._reasoning)
                     parsed = json.loads(raw)
                     break
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "ClassifyingAnalyzer: LLM returned invalid JSON (retrying): {}",
+                        exc,
+                    )
                 except Exception as exc:
-                    logger.error("ClassifyingAnalyzer classify error: {}", exc)
+                    logger.error("ClassifyingAnalyzer: LLM call failed: {}", exc)
 
             for ref in parsed.get("present_ideas", []):
                 if not isinstance(ref, str):

@@ -482,8 +482,21 @@ def _write_memory_write_stats(
     return snapshot
 
 
-def main() -> dict[str, Any] | None:
+def main(
+    *,
+    banks_path: Path | None = None,
+    best_ideas_path: Path | None = None,
+    programs_path: Path | None = None,
+    usage_updates_path: Path | None = None,
+) -> dict[str, Any] | None:
     """Load cards from banks, write to memory backend, report stats."""
+    _banks_path = banks_path or BANKS_PATH
+    _best_ideas_path = best_ideas_path or BEST_IDEAS_PATH
+    _programs_path = programs_path or PROGRAMS_PATH
+    _usage_updates_path = (
+        usage_updates_path if banks_path is not None else USAGE_UPDATES_PATH
+    )
+
     # Build configuration based on use_api flag
     api_config = None
     if USE_API:
@@ -526,21 +539,21 @@ def main() -> dict[str, Any] | None:
     )
 
     try:
-        if not BANKS_PATH.exists():
-            raise FileNotFoundError(f"Banks file not found: {BANKS_PATH}")
+        if not _banks_path.exists():
+            raise FileNotFoundError(f"Banks file not found: {_banks_path}")
         memory_cards = load_memory_cards(
-            BANKS_PATH,
-            best_ideas_path=BEST_IDEAS_PATH,
-            programs_path=PROGRAMS_PATH,
+            _banks_path,
+            best_ideas_path=_best_ideas_path,
+            programs_path=_programs_path,
             best_programs_percent=BEST_PROGRAMS_PERCENT,
-            usage_updates_path=USAGE_UPDATES_PATH,
+            usage_updates_path=_usage_updates_path,
             memory=memory,
         )
         logger.info(
             "Loaded {} cards from banks: {} (filtered by: {})",
             len(memory_cards),
-            BANKS_PATH,
-            BEST_IDEAS_PATH,
+            _banks_path,
+            _best_ideas_path,
         )
         if USE_API:
             logger.info("Writing to API: {} (namespace={})", MEMORY_API_URL, NAMESPACE)
@@ -602,7 +615,7 @@ def main() -> dict[str, Any] | None:
             write_stats.get("updated_target_cards", 0),
         )
 
-        stats_path = BANKS_PATH.parent / "memory_write_stats.json"
+        stats_path = _banks_path.parent / "memory_write_stats.json"
         snapshot = _write_memory_write_stats(
             stats_path=stats_path,
             input_cards_count=len(memory_cards),
