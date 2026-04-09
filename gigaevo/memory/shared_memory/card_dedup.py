@@ -97,7 +97,7 @@ class CardDedup:
                 build_gam_store,
                 build_retrievers,
             )
-        except (ImportError, OSError) as exc:
+        except ImportError as exc:
             logger.warning("[Memory] Dedup retriever import failed: {}", exc)
             return {}
 

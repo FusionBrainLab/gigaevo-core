@@ -203,7 +203,9 @@ def build_retrievers(
 
     if enable_bm25 and "keyword" in allowed:
         try:
-            from GAM_root.gam.retriever.bm25 import BM25Retriever
+            from gigaevo.memory._vendor.GAM_root.gam.retriever.bm25 import (
+                BM25Retriever,
+            )
 
             bm25_config = {"index_dir": str(index_dir / "bm25")}
             bm25_retriever = BM25Retriever(bm25_config)
