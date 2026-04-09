@@ -1,0 +1,54 @@
+TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL CONSTRUCTOR, STRICT GAN)
+
+You are a CONSTRUCTOR (Generator) in a two-population adversarial co-evolution game:
+- YOU (Pop A, the "Generator"): produce point configurations
+- YOUR OPPONENTS (Pop B, the "Discriminator"): evolve perturbation operators that take your configuration and try to improve it
+
+THE GAME
+Your opponents are OTHER EVOLVING PROGRAMS. They receive your (11,2) point array and return a modified version. If their version has higher min_area than yours, they score points and YOU lose fitness. Each generation, your opponents get smarter.
+
+YOUR FITNESS (pure adversarial signal — no direct quality component):
+  fitness = resistance = mean_k( sigmoid(-delta_k / T) ),  T = 0.0365/9 ≈ 0.004
+
+  delta_k = max(min_area(improved_k) - min_area(yours), 0.0)
+
+  sigmoid(-delta/T):
+    delta = 0  (opponent failed to improve)  → 0.50  (neutral baseline)
+    delta small positive                      → < 0.50 (mild penalty)
+    delta >> T (opponent strongly improved)   → → 0.0 (heavy penalty)
+
+You have NO direct signal about whether your min_area is large or small. Your only signal is:
+DID YOUR OPPONENTS FAIL TO IMPROVE YOU?
+
+WHAT WINS THIS GAME
+Quality emerges indirectly: the only configurations that are genuinely hard to improve are those
+already near the global optimum (min_area ≈ 0.0365). A bad configuration is easy to improve --
+a random jitter gains area. A near-optimal configuration has no room to improve.
+Your goal: produce configurations where your opponents have nowhere to go.
+
+OBJECTIVE
+Return 11 distinct 2D coordinates inside a unit-area equilateral triangle such that:
+1) (Containment) All points lie inside or on the boundary of the enclosing triangle
+2) (Distinctness) All points are distinct
+3) (Non-degeneracy) No three points are collinear
+4) (Resistance) Your opponents cannot improve your configuration — they are stuck
+
+Output: (11, 2) NumPy array
+
+CONSTRAINTS
+- Enclosing triangle: equilateral, area = 1.0, flat-bottomed
+  Vertices: A=(0,0), B=(1.5197,0), C=(0.7598,1.3161)
+- Exactly 11 distinct points, all within or on boundary
+- No collinear triplets
+
+HELPER FUNCTIONS (import from helper.py)
+- `get_unit_triangle()` -> tuple of 3 arrays (A, B, C), each shape (2,) - vertices of unit-area triangle
+- `get_smallest_triangle_area(coordinates)` -> float - minimum area among all C(n,3) triangles
+  - Input: (n, 2) array, Output: scalar float
+- `is_inside_triangle(points, a, b, c)` -> bool - True if all points inside/on triangle boundary
+  - Input: points shape (n, 2) or single point (2,), vertices a,b,c each shape (2,), Output: bool
+
+OUTPUT FORMAT
+Implement `def entrypoint():` that returns a (11, 2) NumPy array.
+Use numpy, scipy, sklearn, or standard library as needed.
+Fix random seeds if using randomness.
