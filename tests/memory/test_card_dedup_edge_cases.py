@@ -6,6 +6,7 @@ Complements test_memory_card_update_dedup.py with adversarial inputs.
 import json
 
 # Also test private helpers that are critical to correctness
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.card_update_dedup import (
     CardUpdateDedupConfig,
     RetrievalWeights,
@@ -419,7 +420,7 @@ class TestDedupeKeepOrder:
 
 class TestMergeUsagePayloads:
     def test_both_empty(self):
-        assert merge_usage_payloads({}, {}) == {}
+        assert merge_usage_payloads({}, {}) == UsagePayload()
 
     def test_existing_only(self):
         existing = {
@@ -433,9 +434,9 @@ class TestMergeUsagePayloads:
             }
         }
         result = merge_usage_payloads(existing, {})
-        entries = result["used"]["entries"]
-        assert len(entries) == 1
-        assert entries[0]["task_description_summary"] == "task1"
+        assert isinstance(result, UsagePayload)
+        assert len(result.entries) == 1
+        assert result.entries[0].task_description_summary == "task1"
 
     def test_incoming_only(self):
         incoming = {
@@ -449,8 +450,8 @@ class TestMergeUsagePayloads:
             }
         }
         result = merge_usage_payloads({}, incoming)
-        entries = result["used"]["entries"]
-        assert len(entries) == 1
+        assert isinstance(result, UsagePayload)
+        assert len(result.entries) == 1
 
     def test_merge_same_task(self):
         existing = {
@@ -474,9 +475,9 @@ class TestMergeUsagePayloads:
             }
         }
         result = merge_usage_payloads(existing, incoming)
-        entries = result["used"]["entries"]
-        assert len(entries) == 1
-        assert entries[0]["fitness_delta_per_use"] == [0.1, 0.2]
+        assert isinstance(result, UsagePayload)
+        assert len(result.entries) == 1
+        assert result.entries[0].fitness_delta_per_use == [0.1, 0.2]
 
     def test_nan_and_inf_filtered(self):
         existing = {
@@ -490,13 +491,13 @@ class TestMergeUsagePayloads:
             }
         }
         result = merge_usage_payloads(existing, {})
-        entries = result["used"]["entries"]
-        assert len(entries) == 1
-        assert entries[0]["fitness_delta_per_use"] == [0.5]
+        assert isinstance(result, UsagePayload)
+        assert len(result.entries) == 1
+        assert result.entries[0].fitness_delta_per_use == [0.5]
 
     def test_non_dict_inputs(self):
-        assert merge_usage_payloads(None, None) == {}
-        assert merge_usage_payloads("bad", "bad") == {}
+        assert merge_usage_payloads(None, None) == UsagePayload()
+        assert merge_usage_payloads("bad", "bad") == UsagePayload()
 
 
 # ===========================================================================

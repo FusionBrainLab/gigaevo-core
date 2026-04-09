@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.card_update_dedup import (
     QUERY_DESCRIPTION,
     QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
@@ -190,13 +191,13 @@ def test_merge_usage_payloads_accumulates_per_task_and_total() -> None:
     }
 
     merged = merge_usage_payloads(existing_usage, incoming_usage)
-    used = merged["used"]
-    assert used["total_used"] == 3
-    assert used["median_delta_fitness"] == 0.1
+    assert isinstance(merged, UsagePayload)
+    assert merged.total_used == 3
+    assert merged.median_delta_fitness == 0.1
 
-    entries = {entry["task_description_summary"]: entry for entry in used["entries"]}
-    assert entries["task A"]["used_count"] == 2
-    assert entries["task A"]["fitness_delta_per_use"] == [0.1, 0.3]
-    assert entries["task A"]["median_delta_fitness"] == 0.2
-    assert entries["task B"]["used_count"] == 1
-    assert entries["task B"]["fitness_delta_per_use"] == [-0.2]
+    entries = {entry.task_description_summary: entry for entry in merged.entries}
+    assert entries["task A"].used_count == 2
+    assert entries["task A"].fitness_delta_per_use == [0.1, 0.3]
+    assert entries["task A"].median_delta_fitness == 0.2
+    assert entries["task B"].used_count == 1
+    assert entries["task B"].fitness_delta_per_use == [-0.2]
