@@ -24,7 +24,6 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
-
 def _str_or_empty(value: Any) -> str:
     """Convert to string, preserving falsy-but-valid values like 0."""
     if value is None:

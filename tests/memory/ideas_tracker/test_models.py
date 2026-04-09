@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from gigaevo.memory.ideas_tracker.analyzers import _split_id
 from gigaevo.memory.ideas_tracker.models import (
     AnalysisResult,
     Idea,
@@ -170,18 +171,18 @@ class TestProgramToRecord:
 class TestSplitId:
     """Tests for analyzers._split_id — protects the most fragile LLM-output parser."""
 
-    def test_split_id_from_analyzers(self) -> None:
-        # Import here to avoid failing before analyzers.py exists in Tasks 1-3
-        from gigaevo.memory.ideas_tracker.analyzers import _split_id
-
+    def test_valid_sequence(self) -> None:
         assert _split_id("abc123:2") == ("abc123", 2)
 
-    def test_split_id_without_sequence_defaults_to_one(self) -> None:
-        from gigaevo.memory.ideas_tracker.analyzers import _split_id
-
+    def test_no_sequence_defaults_to_one(self) -> None:
         assert _split_id("[abc123]") == ("abc123", 1)
 
-    def test_split_id_strips_brackets(self) -> None:
-        from gigaevo.memory.ideas_tracker.analyzers import _split_id
-
+    def test_strips_brackets(self) -> None:
         assert _split_id("[abc123:3]") == ("abc123", 3)
+
+    def test_malformed_sequence_defaults_to_one(self) -> None:
+        """LLM returns non-integer sequence — must not raise ValueError."""
+        assert _split_id("abc123:invalid") == ("abc123", 1)
+
+    def test_empty_sequence_defaults_to_one(self) -> None:
+        assert _split_id("abc123:") == ("abc123", 1)

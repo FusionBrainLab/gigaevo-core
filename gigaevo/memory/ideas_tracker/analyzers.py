@@ -88,7 +88,11 @@ def _split_id(idea_ref: str) -> tuple[str, int]:
     if ":" not in raw:
         return raw.strip("[]"), 1
     left, right = raw.split(":", 1)
-    return left.strip("[]"), int(right.strip("[]"))
+    try:
+        seq = int(right.strip("[]"))
+    except ValueError:
+        seq = 1
+    return left.strip("[]"), seq
 
 
 # ---------------------------------------------------------------------------
