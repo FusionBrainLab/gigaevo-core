@@ -61,8 +61,10 @@ def check_gpu_load(server_ip: str, ssh_user: str = "jovyan") -> float | None:
         result = subprocess.run(
             [
                 "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "ConnectTimeout=5",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "ConnectTimeout=5",
                 f"{ssh_user}@{server_ip}",
                 "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null",
             ],
@@ -100,12 +102,18 @@ def find_free_resources(
 
     # Filter by task if specified
     if task:
-        task_servers = [s for s in servers if task in s.get("tasks", []) or "any" in s.get("tasks", [])]
+        task_servers = [
+            s
+            for s in servers
+            if task in s.get("tasks", []) or "any" in s.get("tasks", [])
+        ]
         if task_servers:
             servers = task_servers
 
     # Get free DBs
-    free_dbs = sorted(db for db in ALL_DBS if check_redis_db_free(redis_host, redis_port, db))
+    free_dbs = sorted(
+        db for db in ALL_DBS if check_redis_db_free(redis_host, redis_port, db)
+    )
 
     if len(free_dbs) < n_runs:
         return []  # not enough free DBs
@@ -123,17 +131,19 @@ def find_free_resources(
 
     # Assign: round-robin across least-loaded servers
     assignments = []
-    labels = [f"R{i+1}" for i in range(n_runs)]
+    labels = [f"R{i + 1}" for i in range(n_runs)]
     for i in range(n_runs):
         if i >= len(server_loads):
             break
         server = server_loads[i % len(server_loads)]
-        assignments.append({
-            "server": server["server"],
-            "db": free_dbs[i],
-            "label": labels[i],
-            "gpu_load": server["gpu_load"],
-        })
+        assignments.append(
+            {
+                "server": server["server"],
+                "db": free_dbs[i],
+                "label": labels[i],
+                "gpu_load": server["gpu_load"],
+            }
+        )
 
     return assignments[:n_runs]
 
@@ -186,15 +196,23 @@ def assign_and_print(exp_name: str, n_runs: int) -> None:
     print()
     print("run_db_assignments:")
     for r in resources:
-        print(f"  {r['label']}: db={r['db']}  # {r['server']} ({r['gpu_load']:.0f}% GPU)")
+        print(
+            f"  {r['label']}: db={r['db']}  # {r['server']} ({r['gpu_load']:.0f}% GPU)"
+        )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GigaEvo resource manager")
-    parser.add_argument("--check", action="store_true", help="Show resource availability")
-    parser.add_argument("--assign", action="store_true", help="Assign resources for an experiment")
+    parser.add_argument(
+        "--check", action="store_true", help="Show resource availability"
+    )
+    parser.add_argument(
+        "--assign", action="store_true", help="Assign resources for an experiment"
+    )
     parser.add_argument("--experiment", type=str, help="Experiment name (task/name)")
-    parser.add_argument("--n-runs", type=int, default=4, help="Number of runs to assign")
+    parser.add_argument(
+        "--n-runs", type=int, default=4, help="Number of runs to assign"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 

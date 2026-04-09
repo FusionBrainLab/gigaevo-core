@@ -110,7 +110,10 @@ def wait_for_approval(
 
     while time.time() < deadline:
         try:
-            params: dict = {"timeout": poll_interval_seconds, "allowed_updates": ["message"]}
+            params: dict = {
+                "timeout": poll_interval_seconds,
+                "allowed_updates": ["message"],
+            }
             if offset is not None:
                 params["offset"] = offset
             resp = requests.get(url, params=params, timeout=poll_interval_seconds + 5)
@@ -139,6 +142,7 @@ def wait_for_approval(
 # Gate helpers used by run-experiment skill
 # ---------------------------------------------------------------------------
 
+
 def gate_design_approval(exp_name: str) -> ApprovalResult:
     """Gate 1: design review."""
     msg = (
@@ -165,7 +169,9 @@ def gate_launch_confirmation(exp_name: str, cfg_summary: str) -> ApprovalResult:
     return wait_for_approval(timeout_hours=24)
 
 
-def gate_results_signoff(exp_name: str, verdict: str, effect_summary: str) -> ApprovalResult:
+def gate_results_signoff(
+    exp_name: str, verdict: str, effect_summary: str
+) -> ApprovalResult:
     """Gate 3: results sign-off."""
     msg = (
         f"📊 *Gate 3 — Results Sign-off*\n\n"
@@ -179,14 +185,13 @@ def gate_results_signoff(exp_name: str, verdict: str, effect_summary: str) -> Ap
     return wait_for_approval(timeout_hours=72)
 
 
-def post_fitness_update(exp_name: str, gen: int, fitness: float, label: str = "") -> None:
+def post_fitness_update(
+    exp_name: str, gen: int, fitness: float, label: str = ""
+) -> None:
     """Hourly fitness update from watchdog."""
     ts = datetime.now(datetime.UTC).strftime("%H:%M UTC")
     run_label = f" ({label})" if label else ""
-    msg = (
-        f"📈 *{exp_name}*{run_label}\n"
-        f"Gen {gen} | Fitness {fitness:.1%} | {ts}"
-    )
+    msg = f"📈 *{exp_name}*{run_label}\nGen {gen} | Fitness {fitness:.1%} | {ts}"
     notify(msg)
 
 
@@ -203,6 +208,11 @@ def post_anomaly_alert(exp_name: str, issue: str) -> None:
 if __name__ == "__main__":
     # Quick test: send a test message
     import sys
-    test_msg = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "GigaEvo Telegram notify: test message"
+
+    test_msg = (
+        " ".join(sys.argv[1:])
+        if len(sys.argv) > 1
+        else "GigaEvo Telegram notify: test message"
+    )
     ok = notify(test_msg)
     print("Sent." if ok else "FAILED.")
