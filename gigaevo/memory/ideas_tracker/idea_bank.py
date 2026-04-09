@@ -60,9 +60,24 @@ def _extract_task_deltas(usage: UsagePayload | Any) -> dict[str, list[float]]:
             if deltas:
                 result.setdefault(entry.task_description_summary, []).extend(deltas)
         return result
-    # Legacy dict path: {"used": {"entries": [...]}}
     if not isinstance(usage, dict):
         return {}
+    entries = usage.get("entries")
+    if isinstance(entries, list):
+        result = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            task = str(entry.get("task_description_summary") or "").strip()
+            if not task:
+                continue
+            raw_deltas = entry.get("fitness_delta_per_use") or entry.get("fitness_deltas")
+            if not isinstance(raw_deltas, list):
+                continue
+            deltas = [d for raw in raw_deltas if (d := to_float(raw)) is not None]
+            if deltas:
+                result.setdefault(task, []).extend(deltas)
+        return result
     used = usage.get("used")
     if not isinstance(used, dict):
         return {}
