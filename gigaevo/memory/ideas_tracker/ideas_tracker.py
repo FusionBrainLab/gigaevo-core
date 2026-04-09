@@ -219,7 +219,7 @@ def _run_write_pipeline(
         logger.warning("Memory write pipeline skipped: log paths unavailable.")
         return
     if not banks_path.exists():
-        logger.warning(f"Memory write pipeline skipped: missing {banks_path}.")
+        logger.warning("Memory write pipeline skipped: missing {}.", banks_path)
         return
 
     try:
@@ -386,7 +386,7 @@ class _SessionLog:
                 return
             raise
         except Exception as exc:
-            logger.warning(f"Could not compute evolutionary statistics: {exc}")
+            logger.warning("Could not compute evolutionary statistics: {}", exc)
             return
 
         if df_summary.empty:

@@ -124,8 +124,8 @@ class LLMClient:
                 self._sync.chat.completions.create(**request).choices[0].message.content
                 or ""
             )
-        except Exception as e:
-            logger.error(f"LLMClient.call({step!r}) failed: {e}")
+        except Exception as exc:
+            logger.error("LLMClient.call({!r}) failed: {}", step, exc)
             return ""
 
     async def call_async(
@@ -141,8 +141,8 @@ class LLMClient:
             try:
                 resp = await self._async.chat.completions.create(**request)
                 return resp.choices[0].message.content or ""
-            except Exception as e:
-                logger.error(f"LLMClient.call_async({step!r}) failed: {e}")
+            except Exception as exc:
+                logger.error("LLMClient.call_async({!r}) failed: {}", step, exc)
                 return ""
 
         if self._semaphore:

@@ -242,8 +242,8 @@ class ClassifyingAnalyzer:
                     raw = self._llm.call("classify_ext", prompt, self._reasoning)
                     parsed = json.loads(raw)
                     break
-                except Exception as e:
-                    logger.error(f"ClassifyingAnalyzer classify error: {e}")
+                except Exception as exc:
+                    logger.error("ClassifyingAnalyzer classify error: {}", exc)
 
             for ref in parsed.get("present_ideas", []):
                 if not isinstance(ref, str):
@@ -464,17 +464,17 @@ class ClusteringAnalyzer:
         """Asynchronous LLM call — used by IdeaTracker enrichment step."""
         return await self._llm.call_async(step, content, self._reasoning)
 
-    def analyze(self, records: list[ProgramRecord], bank: IdeaBank) -> AnalysisResult:
+    def analyze(self, records: list[ProgramRecord], _bank: IdeaBank) -> AnalysisResult:
         """
         Embed, cluster, refine, and return one Idea per surviving cluster.
 
-        bank is accepted for protocol compatibility but not used.
+        _bank is accepted for protocol compatibility but not used by this analyzer.
         NOTE: Do not call this from within an async context — use analyze_async instead.
         """
         return AnalysisResult(new_ideas=asyncio.run(self._run_async(records)))
 
     async def analyze_async(
-        self, records: list[ProgramRecord], bank: IdeaBank
+        self, records: list[ProgramRecord], _bank: IdeaBank
     ) -> AnalysisResult:
         """Async implementation — runs the full embed/cluster/refine pipeline."""
         return AnalysisResult(new_ideas=await self._run_async(records))
@@ -755,6 +755,6 @@ class ClusteringAnalyzer:
                 return await self._llm.call_async(
                     "cluster_desc_synth", prompt, self._reasoning
                 )
-            except Exception as e:
-                logger.error(f"ClusteringAnalyzer desc_synth failed: {e}")
+            except Exception as exc:
+                logger.error("ClusteringAnalyzer desc_synth failed: {}", exc)
         return ""
