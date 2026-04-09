@@ -279,7 +279,7 @@ def _make_run_a_programs() -> list[Program]:
     child1 = Program(
         code="def entrypoint():\n    return sort(evidence)",
         state=ProgramState.DONE,
-        metrics={"fitness": 5.0},
+        metrics={"fitness": 5.0, "is_valid": 1.0},
         metadata={
             "mutation_output": {
                 "archetype": "exploitation",
@@ -296,7 +296,7 @@ def _make_run_a_programs() -> list[Program]:
     child2 = Program(
         code="def entrypoint():\n    return bfs(graph)",
         state=ProgramState.DONE,
-        metrics={"fitness": 7.0},
+        metrics={"fitness": 7.0, "is_valid": 1.0},
         metadata={
             "mutation_output": {
                 "archetype": "exploration",
@@ -313,7 +313,7 @@ def _make_run_a_programs() -> list[Program]:
     child3 = Program(
         code="def entrypoint():\n    return combine(bfs, sort)",
         state=ProgramState.DONE,
-        metrics={"fitness": 9.0},
+        metrics={"fitness": 9.0, "is_valid": 1.0},
         metadata={
             "mutation_output": {
                 "archetype": "exploitation",
@@ -548,7 +548,7 @@ class TestTwoRunMemoryLifecycle:
         parent = Program(
             code="def f(): pass",
             state=ProgramState.DONE,
-            metrics={"fitness": 3.0},
+            metrics={"fitness": 3.0, "is_valid": 1.0},
             metadata={},
             lineage=Lineage(parents=[], generation=1),
         )
@@ -556,7 +556,7 @@ class TestTwoRunMemoryLifecycle:
         child = Program(
             code="def f(): return sorted(x)",
             state=ProgramState.DONE,
-            metrics={"fitness": 8.0},
+            metrics={"fitness": 8.0, "is_valid": 1.0},
             metadata={"memory_selected_idea_ids": ["idea-sort", "idea-bfs"]},
             lineage=Lineage(parents=[parent.id], generation=2),
         )
@@ -569,9 +569,9 @@ class TestTwoRunMemoryLifecycle:
         assert "idea-sort" in usage
         assert "idea-bfs" in usage
 
-        sort_total = usage["idea-sort"]["used"]["total"]
-        assert sort_total["total_used"] == 1
-        assert sort_total["median_delta_fitness"] == 5.0
+        sort_payload = usage["idea-sort"]
+        assert sort_payload.total_used == 1
+        assert sort_payload.median_delta_fitness == 5.0
 
     @pytest.mark.asyncio
     async def test_post_run_hook_fires_after_run_b(self, tmp_path) -> None:
