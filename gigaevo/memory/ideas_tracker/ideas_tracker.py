@@ -458,7 +458,7 @@ class IdeaTracker(PostRunHook):
     def __init__(
         self,
         *,
-        analyzer: ClassifyingAnalyzer | ClusteringAnalyzer | None = None,
+        analyzer: Analyzer | None = None,
         task_description: str = "",
         redis_prefix: str = "",
         chunk_size: int = 5,
@@ -471,7 +471,7 @@ class IdeaTracker(PostRunHook):
         if analyzer is None:
             analyzer = ClassifyingAnalyzer()
 
-        self._analyzer: ClassifyingAnalyzer | ClusteringAnalyzer = analyzer
+        self._analyzer: Analyzer = analyzer
         self._bank = IdeaBank(chunk_size=chunk_size)
         self._fitness_key = fitness_key
         self._memory_write_enabled = memory_write_enabled
