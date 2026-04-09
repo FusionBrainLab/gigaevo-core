@@ -251,8 +251,10 @@ def _build_program_cards(
         fitness = to_float(program.get("fitness"))
         if not program_id or fitness is None:
             continue
+        # Absent is_valid means ideas_tracker already pre-filtered (valid-only).
+        # Only skip when is_valid is explicitly 0 (raw Redis export path).
         is_valid = to_float(program.get(VALIDITY_KEY))
-        if is_valid is None or is_valid <= 0:
+        if is_valid is not None and is_valid <= 0:
             continue
         enriched = dict(program)
         enriched["program_id"] = program_id

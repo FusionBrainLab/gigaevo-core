@@ -188,21 +188,18 @@ class TestLoadMemoryCardsEdgeCases:
                 {
                     "id": "p1",
                     "fitness": 50.0,
-                    "is_valid": 1.0,
                     "code": "a",
                     "task_description_summary": "t",
                 },
                 {
                     "id": "p2",
                     "fitness": 90.0,
-                    "is_valid": 1.0,
                     "code": "b",
                     "task_description_summary": "t",
                 },
                 {
                     "id": "p3",
                     "fitness": 70.0,
-                    "is_valid": 1.0,
                     "code": "c",
                     "task_description_summary": "t",
                 },
@@ -225,7 +222,6 @@ class TestLoadMemoryCardsEdgeCases:
                 {
                     "id": "p2",
                     "fitness": 80.0,
-                    "is_valid": 1.0,
                     "code": "b",
                     "task_description_summary": "t",
                 },
@@ -268,8 +264,9 @@ class TestLoadMemoryCardsEdgeCases:
         assert len(program_cards) == 1
         assert program_cards[0].program_id == "p-valid"
 
-    def test_program_missing_is_valid_skipped(self, tmp_path):
-        """Programs without is_valid field are treated as invalid and skipped."""
+    def test_program_missing_is_valid_accepted(self, tmp_path):
+        """Programs without is_valid field are accepted — ideas_tracker pre-filters invalids
+        before writing programs.json, so absence of is_valid means already-valid."""
         banks = _make_banks(tmp_path, active_bank=[])
         best = _make_best_ideas(tmp_path, best_ideas=[])
         programs = _make_programs(
@@ -280,14 +277,7 @@ class TestLoadMemoryCardsEdgeCases:
                     "fitness": 85.0,
                     "code": "a",
                     "task_description_summary": "t",
-                    # no is_valid field
-                },
-                {
-                    "id": "p-valid",
-                    "fitness": 75.0,
-                    "is_valid": 1.0,
-                    "code": "b",
-                    "task_description_summary": "t",
+                    # no is_valid: treated as valid (ideas_tracker format)
                 },
             ],
         )
@@ -296,7 +286,7 @@ class TestLoadMemoryCardsEdgeCases:
         )
         program_cards = [c for c in cards if c.category == "program"]
         assert len(program_cards) == 1
-        assert program_cards[0].program_id == "p-valid"
+        assert program_cards[0].program_id == "p-no-validity"
 
     def test_ideas_tracker_dict_aliases_preserved(self, tmp_path):
         """Integration: ideas_tracker writes aliases as list[dict] version history.
