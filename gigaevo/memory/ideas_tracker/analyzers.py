@@ -631,6 +631,8 @@ class ClusteringAnalyzer:
         merged_inc: list[int] = []
         merged_rej: list[int] = []
         for p in parts:
+            if p is None:
+                continue
             merged_inc.extend(p[0])
             merged_rej.extend(p[1])
         return merged_inc, merged_rej
