@@ -27,6 +27,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()  # auto-load TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID from .env
 
 
 def _bot_token() -> str:
