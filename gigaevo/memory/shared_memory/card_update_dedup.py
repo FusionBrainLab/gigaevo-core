@@ -30,7 +30,7 @@ class RetrievalWeights(BaseModel):
     values are silently dropped so Pydantic uses field defaults.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     description: float = 0.35
     explanation_summary: float = 0.2
@@ -80,7 +80,7 @@ class CardUpdateDedupConfig(BaseModel):
     (``"true"``, ``"1"``, ``"yes"``, ``"on"``).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     enabled: bool = False
     top_k_per_query: int = 5

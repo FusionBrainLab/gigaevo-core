@@ -39,7 +39,7 @@ _MAX_DESCRIPTION_CHARS = 1200
 class DedupDecision(BaseModel):
     """Result of deduplication analysis: whether to add, discard, or update."""
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     action: str  # "add" | "discard" | "update"
     reason: str
