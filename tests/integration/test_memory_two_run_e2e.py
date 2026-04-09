@@ -46,7 +46,9 @@ from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-from gigaevo.memory.ideas_tracker.ideas_tracker import _build_usage_updates as build_memory_usage_updates_from_programs
+from gigaevo.memory.ideas_tracker.ideas_tracker import (
+    _build_usage_updates as build_memory_usage_updates_from_programs,
+)
 from gigaevo.memory.ideas_tracker.models import (
     programs_to_records,
 )
@@ -379,7 +381,9 @@ class TestTwoRunMemoryLifecycle:
         assert best_record.strategy == "exploitation"
 
         # 2. Memory usage tracking works with real programs
-        usage = build_memory_usage_updates_from_programs(run_a_programs, "HoVer", "fitness")
+        usage = build_memory_usage_updates_from_programs(
+            run_a_programs, "HoVer", "fitness"
+        )
         # No memory cards were used in Run A, so usage is empty
         assert usage == {}
 

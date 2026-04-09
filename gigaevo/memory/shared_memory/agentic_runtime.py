@@ -14,6 +14,9 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
+import gigaevo.memory.config as env_config
+from gigaevo.memory.openai_inference import OpenAIInferenceService
+from gigaevo.memory.shared_memory.card_conversion import DEFAULT_MODEL_NAME
 from gigaevo.memory.shared_memory.protocols import (
     AgenticMemoryProtocol,
     GeneratorProtocol,
@@ -78,10 +81,6 @@ def init_llm_and_generator(
 
     Returns ``(None, None)`` when deps are unavailable.
     """
-    import gigaevo.memory.config as env_config
-    from gigaevo.memory.openai_inference import OpenAIInferenceService
-    from gigaevo.memory.shared_memory.card_conversion import DEFAULT_MODEL_NAME
-
     if generator_cls is None and not dedup_enabled:
         return None, None
 
@@ -125,8 +124,6 @@ def init_agentic_storage(
 
     Returns ``None`` when deps are unavailable.
     """
-    import gigaevo.memory.config as env_config
-
     if llm_service is None or system_cls is None:
         return None
     try:

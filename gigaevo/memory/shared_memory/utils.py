@@ -7,6 +7,7 @@ memory.py, a_mem_memory_creation.py, and other submodules.
 from __future__ import annotations
 
 from typing import Any
+import uuid
 
 
 def _to_list(value: Any) -> list[Any]:
@@ -37,10 +38,8 @@ def _safe_get(obj: Any, name: str, default: Any = None) -> Any:
 
 def looks_like_uuid(value: str) -> bool:
     """Check if a string looks like a UUID (hex or dashed format)."""
-    import uuid as _uuid
-
     try:
-        _uuid.UUID(value)
+        uuid.UUID(value)
         return True
     except Exception:
         return False

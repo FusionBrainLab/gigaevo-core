@@ -6,9 +6,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from gigaevo.memory.ideas_tracker.models import UsageEntry, UsagePayload
+from gigaevo.memory.ideas_tracker.idea_bank import build_usage_payload
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order
-from gigaevo.memory.utils import median, to_float
+from gigaevo.memory.utils import to_float
 
 QUERY_DESCRIPTION = "description"
 QUERY_EXPLANATION_SUMMARY = "explanation_summary"
@@ -456,35 +456,6 @@ def _extract_usage_task_deltas(usage: Any) -> dict[str, list[float]]:
     return task_to_deltas
 
 
-def _build_usage_payload(task_to_deltas: dict[str, list[float]]) -> dict[str, Any]:
-    """Build a canonical ``{"used": {...}}`` payload from per-task deltas."""
-    usage_entries: list[UsageEntry] = []
-    total_deltas: list[float] = []
-    for task_summary in sorted(task_to_deltas):
-        deltas = [
-            parsed
-            for raw in task_to_deltas.get(task_summary, [])
-            if (parsed := to_float(raw)) is not None
-        ]
-        if not deltas:
-            continue
-        usage_entries.append(
-            UsageEntry(
-                task_description_summary=task_summary,
-                used_count=len(deltas),
-                fitness_delta_per_use=deltas,
-                median_delta_fitness=median(deltas),
-            )
-        )
-        total_deltas.extend(deltas)
-    payload = UsagePayload(
-        entries=usage_entries,
-        total_used=len(total_deltas),
-        median_delta_fitness=median(total_deltas),
-    )
-    return {"used": payload.model_dump()}
-
-
 def merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, Any]:
     """Merge two usage payloads, combining per-task fitness deltas."""
     existing_task_deltas = _extract_usage_task_deltas(existing_usage)
@@ -509,7 +480,7 @@ def merge_usage_payloads(existing_usage: Any, incoming_usage: Any) -> dict[str, 
         for key, value in incoming_usage.items():
             if key != "used":
                 merged_usage[key] = value
-    merged_usage["used"] = _build_usage_payload(merged_task_deltas)["used"]
+    merged_usage["used"] = build_usage_payload(merged_task_deltas)["used"]
     return merged_usage
 
 
