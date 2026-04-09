@@ -10,8 +10,15 @@ Your opponents are OTHER EVOLVING PROGRAMS. They receive your (11,2) point array
 YOUR FITNESS (two equally-weighted components):
   fitness = 0.5 * quality + 0.5 * resistance
 
-  quality    = min(min_area / 0.0365, 1.0)    -- how good is your min_area?
-  resistance = 1 - mean(improvement / 0.0365)  -- how much can opponents improve you?
+  quality    = min(min_area / 0.0365, 1.0)
+  resistance = mean_k( float(delta_k == 0) )  -- fraction of opponents that failed to improve you
+
+  delta_k = max(min_area(improved_k) - min_area(yours), 0.0)
+
+  resistance:
+    delta = 0 for all opponents (none improved you)  → 1.0  (perfectly resistant)
+    some opponents improved you                       → < 1.0 (proportional penalty)
+    all opponents improved you                        → 0.0  (fully penetrated)
 
 A high-quality configuration that opponents easily improve scores LOWER than a slightly-worse configuration at a true local optimum. You need BOTH quality AND resistance.
 
