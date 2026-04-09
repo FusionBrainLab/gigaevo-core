@@ -275,29 +275,60 @@ class TestLoadMemoryCardsEdgeCases:
 # ===========================================================================
 
 
-def test_usage_updates_path_respects_caller_override(tmp_path):
-    """Regression: usage_updates_path should use caller's value if provided (or config fallback).
+def test_usage_updates_path_uses_config_when_caller_omits_it(tmp_path):
+    """Regression: caller passing banks_path but not usage_updates_path must get config path."""
+    from unittest.mock import MagicMock, patch
 
-    Bug (line 472-474): checked `banks_path is not None` instead of `usage_updates_path is not None`.
-    This meant passing a custom banks_path would accidentally overwrite the default usage_updates_path logic.
-    """
-    from pathlib import Path
+    from gigaevo.memory.write_pipeline import main
 
-    config_usage_path = Path("/config/usage_updates.json")
-    caller_usage_path = Path("/caller/usage_updates.json")
+    # Create banks file so the existence check inside main() passes
+    banks_file = tmp_path / "banks.json"
+    banks_file.write_text("{}")
 
-    # When caller provides explicit usage_updates_path, use it
-    _usage_updates_path = (
-        caller_usage_path if caller_usage_path is not None else config_usage_path
-    )
-    assert _usage_updates_path == caller_usage_path, (
-        "Caller's usage_updates_path should be used when provided"
-    )
+    # MagicMock without spec so any attribute access auto-returns a Mock
+    cfg = MagicMock()
+    cfg.banks_path = banks_file
+    cfg.best_ideas_path = tmp_path / "best_ideas.json"
+    cfg.programs_path = tmp_path / "programs.json"
+    cfg.usage_updates_path = tmp_path / "usage_updates.json"
+    cfg.use_api = False
+    cfg.memory_dir = tmp_path / "memory"
+    cfg.search_limit = 5
+    cfg.rebuild_interval = 10
+    cfg.enable_llm_synthesis = False
+    cfg.should_evolve = False
+    cfg.fill_missing_fields_with_llm = False
+    cfg.enable_bm25 = False
+    cfg.allowed_gam_tools = []
+    cfg.gam_top_k_by_tool = {}
+    cfg.gam_pipeline_mode = "default"
+    cfg.card_update_dedup_config = {}
+    cfg.best_programs_percent = 5.0
+    cfg.sync_batch_size = 100
+    cfg.sync_on_init = True
+    cfg.channel = "latest"
+    cfg.author = None
+    cfg.namespace = "default"
+    cfg.enable_usage_tracking = True
+    cfg.settings_path = tmp_path / "settings.yaml"
 
-    # When caller provides None, use config default
-    _usage_updates_path = (
-        None if None is not None else config_usage_path
-    )
-    assert _usage_updates_path == config_usage_path, (
+    captured: dict = {}
+
+    def fake_load_cards(*_args, usage_updates_path=None, **_kwargs):
+        captured["usage_updates_path"] = usage_updates_path
+        return []  # empty list so main() iterates nothing and returns cleanly
+
+    with (
+        patch("gigaevo.memory.write_pipeline.load_config", return_value=cfg),
+        patch(
+            "gigaevo.memory.write_pipeline.load_memory_cards",
+            side_effect=fake_load_cards,
+        ),
+        patch("gigaevo.memory.write_pipeline.AmemGamMemory") as MockAmem,
+    ):
+        MockAmem.return_value.get_card_write_stats.return_value = {}
+        main(banks_path=banks_file, usage_updates_path=None)
+
+    assert captured["usage_updates_path"] == tmp_path / "usage_updates.json", (
         "Config's usage_updates_path should be used when caller passes None"
     )
