@@ -19,6 +19,7 @@ from gigaevo.memory.shared_memory.memory_config import (
     MemoryConfig,
 )
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.utils import to_float
 from gigaevo.memory.write_pipeline_config import (
     ALLOWED_GAM_TOOLS,
@@ -568,7 +569,7 @@ def main() -> dict[str, Any] | None:
                     memory_id,
                     (stored.description if stored is not None else "")[:110],
                 )
-        except RuntimeError as exc:
+        except (RuntimeError, MemoryStorageError) as exc:
             logger.error("Write failed: {}", exc)
             return None
 

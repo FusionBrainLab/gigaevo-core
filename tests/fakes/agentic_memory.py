@@ -549,8 +549,8 @@ def patch_gam_imports():
     """
     import types
 
-    fake_module = types.ModuleType("shared_memory.amem_gam_retriever")
+    fake_module = types.ModuleType("gigaevo.memory.shared_memory.amem_gam_retriever")
     fake_module.build_gam_store = fake_build_gam_store  # type: ignore[attr-defined]
     fake_module.build_retrievers = fake_build_retrievers  # type: ignore[attr-defined]
     fake_module.load_amem_records = fake_load_amem_records  # type: ignore[attr-defined]
-    return {"shared_memory.amem_gam_retriever": fake_module}
+    return {"gigaevo.memory.shared_memory.amem_gam_retriever": fake_module}
