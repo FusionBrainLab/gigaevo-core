@@ -97,7 +97,7 @@ def _normalize_usage(raw_usage: Any) -> UsagePayload:
     if not isinstance(raw_usage, dict):
         return UsagePayload()
     try:
-        return UsagePayload(**raw_usage)
+        return UsagePayload.model_validate(raw_usage)
     except Exception:
         return UsagePayload()
 

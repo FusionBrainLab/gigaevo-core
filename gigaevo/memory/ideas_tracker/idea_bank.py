@@ -71,7 +71,9 @@ def _extract_task_deltas(usage: UsagePayload | Any) -> dict[str, list[float]]:
             task = str(entry.get("task_description_summary") or "").strip()
             if not task:
                 continue
-            raw_deltas = entry.get("fitness_delta_per_use") or entry.get("fitness_deltas")
+            raw_deltas = entry.get("fitness_delta_per_use") or entry.get(
+                "fitness_deltas"
+            )
             if not isinstance(raw_deltas, list):
                 continue
             deltas = [d for raw in raw_deltas if (d := to_float(raw)) is not None]

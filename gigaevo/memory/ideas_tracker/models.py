@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Improvement normalisation  (mutation output → canonical dict format)
@@ -120,6 +120,8 @@ class IdeaExplanation(BaseModel):
 class UsageEntry(BaseModel):
     """Single per-task entry in a memory card's usage payload."""
 
+    model_config = ConfigDict(extra="forbid")
+
     task_description_summary: str
     """Human-readable task summary this entry belongs to."""
 
@@ -135,6 +137,8 @@ class UsageEntry(BaseModel):
 
 class UsagePayload(BaseModel):
     """Aggregated usage statistics for a single memory card."""
+
+    model_config = ConfigDict(extra="forbid")
 
     entries: list[UsageEntry] = Field(default_factory=list)
     """Per-task usage entries, sorted by task_description_summary."""
