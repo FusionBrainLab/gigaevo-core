@@ -38,7 +38,7 @@ from gigaevo.memory.ideas_tracker.models import (
     UsagePayload,
     program_to_record,
 )
-from gigaevo.memory.ideas_tracker.utils.origin_analysis import compute_origin_analysis
+from gigaevo.memory.ideas_tracker.utils.origin_analysis import analyse as _analyse_origins
 from gigaevo.memory.utils import to_float
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
@@ -376,10 +376,12 @@ class _SessionLog:
         if not self.banks_file.exists() or not self.programs_file.exists():
             return
         try:
-            df_summary, df_best_ideas = compute_origin_analysis(
+            _result = _analyse_origins(
                 banks_path=str(self.banks_file),
                 programs_path=str(self.programs_file),
             )
+            df_summary = _result.summary_df
+            df_best_ideas = _result.best_ideas_df
         except RuntimeError as exc:
             if "No valid programs" in str(exc):
                 return
