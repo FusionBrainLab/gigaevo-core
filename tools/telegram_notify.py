@@ -31,6 +31,12 @@ import requests
 
 load_dotenv()  # auto-load TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID from .env
 
+# Use HTTPS_PROXY from environment (set in ~/.claude/settings.json) so Telegram
+# is reachable from servers where api.telegram.org is blocked.
+_PROXIES: dict | None = None
+if os.environ.get("HTTPS_PROXY"):
+    _PROXIES = {"https": os.environ["HTTPS_PROXY"], "http": os.environ.get("HTTP_PROXY", os.environ["HTTPS_PROXY"])}
+
 
 def _bot_token() -> str:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -57,7 +63,7 @@ def notify(message: str, *, parse_mode: str = "Markdown") -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": message, "parse_mode": parse_mode}
     try:
-        resp = requests.post(url, json=payload, timeout=10)
+        resp = requests.post(url, json=payload, timeout=10, proxies=_PROXIES)
         resp.raise_for_status()
         return True
     except requests.RequestException as e:
@@ -85,6 +91,7 @@ def send_photo(
                 },
                 files={"photo": (Path(image_path).name, f, "image/png")},
                 timeout=30,
+                proxies=_PROXIES,
             )
         resp.raise_for_status()
         return True
