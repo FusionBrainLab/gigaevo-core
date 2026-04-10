@@ -9,10 +9,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 from loguru import logger
-
-load_dotenv()
 
 from gigaevo.memory._vendor.GAM_root.gam import (
     ChromaRetriever,

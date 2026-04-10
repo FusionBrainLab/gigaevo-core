@@ -8,7 +8,6 @@ timestamped directory in a single flush() call at session end.
 
 from __future__ import annotations
 
-import ast
 import asyncio
 from datetime import datetime
 from functools import cached_property
@@ -17,7 +16,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from dotenv import load_dotenv
 from loguru import logger
 import pandas as pd
 
@@ -40,15 +38,12 @@ from gigaevo.memory.ideas_tracker.models import (
 from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
     analyse as _analyse_origins,
 )
-from gigaevo.memory.utils import to_float
+from gigaevo.memory.utils import parse_string_list, to_float
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
-
-load_dotenv()
-
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -96,35 +91,12 @@ def _summarise_task_description(analyzer: Analyzer, task_description: str) -> st
         return text[:240].strip()
 
 
-def _build_usage_updates(
+def _compute_usage_updates_from_program_selection(
     programs: list[Program],
     task_summary: str,
     fitness_key: str,
 ) -> dict[str, UsagePayload]:
     """Build per-memory-card usage payloads from program fitness deltas."""
-
-    def _as_string_list(value: Any) -> list[str]:
-        if isinstance(value, list):
-            return [str(i).strip() for i in value if str(i).strip()]
-        if isinstance(value, str):
-            text = value.strip()
-            if not text:
-                return []
-            if text[0] in "[{(":
-                try:
-                    return [str(i).strip() for i in json.loads(text) if str(i).strip()]
-                except Exception:
-                    try:
-                        return [
-                            str(i).strip()
-                            for i in ast.literal_eval(text)
-                            if str(i).strip()
-                        ]
-                    except Exception:
-                        pass
-            return [text]
-        return []
-
     fitness_by_id: dict[str, float] = {}
     for prog in programs:
         is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
@@ -139,7 +111,7 @@ def _build_usage_updates(
         is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
         if is_valid is None or is_valid <= 0:
             continue
-        selected = _as_string_list(
+        selected = parse_string_list(
             prog.metadata.get(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
         )
         if not selected:
@@ -164,7 +136,7 @@ def _build_usage_updates(
     }
 
 
-async def _enrich_ideas(
+async def _enrich_ideas_with_keywords_and_summaries(
     ideas: list[Idea], analyzer: Analyzer, task_summary: str
 ) -> list[Idea]:
     """Enrich all ideas concurrently with keywords and explanation summaries."""
@@ -527,15 +499,21 @@ class IdeaTracker(PostRunHook):
 
     async def _run(self, programs: list[Program]) -> None:
         """Full pipeline: filter → analyse → enrich → log → write."""
-        if self._memory_usage_tracking_enabled:
-            usage_updates = _build_usage_updates(
+        records = self._eligible_records(programs)
+
+        # Only access _task_summary (LLM) when there's actual work to do
+        _has_valid_fitness = any(
+            to_float(p.metrics.get(VALIDITY_KEY))
+            and to_float(p.metrics.get(self._fitness_key)) is not None
+            for p in programs
+        )
+        if self._memory_usage_tracking_enabled and _has_valid_fitness:
+            usage_updates = _compute_usage_updates_from_program_selection(
                 programs, self._task_summary, self._fitness_key
             )
             self._log.record_usage_updates(usage_updates)
         else:
             usage_updates = {}
-
-        records = self._eligible_records(programs)
 
         result = await self._analyzer.analyze_async(records, self._bank)
         self._bank.apply(result)
@@ -543,16 +521,18 @@ class IdeaTracker(PostRunHook):
         if self._memory_usage_tracking_enabled and usage_updates:
             self._bank.apply_usage_updates(usage_updates)
 
-        enriched = await _enrich_ideas(
-            self._bank.all_ideas(), self._analyzer, self._task_summary
-        )
-        for idea in enriched:
-            self._bank.enrich(
-                idea.id,
-                keywords=idea.keywords,
-                summary=idea.explanation.summary,
-                task_summary=self._task_summary,
+        # Only enrich ideas if there are eligible records to process
+        if records:
+            enriched = await _enrich_ideas_with_keywords_and_summaries(
+                self._bank.all_ideas(), self._analyzer, self._task_summary
             )
+            for idea in enriched:
+                self._bank.enrich(
+                    idea.id,
+                    keywords=idea.keywords,
+                    summary=idea.explanation.summary,
+                    task_summary=self._task_summary,
+                )
 
         self._log.record("pipeline_complete", total_ideas=len(self._bank.all_ideas()))
         self._log.flush(self._bank, records=self._all_records)

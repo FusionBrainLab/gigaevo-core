@@ -1,7 +1,7 @@
 """Tests for the bug fixes in the memory system refactor.
 
 Covers:
-1. State mutation fix: _save_card_core uses model_copy, not direct mutation
+1. State mutation fix: _insert_new_card uses model_copy, not direct mutation
 2. Namespace filtering fix: api_sync excludes None/empty namespace rows when namespace is set
 3. Dedup meta type guard: score_duplicate_candidates handles non-dict meta safely
 4. LLM retry fallback logging: warning logged when all retries fail
@@ -28,7 +28,7 @@ from tests.fakes.agentic_memory import (
 
 
 class TestSaveCardCoreDoesNotMutateInput:
-    """_save_card_core must not mutate the caller's card object."""
+    """_insert_new_card must not mutate the caller's card object."""
 
     def test_enrichment_does_not_mutate_original_card(self, tmp_path):
         """LLM enrichment creates a new card via model_copy; original unchanged."""
@@ -46,9 +46,9 @@ class TestSaveCardCoreDoesNotMutateInput:
 
         mem.save_card(original)
 
-        # Original keywords list must not have been swapped out by _save_card_core
+        # Original keywords list must not have been swapped out by _insert_new_card
         assert id(original.keywords) == original_keywords_id, (
-            "_save_card_core mutated original.keywords in-place"
+            "_insert_new_card mutated original.keywords in-place"
         )
 
     def test_enrichment_stored_card_has_keywords(self, tmp_path):
@@ -369,26 +369,34 @@ class TestGamSearchInvalidateOnBuildFailure:
     """rebuild() must call gam.invalidate() and clear research_agent on build failure."""
 
     def test_rebuild_calls_invalidate_on_gam_build_failure(self, tmp_path):
-        """When gam.build() raises MemoryRetrieverError, invalidate() is called."""
+        """When gam.build_research_agent() raises MemoryRetrieverError, invalidate_retrievers() is called."""
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
-        # Inject a mock GamSearch that raises on build
+        # Inject a mock GamSearch that raises on build_research_agent
         mock_gam = MagicMock()
-        mock_gam.build.side_effect = MemoryRetrieverError("index corrupt")
+        mock_gam.build_research_agent.side_effect = MemoryRetrieverError(
+            "index corrupt"
+        )
         mock_gam.agent = None
         mem.gam = mock_gam
         mem.research_agent = MagicMock()  # Pretend it was set previously
 
+        # Mock dedup to verify invalidate_retrievers is called
+        mock_dedup = MagicMock()
+        mem.dedup = mock_dedup
+
         mem.rebuild()
 
-        mock_gam.invalidate.assert_called_once()
+        mock_dedup.invalidate_retrievers.assert_called_once()
 
     def test_rebuild_clears_research_agent_on_build_failure(self, tmp_path):
         """After a failed rebuild, research_agent must be None."""
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
         mock_gam = MagicMock()
-        mock_gam.build.side_effect = MemoryRetrieverError("store missing")
+        mock_gam.build_research_agent.side_effect = MemoryRetrieverError(
+            "store missing"
+        )
         mock_gam.agent = MagicMock()
         mem.gam = mock_gam
         mem.research_agent = MagicMock()  # Stale reference
@@ -404,7 +412,7 @@ class TestGamSearchInvalidateOnBuildFailure:
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
         mock_gam = MagicMock()
-        mock_gam.build.side_effect = MemoryRetrieverError("unavailable")
+        mock_gam.build_research_agent.side_effect = MemoryRetrieverError("unavailable")
         mock_gam.agent = None
         mem.gam = mock_gam
 
@@ -412,25 +420,121 @@ class TestGamSearchInvalidateOnBuildFailure:
 
         assert mem._gam_build_failed is True
 
-    def test_rebuild_does_not_call_invalidate_on_success(self, tmp_path):
-        """When build succeeds, invalidate() must NOT be called."""
+    def test_rebuild_sets_agent_on_success(self, tmp_path):
+        """When build_research_agent succeeds, research_agent is set and _gam_build_failed is False."""
         mem, _ = make_test_memory_with_agentic(tmp_path)
 
         mock_agent = MagicMock()
         mock_gam = MagicMock()
-        mock_gam.build.return_value = None
+        mock_gam.build_research_agent.return_value = None
         mock_gam.agent = mock_agent
         mem.gam = mock_gam
 
         mem.rebuild()
 
-        mock_gam.invalidate.assert_not_called()
         assert mem.research_agent is mock_agent
         assert mem._gam_build_failed is False
 
 
 # ---------------------------------------------------------------------------
-# E2E Tests for write_pipeline and memory integration
+# 6. parse_string_list helper tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_string_list_from_list():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list(["a", "b"]) == ["a", "b"]
+
+
+def test_parse_string_list_from_json_string():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list('["x", "y"]') == ["x", "y"]
+
+
+def test_parse_string_list_from_ast_string():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list("['x', 'y']") == ["x", "y"]
+
+
+def test_parse_string_list_bare_string():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list("hello") == ["hello"]
+
+
+def test_parse_string_list_empty():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list("") == []
+    assert parse_string_list(None) == []
+    assert parse_string_list([]) == []
+
+
+def test_parse_string_list_with_whitespace():
+    from gigaevo.memory.utils import parse_string_list
+
+    assert parse_string_list(["  a  ", "b"]) == ["a", "b"]
+    assert parse_string_list('[ "x" , "y" ]') == ["x", "y"]
+
+
+# ---------------------------------------------------------------------------
+# 7. _run ordering — LLM not called when no eligible programs
+# ---------------------------------------------------------------------------
+
+
+def _make_invalid_program(pid: str = "p1") -> MagicMock:
+    """Program that is_valid=0 — skipped by eligibility filter."""
+    from gigaevo.programs.program import Program
+
+    prog = MagicMock(spec=Program)
+    prog.lineage = MagicMock()
+    prog.lineage.parents = ["parent-1"]
+    # is_valid=0 → filtered out by _eligible_records
+    prog.metrics = {"is_valid": 0.0}
+    prog.id = pid
+    return prog
+
+
+def test_no_llm_call_when_no_eligible_programs(tmp_path):
+    """_run should not access _task_summary (LLM) when no eligible programs."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
+
+    task_summary_accessed = []
+
+    class TrackedTracker(IdeaTracker):
+        @property  # type: ignore[override]
+        def _task_summary(self) -> str:
+            task_summary_accessed.append(True)
+            return "summary"
+
+    with patch("gigaevo.memory.ideas_tracker.ideas_tracker.ClassifyingAnalyzer"):
+        tracker = TrackedTracker(
+            task_description="test task",
+            memory_write_enabled=False,
+            memory_usage_tracking_enabled=True,
+            logs_dir=tmp_path,
+        )
+        # Mock the analyzer
+        tracker._analyzer = MagicMock()
+        tracker._analyzer.analyze_async = AsyncMock(return_value=MagicMock(ideas=[]))
+
+        # All programs are invalid — should be filtered out completely
+        programs = [_make_invalid_program(f"p{i}") for i in range(3)]
+        asyncio.run(tracker._run(programs))
+
+        assert task_summary_accessed == [], (
+            "_task_summary (LLM) must not be called when no eligible/valid programs exist"
+        )
+
+
+# ---------------------------------------------------------------------------
+# E2E Tests for memory integration
 # ---------------------------------------------------------------------------
 
 
@@ -468,39 +572,6 @@ class TestMemoryWriteE2E:
         assert retrieved2 is not None
         assert retrieved1.description == "gradient descent optimization"
         assert retrieved2.description == "batch normalization technique"
-
-
-class TestMemorySearchE2E:
-    """E2E tests for memory search functionality."""
-
-    def test_memory_search_returns_results(self, tmp_path):
-        """E2E: search() returns card IDs matching query."""
-        mem = make_test_memory(tmp_path, enable_llm_card_enrichment=False)
-
-        # Save cards with distinct descriptions
-        card1 = normalize_memory_card(
-            {
-                "description": "gradient descent optimization algorithm",
-                "category": "general",
-            }
-        )
-        card2 = normalize_memory_card(
-            {
-                "description": "random forest classifier ensemble",
-                "category": "general",
-            }
-        )
-
-        mem.save_card(card1)
-        mem.save_card(card2)
-
-        # Search for relevant cards
-        results = mem.search("gradient descent")
-
-        # Verify search returned results (as card IDs)
-        assert len(results) > 0
-        # Results should be a list of strings (card IDs)
-        assert all(isinstance(r, str) for r in results)
 
 
 class TestCardLoaderE2E:
@@ -552,7 +623,40 @@ class TestCardLoaderE2E:
         assert cards[1]["id"] == "card-002"
 
 
-class TestCardLoaderAndMemoryRebuildE2E:
+class TestMemorySearchE2E:
+    """E2E tests for memory search functionality."""
+
+    def test_memory_search_returns_results(self, tmp_path):
+        """E2E: search() returns card IDs matching query."""
+        mem = make_test_memory(tmp_path, enable_llm_card_enrichment=False)
+
+        # Save cards with distinct descriptions
+        card1 = normalize_memory_card(
+            {
+                "description": "gradient descent optimization algorithm",
+                "category": "general",
+            }
+        )
+        card2 = normalize_memory_card(
+            {
+                "description": "random forest classifier ensemble",
+                "category": "general",
+            }
+        )
+
+        mem.save_card(card1)
+        mem.save_card(card2)
+
+        # Search for relevant cards
+        results = mem.search("gradient descent")
+
+        # Verify search returned results (as card IDs)
+        assert len(results) > 0
+        # Results should be a list of strings (card IDs)
+        assert all(isinstance(r, str) for r in results)
+
+
+class TestMemoryRebuildE2E:
     """E2E tests for memory rebuild and consistency."""
 
     def test_memory_rebuild_maintains_consistency(self, tmp_path):
@@ -579,3 +683,55 @@ class TestCardLoaderAndMemoryRebuildE2E:
         retrieved = mem.get_card(card_id)
         assert retrieved is not None
         assert retrieved.description == "neural architecture search technique"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: CardLoader streaming + card_update_dedup JSON logging
+# ---------------------------------------------------------------------------
+
+
+def test_card_loader_reads_jsonl_line_by_line(tmp_path, monkeypatch):
+    """CardLoader._load_from_export must not read the entire file at once."""
+    from gigaevo.memory.shared_memory.card_loader import CardLoader
+
+    jsonl = tmp_path / "export.jsonl"
+    jsonl.write_text('{"id": "a"}\n{"id": "b"}\n')
+
+    loader = CardLoader(export_file=jsonl)
+
+    read_text_called = []
+    original_read_text = type(jsonl).read_text
+
+    def tracking_read_text(self, *a, **kw):
+        read_text_called.append(self)
+        return original_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(type(jsonl), "read_text", tracking_read_text)
+    cards = loader._load_from_export()
+
+    assert read_text_called == [], (
+        "_load_from_export must not call Path.read_text(); use open() for streaming"
+    )
+    assert len(cards) == 2
+
+
+def test_extract_json_object_logs_debug_on_failure():
+    """_extract_json_object must log at debug level when JSON parse fails."""
+    import io
+
+    from loguru import logger as _logger
+
+    from gigaevo.memory.shared_memory.card_update_dedup import _extract_json_object
+
+    log_output = io.StringIO()
+    handler_id = _logger.add(log_output, level="DEBUG", format="{message}")
+    try:
+        result = _extract_json_object("not json at all !!!!")
+    finally:
+        _logger.remove(handler_id)
+
+    assert result is None
+    output = log_output.getvalue().lower()
+    assert "parse" in output or "json" in output, (
+        "_extract_json_object should log at DEBUG when it cannot parse JSON"
+    )

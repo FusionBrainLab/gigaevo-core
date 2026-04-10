@@ -1,7 +1,7 @@
 """Tests for the usage-tracking sub-pipeline of IdeaTracker.
 
 Layer 1 (unit) — two test classes:
-  TestBuildUsageUpdatesExtended: _build_usage_updates (ideas_tracker.py)
+  TestBuildUsageUpdatesExtended: _compute_usage_updates_from_program_selection (ideas_tracker.py)
   TestMergeUsagePayloadsWithObjects: merge_usage_payloads (idea_bank.py)
 
 Regression tests in TestMergeUsagePayloadsWithObjects expose a bug in
@@ -21,7 +21,10 @@ from gigaevo.memory.ideas_tracker.idea_bank import (
     build_usage_payload,
     merge_usage_payloads,
 )
-from gigaevo.memory.ideas_tracker.ideas_tracker import _build_usage_updates, _SessionLog
+from gigaevo.memory.ideas_tracker.ideas_tracker import (
+    _compute_usage_updates_from_program_selection,
+    _SessionLog,
+)
 from gigaevo.memory.ideas_tracker.models import Idea, UsagePayload
 from gigaevo.programs.program import Lineage, Program
 from gigaevo.programs.program_state import ProgramState
@@ -116,10 +119,14 @@ def _make_idea_with_usage(
 
 
 class TestBuildUsageUpdatesExtended:
-    def test_build_usage_updates_from_single_mutation(self) -> None:
+    def test_compute_usage_updates_from_program_selection_from_single_mutation(
+        self,
+    ) -> None:
         parent = _make_program(program_id="p1", fitness=5.0, parents=[], generation=1)
         child = _make_memory_program(fitness=8.0, parent_id="p1", card_ids=["card-1"])
-        result = _build_usage_updates([parent, child], "task-A", "fitness")
+        result = _compute_usage_updates_from_program_selection(
+            [parent, child], "task-A", "fitness"
+        )
 
         assert "card-1" in result
         assert isinstance(result["card-1"], UsagePayload)
@@ -128,18 +135,24 @@ class TestBuildUsageUpdatesExtended:
         assert result["card-1"].entries[0].fitness_delta_per_use == [3.0]
         assert result["card-1"].median_delta_fitness == 3.0
 
-    def test_build_usage_updates_deduplicates_repeated_card_ids(self) -> None:
+    def test_compute_usage_updates_from_program_selection_deduplicates_repeated_card_ids(
+        self,
+    ) -> None:
         parent = _make_program(program_id="p1", fitness=1.0, parents=[], generation=1)
         child = _make_memory_program(
             fitness=2.0, parent_id="p1", card_ids=["dup", "dup", "dup"]
         )
-        result = _build_usage_updates([parent, child], "task-A", "fitness")
+        result = _compute_usage_updates_from_program_selection(
+            [parent, child], "task-A", "fitness"
+        )
 
         assert "dup" in result
         assert result["dup"].total_used == 1
         assert result["dup"].entries[0].used_count == 1
 
-    def test_build_usage_updates_accumulates_across_multiple_programs(self) -> None:
+    def test_compute_usage_updates_from_program_selection_accumulates_across_multiple_programs(
+        self,
+    ) -> None:
         parent = _make_program(program_id="p0", fitness=4.0, parents=[], generation=1)
         child1 = _make_memory_program(
             fitness=6.0, parent_id="p0", generation=2, card_ids=["card-1"]
@@ -147,17 +160,23 @@ class TestBuildUsageUpdatesExtended:
         child2 = _make_memory_program(
             fitness=7.0, parent_id="p0", generation=2, card_ids=["card-1", "card-2"]
         )
-        result = _build_usage_updates([parent, child1, child2], "task", "fitness")
+        result = _compute_usage_updates_from_program_selection(
+            [parent, child1, child2], "task", "fitness"
+        )
 
         assert result["card-1"].total_used == 2
         assert result["card-1"].entries[0].fitness_delta_per_use == [2.0, 3.0]
         assert result["card-2"].total_used == 1
         assert result["card-2"].entries[0].fitness_delta_per_use == [3.0]
 
-    def test_build_usage_updates_result_is_usage_payload_not_dict(self) -> None:
+    def test_compute_usage_updates_from_program_selection_result_is_usage_payload_not_dict(
+        self,
+    ) -> None:
         parent = _make_program(program_id="p1", fitness=5.0, parents=[], generation=1)
         child = _make_memory_program(fitness=6.0, parent_id="p1", card_ids=["c1"])
-        result = _build_usage_updates([parent, child], "task", "fitness")
+        result = _compute_usage_updates_from_program_selection(
+            [parent, child], "task", "fitness"
+        )
 
         for value in result.values():
             assert isinstance(value, UsagePayload)

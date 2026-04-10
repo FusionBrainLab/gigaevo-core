@@ -83,7 +83,7 @@ def analyse(
         if isinstance(gen, int) and fit is not None:
             try:
                 f = float(fit)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             if math.isfinite(f):
                 valid_pids.append(pid)
@@ -133,7 +133,7 @@ def analyse(
             return float("nan")
         try:
             f = float(fit)
-        except Exception:
+        except (TypeError, ValueError):
             return float("nan")
         xs = gen_to_sorted_fits.get(int(gen), [])
         return percentile_rank(xs, f)
@@ -377,8 +377,8 @@ def main() -> None:
     result.summary_df.to_csv(out_csv, index=False)
     best_csv = out_dir / (Path(args.output_name).stem + "_best_ideas.csv")
     result.best_ideas_df.to_csv(best_csv, index=False)
-    logger.info(f"Wrote: {out_csv}")
-    logger.info(f"Wrote (best ideas): {best_csv}")
+    logger.info("Wrote: {}", out_csv)
+    logger.info("Wrote (best ideas): {}", best_csv)
 
 
 if __name__ == "__main__":

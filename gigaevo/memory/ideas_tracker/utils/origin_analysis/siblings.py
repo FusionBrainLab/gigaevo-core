@@ -18,7 +18,7 @@ def _pick_best_parent(
             continue
         try:
             f = float(p.get("fitness", float("nan")))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if math.isfinite(f) and f > best_fit:
             best_fit = f
@@ -51,7 +51,7 @@ def build_sibling_groups(
             continue
         try:
             f = float(fit)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if not math.isfinite(f):
             continue
@@ -86,7 +86,7 @@ def build_sibling_groups_allgens(
             continue
         try:
             f = float(fit)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if not math.isfinite(f):
             continue

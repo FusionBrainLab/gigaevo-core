@@ -1,7 +1,7 @@
 """Tests using fake A-MEM/GAM infrastructure.
 
 These tests cover the paths that were previously untestable without real
-Chroma/embedding dependencies: note_sync.upsert_agentic,
+Chroma/embedding dependencies: note_sync.sync_card_to_amem_with_evolution,
 note_sync.sync_card_to_amem_fast, note_sync.remove, note_sync.export_jsonl,
 rebuild with real data, and LLM card enrichment.
 """
@@ -33,7 +33,7 @@ def _make_memory_with_fakes(tmp_path, **overrides):
     """Create AmemGamMemory with fake agentic infrastructure (constructor DI)."""
     mem, fake_system = make_test_memory_with_agentic(tmp_path, **overrides)
 
-    # Patch gam.build to use fake retrievers (avoids Chroma import)
+    # Patch gam.build_research_agent to use fake retrievers (avoids Chroma import)
     def _fake_gam_build():
         mem.gam.agent = FakeResearchAgent(
             retrievers={"vector": fake_system.retriever},
@@ -41,7 +41,7 @@ def _make_memory_with_fakes(tmp_path, **overrides):
         )
 
     if mem.gam is not None:
-        mem.gam.build = _fake_gam_build
+        mem.gam.build_research_agent = _fake_gam_build
     return mem, fake_system
 
 
@@ -121,7 +121,7 @@ class TestFakeAgenticMemorySystem:
 
 
 # ===========================================================================
-# AmemGamMemory with fake agentic system: note_sync.upsert_agentic
+# AmemGamMemory with fake agentic system: note_sync.sync_card_to_amem_with_evolution
 # ===========================================================================
 
 
@@ -345,7 +345,7 @@ class TestFullCycleWithFakes:
         result = mem2._search_local_cards("annealing")
         assert "c1" in result
 
-    def test_upsert_fast_direct(self, tmp_path):
+    def test_sync_card_to_amem_fast_direct(self, tmp_path):
         """Test note_sync.sync_card_to_amem_fast — the hot path used by api_sync.sync."""
         mem, fake_sys = _make_memory_with_fakes(tmp_path)
         card = normalize_memory_card(

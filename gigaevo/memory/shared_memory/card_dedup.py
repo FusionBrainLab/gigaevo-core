@@ -97,7 +97,7 @@ class CardDedup:
                 build_gam_store,
                 build_retrievers,
             )
-        except (ImportError, OSError) as exc:
+        except ImportError as exc:
             logger.warning("[Memory] Dedup retriever import failed: {}", exc)
             return {}
 
@@ -135,7 +135,7 @@ class CardDedup:
             if name in self._allowed_gam_tools
         }
 
-    def resolve_retriever(self, tool_name: str) -> Any:
+    def get_vector_retriever(self, tool_name: str) -> Any:
         """Resolve a retriever by tool name, building lazily if needed."""
         if self._retrievers is None:
             with self._retrievers_lock:
@@ -160,13 +160,13 @@ class CardDedup:
         """Score existing cards against incoming card via vector search.
 
         ``resolve_retriever_fn`` resolves tool names to retrievers.
-        If not provided, uses ``self.resolve_retriever``.
+        If not provided, uses ``self.get_vector_retriever``.
         """
         cfg = self._config
         if not cfg.enabled or not self._card_store.cards:
             return []
 
-        resolver = resolve_retriever_fn or self.resolve_retriever
+        resolver = resolve_retriever_fn or self.get_vector_retriever
 
         query_by_key = build_dedup_queries(card.model_dump())
         tool_by_key = {

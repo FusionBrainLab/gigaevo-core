@@ -143,11 +143,11 @@ class TestStaleEntityCleanup:
 
 
 class TestLazyApiSyncFactory:
-    """Tests for the _ensure_api_sync lazy factory logic."""
+    """Tests for the _get_api_sync lazy factory logic."""
 
-    def test_ensure_api_sync_when_api_set_but_config_none(self, tmp_path):
+    def test_get_api_sync_when_api_set_but_config_none(self, tmp_path):
         """D1: When mem.api is set post-construction but config.api is None
-        (local-only mode), _ensure_api_sync creates ApiSync with "default"
+        (local-only mode), _get_api_sync creates ApiSync with "default"
         namespace fallback.
 
         This may be correct-by-design or a bug depending on intent.
@@ -157,7 +157,7 @@ class TestLazyApiSyncFactory:
         mock_api = MagicMock()
         mem.api = mock_api
 
-        api_sync = mem._ensure_api_sync()
+        api_sync = mem._get_api_sync()
 
         assert api_sync is not None
         # Falls back to "default" namespace
@@ -165,25 +165,25 @@ class TestLazyApiSyncFactory:
         assert api_sync.channel == "latest"
         assert api_sync.author is None
 
-    def test_ensure_api_sync_caches_instance(self, tmp_path):
-        """D2: Once _ensure_api_sync creates an ApiSync, subsequent calls
+    def test_get_api_sync_caches_instance(self, tmp_path):
+        """D2: Once _get_api_sync creates an ApiSync, subsequent calls
         return the same cached instance."""
         mem = _make_memory(tmp_path)
         mock_api = MagicMock()
         mem.api = mock_api
 
-        api_sync1 = mem._ensure_api_sync()
-        api_sync2 = mem._ensure_api_sync()
+        api_sync1 = mem._get_api_sync()
+        api_sync2 = mem._get_api_sync()
 
         assert api_sync1 is api_sync2
 
-    def test_ensure_api_sync_none_when_no_api(self, tmp_path):
-        """D3: When mem.api is None (local-only mode), _ensure_api_sync
+    def test_get_api_sync_none_when_no_api(self, tmp_path):
+        """D3: When mem.api is None (local-only mode), _get_api_sync
         returns None without creating ApiSync."""
         mem = _make_memory(tmp_path)
         assert mem.api is None
 
-        result = mem._ensure_api_sync()
+        result = mem._get_api_sync()
         assert result is None
 
 
@@ -317,13 +317,15 @@ class TestSearchSyncInteraction:
 
         # Mock GAM to always fail
         mem.gam = MagicMock()
-        mem.gam.build.side_effect = MemoryRetrieverError("GAM build failed")
+        mem.gam.build_research_agent.side_effect = MemoryRetrieverError(
+            "GAM build failed"
+        )
 
         # First sync triggers rebuild (research_agent is None + _has_agentic)
         mem._sync_from_api(force_full=False)
         assert mem._gam_build_failed is True
-        assert mem.gam.build.call_count == 1
+        assert mem.gam.build_research_agent.call_count == 1
 
         # Second sync does NOT retry build (circuit breaker active)
         mem._sync_from_api(force_full=False)
-        assert mem.gam.build.call_count == 1  # Still 1, not 2
+        assert mem.gam.build_research_agent.call_count == 1  # Still 1, not 2

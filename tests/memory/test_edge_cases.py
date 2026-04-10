@@ -276,7 +276,7 @@ class TestBug7UpdateFallthrough:
             None,
         )
         mem.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.8}]
         )
 
@@ -286,7 +286,7 @@ class TestBug7UpdateFallthrough:
 
         # Now save a new card — dedup will try to update "existing" but it's gone
         mem.save_card({"description": "should be deduped"})
-        # BUG: Falls through to add because _apply_update_actions_from_merges returns []
+        # BUG: Falls through to add because _apply_dedup_merge_updates returns []
         stats = mem.get_card_write_stats()
         assert (
             stats["added"] >= 2

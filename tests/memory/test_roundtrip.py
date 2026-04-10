@@ -276,6 +276,7 @@ class TestMemoryWritePipeline:
                         {
                             "id": "prog-1",
                             "fitness": 90.0,
+                            "is_valid": 1.0,
                             "code": "def solve():\n    return 42\n",
                             "task_description": "Solve TSP",
                             "task_description_summary": "TSP",
@@ -527,7 +528,7 @@ class TestFullMemoryCycle:
             None,
         )
         mem.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.9}]
         )
 

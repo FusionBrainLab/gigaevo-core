@@ -52,7 +52,7 @@ class TestDedupLLMFailures:
         mock_llm.generate.return_value = ("garbage garbage garbage", {}, None, None)
         mem.dedup.llm_service = mock_llm
 
-        # Pre-formatted candidates list (bypassing score_candidates)
+        # Pre-formatted candidates list (bypassing score_duplicate_candidates)
         candidates = [{"card_id": "existing", "final_score": 0.8}]
 
         decision = mem.dedup.ask_llm_for_dedup_decision(
@@ -133,9 +133,9 @@ class TestDedupLLMFailures:
 
 
 class TestMergeEdgeCases:
-    """Tests for CardDedup.compute_card_merge_updates and _apply_update_actions_from_merges."""
+    """Tests for CardDedup.compute_card_merge_updates and _apply_dedup_merge_updates."""
 
-    def test_compute_merges_skips_deleted_card(self, tmp_path):
+    def test_compute_card_merge_updates_skips_deleted_card(self, tmp_path):
         """G1: If an update targets a card_id that's no longer in store.cards,
         it's silently skipped."""
         mem = _make_full_memory(tmp_path)
@@ -155,7 +155,7 @@ class TestMergeEdgeCases:
         # No merges for deleted card
         assert len(merges) == 0
 
-    def test_compute_merges_deduplicates_same_card_id(self, tmp_path):
+    def test_compute_card_merge_updates_deduplicates_same_card_id(self, tmp_path):
         """G2: If LLM returns two update entries for the same card_id,
         only the first is processed (via seen_ids set)."""
         mem = _make_full_memory(tmp_path)
@@ -174,7 +174,7 @@ class TestMergeEdgeCases:
         assert merges[0][0] == "c1"
 
     def test_apply_update_persists_partial_on_exception(self, tmp_path):
-        """G3: When _save_card_core raises on first merge, the exception is
+        """G3: When _insert_new_card raises on first merge, the exception is
         logged (not propagated) and remaining merges are still attempted."""
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "target1"})
@@ -205,16 +205,16 @@ class TestMergeEdgeCases:
         ]
         merges = mem.dedup.compute_card_merge_updates(incoming, updates)
 
-        mem._save_card_core = failing_on_first
+        mem._insert_new_card = failing_on_first
 
         # Try to apply pre-computed merges, first fails
-        updated_ids = mem._apply_update_actions_from_merges(merges)
+        updated_ids = mem._apply_dedup_merge_updates(merges)
 
         # c1 failed, c2 succeeded
         assert "c1" not in updated_ids
         assert "c2" in updated_ids
 
-    def test_compute_merges_skips_non_dict_updates(self, tmp_path):
+    def test_compute_card_merge_updates_skips_non_dict_updates(self, tmp_path):
         """G4: If updates contains non-dict items, they're skipped."""
         mem = _make_full_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "target"})
@@ -263,8 +263,8 @@ class TestDedupOrchestrator:
             return_value={"action": "discard", "duplicate_of": "nonexistent"}
         )
 
-        # Mock score_candidates to return non-empty list so dedup_ready is True
-        mem.dedup.score_candidates = MagicMock(
+        # Mock score_duplicate_candidates to return non-empty list so dedup_ready is True
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "c1", "final_score": 0.9}]
         )
 
@@ -301,7 +301,7 @@ class TestDedupOrchestrator:
         )
         mem.llm_service = mock_llm
         mem.dedup.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[
                 {"card_id": "c1", "final_score": 0.8},
                 {"card_id": "c2", "final_score": 0.7},
@@ -330,7 +330,7 @@ class TestDedupOrchestrator:
         )
         mem.llm_service = mock_llm
         mem.dedup.llm_service = mock_llm
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "existing", "final_score": 0.8}]
         )
 
@@ -349,7 +349,9 @@ class TestDedupOrchestrator:
 class TestNoteSyncExceptions:
     """Tests for exception handling in NoteSync upsert methods."""
 
-    def test_upsert_fast_delete_failure_logs_warning_and_still_adds(self, tmp_path):
+    def test_sync_card_to_amem_fast_delete_failure_logs_warning_and_still_adds(
+        self, tmp_path
+    ):
         """I1: If retriever.delete_document raises, a warning is logged and
         add_document is still called. In dict-based retrievers this overwrites;
         in list-based (Chroma) this may leave duplicates — the warning lets
@@ -384,7 +386,7 @@ class TestNoteSyncExceptions:
         # add_document was still called despite delete failure
         assert len(add_calls) > initial_add_count
 
-    def test_upsert_agentic_update_raises_propagates(self, tmp_path):
+    def test_sync_card_to_amem_with_evolution_update_raises_propagates(self, tmp_path):
         """I2: Unlike sync_card_to_amem_fast, sync_card_to_amem_with_evolution does NOT have try/except,
         so exceptions from memory_system.update() propagate."""
         mem, fake_sys = make_test_memory_with_agentic(tmp_path)
@@ -407,10 +409,10 @@ class TestNoteSyncExceptions:
 
 
 class TestMergeApiError:
-    """Tests for X3: partial merge failure during _apply_update_actions_from_merges."""
+    """Tests for X3: partial merge failure during _apply_dedup_merge_updates."""
 
     def test_merge_api_error_continues_remaining_merges(self, tmp_path):
-        """X3: If _save_card_core raises on first merge, second merge should
+        """X3: If _insert_new_card raises on first merge, second merge should
         still be attempted. The partial failure should be logged, not silently
         dropped."""
         mem = _make_memory(tmp_path)
@@ -418,7 +420,7 @@ class TestMergeApiError:
         mem.save_card({"id": "c2", "description": "target2"})
 
         call_count = 0
-        original_save = mem._save_card_core
+        original_save = mem._insert_new_card
 
         def failing_on_first(card):
             nonlocal call_count
@@ -442,9 +444,9 @@ class TestMergeApiError:
         ]
         merges = mem.dedup.compute_card_merge_updates(incoming, updates)
 
-        mem._save_card_core = failing_on_first
+        mem._insert_new_card = failing_on_first
 
-        updated_ids = mem._apply_update_actions_from_merges(merges)
+        updated_ids = mem._apply_dedup_merge_updates(merges)
 
         # c2 should still be updated even though c1 failed
         assert "c2" in updated_ids
@@ -469,7 +471,7 @@ class TestDiscardPhantomId:
         mem.dedup.ask_llm_for_dedup_decision = MagicMock(
             return_value={"action": "discard", "duplicate_of": "phantom-gone"}
         )
-        mem.dedup.score_candidates = MagicMock(
+        mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "c1", "final_score": 0.9}]
         )
 

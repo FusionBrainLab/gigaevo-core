@@ -15,7 +15,9 @@ from gigaevo.memory._vendor.A_mem.agentic_memory.memory_system import (
 )
 import gigaevo.memory.config as config
 from gigaevo.memory.openai_inference import OpenAIInferenceService
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.card_conversion import (
+    normalize_memory_card as _canonical_normalize,
+)
 from gigaevo.memory.shared_memory.utils import (
     _safe_get,
     _to_list,
@@ -71,7 +73,7 @@ def _memory_to_dict(
     mem_id = (
         _safe_get(mem, "id", None) or _safe_get(mem, "memory_id", None) or memory_id
     )
-    card = normalize_memory_card(base_card, fallback_id=mem_id)
+    card = _canonical_normalize(base_card, fallback_id=mem_id).model_dump()
     if mem is None:
         return card
 
