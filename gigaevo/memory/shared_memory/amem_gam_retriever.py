@@ -220,10 +220,6 @@ def build_retrievers(
 
 def main():
     export_file = Path("amem_exports/amem_memories.jsonl")
-    # if export_path:
-    #     export_file = Path(export_path)
-    # else:
-    #     export_file = Path(__file__).resolve().parents[1]  / "amem_memories.jsonl"
 
     if not export_file.exists():
         raise FileNotFoundError(f"A-mem export not found: {export_file}")

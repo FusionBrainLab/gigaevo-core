@@ -24,7 +24,15 @@ from gigaevo.runner.dag_blueprint import DAGBlueprint
 
 
 class FakeProvider(OpponentArchiveProvider):
-    async def get_opponents(self, n: int = 5) -> list[OpponentProgram]:
+    async def get_opponents(self, _n: int = 5) -> list[OpponentProgram]:
+        return []
+
+    async def get_top_k(
+        self, _k: int, *, higher_is_better: bool = True
+    ) -> list[OpponentProgram]:
+        return []
+
+    async def get_codes_by_ids(self, _ids: list[str]) -> list[str]:
         return []
 
 
@@ -95,12 +103,27 @@ class TestAdversarialPipelineBuilder:
         adversarial_stages = set(adversarial_bp.nodes.keys())
         assert default_stages.issubset(adversarial_stages)
 
+    def test_adds_fetch_opponent_ids_stage(self):
+        ctx = _make_ctx()
+        bp = AdversarialPipelineBuilder(
+            ctx, opponent_provider=FakeProvider()
+        ).build_blueprint()
+        assert "FetchOpponentIdsStage" in bp.nodes
+
     def test_adds_fetch_opponent_results_stage(self):
         ctx = _make_ctx()
         bp = AdversarialPipelineBuilder(
             ctx, opponent_provider=FakeProvider()
         ).build_blueprint()
         assert "FetchOpponentResultsStage" in bp.nodes
+
+    def test_ids_stage_feeds_results_stage(self):
+        ctx = _make_ctx()
+        bp = AdversarialPipelineBuilder(
+            ctx, opponent_provider=FakeProvider()
+        ).build_blueprint()
+        edges = _edge_pairs(bp)
+        assert ("FetchOpponentIdsStage", "FetchOpponentResultsStage") in edges
 
     def test_opponent_results_wired_as_context_to_validator(self):
         ctx = _make_ctx()
@@ -124,12 +147,19 @@ class TestAdversarialPipelineBuilder:
         assert len(context_edges) == 1
         assert context_edges[0].input_name == "context"
 
-    def test_fetch_opponents_depends_on_validate_code(self):
+    def test_fetch_opponent_ids_depends_on_validate_code(self):
         ctx = _make_ctx()
         bp = AdversarialPipelineBuilder(
             ctx, opponent_provider=FakeProvider()
         ).build_blueprint()
-        assert "ValidateCodeStage" in _dep_names(bp, "FetchOpponentResultsStage")
+        assert "ValidateCodeStage" in _dep_names(bp, "FetchOpponentIdsStage")
+
+    def test_fetch_opponent_results_depends_on_fetch_ids(self):
+        ctx = _make_ctx()
+        bp = AdversarialPipelineBuilder(
+            ctx, opponent_provider=FakeProvider()
+        ).build_blueprint()
+        assert "FetchOpponentIdsStage" in _dep_names(bp, "FetchOpponentResultsStage")
 
     def test_program_function_still_wired_as_payload(self):
         ctx = _make_ctx()
@@ -150,7 +180,7 @@ class TestAdversarialPipelineBuilder:
         assert ("MergeMetricsStage", "EnsureMetricsStage") in edges
         assert ("EnsureMetricsStage", "MutationContextStage") in edges
 
-    def test_only_one_new_stage_vs_default(self):
+    def test_two_new_stages_vs_default(self):
         ctx = _make_ctx()
         default_bp = DefaultPipelineBuilder(ctx).build_blueprint()
         adversarial_bp = AdversarialPipelineBuilder(
@@ -158,7 +188,7 @@ class TestAdversarialPipelineBuilder:
         ).build_blueprint()
 
         new_stages = set(adversarial_bp.nodes.keys()) - set(default_bp.nodes.keys())
-        assert new_stages == {"FetchOpponentResultsStage"}
+        assert new_stages == {"FetchOpponentIdsStage", "FetchOpponentResultsStage"}
 
     def test_all_factories_are_callable(self):
         ctx = _make_ctx()

@@ -38,7 +38,11 @@ def _make_opponent(
 
 def _make_provider(opponents: list[OpponentProgram]) -> OpponentArchiveProvider:
     provider = MagicMock(spec=OpponentArchiveProvider)
-    provider.get_opponents = AsyncMock(return_value=opponents)
+    provider.get_top_k = AsyncMock(
+        side_effect=lambda k, *, higher_is_better=True: sorted(
+            opponents, key=lambda o: o.fitness, reverse=higher_is_better
+        )[:k]
+    )
     return provider
 
 
@@ -189,9 +193,13 @@ class TestOpponentFeedbackStage:
             _make_opponent(program_id="low2", code="# low2", fitness=0.2),
             _make_opponent(program_id="high2", code="# high2", fitness=0.8),
         ]
-        # Provider returns all 5 (k*5 = 10 requested, but only 5 available)
+        # Provider returns top-2 by fitness (get_top_k called with k=2)
         provider = MagicMock(spec=OpponentArchiveProvider)
-        provider.get_opponents = AsyncMock(return_value=opponents)
+        provider.get_top_k = AsyncMock(
+            side_effect=lambda k, *, higher_is_better=True: sorted(
+                opponents, key=lambda o: o.fitness, reverse=higher_is_better
+            )[:k]
+        )
 
         stage = OpponentFeedbackStage(
             opponent_provider=provider,

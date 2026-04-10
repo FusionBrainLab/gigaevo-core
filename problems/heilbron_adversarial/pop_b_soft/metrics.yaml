@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: "Adversarial fitness: 0.5*quality + 0.5*resistance (drives MAP-Elites selection)"
+    description: "Mean sigmoid(delta/T) across opponent configs — soft improvement signal, T=Q_MAX/9"
     decimals: 5
     is_primary: true
     higher_is_better: true
@@ -10,7 +10,7 @@ specs:
     significant_change: 0.01
     sentinel_value: -1.0
   is_valid:
-    description: "Whether the constructor output is valid (1 valid, 0 invalid)"
+    description: "Whether the improver callable is valid (1 valid, 0 invalid)"
     decimals: 0
     is_primary: false
     higher_is_better: true
@@ -20,7 +20,7 @@ specs:
     significant_change: 1.0
     sentinel_value: 0
   actual_fitness:
-    description: "Raw min_area of the constructor output (true Heilbron objective, for paper reporting)"
+    description: "Best post-improvement min_area achieved across all opponent configs"
     decimals: 5
     is_primary: false
     higher_is_better: true
@@ -29,38 +29,38 @@ specs:
     include_in_prompts: true
     significant_change: 0.001
     sentinel_value: -1.0
-  quality:
-    description: "Normalized quality = min(min_area / 0.0365, 1.0)"
-    decimals: 5
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 1.0
-    include_in_prompts: false
-    significant_change: 0.01
-    sentinel_value: -1.0
-  resistance:
-    description: "Fraction of opponents that failed to improve the config (binary: 1 if delta==0, 0 otherwise)"
-    decimals: 5
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 1.0
-    include_in_prompts: true
-    significant_change: 0.01
-    sentinel_value: -1.0
-  mean_improvement:
-    description: "Mean raw improvement (delta in min_area units) achieved by opponents"
+  mean_improvement_raw:
+    description: "Mean raw improvement in min_area units across opponent configs (clamped at 0)"
     decimals: 6
     is_primary: false
-    higher_is_better: false
+    higher_is_better: true
     lower_bound: 0.0
     upper_bound: 0.0365
     include_in_prompts: false
     significant_change: 0.001
     sentinel_value: -1.0
-  best_post_improvement:
-    description: "Best min_area achieved by any opponent improver on this config"
+  mean_pre_quality:
+    description: "Mean min_area of opponent configs before improvement"
+    decimals: 5
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 0.0365
+    include_in_prompts: false
+    significant_change: 0.001
+    sentinel_value: -1.0
+  mean_post_quality:
+    description: "Mean min_area of opponent configs after improvement"
+    decimals: 5
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 0.0365
+    include_in_prompts: false
+    significant_change: 0.001
+    sentinel_value: -1.0
+  max_post_quality:
+    description: "Best min_area achieved after improvement across all opponents"
     decimals: 5
     is_primary: false
     higher_is_better: true
@@ -70,7 +70,7 @@ specs:
     significant_change: 0.001
     sentinel_value: -1.0
   n_opponents:
-    description: "Number of opponent improvers evaluated against"
+    description: "Number of opponent configurations evaluated against"
     decimals: 0
     is_primary: false
     higher_is_better: true

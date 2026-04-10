@@ -1,21 +1,27 @@
-"""Adversarial evaluate.py for Pop B (Improver) — binary improvement scoring.
+"""Adversarial evaluate.py for Pop B (Improver) — sigmoid improvement scoring (IV2).
 
 Receives:
     opponent_results: list of (11, 2) np.ndarray  (point configs from Pop A)
     program_output:   callable improve(points) -> improved_points
 
-Fitness = mean(max(delta, 0) / Q_MAX) across opponent configurations, clipped to [0, 1]
+Fitness = mean(sigmoid(delta / T)) across opponent configurations, T=Q_MAX/9 ≈ 0.004
+    delta=0  → sigmoid(0) = 0.50 (neutral; zero improvement gets partial credit)
+    delta=+T → sigmoid(1) ≈ 0.73
+    delta=-T → sigmoid(-1) ≈ 0.27 (worsening penalised)
     actual_fitness = best post-improvement min_area achieved (for paper reporting)
 
-For sigmoid improvement scoring use pop_b_soft (IV2 soft-fitness variant).
+This is the soft-fitness variant (IV2=ON). For binary scoring use pop_b.
 """
 
 from __future__ import annotations
+
+import math
 
 from helper import get_smallest_triangle_area, get_unit_triangle, is_inside_triangle
 import numpy as np
 
 Q_MAX = 0.0365
+_T = Q_MAX / 9  # sigmoid temperature ≈ 0.004
 
 INVALID = {
     "fitness": -1.0,
@@ -27,6 +33,13 @@ INVALID = {
     "max_post_quality": -1.0,
     "n_opponents": 0.0,
 }
+
+
+def _sigmoid(x: float) -> float:
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    exp_x = math.exp(x)
+    return exp_x / (1.0 + exp_x)
 
 
 def _validate_config(points: object) -> np.ndarray | None:
@@ -69,17 +82,17 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
             improved = improve_fn(config.copy())
             improved = _validate_config(improved)
             if improved is None:
-                scores.append(0.0)
+                scores.append(_sigmoid(0.0))
                 pre_qualities.append(pre_q)
                 post_qualities.append(pre_q)
                 continue
             post_q = float(get_smallest_triangle_area(improved))
             delta = post_q - pre_q
-            scores.append(min(max(delta, 0.0) / Q_MAX, 1.0))
+            scores.append(_sigmoid(delta / _T))
             pre_qualities.append(pre_q)
             post_qualities.append(post_q)
         except Exception:
-            scores.append(0.0)
+            scores.append(_sigmoid(0.0))
             pre_qualities.append(pre_q)
             post_qualities.append(pre_q)
 

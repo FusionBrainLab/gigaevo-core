@@ -65,6 +65,34 @@ def notify(message: str, *, parse_mode: str = "Markdown") -> bool:
         return False
 
 
+def send_photo(
+    image_path: str, caption: str = "", *, parse_mode: str = "Markdown"
+) -> bool:
+    """Send a PNG/JPG image to Telegram with an optional caption. Returns True on success."""
+    from pathlib import Path
+
+    token = _bot_token()
+    chat_id = _chat_id()
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                url,
+                data={
+                    "chat_id": chat_id,
+                    "caption": caption[:1024],
+                    "parse_mode": parse_mode,
+                },
+                files={"photo": (Path(image_path).name, f, "image/png")},
+                timeout=30,
+            )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"[telegram_notify] WARNING: failed to send photo: {e}")
+        return False
+
+
 @dataclass
 class ApprovalResult:
     approved: bool

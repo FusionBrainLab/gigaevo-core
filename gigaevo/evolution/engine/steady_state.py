@@ -28,7 +28,7 @@ from typing import cast
 
 from loguru import logger
 
-from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig  # noqa: I001
 from gigaevo.evolution.engine.core import (
     _RUN_STATE_PROGRAMS_PROCESSED,
     _RUN_STATE_TOTAL_GENERATIONS,

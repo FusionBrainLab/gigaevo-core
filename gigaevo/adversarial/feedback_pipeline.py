@@ -58,6 +58,7 @@ class AdversarialFeedbackPipelineBuilder(AdversarialPipelineBuilder):
         n_opponents: int = 5,
         per_opponent_timeout: float = 10.0,
         fallback_dir: str = "fallback",
+        archive_reeval: bool = True,
         *,
         dag_timeout: float = 3600.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
@@ -68,14 +69,21 @@ class AdversarialFeedbackPipelineBuilder(AdversarialPipelineBuilder):
             n_opponents,
             per_opponent_timeout,
             fallback_dir,
+            archive_reeval,
             dag_timeout=dag_timeout,
             stage_timeout=stage_timeout,
+        )
+        # Derive sort direction from the primary metric so we always rank by the
+        # right polarity (e.g. a loss metric where lower=better would use reverse=False).
+        higher_is_better = (
+            ctx.problem_ctx.metrics_context.get_primary_spec().higher_is_better
         )
         self._add_feedback_stages(
             opponent_provider=opponent_provider,
             k=opponent_feedback_k,
             role=population_role,
             stage_timeout=stage_timeout,
+            higher_is_better=higher_is_better,
         )
 
     def _add_feedback_stages(
@@ -84,6 +92,7 @@ class AdversarialFeedbackPipelineBuilder(AdversarialPipelineBuilder):
         k: int,
         role: Literal["constructor", "improver"],
         stage_timeout: float,
+        higher_is_better: bool,
     ) -> None:
         # Remove FormatterStage → MutationContextStage edge (no artifact in adversarial eval)
         self.remove_data_flow_edge("FormatterStage", "MutationContextStage")
@@ -95,6 +104,7 @@ class AdversarialFeedbackPipelineBuilder(AdversarialPipelineBuilder):
                 opponent_provider=opponent_provider,
                 k=k,
                 role=role,
+                higher_is_better=higher_is_better,
                 timeout=stage_timeout,
             ),
         )

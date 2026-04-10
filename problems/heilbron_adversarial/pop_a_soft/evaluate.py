@@ -1,4 +1,4 @@
-"""Adversarial evaluate.py for Pop A (Constructor) — binary resistance scoring.
+"""Adversarial evaluate.py for Pop A (Constructor) — sigmoid resistance scoring (IV2).
 
 Receives:
     opponent_results: list of callables improve(points) -> improved_points  (from Pop B)
@@ -6,19 +6,23 @@ Receives:
 
 Fitness = ALPHA * quality + (1 - ALPHA) * resistance
     quality    = min(min_area / Q_MAX, 1.0)
-    resistance = mean(float(delta_i <= 0))  — 1 if opponent failed to improve, 0 if succeeded
+    resistance = mean(sigmoid(-delta_i / T)), T=Q_MAX/9 ≈ 0.004
+        near 1 when delta≤0 (opponent failed), near 0 for large positive delta
     actual_fitness = raw min_area (tracked separately for paper reporting)
 
-For sigmoid resistance scoring use pop_a_soft (IV2 soft-fitness variant).
+This is the soft-fitness variant (IV2=ON). For binary resistance use pop_a.
 """
 
 from __future__ import annotations
+
+import math
 
 from helper import get_smallest_triangle_area, get_unit_triangle, is_inside_triangle
 import numpy as np
 
 Q_MAX = 0.0365
 ALPHA = 0.5
+_T = Q_MAX / 9  # sigmoid temperature ≈ 0.004
 
 INVALID = {
     "fitness": -1.0,
@@ -30,6 +34,13 @@ INVALID = {
     "best_post_improvement": -1.0,
     "n_opponents": 0.0,
 }
+
+
+def _sigmoid(x: float) -> float:
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    exp_x = math.exp(x)
+    return exp_x / (1.0 + exp_x)
 
 
 def _validate_config(points: object) -> np.ndarray | None:
@@ -78,7 +89,7 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
 
     for improve_fn in opponent_results:
         if not callable(improve_fn):
-            resistance_scores.append(1.0)
+            resistance_scores.append(_sigmoid(0.0))
             deltas.append(0.0)
             post_qualities.append(raw_quality)
             continue
@@ -86,17 +97,17 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
             improved = improve_fn(points.copy())
             improved = _validate_config(improved)
             if improved is None:
-                resistance_scores.append(1.0)
+                resistance_scores.append(_sigmoid(0.0))
                 deltas.append(0.0)
                 post_qualities.append(raw_quality)
                 continue
             post_q = float(get_smallest_triangle_area(improved))
             delta = max(post_q - raw_quality, 0.0)
-            resistance_scores.append(float(delta <= 0))
+            resistance_scores.append(_sigmoid(-delta / _T))
             deltas.append(delta)
             post_qualities.append(post_q)
         except Exception:
-            resistance_scores.append(1.0)
+            resistance_scores.append(_sigmoid(0.0))
             deltas.append(0.0)
             post_qualities.append(raw_quality)
 

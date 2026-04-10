@@ -1,24 +1,38 @@
 """Adversarial co-evolution pipeline stages.
 
-FetchOpponentResultsStage: reads opponent codes from the archive,
-executes each opponent's entrypoint() in parallel subprocesses
-(via run_exec_runner), and returns the list of results as context
-for CallValidatorFunction.
+Two-stage DAG pattern for automatic archive re-evaluation:
+
+  FetchOpponentIdsStage (NO_CACHE)
+    Always re-samples opponent IDs from the live archive.
+    Output: Box[Any](data=[id1, id2, ...])
+
+  FetchOpponentResultsStage (InputHashCache / DEFAULT_CACHE)
+    Receives opponent IDs as input; reruns only when IDs change.
+    The DAG cache key is the ID list hash, so any archive update that
+    changes the sampled opponent set automatically triggers re-evaluation
+    without engine-level hooks.
+    Output: Box[Any](data=[result1, result2, ...])
+
+Pipeline wiring (AdversarialPipelineBuilder):
+  FetchOpponentIdsStage → FetchOpponentResultsStage (opponent_ids)
+  FetchOpponentResultsStage → CallValidatorFunction (context)
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
-from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
-from gigaevo.programs.core_types import VoidInput
+from gigaevo.adversarial.opponent_provider import (
+    OpponentArchiveProvider,
+)
+from gigaevo.programs.core_types import StageIO, VoidInput
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.cache_handler import NO_CACHE
+from gigaevo.programs.stages.cache_handler import DEFAULT_CACHE, NO_CACHE
 from gigaevo.programs.stages.common import Box
 from gigaevo.programs.stages.python_executors.wrapper import (
     ExecRunnerError,
@@ -26,22 +40,55 @@ from gigaevo.programs.stages.python_executors.wrapper import (
 )
 
 
-class FetchOpponentResultsStage(Stage):
-    """Fetch and execute opponent programs from the MAP-Elites archive.
+class FetchOpponentIdsStage(Stage):
+    """Sample opponent IDs from the archive — always fresh (NO_CACHE).
 
-    1. Read opponent codes from OpponentArchiveProvider (async Redis)
-    2. If empty (cold start), use fallback_codes
-    3. Execute each opponent's entrypoint() in parallel subprocesses
-       (uses run_exec_runner -- same as CallProgramFunction)
-    4. Return list of results as Box[Any] (context for CallValidatorFunction)
-
-    Each opponent has its own subprocess with timeout -- one rogue opponent
-    does not block others.
+    Runs every time a program's DAG is evaluated (including archive refreshes).
+    Its output feeds FetchOpponentResultsStage as the cache key: when the
+    sampled IDs change, FetchOpponentResultsStage automatically reruns.
     """
 
     InputsModel = VoidInput
     OutputModel = Box[Any]
-    cache_handler = NO_CACHE  # opponents change between generations
+    cache_handler = NO_CACHE
+
+    def __init__(
+        self,
+        opponent_provider: OpponentArchiveProvider,
+        n_opponents: int = 5,
+        **kwargs: Any,
+    ):
+        super().__init__(**kwargs)
+        self._provider = opponent_provider
+        self._n = n_opponents
+
+    async def compute(self, program: Program) -> Box[Any]:
+        opponents = await self._provider.get_opponents(n=self._n)
+        ids = [o.program_id for o in opponents]
+        logger.debug("[FetchOpponentIds] sampled {} opponent IDs", len(ids))
+        return Box[Any](data=ids)
+
+
+class OpponentIdsInput(StageIO):
+    """Input model for FetchOpponentResultsStage."""
+
+    opponent_ids: Box[Any]
+
+
+class FetchOpponentResultsStage(Stage):
+    """Execute opponent programs given their IDs.
+
+    Uses DEFAULT_CACHE (InputHashCache): reruns automatically when the
+    opponent ID list changes.  Same IDs → cached results reused (no subprocess
+    overhead).  Different IDs → reruns with fresh opponents.
+
+    Fallback: when opponent_ids is empty (cold start), falls back to
+    pre-loaded fallback_codes if provided.
+    """
+
+    InputsModel = OpponentIdsInput
+    OutputModel = Box[Any]
+    # DEFAULT_CACHE (InputHashCache) is the class default — reruns when opponent_ids hash changes
 
     def __init__(
         self,
@@ -51,6 +98,7 @@ class FetchOpponentResultsStage(Stage):
         per_opponent_timeout: float = 10.0,
         python_path: list[Path] | None = None,
         max_memory_mb: int | None = None,
+        archive_reeval: bool = True,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -60,10 +108,18 @@ class FetchOpponentResultsStage(Stage):
         self._per_timeout = per_opponent_timeout
         self._python_path = python_path or []
         self._max_memory_mb = max_memory_mb
+        self._archive_reeval = archive_reeval
+
+    def get_cache_handler(self):  # type: ignore[override]
+        """InputHashCache when archive_reeval=True (re-eval only when IDs change).
+        NO_CACHE when archive_reeval=False (always re-evaluate — adversarial-v2 baseline)."""
+        return DEFAULT_CACHE if self._archive_reeval else NO_CACHE
 
     async def compute(self, program: Program) -> Box[Any]:
-        opponents = await self._provider.get_opponents(n=self._n)
-        codes = [o.code for o in opponents]
+        params = cast(OpponentIdsInput, self.params)
+        ids: list[str] = params.opponent_ids.data
+        codes = await self._provider.get_codes_by_ids(ids)
+
         if not codes and self._fallback_codes:
             codes = self._fallback_codes
             logger.info(

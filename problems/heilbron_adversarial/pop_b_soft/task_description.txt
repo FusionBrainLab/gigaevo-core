@@ -1,24 +1,30 @@
-TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL IMPROVER)
+TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL IMPROVER, SOFT FITNESS)
 
 You are an IMPROVER (Discriminator) in a two-population adversarial co-evolution game, analogous to a GAN:
-- YOUR OPPONENTS (Pop A, the "Generator"): evolve point configurations with high min_area that resist improvement
+- YOUR OPPONENTS (Pop A, the "Generator"): evolve point configurations that resist improvement
 - YOU (Pop B, the "Discriminator"): take their configuration and PROVE IT IS SUBOPTIMAL by producing a better one
 
 THE GAME
-Your opponents are OTHER EVOLVING PROGRAMS. They produce (11,2) point arrays and try to make them as hard to improve as possible. Each generation, your opponents get better -- their configurations sit in deeper local optima with tighter basins. A simple random jitter that works in generation 1 will fail by generation 5. You must evolve increasingly sophisticated improvement strategies to keep finding gains.
+Your opponents are OTHER EVOLVING PROGRAMS. They produce (11,2) point arrays and try to make them as hard to improve as possible. Each generation, your opponents get better — their configurations sit in deeper local optima. A simple random jitter that works in generation 1 will fail by generation 5. You must evolve increasingly sophisticated improvement strategies.
 
-YOUR FITNESS:
-  fitness = mean_k( min(improvement_k / 0.0365, 1.0) )
+YOUR FITNESS (sigmoid scoring):
+  fitness = mean_k( sigmoid(delta_k / T) ),  T = 0.0365/9 ≈ 0.004
 
-  improvement_k = max(min_area(improved_k) - min_area(original_k), 0.0)
+  delta_k = min_area(improved_k) - min_area(original_k)  (signed, not clamped)
 
-You are tested against MULTIPLE opponent configurations each evaluation. Your fitness is the average normalized improvement across all of them. Making things worse counts as zero (clamped).
+  sigmoid(delta/T):
+    delta = 0  (no improvement)           → 0.50  (partial credit — not penalized for neutral)
+    delta small positive                  → > 0.50 (reward for improvement)
+    delta >> T (strong improvement)       → → 1.0  (maximum reward)
+    delta < 0  (you made things worse)    → < 0.50 (penalty)
+
+You are tested against MULTIPLE opponent configurations each evaluation. Your fitness is the average sigmoid score across all of them.
 
 WHAT WINS THIS GAME
-- The opponent configurations you receive will get progressively harder to improve as the game advances
+- The opponent configurations you receive will get progressively harder to improve
 - Early on, simple approaches may work on unoptimized configs
 - As opponents evolve, you need increasingly creative and powerful approaches
-- The winning approach ADAPTS to the difficulty of the input
+- The winning approach ADAPTS to the difficulty of the input — aggressive search on easy configs, precision tuning on hard ones
 
 OBJECTIVE
 Write an `improve(points)` function that:
@@ -32,7 +38,7 @@ CONSTRAINTS ON OUTPUT
   Vertices: A=(0,0), B=(1.5197,0), C=(0.7598,1.3161)
 - Exactly 11 distinct points, all within or on boundary
 - No collinear triplets
-- If your improvement violates any constraint, it counts as zero improvement
+- If your improvement violates any constraint, it counts as zero improvement (sigmoid(0)=0.50)
 
 HELPER FUNCTIONS (must be imported from helper.py — not available globally):
   from helper import get_unit_triangle, get_smallest_triangle_area, is_inside_triangle

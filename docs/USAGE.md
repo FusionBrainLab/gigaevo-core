@@ -84,7 +84,7 @@ python run.py problem.name=toy_example \
 
 | Group | Options |
 |-------|---------|
-| `experiment` | `base`, `full_featured`, `multi_island_complexity`, `multi_llm_exploration` |
+| `experiment` | `base`, `full_featured`, `migration_bus`, `multi_island_complexity`, `multi_llm_exploration`, `prompt_coevolution`, `steady_state`, `steady_state_adversarial`, `steady_state_bus` |
 | `algorithm` | `single_island`, `single_island_2d`, `multi_island`, `single_island_fitness_prop_fixed_temp`, `single_island_weighted` |
 | `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini25_pro`, `gemini31_pro`, `gemini3_flash` |
 | `pipeline` | `standard`, `with_context`, `auto`, `custom`, `hotpotqa_asi`, `hotpotqa_colbert`, `hotpotqa_reflective`, `hover_feedback`, `prompt_evolution`, `optuna_opt`, `cma_opt` |

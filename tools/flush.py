@@ -145,6 +145,37 @@ def kill_workers(pids: list[int], dry_run: bool) -> None:
         print(f"[workers] Failed to kill (already dead?): {failed}")
 
 
+def kill_run_writers(target_dbs: list[int], dry_run: bool) -> None:
+    """Kill run.py processes that are actively writing to the target DBs.
+
+    This is separate from exec_runner workers — the parent run.py process
+    itself writes to Redis (run_state, metrics, archive) and will repopulate
+    a freshly flushed DB within seconds if left running.
+    """
+    pids = sorted(_find_run_pids_for_dbs(target_dbs))
+    if not pids:
+        print("[writers] No run.py writer processes found for target DBs.")
+        return
+
+    print(f"[writers] Found {len(pids)} run.py writer(s) for target DBs: {pids}")
+    if dry_run:
+        print(f"[writers] DRY-RUN — would kill: {pids}")
+        return
+
+    killed, failed = [], []
+    for pid in pids:
+        try:
+            subprocess.run(["kill", str(pid)], check=True, capture_output=True)
+            killed.append(pid)
+        except subprocess.CalledProcessError:
+            failed.append(pid)
+
+    if killed:
+        print(f"[writers] Killed: {killed}")
+    if failed:
+        print(f"[writers] Failed to kill (already dead?): {failed}")
+
+
 def warn_if_not_archived(db: int, before: int) -> None:
     """Warn and pause if DB has data that may not have been archived yet."""
     if before == 0:
@@ -242,10 +273,14 @@ def main():
     if dry_run:
         print("[flush] DRY-RUN mode — pass --confirm to execute\n")
 
-    # Step 1: Kill exec_runner workers (only for target DBs)
+    # Step 1: Kill run.py writer processes and exec_runner workers for target DBs
     if not args.no_kill_workers:
+        kill_run_writers(args.db, dry_run)
         pids = find_exec_runner_pids(args.db)
         kill_workers(pids, dry_run)
+        if not dry_run and (_find_run_pids_for_dbs(args.db) or pids):
+            # Brief wait for killed processes to release Redis connections
+            time.sleep(2)
     else:
         print("[workers] Skipping exec_runner cleanup (--no-kill-workers)")
     print()

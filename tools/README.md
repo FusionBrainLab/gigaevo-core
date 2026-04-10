@@ -39,6 +39,8 @@ Work on any GigaEvo run — no experiment.yaml required.
 | `throughput_plot.py` | Throughput evolution curves | `--run`, `--output-folder` |
 | `csv_memory_comparison.py` | Compare CSV exports from memory experiments | `--run` (multiple), `--output-folder` |
 | `check_docs_freshness.py` | Verify documentation tables match actual files on disk | standalone (no args) |
+| `resource_manager.py` | Auto-detect available GPU servers and free Redis DBs; assign runs to servers/DBs | `--check`, `--experiment task/name` |
+| `telegram_notify.py` | Send Telegram notifications and wait for async approval at experiment gates | `import` — not a CLI tool |
 | `no_proxy.py` | NO_PROXY environment helper for backend access | used by `litellm.sh` and launch scripts |
 | `utils.py` | Shared utilities: `parse_run_arg`, Redis helpers | imported by other tools |
 

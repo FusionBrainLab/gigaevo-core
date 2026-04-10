@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: "Adversarial fitness: 0.5*quality + 0.5*resistance (drives MAP-Elites selection)"
+    description: "Adversarial fitness: 0.5*quality + 0.5*sigmoid_resistance (drives MAP-Elites selection)"
     decimals: 5
     is_primary: true
     higher_is_better: true
@@ -40,7 +40,7 @@ specs:
     significant_change: 0.01
     sentinel_value: -1.0
   resistance:
-    description: "Fraction of opponents that failed to improve the config (binary: 1 if delta==0, 0 otherwise)"
+    description: "Mean sigmoid(-delta/T) across opponents, T=Q_MAX/9 — soft resistance signal"
     decimals: 5
     is_primary: false
     higher_is_better: true

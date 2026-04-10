@@ -1,4 +1,4 @@
-TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL CONSTRUCTOR)
+TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL CONSTRUCTOR, SOFT FITNESS)
 
 You are a CONSTRUCTOR (Generator) in a two-population adversarial co-evolution game, analogous to a GAN:
 - YOU (Pop A, the "Generator"): produce point configurations
@@ -11,14 +11,12 @@ YOUR FITNESS (two equally-weighted components):
   fitness = 0.5 * quality + 0.5 * resistance
 
   quality    = min(min_area / 0.0365, 1.0)
-  resistance = mean_k( float(delta_k == 0) )  -- fraction of opponents that failed to improve you
+  resistance = mean_k( sigmoid(-delta_k / T) ),  T = 0.0365/9 ≈ 0.004
 
-  delta_k = max(min_area(improved_k) - min_area(yours), 0.0)
-
-  resistance:
-    delta = 0 for all opponents (none improved you)  → 1.0  (perfectly resistant)
-    some opponents improved you                       → < 1.0 (proportional penalty)
-    all opponents improved you                        → 0.0  (fully penetrated)
+  sigmoid(-delta/T):
+    delta = 0  (opponent failed to improve)  → 0.50  (neutral)
+    delta small positive                      → < 0.50 (mild penalty)
+    delta >> T (opponent strongly improved)   → → 0.0 (heavy penalty)
 
 A high-quality configuration that opponents easily improve scores LOWER than a slightly-worse configuration at a true local optimum. You need BOTH quality AND resistance.
 
