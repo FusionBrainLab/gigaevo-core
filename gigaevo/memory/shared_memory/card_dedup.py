@@ -94,8 +94,8 @@ class CardDedup:
         """Build dedup retriever index from exported records."""
         try:
             from gigaevo.memory.shared_memory.amem_gam_retriever import (
-                build_dedup_retrievers,
                 build_gam_store,
+                build_retrievers,
             )
         except (ImportError, OSError) as exc:
             logger.warning("[Memory] Dedup retriever import failed: {}", exc)
@@ -113,7 +113,7 @@ class CardDedup:
 
         try:
             _, page_store, _ = build_gam_store(records, self._gam_store_dir)
-            retrievers = build_dedup_retrievers(
+            retrievers = build_retrievers(
                 page_store,
                 self._gam_store_dir / "indexes",
                 self._checkpoint_dir / "chroma",
