@@ -7,7 +7,6 @@ import pytest
 
 from gigaevo.monitoring.telegram_channel import TelegramChannel
 
-
 # ── Test infrastructure ─────────────────────────────────────────────────────
 
 
