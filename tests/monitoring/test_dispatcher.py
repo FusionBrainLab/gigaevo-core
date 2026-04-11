@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from gigaevo.monitoring.alerts import Alert, AlertSeverity, AlertType
 from gigaevo.monitoring.dispatcher import DispatchResult, NotificationDispatcher
+from gigaevo.monitoring.github_pr_channel import GitHubPRChannel
 from gigaevo.monitoring.notifications import NotificationChannel, StatusUpdate
 from gigaevo.monitoring.run_spec import RunSpec
 from gigaevo.monitoring.snapshot import RunSnapshot
+from gigaevo.monitoring.telegram_channel import TelegramChannel
 
 # ── Test infrastructure ─────────────────────────────────────────────────────
 
@@ -279,3 +282,120 @@ class TestDispatchFanOut:
         assert u1.snapshots[0].generation == u2.snapshots[0].generation
         assert u1.snapshots[0].metrics == u2.snapshots[0].metrics
         assert u1.alerts[0].message == u2.alerts[0].message
+
+
+# ── Real-channel test infrastructure ────────────────────────────────────────
+
+
+def _telegram_fail_handler(request: httpx.Request) -> httpx.Response:
+    """Telegram handler that always returns 400 (immediate failure, no retry)."""
+    return httpx.Response(400, json={"ok": False, "description": "Bad Request"})
+
+
+def _telegram_success_handler(request: httpx.Request) -> httpx.Response:
+    """Telegram handler that returns 200 OK."""
+    return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+
+def _github_success_handler(request: httpx.Request) -> httpx.Response:
+    """GitHub handler that returns 201 for comment POST, 200 for others."""
+    if "comments" in str(request.url.path):
+        return httpx.Response(201, json={"id": 1})
+    return httpx.Response(200, json={})
+
+
+def _make_telegram(handler) -> TelegramChannel:
+    transport = httpx.MockTransport(handler)
+    return TelegramChannel(bot_token="test-token", chat_id="12345", transport=transport)
+
+
+def _make_github(handler) -> GitHubPRChannel:
+    transport = httpx.MockTransport(handler)
+    return GitHubPRChannel(
+        repo="owner/repo", pr_number=42, token="gh-token", transport=transport
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. Cross-channel failure escalation tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestCrossChannelEscalation:
+    async def test_telegram_failures_trigger_pr_header(self) -> None:
+        """After 3 Telegram failures, GitHubPRChannel.telegram_down becomes True."""
+        telegram_ch = _make_telegram(_telegram_fail_handler)
+        github_ch = _make_github(_github_success_handler)
+        dispatcher = NotificationDispatcher(channels=[telegram_ch, github_ch])
+
+        # Dispatch 3 times -- Telegram fails each time
+        for _ in range(3):
+            await dispatcher.dispatch(_make_update())
+
+        assert telegram_ch.consecutive_failures == 3
+        assert github_ch.telegram_down is True
+        await telegram_ch.close()
+        await github_ch.close()
+
+    async def test_telegram_recovery_clears_pr_header(self) -> None:
+        """When Telegram recovers, telegram_down resets to False."""
+        telegram_ch = _make_telegram(_telegram_fail_handler)
+        github_ch = _make_github(_github_success_handler)
+        dispatcher = NotificationDispatcher(channels=[telegram_ch, github_ch])
+
+        # Fail 3 times to trigger escalation
+        for _ in range(3):
+            await dispatcher.dispatch(_make_update())
+        assert github_ch.telegram_down is True
+
+        # Now switch Telegram to succeed
+        telegram_ch._client = None  # force client recreation
+        telegram_ch._transport = httpx.MockTransport(_telegram_success_handler)
+
+        await dispatcher.dispatch(_make_update())
+        assert telegram_ch.consecutive_failures == 0
+        assert github_ch.telegram_down is False
+        await telegram_ch.close()
+        await github_ch.close()
+
+    async def test_no_telegram_channel_no_error(self) -> None:
+        """Dispatcher with only GitHubPRChannel works normally."""
+        github_ch = _make_github(_github_success_handler)
+        dispatcher = NotificationDispatcher(channels=[github_ch])
+
+        result = await dispatcher.dispatch(_make_update())
+
+        assert result.all_succeeded is True
+        assert github_ch.telegram_down is False
+        await github_ch.close()
+
+    async def test_no_github_channel_no_error(self) -> None:
+        """Dispatcher with only TelegramChannel -- nothing to escalate to."""
+        telegram_ch = _make_telegram(_telegram_fail_handler)
+        dispatcher = NotificationDispatcher(channels=[telegram_ch])
+
+        # Fail 5 times -- no error from _check_escalation
+        for _ in range(5):
+            await dispatcher.dispatch(_make_update())
+
+        assert telegram_ch.consecutive_failures == 5
+        await telegram_ch.close()
+
+    async def test_escalation_threshold_is_exactly_three(self) -> None:
+        """telegram_down stays False at 2 failures, becomes True at 3."""
+        telegram_ch = _make_telegram(_telegram_fail_handler)
+        github_ch = _make_github(_github_success_handler)
+        dispatcher = NotificationDispatcher(channels=[telegram_ch, github_ch])
+
+        # After 2 failures: still False
+        for _ in range(2):
+            await dispatcher.dispatch(_make_update())
+        assert telegram_ch.consecutive_failures == 2
+        assert github_ch.telegram_down is False
+
+        # After 3rd failure: True
+        await dispatcher.dispatch(_make_update())
+        assert telegram_ch.consecutive_failures == 3
+        assert github_ch.telegram_down is True
+        await telegram_ch.close()
+        await github_ch.close()
