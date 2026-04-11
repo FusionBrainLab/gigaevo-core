@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from gigaevo.monitoring.alerts import Alert, AlertSeverity, AlertType
+from gigaevo.monitoring.alerts import Alert
 from gigaevo.monitoring.dispatcher import DispatchResult, NotificationDispatcher
 from gigaevo.monitoring.notifications import NotificationChannel, StatusUpdate
 from gigaevo.monitoring.run_spec import RunSpec
