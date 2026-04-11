@@ -19,6 +19,28 @@ where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/sta
 
 ---
 
+## Unified CLI (`gigaevo`)
+
+The `gigaevo` CLI wraps the most common tools into a single entry point with shared flags:
+
+```bash
+gigaevo -r prefix@db:label status        # = PYTHONPATH=. python tools/status.py --run ...
+gigaevo -r prefix@db:label trajectory    # = PYTHONPATH=. python tools/trajectory.py --run ...
+gigaevo -r prefix@db:label top           # = PYTHONPATH=. python tools/top_programs.py --run ...
+gigaevo -e task/name checkpoint          # composite: status + notify
+gigaevo flush --db 4 5 --confirm         # = PYTHONPATH=. python tools/flush.py --db 4 5 --confirm
+gigaevo -e task/name watchdog            # start watchdog engine
+gigaevo -e task/name launch --confirm    # lifecycle: launch experiment
+gigaevo -e task/name closeout --confirm  # lifecycle: close out experiment
+gigaevo -e task/name restart --confirm   # lifecycle: restart experiment
+```
+
+Global flags: `-e/--experiment`, `-r/--run` (repeatable), `-f/--format` (table/json/csv/markdown), `-q/--quiet`, `-v/--verbose`, `--redis-host`, `--redis-port`.
+
+Installed via `pip install -e .` (console_scripts entry in pyproject.toml). The standalone `tools/*.py` scripts remain the canonical implementations — the CLI delegates to them.
+
+---
+
 ## Tool Index
 
 ### General Tools (`tools/`)
