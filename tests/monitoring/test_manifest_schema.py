@@ -19,6 +19,7 @@ import pytest
 import yaml
 
 from gigaevo.monitoring.manifest_schema import (
+    VALID_STATUSES,
     ExperimentManifest,
     ExperimentSection,
     export_json_schema,
@@ -393,3 +394,72 @@ class TestManifestOptional:
         from gigaevo.monitoring.redis_queries import collect_snapshot
 
         assert callable(collect_snapshot)
+
+
+# ---------------------------------------------------------------------------
+# 8. Integration: real experiment.yaml files from the repo
+# ---------------------------------------------------------------------------
+
+
+def _discover_experiment_yamls() -> list[Path]:
+    """Find all experiment.yaml files in the repo (excluding _template)."""
+    return [
+        p
+        for p in REPO_ROOT.glob("experiments/*/*/experiment.yaml")
+        if "_template" not in str(p)
+    ]
+
+
+class TestRealManifests:
+    def test_load_real_heilbron_manifest(self) -> None:
+        """The heilbron/adversarial-dynamic-updates manifest loads without errors."""
+        path = (
+            REPO_ROOT
+            / "experiments"
+            / "heilbron"
+            / "adversarial-dynamic-updates"
+            / "experiment.yaml"
+        )
+        if not path.exists():
+            pytest.skip("heilbron manifest not found")
+        manifest = ExperimentManifest.from_yaml_file(path)
+        assert "heilbron" in manifest.experiment.name
+        assert manifest.experiment.status in VALID_STATUSES
+        assert len(manifest.runs) > 0
+
+    def test_load_all_existing_manifests(self) -> None:
+        """All experiment.yaml files in the repo load through the Pydantic schema."""
+        yamls = _discover_experiment_yamls()
+        if not yamls:
+            pytest.skip("No experiment.yaml files found in repo")
+
+        failures: list[tuple[Path, str]] = []
+        for yaml_path in yamls:
+            try:
+                ExperimentManifest.from_yaml_file(yaml_path)
+            except Exception as exc:
+                failures.append((yaml_path, str(exc)))
+
+        if failures:
+            msg_parts = [f"  {p}: {e}" for p, e in failures]
+            pytest.fail(
+                f"{len(failures)}/{len(yamls)} experiment.yaml files failed:\n"
+                + "\n".join(msg_parts)
+            )
+
+    def test_json_schema_validates_real_manifest(self, tmp_path: Path) -> None:
+        """JSON Schema is consistent with Pydantic model on a real manifest."""
+        yamls = _discover_experiment_yamls()
+        if not yamls:
+            pytest.skip("No experiment.yaml files found")
+
+        try:
+            import jsonschema
+        except ImportError:
+            pytest.skip("jsonschema not installed")
+
+        schema = ExperimentManifest.model_json_schema()
+        path = yamls[0]
+        with open(path) as f:
+            raw = yaml.safe_load(f)
+        jsonschema.validate(instance=raw, schema=schema)

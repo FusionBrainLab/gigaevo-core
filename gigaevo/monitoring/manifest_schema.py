@@ -30,7 +30,7 @@ class ManifestRunSpec(BaseModel):
     problem_name: str
     condition: str
     chain_url: str | None = None
-    mutation_url: str
+    mutation_url: str | None = None  # nullable in older experiments
     model_name: str
     pid: int | None = None
     log_path: str | None = None
