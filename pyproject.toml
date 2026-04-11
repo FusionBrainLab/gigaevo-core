@@ -74,6 +74,9 @@ test = [
     "fakeredis[lua]>=2.19.0",
 ]
 
+[project.scripts]
+gigaevo = "gigaevo.cli:main"
+
 [project.urls]
 Repository = "https://github.com/gigaevo/gigaevo"
 Documentation = "https://gigaevo.readthedocs.io"
