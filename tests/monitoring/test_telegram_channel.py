@@ -321,9 +321,7 @@ def _recording_channel(responses=None):
         path = request.url.path
         if path in responses:
             return responses[path]
-        return httpx.Response(
-            200, json={"ok": True, "result": {"message_id": 1}}
-        )
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 
     transport = _make_transport(handler)
     channel = TelegramChannel(
@@ -375,7 +373,11 @@ class TestSendStatus:
         update = StatusUpdate(
             experiment_name="hover/test-exp",
             snapshots=[_make_snapshot()],
-            alerts=[_make_alert(severity=AlertSeverity.WARN, message="Run A stalled at gen 5")],
+            alerts=[
+                _make_alert(
+                    severity=AlertSeverity.WARN, message="Run A stalled at gen 5"
+                )
+            ],
         )
 
         result = await channel.send_status(update)
@@ -469,4 +471,98 @@ class TestSendAlert:
         text = body["text"]
         assert "ERROR" in text
         assert "crash" in text
+        await channel.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. Startup probe + close() tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestStartupProbe:
+    @pytest.mark.asyncio
+    async def test_startup_probe_success(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"id": 123, "is_bot": True, "first_name": "TestBot"},
+                },
+            )
+
+        channel = _make_channel(handler)
+        healthy = await channel.check_health()
+        assert healthy is True
+        await channel.close()
+
+    @pytest.mark.asyncio
+    async def test_startup_probe_failure(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                401, json={"ok": False, "description": "Unauthorized"}
+            )
+
+        channel = _make_channel(handler)
+        healthy = await channel.check_health()
+        assert healthy is False
+        await channel.close()
+
+
+class TestClose:
+    @pytest.mark.asyncio
+    async def test_close_after_use(self) -> None:
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"id": 123, "is_bot": True, "first_name": "TestBot"},
+                },
+            )
+
+        channel = _make_channel(handler)
+        # Initialize client via check_health
+        result1 = await channel.check_health()
+        assert result1 is True
+        assert call_count == 1
+
+        # Close the client
+        await channel.close()
+
+        # Subsequent call re-initializes the client (lazy re-creation)
+        result2 = await channel.check_health()
+        assert result2 is True
+        assert call_count == 2
+        await channel.close()
+
+    @pytest.mark.asyncio
+    async def test_close_idempotent(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"id": 123, "is_bot": True, "first_name": "TestBot"},
+                },
+            )
+
+        channel = _make_channel(handler)
+        # Call check_health to initialize client
+        await channel.check_health()
+
+        # Close multiple times -- no error
+        await channel.close()
+        await channel.close()
+
+    @pytest.mark.asyncio
+    async def test_close_without_any_api_call(self) -> None:
+        """close() is safe even if no API call was ever made."""
+        channel = TelegramChannel(bot_token="test-token", chat_id="12345")
+        # No API call made, client was never created
+        await channel.close()
         await channel.close()
