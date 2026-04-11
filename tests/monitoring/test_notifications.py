@@ -14,6 +14,9 @@ from gigaevo.monitoring.notifications import (
     NotificationChannel,
     PlotAttachment,
     StatusUpdate,
+    format_alert_message,
+    format_status_table_markdown,
+    format_status_table_telegram,
 )
 
 
@@ -274,3 +277,231 @@ class TestNotificationChannelAsync:
         result = await ch.check_health()
         assert result is True
         assert "check_health" in ch.calls
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. format_status_table_markdown tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFormatStatusTableMarkdown:
+    def test_single_snapshot_produces_table(self) -> None:
+        md = format_status_table_markdown([_make_snapshot()])
+        lines = md.strip().split("\n")
+        assert len(lines) == 3  # header, separator, 1 data row
+        assert "|" in lines[0]
+        assert "---" in lines[1]
+        assert "|" in lines[2]
+
+    def test_multiple_snapshots_produce_rows(self) -> None:
+        snaps = [
+            _make_snapshot(label="A", db=1),
+            _make_snapshot(label="B", db=2),
+            _make_snapshot(label="C", db=3),
+        ]
+        md = format_status_table_markdown(snaps)
+        lines = md.strip().split("\n")
+        assert len(lines) == 5  # header + separator + 3 data rows
+        for line in lines[2:]:
+            col_count = line.count("|")
+            assert col_count == lines[0].count("|")
+
+    def test_columns_present(self) -> None:
+        md = format_status_table_markdown([_make_snapshot()])
+        header = md.split("\n")[0]
+        for col in ["Run", "DB", "Gen", "Fitness", "Invalid%", "Val dur(s)", "Keys", "PID", "Status"]:
+            assert col in header
+
+    def test_fitness_formatting(self) -> None:
+        md = format_status_table_markdown([_make_snapshot(fitness=0.762)])
+        assert "76.2%" in md
+
+    def test_invalid_rate_formatting(self) -> None:
+        md = format_status_table_markdown(
+            [_make_snapshot(invalid_rate_inputs=(100, 80))]
+        )
+        assert "20%" in md
+
+    def test_pid_alive_status(self) -> None:
+        md = format_status_table_markdown(
+            [_make_snapshot(pid=49341, pid_alive=True)]
+        )
+        assert "ALIVE" in md
+
+    def test_pid_dead_status(self) -> None:
+        md = format_status_table_markdown(
+            [_make_snapshot(pid=49341, pid_alive=False)]
+        )
+        assert "DEAD" in md
+
+    def test_pid_unknown(self) -> None:
+        md = format_status_table_markdown(
+            [_make_snapshot(pid=None, pid_alive=None)]
+        )
+        data_row = md.strip().split("\n")[2]
+        cells = [c.strip() for c in data_row.split("|") if c.strip()]
+        # PID column (index 7) and Status column (index 8) should be "-"
+        assert cells[7] == "-"
+        assert cells[8] == "-"
+
+    def test_missing_generation(self) -> None:
+        md = format_status_table_markdown([_make_snapshot(generation=None)])
+        data_row = md.strip().split("\n")[2]
+        cells = [c.strip() for c in data_row.split("|") if c.strip()]
+        assert cells[2] == "-"  # Gen column
+
+    def test_missing_fitness(self) -> None:
+        md = format_status_table_markdown([_make_snapshot(fitness=None)])
+        data_row = md.strip().split("\n")[2]
+        cells = [c.strip() for c in data_row.split("|") if c.strip()]
+        assert cells[3] == "-"  # Fitness column
+
+    def test_validator_duration_format(self) -> None:
+        md = format_status_table_markdown(
+            [_make_snapshot(val_mean=639.0, val_max=980.0)]
+        )
+        assert "639/980" in md
+
+    def test_empty_snapshots(self) -> None:
+        md = format_status_table_markdown([])
+        assert "No runs" in md
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. format_status_table_telegram tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFormatStatusTableTelegram:
+    def test_wrapped_in_pre_tags(self) -> None:
+        tg = format_status_table_telegram([_make_snapshot()])
+        assert tg.startswith("<pre>")
+        assert tg.endswith("</pre>")
+
+    def test_contains_same_columns(self) -> None:
+        tg = format_status_table_telegram([_make_snapshot()])
+        for col in ["Run", "DB", "Gen", "Fitness", "Keys", "PID", "Status"]:
+            assert col in tg
+
+    def test_same_data_values(self) -> None:
+        tg = format_status_table_telegram([_make_snapshot(fitness=0.762)])
+        assert "76.2%" in tg
+        assert "ALIVE" in tg
+
+    def test_monospace_alignment(self) -> None:
+        snaps = [
+            _make_snapshot(label="A", db=1),
+            _make_snapshot(label="BB", db=22),
+        ]
+        tg = format_status_table_telegram(snaps)
+        # Strip <pre> tags and get data lines
+        inner = tg.replace("<pre>\n", "").replace("\n</pre>", "")
+        lines = inner.split("\n")
+        # All non-separator lines should have the same length
+        data_lines = [l for l in lines if not all(c in "-  " for c in l)]
+        lengths = [len(l) for l in data_lines]
+        assert len(set(lengths)) == 1, f"Unequal line lengths: {lengths}"
+
+    def test_empty_snapshots(self) -> None:
+        tg = format_status_table_telegram([])
+        assert "<pre>" in tg
+        assert "No runs" in tg
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. format_alert_message tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFormatAlertMessage:
+    def test_info_severity(self) -> None:
+        msg = format_alert_message(
+            _make_alert(severity=AlertSeverity.INFO, message="All done")
+        )
+        assert msg.startswith("[INFO]")
+
+    def test_warn_severity(self) -> None:
+        msg = format_alert_message(
+            _make_alert(severity=AlertSeverity.WARN, message="Stalled")
+        )
+        assert msg.startswith("[WARNING]")
+
+    def test_error_severity(self) -> None:
+        msg = format_alert_message(
+            _make_alert(severity=AlertSeverity.ERROR, message="Crashed")
+        )
+        assert msg.startswith("[ERROR]")
+
+    def test_contains_type_and_label_and_message(self) -> None:
+        msg = format_alert_message(
+            _make_alert(
+                alert_type=AlertType.STALL,
+                run_label="X",
+                message="Run X stalled at gen 10",
+            )
+        )
+        assert "stall" in msg
+        assert "Run X stalled at gen 10" in msg
+
+    def test_stall_includes_generation(self) -> None:
+        msg = format_alert_message(
+            _make_alert(
+                alert_type=AlertType.STALL,
+                message="Run A stalled at gen 7",
+            )
+        )
+        assert "gen 7" in msg
+
+    def test_crash_includes_pid(self) -> None:
+        msg = format_alert_message(
+            _make_alert(
+                alert_type=AlertType.CRASH,
+                severity=AlertSeverity.ERROR,
+                message="Run B process (PID 12345) is not alive",
+            )
+        )
+        assert "12345" in msg
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. Both-formatters-same-data test (NOT-06)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFormatterConsistency:
+    def test_both_formatters_same_data(self) -> None:
+        snaps = [
+            _make_snapshot(label="A", db=1, generation=5, fitness=0.762),
+            _make_snapshot(label="B", db=2, generation=10, fitness=0.881),
+            _make_snapshot(label="C", db=3, generation=15, fitness=0.550),
+        ]
+
+        md = format_status_table_markdown(snaps)
+        tg = format_status_table_telegram(snaps)
+
+        # Extract data values from markdown
+        md_lines = md.strip().split("\n")[2:]  # skip header + separator
+        md_labels = []
+        md_gens = []
+        md_fitness = []
+        for line in md_lines:
+            cells = [c.strip() for c in line.split("|") if c.strip()]
+            md_labels.append(cells[0])
+            md_gens.append(cells[2])
+            md_fitness.append(cells[3])
+
+        # Extract data values from telegram
+        inner = tg.replace("<pre>\n", "").replace("\n</pre>", "")
+        tg_lines = inner.split("\n")[2:]  # skip header + separator
+        tg_labels = []
+        tg_gens = []
+        tg_fitness = []
+        for line in tg_lines:
+            parts = line.split()
+            tg_labels.append(parts[0])
+            tg_gens.append(parts[2])
+            tg_fitness.append(parts[3])
+
+        assert md_labels == tg_labels
+        assert md_gens == tg_gens
+        assert md_fitness == tg_fitness
