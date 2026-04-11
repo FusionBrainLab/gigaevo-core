@@ -17,6 +17,7 @@ from loguru import logger
 from gigaevo.monitoring.alerts import Alert
 from gigaevo.monitoring.notifications import (
     NotificationChannel,
+    PlotAttachment,
     StatusUpdate,
     format_alert_message,
     format_status_table_markdown,
@@ -167,9 +168,70 @@ class GitHubPRChannel(NotificationChannel):
             _log.error(f"PATCH comment error: {exc}")
             return False
 
+    async def _upload_plot(
+        self, plot: PlotAttachment, branch: str
+    ) -> str | None:
+        """Upload a plot file to the repo via GitHub Contents API.
+
+        Returns the raw.githubusercontent.com URL on success, None on failure.
+        The file is committed to the experiment branch so it persists.
+        """
+        import base64
+
+        try:
+            content = plot.path.read_bytes()
+            encoded = base64.b64encode(content).decode()
+
+            upload_path = f"plots/{plot.path.name}"
+            api_url = (
+                f"{self._base_url}/repos/{self._repo}/contents/{upload_path}"
+            )
+
+            client = await self._get_client()
+            get_resp = await client.get(api_url, params={"ref": branch})
+            sha = None
+            if get_resp.status_code == 200:
+                sha = get_resp.json().get("sha")
+
+            payload: dict[str, Any] = {
+                "message": f"watchdog: upload {plot.path.name}",
+                "content": encoded,
+                "branch": branch,
+            }
+            if sha:
+                payload["sha"] = sha
+
+            resp = await client.put(api_url, json=payload)
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                download_url = data.get("content", {}).get("download_url")
+                if download_url:
+                    _log.info(f"Plot uploaded: {download_url}")
+                    return download_url
+            _log.warning(f"Plot upload failed: {resp.status_code}")
+            return None
+        except Exception as exc:
+            _log.error(f"Plot upload error: {exc}")
+            return None
+
+    @staticmethod
+    def _cache_bust_url(url: str, timestamp: int) -> str:
+        """Append cache-busting query parameter to a URL."""
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}v={timestamp}"
+
     async def send_status(self, update: StatusUpdate) -> bool:
         """Post or edit the rolling PR comment with status table + alerts + plots."""
-        body = self._build_status_body(update)
+        # Upload plots first and collect URLs
+        plot_urls: dict[int, str] = {}
+        if update.has_plots and self._branch:
+            for i, plot in enumerate(update.plots):
+                url = await self._upload_plot(plot, self._branch)
+                if url:
+                    ts_bust = int(update.timestamp.timestamp())
+                    plot_urls[i] = self._cache_bust_url(url, ts_bust)
+
+        body = self._build_status_body(update, plot_urls=plot_urls)
 
         if self._comment_id is not None:
             success = await self._edit_comment(self._comment_id, body)
