@@ -399,3 +399,105 @@ class TestCrossChannelEscalation:
         assert github_ch.telegram_down is True
         await telegram_ch.close()
         await github_ch.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. NOT-06 compliance integration test
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestNOT06Integration:
+    async def test_both_channels_receive_identical_data(self) -> None:
+        """NOT-06: both real channels receive the same run labels, generations,
+        fitness values, and alert messages from a single dispatch."""
+        telegram_bodies: list[str] = []
+        github_bodies: list[str] = []
+
+        def telegram_handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            body = json.loads(request.content)
+            telegram_bodies.append(body.get("text", ""))
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+        def github_handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            if "comments" in str(request.url.path):
+                body = json.loads(request.content)
+                github_bodies.append(body.get("body", ""))
+                return httpx.Response(201, json={"id": 1})
+            return httpx.Response(200, json={})
+
+        telegram_ch = _make_telegram(telegram_handler)
+        github_ch = _make_github(github_handler)
+        dispatcher = NotificationDispatcher(channels=[telegram_ch, github_ch])
+
+        snapshots = [
+            RunSnapshot(
+                run_spec=RunSpec(prefix="chains/hover/static", db=i, label=label),
+                generation=gen,
+                metrics={"fitness": fitness},
+                pid=pid,
+                pid_alive=True,
+            )
+            for i, label, gen, fitness, pid in [
+                (1, "T1", 25, 0.762, 49341),
+                (2, "T2", 30, 0.801, 49342),
+                (3, "C1", 18, 0.655, 49343),
+            ]
+        ]
+        alerts = [
+            _make_alert(AlertType.STALL, AlertSeverity.WARN, "T1", "Run T1 stalled"),
+            _make_alert(AlertType.CRASH, AlertSeverity.ERROR, "C1", "PID 49343 dead"),
+        ]
+        update = StatusUpdate(
+            experiment_name="hover/test-exp",
+            snapshots=snapshots,
+            alerts=alerts,
+            max_generations=50,
+            timestamp=datetime(2026, 4, 11, 14, 30, 0, tzinfo=UTC),
+        )
+
+        result = await dispatcher.dispatch(update)
+        assert result.all_succeeded is True
+
+        # Telegram gets 1 status message + 2 alert messages
+        assert len(telegram_bodies) >= 1
+        # GitHub gets 1 status comment + 2 alert comments
+        assert len(github_bodies) >= 1
+
+        telegram_text = telegram_bodies[0]
+        github_text = github_bodies[0]
+
+        # Both channels contain all 3 run labels
+        for label in ["T1", "T2", "C1"]:
+            assert label in telegram_text, f"Telegram missing label {label}"
+            assert label in github_text, f"GitHub missing label {label}"
+
+        # Both channels contain all 3 generation values
+        for gen in ["25", "30", "18"]:
+            assert gen in telegram_text, f"Telegram missing gen {gen}"
+            assert gen in github_text, f"GitHub missing gen {gen}"
+
+        # Both channels contain all 3 fitness percentages
+        for pct in ["76.2%", "80.1%", "65.5%"]:
+            assert pct in telegram_text, f"Telegram missing fitness {pct}"
+            assert pct in github_text, f"GitHub missing fitness {pct}"
+
+        # Both channels contain the experiment name
+        assert "hover/test-exp" in telegram_text
+        assert "hover/test-exp" in github_text
+
+        # Alert messages were delivered to both channels
+        telegram_alert_texts = telegram_bodies[1:]
+        github_alert_texts = github_bodies[1:]
+        all_telegram_alerts = " ".join(telegram_alert_texts)
+        all_github_alerts = " ".join(github_alert_texts)
+        assert "Run T1 stalled" in all_telegram_alerts
+        assert "PID 49343 dead" in all_telegram_alerts
+        assert "Run T1 stalled" in all_github_alerts
+        assert "PID 49343 dead" in all_github_alerts
+
+        await telegram_ch.close()
+        await github_ch.close()
