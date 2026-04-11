@@ -424,3 +424,189 @@ class TestSendAlert:
         assert "/issues/42/comments" in str(recorder.requests[0].url)
         # Rolling comment ID should NOT be changed by alert
         assert ch._comment_id == 99
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. Plot upload + cache-busting tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestUploadPlot:
+    @pytest.mark.asyncio
+    async def test_upload_plot_success(self, tmp_path: Path) -> None:
+        png_file = tmp_path / "fitness.png"
+        png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+        plot = PlotAttachment(path=png_file, caption="Fitness curves")
+
+        recorder = RequestRecorder(
+            ordered_responses=[
+                # GET to check if file exists (404 = new file)
+                (
+                    "GET /repos/owner/repo/contents/",
+                    httpx.Response(404, json={"message": "Not Found"}),
+                ),
+                # PUT to upload the file
+                (
+                    "PUT /repos/owner/repo/contents/",
+                    httpx.Response(
+                        201,
+                        json={
+                            "content": {
+                                "download_url": "https://raw.githubusercontent.com/owner/repo/main/plots/fitness.png"
+                            }
+                        },
+                    ),
+                ),
+            ]
+        )
+        ch = _make_channel(recorder=recorder)
+        url = await ch._upload_plot(plot, branch="exp/my-branch")
+
+        assert url is not None
+        assert "fitness.png" in url
+
+    @pytest.mark.asyncio
+    async def test_upload_plot_failure_returns_none(self, tmp_path: Path) -> None:
+        png_file = tmp_path / "broken.png"
+        png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+        plot = PlotAttachment(path=png_file, caption="Broken plot")
+
+        recorder = RequestRecorder(
+            ordered_responses=[
+                # GET returns 404
+                (
+                    "GET /repos/owner/repo/contents/",
+                    httpx.Response(404, json={"message": "Not Found"}),
+                ),
+                # PUT fails
+                (
+                    "PUT /repos/owner/repo/contents/",
+                    httpx.Response(500, json={"message": "Server Error"}),
+                ),
+            ]
+        )
+        ch = _make_channel(recorder=recorder)
+        url = await ch._upload_plot(plot, branch="exp/my-branch")
+
+        assert url is None
+
+    @pytest.mark.asyncio
+    async def test_send_status_with_plots_embeds_urls(self, tmp_path: Path) -> None:
+        """send_status with plots: uploaded plots are embedded as markdown images."""
+        png_file = tmp_path / "fitness.png"
+        png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+        plot = PlotAttachment(path=png_file, caption="Fitness curves")
+        ts = datetime(2026, 4, 11, 12, 0, 0, tzinfo=UTC)
+        update = _make_update(plots=[plot], timestamp=ts)
+
+        recorder = RequestRecorder(
+            ordered_responses=[
+                # GET for plot (new file)
+                (
+                    "GET /repos/owner/repo/contents/",
+                    httpx.Response(404, json={"message": "Not Found"}),
+                ),
+                # PUT to upload
+                (
+                    "PUT /repos/owner/repo/contents/",
+                    httpx.Response(
+                        201,
+                        json={
+                            "content": {
+                                "download_url": "https://raw.githubusercontent.com/owner/repo/main/plots/fitness.png"
+                            }
+                        },
+                    ),
+                ),
+                # POST the PR comment
+                (
+                    "POST /repos/owner/repo/issues/42/comments",
+                    httpx.Response(201, json={"id": 1}),
+                ),
+            ]
+        )
+        transport = httpx.MockTransport(recorder.handler)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            transport=transport,
+            branch="exp/my-branch",
+        )
+
+        result = await ch.send_status(update)
+
+        assert result is True
+        # Find the POST comment request
+        post_reqs = [r for r in recorder.requests if r.method == "POST"]
+        assert len(post_reqs) == 1
+        import json
+
+        body = json.loads(post_reqs[0].content)["body"]
+        # Should contain cache-busted image URL
+        assert "![Fitness curves](" in body
+        assert "?v=" in body
+
+    @pytest.mark.asyncio
+    async def test_send_status_with_plots_upload_failure_still_posts(
+        self, tmp_path: Path
+    ) -> None:
+        """When plot upload fails, comment is still posted with text reference."""
+        png_file = tmp_path / "broken.png"
+        png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+        plot = PlotAttachment(path=png_file, caption="Broken plot")
+        update = _make_update(plots=[plot])
+
+        recorder = RequestRecorder(
+            ordered_responses=[
+                # GET returns 404
+                (
+                    "GET /repos/owner/repo/contents/",
+                    httpx.Response(404, json={"message": "Not Found"}),
+                ),
+                # PUT fails
+                (
+                    "PUT /repos/owner/repo/contents/",
+                    httpx.Response(500, json={"message": "Server Error"}),
+                ),
+                # POST comment still succeeds
+                (
+                    "POST /repos/owner/repo/issues/42/comments",
+                    httpx.Response(201, json={"id": 1}),
+                ),
+            ]
+        )
+        transport = httpx.MockTransport(recorder.handler)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            transport=transport,
+            branch="exp/my-branch",
+        )
+
+        result = await ch.send_status(update)
+
+        assert result is True
+        post_reqs = [r for r in recorder.requests if r.method == "POST"]
+        assert len(post_reqs) == 1
+        import json
+
+        body = json.loads(post_reqs[0].content)["body"]
+        # Should contain caption as text reference, not image embed
+        assert "Broken plot" in body
+        assert "broken.png" in body
+
+
+class TestCacheBustUrl:
+    def test_appends_query_param(self) -> None:
+        result = GitHubPRChannel._cache_bust_url(
+            "https://example.com/plot.png", timestamp=1234567890
+        )
+        assert result == "https://example.com/plot.png?v=1234567890"
+
+    def test_preserves_existing_query_params(self) -> None:
+        result = GitHubPRChannel._cache_bust_url(
+            "https://example.com/plot.png?ref=main", timestamp=1234567890
+        )
+        assert result == "https://example.com/plot.png?ref=main&v=1234567890"
