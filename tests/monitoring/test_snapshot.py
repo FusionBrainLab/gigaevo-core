@@ -82,16 +82,12 @@ def test_frozen() -> None:
 
 
 def test_invalid_rate_normal() -> None:
-    snap = RunSnapshot(
-        run_spec=_make_spec(), total_programs=100, valid_programs=85
-    )
+    snap = RunSnapshot(run_spec=_make_spec(), total_programs=100, valid_programs=85)
     assert snap.invalid_rate == pytest.approx(0.15)
 
 
 def test_invalid_rate_zero_total() -> None:
-    snap = RunSnapshot(
-        run_spec=_make_spec(), total_programs=0, valid_programs=0
-    )
+    snap = RunSnapshot(run_spec=_make_spec(), total_programs=0, valid_programs=0)
     assert snap.invalid_rate == 0.0
 
 
@@ -106,9 +102,7 @@ def test_invalid_rate_none_when_missing_valid() -> None:
 
 
 def test_has_error_true() -> None:
-    snap = RunSnapshot(
-        run_spec=_make_spec(), error="Connection refused"
-    )
+    snap = RunSnapshot(run_spec=_make_spec(), error="Connection refused")
     assert snap.has_error is True
 
 

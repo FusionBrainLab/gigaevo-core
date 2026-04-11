@@ -49,8 +49,12 @@ def _populate_run(
 
 def test_collect_multiple_runs() -> None:
     server = fakeredis.FakeServer()
-    _populate_run(server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85)
-    _populate_run(server, 5, "prefix_b", generation=20, fitness=0.82, total=200, valid=190)
+    _populate_run(
+        server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85
+    )
+    _populate_run(
+        server, 5, "prefix_b", generation=20, fitness=0.82, total=200, valid=190
+    )
     _populate_run(server, 6, "prefix_c", generation=5, fitness=0.50, total=50, valid=40)
 
     monitor = ExperimentMonitor(
@@ -136,7 +140,9 @@ def test_collect_with_different_metric_names() -> None:
 
 def test_collect_one_run_fails() -> None:
     server = fakeredis.FakeServer()
-    _populate_run(server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85)
+    _populate_run(
+        server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85
+    )
     _populate_run(server, 6, "prefix_c", generation=5, fitness=0.50, total=50, valid=40)
 
     def failing_factory(db: int) -> fakeredis.FakeRedis:
@@ -188,7 +194,9 @@ def test_collect_empty_runs() -> None:
 
 def test_collect_with_pid() -> None:
     server = fakeredis.FakeServer()
-    _populate_run(server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85)
+    _populate_run(
+        server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85
+    )
 
     monitor = ExperimentMonitor(
         redis_factory=lambda db: fakeredis.FakeRedis(

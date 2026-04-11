@@ -51,8 +51,7 @@ class RunSpec:
 
         if not prefix:
             raise ValueError(
-                f"Empty prefix in run spec: {raw!r}. "
-                f"Expected format: prefix@db[:label]"
+                f"Empty prefix in run spec: {raw!r}. Expected format: prefix@db[:label]"
             )
 
         # Split rest into db and optional label
@@ -73,8 +72,7 @@ class RunSpec:
 
         if db < 0:
             raise ValueError(
-                f"Negative db in run spec: {db} from {raw!r}. "
-                f"DB must be >= 0"
+                f"Negative db in run spec: {db} from {raw!r}. DB must be >= 0"
             )
 
         if label is None:

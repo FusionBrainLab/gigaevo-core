@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+import pytest
 
 from gigaevo.monitoring.run_spec import RunSpec
-
 
 # ---------------------------------------------------------------------------
 # a) Basic parsing tests (parametrize)
@@ -128,9 +127,7 @@ def test_error_just_at() -> None:
 # ---------------------------------------------------------------------------
 
 _prefix_strategy = st.text(
-    alphabet=st.sampled_from(
-        list("abcdefghijklmnopqrstuvwxyz/_-0123456789")
-    ),
+    alphabet=st.sampled_from(list("abcdefghijklmnopqrstuvwxyz/_-0123456789")),
     min_size=1,
     max_size=50,
 )

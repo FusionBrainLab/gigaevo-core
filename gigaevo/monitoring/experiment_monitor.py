@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-import redis as redis_lib
 from loguru import logger
+import redis as redis_lib
 
 from gigaevo.monitoring.redis_queries import collect_snapshot
 from gigaevo.monitoring.run_spec import RunSpec
@@ -90,7 +90,5 @@ class ExperimentMonitor:
             finally:
                 r.close()
         except Exception as exc:
-            _log.error(
-                f"Failed to connect to Redis for {run_cfg.run_spec}: {exc}"
-            )
+            _log.error(f"Failed to connect to Redis for {run_cfg.run_spec}: {exc}")
             return RunSnapshot(run_spec=run_cfg.run_spec, error=str(exc))
