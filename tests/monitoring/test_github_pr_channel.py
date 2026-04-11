@@ -19,16 +19,35 @@ from gigaevo.monitoring.snapshot import RunSnapshot
 
 
 class RequestRecorder:
-    """Records HTTP requests for assertion in tests."""
+    """Records HTTP requests for assertion in tests.
 
-    def __init__(self, responses: dict[str, httpx.Response] | None = None):
+    Supports two response modes:
+    - Simple dict: pattern -> response (matches on "METHOD /path" substring)
+    - Ordered list: list of (pattern, response) tuples, consumed in order for
+      the same pattern (allows different responses for repeated requests)
+    """
+
+    def __init__(
+        self,
+        responses: dict[str, httpx.Response] | None = None,
+        ordered_responses: list[tuple[str, httpx.Response]] | None = None,
+    ):
         self.requests: list[httpx.Request] = []
         self._responses = responses or {}
+        self._ordered = list(ordered_responses) if ordered_responses else []
         self._default_response = httpx.Response(200, json={"id": 1})
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         key = f"{request.method} {request.url.path}"
+
+        # Try ordered responses first (consumed in order)
+        for i, (pattern, resp) in enumerate(self._ordered):
+            if pattern in key:
+                self._ordered.pop(i)
+                return resp
+
+        # Fall back to simple dict
         for pattern, resp in self._responses.items():
             if pattern in key:
                 return resp
@@ -169,3 +188,239 @@ class TestCheckHealth:
         )
         result = await ch.check_health()
         assert result is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. send_status -- rolling comment tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _make_update(
+    experiment_name: str = "hover/test-exp",
+    snapshots: list[RunSnapshot] | None = None,
+    alerts: list[Alert] | None = None,
+    plots: list[PlotAttachment] | None = None,
+    max_generations: int | None = 50,
+    timestamp: datetime | None = None,
+) -> StatusUpdate:
+    return StatusUpdate(
+        experiment_name=experiment_name,
+        snapshots=snapshots or [_make_snapshot(label="A"), _make_snapshot(label="B")],
+        alerts=alerts or [],
+        plots=plots or [],
+        max_generations=max_generations,
+        timestamp=timestamp or datetime(2026, 4, 11, 12, 0, 0, tzinfo=UTC),
+    )
+
+
+class TestSendStatusRollingComment:
+    @pytest.mark.asyncio
+    async def test_first_call_creates_new_comment(self) -> None:
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    201, json={"id": 99}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        update = _make_update()
+
+        result = await ch.send_status(update)
+
+        assert result is True
+        assert len(recorder.requests) == 1
+        assert recorder.requests[0].method == "POST"
+        assert "/issues/42/comments" in str(recorder.requests[0].url)
+        # Body should contain markdown table
+        import json
+
+        body = json.loads(recorder.requests[0].content)["body"]
+        assert "|" in body
+        # Rolling comment ID stored
+        assert ch._comment_id == 99
+
+    @pytest.mark.asyncio
+    async def test_second_call_edits_existing_comment(self) -> None:
+        recorder = RequestRecorder(
+            responses={
+                "PATCH /repos/owner/repo/issues/comments/99": httpx.Response(
+                    200, json={"id": 99}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        ch._comment_id = 99  # Simulate first call already happened
+        update = _make_update()
+
+        result = await ch.send_status(update)
+
+        assert result is True
+        assert len(recorder.requests) == 1
+        assert recorder.requests[0].method == "PATCH"
+        assert "/issues/comments/99" in str(recorder.requests[0].url)
+
+    @pytest.mark.asyncio
+    async def test_edit_failure_falls_back_to_new_comment(self) -> None:
+        recorder = RequestRecorder(
+            ordered_responses=[
+                # PATCH fails (comment was deleted)
+                (
+                    "PATCH /repos/owner/repo/issues/comments/99",
+                    httpx.Response(404, json={"message": "Not Found"}),
+                ),
+                # POST succeeds with new ID
+                (
+                    "POST /repos/owner/repo/issues/42/comments",
+                    httpx.Response(201, json={"id": 100}),
+                ),
+            ]
+        )
+        ch = _make_channel(recorder=recorder)
+        ch._comment_id = 99
+        update = _make_update()
+
+        result = await ch.send_status(update)
+
+        assert result is True
+        assert ch._comment_id == 100
+        assert len(recorder.requests) == 2
+        assert recorder.requests[0].method == "PATCH"
+        assert recorder.requests[1].method == "POST"
+
+    @pytest.mark.asyncio
+    async def test_body_contains_experiment_name_and_table(self) -> None:
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    201, json={"id": 1}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        update = _make_update(experiment_name="hover/my-exp")
+
+        await ch.send_status(update)
+
+        import json
+
+        body = json.loads(recorder.requests[0].content)["body"]
+        assert "hover/my-exp" in body
+        assert "|" in body  # markdown table
+        assert "A" in body  # run label A
+        assert "B" in body  # run label B
+
+    @pytest.mark.asyncio
+    async def test_body_contains_alerts_section(self) -> None:
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    201, json={"id": 1}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        alert = _make_alert(
+            alert_type=AlertType.STALL,
+            severity=AlertSeverity.WARN,
+            message="Run A stalled at gen 5",
+        )
+        update = _make_update(alerts=[alert])
+
+        await ch.send_status(update)
+
+        import json
+
+        body = json.loads(recorder.requests[0].content)["body"]
+        assert "Alert" in body
+        assert "stall" in body.lower() or "Run A stalled" in body
+
+    @pytest.mark.asyncio
+    async def test_telegram_down_header_present(self) -> None:
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    201, json={"id": 1}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        ch.telegram_down = True
+        update = _make_update()
+
+        await ch.send_status(update)
+
+        import json
+
+        body = json.loads(recorder.requests[0].content)["body"]
+        assert "TELEGRAM DOWN" in body
+        assert body.startswith("> ")
+
+    @pytest.mark.asyncio
+    async def test_telegram_down_false_no_header(self) -> None:
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    201, json={"id": 1}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        assert ch.telegram_down is False
+        update = _make_update()
+
+        await ch.send_status(update)
+
+        import json
+
+        body = json.loads(recorder.requests[0].content)["body"]
+        assert "TELEGRAM DOWN" not in body
+
+    @pytest.mark.asyncio
+    async def test_api_failure_returns_false(self) -> None:
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    500, json={"message": "Internal Server Error"}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        update = _make_update()
+
+        result = await ch.send_status(update)
+
+        assert result is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. send_alert tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestSendAlert:
+    @pytest.mark.asyncio
+    async def test_always_creates_new_comment(self) -> None:
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    201, json={"id": 200}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        ch._comment_id = 99  # Rolling comment exists
+        alert = _make_alert(
+            alert_type=AlertType.CRASH,
+            severity=AlertSeverity.ERROR,
+            message="Run B process (PID 12345) is not alive",
+        )
+
+        result = await ch.send_alert(alert)
+
+        assert result is True
+        assert len(recorder.requests) == 1
+        assert recorder.requests[0].method == "POST"
+        assert "/issues/42/comments" in str(recorder.requests[0].url)
+        # Rolling comment ID should NOT be changed by alert
+        assert ch._comment_id == 99
