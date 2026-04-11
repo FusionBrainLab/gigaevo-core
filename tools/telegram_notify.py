@@ -35,7 +35,10 @@ load_dotenv()  # auto-load TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID from .env
 # is reachable from servers where api.telegram.org is blocked.
 _PROXIES: dict | None = None
 if os.environ.get("HTTPS_PROXY"):
-    _PROXIES = {"https": os.environ["HTTPS_PROXY"], "http": os.environ.get("HTTP_PROXY", os.environ["HTTPS_PROXY"])}
+    _PROXIES = {
+        "https": os.environ["HTTPS_PROXY"],
+        "http": os.environ.get("HTTP_PROXY", os.environ["HTTPS_PROXY"]),
+    }
 
 
 def _bot_token() -> str:
