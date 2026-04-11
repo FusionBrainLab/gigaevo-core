@@ -363,8 +363,8 @@ class TestSendStatus:
         assert "<pre>" in text
         assert "A" in text
         assert "B" in text
-        assert "76.2%" in text
-        assert "83.1%" in text
+        assert "0.7620" in text
+        assert "0.8310" in text
         await channel.close()
 
     @pytest.mark.asyncio

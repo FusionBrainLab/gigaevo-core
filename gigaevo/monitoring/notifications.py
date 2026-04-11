@@ -187,7 +187,15 @@ def format_alert_message(alert: Alert) -> str:
 def _format_fitness(value: float | None) -> str:
     if value is None:
         return "-"
-    return f"{value * 100:.1f}%"
+    # Show raw value — fitness semantics are task-dependent.
+    # Heilbronn: ~0.034 (raw geometric), HoVer: ~0.76 (fraction).
+    # status.py reads metrics.yaml upper_bound to decide; formatters
+    # display the raw number and let the reader interpret.
+    if abs(value) >= 1.0:
+        return f"{value:.2f}"
+    if abs(value) >= 0.1:
+        return f"{value:.4f}"
+    return f"{value:.5f}"
 
 
 def _format_invalid_rate(rate: float | None) -> str:

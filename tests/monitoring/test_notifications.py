@@ -322,7 +322,11 @@ class TestFormatStatusTableMarkdown:
 
     def test_fitness_formatting(self) -> None:
         md = format_status_table_markdown([_make_snapshot(fitness=0.762)])
-        assert "76.2%" in md
+        assert "0.7620" in md
+
+    def test_fitness_formatting_small_value(self) -> None:
+        md = format_status_table_markdown([_make_snapshot(fitness=0.03450)])
+        assert "0.03450" in md
 
     def test_invalid_rate_formatting(self) -> None:
         md = format_status_table_markdown(
@@ -387,7 +391,7 @@ class TestFormatStatusTableTelegram:
 
     def test_same_data_values(self) -> None:
         tg = format_status_table_telegram([_make_snapshot(fitness=0.762)])
-        assert "76.2%" in tg
+        assert "0.7620" in tg
         assert "ALIVE" in tg
 
     def test_monospace_alignment(self) -> None:

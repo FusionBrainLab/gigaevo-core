@@ -480,10 +480,10 @@ class TestNOT06Integration:
             assert gen in telegram_text, f"Telegram missing gen {gen}"
             assert gen in github_text, f"GitHub missing gen {gen}"
 
-        # Both channels contain all 3 fitness percentages
-        for pct in ["76.2%", "80.1%", "65.5%"]:
-            assert pct in telegram_text, f"Telegram missing fitness {pct}"
-            assert pct in github_text, f"GitHub missing fitness {pct}"
+        # Both channels contain all 3 fitness values (raw, not %)
+        for val in ["0.7620", "0.8010", "0.6550"]:
+            assert val in telegram_text, f"Telegram missing fitness {val}"
+            assert val in github_text, f"GitHub missing fitness {val}"
 
         # Both channels contain the experiment name
         assert "hover/test-exp" in telegram_text
