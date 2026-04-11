@@ -221,16 +221,18 @@ class TestHighInvalidity:
     def test_no_high_invalidity_when_no_data(self):
         """total=None or valid=None -> no alert."""
         detector = AlertDetector()
-        snap_no_total = make_snapshot(total_programs=None, valid_programs=90, generation=5)
-        snap_no_valid = make_snapshot(total_programs=100, valid_programs=None, generation=5)
+        snap_no_total = make_snapshot(
+            total_programs=None, valid_programs=90, generation=5
+        )
+        snap_no_valid = make_snapshot(
+            total_programs=100, valid_programs=None, generation=5
+        )
 
         alerts1 = detector.check([snap_no_total])
         alerts2 = detector.check([snap_no_valid])
 
         inv_alerts = [
-            a
-            for a in alerts1 + alerts2
-            if a.alert_type == AlertType.HIGH_INVALIDITY
+            a for a in alerts1 + alerts2 if a.alert_type == AlertType.HIGH_INVALIDITY
         ]
         assert len(inv_alerts) == 0
 
@@ -340,10 +342,18 @@ class TestCooldown:
         """STALL for run 'O' is suppressed, but STALL for run 'R' is not."""
         detector = AlertDetector(cooldown_cycles=2)
 
-        prev_o = make_snapshot(label="O", generation=10, running_programs=2, total_programs=100)
-        stall_o = make_snapshot(label="O", generation=10, running_programs=0, total_programs=100)
-        prev_r = make_snapshot(label="R", generation=10, running_programs=2, total_programs=100)
-        stall_r = make_snapshot(label="R", generation=10, running_programs=0, total_programs=100)
+        prev_o = make_snapshot(
+            label="O", generation=10, running_programs=2, total_programs=100
+        )
+        stall_o = make_snapshot(
+            label="O", generation=10, running_programs=0, total_programs=100
+        )
+        prev_r = make_snapshot(
+            label="R", generation=10, running_programs=2, total_programs=100
+        )
+        stall_r = make_snapshot(
+            label="R", generation=10, running_programs=0, total_programs=100
+        )
 
         # Set up previous for both
         detector.check([prev_o, prev_r])
@@ -364,12 +374,18 @@ class TestCooldown:
 
         # Set up previous for stall detection
         prev = make_snapshot(
-            label="O", generation=10, running_programs=2, total_programs=100,
+            label="O",
+            generation=10,
+            running_programs=2,
+            total_programs=100,
             valid_programs=90,
         )
         # Current: stalled AND high invalidity
         curr = make_snapshot(
-            label="O", generation=10, running_programs=0, total_programs=100,
+            label="O",
+            generation=10,
+            running_programs=0,
+            total_programs=100,
             valid_programs=20,  # 80% invalid
         )
 
@@ -421,15 +437,30 @@ class TestCooldown:
         detector.check([prev])
 
         # Call 1: fires
-        assert len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL]) == 1
+        assert (
+            len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL])
+            == 1
+        )
         # Call 2: suppress
-        assert len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL]) == 0
+        assert (
+            len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL])
+            == 0
+        )
         # Call 3: suppress
-        assert len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL]) == 0
+        assert (
+            len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL])
+            == 0
+        )
         # Call 4: suppress
-        assert len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL]) == 0
+        assert (
+            len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL])
+            == 0
+        )
         # Call 5: fires again
-        assert len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL]) == 1
+        assert (
+            len([a for a in detector.check([stall]) if a.alert_type == AlertType.STALL])
+            == 1
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -442,10 +473,16 @@ class TestMultipleAlerts:
         """One run is stalled AND has high invalidity -> two alerts returned."""
         detector = AlertDetector()
         prev = make_snapshot(
-            generation=10, running_programs=2, total_programs=100, valid_programs=90,
+            generation=10,
+            running_programs=2,
+            total_programs=100,
+            valid_programs=90,
         )
         curr = make_snapshot(
-            generation=10, running_programs=0, total_programs=100, valid_programs=20,
+            generation=10,
+            running_programs=0,
+            total_programs=100,
+            valid_programs=20,
         )
 
         detector.check([prev])
@@ -459,10 +496,16 @@ class TestMultipleAlerts:
         """Two runs: one stalled, one crashed -> two alerts (one per run)."""
         detector = AlertDetector()
         prev_stall = make_snapshot(
-            label="O", generation=10, running_programs=2, total_programs=100,
+            label="O",
+            generation=10,
+            running_programs=2,
+            total_programs=100,
         )
         curr_stall = make_snapshot(
-            label="O", generation=10, running_programs=0, total_programs=100,
+            label="O",
+            generation=10,
+            running_programs=0,
+            total_programs=100,
         )
         crash = make_snapshot(label="R", pid=12345, pid_alive=False)
 
@@ -520,3 +563,190 @@ class TestAlertDataclass:
         assert AlertSeverity.INFO == "info"
         assert AlertSeverity.WARN == "warn"
         assert AlertSeverity.ERROR == "error"
+
+
+# ---------------------------------------------------------------------------
+# 8. Edge case tests (Task 4)
+# ---------------------------------------------------------------------------
+
+
+class TestEdgeCases:
+    def test_stall_not_triggered_when_generation_is_none(self):
+        """Both current and previous have generation=None -> no stall.
+        Prevents false stall alarms on runs that haven't started."""
+        detector = AlertDetector()
+        prev = make_snapshot(generation=None, running_programs=0, total_programs=0)
+        curr = make_snapshot(generation=None, running_programs=0, total_programs=0)
+
+        detector.check([prev])
+        alerts = detector.check([curr])
+
+        stall_alerts = [a for a in alerts if a.alert_type == AlertType.STALL]
+        assert len(stall_alerts) == 0
+
+    def test_detector_resets_after_progress(self):
+        """Cycle 1: stall. Cycle 2: progress. Cycle 3: stall returns.
+        Stall in cycle 3 fires (cooldown from cycle 1 has expired)."""
+        detector = AlertDetector(cooldown_cycles=1)
+
+        prev = make_snapshot(generation=10, running_programs=2, total_programs=100)
+        stall = make_snapshot(generation=10, running_programs=0, total_programs=100)
+        progress = make_snapshot(generation=11, running_programs=2, total_programs=110)
+        stall_again = make_snapshot(
+            generation=11, running_programs=0, total_programs=110
+        )
+
+        # Setup
+        detector.check([prev])
+        # Cycle 1: stall fires
+        alerts1 = detector.check([stall])
+        assert any(a.alert_type == AlertType.STALL for a in alerts1)
+        # Cycle 2: progress (cooldown 1 -> 0, deleted)
+        alerts2 = detector.check([progress])
+        assert not any(a.alert_type == AlertType.STALL for a in alerts2)
+        # Cycle 3: stall again -> fires (cooldown expired)
+        alerts3 = detector.check([stall_again])
+        assert any(a.alert_type == AlertType.STALL for a in alerts3)
+
+    def test_high_invalidity_at_exactly_threshold(self):
+        """75% invalid at threshold=0.75 -> NOT triggered (strictly greater than).
+        At 75.1% -> triggered."""
+        detector = AlertDetector(invalidity_threshold=0.75)
+
+        # Exactly at threshold: 25 valid / 100 total = 0.75 invalid -> NOT triggered
+        snap_at = make_snapshot(total_programs=100, valid_programs=25, generation=5)
+        alerts_at = detector.check([snap_at])
+        assert not any(a.alert_type == AlertType.HIGH_INVALIDITY for a in alerts_at)
+
+        # Just above: 24 valid / 100 total = 0.76 invalid -> triggered
+        detector2 = AlertDetector(invalidity_threshold=0.75)
+        snap_above = make_snapshot(total_programs=100, valid_programs=24, generation=5)
+        alerts_above = detector2.check([snap_above])
+        assert any(a.alert_type == AlertType.HIGH_INVALIDITY for a in alerts_above)
+
+    def test_completion_with_zero_runs(self):
+        """Empty snapshots list with max_generations set -> no completion alert."""
+        detector = AlertDetector(max_generations=50)
+        alerts = detector.check([])
+        assert not any(a.alert_type == AlertType.COMPLETION for a in alerts)
+
+    def test_crash_and_stall_same_run(self):
+        """A run that is both stalled AND crashed -> both alerts emitted."""
+        detector = AlertDetector()
+        prev = make_snapshot(
+            generation=10,
+            running_programs=2,
+            total_programs=100,
+            pid=12345,
+            pid_alive=True,
+        )
+        curr = make_snapshot(
+            generation=10,
+            running_programs=0,
+            total_programs=100,
+            pid=12345,
+            pid_alive=False,
+        )
+
+        detector.check([prev])
+        alerts = detector.check([curr])
+
+        alert_types = {a.alert_type for a in alerts}
+        assert AlertType.STALL in alert_types
+        assert AlertType.CRASH in alert_types
+
+    def test_error_snapshot_produces_no_false_alerts(self):
+        """A snapshot with error and all fields None -> no stall/crash/invalidity."""
+        detector = AlertDetector()
+        snap = make_snapshot(
+            generation=None,
+            total_programs=None,
+            valid_programs=None,
+            running_programs=None,
+            pid=None,
+            error="connection refused",
+        )
+
+        alerts = detector.check([snap])
+
+        # Should not produce stall, crash, or invalidity alerts
+        problematic = [
+            a
+            for a in alerts
+            if a.alert_type
+            in (AlertType.STALL, AlertType.CRASH, AlertType.HIGH_INVALIDITY)
+        ]
+        assert len(problematic) == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. Full lifecycle integration test (Task 4)
+# ---------------------------------------------------------------------------
+
+
+class TestFullLifecycle:
+    def test_full_lifecycle(self):
+        """Simulate 6 cycles of an experiment with cooldown_cycles=2.
+
+        Cycle 1: All runs healthy -> no alerts
+        Cycle 2: One run stalls -> STALL alert (cooldown set to 2)
+        Cycle 3: Same run still stalled -> STALL suppressed (2 -> 1)
+        Cycle 4: Same run still stalled -> STALL suppressed (1 -> 0, deleted)
+        Cycle 5: All runs reach max_gen -> COMPLETION + STALL resumes
+        Cycle 6: Completion suppressed (cooldown)
+        """
+        detector = AlertDetector(max_generations=50, cooldown_cycles=2)
+
+        # Cycle 1: healthy
+        healthy_a = make_snapshot(
+            label="A", generation=10, running_programs=2, total_programs=100
+        )
+        healthy_b = make_snapshot(
+            label="B", generation=10, running_programs=2, total_programs=100
+        )
+        alerts1 = detector.check([healthy_a, healthy_b])
+        assert len(alerts1) == 0
+
+        # Cycle 2: A stalls
+        stall_a = make_snapshot(
+            label="A", generation=10, running_programs=0, total_programs=100
+        )
+        healthy_b2 = make_snapshot(
+            label="B", generation=11, running_programs=2, total_programs=110
+        )
+        alerts2 = detector.check([stall_a, healthy_b2])
+        stalls2 = [a for a in alerts2 if a.alert_type == AlertType.STALL]
+        assert len(stalls2) == 1
+        assert stalls2[0].run_label == "A"
+
+        # Cycle 3: A still stalled -> suppressed
+        healthy_b3 = make_snapshot(
+            label="B", generation=12, running_programs=2, total_programs=120
+        )
+        alerts3 = detector.check([stall_a, healthy_b3])
+        stalls3 = [a for a in alerts3 if a.alert_type == AlertType.STALL]
+        assert len(stalls3) == 0
+
+        # Cycle 4: A still stalled -> suppressed (last suppression)
+        healthy_b4 = make_snapshot(
+            label="B", generation=13, running_programs=2, total_programs=130
+        )
+        alerts4 = detector.check([stall_a, healthy_b4])
+        stalls4 = [a for a in alerts4 if a.alert_type == AlertType.STALL]
+        assert len(stalls4) == 0
+
+        # Cycle 5: all reach max_gen -> COMPLETION + STALL resumes for A
+        done_a = make_snapshot(
+            label="A", generation=50, running_programs=0, total_programs=100
+        )
+        done_b = make_snapshot(
+            label="B", generation=50, running_programs=2, total_programs=200
+        )
+        alerts5 = detector.check([done_a, done_b])
+        comp5 = [a for a in alerts5 if a.alert_type == AlertType.COMPLETION]
+        assert len(comp5) == 1
+
+        # Cycle 6: completion suppressed
+        alerts6 = detector.check([done_a, done_b])
+        comp6 = [a for a in alerts6 if a.alert_type == AlertType.COMPLETION]
+        assert len(comp6) == 0

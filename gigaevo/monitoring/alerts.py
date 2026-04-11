@@ -150,9 +150,7 @@ class AlertDetector:
                 and snap.generation >= self._invalidity_min_gen
             ):
                 pct = inv_rate * 100
-                log.warning(
-                    f"High invalidity: {pct:.0f}% at gen {snap.generation}"
-                )
+                log.warning(f"High invalidity: {pct:.0f}% at gen {snap.generation}")
                 raw_alerts.append(
                     Alert(
                         alert_type=AlertType.HIGH_INVALIDITY,
@@ -175,8 +173,7 @@ class AlertDetector:
         # --- Completion detection (global, not per-run) ---
         if self._max_generations is not None and snapshots:
             all_complete = all(
-                snap.generation is not None
-                and snap.generation >= self._max_generations
+                snap.generation is not None and snap.generation >= self._max_generations
                 for snap in snapshots
             )
             if all_complete:
