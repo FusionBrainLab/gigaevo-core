@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from gigaevo.monitoring.alerts import Alert, AlertSeverity
@@ -51,9 +51,7 @@ class StatusUpdate:
     alerts: list[Alert] = field(default_factory=list)
     plots: list[PlotAttachment] = field(default_factory=list)
     max_generations: int | None = None
-    timestamp: datetime = field(
-        default_factory=lambda: datetime.now(tz=timezone.utc)
-    )
+    timestamp: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
     @property
     def has_alerts(self) -> bool:
@@ -104,7 +102,9 @@ def format_status_table_markdown(snapshots: list[RunSnapshot]) -> str:
     if not snapshots:
         return "_No runs to display._"
 
-    header = "| Run | DB | Gen | Fitness | Invalid% | Val dur(s) | Keys | PID | Status |"
+    header = (
+        "| Run | DB | Gen | Fitness | Invalid% | Val dur(s) | Keys | PID | Status |"
+    )
     sep = "|-----|-----|-----|---------|----------|------------|------|-----|--------|"
     rows = [header, sep]
 
@@ -114,7 +114,9 @@ def format_status_table_markdown(snapshots: list[RunSnapshot]) -> str:
         gen = str(snap.generation) if snap.generation is not None else "-"
         fitness = _format_fitness(snap.metrics.get("fitness"))
         invalid = _format_invalid_rate(snap.invalid_rate)
-        val_dur = _format_validator_duration(snap.validator_mean_s, snap.validator_max_s)
+        val_dur = _format_validator_duration(
+            snap.validator_mean_s, snap.validator_max_s
+        )
         keys = str(snap.total_keys) if snap.total_keys is not None else "-"
         pid = str(snap.pid) if snap.pid is not None else "-"
         status = _format_pid_status(snap.pid, snap.pid_alive)
@@ -138,17 +140,19 @@ def format_status_table_telegram(snapshots: list[RunSnapshot]) -> str:
     headers = ["Run", "DB", "Gen", "Fitness", "Inv%", "Val(s)", "Keys", "PID", "Status"]
     table_rows: list[list[str]] = []
     for snap in snapshots:
-        table_rows.append([
-            snap.run_spec.label,
-            str(snap.run_spec.db),
-            str(snap.generation) if snap.generation is not None else "-",
-            _format_fitness(snap.metrics.get("fitness")),
-            _format_invalid_rate(snap.invalid_rate),
-            _format_validator_duration(snap.validator_mean_s, snap.validator_max_s),
-            str(snap.total_keys) if snap.total_keys is not None else "-",
-            str(snap.pid) if snap.pid is not None else "-",
-            _format_pid_status(snap.pid, snap.pid_alive),
-        ])
+        table_rows.append(
+            [
+                snap.run_spec.label,
+                str(snap.run_spec.db),
+                str(snap.generation) if snap.generation is not None else "-",
+                _format_fitness(snap.metrics.get("fitness")),
+                _format_invalid_rate(snap.invalid_rate),
+                _format_validator_duration(snap.validator_mean_s, snap.validator_max_s),
+                str(snap.total_keys) if snap.total_keys is not None else "-",
+                str(snap.pid) if snap.pid is not None else "-",
+                _format_pid_status(snap.pid, snap.pid_alive),
+            ]
+        )
 
     col_widths = [len(h) for h in headers]
     for row in table_rows:
@@ -192,9 +196,7 @@ def _format_invalid_rate(rate: float | None) -> str:
     return f"{rate * 100:.0f}%"
 
 
-def _format_validator_duration(
-    mean: float | None, max_val: float | None
-) -> str:
+def _format_validator_duration(mean: float | None, max_val: float | None) -> str:
     if mean is None and max_val is None:
         return "-"
     mean_s = f"{mean:.0f}" if mean is not None else "?"

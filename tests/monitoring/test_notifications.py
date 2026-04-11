@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from gigaevo.monitoring import Alert, AlertSeverity, AlertType, RunSnapshot
-from gigaevo.monitoring.run_spec import RunSpec
-
 from gigaevo.monitoring.notifications import (
     NotificationChannel,
     PlotAttachment,
@@ -18,7 +16,7 @@ from gigaevo.monitoring.notifications import (
     format_status_table_markdown,
     format_status_table_telegram,
 )
-
+from gigaevo.monitoring.run_spec import RunSpec
 
 # ── Factories ────────────────────────────────────────────────────────────────
 
@@ -98,7 +96,7 @@ class TestStatusUpdateConstruction:
         snap = _make_snapshot()
         alert = _make_alert()
         plot = PlotAttachment(path=Path("/tmp/p.png"), caption="c")
-        ts = datetime(2026, 4, 11, 12, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 4, 11, 12, 0, 0, tzinfo=UTC)
 
         update = StatusUpdate(
             experiment_name="hover/push",
@@ -309,7 +307,17 @@ class TestFormatStatusTableMarkdown:
     def test_columns_present(self) -> None:
         md = format_status_table_markdown([_make_snapshot()])
         header = md.split("\n")[0]
-        for col in ["Run", "DB", "Gen", "Fitness", "Invalid%", "Val dur(s)", "Keys", "PID", "Status"]:
+        for col in [
+            "Run",
+            "DB",
+            "Gen",
+            "Fitness",
+            "Invalid%",
+            "Val dur(s)",
+            "Keys",
+            "PID",
+            "Status",
+        ]:
             assert col in header
 
     def test_fitness_formatting(self) -> None:
@@ -323,21 +331,15 @@ class TestFormatStatusTableMarkdown:
         assert "20%" in md
 
     def test_pid_alive_status(self) -> None:
-        md = format_status_table_markdown(
-            [_make_snapshot(pid=49341, pid_alive=True)]
-        )
+        md = format_status_table_markdown([_make_snapshot(pid=49341, pid_alive=True)])
         assert "ALIVE" in md
 
     def test_pid_dead_status(self) -> None:
-        md = format_status_table_markdown(
-            [_make_snapshot(pid=49341, pid_alive=False)]
-        )
+        md = format_status_table_markdown([_make_snapshot(pid=49341, pid_alive=False)])
         assert "DEAD" in md
 
     def test_pid_unknown(self) -> None:
-        md = format_status_table_markdown(
-            [_make_snapshot(pid=None, pid_alive=None)]
-        )
+        md = format_status_table_markdown([_make_snapshot(pid=None, pid_alive=None)])
         data_row = md.strip().split("\n")[2]
         cells = [c.strip() for c in data_row.split("|") if c.strip()]
         # PID column (index 7) and Status column (index 8) should be "-"
@@ -398,8 +400,8 @@ class TestFormatStatusTableTelegram:
         inner = tg.replace("<pre>\n", "").replace("\n</pre>", "")
         lines = inner.split("\n")
         # All non-separator lines should have the same length
-        data_lines = [l for l in lines if not all(c in "-  " for c in l)]
-        lengths = [len(l) for l in data_lines]
+        data_lines = [row for row in lines if not all(c in "-  " for c in row)]
+        lengths = [len(row) for row in data_lines]
         assert len(set(lengths)) == 1, f"Unequal line lengths: {lengths}"
 
     def test_empty_snapshots(self) -> None:
