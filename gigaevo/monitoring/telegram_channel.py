@@ -9,6 +9,8 @@ Replaces tools/telegram_notify.py with:
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -18,6 +20,8 @@ from gigaevo.monitoring.alerts import Alert
 from gigaevo.monitoring.notifications import (
     NotificationChannel,
     StatusUpdate,
+    format_alert_message,
+    format_status_table_telegram,
 )
 
 _log = logger.bind(component="telegram")
@@ -87,9 +91,141 @@ class TelegramChannel(NotificationChannel):
             _log.warning(f"Health check failed: {exc}")
             return False
 
-    # send_status and send_alert implemented in Task 4
+    # ── Core send methods ───────────────────────────────────────────────────
+
+    async def _send_message(self, text: str, *, parse_mode: str = "HTML") -> bool:
+        """Send a text message to Telegram with retry.
+
+        Retries on HTTP 429, 5xx, and network errors. No retry on 4xx
+        (except 429) because those indicate a bug in our request.
+        """
+        payload = {
+            "chat_id": self._chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+        }
+        return await self._post_with_retry("sendMessage", payload)
+
+    async def _send_photo(self, photo_path: Path, caption: str = "") -> bool:
+        """Send a photo to Telegram with retry."""
+        try:
+            client = await self._get_client()
+            with open(photo_path, "rb") as f:
+                files = {"photo": (photo_path.name, f, "image/png")}
+                data = {
+                    "chat_id": self._chat_id,
+                    "caption": caption[:1024],
+                    "parse_mode": "HTML",
+                }
+                for attempt in range(_MAX_RETRIES):
+                    try:
+                        f.seek(0)
+                        resp = await client.post(
+                            self._api_url("sendPhoto"),
+                            data=data,
+                            files=files,
+                        )
+                        if resp.status_code == 200:
+                            return True
+                        if resp.status_code == 429 or resp.status_code >= 500:
+                            await self._backoff(attempt)
+                            continue
+                        _log.warning(
+                            f"sendPhoto failed: {resp.status_code} {resp.text}"
+                        )
+                        return False
+                    except httpx.HTTPError as exc:
+                        _log.warning(
+                            f"sendPhoto network error (attempt {attempt + 1}): {exc}"
+                        )
+                        if attempt < _MAX_RETRIES - 1:
+                            await self._backoff(attempt)
+                return False
+        except Exception as exc:
+            _log.error(f"sendPhoto error: {exc}")
+            return False
+
+    async def _post_with_retry(self, method: str, payload: dict) -> bool:
+        """POST to Telegram Bot API with exponential backoff retry.
+
+        Returns True on success (HTTP 200 + ok:true), False on failure.
+        Updates consecutive_failures counter.
+        """
+        client = await self._get_client()
+        last_exc: Exception | None = None
+
+        for attempt in range(_MAX_RETRIES):
+            try:
+                resp = await client.post(self._api_url(method), json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("ok", False):
+                        self._consecutive_failures = 0
+                        return True
+                    _log.warning(f"{method} returned ok=false: {data}")
+                    self._consecutive_failures += 1
+                    return False
+
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    _log.info(
+                        f"{method} got {resp.status_code}, "
+                        f"retry {attempt + 1}/{_MAX_RETRIES}"
+                    )
+                    await self._backoff(attempt)
+                    continue
+
+                # 4xx (except 429) -- our bug, no retry
+                _log.warning(f"{method} failed: {resp.status_code} {resp.text}")
+                self._consecutive_failures += 1
+                return False
+
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                _log.warning(f"{method} network error (attempt {attempt + 1}): {exc}")
+                if attempt < _MAX_RETRIES - 1:
+                    await self._backoff(attempt)
+
+        # All retries exhausted
+        _log.error(f"{method} failed after {_MAX_RETRIES} attempts: {last_exc}")
+        self._consecutive_failures += 1
+        return False
+
+    @staticmethod
+    async def _backoff(attempt: int) -> None:
+        delay = _BACKOFF_BASE * (2**attempt)
+        await asyncio.sleep(delay)
+
+    # ── Public channel methods ──────────────────────────────────────────────
+
     async def send_status(self, update: StatusUpdate) -> bool:
-        raise NotImplementedError  # placeholder until Task 4
+        """Send full status update: table + alerts + photos."""
+        parts: list[str] = []
+
+        parts.append(f"<b>{update.experiment_name}</b>")
+        if update.max_generations is not None:
+            parts.append(f"Target: {update.max_generations} generations")
+        parts.append("")
+
+        table = format_status_table_telegram(update.snapshots)
+        parts.append(table)
+
+        if update.has_alerts:
+            parts.append("")
+            parts.append("<b>Alerts:</b>")
+            for alert in update.alerts:
+                parts.append(f"  {format_alert_message(alert)}")
+
+        message = "\n".join(parts)
+        text_ok = await self._send_message(message)
+
+        for plot in update.plots:
+            photo_ok = await self._send_photo(plot.path, plot.caption)
+            if not photo_ok:
+                _log.warning(f"Failed to send plot: {plot.path}")
+
+        return text_ok
 
     async def send_alert(self, alert: Alert) -> bool:
-        raise NotImplementedError  # placeholder until Task 4
+        """Send a single alert as a text message."""
+        message = format_alert_message(alert)
+        return await self._send_message(message)

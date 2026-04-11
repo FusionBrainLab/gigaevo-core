@@ -127,9 +127,7 @@ class TestSendMessageRetry:
                     json={"ok": False, "description": "Too Many Requests"},
                     headers={"Retry-After": "1"},
                 )
-            return httpx.Response(
-                200, json={"ok": True, "result": {"message_id": 1}}
-            )
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 
         channel = _make_channel(handler)
         result = await channel._send_message("test")
@@ -148,9 +146,7 @@ class TestSendMessageRetry:
                 return httpx.Response(
                     500, json={"ok": False, "description": "Internal Server Error"}
                 )
-            return httpx.Response(
-                200, json={"ok": True, "result": {"message_id": 1}}
-            )
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 
         channel = _make_channel(handler)
         result = await channel._send_message("test")
@@ -183,9 +179,7 @@ class TestSendMessageRetry:
         def handler(request: httpx.Request) -> httpx.Response:
             nonlocal call_count
             call_count += 1
-            return httpx.Response(
-                400, json={"ok": False, "description": "Bad Request"}
-            )
+            return httpx.Response(400, json={"ok": False, "description": "Bad Request"})
 
         channel = _make_channel(handler)
         result = await channel._send_message("test")
@@ -202,9 +196,7 @@ class TestSendMessageRetry:
             call_count += 1
             if call_count == 1:
                 raise httpx.ConnectError("Connection refused")
-            return httpx.Response(
-                200, json={"ok": True, "result": {"message_id": 1}}
-            )
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 
         channel = _make_channel(handler)
         result = await channel._send_message("test")
@@ -228,9 +220,7 @@ class TestConsecutiveFailures:
                     json={"ok": False, "description": "Internal Server Error"},
                 )
             # Second _send_message: success
-            return httpx.Response(
-                200, json={"ok": True, "result": {"message_id": 1}}
-            )
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 
         channel = _make_channel(handler)
 
