@@ -19,6 +19,10 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str]] = {
     "export": ("gigaevo.cli.export", "export"),
     "flush": ("gigaevo.cli.flush", "flush"),
     "watchdog": ("gigaevo.cli.watchdog_cmd", "watchdog"),
+    "checkpoint": ("gigaevo.cli.checkpoint", "checkpoint"),
+    "launch": ("gigaevo.cli.lifecycle", "launch"),
+    "closeout": ("gigaevo.cli.lifecycle", "closeout"),
+    "restart": ("gigaevo.cli.lifecycle", "restart"),
 }
 
 
