@@ -17,6 +17,14 @@ from gigaevo.monitoring.redis_queries import collect_snapshot
 from gigaevo.monitoring.run_spec import RunSpec
 from gigaevo.monitoring.snapshot import RunSnapshot
 from gigaevo.monitoring.telegram_channel import TelegramChannel
+from gigaevo.monitoring.watchdog_config import WatchdogConfig
+from gigaevo.monitoring.watchdog_engine import WatchdogEngine
+from gigaevo.monitoring.watchdog_plugin import (
+    WatchdogPlugin,
+    get_registry,
+    register,
+    resolve_plugin,
+)
 
 __all__ = [
     "Alert",
@@ -40,4 +48,10 @@ __all__ = [
     "format_alert_message",
     "format_status_table_markdown",
     "format_status_table_telegram",
+    "get_registry",
+    "register",
+    "resolve_plugin",
+    "WatchdogConfig",
+    "WatchdogEngine",
+    "WatchdogPlugin",
 ]
