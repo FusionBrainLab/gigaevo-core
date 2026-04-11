@@ -21,7 +21,6 @@ import yaml
 from gigaevo.monitoring.manifest_schema import (
     VALID_STATUSES,
     ExperimentManifest,
-    ExperimentSection,
     export_json_schema,
 )
 
@@ -336,7 +335,9 @@ class TestYamlLoading:
     def test_yaml_file_error_includes_path(self, tmp_path: Path) -> None:
         """Error from invalid file content mentions the file path."""
         bad_path = tmp_path / "bad.yaml"
-        bad_path.write_text("schema_version: 99\nexperiment:\n  name: x\n  task: y\n  status: preregistered\n")
+        bad_path.write_text(
+            "schema_version: 99\nexperiment:\n  name: x\n  task: y\n  status: preregistered\n"
+        )
         with pytest.raises(ValueError) as exc_info:
             ExperimentManifest.from_yaml_file(bad_path)
         assert str(bad_path) in str(exc_info.value)

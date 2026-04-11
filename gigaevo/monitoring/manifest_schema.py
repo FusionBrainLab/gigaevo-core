@@ -13,7 +13,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 import yaml
 
-
 SUPPORTED_SCHEMA_VERSIONS = {1}
 VALID_STATUSES = {"preregistered", "implemented", "running", "complete", "invalid"}
 
@@ -249,8 +248,7 @@ class ExperimentManifest(BaseModel):
             return cls.from_yaml(content)
         except ValueError as exc:
             raise ValueError(
-                f"Validation failed for {path}:\n{exc}\n"
-                f"Recovery: git checkout {path}"
+                f"Validation failed for {path}:\n{exc}\nRecovery: git checkout {path}"
             ) from exc
 
     def to_dict(self) -> dict[str, Any]:
