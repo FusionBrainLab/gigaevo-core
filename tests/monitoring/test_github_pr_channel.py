@@ -14,7 +14,6 @@ from gigaevo.monitoring.notifications import PlotAttachment, StatusUpdate
 from gigaevo.monitoring.run_spec import RunSpec
 from gigaevo.monitoring.snapshot import RunSnapshot
 
-
 # ── Test infrastructure ─────────────────────────────────────────────────────
 
 
@@ -156,7 +155,9 @@ class TestCheckHealth:
     async def test_health_bad_token(self) -> None:
         recorder = RequestRecorder(
             responses={
-                "GET /repos/owner/repo": httpx.Response(401, json={"message": "Bad credentials"}),
+                "GET /repos/owner/repo": httpx.Response(
+                    401, json={"message": "Bad credentials"}
+                ),
             }
         )
         ch = _make_channel(recorder=recorder)
@@ -167,7 +168,9 @@ class TestCheckHealth:
     async def test_health_repo_not_found(self) -> None:
         recorder = RequestRecorder(
             responses={
-                "GET /repos/owner/repo": httpx.Response(404, json={"message": "Not Found"}),
+                "GET /repos/owner/repo": httpx.Response(
+                    404, json={"message": "Not Found"}
+                ),
             }
         )
         ch = _make_channel(recorder=recorder)

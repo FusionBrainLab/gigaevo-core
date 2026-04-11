@@ -156,8 +156,7 @@ class GitHubPRChannel(NotificationChannel):
         try:
             client = await self._get_client()
             resp = await client.patch(
-                f"{self._base_url}/repos/{self._repo}"
-                f"/issues/comments/{comment_id}",
+                f"{self._base_url}/repos/{self._repo}/issues/comments/{comment_id}",
                 json={"body": body},
             )
             if resp.status_code == 200:
@@ -168,9 +167,7 @@ class GitHubPRChannel(NotificationChannel):
             _log.error(f"PATCH comment error: {exc}")
             return False
 
-    async def _upload_plot(
-        self, plot: PlotAttachment, branch: str
-    ) -> str | None:
+    async def _upload_plot(self, plot: PlotAttachment, branch: str) -> str | None:
         """Upload a plot file to the repo via GitHub Contents API.
 
         Returns the raw.githubusercontent.com URL on success, None on failure.
@@ -183,9 +180,7 @@ class GitHubPRChannel(NotificationChannel):
             encoded = base64.b64encode(content).decode()
 
             upload_path = f"plots/{plot.path.name}"
-            api_url = (
-                f"{self._base_url}/repos/{self._repo}/contents/{upload_path}"
-            )
+            api_url = f"{self._base_url}/repos/{self._repo}/contents/{upload_path}"
 
             client = await self._get_client()
             get_resp = await client.get(api_url, params={"ref": branch})
@@ -238,8 +233,7 @@ class GitHubPRChannel(NotificationChannel):
             if success:
                 return True
             _log.info(
-                f"Rolling comment {self._comment_id} edit failed, "
-                f"creating new comment"
+                f"Rolling comment {self._comment_id} edit failed, creating new comment"
             )
             self._comment_id = None
 
