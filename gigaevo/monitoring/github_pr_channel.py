@@ -91,10 +91,104 @@ class GitHubPRChannel(NotificationChannel):
             _log.warning(f"GitHub health check failed: {exc}")
             return False
 
+    def _build_status_body(
+        self, update: StatusUpdate, plot_urls: dict[int, str] | None = None
+    ) -> str:
+        """Build the markdown body for a status update PR comment."""
+        parts: list[str] = []
+
+        if self._telegram_down:
+            parts.append(
+                "> :warning: TELEGRAM DOWN "
+                "-- notifications are not being delivered to Telegram"
+            )
+            parts.append("")
+
+        parts.append(f"### {update.experiment_name}")
+        if update.max_generations is not None:
+            parts.append(f"Target: {update.max_generations} generations")
+        ts = update.timestamp.strftime("%Y-%m-%d %H:%M UTC")
+        parts.append(f"_Updated: {ts}_")
+        parts.append("")
+
+        table = format_status_table_markdown(update.snapshots)
+        parts.append(table)
+
+        if update.has_alerts:
+            parts.append("")
+            parts.append("**Alerts:**")
+            for alert in update.alerts:
+                parts.append(f"- {format_alert_message(alert)}")
+
+        if update.has_plots:
+            parts.append("")
+            parts.append("**Plots:**")
+            for i, plot in enumerate(update.plots):
+                url = (plot_urls or {}).get(i)
+                if url:
+                    parts.append(f"![{plot.caption}]({url})")
+                else:
+                    parts.append(f"- {plot.caption}: _{plot.path.name}_")
+
+        return "\n".join(parts)
+
+    async def _post_comment(self, body: str) -> int | None:
+        """Create a new PR comment. Returns the comment ID or None."""
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                f"{self._base_url}/repos/{self._repo}"
+                f"/issues/{self._pr_number}/comments",
+                json={"body": body},
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                return data.get("id")
+            _log.warning(f"POST comment failed: {resp.status_code} {resp.text}")
+            return None
+        except Exception as exc:
+            _log.error(f"POST comment error: {exc}")
+            return None
+
+    async def _edit_comment(self, comment_id: int, body: str) -> bool:
+        """Edit an existing PR comment. Returns True on success."""
+        try:
+            client = await self._get_client()
+            resp = await client.patch(
+                f"{self._base_url}/repos/{self._repo}"
+                f"/issues/comments/{comment_id}",
+                json={"body": body},
+            )
+            if resp.status_code == 200:
+                return True
+            _log.warning(f"PATCH comment {comment_id} failed: {resp.status_code}")
+            return False
+        except Exception as exc:
+            _log.error(f"PATCH comment error: {exc}")
+            return False
+
     async def send_status(self, update: StatusUpdate) -> bool:
         """Post or edit the rolling PR comment with status table + alerts + plots."""
-        raise NotImplementedError
+        body = self._build_status_body(update)
+
+        if self._comment_id is not None:
+            success = await self._edit_comment(self._comment_id, body)
+            if success:
+                return True
+            _log.info(
+                f"Rolling comment {self._comment_id} edit failed, "
+                f"creating new comment"
+            )
+            self._comment_id = None
+
+        new_id = await self._post_comment(body)
+        if new_id is not None:
+            self._comment_id = new_id
+            return True
+        return False
 
     async def send_alert(self, alert: Alert) -> bool:
         """Post a new PR comment for an alert (never edits rolling comment)."""
-        raise NotImplementedError
+        body = format_alert_message(alert)
+        new_id = await self._post_comment(body)
+        return new_id is not None
