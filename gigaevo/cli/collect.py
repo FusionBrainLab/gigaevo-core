@@ -1,10 +1,11 @@
 """Collect subcommand -- fetch top programs and summary stats from Redis."""
+
 from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
+import sys
 
 import click
 import redis as redis_lib
@@ -36,9 +37,7 @@ def _higher_is_better(specs: dict[str, dict], metric: str) -> bool:
     return spec.get("higher_is_better", True)
 
 
-async def _fetch_programs(
-    host: str, port: int, db: int, prefix: str
-) -> list:
+async def _fetch_programs(host: str, port: int, db: int, prefix: str) -> list:
     """Fetch all programs from Redis using RedisProgramStorage."""
     url = f"redis://{host}:{port}/{db}"
     storage = RedisProgramStorage(
@@ -70,8 +69,7 @@ def _collect_data(
     programs = asyncio.run(_fetch_programs(host, port, db, prefix))
 
     valid_programs = [
-        p for p in programs
-        if metric in p.metrics and p.metrics[metric] is not None
+        p for p in programs if metric in p.metrics and p.metrics[metric] is not None
     ]
 
     valid_programs.sort(
@@ -92,7 +90,7 @@ def _collect_data(
 
     r = redis_lib.Redis(host=host, port=port, db=db)
     try:
-        done_count = r.scard(f"{prefix}:status:DONE")
+        r.scard(f"{prefix}:status:DONE")
         discarded_count = r.scard(f"{prefix}:status:DISCARDED")
 
         fitness_trajectory: list[float] = []

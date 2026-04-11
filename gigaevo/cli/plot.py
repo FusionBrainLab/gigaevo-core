@@ -1,10 +1,11 @@
 """Plot subcommand -- fitness trajectory visualization."""
+
 from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
+import sys
 
 import click
 import matplotlib
@@ -183,7 +184,11 @@ def plot(
 
         if not gen_mean_entries and not frontier_entries:
             click.echo(
-                json.dumps({"error": f"No trajectory data for prefix={prefix}, metric={metric}"}),
+                json.dumps(
+                    {
+                        "error": f"No trajectory data for prefix={prefix}, metric={metric}"
+                    }
+                ),
                 err=True,
             )
             sys.exit(1)
@@ -256,11 +261,13 @@ def plot(
         plt.close(fig)
 
         click.echo(
-            json.dumps({
-                "plot": output_path,
-                "format": ext,
-                "iterations": len(iterations),
-            })
+            json.dumps(
+                {
+                    "plot": output_path,
+                    "format": ext,
+                    "iterations": len(iterations),
+                }
+            )
         )
     except Exception as exc:
         click.echo(json.dumps({"error": str(exc)}), err=True)

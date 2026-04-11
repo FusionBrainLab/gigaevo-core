@@ -1,9 +1,10 @@
 """Status subcommand -- query Redis for current run status."""
+
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
+import sys
 
 import click
 import redis as redis_lib

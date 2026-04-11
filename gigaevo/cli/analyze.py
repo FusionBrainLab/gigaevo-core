@@ -1,10 +1,11 @@
 """Analyze subcommand -- comprehensive experiment analysis."""
+
 from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
+import sys
 
 import click
 import redis as redis_lib
@@ -63,8 +64,7 @@ def _build_top_section(
 ) -> list[dict]:
     """Build the top-N programs section."""
     valid = [
-        p for p in programs
-        if metric in p.metrics and p.metrics[metric] is not None
+        p for p in programs if metric in p.metrics and p.metrics[metric] is not None
     ]
     valid.sort(key=lambda p: p.metrics[metric], reverse=higher)
 
@@ -92,8 +92,7 @@ def _build_stats_section(
 ) -> dict:
     """Build the stats section with summary statistics."""
     valid = [
-        p for p in programs
-        if metric in p.metrics and p.metrics[metric] is not None
+        p for p in programs if metric in p.metrics and p.metrics[metric] is not None
     ]
     fitness_values = [p.metrics[metric] for p in valid]
 
@@ -107,7 +106,7 @@ def _build_stats_section(
             except (ValueError, TypeError):
                 pass
 
-        done_count = r.scard(f"{prefix}:status:DONE")
+        r.scard(f"{prefix}:status:DONE")
         discarded_count = r.scard(f"{prefix}:status:DISCARDED")
     finally:
         r.close()
@@ -124,6 +123,7 @@ def _build_stats_section(
         mean_fitness = sum(fitness_values) / len(fitness_values)
         if len(fitness_values) > 1:
             import statistics
+
             std_fitness = statistics.stdev(fitness_values)
         else:
             std_fitness = 0.0
@@ -233,14 +233,24 @@ def _run_analysis(
     if section == "top":
         return {"top": _build_top_section(programs, metric, higher, top_n)}
     elif section == "stats":
-        return {"stats": _build_stats_section(programs, metric, higher, host, port, db, prefix)}
+        return {
+            "stats": _build_stats_section(
+                programs, metric, higher, host, port, db, prefix
+            )
+        }
     elif section == "convergence":
-        return {"convergence": _build_convergence_section(host, port, db, prefix, metric, higher)}
+        return {
+            "convergence": _build_convergence_section(
+                host, port, db, prefix, metric, higher
+            )
+        }
 
     return {
         "top": _build_top_section(programs, metric, higher, top_n),
         "stats": _build_stats_section(programs, metric, higher, host, port, db, prefix),
-        "convergence": _build_convergence_section(host, port, db, prefix, metric, higher),
+        "convergence": _build_convergence_section(
+            host, port, db, prefix, metric, higher
+        ),
     }
 
 
@@ -302,7 +312,14 @@ def analyze(
                 try:
                     cmp_prefix, cmp_db = _parse_compare_spec(spec)
                     cmp_result = _run_analysis(
-                        cmp_prefix, cmp_db, redis_host, redis_port, top_n, metric, higher, section
+                        cmp_prefix,
+                        cmp_db,
+                        redis_host,
+                        redis_port,
+                        top_n,
+                        metric,
+                        higher,
+                        section,
                     )
                     cmp_result["name"] = spec
                     runs_results.append(cmp_result)
