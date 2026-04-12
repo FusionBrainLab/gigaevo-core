@@ -19,25 +19,117 @@ where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/sta
 
 ---
 
-## Unified CLI (`gigaevo`)
+## Unified CLI (`gigaevo`) — Primary Interface
 
-The `gigaevo` CLI wraps the most common tools into a single entry point with shared flags:
+> **Prefer `gigaevo` over raw `PYTHONPATH=. python tools/X.py` invocations.** The CLI handles PYTHONPATH, run resolution from experiment.yaml, and output formatting automatically. The standalone `tools/*.py` scripts remain available for scripting and backwards compatibility.
+
+Installed via `pip install -e .` (console_scripts entry in pyproject.toml).
+
+### Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `-e/--experiment TASK/NAME` | Experiment name — auto-discovers all runs, PIDs, watchdog from `experiment.yaml` |
+| `-r/--run PREFIX@DB:LABEL` | Manual run spec (repeatable for multiple runs) |
+| `-f/--format FORMAT` | Output format: `table` (default for terminal), `json`, `csv`, `markdown` |
+| `-q/--quiet` | Suppress output |
+| `-v/--verbose` | Verbose output |
+| `--redis-host HOST` | Redis hostname (default: localhost) |
+| `--redis-port PORT` | Redis port (default: 6379) |
+
+### Commands
+
+#### Monitoring
 
 ```bash
-gigaevo -r prefix@db:label status        # = PYTHONPATH=. python tools/status.py --run ...
-gigaevo -r prefix@db:label trajectory    # = PYTHONPATH=. python tools/trajectory.py --run ...
-gigaevo -r prefix@db:label top           # = PYTHONPATH=. python tools/top_programs.py --run ...
-gigaevo -e task/name checkpoint          # composite: status + notify
-gigaevo flush --db 4 5 --confirm         # = PYTHONPATH=. python tools/flush.py --db 4 5 --confirm
-gigaevo -e task/name watchdog            # start watchdog engine
-gigaevo -e task/name launch --confirm    # lifecycle: launch experiment
-gigaevo -e task/name closeout --confirm  # lifecycle: close out experiment
-gigaevo -e task/name restart --confirm   # lifecycle: restart experiment
+# Status — live run monitoring (gen, metrics, PIDs, watchdog)
+gigaevo -e hover/my-exp status
+gigaevo -r chains/hotpotqa/static@4:O status
+
+# Trajectory — gen-by-gen fitness table
+gigaevo -r chains/hotpotqa/static@4:O trajectory
+gigaevo -r chains/hotpotqa/static@4:O trajectory --tail 10 --metric fitness
+
+# Top programs — inspect best programs by fitness
+gigaevo -r chains/hotpotqa/static@4:O top
+gigaevo -r chains/hotpotqa/static@4:O top -n 1 --code --save-dir top_k/
+
+# Logs — show evolution logs
+gigaevo -e hover/my-exp logs
 ```
 
-Global flags: `-e/--experiment`, `-r/--run` (repeatable), `-f/--format` (table/json/csv/markdown), `-q/--quiet`, `-v/--verbose`, `--redis-host`, `--redis-port`.
+#### Plotting
 
-Installed via `pip install -e .` (console_scripts entry in pyproject.toml). The standalone `tools/*.py` scripts remain the canonical implementations — the CLI delegates to them.
+```bash
+# Fitness comparison across runs (png/pdf/svg)
+gigaevo -e adversarial/adversarial-vs-solo plot comparison -o plots/
+gigaevo -r A@4:A -r B@5:B plot comparison -o plots/ --paper --smoothing lowess
+
+# Suppress cummax frontier for adversarial Improver runs
+gigaevo -e ... plot comparison -o plots/ --no-frontier-for D1,D2
+gigaevo -e ... plot comparison -o plots/ --no-frontier  # suppress for ALL runs
+
+# Annotate frontier jumps
+gigaevo -e ... plot comparison -o plots/ --annotate-frontier --max-annotations 5
+
+# Single-run trajectory plot
+gigaevo -r chains/hover/static@4:O plot trajectory -o plots/ --pdf
+
+# Arms-race dual-panel plot (Constructor top, Improver bottom)
+gigaevo -e ... plot arms-race -o plots/ --paired C1_A:C1_B --paper
+gigaevo -e ... plot arms-race -o plots/ --paired C1_A:C1_B,C2_A:C2_B --show-max
+```
+
+#### Data Export
+
+```bash
+# Full evolution data to CSV
+gigaevo -r chains/hotpotqa/static@4:O export csv -o data/evolution.csv
+
+# Frontier-only CSV (gen, best_val)
+gigaevo -r chains/hotpotqa/static@4:O export frontier -o data/frontier.csv --metric fitness
+```
+
+#### Operations
+
+```bash
+# Flush Redis DBs (kills workers first)
+gigaevo flush --db 4 5 --confirm           # execute
+gigaevo flush --db 4 5                     # dry-run (default)
+
+# Checkpoint — status + notify (for experiment monitoring)
+gigaevo -e hover/my-exp checkpoint
+
+# Watchdog — start watchdog engine
+gigaevo -e hover/my-exp watchdog
+```
+
+#### Lifecycle (experiment management)
+
+```bash
+# Launch — preflight + start runs (use experiment-launch skill for full workflow)
+gigaevo -e hover/my-exp launch --confirm
+
+# Closeout — archive + analyze + update PR
+gigaevo -e hover/my-exp closeout --confirm
+
+# Restart — kill runs + flush + re-launch
+gigaevo -e hover/my-exp restart --confirm
+```
+
+### CLI vs Legacy Mapping
+
+| CLI command | Legacy equivalent |
+|---|---|
+| `gigaevo -e EXP status` | `PYTHONPATH=. python tools/status.py --experiment EXP` |
+| `gigaevo -r RUN trajectory` | `PYTHONPATH=. python tools/trajectory.py --run RUN` |
+| `gigaevo -r RUN top -n 5` | `PYTHONPATH=. python tools/top_programs.py --run RUN -n 5` |
+| `gigaevo -r A -r B plot comparison -o DIR` | `PYTHONPATH=. python tools/comparison.py --run A --run B --output-folder DIR` |
+| `gigaevo -r RUN export csv -o FILE` | `PYTHONPATH=. python tools/redis2pd.py --run RUN --output-file FILE` |
+| `gigaevo -r RUN export frontier -o FILE` | `PYTHONPATH=. python tools/redis2pd.py --run RUN --frontier-csv --output-file FILE` |
+| `gigaevo flush --db 4 --confirm` | `PYTHONPATH=. python tools/flush.py --db 4 --confirm` |
+
+The legacy `tools/*.py` scripts are still valid and used by shell scripts and experiment automation. The CLI is preferred for interactive use and agent/skill invocations.
 
 ---
 
