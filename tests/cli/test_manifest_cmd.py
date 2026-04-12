@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
 from gigaevo.cli import main
-
 
 # ---------------------------------------------------------------------------
 # Test fixtures
