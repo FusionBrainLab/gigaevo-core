@@ -228,16 +228,16 @@ strategies.  No Redis or real DAGs needed — pure math.
 
 ```bash
 # Default: 40 programs, 4 servers, noise=0.3
-PYTHONPATH=. python tools/benchmarks/bench_lpt.py
+python -m tools.benchmarks.bench_lpt
 
 # Sweep noise levels (prediction quality impact)
-PYTHONPATH=. python tools/benchmarks/bench_lpt.py --sweep-noise
+python -m tools.benchmarks.bench_lpt --sweep-noise
 
 # Sweep server count
-PYTHONPATH=. python tools/benchmarks/bench_lpt.py --sweep-servers
+python -m tools.benchmarks.bench_lpt --sweep-servers
 
 # Sweep batch size
-PYTHONPATH=. python tools/benchmarks/bench_lpt.py --sweep-programs
+python -m tools.benchmarks.bench_lpt --sweep-programs
 ```
 
 ### Results (40 programs, 4 servers, noise=0.3)

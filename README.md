@@ -209,22 +209,28 @@ See `problems/heilbron/` for a complete example.
 
 Results are saved to `outputs/YYYY-MM-DD/HH-MM-SS/`:
 - **Logs**: `evolution_*.log`
-- **Programs**: Stored in Redis (export with `tools/redis2pd.py`)
+- **Programs**: Stored in Redis (export with `gigaevo export csv`)
 - **Metrics**: TensorBoard / W&B (if configured)
 
-## Tools
+## CLI Tools (`gigaevo`)
 
-| Tool | Purpose |
-|------|---------|
-| `tools/redis2pd.py` | Export evolution data to CSV/DataFrame |
-| `tools/comparison.py` | Compare runs with fitness curve plots |
-| `tools/top_programs.py` | Extract best programs from archive |
-| `tools/flush.py` | Safely flush Redis DBs (kills workers first) |
+Installed via `pip install -e .`. Global flags: `-e/--experiment`, `-r/--run`, `-f/--format`.
+
+| Command | Purpose |
+|---------|---------|
+| `gigaevo -e EXP status` | Live monitoring: gen, metrics, PIDs, watchdog |
+| `gigaevo -r RUN trajectory` | Gen-by-gen fitness trajectory |
+| `gigaevo -r RUN top` | Inspect best programs by fitness |
+| `gigaevo -e EXP plot comparison -o DIR` | Multi-run fitness curve plots |
+| `gigaevo -e EXP plot arms-race -o DIR` | Dual-panel adversarial arms-race plot |
+| `gigaevo -r RUN export csv -o FILE` | Export evolution data to CSV |
+| `gigaevo flush --db N --confirm` | Safely flush Redis DBs (kills workers first) |
+| `gigaevo -e EXP watchdog` | Start experiment watchdog |
 | `tools/experiment/archive_run.sh` | Archive run data before flush |
 | `tools/dag_builder/` | Visual DAG pipeline designer |
 | `tools/wizard/` | Interactive problem scaffolding |
 
-See [tools/README.md](tools/README.md) for full documentation and Redis key schema.
+See [tools/README.md](tools/README.md) for full CLI reference and Redis key schema.
 
 ## Testing
 
@@ -247,8 +253,8 @@ ruff check . && ruff format --check .
 
 **Redis database not empty:**
 ```bash
-# Use tools/flush.py (kills exec_runner workers first):
-PYTHONPATH=. python tools/flush.py --db 0 --confirm
+# Flush (kills exec_runner workers first):
+gigaevo flush --db 0 --confirm
 
 # Or use a different DB:
 python run.py redis.db=1

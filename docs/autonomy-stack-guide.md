@@ -65,14 +65,14 @@ See `docs/setup/telegram-bot.md` for full instructions. Short version:
 export TELEGRAM_BOT_TOKEN="123456789:ABCdef..."
 export TELEGRAM_CHAT_ID="123456789"
 ```
-4. Test: `PYTHONPATH=. python tools/telegram_notify.py "test"`
+4. Test: `gigaevo notify "test"`
 
 **If you skip Telegram**: everything still works — gates fall back to blocking terminal prompts.
 
 ### 3. Verify resource manager
 ```bash
 cd /mnt/virtual_ai0001071-04017_SR004-nfs1/CFS-SR008/workspace/mathemage/gigaevo-core-internal
-PYTHONPATH=. python tools/resource_manager.py --check
+gigaevo resources --check
 ```
 Expected output: list of servers with GPU% and list of free/used Redis DBs.
 
@@ -179,12 +179,12 @@ for i in queued[:5]:
 
 **Check what's available:**
 ```bash
-PYTHONPATH=. python tools/resource_manager.py --check
+gigaevo resources --check
 ```
 
 **Get assignment suggestions for 4 runs:**
 ```bash
-PYTHONPATH=. python tools/resource_manager.py --assign --experiment hover/my-exp --n-runs 4
+gigaevo resources --assign --experiment hover/my-exp --n-runs 4
 ```
 
 Output (paste into experiment.yaml Step 7):

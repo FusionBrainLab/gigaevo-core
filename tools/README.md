@@ -1,29 +1,15 @@
 # GigaEvo Tools
 
-## Prerequisites
+## CLI (`gigaevo`)
 
-All tool commands use the project venv and require `PYTHONPATH=.`:
+Installed via `pip install -e .` (console_scripts entry in pyproject.toml). Handles PYTHONPATH, run resolution from experiment.yaml, and output formatting automatically.
 
-```bash
-PYTHONPATH=. $GIGAEVO_PYTHON tools/<tool>.py ...
-```
+**Run format**: `prefix@db[:label]` where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/static`).
 
 Shell scripts use `$GIGAEVO_PYTHON` (falls back to `python3`):
-
 ```bash
 export GIGAEVO_PYTHON=python3  # adjust for your environment
 ```
-
-**Run format** (all operational and analysis tools): `prefix@db[:label]`
-where `prefix` = `problem.name` from the Hydra config (e.g. `chains/hotpotqa/static`).
-
----
-
-## Unified CLI (`gigaevo`) — Primary Interface
-
-> **Prefer `gigaevo` over raw `PYTHONPATH=. python tools/X.py` invocations.** The CLI handles PYTHONPATH, run resolution from experiment.yaml, and output formatting automatically. The standalone `tools/*.py` scripts remain available for scripting and backwards compatibility.
-
-Installed via `pip install -e .` (console_scripts entry in pyproject.toml).
 
 ### Global Flags
 
@@ -117,20 +103,6 @@ gigaevo -e hover/my-exp closeout --confirm
 gigaevo -e hover/my-exp restart --confirm
 ```
 
-### CLI vs Legacy Mapping
-
-| CLI command | Legacy equivalent |
-|---|---|
-| `gigaevo -e EXP status` | `PYTHONPATH=. python tools/status.py --experiment EXP` |
-| `gigaevo -r RUN trajectory` | `PYTHONPATH=. python tools/trajectory.py --run RUN` |
-| `gigaevo -r RUN top -n 5` | `PYTHONPATH=. python tools/top_programs.py --run RUN -n 5` |
-| `gigaevo -r A -r B plot comparison -o DIR` | `PYTHONPATH=. python tools/comparison.py --run A --run B --output-folder DIR` |
-| `gigaevo -r RUN export csv -o FILE` | `PYTHONPATH=. python tools/redis2pd.py --run RUN --output-file FILE` |
-| `gigaevo -r RUN export frontier -o FILE` | `PYTHONPATH=. python tools/redis2pd.py --run RUN --frontier-csv --output-file FILE` |
-| `gigaevo flush --db 4 --confirm` | `PYTHONPATH=. python tools/flush.py --db 4 --confirm` |
-
-The legacy `tools/*.py` scripts are still valid and used by shell scripts and experiment automation. The CLI is preferred for interactive use and agent/skill invocations.
-
 ---
 
 ## Tool Index
@@ -205,24 +177,20 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 
 ## Monitoring a Running Experiment
 
-### `status.py` — Live run status
+### `gigaevo status` — Live run status
 
 Shows generation, all metrics from `metrics.yaml`, invalidity rate, validator timing, and PID liveness.
 Reads `metrics.yaml` from the problem directory to discover metric names and formatting (percentage vs raw value).
 
 ```bash
 # From experiment manifest (recommended — auto-discovers runs, PIDs, watchdog, metrics)
-PYTHONPATH=. python tools/status.py --experiment hover/prompt_coevolution
+gigaevo -e hover/prompt_coevolution status
 
-# Manual: one run (defaults to "fitness" metric)
-PYTHONPATH=. python tools/status.py --run chains/hotpotqa/static@4:O
+# Manual: one run
+gigaevo -r chains/hotpotqa/static@4:O status
 
-# Manual: multiple runs with PID and watchdog check
-PYTHONPATH=. python tools/status.py \
-    --run chains/hotpotqa/static@4:O \
-    --run chains/hotpotqa/static_r@7:R \
-    --pid O:3054746 --pid R:3054747 \
-    --watchdog 3057704
+# Manual: multiple runs
+gigaevo -r chains/hotpotqa/static@4:O -r chains/hotpotqa/static_r@7:R status
 ```
 
 Output (with `--experiment` — shows all metrics per problem):
@@ -242,22 +210,22 @@ Column notes:
 - **Invalid%** — fraction of programs that failed validation; >75% at gen 3+ = stage_timeout too short
 - **Val dur(s)** — validator stage mean/max duration in seconds (last 20 evaluations)
 
-**Watchdog**: each experiment has `experiments/<task>/<name>/run_watchdog.py`, launched at
-experiment start and kept alive throughout. The watchdog posts hourly PR comments.
+**Watchdog**: started via `gigaevo -e <task>/<name> watchdog` at experiment launch.
+The watchdog posts hourly PR comments with status, plots, and stagnation alerts.
 
 ---
 
-### `trajectory.py` — Gen-by-gen trajectory (text mode)
+### `gigaevo trajectory` — Gen-by-gen trajectory (text mode)
 
 Prints a gen-by-gen table of best (frontier), mean fitness, and valid program count.
 Lightweight — reads metrics history keys directly, no full program fetch.
 
 ```bash
 # Full trajectory
-PYTHONPATH=. python tools/trajectory.py --run chains/hotpotqa/static@4:O
+gigaevo -r chains/hotpotqa/static@4:O trajectory
 
 # Last 10 gens only
-PYTHONPATH=. python tools/trajectory.py --run chains/hotpotqa/static@4:O --tail 10
+gigaevo -r chains/hotpotqa/static@4:O trajectory --tail 10
 ```
 
 Output:
@@ -280,7 +248,7 @@ Gen 42: best=66.0%  mean=57.3%  n_valid=  5
 > **Required order** (skipping steps loses data permanently):
 > 1. Run test evaluations → `bash experiments/<task>/<name>/run_test_eval.sh`
 > 2. Archive all runs → `bash tools/experiment/archive_run.sh --exp <name> --run "prefix@db:label" --upload`
-> 3. Flush Redis → `PYTHONPATH=. python tools/flush.py --db N --confirm`
+> 3. Flush Redis → `gigaevo flush --db N --confirm`
 
 ### `run_test_eval.sh` — Test evaluation (per-experiment)
 
@@ -325,37 +293,37 @@ Also uploads `environment.txt` (pip freeze, OS, GPU) once per experiment.
 
 ---
 
-### `flush.py` — Safe Redis flush
+### `gigaevo flush` — Safe Redis flush
 
 Kills stale exec_runner workers first, then flushes each DB, then verifies 0 keys remain.
 **Never flush manually with `redis-cli FLUSHDB` or `FLUSHALL`** — workers will repopulate Redis immediately.
 
 ```bash
 # Preview (dry-run, default)
-PYTHONPATH=. python tools/flush.py --db 0 1 2 3
+gigaevo flush --db 0 1 2 3
 
 # Execute (kills workers first, then flushes)
-PYTHONPATH=. python tools/flush.py --db 0 1 2 3 --confirm
+gigaevo flush --db 0 1 2 3 --confirm
 ```
 
 ---
 
 ## Analyzing Results
 
-### `top_programs.py` — Inspect top programs
+### `gigaevo top` — Inspect top programs
 
 ```bash
 # Top 5 by fitness (default)
-PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O
+gigaevo -r chains/hotpotqa/static@4:O top
 
 # Top 1 with full code (the program to run test eval on)
-PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O -n 1 --code
+gigaevo -r chains/hotpotqa/static@4:O top -n 1 --code
 
 # Save top-3 source files to disk
-PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O -n 3 --save-dir top_k/
+gigaevo -r chains/hotpotqa/static@4:O top -n 3 --save-dir top_k/
 
 # JSON output for scripting
-PYTHONPATH=. python tools/top_programs.py --run chains/hotpotqa/static@4:O -n 1 --json
+gigaevo -r chains/hotpotqa/static@4:O top -n 1 --json
 ```
 
 ---
@@ -379,44 +347,35 @@ python -m tools.csv_comparison \
 
 ---
 
-### `comparison.py` — Fitness curve plots
+### `gigaevo plot comparison` — Fitness curve plots
 
 Plots rolling fitness vs iteration across multiple runs. Always emits all three formats
 (png/pdf/svg). Output folder is created automatically. Default backend is headless (Agg) — no
 display required.
 
 ```bash
-PYTHONPATH=. python tools/comparison.py \
-    --run chains/hotpotqa/static@4:O \
-    --run chains/hotpotqa/static_r@7:R \
-    --run chains/hotpotqa/static_r@6:Q \
-    --run chains/hotpotqa/static_r@5:F \
-    --output-folder experiments/hotpotqa/val_gap/plots/
-
-# Interactive display (requires a display server)
-PYTHONPATH=. python tools/comparison.py --run ... --output-folder /tmp/ --show
+gigaevo -r chains/hotpotqa/static@4:O \
+    -r chains/hotpotqa/static_r@7:R \
+    -r chains/hotpotqa/static_r@6:Q \
+    -r chains/hotpotqa/static_r@5:F \
+    plot comparison -o experiments/hotpotqa/val_gap/plots/
 ```
 
 Output files: `evolution_runs_comparison.{png,pdf,svg}` in the output folder.
 
 ---
 
-### `redis2pd.py` — Export evolution data to CSV
+### `gigaevo export` — Export evolution data to CSV
 
 ```bash
 # Full program history (all programs, all metrics)
-PYTHONPATH=. python tools/redis2pd.py \
-    --run chains/hotpotqa/static@4:O \
-    --output-file experiments/hotpotqa/val_gap/archives/O/evolution_data.csv
+gigaevo -r chains/hotpotqa/static@4:O export csv \
+    -o experiments/hotpotqa/val_gap/archives/O/evolution_data.csv
 
 # Frontier-only CSV (gen,best_val) — for 05_results.md tables
-PYTHONPATH=. python tools/redis2pd.py \
-    --run chains/hotpotqa/static@4:O \
-    --frontier-csv \
-    --output-file experiments/hotpotqa/val_gap/frontier_O.csv
+gigaevo -r chains/hotpotqa/static@4:O export frontier \
+    -o experiments/hotpotqa/val_gap/frontier_O.csv
 ```
-
-Legacy args (`--redis-db` / `--redis-prefix`) still work for `archive_run.sh` compatibility.
 
 ---
 
@@ -427,13 +386,13 @@ Learned" — which mutations led to the best result?
 
 ```bash
 # Trace best program by fitness
-PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1
+gigaevo -r chains/hotpotqa/static@4:O lineage --top-n 1
 
 # Trace specific program by ID prefix
-PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --program abc12345
+gigaevo -r chains/hotpotqa/static@4:O lineage --program abc12345
 
 # Limit depth to 5 ancestor hops
-PYTHONPATH=. python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1 --depth 5
+gigaevo -r chains/hotpotqa/static@4:O lineage --top-n 1 --depth 5
 ```
 
 ---
@@ -473,10 +432,10 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 | Tool | Purpose | Command |
 |---|---|---|
 | `manifest.py` | Load/update `experiment.yaml` programmatically | `from tools.experiment.manifest import load_manifest, update_manifest` |
-| `preflight_check.py` | 20-check validation gate before launch | `PYTHONPATH=. python tools/experiment/preflight_check.py --experiment task/name` |
-| `generate_launch.py` | Generate `launch.sh` from experiment.yaml | `PYTHONPATH=. python tools/experiment/generate_launch.py --experiment task/name` |
-| `record_pids.py` | Record launched PIDs into experiment.yaml | `PYTHONPATH=. python tools/experiment/record_pids.py --experiment task/name --pids-file pids.txt --labels R1 R2` |
-| `reset_status.py` | Force-reset experiment status (escape hatch) | `PYTHONPATH=. python tools/experiment/reset_status.py --experiment task/name --status implemented` |
+| `preflight_check.py` | 20-check validation gate before launch | `gigaevo -e task/name preflight` |
+| `generate_launch.py` | Generate `launch.sh` from experiment.yaml | `gigaevo -e task/name generate-launch` |
+| `record_pids.py` | Record launched PIDs into experiment.yaml | Used internally by `launch.sh` |
+| `reset_status.py` | Force-reset experiment status (escape hatch) | `gigaevo -e task/name reset-status --status implemented` |
 
 ---
 
@@ -488,13 +447,13 @@ CLI wrapper that runs the benchmark test suite (`tests/benchmarks/`).
 
 ```bash
 # Quick run with fakeredis
-PYTHONPATH=. python tools/benchmark.py
+python -m tools.benchmark
 
 # Full run with real Redis
-PYTHONPATH=. python tools/benchmark.py --redis-url redis://localhost:6379/15 --full
+python -m tools.benchmark --redis-url redis://localhost:6379/15 --full
 
 # Also run profiler
-PYTHONPATH=. python tools/benchmark.py --profile
+python -m tools.benchmark --profile
 ```
 
 ### `profiler.py` — Redis and DAG throughput profiler
@@ -503,7 +462,7 @@ Measures throughput of Redis ops, program serialization, DAG construction,
 stage execution, and concurrent workloads.
 
 ```bash
-PYTHONPATH=. python tools/profiler.py --redis-url redis://localhost:6379/15
+python -m tools.profiler --redis-url redis://localhost:6379/15
 ```
 
 ---
@@ -639,5 +598,5 @@ Archive data persists in Redis until explicitly flushed. However, the **programs
 
 1. **Canonical generation count**: `hget {prefix}:run_state engine:total_generations`. Never use `llen(valid_frontier_fitness)` or `valid_iter_fitness_mean` last `"s"` — both can lag under high throughput.
 2. **Never write ad-hoc Redis queries** to answer questions the tools already answer. If a tool gives wrong results, fix the tool.
-3. **Never flush manually** with `redis-cli FLUSHDB` — use `tools/flush.py --confirm` which kills workers first.
+3. **Never flush manually** with `redis-cli FLUSHDB` — use `gigaevo flush --db N --confirm` which kills workers first.
 4. **Never use log grep for gen count** — `grep -c "Phase 1: Idle confirmed" run.log` is brittle and has caused production crashes. Use `hget` on `run_state`.

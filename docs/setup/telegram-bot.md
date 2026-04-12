@@ -25,7 +25,7 @@ export TELEGRAM_CHAT_ID="123456789"
 ## Step 3 — Test
 
 ```bash
-PYTHONPATH=. python tools/telegram_notify.py "GigaEvo test message"
+gigaevo notify "GigaEvo test message"
 ```
 
 You should receive the message on Telegram.
