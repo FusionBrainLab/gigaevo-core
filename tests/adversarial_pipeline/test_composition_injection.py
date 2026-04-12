@@ -303,7 +303,7 @@ class TestDGTrackerRecording:
     async def test_tracker_called_on_successful_injection(
         self, hook_with_tracker, d_provider, g_storage, dg_tracker
     ):
-        """dg_tracker.record_improvement is called when injection succeeds."""
+        """dg_tracker.record_improvement is called with d_id, g_id, delta when injection succeeds."""
         d_provider.get_top_k.return_value = [
             OpponentProgram(
                 program_id="d-1",
@@ -335,4 +335,112 @@ class TestDGTrackerRecording:
 
         dg_tracker.record_improvement.assert_called_once()
         call_kwargs = dg_tracker.record_improvement.call_args
-        assert call_kwargs[1]["d_id"] == "d-1" or call_kwargs[0][0] == "d-1"
+        assert call_kwargs[1]["d_id"] == "d-1"
+        assert call_kwargs[1]["g_id"] == g_prog.id
+        assert call_kwargs[1]["delta"] > 0  # positive delta when improvement occurred
+
+    @pytest.mark.asyncio
+    async def test_tracker_none_inject_succeeds_without_recording(
+        self, hook, d_provider, g_storage
+    ):
+        """When dg_tracker is None, inject() succeeds without recording (no error)."""
+        d_provider.get_top_k.return_value = [
+            OpponentProgram(
+                program_id="d-1",
+                code=(
+                    "import numpy as np\n"
+                    "def entrypoint():\n"
+                    "    def improve(pts):\n"
+                    "        return pts * 2.0\n"
+                    "    return improve\n"
+                ),
+                fitness=0.6,
+            )
+        ]
+
+        g_points = np.array([[1.0, 1.0]] * 11)
+        g_prog = Program(code="def entrypoint():\n    pass\n", metadata={})
+        g_storage.get_all.return_value = [g_prog]
+
+        improved = g_points * 2.0
+        with patch(
+            "gigaevo.adversarial.composition_injection.run_exec_runner",
+            new_callable=AsyncMock,
+        ) as mock_runner:
+            mock_runner.side_effect = [
+                (g_points.tolist(), b"", ""),
+                (improved.tolist(), b"", ""),
+            ]
+            result = await hook.inject()
+
+        assert result is not None  # injection succeeded
+        g_storage.add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_tracker_not_called_when_no_improvement(
+        self, hook_with_tracker, d_provider, g_storage, dg_tracker
+    ):
+        """When inject() fails (no improvement), dg_tracker.record_improvement is NOT called."""
+        d_provider.get_top_k.return_value = [
+            OpponentProgram(
+                program_id="d-1",
+                code="def entrypoint():\n    return lambda pts: pts\n",
+                fitness=0.5,
+            )
+        ]
+
+        g_points = [[1.0, 2.0]] * 11
+        g_prog = Program(code="def entrypoint():\n    pass\n", metadata={})
+        g_storage.get_all.return_value = [g_prog]
+
+        with patch(
+            "gigaevo.adversarial.composition_injection.run_exec_runner",
+            new_callable=AsyncMock,
+        ) as mock_runner:
+            mock_runner.side_effect = [
+                (g_points, b"", ""),
+                (g_points, b"", ""),  # same output = no improvement
+            ]
+            result = await hook_with_tracker.inject()
+
+        assert result is None
+        dg_tracker.record_improvement.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tracker_recording_exception_caught(
+        self, hook_with_tracker, d_provider, g_storage, dg_tracker
+    ):
+        """When dg_tracker.record_improvement raises, injection still succeeds."""
+        dg_tracker.record_improvement.side_effect = RuntimeError("Redis connection lost")
+        d_provider.get_top_k.return_value = [
+            OpponentProgram(
+                program_id="d-1",
+                code=(
+                    "import numpy as np\n"
+                    "def entrypoint():\n"
+                    "    def improve(pts):\n"
+                    "        return pts * 1.5\n"
+                    "    return improve\n"
+                ),
+                fitness=0.7,
+            )
+        ]
+
+        g_points = np.array([[1.0, 1.0]] * 11)
+        g_prog = Program(code="def entrypoint():\n    pass\n", metadata={})
+        g_storage.get_all.return_value = [g_prog]
+
+        improved = g_points * 1.5
+        with patch(
+            "gigaevo.adversarial.composition_injection.run_exec_runner",
+            new_callable=AsyncMock,
+        ) as mock_runner:
+            mock_runner.side_effect = [
+                (g_points.tolist(), b"", ""),
+                (improved.tolist(), b"", ""),
+            ]
+            result = await hook_with_tracker.inject()
+
+        # Injection still succeeded despite tracker error
+        assert result is not None
+        g_storage.add.assert_called_once()

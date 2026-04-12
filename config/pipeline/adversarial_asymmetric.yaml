@@ -60,12 +60,23 @@ d_sees_g_source: false
 d_archive_persistent: false
 inner_iterations: 1
 
+# D-G improvement tracker (records which D improved which G and by how much)
+# Used by GradientInPromptStage for per-G-program D selection
+dg_tracker:
+  _target_: gigaevo.adversarial.dg_tracker.DGImprovementTracker
+  host: ${redis.host}
+  port: ${redis.port}
+  db: ${redis.db}
+  prefix: ${problem.name}
+  ttl_seconds: 86400
+
 # Composition injection hook (activated for Arm A G runs via post_step_hook override in launch.sh)
 # CompositionInjectionHook.__call__() delegates to inject(), making it Callable[[], Awaitable[None]]
 composition_injection_hook:
   _target_: gigaevo.adversarial.composition_injection.CompositionInjectionHook
   d_provider: ${opponent_provider}
   g_storage: ${ref:redis_storage}
+  dg_tracker: ${dg_tracker}
 
 pipeline_builder:
   _target_: gigaevo.adversarial.asymmetric_pipeline.AdversarialAsymmetricPipelineBuilder

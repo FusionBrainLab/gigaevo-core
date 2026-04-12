@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import random
 import re
-from typing import Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 import numpy as np
@@ -29,6 +29,9 @@ from gigaevo.programs.stages.python_executors.wrapper import (
     ExecRunnerError,
     run_exec_runner,
 )
+
+if TYPE_CHECKING:
+    from gigaevo.adversarial.dg_tracker import DGImprovementTracker
 
 _SUBPROCESS_TIMEOUT_S = 30
 
@@ -62,7 +65,7 @@ class CompositionInjectionHook:
         self,
         d_provider: OpponentArchiveProvider,
         g_storage: ProgramStorage,
-        dg_tracker: Any | None = None,
+        dg_tracker: DGImprovementTracker | None = None,
     ):
         self._d_provider = d_provider
         self._g_storage = g_storage
@@ -154,6 +157,8 @@ class CompositionInjectionHook:
             )
             return None
 
+        improvement_delta = float(np.linalg.norm(composed_points - g_points))
+
         program = Program(
             code=composed_code,
             metadata={
@@ -167,10 +172,11 @@ class CompositionInjectionHook:
 
         logger.info(
             "[CompositionInjection] mutation_type=d_improvement "
-            "d_id={} g_id={} d_fitness={:.5f} injected_id={}",
+            "d_id={} g_id={} d_fitness={:.5f} delta={:.6f} injected_id={}",
             d_best.program_id,
             g_prog.id[:8],
             d_best.fitness,
+            improvement_delta,
             program.id,
         )
 
@@ -179,7 +185,7 @@ class CompositionInjectionHook:
                 await self._dg_tracker.record_improvement(
                     d_id=d_best.program_id,
                     g_id=g_prog.id,
-                    injected_id=program.id,
+                    delta=improvement_delta,
                 )
             except Exception as e:
                 logger.warning(
