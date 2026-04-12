@@ -58,9 +58,7 @@ def checkpoint(ctx: click.Context, no_notify: bool, no_plots: bool) -> None:
     redis_port = ctx.obj["redis_port"]
 
     if not experiment and not runs:
-        click.echo(
-            "Error: Checkpoint requires --experiment or --run flag.", err=True
-        )
+        click.echo("Error: Checkpoint requires --experiment or --run flag.", err=True)
         ctx.exit(1)
         return
 

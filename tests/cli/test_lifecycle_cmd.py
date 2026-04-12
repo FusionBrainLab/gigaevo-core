@@ -27,9 +27,7 @@ class TestLaunchRequiresConfirm:
         manifest.runs = []
         manifest.servers = []
 
-        with patch(
-            "tools.experiment.manifest.load_manifest", return_value=manifest
-        ):
+        with patch("tools.experiment.manifest.load_manifest", return_value=manifest):
             runner = CliRunner()
             result = runner.invoke(
                 main,
@@ -38,8 +36,7 @@ class TestLaunchRequiresConfirm:
             )
             assert result.exit_code == 0, result.output
             assert (
-                "dry-run" in result.output.lower()
-                or "confirm" in result.output.lower()
+                "dry-run" in result.output.lower() or "confirm" in result.output.lower()
             )
 
 
@@ -69,9 +66,7 @@ class TestRestartRequiresConfirm:
         manifest.status = "running"
         manifest.runs = [MagicMock(label="A", db=4, prefix="p", pid=12345)]
 
-        with patch(
-            "tools.experiment.manifest.load_manifest", return_value=manifest
-        ):
+        with patch("tools.experiment.manifest.load_manifest", return_value=manifest):
             runner = CliRunner()
             result = runner.invoke(
                 main,
@@ -80,6 +75,5 @@ class TestRestartRequiresConfirm:
             )
             assert result.exit_code == 0, result.output
             assert (
-                "dry-run" in result.output.lower()
-                or "confirm" in result.output.lower()
+                "dry-run" in result.output.lower() or "confirm" in result.output.lower()
             )

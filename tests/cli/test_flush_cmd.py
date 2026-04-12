@@ -20,9 +20,7 @@ class TestFlushDryRunDefault:
         ):
             mock_flush.return_value = True
             runner = CliRunner()
-            result = runner.invoke(
-                main, ["flush", "--db", "5"], catch_exceptions=False
-            )
+            result = runner.invoke(main, ["flush", "--db", "5"], catch_exceptions=False)
             assert result.exit_code == 0, result.output
             mock_flush.assert_called_once_with(5, "localhost", 6379, True)
 
@@ -85,18 +83,14 @@ class TestFlushDbValidation:
     def test_db_out_of_range_errors(self):
         """DB number > 15 shows error."""
         runner = CliRunner()
-        result = runner.invoke(
-            main, ["flush", "--db", "16"], catch_exceptions=False
-        )
+        result = runner.invoke(main, ["flush", "--db", "16"], catch_exceptions=False)
         assert result.exit_code != 0
         assert "out of range" in result.output.lower() or "16" in result.output
 
     def test_negative_db_errors(self):
         """Negative DB number shows error."""
         runner = CliRunner()
-        result = runner.invoke(
-            main, ["flush", "--db", "-1"], catch_exceptions=False
-        )
+        result = runner.invoke(main, ["flush", "--db", "-1"], catch_exceptions=False)
         assert result.exit_code != 0
 
 
