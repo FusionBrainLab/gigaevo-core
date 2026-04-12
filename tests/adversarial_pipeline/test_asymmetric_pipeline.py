@@ -8,15 +8,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from gigaevo.adversarial.asymmetric_pipeline import AdversarialAsymmetricPipelineBuilder
-from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider, OpponentProgram
+from gigaevo.adversarial.opponent_provider import (
+    OpponentArchiveProvider,
+    OpponentProgram,
+)
 from gigaevo.adversarial.pipeline import AdversarialPipelineBuilder
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
-from gigaevo.runner.dag_blueprint import DAGBlueprint
-
 
 # ---------------------------------------------------------------------------
 # Helpers

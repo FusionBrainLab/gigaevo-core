@@ -11,12 +11,10 @@ from gigaevo.adversarial.opponent_provider import (
     RedisOpponentArchiveProvider,
 )
 from gigaevo.adversarial.source_injection import (
-    SourceCodeInjectionInput,
     SourceCodeInjectionStage,
 )
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.common import Box
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,7 +25,9 @@ def _make_opponent(pid: str, code: str, fitness: float) -> OpponentProgram:
     return OpponentProgram(program_id=pid, code=code, fitness=fitness)
 
 
-def _make_stage(provider: AsyncMock, source_prompt_k: int = 1) -> SourceCodeInjectionStage:
+def _make_stage(
+    provider: AsyncMock, source_prompt_k: int = 1
+) -> SourceCodeInjectionStage:
     return SourceCodeInjectionStage(
         opponent_provider=provider,
         source_prompt_k=source_prompt_k,
