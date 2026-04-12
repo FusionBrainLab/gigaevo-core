@@ -102,7 +102,7 @@ def top(
     all_programs.sort(key=lambda p: p.get(metric, 0), reverse=not minimize)
     all_programs = all_programs[:top_n]
 
-    rows = []
+    rows: list[dict[str, object]] = []
     for p in all_programs:
         row = {
             "Rank": len(rows) + 1,

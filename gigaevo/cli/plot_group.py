@@ -212,7 +212,7 @@ def comparison(
 
         mean_vals = df["running_mean_fitness"]
         if smoothing != "none" and window > 1:
-            mean_vals = _smooth_series(mean_vals, window, smoothing)
+            mean_vals = _smooth_series(mean_vals, window, smoothing)  # type: ignore[arg-type]
 
         ax.plot(iters, mean_vals, label=f"{label} (mean)", color=color, linewidth=1.5)
 

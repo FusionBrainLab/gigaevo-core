@@ -44,6 +44,7 @@ def logs(ctx: click.Context, log_file: str | None, follow: bool, tail_n: int) ->
     """Tail experiment log files."""
     experiment = ctx.obj.get("experiment")
 
+    path: Path | None
     if log_file:
         path = Path(log_file)
     else:

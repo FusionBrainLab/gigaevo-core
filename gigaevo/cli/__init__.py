@@ -34,7 +34,7 @@ class LazyGroup(click.Group):
         rv.extend(super().list_commands(ctx))
         return sorted(set(rv))
 
-    def get_command(
+    def get_command(  # type: ignore[override]
         self, ctx: click.Context, cmd_name: str
     ) -> click.BaseCommand | None:
         # Check eagerly-registered commands first

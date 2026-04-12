@@ -87,7 +87,7 @@ class HeilbronPlugin(WatchdogPlugin):
                     ax.set_ylabel(metric)
 
             fig.suptitle(f"Heilbron Metrics -- Cycle {cycle}", fontsize=14)
-            fig.tight_layout(rect=[0, 0, 1, 0.96])
+            fig.tight_layout(rect=(0, 0, 1, 0.96))
 
             plot_path = output_dir / f"heilbron_panel_cycle_{cycle:04d}.png"
             fig.savefig(plot_path, dpi=100, bbox_inches="tight")
