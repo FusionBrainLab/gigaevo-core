@@ -216,6 +216,7 @@ def prepare_iteration_dataframe(
     fitness_col: str = "metric_fitness",
     iteration_col: str = "metadata_iteration",
     minimize: bool = False,
+    compute_frontier: bool = True,
 ) -> pd.DataFrame:
     """Return a DataFrame sorted by iteration with rolling mean/std columns.
 
@@ -333,39 +334,41 @@ def prepare_iteration_dataframe(
 
     # Frontier: per-iteration best and its cumulative best across iterations
     # For minimization problems, we want the minimum; for maximization, the maximum
-    if minimize:
-        per_iter_best = (
-            df.groupby(iteration_col, as_index=False)[fitness_col]
-            .min()
-            .sort_values(iteration_col)
-            .reset_index(drop=True)
+    if compute_frontier:
+        if minimize:
+            per_iter_best = (
+                df.groupby(iteration_col, as_index=False)[fitness_col]
+                .min()
+                .sort_values(iteration_col)
+                .reset_index(drop=True)
+            )
+            per_iter_best["frontier_fitness"] = per_iter_best[fitness_col].cummin()
+        else:
+            per_iter_best = (
+                df.groupby(iteration_col, as_index=False)[fitness_col]
+                .max()
+                .sort_values(iteration_col)
+                .reset_index(drop=True)
+            )
+            per_iter_best["frontier_fitness"] = per_iter_best[fitness_col].cummax()
+        df = df.merge(
+            per_iter_best[[iteration_col, "frontier_fitness"]],
+            on=iteration_col,
+            how="left",
         )
-        per_iter_best["frontier_fitness"] = per_iter_best[fitness_col].cummin()
-    else:
-        per_iter_best = (
-            df.groupby(iteration_col, as_index=False)[fitness_col]
-            .max()
-            .sort_values(iteration_col)
-            .reset_index(drop=True)
-        )
-        per_iter_best["frontier_fitness"] = per_iter_best[fitness_col].cummax()
-    df = df.merge(
-        per_iter_best[[iteration_col, "frontier_fitness"]],
-        on=iteration_col,
-        how="left",
-    )
 
-    return df[
-        [
-            iteration_col,
-            fitness_col,
-            "running_mean_fitness",
-            "running_std_fitness",
-            "running_mean_plus_std",
-            "running_mean_minus_std",
-            "frontier_fitness",
-        ]
+    output_cols = [
+        iteration_col,
+        fitness_col,
+        "running_mean_fitness",
+        "running_std_fitness",
+        "running_mean_plus_std",
+        "running_mean_minus_std",
     ]
+    if compute_frontier:
+        output_cols.append("frontier_fitness")
+
+    return df[output_cols]
 
 
 def fetch_frontier_from_redis(

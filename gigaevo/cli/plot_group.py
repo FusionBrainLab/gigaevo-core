@@ -37,8 +37,15 @@ def _fetch_run_data(
     redis_host: str,
     redis_port: int,
     metric: str = "fitness",
+    no_frontier_labels: set[str] | None = None,
 ) -> list[tuple[str, pd.DataFrame]]:
-    """Fetch and prepare DataFrames for each run. Returns list of (label, df)."""
+    """Fetch and prepare DataFrames for each run. Returns list of (label, df).
+
+    Args:
+        no_frontier_labels: Set of run labels for which frontier (cummax) should
+            be suppressed. Useful for adversarial Improver populations where
+            fitness is non-monotonic.
+    """
     from tools.utils import (
         fetch_evolution_dataframe,
         prepare_iteration_dataframe,
@@ -50,13 +57,15 @@ def _fetch_run_data(
         raw_df = asyncio.run(fetch_evolution_dataframe(config, add_stage_results=False))
         if raw_df.empty:
             continue
+        label = config.display_label()
+        skip_frontier = no_frontier_labels is not None and label in no_frontier_labels
         prepared = prepare_iteration_dataframe(
             raw_df,
             fitness_col=f"metric_{metric}",
+            compute_frontier=not skip_frontier,
         )
         if prepared.empty:
             continue
-        label = config.display_label()
         results.append((label, prepared))
     return results
 
@@ -156,6 +165,36 @@ def plot() -> None:
 @click.option("--window", type=int, default=5, help="Smoothing window size.")
 @click.option("--show", is_flag=True, default=False, help="Show plot interactively.")
 @click.option("--metric", default="fitness", help="Metric to plot.")
+@click.option(
+    "--no-frontier",
+    is_flag=True,
+    default=False,
+    help="Suppress frontier (cummax) line for ALL runs.",
+)
+@click.option(
+    "--no-frontier-for",
+    type=str,
+    default=None,
+    help="Comma-separated labels to suppress frontier for (e.g. 'D1,D2').",
+)
+@click.option(
+    "--annotate-frontier",
+    is_flag=True,
+    default=False,
+    help="Annotate significant frontier jumps on the plot.",
+)
+@click.option(
+    "--max-annotations",
+    type=int,
+    default=5,
+    help="Max number of frontier annotations per run (default: 5).",
+)
+@click.option(
+    "--paper",
+    is_flag=True,
+    default=False,
+    help="Use publication-quality styling (larger fonts, 300 DPI, colorblind-safe).",
+)
 @click.pass_context
 def comparison(
     ctx: click.Context,
@@ -164,12 +203,26 @@ def comparison(
     window: int,
     show: bool,
     metric: str,
+    no_frontier: bool,
+    no_frontier_for: str | None,
+    annotate_frontier: bool,
+    max_annotations: int,
+    paper: bool,
 ) -> None:
     """Plot fitness comparison across runs."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    from tools.comparison import _annotate_frontier_points
+
+    # Build set of labels to suppress frontier for
+    no_frontier_labels: set[str] | None = None
+    if no_frontier:
+        no_frontier_labels = {"__ALL__"}  # sentinel: suppress for all
+    elif no_frontier_for:
+        no_frontier_labels = {s.strip() for s in no_frontier_for.split(",")}
 
     run_configs = RunResolver.resolve(
         ctx.obj["experiment"],
@@ -178,30 +231,74 @@ def comparison(
         ctx.obj["redis_port"],
     )
 
+    # When --no-frontier applies to ALL runs, pass all labels; otherwise pass specific ones
+    actual_no_frontier: set[str] | None = None
+    if no_frontier_labels and "__ALL__" in no_frontier_labels:
+        # Resolve all labels first, then suppress frontier for all
+        all_labels = {
+            _build_redis_config(
+                rc, ctx.obj["redis_host"], ctx.obj["redis_port"]
+            ).display_label()
+            for rc in run_configs
+        }
+        actual_no_frontier = all_labels
+    else:
+        actual_no_frontier = no_frontier_labels
+
     prepared_dfs = _fetch_run_data(
         run_configs,
         ctx.obj["redis_host"],
         ctx.obj["redis_port"],
         metric=metric,
+        no_frontier_labels=actual_no_frontier,
     )
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(7.0, 4.5))
+    # Publication styling
+    if paper:
+        plt.rcParams.update(
+            {
+                "font.size": 14,
+                "axes.titlesize": 16,
+                "axes.labelsize": 14,
+                "xtick.labelsize": 12,
+                "ytick.labelsize": 12,
+                "legend.fontsize": 11,
+                "lines.linewidth": 2.0,
+                "figure.dpi": 300,
+            }
+        )
 
-    colors = [
-        "#1f77b4",
-        "#ff7f0e",
-        "#2ca02c",
-        "#d62728",
-        "#9467bd",
-        "#8c564b",
-        "#e377c2",
-        "#7f7f7f",
-        "#bcbd22",
-        "#17becf",
-    ]
+    figsize = (8.0, 5.0) if paper else (7.0, 4.5)
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Colorblind-safe palette (Okabe-Ito) for paper, default matplotlib otherwise
+    if paper:
+        colors = [
+            "#0072B2",  # blue
+            "#D55E00",  # vermilion
+            "#009E73",  # green
+            "#CC79A7",  # pink
+            "#F0E442",  # yellow
+            "#56B4E9",  # sky blue
+            "#E69F00",  # orange
+            "#000000",  # black
+        ]
+    else:
+        colors = [
+            "#1f77b4",
+            "#ff7f0e",
+            "#2ca02c",
+            "#d62728",
+            "#9467bd",
+            "#8c564b",
+            "#e377c2",
+            "#7f7f7f",
+            "#bcbd22",
+            "#17becf",
+        ]
 
     iteration_col = "metadata_iteration"
 
@@ -214,7 +311,10 @@ def comparison(
         if smoothing != "none" and window > 1:
             mean_vals = _smooth_series(mean_vals, window, smoothing)  # type: ignore[arg-type]
 
-        ax.plot(iters, mean_vals, label=f"{label} (mean)", color=color, linewidth=1.5)
+        lw_mean = 2.0 if paper else 1.5
+        ax.plot(
+            iters, mean_vals, label=f"{label} (mean)", color=color, linewidth=lw_mean
+        )
 
         if "running_std_fitness" in df.columns:
             std_vals = df["running_std_fitness"]
@@ -227,25 +327,43 @@ def comparison(
             )
 
         if "frontier_fitness" in df.columns:
+            lw_best = 1.5 if paper else 1.0
             ax.plot(
                 iters,
                 df["frontier_fitness"],
                 label=f"{label} (best)",
                 color=color,
-                linewidth=1.0,
+                linewidth=lw_best,
                 linestyle="--",
             )
+
+            if annotate_frontier:
+                _annotate_frontier_points(
+                    ax,
+                    iters.values,
+                    df["frontier_fitness"].values,
+                    minimize=False,
+                    max_annotations=max_annotations,
+                    color=color,
+                )
 
         run_labels.append(label)
 
     ax.set_xlabel("Iteration")
     ax.set_ylabel(metric.replace("_", " ").title())
-    ax.set_title(f"Evolution Runs Comparison ({metric})")
-    ax.legend(fontsize=8)
+    if not paper:
+        ax.set_title(f"Evolution Runs Comparison ({metric})")
+    ax.legend(fontsize=11 if paper else 8)
 
     stem = "evolution_runs_comparison"
+    dpi = 300 if paper else 300
     for ext in ("png", "pdf", "svg"):
-        fig.savefig(out_path / f"{stem}.{ext}", dpi=300, bbox_inches="tight")
+        fig.savefig(
+            out_path / f"{stem}.{ext}",
+            dpi=dpi,
+            bbox_inches="tight",
+            facecolor="white",
+        )
 
     if show:
         plt.show()
@@ -256,6 +374,10 @@ def comparison(
         "runs": run_labels,
         "smoothing": smoothing,
         "metric": metric,
+        "no_frontier": no_frontier,
+        "no_frontier_for": no_frontier_for,
+        "annotate_frontier": annotate_frontier,
+        "paper": paper,
         "files": [f"{stem}.png", f"{stem}.pdf", f"{stem}.svg"],
     }
     click.echo(json.dumps(summary, indent=2))
@@ -372,6 +494,226 @@ def trajectory(
     summary = {
         "output_dir": str(out_path),
         "metric": metric,
+        "files": files_created,
+    }
+    click.echo(json.dumps(summary, indent=2))
+
+
+@plot.command("arms-race")
+@click.option(
+    "-o",
+    "--output-dir",
+    required=True,
+    type=click.Path(),
+    help="Output directory for plot files.",
+)
+@click.option("--metric", default="fitness", help="Metric to plot.")
+@click.option(
+    "--paired",
+    type=str,
+    required=True,
+    help="Pair spec: 'G_label:D_label' (e.g. 'C1_A:C1_B'). Repeatable via comma.",
+)
+@click.option(
+    "--show-max",
+    is_flag=True,
+    default=False,
+    help="Plot max(G, D) best-overall across each pair.",
+)
+@click.option(
+    "--paper",
+    is_flag=True,
+    default=False,
+    help="Use publication-quality styling.",
+)
+@click.option("--show", is_flag=True, default=False, help="Show plot interactively.")
+@click.pass_context
+def arms_race(
+    ctx: click.Context,
+    output_dir: str,
+    metric: str,
+    paired: str,
+    show_max: bool,
+    paper: bool,
+    show: bool,
+) -> None:
+    """Dual-panel arms race plot for adversarial co-evolution.
+
+    Plots Constructor (G) and Improver (D) fitness on stacked panels with shared
+    X-axis. Optionally overlays max(G, D) — the best-overall across both populations.
+
+    Example:
+        gigaevo plot arms-race -r ... --paired C1_A:C1_B --show-max -o plots/
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Parse pair specs
+    pairs: list[tuple[str, str]] = []
+    for pair_str in paired.split(","):
+        parts = pair_str.strip().split(":")
+        if len(parts) != 2:
+            raise click.BadParameter(
+                f"Pair '{pair_str}' must be 'G_label:D_label'", param_hint="--paired"
+            )
+        pairs.append((parts[0].strip(), parts[1].strip()))
+
+    run_configs = RunResolver.resolve(
+        ctx.obj["experiment"],
+        ctx.obj["runs"],
+        ctx.obj["redis_host"],
+        ctx.obj["redis_port"],
+    )
+
+    # Suppress frontier for D runs (non-monotonic)
+    d_labels = {d for _, d in pairs}
+    prepared_dfs = _fetch_run_data(
+        run_configs,
+        ctx.obj["redis_host"],
+        ctx.obj["redis_port"],
+        metric=metric,
+        no_frontier_labels=d_labels,
+    )
+
+    # Index by label
+    df_by_label: dict[str, pd.DataFrame] = {label: df for label, df in prepared_dfs}
+
+    if paper:
+        plt.rcParams.update(
+            {
+                "font.size": 14,
+                "axes.titlesize": 16,
+                "axes.labelsize": 14,
+                "xtick.labelsize": 12,
+                "ytick.labelsize": 12,
+                "legend.fontsize": 11,
+                "lines.linewidth": 2.0,
+                "figure.dpi": 300,
+            }
+        )
+
+    # Colorblind-safe palette
+    colors = (
+        ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#56B4E9", "#E69F00"]
+        if paper
+        else ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+    )
+
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    iteration_col = "metadata_iteration"
+
+    fig, (ax_g, ax_d) = plt.subplots(
+        2,
+        1,
+        figsize=(8.0, 8.0) if paper else (7.0, 7.0),
+        sharex=True,
+    )
+
+    files_created = []
+    pair_labels = []
+
+    for i, (g_label, d_label) in enumerate(pairs):
+        color = colors[i % len(colors)]
+
+        # Constructor (G) panel — top
+        if g_label in df_by_label:
+            g_df = df_by_label[g_label]
+            g_iters = g_df[iteration_col]
+            ax_g.plot(
+                g_iters,
+                g_df["running_mean_fitness"],
+                label=f"{g_label} (mean)",
+                color=color,
+                linewidth=2.0 if paper else 1.5,
+            )
+            if "frontier_fitness" in g_df.columns:
+                ax_g.plot(
+                    g_iters,
+                    g_df["frontier_fitness"],
+                    label=f"{g_label} (best)",
+                    color=color,
+                    linewidth=1.5 if paper else 1.0,
+                    linestyle="--",
+                )
+
+        # Improver (D) panel — bottom (no frontier, non-monotonic)
+        if d_label in df_by_label:
+            d_df = df_by_label[d_label]
+            d_iters = d_df[iteration_col]
+            ax_d.plot(
+                d_iters,
+                d_df["running_mean_fitness"],
+                label=f"{d_label} (mean)",
+                color=color,
+                linewidth=2.0 if paper else 1.5,
+            )
+
+        # max(G, D) overlay on G panel
+        if show_max and g_label in df_by_label and d_label in df_by_label:
+            g_df = df_by_label[g_label]
+            d_df = df_by_label[d_label]
+
+            # Align on common iterations
+            g_frontier = g_df.set_index(iteration_col)
+            d_mean = d_df.set_index(iteration_col)
+
+            g_col = (
+                "frontier_fitness"
+                if "frontier_fitness" in g_frontier.columns
+                else "running_mean_fitness"
+            )
+            common_iters = g_frontier.index.intersection(d_mean.index)
+            if len(common_iters) > 0:
+                g_vals = g_frontier.loc[common_iters, g_col]
+                d_vals = d_mean.loc[common_iters, "running_mean_fitness"]
+                max_vals = np.maximum(g_vals.values, d_vals.values)
+                ax_g.plot(
+                    common_iters,
+                    max_vals,
+                    label=f"max({g_label},{d_label})",
+                    color=color,
+                    linewidth=2.5 if paper else 2.0,
+                    linestyle=":",
+                    alpha=0.8,
+                )
+
+        pair_labels.append(f"{g_label}:{d_label}")
+
+    ax_g.set_ylabel(f"Constructor {metric.replace('_', ' ').title()}")
+    ax_d.set_ylabel(f"Improver {metric.replace('_', ' ').title()}")
+    ax_d.set_xlabel("Iteration")
+
+    if not paper:
+        ax_g.set_title("Arms Race — Constructor (G)")
+        ax_d.set_title("Arms Race — Improver (D)")
+
+    ax_g.legend(fontsize=11 if paper else 8)
+    ax_d.legend(fontsize=11 if paper else 8)
+
+    stem = "arms_race"
+    for ext in ("png", "pdf", "svg"):
+        fig.savefig(
+            out_path / f"{stem}.{ext}",
+            dpi=300,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+        files_created.append(f"{stem}.{ext}")
+
+    if show:
+        plt.show()
+    plt.close(fig)
+
+    summary = {
+        "output_dir": str(out_path),
+        "pairs": pair_labels,
+        "metric": metric,
+        "show_max": show_max,
+        "paper": paper,
         "files": files_created,
     }
     click.echo(json.dumps(summary, indent=2))

@@ -16,7 +16,14 @@ import sys
 
 import redis as redis_lib
 
-from tools.status import parse_run_arg
+from tools.status import load_metrics_yaml, parse_run_arg
+
+
+def _fmt_value(val: float, is_pct: bool, decimals: int) -> str:
+    """Format a metric value as percentage or raw based on spec."""
+    if is_pct:
+        return f"{val * 100:.{decimals}f}%"
+    return f"{val:.{decimals}f}"
 
 
 def _read_list(r, key: str) -> list[dict]:
@@ -97,6 +104,12 @@ Summary lines:
     metric = args.metric
     # Auto-detect non-monotonic: adversarial metrics change as opponents evolve
     non_monotonic = args.non_monotonic or "adversarial" in metric.lower()
+
+    # Load metric spec for formatting (percentage vs raw)
+    specs = load_metrics_yaml(prefix)
+    spec = specs.get(metric, {})
+    is_pct = spec.get("upper_bound", 1.0) == 1.0
+    decimals = spec.get("decimals", 1)
 
     try:
         # Per-gen mean fitness: one entry per valid program, s=generation, v=running_mean
@@ -182,8 +195,10 @@ Summary lines:
         best_val = frontier_at_gen.get(gen)
         mean_val = info["mean"]
         n_valid = info["n_valid"]
-        best_str = f"{best_val * 100:.1f}%" if best_val is not None else "     ?"
-        mean_str = f"{mean_val * 100:.1f}%"
+        best_str = (
+            _fmt_value(best_val, is_pct, decimals) if best_val is not None else "?"
+        )
+        mean_str = _fmt_value(mean_val, is_pct, decimals)
         print(
             f"Gen {gen:{gen_width}d}: best={best_str:>6}  mean={mean_str:>6}  n_valid={n_valid:>3}"
         )
@@ -207,15 +222,25 @@ Summary lines:
 
         if len(improvement_points) >= 2:
             last_s, last_v = improvement_points[-1]
-            prev_s, prev_v = improvement_points[-2]
-            delta = (last_v - prev_v) * 100
+            _, prev_v = improvement_points[-2]
+            prev_str = _fmt_value(prev_v, is_pct, decimals)
+            last_str = _fmt_value(last_v, is_pct, decimals)
+            if is_pct:
+                delta = (last_v - prev_v) * 100
+                delta_str = f"+{delta:.{decimals}f}pp"
+            else:
+                delta = last_v - prev_v
+                delta_str = f"+{delta:.{decimals}f}"
             print(
                 f"  Last improvement: gen {last_s}"
-                f" ({prev_v * 100:.1f}% \u2192 {last_v * 100:.1f}%, +{delta:.1f}pp)"
+                f" ({prev_str} \u2192 {last_str}, {delta_str})"
             )
         elif len(improvement_points) == 1:
             last_s, last_v = improvement_points[0]
-            print(f"  Last improvement: gen {last_s} (\u2192 {last_v * 100:.1f}%)")
+            print(
+                f"  Last improvement: gen {last_s}"
+                f" (\u2192 {_fmt_value(last_v, is_pct, decimals)})"
+            )
 
     # Acceptance rate over last 10 gens:
     # = frontier improvements in that window / total valid programs in that window
