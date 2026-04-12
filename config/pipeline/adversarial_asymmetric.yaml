@@ -60,6 +60,13 @@ d_sees_g_source: false
 d_archive_persistent: false
 inner_iterations: 1
 
+# Composition injection hook (activated for Arm A G runs via post_step_hook override in launch.sh)
+# CompositionInjectionHook.__call__() delegates to inject(), making it Callable[[], Awaitable[None]]
+composition_injection_hook:
+  _target_: gigaevo.adversarial.composition_injection.CompositionInjectionHook
+  d_provider: ${opponent_provider}
+  g_storage: ${ref:redis_storage}
+
 pipeline_builder:
   _target_: gigaevo.adversarial.asymmetric_pipeline.AdversarialAsymmetricPipelineBuilder
   ctx: ${evolution_context}
