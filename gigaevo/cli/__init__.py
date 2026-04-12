@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import importlib
+import os
+import sys
 from typing import Any
 
 import click
+
+# Ensure project root (CWD) is on sys.path so CLI modules can import from
+# `tools.*` which lives at the project root, outside the gigaevo package.
+_project_root = os.getcwd()
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from gigaevo.cli.output_formatter import OutputFormatter
 

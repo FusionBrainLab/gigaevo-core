@@ -83,6 +83,15 @@ class OpponentArchiveProvider(ABC):
         ...
 
     @abstractmethod
+    async def get_programs_by_ids(self, ids: list[str]) -> list[OpponentProgram]:
+        """Return full OpponentProgram objects for the given IDs.
+
+        Unlike get_codes_by_ids (codes only), returns fitness too — needed
+        for ranking when showing l < k opponents in the mutation prompt.
+        """
+        ...
+
+    @abstractmethod
     async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
         """Return codes for the given opponent program IDs.
 
@@ -272,6 +281,11 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
             len(opponents),
             len(self._sources),
         )
+
+    async def get_programs_by_ids(self, ids: list[str]) -> list[OpponentProgram]:
+        """Return OpponentProgram objects from cache for the given IDs."""
+        id_set = set(ids)
+        return [o for o in self._cache if o.program_id in id_set]
 
     async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
         """Return codes from the in-memory cache for the given IDs.
