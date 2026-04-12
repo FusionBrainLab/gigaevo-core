@@ -126,7 +126,9 @@ def get(ctx: click.Context, field: str) -> None:
             }
             for run in manifest_obj.runs
         ]
-        formatter.echo(rows, columns=["Label", "DB", "Prefix", "Pipeline", "PID"], title="Runs")
+        formatter.echo(
+            rows, columns=["Label", "DB", "Prefix", "Pipeline", "PID"], title="Runs"
+        )
         return
 
     if field == "servers":
@@ -282,7 +284,14 @@ def pr_description(ctx: click.Context, push: bool) -> None:
         manifest_obj = load_manifest(experiment)
         if manifest_obj.pr_number:
             subprocess.run(
-                ["gh", "pr", "edit", str(manifest_obj.pr_number), "--body", description],
+                [
+                    "gh",
+                    "pr",
+                    "edit",
+                    str(manifest_obj.pr_number),
+                    "--body",
+                    description,
+                ],
                 check=True,
             )
             click.echo(f"PR #{manifest_obj.pr_number} description updated.")

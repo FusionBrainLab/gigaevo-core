@@ -50,11 +50,15 @@ def _make_manifest(
     m.pr_number = pr_number
     m.tracking_issue = 42
     m.prereg_commit = "abc1234"
-    m._raw = raw if raw is not None else {
-        "experiment": {"status": status, "name": "hover/test"},
-        "launch": {"watchdog_pid": 9999, "time": "2026-01-01T00:00:00Z"},
-        "config": {"stopping_rule": "stagnation_10"},
-    }
+    m._raw = (
+        raw
+        if raw is not None
+        else {
+            "experiment": {"status": status, "name": "hover/test"},
+            "launch": {"watchdog_pid": 9999, "time": "2026-01-01T00:00:00Z"},
+            "config": {"stopping_rule": "stagnation_10"},
+        }
+    )
     m.config = m._raw.get("config", {})
     m.launch = MagicMock()
     m.launch.watchdog_pid = 9999
@@ -252,7 +256,14 @@ class TestManifestUpdate:
             runner = CliRunner()
             result = runner.invoke(
                 main,
-                ["-e", "hover/test", "manifest", "update", "launch.watchdog_pid", "12345"],
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "update",
+                    "launch.watchdog_pid",
+                    "12345",
+                ],
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
@@ -269,7 +280,14 @@ class TestManifestUpdate:
             runner = CliRunner()
             result = runner.invoke(
                 main,
-                ["-e", "hover/test", "manifest", "update", "launch.time", "2026-01-01T00:00:00Z"],
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "update",
+                    "launch.time",
+                    "2026-01-01T00:00:00Z",
+                ],
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
@@ -286,13 +304,18 @@ class TestManifestUpdate:
             captured_updater["raw"] = raw
             return updated_manifest
 
-        with patch(
-            f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_updater
-        ):
+        with patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_updater):
             runner = CliRunner()
             result = runner.invoke(
                 main,
-                ["-e", "hover/test", "manifest", "update", "launch.watchdog_pid", "12345"],
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "update",
+                    "launch.watchdog_pid",
+                    "12345",
+                ],
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
@@ -309,13 +332,18 @@ class TestManifestUpdate:
             captured_updater["raw"] = raw
             return updated_manifest
 
-        with patch(
-            f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_updater
-        ):
+        with patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_updater):
             runner = CliRunner()
             result = runner.invoke(
                 main,
-                ["-e", "hover/test", "manifest", "update", "smoke_test.completed", "true"],
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "update",
+                    "smoke_test.completed",
+                    "true",
+                ],
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
