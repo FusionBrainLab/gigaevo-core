@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pandas as pd
 import pytest
 
@@ -129,3 +131,62 @@ class TestSentinelFiltering:
         assert frontier_values[-1] == pytest.approx(0.8)
         # No sentinel values should appear in frontier
         assert all(v >= 0 for v in frontier_values)
+
+
+class TestFetchRunDataSentinelPassthrough:
+    """Tests that _fetch_run_data passes sentinel_value to prepare_iteration_dataframe."""
+
+    def _make_raw_df(self, fitness_values: list[float]) -> pd.DataFrame:
+        """Create a raw DataFrame matching fetch_evolution_dataframe output."""
+        n = len(fitness_values)
+        return pd.DataFrame(
+            {
+                "metric_fitness": fitness_values,
+                "metadata_iteration": list(range(1, n + 1)),
+            }
+        )
+
+    @patch("gigaevo.cli.plot_group.asyncio")
+    @patch("gigaevo.cli.plot_group._build_redis_config")
+    def test_fetch_run_data_passes_sentinel_value(
+        self, mock_build_config, mock_asyncio
+    ) -> None:
+        """_fetch_run_data with sentinel_value=-1.0 passes it to prepare_iteration_dataframe."""
+        from gigaevo.cli.plot_group import _fetch_run_data
+
+        raw_df = self._make_raw_df([0.5, -1.0, 0.6, -1.0, 0.8])
+        mock_config = MagicMock()
+        mock_config.display_label.return_value = "test_label"
+        mock_build_config.return_value = mock_config
+        mock_asyncio.run.return_value = raw_df
+
+        mock_rc = MagicMock()
+        results = _fetch_run_data(
+            [mock_rc], "localhost", 6379, metric="fitness", sentinel_value=-1.0
+        )
+
+        assert len(results) == 1
+        label, df = results[0]
+        assert -1.0 not in df["metric_fitness"].values
+
+    @patch("gigaevo.cli.plot_group.asyncio")
+    @patch("gigaevo.cli.plot_group._build_redis_config")
+    def test_fetch_run_data_default_no_sentinel_filtering(
+        self, mock_build_config, mock_asyncio
+    ) -> None:
+        """_fetch_run_data with sentinel_value=None (default) does not filter sentinels."""
+        from gigaevo.cli.plot_group import _fetch_run_data
+
+        raw_df = self._make_raw_df([0.5, -1.0, 0.6, -1.0, 0.8])
+        mock_config = MagicMock()
+        mock_config.display_label.return_value = "test_label"
+        mock_build_config.return_value = mock_config
+        mock_asyncio.run.return_value = raw_df
+
+        mock_rc = MagicMock()
+        results = _fetch_run_data([mock_rc], "localhost", 6379, metric="fitness")
+
+        assert len(results) == 1
+        label, df = results[0]
+        # -1.0 rows should still be present (no sentinel filtering by default)
+        assert len(df) == 5
