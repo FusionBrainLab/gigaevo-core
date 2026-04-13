@@ -8,7 +8,6 @@ from click.testing import CliRunner
 import fakeredis
 
 from gigaevo.cli import main
-from gigaevo.cli.run_resolver import RunResolver
 
 
 def _metric_entry(step: int, value: float, ts: int = 123) -> str:
@@ -242,8 +241,9 @@ class TestTrajectoryMultiMetric:
 
     def test_auto_discovery_uses_run_config_metric_names(self):
         """When no --metric specified, trajectory auto-discovers from RunConfig.metric_names."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
+        from gigaevo.cli.run_resolver import RunResolver
         from gigaevo.monitoring.experiment_monitor import RunConfig
         from gigaevo.monitoring.run_spec import RunSpec
 
