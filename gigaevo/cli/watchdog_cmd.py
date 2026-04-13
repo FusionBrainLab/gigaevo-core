@@ -47,6 +47,7 @@ def watchdog(
         return
 
     # Lazy imports to keep CLI startup fast
+    from gigaevo.cli.run_resolver import _load_metric_names
     from gigaevo.monitoring.experiment_monitor import RunConfig
     from gigaevo.monitoring.run_spec import RunSpec
     from gigaevo.monitoring.watchdog_config import WatchdogConfig
@@ -76,7 +77,8 @@ def watchdog(
     run_configs = []
     for run in manifest.runs:
         spec = RunSpec(prefix=run.prefix, db=run.db, label=run.label)
-        rc = RunConfig(run_spec=spec, pid=run.pid)
+        metric_names = _load_metric_names(run.problem_name)
+        rc = RunConfig(run_spec=spec, metric_names=metric_names, pid=run.pid)
         run_configs.append(rc)
 
     # Build config

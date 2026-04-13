@@ -8,6 +8,7 @@ from click.testing import CliRunner
 import fakeredis
 
 from gigaevo.cli import main
+from gigaevo.cli.run_resolver import RunResolver
 
 
 def _metric_entry(step: int, value: float, ts: int = 123) -> str:
@@ -183,3 +184,96 @@ class TestTrajectoryMetricOption:
         assert len(data) == 2
         assert data[0]["Best"] == 0.80
         assert data[1]["Mean"] == 0.75
+
+
+def _populate_metric_trajectory(
+    server: fakeredis.FakeServer,
+    db: int,
+    prefix: str,
+    metric: str,
+    generations: list[tuple[int, float, float]],
+) -> None:
+    """Populate fakeredis with gen-by-gen trajectory data for a specific metric."""
+    r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
+    for gen, frontier, mean in generations:
+        r.rpush(
+            f"{prefix}:metrics:history:program_metrics:valid_frontier_{metric}",
+            _metric_entry(gen, frontier),
+        )
+        r.rpush(
+            f"{prefix}:metrics:history:program_metrics:valid_gen_{metric}_mean",
+            _metric_entry(gen, mean),
+        )
+
+
+class TestTrajectoryMultiMetric:
+    def test_multiple_metric_flags_show_both(self):
+        """--metric actual_fitness --metric quality shows both metrics in output."""
+        server = fakeredis.FakeServer()
+        _populate_metric_trajectory(
+            server, 4, "test/prefix", "actual_fitness", [(1, 0.70, 0.60)]
+        )
+        _populate_metric_trajectory(
+            server, 4, "test/prefix", "quality", [(1, 0.90, 0.85)]
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "test/prefix@4:O",
+                "-f",
+                "json",
+                "trajectory",
+                "--metric",
+                "actual_fitness",
+                "--metric",
+                "quality",
+            ],
+            obj=_make_obj(server),
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        metrics_in_output = {row["Metric"] for row in data}
+        assert metrics_in_output == {"actual_fitness", "quality"}
+        assert len(data) == 2
+
+    def test_auto_discovery_uses_run_config_metric_names(self):
+        """When no --metric specified, trajectory auto-discovers from RunConfig.metric_names."""
+        from unittest.mock import patch, MagicMock
+
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+        from gigaevo.monitoring.run_spec import RunSpec
+
+        server = fakeredis.FakeServer()
+        _populate_metric_trajectory(
+            server, 4, "test/prefix", "fitness", [(1, 0.50, 0.40)]
+        )
+        _populate_metric_trajectory(
+            server, 4, "test/prefix", "actual_fitness", [(1, 0.70, 0.60)]
+        )
+
+        configs = [
+            RunConfig(
+                run_spec=RunSpec(prefix="test/prefix", db=4, label="O"),
+                metric_names=["fitness", "actual_fitness"],
+            ),
+        ]
+
+        with patch.object(
+            RunResolver, "resolve", return_value=configs
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-r", "test/prefix@4:O", "-f", "json", "trajectory"],
+                obj=_make_obj(server),
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            metrics_in_output = {row["Metric"] for row in data}
+            assert "fitness" in metrics_in_output
+            assert "actual_fitness" in metrics_in_output

@@ -143,6 +143,7 @@ class ExperimentManifest(BaseModel):
     baseline: BaselineInfo = BaselineInfo()
     smoke_test: SmokeTestInfo = SmokeTestInfo()
     tools: list[dict[str, str]] = []
+    watchdog_plugin: str | None = None
 
     @field_validator("schema_version")
     @classmethod

@@ -142,3 +142,42 @@ class TestWatchdogPluginOverride:
             )
             assert result.exit_code != 0
             assert "nonexistent" in result.output.lower()
+
+
+class TestWatchdogMetricNamesPropagation:
+    def test_run_configs_contain_metric_names_from_metrics_yaml(self):
+        """RunConfigs built by watchdog contain metric_names loaded from metrics.yaml."""
+        manifest = _make_fake_manifest()
+        # Add problem_name to the mock run so _load_metric_names can use it
+        manifest.runs[0].problem_name = "chains/hover/test"
+
+        expected_metrics = ["fitness", "actual_fitness", "quality"]
+
+        with (
+            patch("tools.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.cli.run_resolver._load_metric_names",
+                return_value=expected_metrics,
+            ) as mock_load_metrics,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "test/exp", "watchdog"],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+
+            mock_load_metrics.assert_called_once_with("chains/hover/test")
+
+            call_kwargs = mock_engine_cls.call_args[1]
+            run_configs = call_kwargs["run_configs"]
+            assert len(run_configs) == 1
+            assert run_configs[0].metric_names == expected_metrics

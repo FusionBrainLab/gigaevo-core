@@ -411,6 +411,38 @@ def _discover_experiment_yamls() -> list[Path]:
     ]
 
 
+class TestWatchdogPluginField:
+    def test_watchdog_plugin_accepted_in_yaml(self) -> None:
+        """ExperimentManifest accepts watchdog_plugin in YAML input."""
+        raw = _minimal_preregistered()
+        raw["watchdog_plugin"] = "prompt_coevo"
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.watchdog_plugin == "prompt_coevo"
+
+    def test_watchdog_plugin_defaults_to_none(self) -> None:
+        """watchdog_plugin defaults to None when not specified."""
+        raw = _minimal_preregistered()
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.watchdog_plugin is None
+
+    def test_watchdog_plugin_in_json_schema(self) -> None:
+        """JSON Schema export includes watchdog_plugin field."""
+        schema = ExperimentManifest.model_json_schema()
+        properties = schema.get("properties", {})
+        assert "watchdog_plugin" in properties
+        wp_schema = properties["watchdog_plugin"]
+        assert "anyOf" in wp_schema or "type" in wp_schema
+
+    def test_watchdog_plugin_roundtrip(self) -> None:
+        """watchdog_plugin survives to_dict -> from_dict roundtrip."""
+        raw = _minimal_preregistered()
+        raw["watchdog_plugin"] = "heilbron"
+        manifest = ExperimentManifest.from_dict(raw)
+        exported = manifest.to_dict()
+        reloaded = ExperimentManifest.from_dict(exported)
+        assert reloaded.watchdog_plugin == "heilbron"
+
+
 class TestRealManifests:
     def test_load_real_heilbron_manifest(self) -> None:
         """The heilbron/adversarial-dynamic-updates manifest loads without errors."""
