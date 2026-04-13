@@ -1,4 +1,4 @@
-"""Tests for WatchdogPlugin ABC, @register decorator, and resolve_plugin()."""
+"""Tests for WatchdogPlugin ABC, @register decorator, resolve_plugin(), and WatchdogPluginOptions."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from gigaevo.monitoring.manifest_schema import WatchdogPluginOptions
 from gigaevo.monitoring.watchdog_plugin import (
     _REGISTRY,
     WatchdogPlugin,
@@ -14,7 +15,7 @@ from gigaevo.monitoring.watchdog_plugin import (
     resolve_plugin,
 )
 
-# ── ABC enforcement ──────────────────────────────────────────────────────────
+# -- ABC enforcement ----------------------------------------------------------
 
 
 class TestWatchdogPluginABC:
@@ -74,7 +75,7 @@ class TestDefaultMethods:
         assert plugin.extra_redis_queries() == {}
 
 
-# ── Registry ─────────────────────────────────────────────────────────────────
+# -- Registry -----------------------------------------------------------------
 
 
 class TestPluginRegistry:
@@ -124,17 +125,16 @@ class TestPluginRegistry:
         assert "mutated" not in get_registry()
 
 
-# ── resolve_plugin ───────────────────────────────────────────────────────────
+# -- resolve_plugin -----------------------------------------------------------
 
 
 class TestResolvePlugin:
-    """resolve_plugin() priority: manifest field > task heuristic > solo fallback."""
+    """resolve_plugin() priority: manifest.watchdog_plugin field > solo fallback."""
 
     @pytest.fixture(autouse=True)
     def _isolate_registry(self):
         """Save and restore plugin registry around each test."""
         saved = dict(_REGISTRY)
-        # Remove real plugins so tests can register their own
         for name in ("adversarial", "heilbron", "solo", "prompt_coevo", "my_explicit"):
             _REGISTRY.pop(name, None)
         yield
@@ -173,9 +173,11 @@ class TestResolvePlugin:
         with pytest.raises(KeyError, match="nonexistent_plugin_xyz"):
             resolve_plugin(manifest)
 
-    def test_task_heuristic_adversarial(self):
-        @register("adversarial")
-        class AdvPlugin(WatchdogPlugin):
+    def test_fallback_to_solo_when_no_explicit_plugin(self):
+        """When manifest has no watchdog_plugin field, fallback to solo."""
+
+        @register("solo")
+        class SoloFallback(WatchdogPlugin):
             def generate_plots(self, snapshots, output_dir, cycle):
                 return []
 
@@ -184,23 +186,10 @@ class TestResolvePlugin:
 
         manifest = self._make_manifest(task="adversarial", watchdog_plugin=None)
         cls = resolve_plugin(manifest)
-        assert cls is AdvPlugin
+        assert cls is SoloFallback
 
-    def test_task_heuristic_heilbron(self):
-        @register("heilbron")
-        class HeilbronPlugin(WatchdogPlugin):
-            def generate_plots(self, snapshots, output_dir, cycle):
-                return []
-
-            def format_status_body(self, snapshots, experiment_name, cycle, max_gen):
-                return ""
-
-        manifest = self._make_manifest(task="heilbron", watchdog_plugin=None)
-        cls = resolve_plugin(manifest)
-        assert cls is HeilbronPlugin
-
-    def test_fallback_to_solo(self):
-        """When no explicit plugin and no heuristic match, resolve to 'solo'."""
+    def test_fallback_to_solo_for_unknown_task(self):
+        """Unknown task (no heuristic) falls back to solo."""
 
         @register("solo")
         class SoloFallback(WatchdogPlugin):
@@ -213,23 +202,6 @@ class TestResolvePlugin:
         manifest = self._make_manifest(task="unknown_task_xyz", watchdog_plugin=None)
         cls = resolve_plugin(manifest)
         assert cls is SoloFallback
-        # cleanup handled by _isolate_registry fixture
-
-    def test_hover_resolves_to_solo_heuristic(self):
-        """HoVer task uses the solo plugin via heuristic."""
-
-        @register("solo")
-        class SoloHover(WatchdogPlugin):
-            def generate_plots(self, snapshots, output_dir, cycle):
-                return []
-
-            def format_status_body(self, snapshots, experiment_name, cycle, max_gen):
-                return ""
-
-        manifest = self._make_manifest(task="hover", watchdog_plugin=None)
-        cls = resolve_plugin(manifest)
-        assert cls is SoloHover
-        # cleanup handled by _isolate_registry fixture
 
     def test_none_manifest_returns_solo(self):
         """resolve_plugin(None) returns solo plugin."""
@@ -244,4 +216,54 @@ class TestResolvePlugin:
 
         cls = resolve_plugin(None)
         assert cls is SoloNone
-        # cleanup handled by _isolate_registry fixture
+
+    def test_no_solo_registered_raises(self):
+        """If solo plugin is not registered and no explicit match, KeyError."""
+        manifest = self._make_manifest(task="hover", watchdog_plugin=None)
+        with pytest.raises(KeyError, match="solo"):
+            resolve_plugin(manifest)
+
+
+# -- WatchdogPluginOptions ----------------------------------------------------
+
+
+class TestWatchdogPluginOptions:
+    """WatchdogPluginOptions round-trip and validate_plot_metrics."""
+
+    def test_default_plot_metrics_empty(self):
+        opts = WatchdogPluginOptions()
+        assert opts.plot_metrics == []
+
+    def test_round_trip_with_metrics(self):
+        opts = WatchdogPluginOptions(plot_metrics=["fitness", "actual_fitness"])
+        dumped = opts.model_dump()
+        restored = WatchdogPluginOptions.model_validate(dumped)
+        assert restored.plot_metrics == ["fitness", "actual_fitness"]
+
+    def test_validate_empty_metrics_returns_empty(self):
+        opts = WatchdogPluginOptions(plot_metrics=[])
+        result = opts.validate_plot_metrics("nonexistent_problem")
+        assert result == []
+
+    def test_validate_known_metrics_passes(self, tmp_path, monkeypatch):
+        """Known metrics pass validation without warnings."""
+        monkeypatch.setattr(
+            "gigaevo.cli.run_resolver._load_metric_names",
+            lambda pn: ["fitness", "actual_fitness", "soft_fitness"],
+        )
+
+        opts = WatchdogPluginOptions(plot_metrics=["fitness", "actual_fitness"])
+        result = opts.validate_plot_metrics("test_problem")
+        assert result == ["fitness", "actual_fitness"]
+
+    def test_validate_unknown_metrics_warns(self, monkeypatch):
+        """Unknown metrics emit a warning but still return the list."""
+        monkeypatch.setattr(
+            "gigaevo.cli.run_resolver._load_metric_names",
+            lambda pn: ["fitness"],
+        )
+
+        opts = WatchdogPluginOptions(plot_metrics=["fitness", "bogus_metric"])
+        with pytest.warns(UserWarning, match="bogus_metric"):
+            result = opts.validate_plot_metrics("test_problem")
+        assert result == ["fitness", "bogus_metric"]
