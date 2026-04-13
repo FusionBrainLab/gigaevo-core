@@ -8,6 +8,8 @@ from click.testing import CliRunner
 import fakeredis
 
 from gigaevo.cli import main
+from gigaevo.monitoring.run_spec import RunSpec
+from gigaevo.monitoring.snapshot import RunSnapshot
 
 
 def _metric_entry(step: int, value: float, ts: int = 123) -> str:
@@ -113,3 +115,62 @@ class TestCheckpointMultipleRuns:
         assert len(data) == 2
         labels = {row["Label"] for row in data}
         assert labels == {"A", "B"}
+
+
+class TestCheckpointMetricFormatting:
+    """Tests for checkpoint _snapshot_to_row metric formatting."""
+
+    def test_sentinel_displays_na(self):
+        """Checkpoint formats sentinel values as 'N/A'."""
+        from gigaevo.cli.checkpoint import _snapshot_to_row
+
+        snapshot = RunSnapshot(
+            run_spec=RunSpec(prefix="p", db=4, label="A"),
+            generation=10,
+            metrics={"fitness": -1.0},
+            total_programs=100,
+            valid_programs=90,
+        )
+        specs = {"fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0}}
+        row = _snapshot_to_row(snapshot, metric_specs=specs)
+        assert row["Fitness"] == "N/A"
+
+    def test_percentage_display(self):
+        """Checkpoint formats upper_bound=1.0 metrics as percentages."""
+        from gigaevo.cli.checkpoint import _snapshot_to_row
+
+        snapshot = RunSnapshot(
+            run_spec=RunSpec(prefix="p", db=4, label="A"),
+            generation=10,
+            metrics={"fitness": 0.85},
+            total_programs=100,
+            valid_programs=90,
+        )
+        specs = {"fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0}}
+        row = _snapshot_to_row(snapshot, metric_specs=specs)
+        assert row["Fitness"] == "85.000%"
+
+    def test_formats_identically_to_status(self):
+        """Checkpoint and status format metrics identically."""
+        from gigaevo.cli.checkpoint import _snapshot_to_row as checkpoint_to_row
+        from gigaevo.cli.status import _snapshot_to_row as status_to_row
+
+        snapshot = RunSnapshot(
+            run_spec=RunSpec(prefix="p", db=4, label="A"),
+            generation=10,
+            metrics={"fitness": 0.76, "actual_fitness": -1.0},
+            total_programs=100,
+            valid_programs=90,
+        )
+        specs = {
+            "fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0},
+            "actual_fitness": {
+                "decimals": 5,
+                "upper_bound": 0.0365,
+                "sentinel_value": -1.0,
+            },
+        }
+        status_row = status_to_row(snapshot, metric_specs=specs)
+        checkpoint_row = checkpoint_to_row(snapshot, metric_specs=specs)
+        assert status_row["Fitness"] == checkpoint_row["Fitness"]
+        assert status_row["Actual Fitness"] == checkpoint_row["Actual Fitness"]

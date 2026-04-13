@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
+import yaml
 
 from gigaevo.cli.output_formatter import OutputFormatter
 from gigaevo.cli.run_resolver import RunResolver
@@ -10,7 +13,60 @@ from gigaevo.monitoring.experiment_monitor import ExperimentMonitor, RunConfig
 from gigaevo.monitoring.snapshot import RunSnapshot
 
 
-def _snapshot_to_row(snapshot: RunSnapshot) -> dict:
+def _load_metric_specs(experiment: str | None) -> dict[str, dict]:
+    """Load metrics.yaml specs for all problems in an experiment manifest.
+
+    Merges specs from all unique problem_names. Falls back to empty dict
+    if no metrics.yaml found or not in --experiment mode.
+    """
+    if not experiment:
+        return {}
+    try:
+        from gigaevo.cli.run_resolver import _load_manifest
+
+        manifest = _load_manifest(experiment)
+        all_specs: dict[str, dict] = {}
+        seen: set[str] = set()
+        for run in manifest.runs:
+            if run.problem_name not in seen:
+                seen.add(run.problem_name)
+                path = Path("problems") / run.problem_name / "metrics.yaml"
+                if path.exists():
+                    with open(path) as f:
+                        data = yaml.safe_load(f)
+                    if isinstance(data, dict):
+                        all_specs.update(data.get("specs", {}))
+        return all_specs
+    except Exception:
+        return {}
+
+
+def _format_metric_value(value: float | None, name: str, specs: dict[str, dict]) -> str:
+    """Format a metric value according to its metrics.yaml spec.
+
+    - None: display as "?"
+    - sentinel_value: display as "N/A"
+    - upper_bound == 1.0: display as percentage (value * 100)
+    - decimals: control decimal places
+    - Default: 3 decimal places
+    """
+    if value is None:
+        return "?"
+    spec = specs.get(name, {})
+    sentinel = spec.get("sentinel_value")
+    if sentinel is not None and value == sentinel:
+        return "N/A"
+    decimals = spec.get("decimals", 3)
+    upper_bound = spec.get("upper_bound")
+    if upper_bound is not None and upper_bound == 1.0:
+        pct_decimals = max(0, decimals - 2)
+        return f"{value * 100:.{pct_decimals}f}%"
+    return f"{value:.{decimals}f}"
+
+
+def _snapshot_to_row(
+    snapshot: RunSnapshot, metric_specs: dict[str, dict] | None = None
+) -> dict:
     """Convert a RunSnapshot to a flat dict for OutputFormatter."""
     row: dict = {
         "Label": snapshot.run_spec.label,
@@ -18,9 +74,10 @@ def _snapshot_to_row(snapshot: RunSnapshot) -> dict:
         "Gen": snapshot.generation,
     }
 
+    specs = metric_specs or {}
     for name, value in snapshot.metrics.items():
         col_name = name.replace("_", " ").title()
-        row[col_name] = value
+        row[col_name] = _format_metric_value(value, name, specs)
 
     invalid_rate = snapshot.invalid_rate
     if invalid_rate is not None:
@@ -91,6 +148,8 @@ def status(ctx: click.Context) -> None:
         redis_port=redis_port,
     )
 
+    metric_specs = _load_metric_specs(experiment)
+
     redis_factory = ctx.obj.get("redis_factory")
     monitor = ExperimentMonitor(
         redis_host=redis_host,
@@ -99,6 +158,6 @@ def status(ctx: click.Context) -> None:
     )
     snapshots: list[RunSnapshot] = monitor.collect(run_configs)
 
-    rows = [_snapshot_to_row(s) for s in snapshots]
+    rows = [_snapshot_to_row(s, metric_specs) for s in snapshots]
     columns = _build_columns(rows)
     formatter.echo(rows, columns=columns, title="Run Status")

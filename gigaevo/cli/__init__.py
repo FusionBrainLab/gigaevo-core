@@ -3,35 +3,28 @@
 from __future__ import annotations
 
 import importlib
-import os
-import sys
 from typing import Any
 
 import click
 
 from gigaevo.cli.output_formatter import OutputFormatter
 
-# Ensure project root (CWD) is on sys.path so CLI modules can import from
-# `tools.*` which lives at the project root, outside the gigaevo package.
-_project_root = os.getcwd()
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
 # Lazy subcommand registry: name -> (module_path, attr_name)
 _LAZY_SUBCOMMANDS: dict[str, tuple[str, str]] = {
-    "status": ("gigaevo.cli.status", "status"),
-    "trajectory": ("gigaevo.cli.trajectory", "trajectory"),
-    "top": ("gigaevo.cli.top", "top"),
-    "logs": ("gigaevo.cli.logs", "logs"),
-    "plot": ("gigaevo.cli.plot_group", "plot"),
+    "analyze": ("gigaevo.cli.analyze", "analyze"),
+    "checkpoint": ("gigaevo.cli.checkpoint", "checkpoint"),
+    "closeout": ("gigaevo.cli.lifecycle", "closeout"),
+    "collect": ("gigaevo.cli.collect", "collect"),
     "export": ("gigaevo.cli.export", "export"),
     "flush": ("gigaevo.cli.flush", "flush"),
-    "watchdog": ("gigaevo.cli.watchdog_cmd", "watchdog"),
-    "checkpoint": ("gigaevo.cli.checkpoint", "checkpoint"),
     "launch": ("gigaevo.cli.lifecycle", "launch"),
-    "closeout": ("gigaevo.cli.lifecycle", "closeout"),
+    "logs": ("gigaevo.cli.logs", "logs"),
+    "plot": ("gigaevo.cli.plot_group", "plot"),
     "restart": ("gigaevo.cli.lifecycle", "restart"),
-    "manifest": ("gigaevo.cli.manifest_cmd", "manifest"),
+    "status": ("gigaevo.cli.status", "status"),
+    "top": ("gigaevo.cli.top", "top"),
+    "trajectory": ("gigaevo.cli.trajectory", "trajectory"),
+    "watchdog": ("gigaevo.cli.watchdog_cmd", "watchdog"),
 }
 
 

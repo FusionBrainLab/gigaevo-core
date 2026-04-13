@@ -174,6 +174,116 @@ class TestStatusUsesMonitoringLib:
         assert data[0]["Gen"] == 42
 
 
+class TestFormatMetricValue:
+    """Tests for _format_metric_value with metrics.yaml specs."""
+
+    def test_sentinel_value_displays_na(self):
+        """Sentinel value (-1.0) displays as 'N/A' when spec defines sentinel_value."""
+        from gigaevo.cli.status import _format_metric_value
+
+        specs = {
+            "fitness": {
+                "decimals": 5,
+                "upper_bound": 1.0,
+                "sentinel_value": -1.0,
+            }
+        }
+        assert _format_metric_value(-1.0, "fitness", specs) == "N/A"
+
+    def test_percentage_display_for_upper_bound_1(self):
+        """Metric with upper_bound=1.0 displays as percentage."""
+        from gigaevo.cli.status import _format_metric_value
+
+        specs = {
+            "fitness": {
+                "decimals": 5,
+                "upper_bound": 1.0,
+                "sentinel_value": -1.0,
+            }
+        }
+        assert _format_metric_value(0.85, "fitness", specs) == "85.000%"
+
+    def test_raw_display_for_non_percentage_metric(self):
+        """Metric with upper_bound != 1.0 displays as raw value with decimals."""
+        from gigaevo.cli.status import _format_metric_value
+
+        specs = {
+            "actual_fitness": {
+                "decimals": 5,
+                "upper_bound": 0.0365,
+                "sentinel_value": -1.0,
+            }
+        }
+        assert _format_metric_value(0.02345, "actual_fitness", specs) == "0.02345"
+
+    def test_none_displays_question_mark(self):
+        """None metric value displays as '?'."""
+        from gigaevo.cli.status import _format_metric_value
+
+        assert _format_metric_value(None, "fitness", {}) == "?"
+
+    def test_no_spec_uses_default_decimals(self):
+        """Metric without spec uses 3 decimal places."""
+        from gigaevo.cli.status import _format_metric_value
+
+        assert _format_metric_value(0.123456, "unknown_metric", {}) == "0.123"
+
+    def test_sentinel_for_actual_fitness(self):
+        """Non-percentage metric sentinel value also displays as 'N/A'."""
+        from gigaevo.cli.status import _format_metric_value
+
+        specs = {
+            "actual_fitness": {
+                "decimals": 5,
+                "upper_bound": 0.0365,
+                "sentinel_value": -1.0,
+            }
+        }
+        assert _format_metric_value(-1.0, "actual_fitness", specs) == "N/A"
+
+
+class TestSnapshotToRowWithSpecs:
+    """Tests for _snapshot_to_row metric formatting integration."""
+
+    def test_snapshot_row_formats_percentage(self):
+        """_snapshot_to_row applies percentage formatting when specs provided."""
+        from gigaevo.cli.status import _snapshot_to_row
+
+        snapshot = RunSnapshot(
+            run_spec=RunSpec(prefix="p", db=4, label="A"),
+            generation=10,
+            metrics={"fitness": 0.76},
+        )
+        specs = {"fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0}}
+        row = _snapshot_to_row(snapshot, metric_specs=specs)
+        assert row["Fitness"] == "76.000%"
+
+    def test_snapshot_row_formats_sentinel_as_na(self):
+        """_snapshot_to_row shows 'N/A' for sentinel values."""
+        from gigaevo.cli.status import _snapshot_to_row
+
+        snapshot = RunSnapshot(
+            run_spec=RunSpec(prefix="p", db=4, label="A"),
+            generation=10,
+            metrics={"fitness": -1.0},
+        )
+        specs = {"fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0}}
+        row = _snapshot_to_row(snapshot, metric_specs=specs)
+        assert row["Fitness"] == "N/A"
+
+    def test_snapshot_row_without_specs_uses_raw_formatted(self):
+        """_snapshot_to_row without specs uses default 3-decimal formatting."""
+        from gigaevo.cli.status import _snapshot_to_row
+
+        snapshot = RunSnapshot(
+            run_spec=RunSpec(prefix="p", db=4, label="A"),
+            generation=10,
+            metrics={"fitness": 0.76543},
+        )
+        row = _snapshot_to_row(snapshot)
+        assert row["Fitness"] == "0.765"
+
+
 class TestStatusNoRunFlag:
     def test_missing_run_flag_shows_error(self):
         """Status without --run or --experiment shows usage error."""
