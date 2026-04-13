@@ -40,17 +40,17 @@ def _make_manifest(
     raw: dict[str, Any] | None = None,
 ) -> MagicMock:
     m = MagicMock()
-    m.name = "hover/test"
-    m.task = "hover"
-    m.status = status
-    m.max_generations = max_generations
-    m.branch = "exp/hover/test"
+    m.experiment.name = "hover/test"
+    m.experiment.task = "hover"
+    m.experiment.status = status
+    m.experiment.max_generations = max_generations
+    m.experiment.branch = "exp/hover/test"
+    m.experiment.pr_number = pr_number
+    m.experiment.tracking_issue = 42
+    m.experiment.prereg_commit = "abc1234"
     m.runs = runs if runs is not None else [_make_run("A", 4), _make_run("B", 5)]
     m.servers = ["server1.example.com"]
-    m.pr_number = pr_number
-    m.tracking_issue = 42
-    m.prereg_commit = "abc1234"
-    m._raw = (
+    _raw = (
         raw
         if raw is not None
         else {
@@ -59,13 +59,14 @@ def _make_manifest(
             "config": {"stopping_rule": "stagnation_10"},
         }
     )
-    m.config = m._raw.get("config", {})
+    m.model_dump.return_value = _raw
+    m.config = _raw.get("config", {})
     m.launch = MagicMock()
     m.launch.watchdog_pid = 9999
     return m
 
 
-_MANIFEST_MOD = "tools.experiment.manifest"
+_MANIFEST_MOD = "gigaevo.monitoring.manifest"
 
 
 # ---------------------------------------------------------------------------
