@@ -1,6 +1,6 @@
 """Manifest subcommand group: read, write, and gate experiment.yaml fields.
 
-Replaces inline ``PYTHONPATH=. python -c "from tools.experiment.manifest import ..."``
+Replaces inline ``PYTHONPATH=. python -c "from gigaevo.monitoring.manifest import ..."``
 snippets in experiment lifecycle skills with proper CLI calls.
 
 Usage examples::
@@ -110,7 +110,7 @@ def get(ctx: click.Context, field: str) -> None:
 
     experiment = _require_experiment(ctx)
 
-    from tools.experiment.manifest import load_manifest
+    from gigaevo.monitoring.manifest import load_manifest
 
     manifest_obj = load_manifest(experiment)
     formatter: OutputFormatter = ctx.obj["formatter"]
@@ -137,13 +137,13 @@ def get(ctx: click.Context, field: str) -> None:
         return
 
     if field in _KNOWN_SCALAR_FIELDS:
-        click.echo(getattr(manifest_obj, field))
+        click.echo(getattr(manifest_obj.experiment, field))
         return
 
     if field == "stopping_rule":
         stopping_rule = manifest_obj.config.get("stopping_rule")
         if stopping_rule is None:
-            stopping_rule = manifest_obj._raw.get("config", {}).get("stopping_rule")
+            stopping_rule = manifest_obj.model_dump().get("config", {}).get("stopping_rule")
         if stopping_rule is None:
             click.echo("Error: Field not found: stopping_rule", err=True)
             ctx.exit(1)
@@ -152,7 +152,7 @@ def get(ctx: click.Context, field: str) -> None:
         return
 
     try:
-        value = _traverse_raw(manifest_obj._raw, field)
+        value = _traverse_raw(manifest_obj.model_dump(), field)
     except KeyError:
         click.echo(f"Error: Field not found: {field}", err=True)
         ctx.exit(1)
@@ -191,10 +191,10 @@ def set_field(ctx: click.Context, field: str, value: str) -> None:
         ctx.exit(1)
         return
 
-    from tools.experiment.manifest import set_status
+    from gigaevo.monitoring.manifest import set_status
 
     updated = set_status(experiment, value)
-    click.echo(f"Status updated: {updated.status}")
+    click.echo(f"Status updated: {updated.experiment.status}")
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ def update(ctx: click.Context, path: str, value: str) -> None:
 
     coerced = _coerce_value(value)
 
-    from tools.experiment.manifest import update_manifest
+    from gigaevo.monitoring.manifest import update_manifest
 
     def updater(raw: dict[str, Any]) -> None:
         _set_nested(raw, path, coerced)
@@ -240,19 +240,19 @@ def gate(ctx: click.Context, expected_status: str) -> None:
     """
     experiment = _require_experiment(ctx)
 
-    from tools.experiment.manifest import load_manifest
+    from gigaevo.monitoring.manifest import load_manifest
 
     manifest_obj = load_manifest(experiment)
 
-    if manifest_obj.status == expected_status:
+    if manifest_obj.experiment.status == expected_status:
         click.echo(
-            f"GATE PASSED: {manifest_obj.name} status={manifest_obj.status} "
-            f"({len(manifest_obj.runs)} runs, max_gen={manifest_obj.max_generations})"
+            f"GATE PASSED: {manifest_obj.experiment.name} status={manifest_obj.experiment.status} "
+            f"({len(manifest_obj.runs)} runs, max_gen={manifest_obj.experiment.max_generations})"
         )
         return
 
     click.echo(
-        f"BLOCKED: status={manifest_obj.status}, expected {expected_status}",
+        f"BLOCKED: status={manifest_obj.experiment.status}, expected {expected_status}",
         err=True,
     )
     ctx.exit(1)
@@ -273,27 +273,27 @@ def pr_description(ctx: click.Context, push: bool) -> None:
     """
     experiment = _require_experiment(ctx)
 
-    from tools.experiment.manifest import generate_pr_description
+    from gigaevo.monitoring.manifest import generate_pr_description
 
     description = generate_pr_description(experiment)
     click.echo(description)
 
     if push:
-        from tools.experiment.manifest import load_manifest
+        from gigaevo.monitoring.manifest import load_manifest
 
         manifest_obj = load_manifest(experiment)
-        if manifest_obj.pr_number:
+        if manifest_obj.experiment.pr_number:
             subprocess.run(
                 [
                     "gh",
                     "pr",
                     "edit",
-                    str(manifest_obj.pr_number),
+                    str(manifest_obj.experiment.pr_number),
                     "--body",
                     description,
                 ],
                 check=True,
             )
-            click.echo(f"PR #{manifest_obj.pr_number} description updated.")
+            click.echo(f"PR #{manifest_obj.experiment.pr_number} description updated.")
         else:
             click.echo("Warning: No pr_number in manifest; --push skipped.", err=True)
