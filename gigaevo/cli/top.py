@@ -77,7 +77,7 @@ def top(
     # and user didn't explicitly pass --metric (still has Click default "fitness")
     if metric == "fitness" and experiment:
         try:
-            from tools.experiment.manifest import load_manifest
+            from gigaevo.monitoring.manifest import load_manifest
 
             manifest = load_manifest(experiment)
             if manifest.problem.metric_name:
