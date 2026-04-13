@@ -74,6 +74,16 @@ class TestDefaultMethods:
         plugin = self._make_plugin()
         assert plugin.extra_redis_queries() == {}
 
+    def test_format_telegram_body_returns_none(self):
+        plugin = self._make_plugin()
+        result = plugin.format_telegram_body([], "test/exp", 1, 50)
+        assert result is None
+
+    def test_format_telegram_body_with_baseline(self):
+        plugin = self._make_plugin()
+        result = plugin.format_telegram_body([], "test/exp", 1, 50, baseline=0.85)
+        assert result is None
+
 
 # -- Registry -----------------------------------------------------------------
 

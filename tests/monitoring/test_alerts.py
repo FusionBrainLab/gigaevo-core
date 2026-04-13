@@ -557,6 +557,7 @@ class TestAlertDataclass:
         assert AlertType.HIGH_INVALIDITY == "high_invalidity"
         assert AlertType.COMPLETION == "completion"
         assert AlertType.LOW_THROUGHPUT == "low_throughput"
+        assert AlertType.MODEL_DRIFT == "model_drift"
 
     def test_alert_severity_is_enum(self):
         """AlertSeverity values are strings via StrEnum."""
@@ -750,3 +751,69 @@ class TestFullLifecycle:
         alerts6 = detector.check([done_a, done_b])
         comp6 = [a for a in alerts6 if a.alert_type == AlertType.COMPLETION]
         assert len(comp6) == 0
+
+
+# ---------------------------------------------------------------------------
+# 10. ModelDriftRule tests
+# ---------------------------------------------------------------------------
+
+
+class TestModelDriftRule:
+    def test_model_found_returns_none(self):
+        """When expected model is in the /models response, returns None."""
+        from unittest.mock import patch, MagicMock
+        import json
+
+        from gigaevo.monitoring.alerts import ModelDriftRule
+
+        rule = ModelDriftRule(timeout=5)
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "data": [{"id": "gpt-4"}, {"id": "claude-3"}]
+        }).encode()
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_response):
+            result = rule.check("R1", "http://localhost:4000/v1", "gpt-4")
+
+        assert result is None
+
+    def test_model_not_found_returns_alert(self):
+        """When expected model is NOT in /models response, returns MODEL_DRIFT alert."""
+        from unittest.mock import patch, MagicMock
+        import json
+
+        from gigaevo.monitoring.alerts import ModelDriftRule
+
+        rule = ModelDriftRule(timeout=5)
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "data": [{"id": "gpt-4"}, {"id": "claude-3"}]
+        }).encode()
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_response):
+            result = rule.check("R1", "http://localhost:4000/v1", "missing-model")
+
+        assert result is not None
+        assert result.alert_type == AlertType.MODEL_DRIFT
+        assert result.severity == AlertSeverity.WARN
+        assert "missing-model" in result.message
+        assert result.run_label == "R1"
+
+    def test_connection_error_returns_alert(self):
+        """When /models endpoint is unreachable, returns MODEL_DRIFT alert."""
+        from unittest.mock import patch
+
+        from gigaevo.monitoring.alerts import ModelDriftRule
+
+        rule = ModelDriftRule(timeout=1)
+
+        with patch("urllib.request.urlopen", side_effect=ConnectionError("refused")):
+            result = rule.check("R1", "http://unreachable:4000/v1", "gpt-4")
+
+        assert result is not None
+        assert result.alert_type == AlertType.MODEL_DRIFT
+        assert "refused" in result.message

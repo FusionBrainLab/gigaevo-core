@@ -11,11 +11,15 @@ from gigaevo.cli import main
 
 def _make_fake_manifest():
     """Build a fake manifest object for testing."""
+    from gigaevo.monitoring.manifest_schema import WatchdogSection
+
     mock = MagicMock()
     mock.name = "test/exp"
     mock.task = "hover"
     mock.max_generations = 50
     mock.watchdog_plugin = None
+    mock.servers = ["10.0.0.1"]
+    mock.watchdog = WatchdogSection()
 
     run1 = MagicMock()
     run1.prefix = "test/prefix"
@@ -142,6 +146,141 @@ class TestWatchdogPluginOverride:
             )
             assert result.exit_code != 0
             assert "nonexistent" in result.output.lower()
+
+
+class TestWatchdogNoProxy:
+    def test_no_proxy_set_from_manifest_servers(self):
+        """NO_PROXY env var is auto-configured from manifest.servers."""
+        import os
+
+        manifest = _make_fake_manifest()
+        manifest.servers = ["10.0.0.1", "10.0.0.2"]
+
+        with (
+            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+
+            old_no_proxy = os.environ.get("NO_PROXY", "")
+            try:
+                os.environ["NO_PROXY"] = ""
+                runner = CliRunner()
+                result = runner.invoke(
+                    main,
+                    ["-e", "test/exp", "watchdog"],
+                    catch_exceptions=False,
+                )
+                assert result.exit_code == 0, result.output
+                no_proxy = os.environ.get("NO_PROXY", "")
+                assert "10.0.0.1" in no_proxy
+                assert "10.0.0.2" in no_proxy
+                assert "api.github.com" in no_proxy
+            finally:
+                os.environ["NO_PROXY"] = old_no_proxy
+
+    def test_no_proxy_includes_extra_hosts(self):
+        """no_proxy_hosts from watchdog section are included."""
+        import os
+
+        from gigaevo.monitoring.manifest_schema import WatchdogSection
+
+        manifest = _make_fake_manifest()
+        manifest.servers = ["10.0.0.1"]
+        manifest.watchdog = WatchdogSection(no_proxy_hosts=["custom.host.com"])
+
+        with (
+            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+
+            old_no_proxy = os.environ.get("NO_PROXY", "")
+            try:
+                os.environ["NO_PROXY"] = ""
+                runner = CliRunner()
+                result = runner.invoke(
+                    main,
+                    ["-e", "test/exp", "watchdog"],
+                    catch_exceptions=False,
+                )
+                assert result.exit_code == 0, result.output
+                no_proxy = os.environ.get("NO_PROXY", "")
+                assert "custom.host.com" in no_proxy
+            finally:
+                os.environ["NO_PROXY"] = old_no_proxy
+
+
+class TestWatchdogManifestConfig:
+    def test_config_from_manifest_watchdog_section(self):
+        """WatchdogConfig is built from manifest.watchdog section."""
+        from gigaevo.monitoring.manifest_schema import WatchdogSection
+
+        manifest = _make_fake_manifest()
+        manifest.watchdog = WatchdogSection(
+            poll_interval_s=1800,
+            plot_retries=5,
+            plot_retry_delay_s=60,
+            checkpoint_milestones=[0.25, 0.5, 1.0],
+        )
+
+        with (
+            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "test/exp", "watchdog"],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            call_kwargs = mock_engine_cls.call_args[1]
+            config = call_kwargs["config"]
+            assert config.poll_interval_s == 1800
+            assert config.plot_retries == 5
+            assert config.checkpoint_milestones == (0.25, 0.5, 1.0)
+
+    def test_cli_flag_overrides_manifest(self):
+        """CLI --poll-interval takes precedence over manifest.watchdog.poll_interval_s."""
+        from gigaevo.monitoring.manifest_schema import WatchdogSection
+
+        manifest = _make_fake_manifest()
+        manifest.watchdog = WatchdogSection(poll_interval_s=1800)
+
+        with (
+            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "test/exp", "watchdog", "--poll-interval", "900"],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            call_kwargs = mock_engine_cls.call_args[1]
+            assert call_kwargs["config"].poll_interval_s == 900
 
 
 class TestWatchdogMetricNamesPropagation:

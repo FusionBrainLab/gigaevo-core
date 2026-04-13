@@ -50,3 +50,37 @@ class TestWatchdogConfigHeartbeatTTL:
     def test_custom_heartbeat_ttl(self):
         cfg = WatchdogConfig(poll_interval_s=600, heartbeat_ttl_multiplier=2)
         assert cfg.heartbeat_ttl_s == 1200
+
+
+class TestWatchdogConfigPlotRetryFields:
+    """Test plot retry and checkpoint fields added in Phase 6."""
+
+    def test_default_plot_retries(self):
+        cfg = WatchdogConfig()
+        assert cfg.plot_retries == 3
+
+    def test_default_plot_retry_delay(self):
+        cfg = WatchdogConfig()
+        assert cfg.plot_retry_delay_s == 30
+
+    def test_default_rolling_comment_threshold(self):
+        cfg = WatchdogConfig()
+        assert cfg.rolling_comment_threshold_hours == 24
+
+    def test_default_checkpoint_milestones(self):
+        cfg = WatchdogConfig()
+        assert cfg.checkpoint_milestones == (0.1, 0.2, 0.5, 1.0)
+
+    def test_custom_plot_retries(self):
+        cfg = WatchdogConfig(plot_retries=5, plot_retry_delay_s=60)
+        assert cfg.plot_retries == 5
+        assert cfg.plot_retry_delay_s == 60
+
+    def test_custom_checkpoint_milestones(self):
+        cfg = WatchdogConfig(checkpoint_milestones=(0.25, 0.5, 1.0))
+        assert cfg.checkpoint_milestones == (0.25, 0.5, 1.0)
+
+    def test_frozen_new_fields(self):
+        cfg = WatchdogConfig()
+        with pytest.raises(AttributeError):
+            cfg.plot_retries = 10  # type: ignore[misc]

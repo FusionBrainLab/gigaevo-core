@@ -20,7 +20,10 @@ import yaml
 
 from gigaevo.monitoring.manifest_schema import (
     VALID_STATUSES,
+    AlertThresholds,
     ExperimentManifest,
+    PlotCommand,
+    WatchdogSection,
     export_json_schema,
 )
 
@@ -496,3 +499,118 @@ class TestRealManifests:
         with open(path) as f:
             raw = yaml.safe_load(f)
         jsonschema.validate(instance=raw, schema=schema)
+
+
+# ---------------------------------------------------------------------------
+# 9. WatchdogSection tests
+# ---------------------------------------------------------------------------
+
+
+class TestWatchdogSection:
+    def test_default_watchdog_section(self) -> None:
+        raw = _minimal_preregistered()
+        manifest = ExperimentManifest.from_dict(raw)
+        assert isinstance(manifest.watchdog, WatchdogSection)
+        assert manifest.watchdog.plugin is None
+        assert manifest.watchdog.plot_commands == []
+        assert manifest.watchdog.plot_metrics == []
+        assert manifest.watchdog.poll_interval_s == 3600
+        assert manifest.watchdog.plot_retries == 3
+        assert manifest.watchdog.checkpoint_milestones == [0.1, 0.2, 0.5, 1.0]
+
+    def test_watchdog_section_from_yaml(self) -> None:
+        raw = _minimal_preregistered()
+        raw["watchdog"] = {
+            "plugin": "adversarial",
+            "plot_commands": [
+                {"command": "arms-race", "args": {"metric": "actual_fitness"}},
+                {"command": "comparison", "caption": "Fitness curves"},
+            ],
+            "plot_metrics": ["fitness", "actual_fitness"],
+            "alert_thresholds": {"invalidity_rate": 0.5, "stagnation_window": 5},
+            "poll_interval_s": 1800,
+            "plot_retries": 5,
+            "checkpoint_milestones": [0.25, 0.5, 1.0],
+        }
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.watchdog.plugin == "adversarial"
+        assert len(manifest.watchdog.plot_commands) == 2
+        assert manifest.watchdog.plot_commands[0].command == "arms-race"
+        assert manifest.watchdog.plot_commands[0].output_name == "arms_race"
+        assert manifest.watchdog.plot_commands[1].caption == "Fitness curves"
+        assert manifest.watchdog.plot_metrics == ["fitness", "actual_fitness"]
+        assert manifest.watchdog.alert_thresholds.invalidity_rate == 0.5
+        assert manifest.watchdog.alert_thresholds.stagnation_window == 5
+        assert manifest.watchdog.poll_interval_s == 1800
+        assert manifest.watchdog.plot_retries == 5
+
+    def test_watchdog_section_roundtrip(self) -> None:
+        raw = _minimal_preregistered()
+        raw["watchdog"] = {
+            "plugin": "solo",
+            "plot_commands": [{"command": "comparison"}],
+            "plot_metrics": ["fitness"],
+        }
+        manifest = ExperimentManifest.from_dict(raw)
+        exported = manifest.to_dict()
+        reloaded = ExperimentManifest.from_dict(exported)
+        assert reloaded.watchdog.plugin == "solo"
+        assert len(reloaded.watchdog.plot_commands) == 1
+        assert reloaded.watchdog.plot_metrics == ["fitness"]
+
+    def test_watchdog_section_in_json_schema(self) -> None:
+        schema = ExperimentManifest.model_json_schema()
+        properties = schema.get("properties", {})
+        assert "watchdog" in properties
+
+
+class TestPlotCommand:
+    def test_default_output_name(self) -> None:
+        cmd = PlotCommand(command="arms-race")
+        assert cmd.output_name == "arms_race"
+
+    def test_custom_output_name(self) -> None:
+        cmd = PlotCommand(command="arms-race", output_name="custom_name")
+        assert cmd.output_name == "custom_name"
+
+    def test_args_default_empty(self) -> None:
+        cmd = PlotCommand(command="comparison")
+        assert cmd.args == {}
+
+    def test_extra_fields_ignored(self) -> None:
+        cmd = PlotCommand.model_validate({"command": "comparison", "unknown_field": "test"})
+        assert cmd.command == "comparison"
+
+
+class TestAlertThresholds:
+    def test_defaults(self) -> None:
+        t = AlertThresholds()
+        assert t.invalidity_rate == 0.75
+        assert t.stagnation_window == 10
+        assert t.generation_gap_threshold == 5
+
+    def test_custom_values(self) -> None:
+        t = AlertThresholds(invalidity_rate=0.5, stagnation_window=20)
+        assert t.invalidity_rate == 0.5
+        assert t.stagnation_window == 20
+
+
+class TestLegacyWatchdogMigration:
+    def test_watchdog_plugin_migrates_to_watchdog_section(self) -> None:
+        raw = _minimal_preregistered()
+        raw["watchdog_plugin"] = "adversarial"
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.watchdog.plugin == "adversarial"
+
+    def test_watchdog_plugin_options_migrates_plot_metrics(self) -> None:
+        raw = _minimal_preregistered()
+        raw["watchdog_plugin_options"] = {"plot_metrics": ["fitness", "actual_fitness"]}
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.watchdog.plot_metrics == ["fitness", "actual_fitness"]
+
+    def test_explicit_watchdog_section_not_overwritten(self) -> None:
+        raw = _minimal_preregistered()
+        raw["watchdog_plugin"] = "old_plugin"
+        raw["watchdog"] = {"plugin": "new_plugin"}
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.watchdog.plugin == "new_plugin"

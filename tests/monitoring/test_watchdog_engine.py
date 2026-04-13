@@ -385,6 +385,187 @@ class TestFinalAlert:
         assert "WATCHDOG CRASHED" in alert.message
 
 
+class TestRedisCheckpoint:
+    """Redis checkpoint/completion markers (D-09)."""
+
+    def test_write_checkpoint_at_milestone(self):
+        """When min generation reaches a milestone, checkpoint is written."""
+        import json
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+
+        engine = WatchdogEngine(
+            experiment_name="test/exp",
+            plugin=_make_plugin(),
+            run_configs=[],
+            config=WatchdogConfig(checkpoint_milestones=(0.1, 0.5, 1.0)),
+            max_generations=100,
+            heartbeat_redis=r,
+        )
+
+        snaps = [
+            _make_snapshot(label="A", gen=10, fitness=0.5),
+            _make_snapshot(label="B", gen=12, fitness=0.6),
+        ]
+        engine._write_redis_checkpoint(snaps, cycle=1)
+
+        key = "experiments:test/exp:checkpoint:10"
+        assert r.exists(key)
+        data = json.loads(r.get(key))
+        assert data["gen"] == 10
+        assert "A" in data["metrics"]
+        assert "B" in data["metrics"]
+
+    def test_no_checkpoint_before_milestone(self):
+        """Before reaching any milestone, no checkpoint is written."""
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+
+        engine = WatchdogEngine(
+            experiment_name="test/exp",
+            plugin=_make_plugin(),
+            run_configs=[],
+            config=WatchdogConfig(checkpoint_milestones=(0.5, 1.0)),
+            max_generations=100,
+            heartbeat_redis=r,
+        )
+
+        snaps = [_make_snapshot(label="A", gen=5, fitness=0.5)]
+        engine._write_redis_checkpoint(snaps, cycle=1)
+
+        keys = [k for k in r.keys() if "checkpoint" in k]
+        assert len(keys) == 0
+
+    def test_checkpoint_not_overwritten(self):
+        """Once a checkpoint is written, it is not overwritten on subsequent cycles."""
+        import json
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+
+        engine = WatchdogEngine(
+            experiment_name="test/exp",
+            plugin=_make_plugin(),
+            run_configs=[],
+            config=WatchdogConfig(checkpoint_milestones=(0.1,)),
+            max_generations=100,
+            heartbeat_redis=r,
+        )
+
+        snaps1 = [_make_snapshot(label="A", gen=10, fitness=0.5)]
+        engine._write_redis_checkpoint(snaps1, cycle=1)
+        first_data = r.get("experiments:test/exp:checkpoint:10")
+
+        snaps2 = [_make_snapshot(label="A", gen=20, fitness=0.8)]
+        engine._write_redis_checkpoint(snaps2, cycle=2)
+        second_data = r.get("experiments:test/exp:checkpoint:10")
+
+        assert first_data == second_data
+
+    def test_no_checkpoint_without_redis(self):
+        """No error when heartbeat_redis is None."""
+        engine = WatchdogEngine(
+            experiment_name="test/exp",
+            plugin=_make_plugin(),
+            run_configs=[],
+            max_generations=100,
+            heartbeat_redis=None,
+        )
+        snaps = [_make_snapshot(label="A", gen=50)]
+        engine._write_redis_checkpoint(snaps, cycle=1)  # should not raise
+
+
+class TestRedisCompletion:
+    """Redis completion marker (D-09)."""
+
+    def test_write_completion_marker(self):
+        """Completion marker is written with run states."""
+        import json
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+
+        engine = WatchdogEngine(
+            experiment_name="test/exp",
+            plugin=_make_plugin(),
+            run_configs=[],
+            heartbeat_redis=r,
+        )
+
+        snaps = [
+            _make_snapshot(label="A", gen=50, fitness=0.9),
+            _make_snapshot(label="B", gen=50, fitness=0.85),
+        ]
+        engine._write_completion(snaps)
+
+        key = "experiments:test/exp:completion"
+        assert r.exists(key)
+        data = json.loads(r.get(key))
+        assert "timestamp" in data
+        assert len(data["run_states"]) == 2
+        labels = {rs["label"] for rs in data["run_states"]}
+        assert labels == {"A", "B"}
+
+    def test_no_completion_without_redis(self):
+        """No error when heartbeat_redis is None."""
+        engine = WatchdogEngine(
+            experiment_name="test/exp",
+            plugin=_make_plugin(),
+            run_configs=[],
+            heartbeat_redis=None,
+        )
+        snaps = [_make_snapshot(label="A", gen=50)]
+        engine._write_completion(snaps)  # should not raise
+
+
+class TestCompletionShutdown:
+    """Engine shuts down when COMPLETION alert is detected."""
+
+    def test_completion_triggers_shutdown_and_writes_marker(self):
+        """When AlertDetector returns COMPLETION, engine sets _shutdown and writes completion."""
+        import json
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+
+        snap = _make_snapshot(label="A", gen=50, fitness=0.9)
+        completion_alert = Alert(
+            alert_type=AlertType.COMPLETION,
+            severity=AlertSeverity.INFO,
+            run_label="experiment",
+            message="All runs done.",
+        )
+
+        monitor = MagicMock()
+        monitor.collect.return_value = [snap]
+
+        detector = MagicMock()
+        detector.check.return_value = [completion_alert]
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+
+        engine = WatchdogEngine(
+            experiment_name="test/exp",
+            plugin=_make_plugin(),
+            run_configs=[],
+            config=WatchdogConfig(),
+            max_generations=50,
+            monitor=monitor,
+            alert_detector=detector,
+            dispatcher=dispatcher,
+            heartbeat_redis=r,
+        )
+
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert engine._shutdown is True
+        assert r.exists("experiments:test/exp:completion")
+        data = json.loads(r.get("experiments:test/exp:completion"))
+        assert len(data["run_states"]) == 1
+
+
 class TestMemoryLogging:
     """Memory RSS logged each cycle."""
 

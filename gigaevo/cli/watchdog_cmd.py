@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import click
 
 
@@ -9,8 +11,8 @@ import click
 @click.option(
     "--poll-interval",
     type=int,
-    default=3600,
-    help="Seconds between monitoring cycles.",
+    default=None,
+    help="Seconds between monitoring cycles (default: from manifest or 3600).",
 )
 @click.option(
     "--max-generations",
@@ -21,8 +23,8 @@ import click
 @click.option(
     "--max-restarts",
     type=int,
-    default=3,
-    help="Max restart attempts on failure.",
+    default=None,
+    help="Max restart attempts on failure (default: from manifest or 5).",
 )
 @click.option(
     "--plugin",
@@ -34,9 +36,9 @@ import click
 @click.pass_context
 def watchdog(
     ctx: click.Context,
-    poll_interval: int,
+    poll_interval: int | None,
     max_generations: int | None,
-    max_restarts: int,
+    max_restarts: int | None,
     plugin_name: str | None,
 ) -> None:
     """Start or manage the experiment watchdog."""
@@ -55,19 +57,31 @@ def watchdog(
     from gigaevo.monitoring.watchdog_plugin import get_registry, resolve_plugin
 
     manifest = load_manifest(experiment)
+    wd_cfg = manifest.watchdog
 
-    # Resolve plugin
-    if plugin_name:
+    # Auto-configure NO_PROXY from manifest servers
+    no_proxy = os.environ.get("NO_PROXY", "")
+    extra_hosts = list(manifest.servers) + ["api.github.com"]
+    extra_hosts.extend(wd_cfg.no_proxy_hosts)
+    for host in extra_hosts:
+        if host and host not in no_proxy:
+            no_proxy = ",".join(filter(None, [no_proxy, host]))
+    os.environ["NO_PROXY"] = no_proxy
+    os.environ["no_proxy"] = no_proxy
+
+    # Resolve plugin: CLI flag > manifest.watchdog.plugin > manifest.watchdog_plugin > solo
+    effective_plugin_name = plugin_name or wd_cfg.plugin or manifest.watchdog_plugin
+    if effective_plugin_name:
         registry = get_registry()
-        if plugin_name not in registry:
+        if effective_plugin_name not in registry:
             click.echo(
-                f"Error: Plugin '{plugin_name}' not found. "
+                f"Error: Plugin '{effective_plugin_name}' not found. "
                 f"Available: {sorted(registry.keys())}",
                 err=True,
             )
             ctx.exit(1)
             return
-        plugin = registry[plugin_name]()
+        plugin = registry[effective_plugin_name]()
     else:
         plugin_cls = resolve_plugin(manifest=manifest)
         plugin = plugin_cls()
@@ -79,16 +93,23 @@ def watchdog(
         rc = RunConfig(run_spec=spec, pid=run.pid)
         run_configs.append(rc)
 
-    # Build config
+    # Build config: CLI flags take precedence over manifest watchdog section
+    effective_poll = poll_interval or wd_cfg.poll_interval_s
+    effective_restarts = max_restarts if max_restarts is not None else 5
     config = WatchdogConfig(
-        poll_interval_s=poll_interval,
-        max_restarts=max_restarts,
+        poll_interval_s=effective_poll,
+        max_restarts=effective_restarts,
+        plot_retries=wd_cfg.plot_retries,
+        plot_retry_delay_s=wd_cfg.plot_retry_delay_s,
+        rolling_comment_threshold_hours=wd_cfg.rolling_comment_threshold_hours,
+        checkpoint_milestones=tuple(wd_cfg.checkpoint_milestones),
     )
 
     click.echo(
         f"Starting watchdog for {experiment} "
-        f"({len(run_configs)} runs, poll={poll_interval}s)"
+        f"({len(run_configs)} runs, poll={effective_poll}s)"
     )
+    click.echo(f"  NO_PROXY: {no_proxy}")
 
     engine = WatchdogEngine(
         experiment_name=experiment,

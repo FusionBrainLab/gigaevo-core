@@ -8,6 +8,7 @@ single run loop that replaces experiments/_template/run_watchdog.py.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 import resource
@@ -164,6 +165,12 @@ class WatchdogEngine:
         )
         await self._dispatcher.dispatch(update)
 
+        # 7.5. Redis checkpoint/completion markers
+        self._write_redis_checkpoint(snapshots, cycle)
+        if any(a.alert_type == AlertType.COMPLETION for a in alerts):
+            self._write_completion(snapshots)
+            self._shutdown = True
+
         # 8. Cleanup old plots
         self._cleanup_plots()
 
@@ -234,6 +241,62 @@ class WatchdogEngine:
                         )
                     )
         return alerts
+
+    def _write_redis_checkpoint(self, snapshots: list[RunSnapshot], cycle: int) -> None:
+        """Write Redis checkpoint markers at milestone percentages."""
+        if self._heartbeat_redis is None or self.max_generations is None:
+            return
+        min_gen = min(
+            (s.generation for s in snapshots if s.generation is not None),
+            default=0,
+        )
+        milestones = [
+            int(self.max_generations * p) for p in self.config.checkpoint_milestones
+        ]
+        for milestone in milestones:
+            if min_gen >= milestone > 0:
+                key = f"experiments:{self.experiment_name}:checkpoint:{milestone}"
+                if self._heartbeat_redis.exists(key):
+                    continue
+                try:
+                    metrics = {
+                        s.run_spec.label: {
+                            "gen": s.generation,
+                            "fitness": s.metrics.get("fitness"),
+                        }
+                        for s in snapshots
+                    }
+                    data = json.dumps({
+                        "gen": milestone,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "metrics": metrics,
+                    })
+                    self._heartbeat_redis.set(key, data)
+                except Exception as exc:
+                    _log.error(f"Checkpoint write failed for milestone {milestone}: {exc}")
+
+    def _write_completion(self, snapshots: list[RunSnapshot]) -> None:
+        """Write Redis completion marker when all runs finish."""
+        if self._heartbeat_redis is None:
+            return
+        try:
+            completion_data = json.dumps({
+                "timestamp": datetime.now(UTC).isoformat(),
+                "run_states": [
+                    {
+                        "label": s.run_spec.label,
+                        "gen": s.generation,
+                        "fitness": s.metrics.get("fitness"),
+                    }
+                    for s in snapshots
+                ],
+            })
+            self._heartbeat_redis.set(
+                f"experiments:{self.experiment_name}:completion",
+                completion_data,
+            )
+        except Exception as exc:
+            _log.error(f"Completion write failed: {exc}")
 
     def _cleanup_plots(self) -> None:
         """Remove oldest plot files if count exceeds max_plot_files."""

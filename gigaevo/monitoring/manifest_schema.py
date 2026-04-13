@@ -155,6 +155,47 @@ class WatchdogPluginOptions(BaseModel):
         return self.plot_metrics
 
 
+class PlotCommand(BaseModel):
+    """A CLI plot command to invoke from the watchdog plugin."""
+
+    model_config = ConfigDict(extra="ignore")
+    command: str  # e.g. "arms-race", "comparison"
+    args: dict[str, Any] = {}
+    output_name: str = ""
+    caption: str = ""
+
+    @model_validator(mode="after")
+    def default_output_name(self) -> PlotCommand:
+        if not self.output_name:
+            self.output_name = self.command.replace("-", "_")
+        return self
+
+
+class AlertThresholds(BaseModel):
+    """Configurable alert thresholds for watchdog."""
+
+    model_config = ConfigDict(extra="ignore")
+    invalidity_rate: float = 0.75
+    stagnation_window: int = 10
+    generation_gap_threshold: int = 5
+
+
+class WatchdogSection(BaseModel):
+    """Watchdog configuration section in experiment.yaml (Hydra/OOP style)."""
+
+    model_config = ConfigDict(extra="ignore")
+    plugin: str | None = None
+    plot_commands: list[PlotCommand] = []
+    plot_metrics: list[str] = []
+    alert_thresholds: AlertThresholds = AlertThresholds()
+    poll_interval_s: int = 3600
+    plot_retries: int = 3
+    plot_retry_delay_s: int = 30
+    rolling_comment_threshold_hours: int = 24
+    checkpoint_milestones: list[float] = [0.1, 0.2, 0.5, 1.0]
+    no_proxy_hosts: list[str] = []
+
+
 class ExperimentManifest(BaseModel):
     """Pydantic-validated schema for experiment.yaml.
 
@@ -178,6 +219,7 @@ class ExperimentManifest(BaseModel):
     tools: list[dict[str, str]] = []
     watchdog_plugin: str | None = None
     watchdog_plugin_options: WatchdogPluginOptions = WatchdogPluginOptions()
+    watchdog: WatchdogSection = WatchdogSection()
 
     @field_validator("schema_version")
     @classmethod
@@ -243,6 +285,16 @@ class ExperimentManifest(BaseModel):
                 + "\n".join(f"  - {e}" for e in errors)
             )
 
+        return self
+
+    @model_validator(mode="after")
+    def migrate_legacy_watchdog_fields(self) -> ExperimentManifest:
+        """Migrate legacy watchdog_plugin / watchdog_plugin_options into watchdog section."""
+        wd = self.watchdog
+        if self.watchdog_plugin and not wd.plugin:
+            wd.plugin = self.watchdog_plugin
+        if self.watchdog_plugin_options.plot_metrics and not wd.plot_metrics:
+            wd.plot_metrics = list(self.watchdog_plugin_options.plot_metrics)
         return self
 
     @classmethod
