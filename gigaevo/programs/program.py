@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.program_state import (
@@ -124,6 +131,11 @@ class Program(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="Auxiliary, storage-opaque metadata."
     )
+    iteration: int = Field(
+        default=0,
+        ge=0,
+        description="Monotonic evaluation counter (set during mutation or seed loading).",
+    )
 
     state: ProgramState = Field(
         default=ProgramState.QUEUED, description="Lifecycle state."
@@ -154,6 +166,24 @@ class Program(BaseModel):
     def short_id(self) -> str:
         """First 8 characters of the program UUID, for compact log output."""
         return self.id[:8]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _extract_iteration_from_metadata(cls, data: Any) -> Any:
+        """Backwards compat: copy iteration from metadata for Redis blobs.
+
+        Uses copy (not pop) so legacy code reading metadata["iteration"]
+        still works during migration.
+        """
+        if isinstance(data, dict):
+            meta = data.get("metadata")
+            if (
+                isinstance(meta, dict)
+                and "iteration" in meta
+                and "iteration" not in data
+            ):
+                data["iteration"] = meta["iteration"]
+        return data
 
     @field_validator("id", mode="before")
     @classmethod

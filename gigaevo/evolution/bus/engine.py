@@ -86,7 +86,7 @@ class BusedEvolutionEngine(EvolutionEngine):
         if outcome == MutationOutcome.REJECTED_STRATEGY:
             if prog.metrics.get("is_valid", 0) > 0:
                 try:
-                    gen = prog.metadata.get("iteration", 0)
+                    gen = prog.iteration
                     await self._migration_node.publish(prog, gen)
                 except Exception as exc:
                     logger.warning(

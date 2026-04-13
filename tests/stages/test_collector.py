@@ -506,11 +506,11 @@ class TestEvolutionaryStatisticsCollector:
         """Iteration stats computed when program has iteration metadata."""
         storage = AsyncMock()
         p1 = _prog(score=60.0, generation=0)
-        p1.set_metadata("iteration", 1)
+        p1.iteration = 1
         p2 = _prog(score=80.0, generation=0)
-        p2.set_metadata("iteration", 1)
+        p2.iteration = 1
         p3 = _prog(score=40.0, generation=0)
-        p3.set_metadata("iteration", 2)
+        p3.iteration = 2
         storage.get_all.return_value = [p1, p2, p3]
         storage.mget.return_value = []
         storage.snapshot.get_all.return_value = [p1, p2, p3]
@@ -528,8 +528,8 @@ class TestEvolutionaryStatisticsCollector:
         assert stats.best_fitness_in_iteration["score"] == 80.0
         assert stats.worst_fitness_in_iteration["score"] == 60.0
 
-    async def test_iteration_stats_none_when_no_iteration(self):
-        """No iteration metadata → iteration stats are None."""
+    async def test_iteration_stats_default_when_no_explicit_iteration(self):
+        """No explicit iteration → defaults to 0 with iteration stats computed."""
         storage = AsyncMock()
         p1 = _prog(score=60.0, generation=0)
         storage.get_all.return_value = [p1]
@@ -544,6 +544,6 @@ class TestEvolutionaryStatisticsCollector:
         result = await stage.execute(p1)
 
         stats = result.output
-        assert stats.iteration is None
-        assert stats.best_fitness_in_iteration is None
-        assert stats.valid_rate_in_iteration is None
+        assert stats.iteration == 0
+        assert stats.best_fitness_in_iteration is not None
+        assert stats.valid_rate_in_iteration is not None

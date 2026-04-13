@@ -79,7 +79,7 @@ def _make_program(
         object.__setattr__(p, "id", prog_id)
     if metrics:
         p.add_metrics(metrics)
-    p.metadata["iteration"] = iteration
+    p.iteration = iteration
     p.lineage.generation = generation
     return p
 

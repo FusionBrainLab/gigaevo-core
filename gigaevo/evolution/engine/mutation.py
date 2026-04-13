@@ -77,7 +77,7 @@ async def generate_mutations(
                     return None
 
                 program = Program.from_mutation_spec(mutation_spec)
-                program.set_metadata("iteration", iteration)
+                program.iteration = iteration
 
                 # Auto-derive memory_used from parent metadata (set by MemoryContextStage)
                 has_memory_ids = any(
