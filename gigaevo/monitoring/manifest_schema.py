@@ -122,6 +122,39 @@ class ExperimentSection(BaseModel):
         return v
 
 
+class WatchdogPluginOptions(BaseModel):
+    """Plugin-specific options from experiment.yaml."""
+
+    model_config = ConfigDict(extra="ignore")
+    plot_metrics: list[str] = []
+
+    def validate_plot_metrics(self, problem_name: str) -> list[str]:
+        if not self.plot_metrics:
+            return self.plot_metrics
+
+        from gigaevo.cli.run_resolver import _load_metric_names
+
+        known_metrics = _load_metric_names(problem_name)
+        unknown = [m for m in self.plot_metrics if m not in known_metrics]
+        if unknown:
+            import warnings
+
+            warnings.warn(
+                f"plot_metrics contains unknown metrics not in "
+                f"problems/{problem_name}/metrics.yaml: {unknown}. "
+                f"Known metrics: {known_metrics}. "
+                f"These metrics will be plotted but may produce empty panels.",
+                stacklevel=2,
+            )
+            from loguru import logger
+
+            logger.warning(
+                f"Unknown plot_metrics for {problem_name}: {unknown}. "
+                f"Known: {known_metrics}"
+            )
+        return self.plot_metrics
+
+
 class ExperimentManifest(BaseModel):
     """Pydantic-validated schema for experiment.yaml.
 
@@ -144,6 +177,7 @@ class ExperimentManifest(BaseModel):
     smoke_test: SmokeTestInfo = SmokeTestInfo()
     tools: list[dict[str, str]] = []
     watchdog_plugin: str | None = None
+    watchdog_plugin_options: WatchdogPluginOptions = WatchdogPluginOptions()
 
     @field_validator("schema_version")
     @classmethod
