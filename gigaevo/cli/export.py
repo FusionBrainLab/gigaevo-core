@@ -28,7 +28,7 @@ def _build_redis_config(run_config, redis_host: str, redis_port: int):
 
 def _fetch_dataframe(run_config, redis_host: str, redis_port: int) -> pd.DataFrame:
     """Fetch evolution DataFrame for a single run."""
-    from tools.utils import fetch_evolution_dataframe
+    from gigaevo.utils.redis import fetch_evolution_dataframe
 
     config = _build_redis_config(run_config, redis_host, redis_port)
     return asyncio.run(fetch_evolution_dataframe(config, add_stage_results=False))

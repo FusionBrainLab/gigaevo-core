@@ -11,20 +11,19 @@ from gigaevo.cli.output_formatter import OutputFormatter
 
 # Lazy subcommand registry: name -> (module_path, attr_name)
 _LAZY_SUBCOMMANDS: dict[str, tuple[str, str]] = {
-    "analyze": ("gigaevo.cli.analyze", "analyze"),
-    "checkpoint": ("gigaevo.cli.checkpoint", "checkpoint"),
-    "closeout": ("gigaevo.cli.lifecycle", "closeout"),
-    "collect": ("gigaevo.cli.collect", "collect"),
-    "export": ("gigaevo.cli.export", "export"),
-    "flush": ("gigaevo.cli.flush", "flush"),
-    "launch": ("gigaevo.cli.lifecycle", "launch"),
+    "status": ("gigaevo.cli.status", "status"),
+    "trajectory": ("gigaevo.cli.trajectory", "trajectory"),
+    "top": ("gigaevo.cli.top", "top"),
     "logs": ("gigaevo.cli.logs", "logs"),
     "plot": ("gigaevo.cli.plot_group", "plot"),
-    "restart": ("gigaevo.cli.lifecycle", "restart"),
-    "status": ("gigaevo.cli.status", "status"),
-    "top": ("gigaevo.cli.top", "top"),
-    "trajectory": ("gigaevo.cli.trajectory", "trajectory"),
+    "export": ("gigaevo.cli.export", "export"),
+    "flush": ("gigaevo.cli.flush", "flush"),
     "watchdog": ("gigaevo.cli.watchdog_cmd", "watchdog"),
+    "checkpoint": ("gigaevo.cli.checkpoint", "checkpoint"),
+    "launch": ("gigaevo.cli.lifecycle", "launch"),
+    "closeout": ("gigaevo.cli.lifecycle", "closeout"),
+    "restart": ("gigaevo.cli.lifecycle", "restart"),
+    "manifest": ("gigaevo.cli.manifest_cmd", "manifest"),
 }
 
 

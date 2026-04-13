@@ -38,7 +38,6 @@ def _fetch_run_data(
     redis_port: int,
     metric: str = "fitness",
     no_frontier_labels: set[str] | None = None,
-    sentinel_value: float | None = None,
 ) -> list[tuple[str, pd.DataFrame]]:
     """Fetch and prepare DataFrames for each run. Returns list of (label, df).
 
@@ -46,14 +45,9 @@ def _fetch_run_data(
         no_frontier_labels: Set of run labels for which frontier (cummax) should
             be suppressed. Useful for adversarial Improver populations where
             fitness is non-monotonic.
-        sentinel_value: Exact fitness value used for invalid programs (e.g. -1.0).
-            Rows matching this value are removed before outlier removal and
-            rolling stats. None (default) disables sentinel filtering.
     """
-    from tools.utils import (
-        fetch_evolution_dataframe,
-        prepare_iteration_dataframe,
-    )
+    from gigaevo.utils.dataframes import prepare_iteration_dataframe
+    from gigaevo.utils.redis import fetch_evolution_dataframe
 
     results: list[tuple[str, pd.DataFrame]] = []
     for rc in run_configs:
@@ -67,7 +61,6 @@ def _fetch_run_data(
             raw_df,
             fitness_col=f"metric_{metric}",
             compute_frontier=not skip_frontier,
-            sentinel_value=sentinel_value,
         )
         if prepared.empty:
             continue
@@ -220,7 +213,7 @@ def comparison(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from tools.comparison import _annotate_frontier_points
+    from gigaevo.utils.plotting import annotate_frontier_points
 
     # Build set of labels to suppress frontier for
     no_frontier_labels: set[str] | None = None
@@ -256,7 +249,6 @@ def comparison(
         ctx.obj["redis_port"],
         metric=metric,
         no_frontier_labels=actual_no_frontier,
-        sentinel_value=-1.0,
     )
 
     out_path = Path(output_dir)
@@ -344,7 +336,7 @@ def comparison(
             )
 
             if annotate_frontier:
-                _annotate_frontier_points(
+                annotate_frontier_points(
                     ax,
                     iters.values,
                     df["frontier_fitness"].values,
@@ -439,7 +431,6 @@ def trajectory(
         ctx.obj["redis_host"],
         ctx.obj["redis_port"],
         metric=metric,
-        sentinel_value=-1.0,
     )
 
     out_path = Path(output_dir)
@@ -583,7 +574,6 @@ def arms_race(
         ctx.obj["redis_port"],
         metric=metric,
         no_frontier_labels=d_labels,
-        sentinel_value=-1.0,
     )
 
     # Index by label

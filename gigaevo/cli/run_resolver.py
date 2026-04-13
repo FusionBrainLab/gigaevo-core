@@ -13,7 +13,7 @@ from gigaevo.monitoring.run_spec import RunSpec
 
 def _load_manifest(experiment: str):
     """Lazy-load experiment manifest to avoid import at CLI startup."""
-    from tools.experiment.manifest import load_manifest
+    from gigaevo.monitoring.manifest import load_manifest
 
     return load_manifest(experiment)
 
