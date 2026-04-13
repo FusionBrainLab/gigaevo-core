@@ -198,25 +198,28 @@ class TelegramChannel(NotificationChannel):
     # ── Public channel methods ──────────────────────────────────────────────
 
     async def send_status(self, update: StatusUpdate) -> bool:
-        """Send full status update: table + alerts + photos."""
-        parts: list[str] = []
+        """Send full status update: plugin body or table + alerts + photos."""
+        if update.telegram_body:
+            text_ok = await self._send_message(update.telegram_body, parse_mode="")
+        else:
+            parts: list[str] = []
 
-        parts.append(f"<b>{update.experiment_name}</b>")
-        if update.max_generations is not None:
-            parts.append(f"Target: {update.max_generations} generations")
-        parts.append("")
-
-        table = format_status_table_telegram(update.snapshots)
-        parts.append(table)
-
-        if update.has_alerts:
+            parts.append(f"<b>{update.experiment_name}</b>")
+            if update.max_generations is not None:
+                parts.append(f"Target: {update.max_generations} generations")
             parts.append("")
-            parts.append("<b>Alerts:</b>")
-            for alert in update.alerts:
-                parts.append(f"  {format_alert_message(alert)}")
 
-        message = "\n".join(parts)
-        text_ok = await self._send_message(message)
+            table = format_status_table_telegram(update.snapshots)
+            parts.append(table)
+
+            if update.has_alerts:
+                parts.append("")
+                parts.append("<b>Alerts:</b>")
+                for alert in update.alerts:
+                    parts.append(f"  {format_alert_message(alert)}")
+
+            message = "\n".join(parts)
+            text_ok = await self._send_message(message)
 
         for plot in update.plots:
             photo_ok = await self._send_photo(plot.path, plot.caption)

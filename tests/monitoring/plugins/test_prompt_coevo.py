@@ -1,12 +1,9 @@
-"""Tests for PromptCoevoPlugin -- prompt co-evolution monitoring (inline matplotlib)."""
+"""Tests for PromptCoevoPlugin -- CLI-delegating plot generation + Telegram formatting."""
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import patch
-
-import matplotlib
-
-matplotlib.use("Agg")
 
 from gigaevo.monitoring.notifications import PlotAttachment
 from gigaevo.monitoring.plugins.prompt_coevo import PromptCoevoPlugin
@@ -24,19 +21,36 @@ def _make_code_snapshot(label="C1", db=9, gen=10, fitness=0.76):
         valid_programs=85,
         pid=1000,
         pid_alive=True,
+        running_programs=5,
     )
 
 
-def _make_prompt_snapshot(label="P1", db=11, gen=8, fitness=0.25, prompt_length=299.0):
+def _make_prompt_snapshot(label="P1", db=11, gen=8, fitness=0.25):
     return RunSnapshot(
         run_spec=RunSpec(prefix="prompt_evolution_hover", db=db, label=label),
         generation=gen,
-        metrics={"fitness": fitness, "prompt_length": prompt_length},
+        metrics={"fitness": fitness},
         total_programs=50,
         valid_programs=45,
         pid=2000,
         pid_alive=True,
+        running_programs=3,
     )
+
+
+def _mock_subprocess_comparison(cmd, **kwargs):
+    """Side effect that creates the comparison output PNG."""
+    from pathlib import Path
+
+    out_dir = None
+    for i, arg in enumerate(cmd):
+        if arg == "-o" and i + 1 < len(cmd):
+            out_dir = Path(cmd[i + 1])
+            break
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "evolution_runs_comparison.png").write_bytes(b"fake-png")
+    return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
 
 class TestPromptCoevoPluginRegistration:
@@ -48,26 +62,24 @@ class TestPromptCoevoPluginRegistration:
         assert issubclass(PromptCoevoPlugin, WatchdogPlugin)
 
 
-class TestPromptCoevoPluginNoSubprocess:
-    """Verify no subprocess or tools/ references exist."""
+class TestPromptCoevoPluginUsesSubprocess:
+    """Verify subprocess-based CLI delegation."""
 
-    def test_no_subprocess_import(self):
+    def test_has_subprocess_import(self):
         import inspect
 
         source = inspect.getsource(PromptCoevoPlugin)
-        assert "subprocess" not in source
+        assert "subprocess" in source
 
-    def test_no_tools_reference(self):
+    def test_no_ax_bar_calls(self):
         import inspect
 
         source = inspect.getsource(PromptCoevoPlugin)
-        assert "tools/" not in source
-        assert "_PROJ" not in source
+        assert "ax.bar(" not in source
 
 
 class TestPromptCoevoPluginGrouping:
     def test_separates_code_and_prompt_runs(self):
-        """Groups by prefix: code runs vs prompt runs."""
         plugin = PromptCoevoPlugin()
         snapshots = [
             _make_code_snapshot("C1", 9),
@@ -95,69 +107,94 @@ class TestPromptCoevoPluginGrouping:
 
 class TestPromptCoevoPluginGeneratePlots:
     def test_generates_plots_per_group(self, tmp_path):
-        """Creates one PNG per population group using inline matplotlib."""
+        """Calls subprocess once per population group."""
         plugin = PromptCoevoPlugin()
         snapshots = [
             _make_code_snapshot("C1", 9),
             _make_prompt_snapshot("P1", 11),
         ]
 
-        plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
+        with patch(
+            "gigaevo.monitoring.plugins.prompt_coevo.subprocess.run",
+            side_effect=_mock_subprocess_comparison,
+        ) as mock_run:
+            plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
 
+        assert mock_run.call_count == 2
         assert len(plots) >= 1
         for p in plots:
             assert isinstance(p, PlotAttachment)
-            assert p.path.suffix == ".png"
             assert p.path.exists()
-            assert p.path.stat().st_size > 0
 
     def test_empty_snapshots(self, tmp_path):
         plugin = PromptCoevoPlugin()
         plots = plugin.generate_plots([], tmp_path, cycle=1)
         assert plots == []
 
-    def test_matplotlib_failure_partial_results(self, tmp_path):
-        """If one group fails, other groups still get plotted."""
+    def test_subprocess_failure_partial_results(self, tmp_path):
+        """If one group fails, other groups still produce plots."""
         plugin = PromptCoevoPlugin()
         snapshots = [
             _make_code_snapshot("C1", 9),
             _make_prompt_snapshot("P1", 11),
         ]
         call_count = [0]
-        orig_subplots = matplotlib.pyplot.subplots
 
-        def intermittent_fail(*args, **kwargs):
+        def intermittent_fail(cmd, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
-                raise Exception("first call fails")
-            return orig_subplots(*args, **kwargs)
+                return subprocess.CompletedProcess(cmd, 1, b"", b"error")
+            return _mock_subprocess_comparison(cmd, **kwargs)
 
-        with patch("matplotlib.pyplot.subplots", side_effect=intermittent_fail):
+        with patch(
+            "gigaevo.monitoring.plugins.prompt_coevo.subprocess.run",
+            side_effect=intermittent_fail,
+        ):
             plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
         assert isinstance(plots, list)
 
-    def test_plt_close_called_on_success(self, tmp_path):
-        """plt.close(fig) is called for resource cleanup."""
-        plugin = PromptCoevoPlugin()
-        snapshots = [_make_code_snapshot()]
-
-        with patch("matplotlib.pyplot.close") as mock_close:
-            plugin.generate_plots(snapshots, tmp_path, cycle=1)
-        mock_close.assert_called()
-
     def test_cycle_number_in_filename(self, tmp_path):
-        """Output filename includes zero-padded cycle number."""
         plugin = PromptCoevoPlugin()
-        plots = plugin.generate_plots([_make_code_snapshot()], tmp_path, cycle=7)
+
+        with patch(
+            "gigaevo.monitoring.plugins.prompt_coevo.subprocess.run",
+            side_effect=_mock_subprocess_comparison,
+        ):
+            plots = plugin.generate_plots([_make_code_snapshot()], tmp_path, cycle=7)
         assert len(plots) == 1
         assert "0007" in plots[0].path.name
 
     def test_caption_includes_population_type(self, tmp_path):
-        """Caption indicates whether it's code or prompt population."""
         plugin = PromptCoevoPlugin()
-        plots = plugin.generate_plots([_make_prompt_snapshot()], tmp_path, cycle=1)
+
+        with patch(
+            "gigaevo.monitoring.plugins.prompt_coevo.subprocess.run",
+            side_effect=_mock_subprocess_comparison,
+        ):
+            plots = plugin.generate_plots([_make_prompt_snapshot()], tmp_path, cycle=1)
         assert len(plots) == 1
         assert "Prompt Population" in plots[0].caption
+
+    def test_run_args_per_group(self, tmp_path):
+        """Each group subprocess call only includes that group's run args."""
+        plugin = PromptCoevoPlugin()
+        snapshots = [
+            _make_code_snapshot("C1", 9),
+            _make_prompt_snapshot("P1", 11),
+        ]
+
+        with patch(
+            "gigaevo.monitoring.plugins.prompt_coevo.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, b"", b""),
+        ) as mock_run:
+            plugin.generate_plots(snapshots, tmp_path, cycle=1)
+
+        # Each call should have only its group's -r args
+        for call in mock_run.call_args_list:
+            cmd = call[0][0]
+            r_args = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-r"]
+            # Each group should have exactly 1 run
+            assert len(r_args) == 1
 
 
 class TestPromptCoevoPluginFormatStatus:
@@ -182,6 +219,49 @@ class TestPromptCoevoPluginFormatStatus:
         plugin = PromptCoevoPlugin()
         body = plugin.format_status_body([], "test", cycle=1, max_generations=None)
         assert isinstance(body, str)
+
+
+class TestPromptCoevoPluginFormatTelegramBody:
+    def test_contains_population_groups(self):
+        plugin = PromptCoevoPlugin()
+        snapshots = [_make_code_snapshot("C1"), _make_prompt_snapshot("P1")]
+        body = plugin.format_telegram_body(
+            snapshots, "test/exp", cycle=1, max_generations=25
+        )
+        assert body is not None
+        assert "Code Population" in body
+        assert "Prompt Population" in body
+
+    def test_contains_run_metrics(self):
+        plugin = PromptCoevoPlugin()
+        snapshots = [_make_code_snapshot("C1", fitness=0.76)]
+        body = plugin.format_telegram_body(
+            snapshots, "test/exp", cycle=1, max_generations=25
+        )
+        assert body is not None
+        assert "0.76000" in body
+
+    def test_contains_baseline_when_set(self):
+        plugin = PromptCoevoPlugin()
+        body = plugin.format_telegram_body(
+            [_make_code_snapshot()], "test", cycle=1, max_generations=25, baseline=0.80
+        )
+        assert body is not None
+        assert "SOTA baseline" in body
+
+    def test_stalled_flag(self):
+        snap = RunSnapshot(
+            run_spec=RunSpec(prefix="chains/hover/static_soft", db=1, label="C1"),
+            generation=10,
+            metrics={"fitness": 0.5},
+            running_programs=0,
+        )
+        plugin = PromptCoevoPlugin()
+        body = plugin.format_telegram_body(
+            [snap], "test", cycle=1, max_generations=25
+        )
+        assert body is not None
+        assert "! C1" in body
 
 
 class TestPromptCoevoPluginDefaults:

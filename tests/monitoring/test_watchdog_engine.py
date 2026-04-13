@@ -192,7 +192,11 @@ class TestEngineCycle:
         dispatcher = MagicMock()
         dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
 
-        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retry_delay_s=0),
+        )
         asyncio.run(engine._cycle(cycle=1))
 
         dispatcher.dispatch.assert_called_once()
@@ -564,6 +568,156 @@ class TestCompletionShutdown:
         assert r.exists("experiments:test/exp:completion")
         data = json.loads(r.get("experiments:test/exp:completion"))
         assert len(data["run_states"]) == 1
+
+
+class TestPlotRetry:
+    """Plot generation retries on failure (06-02)."""
+
+    def test_retries_on_plot_exception(self):
+        """Plugin.generate_plots is retried on exception."""
+        plugin = _make_plugin()
+        plugin.generate_plots.side_effect = [
+            RuntimeError("attempt 1"),
+            RuntimeError("attempt 2"),
+            [],  # success on 3rd attempt
+        ]
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=3, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert plugin.generate_plots.call_count == 3
+        dispatcher.dispatch.assert_called_once()
+
+    def test_stops_retrying_after_max_attempts(self):
+        """After max retries exhausted, dispatches with empty plots."""
+        plugin = _make_plugin()
+        plugin.generate_plots.side_effect = RuntimeError("always fails")
+
+        captured = []
+
+        async def capture(update):
+            captured.append(update)
+            return MagicMock(all_succeeded=True)
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(side_effect=capture)
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=2, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert plugin.generate_plots.call_count == 2
+        assert len(captured) == 1
+        assert captured[0].plots == []
+
+    def test_no_retry_on_success(self):
+        """If first attempt succeeds, no retries."""
+        plugin = _make_plugin()
+        plugin.generate_plots.return_value = []
+
+        engine = _make_engine(
+            plugin=plugin,
+            config=WatchdogConfig(plot_retries=3),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert plugin.generate_plots.call_count == 1
+
+
+class TestBaseline:
+    """Baseline parameter passed to plugin format_telegram_body (06-02)."""
+
+    def test_baseline_stored(self):
+        engine = _make_engine(baseline=0.034)
+        assert engine._baseline == 0.034
+
+    def test_baseline_none_by_default(self):
+        engine = _make_engine()
+        assert engine._baseline is None
+
+    def test_baseline_passed_to_format_telegram_body(self):
+        """Engine calls plugin.format_telegram_body with baseline."""
+        plugin = _make_plugin()
+        plugin.format_telegram_body.return_value = "test body"
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+
+        engine = _make_engine(
+            plugin=plugin, dispatcher=dispatcher, baseline=0.034
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        plugin.format_telegram_body.assert_called_once()
+        call_kwargs = plugin.format_telegram_body.call_args
+        assert call_kwargs[1]["baseline"] == 0.034
+
+
+class TestTelegramBody:
+    """Telegram body from plugin included in StatusUpdate (06-02)."""
+
+    def test_telegram_body_in_status_update(self):
+        """Plugin telegram body appears in dispatched StatusUpdate."""
+        plugin = _make_plugin()
+        plugin.format_telegram_body.return_value = "custom telegram"
+
+        captured = []
+
+        async def capture(update):
+            captured.append(update)
+            return MagicMock(all_succeeded=True)
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(side_effect=capture)
+
+        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert len(captured) == 1
+        assert captured[0].telegram_body == "custom telegram"
+
+    def test_telegram_body_none_when_plugin_returns_none(self):
+        """When plugin returns None, StatusUpdate.telegram_body is None."""
+        plugin = _make_plugin()
+        plugin.format_telegram_body.return_value = None
+
+        captured = []
+
+        async def capture(update):
+            captured.append(update)
+            return MagicMock(all_succeeded=True)
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(side_effect=capture)
+
+        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert len(captured) == 1
+        assert captured[0].telegram_body is None
+
+    def test_telegram_body_error_does_not_crash_cycle(self):
+        """If format_telegram_body raises, cycle still dispatches."""
+        plugin = _make_plugin()
+        plugin.format_telegram_body.side_effect = RuntimeError("telegram boom")
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+
+        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
+        asyncio.run(engine._cycle(cycle=1))
+
+        dispatcher.dispatch.assert_called_once()
 
 
 class TestMemoryLogging:

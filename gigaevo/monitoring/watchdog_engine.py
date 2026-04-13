@@ -54,6 +54,7 @@ class WatchdogEngine:
         dispatcher: NotificationDispatcher | None = None,
         heartbeat_redis: redis_lib.Redis | None = None,
         plot_dir: Path | None = None,
+        baseline: float | None = None,
     ):
         self.experiment_name = experiment_name
         self.plugin = plugin
@@ -72,6 +73,7 @@ class WatchdogEngine:
         self._plot_dir = plot_dir or Path(
             f"/tmp/watchdog_{experiment_name.replace('/', '_')}"
         )
+        self._baseline = baseline
         self._shutdown = False
         self._cycle_count = 0
 
@@ -137,14 +139,21 @@ class WatchdogEngine:
         stagnation_alerts = self._check_stagnation(snapshots)
         alerts.extend(stagnation_alerts)
 
-        # 5. Generate plots (with resource cleanup)
+        # 5. Generate plots (with retries)
         plots: list[PlotAttachment] = []
-        try:
-            plots = self.plugin.generate_plots(snapshots, self._plot_dir, cycle)
-        except Exception as exc:
-            _log.error(f"Plot generation failed: {exc}")
-        finally:
-            self._close_matplotlib_figures()
+        for attempt in range(self.config.plot_retries):
+            try:
+                plots = self.plugin.generate_plots(snapshots, self._plot_dir, cycle)
+                break
+            except Exception as exc:
+                _log.error(
+                    f"Plot generation attempt {attempt + 1}"
+                    f"/{self.config.plot_retries} failed: {exc}"
+                )
+                if attempt < self.config.plot_retries - 1:
+                    _log.info(f"Retrying in {self.config.plot_retry_delay_s}s...")
+                    time.sleep(self.config.plot_retry_delay_s)
+        self._close_matplotlib_figures()
 
         # 6. Format status
         try:
@@ -154,6 +163,19 @@ class WatchdogEngine:
         except Exception as exc:
             _log.error(f"Status formatting failed: {exc}")
 
+        # 6.5. Plugin-specific Telegram body
+        telegram_body: str | None = None
+        try:
+            telegram_body = self.plugin.format_telegram_body(
+                snapshots,
+                self.experiment_name,
+                cycle,
+                self.max_generations,
+                baseline=self._baseline,
+            )
+        except Exception as exc:
+            _log.error(f"Telegram body formatting failed: {exc}")
+
         # 7. Build StatusUpdate and dispatch
         update = StatusUpdate(
             experiment_name=self.experiment_name,
@@ -162,6 +184,7 @@ class WatchdogEngine:
             plots=plots,
             max_generations=self.max_generations,
             timestamp=ts,
+            telegram_body=telegram_body,
         )
         await self._dispatcher.dispatch(update)
 

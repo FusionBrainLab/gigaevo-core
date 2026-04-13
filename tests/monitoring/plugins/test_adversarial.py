@@ -1,12 +1,9 @@
-"""Tests for AdversarialPlugin -- multi-metric panel plots (inline matplotlib)."""
+"""Tests for AdversarialPlugin -- CLI-delegating plot generation + Telegram formatting."""
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
-import matplotlib
-
-matplotlib.use("Agg")
+import subprocess
+from unittest.mock import MagicMock, patch
 
 from gigaevo.monitoring.notifications import PlotAttachment
 from gigaevo.monitoring.plugins.adversarial import AdversarialPlugin
@@ -23,6 +20,7 @@ def _make_snapshot(
     fitness=0.03,
     actual_fitness=0.028,
     soft_fitness=0.5,
+    running_programs=5,
 ):
     return RunSnapshot(
         run_spec=RunSpec(prefix=prefix, db=db, label=label),
@@ -36,7 +34,39 @@ def _make_snapshot(
         valid_programs=90,
         pid=1000 + db,
         pid_alive=True,
+        running_programs=running_programs,
     )
+
+
+def _make_g_snapshot(label="G1", db=1, gen=10, fitness=0.03):
+    return _make_snapshot(
+        label=label, db=db, prefix="heilbron_pop_a", gen=gen, fitness=fitness
+    )
+
+
+def _make_d_snapshot(label="D1", db=2, gen=10, fitness=0.02):
+    return _make_snapshot(
+        label=label, db=db, prefix="heilbron_pop_b", gen=gen, fitness=fitness
+    )
+
+
+def _mock_subprocess_success(output_dir, output_file="arms_race.png"):
+    """Create a side_effect that writes a fake PNG after subprocess.run."""
+
+    def side_effect(cmd, **kwargs):
+        from pathlib import Path
+
+        out_dir = None
+        for i, arg in enumerate(cmd):
+            if arg == "-o" and i + 1 < len(cmd):
+                out_dir = Path(cmd[i + 1])
+                break
+        if out_dir:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / output_file).write_bytes(b"fake-png-data")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    return side_effect
 
 
 class TestAdversarialPluginRegistration:
@@ -48,21 +78,20 @@ class TestAdversarialPluginRegistration:
         assert issubclass(AdversarialPlugin, WatchdogPlugin)
 
 
-class TestAdversarialPluginNoSubprocess:
-    """Verify no subprocess or tools/ references exist."""
+class TestAdversarialPluginUsesSubprocess:
+    """Verify subprocess-based CLI delegation."""
 
-    def test_no_subprocess_import(self):
+    def test_has_subprocess_import(self):
         import inspect
 
         source = inspect.getsource(AdversarialPlugin)
-        assert "subprocess" not in source
+        assert "subprocess" in source
 
-    def test_no_tools_reference(self):
+    def test_no_ax_bar_calls(self):
         import inspect
 
         source = inspect.getsource(AdversarialPlugin)
-        assert "tools/" not in source
-        assert "_PROJ" not in source
+        assert "ax.bar(" not in source
 
 
 class TestAdversarialPluginInit:
@@ -76,10 +105,12 @@ class TestAdversarialPluginInit:
         )
         assert plugin._plot_metrics == ["fitness", "actual_fitness", "soft_fitness"]
 
+    def test_accepts_plot_commands(self):
+        plugin = AdversarialPlugin(plot_commands=[MagicMock()])
+        assert len(plugin._plot_commands) == 1
+
 
 class TestAdversarialPluginRunGrouping:
-    """AdversarialPlugin groups runs by prefix."""
-
     def test_groups_by_prefix(self):
         plugin = AdversarialPlugin()
         snapshots = [
@@ -101,71 +132,146 @@ class TestAdversarialPluginRunGrouping:
         assert len(groups) == 1
 
 
-class TestAdversarialPluginGeneratePlots:
-    def test_generates_panel_plot(self, tmp_path):
-        """Creates a multi-panel PNG file using inline matplotlib."""
-        plugin = AdversarialPlugin(
-            plot_metrics=["fitness", "actual_fitness", "soft_fitness"]
-        )
+class TestAdversarialPluginBuildRunArgs:
+    def test_builds_run_args_from_snapshots(self):
         snapshots = [
-            _make_snapshot("S1", 1),
-            _make_snapshot("S2", 2),
-            _make_snapshot("A1", 3, prefix="heilbron_adv"),
-            _make_snapshot("A2", 4, prefix="heilbron_adv"),
+            _make_g_snapshot("G1", db=1),
+            _make_d_snapshot("D1", db=2),
+        ]
+        args = AdversarialPlugin._build_run_args(snapshots)
+        assert args == [
+            "-r", "heilbron_pop_a@1:G1",
+            "-r", "heilbron_pop_b@2:D1",
         ]
 
-        plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
-        assert len(plots) >= 1
+
+class TestAdversarialPluginGeneratePlots:
+    def test_generates_arms_race_and_comparison(self, tmp_path):
+        """Calls subprocess for arms-race and comparison plots."""
+        plugin = AdversarialPlugin()
+        snapshots = [_make_g_snapshot("G1", 1), _make_d_snapshot("D1", 2)]
+
+        call_count = [0]
+
+        def multi_output(cmd, **kwargs):
+            call_count[0] += 1
+            from pathlib import Path
+
+            out_dir = None
+            for i, arg in enumerate(cmd):
+                if arg == "-o" and i + 1 < len(cmd):
+                    out_dir = Path(cmd[i + 1])
+                    break
+            if out_dir:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                if "arms-race" in cmd:
+                    (out_dir / "arms_race.png").write_bytes(b"fake")
+                elif "comparison" in cmd:
+                    (out_dir / "evolution_runs_comparison.png").write_bytes(b"fake")
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        with patch("gigaevo.monitoring.plugins.adversarial.subprocess.run", side_effect=multi_output):
+            plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
+
+        assert len(plots) == 2
+        assert call_count[0] == 2
         for p in plots:
             assert isinstance(p, PlotAttachment)
-            assert p.path.suffix == ".png"
             assert p.path.exists()
-            assert p.path.stat().st_size > 0
 
     def test_empty_snapshots(self, tmp_path):
         plugin = AdversarialPlugin()
         plots = plugin.generate_plots([], tmp_path, cycle=1)
         assert plots == []
 
-    def test_matplotlib_failure_returns_empty(self, tmp_path):
-        """If matplotlib raises, returns empty list (no crash)."""
+    def test_subprocess_failure_returns_empty(self, tmp_path):
+        """If subprocess returns non-zero, returns empty list."""
         plugin = AdversarialPlugin()
-        snapshots = [_make_snapshot()]
+        snapshots = [_make_g_snapshot(), _make_d_snapshot()]
+
         with patch(
-            "matplotlib.pyplot.subplots", side_effect=Exception("display error")
+            "gigaevo.monitoring.plugins.adversarial.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 1, b"", b"error"),
         ):
             plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
         assert plots == []
 
-    def test_plt_close_called_on_success(self, tmp_path):
-        """plt.close(fig) is called even on success (resource cleanup)."""
+    def test_subprocess_timeout_returns_empty(self, tmp_path):
+        """If subprocess times out, returns empty list."""
         plugin = AdversarialPlugin()
-        snapshots = [_make_snapshot()]
+        snapshots = [_make_g_snapshot(), _make_d_snapshot()]
 
-        with patch("matplotlib.pyplot.close") as mock_close:
-            plugin.generate_plots(snapshots, tmp_path, cycle=1)
-        mock_close.assert_called()
-
-    def test_plt_close_called_on_failure(self, tmp_path):
-        """plt.close(fig) is called in finally even when rendering fails."""
-        plugin = AdversarialPlugin()
-        snapshots = [_make_snapshot()]
-
-        with (
-            patch("matplotlib.pyplot.close") as mock_close,
-            patch(
-                "matplotlib.figure.Figure.savefig", side_effect=Exception("save fail")
-            ),
+        with patch(
+            "gigaevo.monitoring.plugins.adversarial.subprocess.run",
+            side_effect=subprocess.TimeoutExpired([], 120),
         ):
-            plugin.generate_plots(snapshots, tmp_path, cycle=1)
-        mock_close.assert_called()
+            plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
+        assert plots == []
 
     def test_cycle_number_in_filename(self, tmp_path):
-        """Output filename includes zero-padded cycle number."""
         plugin = AdversarialPlugin()
-        plots = plugin.generate_plots([_make_snapshot()], tmp_path, cycle=42)
-        assert len(plots) == 1
-        assert "0042" in plots[0].path.name
+        snapshots = [_make_g_snapshot(), _make_d_snapshot()]
+
+        with patch(
+            "gigaevo.monitoring.plugins.adversarial.subprocess.run",
+            side_effect=_mock_subprocess_success(tmp_path, "arms_race.png"),
+        ):
+            plots = plugin.generate_plots(snapshots, tmp_path, cycle=42)
+        assert any("0042" in p.path.name for p in plots)
+
+    def test_arms_race_command_includes_paired_arg(self, tmp_path):
+        """Subprocess call for arms-race includes --paired with G:D labels."""
+        plugin = AdversarialPlugin()
+        snapshots = [_make_g_snapshot("G1"), _make_d_snapshot("D1")]
+
+        with patch(
+            "gigaevo.monitoring.plugins.adversarial.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, b"", b""),
+        ) as mock_run:
+            plugin.generate_plots(snapshots, tmp_path, cycle=1)
+
+        # First call should be arms-race
+        first_call = mock_run.call_args_list[0]
+        cmd = first_call[0][0]
+        assert "arms-race" in cmd
+        assert "--paired" in cmd
+        paired_idx = cmd.index("--paired")
+        assert cmd[paired_idx + 1] == "G1:D1"
+
+    def test_comparison_command_includes_no_frontier_for(self, tmp_path):
+        """Subprocess call for comparison includes --no-frontier-for D labels."""
+        plugin = AdversarialPlugin()
+        snapshots = [_make_g_snapshot("G1"), _make_d_snapshot("D1")]
+
+        with patch(
+            "gigaevo.monitoring.plugins.adversarial.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, b"", b""),
+        ) as mock_run:
+            plugin.generate_plots(snapshots, tmp_path, cycle=1)
+
+        # Second call should be comparison
+        second_call = mock_run.call_args_list[1]
+        cmd = second_call[0][0]
+        assert "comparison" in cmd
+        assert "--no-frontier-for" in cmd
+        nf_idx = cmd.index("--no-frontier-for")
+        assert "D1" in cmd[nf_idx + 1]
+
+    def test_missing_g_runs_skips_arms_race(self, tmp_path):
+        """If no pop_a runs, arms-race is skipped but comparison still runs."""
+        plugin = AdversarialPlugin()
+        snapshots = [_make_d_snapshot("D1")]
+
+        with patch(
+            "gigaevo.monitoring.plugins.adversarial.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, b"", b""),
+        ) as mock_run:
+            plugin.generate_plots(snapshots, tmp_path, cycle=1)
+
+        # Only comparison should be called (not arms-race)
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args[0][0]
+        assert "comparison" in cmd
 
 
 class TestAdversarialPluginFormatStatus:
@@ -185,6 +291,75 @@ class TestAdversarialPluginFormatStatus:
         plugin = AdversarialPlugin()
         body = plugin.format_status_body([], "test", cycle=1, max_generations=None)
         assert isinstance(body, str)
+
+
+class TestAdversarialPluginFormatTelegramBody:
+    def test_contains_gd_sections(self):
+        plugin = AdversarialPlugin()
+        snapshots = [_make_g_snapshot("G1"), _make_d_snapshot("D1")]
+        body = plugin.format_telegram_body(
+            snapshots, "test/exp", cycle=1, max_generations=50
+        )
+        assert body is not None
+        assert "Constructor (G)" in body
+        assert "Improver (D)" in body
+
+    def test_contains_sota_comparison_when_baseline_set(self):
+        plugin = AdversarialPlugin()
+        snapshots = [_make_g_snapshot("G1", fitness=0.03)]
+        body = plugin.format_telegram_body(
+            snapshots, "test/exp", cycle=1, max_generations=50, baseline=0.034
+        )
+        assert body is not None
+        assert "SOTA baseline" in body
+        assert "of SOTA" in body
+
+    def test_no_sota_without_baseline(self):
+        plugin = AdversarialPlugin()
+        snapshots = [_make_g_snapshot("G1")]
+        body = plugin.format_telegram_body(
+            snapshots, "test/exp", cycle=1, max_generations=50, baseline=None
+        )
+        assert body is not None
+        assert "SOTA" not in body
+
+    def test_max_gd_section_with_baseline(self):
+        plugin = AdversarialPlugin()
+        snapshots = [
+            _make_g_snapshot("G1", fitness=0.03),
+            _make_d_snapshot("D1", fitness=0.025),
+        ]
+        body = plugin.format_telegram_body(
+            snapshots, "test/exp", cycle=1, max_generations=50, baseline=0.034
+        )
+        assert body is not None
+        assert "max(G,D)" in body
+
+    def test_completion_message_when_all_done(self):
+        plugin = AdversarialPlugin()
+        snapshots = [
+            _make_g_snapshot("G1", gen=50),
+            _make_d_snapshot("D1", gen=50),
+        ]
+        body = plugin.format_telegram_body(
+            snapshots, "test/exp", cycle=1, max_generations=50
+        )
+        assert body is not None
+        assert "ALL RUNS COMPLETE" in body
+
+    def test_stalled_flag_when_no_running_programs(self):
+        plugin = AdversarialPlugin()
+        snap = RunSnapshot(
+            run_spec=RunSpec(prefix="heilbron_pop_a", db=1, label="G1"),
+            generation=10,
+            metrics={"fitness": 0.03},
+            running_programs=0,
+        )
+        body = plugin.format_telegram_body(
+            [snap], "test/exp", cycle=1, max_generations=50
+        )
+        assert body is not None
+        assert "! G1" in body
 
 
 class TestAdversarialPluginTelegramContent:
