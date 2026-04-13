@@ -1,9 +1,12 @@
-"""Tests for SoloPlugin -- standard MAP-Elites watchdog plugin."""
+"""Tests for SoloPlugin -- standard MAP-Elites watchdog plugin (inline matplotlib)."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+
+import matplotlib
+
+matplotlib.use("Agg")
 
 from gigaevo.monitoring.notifications import PlotAttachment
 from gigaevo.monitoring.plugins.solo import SoloPlugin
@@ -37,61 +40,96 @@ class TestSoloPluginRegistration:
         assert isinstance(plugin, WatchdogPlugin)
 
 
+class TestSoloPluginNoSubprocess:
+    """Verify no subprocess or tools/ references exist."""
+
+    def test_no_subprocess_import(self):
+        import inspect
+
+        source = inspect.getsource(SoloPlugin)
+        assert "subprocess" not in source
+
+    def test_no_tools_reference(self):
+        import inspect
+
+        source = inspect.getsource(SoloPlugin)
+        assert "tools/" not in source
+        assert "_PROJ" not in source
+
+
 class TestSoloPluginGeneratePlots:
-    def test_generates_comparison_plot(self, tmp_path):
-        """Calls comparison.py subprocess and returns PlotAttachment."""
+    def test_generates_bar_chart(self, tmp_path):
+        """Creates a bar chart PNG file using inline matplotlib."""
         plugin = SoloPlugin()
         snapshots = [_make_snapshot("A", 1), _make_snapshot("B", 2)]
 
-        def fake_run(*args, **kwargs):
-            out_dir = None
-            cmd = args[0]
-            for i, arg in enumerate(cmd):
-                if arg == "--output-folder" and i + 1 < len(cmd):
-                    out_dir = Path(cmd[i + 1])
-            if out_dir:
-                out_dir.mkdir(parents=True, exist_ok=True)
-                (out_dir / "evolution_runs_comparison.png").write_text("fake")
-            return MagicMock(returncode=0)
+        plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
 
-        with patch("subprocess.run", side_effect=fake_run):
-            plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
-
-        assert len(plots) >= 1
+        assert len(plots) == 1
         assert isinstance(plots[0], PlotAttachment)
+        assert plots[0].path.suffix == ".png"
         assert plots[0].path.exists()
+        assert plots[0].path.stat().st_size > 0
 
     def test_empty_snapshots_returns_empty_list(self, tmp_path):
         plugin = SoloPlugin()
         plots = plugin.generate_plots([], tmp_path, cycle=1)
         assert plots == []
 
-    def test_subprocess_failure_returns_empty_list(self, tmp_path):
-        """If comparison.py fails, returns empty list (no crash)."""
+    def test_no_fitness_values_returns_empty_list(self, tmp_path):
+        """If all fitness values are None, returns empty."""
+        plugin = SoloPlugin()
+        snap = RunSnapshot(
+            run_spec=RunSpec(prefix="test", db=1, label="X"),
+            generation=5,
+            metrics={},
+            total_programs=10,
+            valid_programs=8,
+            pid=1000,
+            pid_alive=True,
+        )
+        plots = plugin.generate_plots([snap], tmp_path, cycle=1)
+        assert plots == []
+
+    def test_matplotlib_failure_returns_empty_list(self, tmp_path):
+        """If matplotlib raises, returns empty list (no crash)."""
         plugin = SoloPlugin()
         snapshots = [_make_snapshot()]
-        with patch("subprocess.run", side_effect=Exception("boom")):
+        with patch(
+            "matplotlib.pyplot.subplots", side_effect=Exception("display error")
+        ):
             plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
         assert plots == []
 
-    def test_builds_correct_run_args(self, tmp_path):
-        """--run arguments use prefix@db:label format."""
+    def test_plt_close_called_on_success(self, tmp_path):
+        """plt.close(fig) is called for resource cleanup."""
         plugin = SoloPlugin()
-        snapshots = [
-            _make_snapshot("A", 4),
-            _make_snapshot("B", 5),
-        ]
-        captured_cmd = []
+        snapshots = [_make_snapshot()]
 
-        def capture_run(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-            return MagicMock(returncode=0)
-
-        with patch("subprocess.run", side_effect=capture_run):
+        with patch("matplotlib.pyplot.close") as mock_close:
             plugin.generate_plots(snapshots, tmp_path, cycle=1)
+        mock_close.assert_called()
 
-        run_indices = [i for i, x in enumerate(captured_cmd) if x == "--run"]
-        assert len(run_indices) == 2
+    def test_plt_close_called_on_failure(self, tmp_path):
+        """plt.close(fig) is called in finally even when save fails."""
+        plugin = SoloPlugin()
+        snapshots = [_make_snapshot()]
+
+        with (
+            patch("matplotlib.pyplot.close") as mock_close,
+            patch(
+                "matplotlib.figure.Figure.savefig", side_effect=Exception("save fail")
+            ),
+        ):
+            plugin.generate_plots(snapshots, tmp_path, cycle=1)
+        mock_close.assert_called()
+
+    def test_cycle_number_in_filename(self, tmp_path):
+        """Output filename includes zero-padded cycle number."""
+        plugin = SoloPlugin()
+        plots = plugin.generate_plots([_make_snapshot()], tmp_path, cycle=42)
+        assert len(plots) == 1
+        assert "0042" in plots[0].path.name
 
 
 class TestSoloPluginFormatStatus:

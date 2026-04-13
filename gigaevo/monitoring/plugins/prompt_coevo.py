@@ -4,17 +4,16 @@ Co-evolution experiments have two populations:
 - Code runs: evolve Python programs (prefix like chains/hover/static_soft)
 - Prompt runs: evolve mutation prompts (prefix like prompt_evolution_hover)
 
-This plugin groups runs by prefix and generates separate comparison plots
-for each population, with population-specific status formatting.
+This plugin groups runs by prefix and generates inline matplotlib bar
+charts per population, with population-specific status formatting.
+
+All plotting is done inline via matplotlib.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-import shutil
-import subprocess
-import sys
 
 from loguru import logger
 
@@ -26,7 +25,6 @@ from gigaevo.monitoring.snapshot import RunSnapshot
 from gigaevo.monitoring.watchdog_plugin import WatchdogPlugin, register
 
 _log = logger.bind(component="plugin.prompt_coevo")
-_PROJ = Path(__file__).resolve().parent.parent.parent.parent
 
 
 @register("prompt_coevo")
@@ -34,7 +32,7 @@ class PromptCoevoPlugin(WatchdogPlugin):
     """Prompt co-evolution watchdog plugin.
 
     Groups runs by prefix (code vs prompt populations).
-    Each group gets its own comparison.py plot and status section.
+    Each group gets its own inline matplotlib bar chart and status section.
     """
 
     def _group_runs(self, snapshots: list[RunSnapshot]) -> dict[str, list[RunSnapshot]]:
@@ -64,47 +62,59 @@ class PromptCoevoPlugin(WatchdogPlugin):
 
         for group_name, group_snaps in groups.items():
             safe_name = group_name.replace("/", "_")
-            group_dir = output_dir / safe_name
-            group_dir.mkdir(parents=True, exist_ok=True)
-
-            run_args: list[str] = []
-            for snap in group_snaps:
-                spec = snap.run_spec
-                run_args.extend(["--run", f"{spec.prefix}@{spec.db}:{spec.label}"])
-
-            cmd = [
-                sys.executable,
-                str(_PROJ / "tools" / "comparison.py"),
-                *run_args,
-                "--annotate-frontier",
-                "--output-folder",
-                str(group_dir),
-            ]
+            fig = None
 
             try:
-                subprocess.run(
-                    cmd,
-                    cwd=str(_PROJ),
-                    env={"PYTHONPATH": str(_PROJ)},
-                    capture_output=True,
-                    timeout=120,
-                    check=True,
-                )
-            except Exception as exc:
-                _log.error(f"comparison.py failed for group {group_name}: {exc}")
-                continue
+                import matplotlib
+                import matplotlib.pyplot as plt
 
-            png = group_dir / "evolution_runs_comparison.png"
-            if png.exists():
+                matplotlib.use("Agg")
+
+                labels = [s.run_spec.label for s in group_snaps]
+                values = [s.metrics.get("fitness") for s in group_snaps]
+
+                valid_pairs = [
+                    (lbl, val)
+                    for lbl, val in zip(labels, values)
+                    if val is not None
+                ]
+
+                if not valid_pairs:
+                    _log.warning(f"No valid fitness values for group {group_name}")
+                    continue
+
+                bar_labels, bar_vals = zip(*valid_pairs)
                 pop_type = self._classify_group(group_name)
-                stamped = output_dir / f"{safe_name}_cycle_{cycle:04d}.png"
-                shutil.copy2(png, stamped)
+
+                fig, ax = plt.subplots(
+                    figsize=(max(6, len(bar_labels) * 1.5), 4)
+                )
+                ax.bar(bar_labels, bar_vals, color="steelblue", alpha=0.8)
+                ax.set_ylabel("Fitness")
+                ax.set_title(f"{pop_type} ({group_name}) -- Cycle {cycle}")
+                fig.tight_layout()
+
+                plot_path = output_dir / f"{safe_name}_cycle_{cycle:04d}.png"
+                fig.savefig(plot_path, dpi=100, bbox_inches="tight")
+
                 plots.append(
                     PlotAttachment(
-                        path=stamped,
+                        path=plot_path,
                         caption=f"{pop_type} ({group_name}) fitness curves (cycle {cycle})",
                     )
                 )
+
+            except Exception as exc:
+                _log.error(f"Plot generation failed for group {group_name}: {exc}")
+                continue
+            finally:
+                if fig is not None:
+                    try:
+                        import matplotlib.pyplot as plt
+
+                        plt.close(fig)
+                    except Exception:
+                        pass
 
         return plots
 

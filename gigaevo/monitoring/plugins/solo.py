@@ -1,16 +1,15 @@
 """SoloPlugin -- standard MAP-Elites experiment monitoring.
 
 Handles any single-population MAP-Elites experiment. Default fallback
-for unknown experiment types. Generates comparison.py fitness curves
-and renders standard markdown status tables.
+for unknown experiment types. Generates inline matplotlib fitness bar
+charts and renders standard markdown status tables.
+
+All plotting is done inline via matplotlib.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
-import subprocess
-import sys
 
 from loguru import logger
 
@@ -23,15 +22,12 @@ from gigaevo.monitoring.watchdog_plugin import WatchdogPlugin, register
 
 _log = logger.bind(component="plugin.solo")
 
-# Project root for tools/comparison.py
-_PROJ = Path(__file__).resolve().parent.parent.parent.parent
-
 
 @register("solo")
 class SoloPlugin(WatchdogPlugin):
     """Standard MAP-Elites watchdog plugin.
 
-    - generate_plots: calls tools/comparison.py subprocess
+    - generate_plots: inline matplotlib bar chart of latest fitness per run
     - format_status_body: markdown header + status table
     """
 
@@ -45,42 +41,56 @@ class SoloPlugin(WatchdogPlugin):
             return []
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        run_args: list[str] = []
-        for snap in snapshots:
-            spec = snap.run_spec
-            run_args.extend(["--run", f"{spec.prefix}@{spec.db}:{spec.label}"])
-
-        cmd = [
-            sys.executable,
-            str(_PROJ / "tools" / "comparison.py"),
-            *run_args,
-            "--annotate-frontier",
-            "--output-folder",
-            str(output_dir),
-        ]
+        fig = None
 
         try:
-            subprocess.run(
-                cmd,
-                cwd=str(_PROJ),
-                env={"PYTHONPATH": str(_PROJ)},
-                capture_output=True,
-                timeout=120,
-                check=True,
-            )
-        except Exception as exc:
-            _log.error(f"comparison.py failed: {exc}")
-            return []
+            import matplotlib
+            import matplotlib.pyplot as plt
 
-        png = output_dir / "evolution_runs_comparison.png"
-        if png.exists():
-            stamped = output_dir / f"comparison_cycle_{cycle:04d}.png"
-            shutil.copy2(png, stamped)
-            return [
-                PlotAttachment(path=stamped, caption=f"Fitness curves (cycle {cycle})")
+            matplotlib.use("Agg")
+
+            labels = [s.run_spec.label for s in snapshots]
+            values = [s.metrics.get("fitness") for s in snapshots]
+
+            valid_pairs = [
+                (lbl, val)
+                for lbl, val in zip(labels, values)
+                if val is not None
             ]
 
-        return []
+            if not valid_pairs:
+                _log.warning("No valid fitness values for solo plot")
+                return []
+
+            bar_labels, bar_vals = zip(*valid_pairs)
+
+            fig, ax = plt.subplots(figsize=(max(6, len(bar_labels) * 1.5), 4))
+            ax.bar(bar_labels, bar_vals, color="steelblue", alpha=0.8)
+            ax.set_ylabel("Fitness")
+            ax.set_title(f"Fitness -- Cycle {cycle}")
+            fig.tight_layout()
+
+            plot_path = output_dir / f"comparison_cycle_{cycle:04d}.png"
+            fig.savefig(plot_path, dpi=100, bbox_inches="tight")
+
+            return [
+                PlotAttachment(
+                    path=plot_path,
+                    caption=f"Fitness curves (cycle {cycle})",
+                )
+            ]
+
+        except Exception as exc:
+            _log.error(f"Solo plot generation failed: {exc}")
+            return []
+        finally:
+            if fig is not None:
+                try:
+                    import matplotlib.pyplot as plt
+
+                    plt.close(fig)
+                except Exception:
+                    pass
 
     def format_status_body(
         self,

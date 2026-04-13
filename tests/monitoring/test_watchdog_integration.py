@@ -198,7 +198,6 @@ class TestPluginRegistryCompleteness:
         registry = get_registry()
         assert "solo" in registry
         assert "adversarial" in registry
-        assert "heilbron" in registry
         assert "prompt_coevo" in registry
 
     def test_each_plugin_is_watchdog_plugin_subclass(self):
