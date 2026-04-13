@@ -408,6 +408,43 @@ class TestWatchdogDispatcher:
             assert gh_kwargs["rolling_comment_threshold_hours"] == 24
 
 
+class TestCliRunnerImportChain:
+    """CliRunner tests that catch import errors and wiring issues."""
+
+    def test_watchdog_help(self):
+        """watchdog --help renders without import errors."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["watchdog", "--help"])
+        assert result.exit_code == 0
+        assert "poll-interval" in result.output
+
+    def test_watchdog_import_chain(self):
+        """All imports resolve — the original crash bug (04_issues_log.md)."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["-e", "nonexistent/exp", "watchdog"])
+        assert "ImportError" not in (result.output + str(result.exception or ""))
+
+    def test_status_help(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["status", "--help"])
+        assert result.exit_code == 0
+
+    def test_plot_comparison_help(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["plot", "comparison", "--help"])
+        assert result.exit_code == 0
+
+    def test_plot_arms_race_help(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["plot", "arms-race", "--help"])
+        assert result.exit_code == 0
+
+    def test_plot_trajectory_help(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["plot", "trajectory", "--help"])
+        assert result.exit_code == 0
+
+
 class TestWatchdogMetricNamesPropagation:
     def test_run_configs_contain_metric_names_from_metrics_yaml(self):
         """RunConfigs built by watchdog contain metric_names loaded from metrics.yaml."""

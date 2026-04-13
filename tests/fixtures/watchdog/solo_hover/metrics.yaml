@@ -1,0 +1,4 @@
+accuracy:
+  display_name: Accuracy
+  higher_is_better: true
+  upper_bound: 1.0
