@@ -283,6 +283,131 @@ class TestWatchdogManifestConfig:
             assert call_kwargs["config"].poll_interval_s == 900
 
 
+class TestWatchdogBaselineFromManifest:
+    def test_baseline_passed_to_engine(self):
+        """baseline from manifest.baseline.mean is passed to WatchdogEngine."""
+        manifest = _make_fake_manifest()
+        manifest.baseline = MagicMock()
+        manifest.baseline.mean = 0.034
+
+        with (
+            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+            patch("gigaevo.cli.watchdog_cmd._get_github_token", return_value=None),
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "test/exp", "watchdog"],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            call_kwargs = mock_engine_cls.call_args[1]
+            assert call_kwargs["baseline"] == 0.034
+
+    def test_baseline_none_when_not_set(self):
+        """baseline is None when manifest.baseline.mean is None."""
+        manifest = _make_fake_manifest()
+        manifest.baseline = MagicMock()
+        manifest.baseline.mean = None
+
+        with (
+            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+            patch("gigaevo.cli.watchdog_cmd._get_github_token", return_value=None),
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "test/exp", "watchdog"],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            call_kwargs = mock_engine_cls.call_args[1]
+            assert call_kwargs["baseline"] is None
+
+
+class TestWatchdogDispatcher:
+    def test_dispatcher_passed_to_engine(self):
+        """A NotificationDispatcher is passed to WatchdogEngine."""
+        manifest = _make_fake_manifest()
+        manifest.baseline = MagicMock()
+        manifest.baseline.mean = None
+
+        with (
+            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+            patch("gigaevo.cli.watchdog_cmd._get_github_token", return_value=None),
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "test/exp", "watchdog"],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            call_kwargs = mock_engine_cls.call_args[1]
+            assert call_kwargs["dispatcher"] is not None
+
+    def test_github_channel_created_with_token_and_pr(self):
+        """GitHubPRChannel is created when token and pr_number are available."""
+        manifest = _make_fake_manifest()
+        manifest.experiment.pr_number = 99
+        manifest.experiment.branch = "exp/test"
+        manifest.baseline = MagicMock()
+        manifest.baseline.mean = None
+
+        with (
+            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+            patch(
+                "gigaevo.cli.watchdog_cmd._get_github_token",
+                return_value="ghp_test123",
+            ),
+            patch(
+                "gigaevo.monitoring.github_pr_channel.GitHubPRChannel"
+            ) as mock_gh_cls,
+        ):
+            mock_resolve.return_value = MagicMock()
+            mock_engine_cls.return_value.run.return_value = None
+            mock_gh_cls.return_value = MagicMock()
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "test/exp", "watchdog"],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            mock_gh_cls.assert_called_once()
+            gh_kwargs = mock_gh_cls.call_args[1]
+            assert gh_kwargs["experiment_name"] == "test/exp"
+            assert gh_kwargs["pr_number"] == 99
+            assert gh_kwargs["branch"] == "exp/test"
+            assert gh_kwargs["rolling_comment_threshold_hours"] == 24
+
+
 class TestWatchdogMetricNamesPropagation:
     def test_run_configs_contain_metric_names_from_metrics_yaml(self):
         """RunConfigs built by watchdog contain metric_names loaded from metrics.yaml."""

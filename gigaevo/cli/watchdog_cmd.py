@@ -3,8 +3,21 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import re
 
 import click
+
+
+def _get_github_token() -> str | None:
+    """Read GitHub token from gh CLI config (~/.config/gh/hosts.yml)."""
+    try:
+        token_file = Path.home() / ".config/gh/hosts.yml"
+        text = token_file.read_text()
+        m = re.search(r"oauth_token:\s*(\S+)", text)
+        return m.group(1) if m else None
+    except Exception:
+        return None
 
 
 @click.command("watchdog")
@@ -105,6 +118,58 @@ def watchdog(
         checkpoint_milestones=tuple(wd_cfg.checkpoint_milestones),
     )
 
+    # Build notification channels
+    from gigaevo.monitoring.dispatcher import NotificationDispatcher
+
+    channels = []
+
+    # GitHub PR channel: requires token + PR number
+    gh_token = _get_github_token()
+    pr_number_val = manifest.experiment.pr_number
+    branch = manifest.experiment.branch
+
+    if gh_token and pr_number_val:
+        from gigaevo.monitoring.github_pr_channel import GitHubPRChannel
+
+        rolling_redis = None
+        try:
+            import redis as redis_lib
+
+            rolling_redis = redis_lib.Redis(
+                host=config.redis_host,
+                port=config.redis_port,
+                db=0,
+                decode_responses=True,
+                socket_connect_timeout=5,
+            )
+        except Exception as exc:
+            click.echo(f"  Rolling comment Redis: failed ({exc})", err=True)
+
+        channels.append(
+            GitHubPRChannel(
+                repo="KhrulkovV/gigaevo-core-internal",
+                pr_number=pr_number_val,
+                token=gh_token,
+                branch=branch,
+                experiment_name=experiment,
+                rolling_comment_redis=rolling_redis,
+                rolling_comment_threshold_hours=config.rolling_comment_threshold_hours,
+            )
+        )
+        click.echo(
+            f"  GitHub PR channel: enabled "
+            f"(PR #{pr_number_val}, rolling after {config.rolling_comment_threshold_hours}h)"
+        )
+    else:
+        click.echo("  GitHub PR channel: disabled (no token or PR number)")
+
+    dispatcher = NotificationDispatcher(channels)
+
+    # Baseline for plugin SOTA comparison
+    baseline = None
+    if manifest.baseline.mean is not None:
+        baseline = manifest.baseline.mean
+
     click.echo(
         f"Starting watchdog for {experiment} "
         f"({len(run_configs)} runs, poll={effective_poll}s)"
@@ -117,5 +182,7 @@ def watchdog(
         run_configs=run_configs,
         config=config,
         max_generations=max_generations or manifest.experiment.max_generations,
+        dispatcher=dispatcher,
+        baseline=baseline,
     )
     engine.run()
