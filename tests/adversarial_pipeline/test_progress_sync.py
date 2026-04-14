@@ -251,12 +251,14 @@ class TestProgressBasedSyncHookEpochParity:
 
         # Simulate opponent advancing at exactly min_delta per sync.
         # This enforces ~1:1 epoch parity.
-        mock_redis.hget = AsyncMock(side_effect=[
-            "0",   # epoch 1 baseline: opponent at 0
-            "8",   # epoch 2: opponent advanced 8 → unblock
-            "16",  # epoch 3: opponent advanced 8 more → unblock
-            "24",  # epoch 4: opponent advanced 8 more → unblock
-        ])
+        mock_redis.hget = AsyncMock(
+            side_effect=[
+                "0",  # epoch 1 baseline: opponent at 0
+                "8",  # epoch 2: opponent advanced 8 → unblock
+                "16",  # epoch 3: opponent advanced 8 more → unblock
+                "24",  # epoch 4: opponent advanced 8 more → unblock
+            ]
+        )
 
         # Epoch 1 baseline
         await hook()
