@@ -65,6 +65,7 @@ async def fetch_evolution_dataframe(
             "state": program.state.value,
             "is_complete": program.is_complete,
             "generation": program.generation,
+            "iteration": program.iteration,
             "is_root": program.is_root,
             "parent_ids": (program.lineage.parents),
             "children_ids": (program.lineage.children),

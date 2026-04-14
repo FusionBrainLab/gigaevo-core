@@ -37,6 +37,14 @@ class PromptCoevoPlugin(WatchdogPlugin):
     Each group gets its own comparison plot via CLI subprocess.
     """
 
+    def __init__(self, sentinel_value: float | None = None, **kwargs):
+        self._sentinel_value = sentinel_value
+
+    def _sentinel_args(self) -> list[str]:
+        if self._sentinel_value is not None:
+            return ["--sentinel", str(self._sentinel_value)]
+        return []
+
     def _group_runs(self, snapshots: list[RunSnapshot]) -> dict[str, list[RunSnapshot]]:
         groups: dict[str, list[RunSnapshot]] = defaultdict(list)
         for snap in snapshots:
@@ -91,6 +99,7 @@ class PromptCoevoPlugin(WatchdogPlugin):
                     "-o",
                     str(output_dir),
                 ]
+                + self._sentinel_args()
             )
 
             try:

@@ -128,7 +128,7 @@ def frontier(ctx: click.Context, output_file: str, metric: str) -> None:
 
     gen_col = "generation"
     if gen_col not in df.columns:
-        gen_col = "metadata_iteration"
+        gen_col = "iteration"
 
     frontier_df = df.groupby(gen_col)[fitness_col].max().reset_index()
     frontier_df.columns = ["gen", "best_val"]

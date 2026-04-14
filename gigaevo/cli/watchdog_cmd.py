@@ -84,6 +84,16 @@ def watchdog(
 
     # Resolve plugin: CLI flag > manifest.watchdog.plugin > manifest.watchdog_plugin > solo
     effective_plugin_name = plugin_name or wd_cfg.plugin or manifest.watchdog_plugin
+
+    # Build plugin kwargs from manifest watchdog section
+    plugin_kwargs: dict = {}
+    if wd_cfg.sentinel_value is not None:
+        plugin_kwargs["sentinel_value"] = wd_cfg.sentinel_value
+    if wd_cfg.plot_metrics:
+        plugin_kwargs["plot_metrics"] = list(wd_cfg.plot_metrics)
+    if wd_cfg.plot_commands:
+        plugin_kwargs["plot_commands"] = list(wd_cfg.plot_commands)
+
     if effective_plugin_name:
         registry = get_registry()
         if effective_plugin_name not in registry:
@@ -94,10 +104,10 @@ def watchdog(
             )
             ctx.exit(1)
             return
-        plugin = registry[effective_plugin_name]()
+        plugin = registry[effective_plugin_name](**plugin_kwargs)
     else:
         plugin_cls = resolve_plugin(manifest=manifest)
-        plugin = plugin_cls()
+        plugin = plugin_cls(**plugin_kwargs)
 
     # Build RunConfigs from manifest
     run_configs = []

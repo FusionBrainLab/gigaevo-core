@@ -194,6 +194,7 @@ class WatchdogSection(BaseModel):
     rolling_comment_threshold_hours: int = 24
     checkpoint_milestones: list[float] = [0.1, 0.2, 0.5, 1.0]
     no_proxy_hosts: list[str] = []
+    sentinel_value: float | None = None
 
 
 class ExperimentManifest(BaseModel):

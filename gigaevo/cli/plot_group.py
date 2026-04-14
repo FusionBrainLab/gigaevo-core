@@ -38,6 +38,7 @@ def _fetch_run_data(
     redis_port: int,
     metric: str = "fitness",
     no_frontier_labels: set[str] | None = None,
+    sentinel_value: float | None = None,
 ) -> list[tuple[str, pd.DataFrame]]:
     """Fetch and prepare DataFrames for each run. Returns list of (label, df).
 
@@ -45,6 +46,8 @@ def _fetch_run_data(
         no_frontier_labels: Set of run labels for which frontier (cummax) should
             be suppressed. Useful for adversarial Improver populations where
             fitness is non-monotonic.
+        sentinel_value: Exact fitness value used for invalid programs (e.g. -1.0).
+            Rows matching this value are removed before computing statistics.
     """
     from gigaevo.utils.dataframes import prepare_iteration_dataframe
     from gigaevo.utils.redis import fetch_evolution_dataframe
@@ -61,6 +64,7 @@ def _fetch_run_data(
             raw_df,
             fitness_col=f"metric_{metric}",
             compute_frontier=not skip_frontier,
+            sentinel_value=sentinel_value,
         )
         if prepared.empty:
             continue
@@ -193,6 +197,12 @@ def plot() -> None:
     default=False,
     help="Use publication-quality styling (larger fonts, 300 DPI, colorblind-safe).",
 )
+@click.option(
+    "--sentinel",
+    type=float,
+    default=None,
+    help="Sentinel fitness value for invalid programs (e.g. -1.0). Filtered before plotting.",
+)
 @click.pass_context
 def comparison(
     ctx: click.Context,
@@ -206,6 +216,7 @@ def comparison(
     annotate_frontier: bool,
     max_annotations: int,
     paper: bool,
+    sentinel: float | None,
 ) -> None:
     """Plot fitness comparison across runs."""
     import matplotlib
@@ -249,6 +260,7 @@ def comparison(
         ctx.obj["redis_port"],
         metric=metric,
         no_frontier_labels=actual_no_frontier,
+        sentinel_value=sentinel,
     )
 
     out_path = Path(output_dir)
@@ -298,7 +310,7 @@ def comparison(
             "#17becf",
         ]
 
-    iteration_col = "metadata_iteration"
+    iteration_col = "iteration"
 
     run_labels = []
     for i, (label, df) in enumerate(prepared_dfs):
@@ -403,6 +415,12 @@ def comparison(
     default=False,
     help="Suppress standard deviation band.",
 )
+@click.option(
+    "--sentinel",
+    type=float,
+    default=None,
+    help="Sentinel fitness value for invalid programs (e.g. -1.0). Filtered before plotting.",
+)
 @click.pass_context
 def trajectory(
     ctx: click.Context,
@@ -412,6 +430,7 @@ def trajectory(
     no_best: bool,
     no_mean: bool,
     no_std: bool,
+    sentinel: float | None,
 ) -> None:
     """Plot fitness trajectory for a run."""
     import matplotlib
@@ -431,6 +450,7 @@ def trajectory(
         ctx.obj["redis_host"],
         ctx.obj["redis_port"],
         metric=metric,
+        sentinel_value=sentinel,
     )
 
     out_path = Path(output_dir)
@@ -438,7 +458,7 @@ def trajectory(
 
     fig, ax = plt.subplots(figsize=(7.0, 4.5))
 
-    iteration_col = "metadata_iteration"
+    iteration_col = "iteration"
 
     for label, df in prepared_dfs:
         iters = df[iteration_col]
@@ -525,6 +545,12 @@ def trajectory(
     help="Use publication-quality styling.",
 )
 @click.option("--show", is_flag=True, default=False, help="Show plot interactively.")
+@click.option(
+    "--sentinel",
+    type=float,
+    default=None,
+    help="Sentinel fitness value for invalid programs (e.g. -1.0). Filtered before plotting.",
+)
 @click.pass_context
 def arms_race(
     ctx: click.Context,
@@ -534,6 +560,7 @@ def arms_race(
     show_max: bool,
     paper: bool,
     show: bool,
+    sentinel: float | None,
 ) -> None:
     """Dual-panel arms race plot for adversarial co-evolution.
 
@@ -574,6 +601,7 @@ def arms_race(
         ctx.obj["redis_port"],
         metric=metric,
         no_frontier_labels=d_labels,
+        sentinel_value=sentinel,
     )
 
     # Index by label
@@ -602,7 +630,7 @@ def arms_race(
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    iteration_col = "metadata_iteration"
+    iteration_col = "iteration"
 
     fig, (ax_g, ax_d) = plt.subplots(
         2,

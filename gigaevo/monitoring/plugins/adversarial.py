@@ -40,9 +40,11 @@ class AdversarialPlugin(WatchdogPlugin):
         plot_metrics: list[str] | None = None,
         plot_commands: list | None = None,
         problem_name: str | None = None,
+        sentinel_value: float | None = None,
     ):
         self._plot_metrics = plot_metrics or ["fitness"]
         self._plot_commands = plot_commands or []
+        self._sentinel_value = sentinel_value
         if plot_metrics and problem_name:
             from gigaevo.monitoring.manifest_schema import WatchdogPluginOptions
 
@@ -57,6 +59,11 @@ class AdversarialPlugin(WatchdogPlugin):
         for snap in snapshots:
             groups[snap.run_spec.prefix].append(snap)
         return dict(groups)
+
+    def _sentinel_args(self) -> list[str]:
+        if self._sentinel_value is not None:
+            return ["--sentinel", str(self._sentinel_value)]
+        return []
 
     @staticmethod
     def _build_run_args(snapshots: list[RunSnapshot]) -> list[str]:
@@ -133,6 +140,7 @@ class AdversarialPlugin(WatchdogPlugin):
                 "-o",
                 str(output_dir),
             ]
+            + self._sentinel_args()
         )
 
         try:
@@ -187,6 +195,7 @@ class AdversarialPlugin(WatchdogPlugin):
                 "-o",
                 str(output_dir),
             ]
+            + self._sentinel_args()
         )
         if d_labels:
             cmd.extend(["--no-frontier-for", ",".join(d_labels)])
@@ -220,6 +229,7 @@ class AdversarialPlugin(WatchdogPlugin):
         for key, val in plot_command.args.items():
             cmd.extend([f"--{key}", str(val)])
         cmd.extend(["-o", str(output_dir)])
+        cmd.extend(self._sentinel_args())
 
         try:
             result = subprocess.run(

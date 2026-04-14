@@ -33,6 +33,14 @@ class SoloPlugin(WatchdogPlugin):
     - format_telegram_body: run-by-run format with stall flags
     """
 
+    def __init__(self, sentinel_value: float | None = None, **kwargs):
+        self._sentinel_value = sentinel_value
+
+    def _sentinel_args(self) -> list[str]:
+        if self._sentinel_value is not None:
+            return ["--sentinel", str(self._sentinel_value)]
+        return []
+
     @staticmethod
     def _build_run_args(snapshots: list[RunSnapshot]) -> list[str]:
         """Build -r args for CLI from snapshots."""
@@ -69,6 +77,7 @@ class SoloPlugin(WatchdogPlugin):
                 "-o",
                 str(output_dir),
             ]
+            + self._sentinel_args()
         )
 
         try:

@@ -142,7 +142,7 @@ class TestFetchRunDataSentinelPassthrough:
         return pd.DataFrame(
             {
                 "metric_fitness": fitness_values,
-                "metadata_iteration": list(range(1, n + 1)),
+                "iteration": list(range(1, n + 1)),
             }
         )
 
