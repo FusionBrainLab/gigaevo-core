@@ -1,8 +1,8 @@
-"""Tests for tools.experiment.preflight_check — checks 9, 15, 22."""
+"""Tests for gigaevo.experiment.preflight — checks 9, 15, 22."""
 
 from unittest.mock import MagicMock, patch
 
-from tools.experiment.preflight_check import run_checks
+from gigaevo.experiment.preflight import run_checks
 
 
 def _make_manifest(stopping_rule=None, status="implemented", factorial_design=False):
@@ -187,7 +187,7 @@ class TestCheck9LiveWriters:
             patch("tools.experiment.manifest.load_manifest", return_value=manifest),
             patch("redis.Redis", return_value=mock_redis),
             patch(
-                "tools.experiment.preflight_check._find_run_pids_for_db",
+                "gigaevo.experiment.preflight._find_run_pids_for_db",
                 return_value=pids,
             ),
         ):
