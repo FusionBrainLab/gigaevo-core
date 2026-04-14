@@ -9,6 +9,8 @@ Replaces the urllib.request code in watchdog templates with:
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -43,6 +45,7 @@ class GitHubPRChannel(NotificationChannel):
         token: str,
         base_url: str = _DEFAULT_BASE_URL,
         transport: httpx.AsyncBaseTransport | None = None,
+        transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
         branch: str | None = None,
         experiment_name: str | None = None,
         rolling_comment_redis: redis_lib.Redis | None = None,
@@ -53,11 +56,17 @@ class GitHubPRChannel(NotificationChannel):
         self._token = token
         self._base_url = base_url.rstrip("/")
         self._transport = transport
+        self._transport_factory = transport_factory
         self._branch = branch
         self._experiment_name = experiment_name
         self._rolling_redis = rolling_comment_redis
         self._rolling_threshold_hours = rolling_comment_threshold_hours
         self._client: httpx.AsyncClient | None = None
+        # Track the event loop that owns the current client so we can detect
+        # when the watchdog enters a new asyncio.run() cycle and rebuild the
+        # client in the new loop. Without this, httpx raises "Event loop is
+        # closed" when the underlying connection pool outlives its loop.
+        self._client_loop: asyncio.AbstractEventLoop | None = None
         self._comment_id: int | None = None
         self._status_count: int = 0
         self._telegram_down = False
@@ -77,7 +86,15 @@ class GitHubPRChannel(NotificationChannel):
         self._telegram_down = value
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
+        current_loop = asyncio.get_running_loop()
+        stale_loop = (
+            self._client_loop is not None and self._client_loop is not current_loop
+        )
+
+        if self._client is None or self._client.is_closed or stale_loop:
+            # Drop the old client without aclose(): its loop is gone.
+            self._client = None
+
             kwargs: dict[str, Any] = {
                 "timeout": httpx.Timeout(30.0),
                 "headers": {
@@ -85,9 +102,12 @@ class GitHubPRChannel(NotificationChannel):
                     "Accept": "application/vnd.github.v3+json",
                 },
             }
-            if self._transport is not None:
+            if self._transport_factory is not None:
+                kwargs["transport"] = self._transport_factory()
+            elif self._transport is not None:
                 kwargs["transport"] = self._transport
             self._client = httpx.AsyncClient(**kwargs)
+            self._client_loop = current_loop
         return self._client
 
     async def close(self) -> None:

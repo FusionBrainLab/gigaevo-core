@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -628,3 +629,106 @@ class TestClose:
         # No API call made, client was never created
         await channel.close()
         await channel.close()
+
+
+class _LoopBoundTransport(httpx.AsyncBaseTransport):
+    """Mock transport that mimics real httpx/anyio loop affinity.
+
+    Records which event loop created it (first request). Any subsequent
+    request from a different loop raises RuntimeError('Event loop is closed'),
+    exactly like a real AsyncHTTPTransport whose connection pool was bound
+    to a now-closed loop.
+
+    This reproduces the production bug observed in watchdog cycles 2+.
+    """
+
+    def __init__(self, handler) -> None:
+        self._handler = handler
+        self._bound_loop: asyncio.AbstractEventLoop | None = None
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        current = asyncio.get_running_loop()
+        if self._bound_loop is None:
+            self._bound_loop = current
+        elif self._bound_loop is not current:
+            raise RuntimeError("Event loop is closed")
+        return self._handler(request)
+
+
+class TestEventLoopReuse:
+    """Regression: the watchdog calls asyncio.run() per cycle, creating a new
+    event loop each time. The cached httpx.AsyncClient from the previous loop
+    must not be reused — its connection pool is bound to the old (now closed)
+    loop and httpx raises 'Event loop is closed'.
+
+    The fix: detect loop change in _get_client() and rebuild the client.
+    """
+
+    def test_second_asyncio_run_reinitializes_client(self) -> None:
+        """check_health across two asyncio.run() invocations succeeds.
+
+        Uses _LoopBoundTransport (via transport_factory) which rejects
+        requests from a second loop — exactly like httpx's real
+        AsyncHTTPTransport whose connection pool is bound to the loop that
+        created it. Without the fix, cycle 2 hits 'Event loop is closed';
+        with the fix, the channel rebuilds client+transport so cycle 2
+        succeeds.
+        """
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"id": 123, "is_bot": True, "first_name": "TestBot"},
+                },
+            )
+
+        # Factory mirrors production: each loop gets a fresh transport,
+        # because the real AsyncHTTPTransport's connection pool is
+        # loop-bound. Without loop-change detection in _get_client(), the
+        # cached client from cycle 1 keeps using cycle-1's transport which
+        # rejects cycle 2 requests.
+        channel = TelegramChannel(
+            bot_token="test-token",
+            chat_id="12345",
+            transport_factory=lambda: _LoopBoundTransport(handler),
+        )
+
+        async def one_cycle() -> bool:
+            return await channel.check_health()
+
+        result1 = asyncio.run(one_cycle())
+        result2 = asyncio.run(one_cycle())
+
+        assert result1 is True, "cycle 1 should succeed"
+        assert result2 is True, (
+            "cycle 2 should succeed: channel must rebuild its client+transport "
+            "across event loops (the transport itself is loop-bound in production)"
+        )
+        assert call_count == 2
+
+    def test_multiple_sends_across_loops(self) -> None:
+        """Send messages across 3 asyncio.run() cycles — all must succeed."""
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+        channel = TelegramChannel(
+            bot_token="test-token",
+            chat_id="12345",
+            transport_factory=lambda: _LoopBoundTransport(handler),
+        )
+
+        async def send_once() -> bool:
+            return await channel._send_message("hello")
+
+        results = [asyncio.run(send_once()) for _ in range(3)]
+        assert results == [True, True, True]
+        assert call_count == 3
