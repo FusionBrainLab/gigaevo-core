@@ -222,3 +222,58 @@ class TestProgressBasedSyncHookGetRedis:
         sentinel = MagicMock()
         hook._redis_clients[0] = sentinel
         assert hook._get_redis(0) is sentinel
+
+
+class TestProgressBasedSyncHookEpochParity:
+    async def test_enforces_1_to_1_epoch_advancement(self):
+        """
+        Verify that ProgressBasedSyncHook enforces ~1:1 epoch advancement ratio.
+
+        This test guards against the bug fixed in steady_state.py where
+        incremental publications of programs_processed during _ingest_batch
+        allowed the faster population to read stale intermediate values and
+        advance multiple epochs per opponent epoch (observed 2-2.5x divergence
+        in heilbron/asymmetric-iterations).
+
+        With the fix, programs_processed is published ONLY at epoch boundaries
+        (step 3a of _epoch_refresh), forcing sync parity.
+        """
+        hook = ProgressBasedSyncHook(
+            host="localhost",
+            port=6379,
+            sources=[{"db": 0, "prefix": "opponent"}],
+            min_delta=8,  # standard: epoch_trigger_count = max_mutations_per_generation
+            poll_interval=0.01,
+        )
+
+        mock_redis = AsyncMock()
+        hook._redis_clients[0] = mock_redis
+
+        # Simulate opponent advancing at exactly min_delta per sync.
+        # This enforces ~1:1 epoch parity.
+        mock_redis.hget = AsyncMock(side_effect=[
+            "0",   # epoch 1 baseline: opponent at 0
+            "8",   # epoch 2: opponent advanced 8 → unblock
+            "16",  # epoch 3: opponent advanced 8 more → unblock
+            "24",  # epoch 4: opponent advanced 8 more → unblock
+        ])
+
+        # Epoch 1 baseline
+        await hook()
+        assert hook._last_progress == 0
+
+        # Epoch 2: blocked until opponent reaches 8
+        await hook()
+        assert hook._last_progress == 8
+
+        # Epoch 3: blocked until opponent reaches 16
+        await hook()
+        assert hook._last_progress == 16
+
+        # Epoch 4: blocked until opponent reaches 24
+        await hook()
+        assert hook._last_progress == 24
+
+        # Verify we polled exactly as many times as needed (one poll per epoch)
+        # The fix ensures no premature unblocking from intermediate counter values
+        assert mock_redis.hget.call_count == 4  # 1 baseline + 3 syncs

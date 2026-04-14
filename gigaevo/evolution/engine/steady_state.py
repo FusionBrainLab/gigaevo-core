@@ -466,13 +466,13 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self.metrics.programs_processed += len(completed)
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
 
-        # Publish counter to Redis immediately so adversarial sync hooks can
-        # see our progress between epoch boundaries.  Without this, the counter
-        # is only updated at epoch refresh, causing the opponent to block.
-        if completed:
-            await self.storage.save_run_state(
-                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
-            )
+        # NOTE: programs_processed is intentionally NOT published to Redis here.
+        # Publication happens only at _epoch_refresh step 3a (before the sync
+        # hook).  Publishing after every batch caused adversarial generation
+        # divergence: the faster population read intermediate counter values
+        # and advanced multiple epochs per opponent epoch (2-2.5x divergence
+        # observed in heilbron/asymmetric-iterations).  With publication only
+        # at epoch boundaries, the sync hook enforces ~1:1 epoch parity.
 
         handled = [p.id for p in completed]
         return added, handled
