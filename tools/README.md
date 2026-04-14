@@ -474,6 +474,230 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 
 ---
 
+## Experiment Manifest (`experiment.yaml`)
+
+Every experiment has a single source of truth: `experiments/<task>/<name>/experiment.yaml`.
+It is the machine-readable declaration of the experiment — Pydantic-validated, read by every
+CLI command, skill, watchdog, and plot. `launch.sh` is **generated** from it (never hand-edited).
+
+Two import paths:
+
+| Module | Returns | When to use |
+|---|---|---|
+| `gigaevo.monitoring.manifest.load_manifest(exp)` | Pydantic `ExperimentManifest` (nested: `m.experiment.name`, `m.experiment.status`) | New code; strict validation; JSON Schema export |
+| `tools.experiment.manifest.load_manifest(exp)` | Legacy dataclass (flat: `m.name`, `m.status`) | Legacy consumers; `launch_generator`, `preflight` |
+
+Both read the same `experiment.yaml` and enforce the same state machine and status gates.
+
+### Schema (Pydantic `ExperimentManifest`)
+
+Source: `gigaevo/monitoring/manifest_schema.py`. Top-level keys, in canonical order:
+
+| Key | Type | Required | Notes |
+|---|---|---|---|
+| `schema_version` | `int` | always | Only `1` is supported today |
+| `experiment` | `ExperimentSection` | always | Identity, status, PR, prereg |
+| `problem` | `ProblemSpec` | no (defaults) | Test set, fitness type, metric name |
+| `runs` | `list[ManifestRunSpec]` | gated | Required when `status ≥ implemented` |
+| `servers` | `list[str]` | gated | Required when `status ≥ implemented` |
+| `config` | `dict[str, Any]` | gated | Shared Hydra overrides; required when `status ≥ implemented` |
+| `custom_env` | `dict[str, str]` | no | Env vars exported in generated `launch.sh` |
+| `checkpoints` | `list[dict]` | no | Appended by `/experiment-checkpoint` |
+| `launch` | `LaunchInfo` | gated | `time` + `commit` required when `status ≥ running` |
+| `baseline` | `BaselineInfo` | no | Reference / mean / metric for comparison |
+| `smoke_test` | `SmokeTestInfo` | gated | `completed=true` required when `status ≥ implemented` |
+| `tools` | `list[dict[str, str]]` | no | Experiment-specific tool registry |
+| `watchdog` | `WatchdogSection` | no | Plugin, plot commands, alert thresholds |
+
+#### `experiment` section
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `name` | `str` | required | `<task>/<short-name>`, e.g. `heilbron/asymmetric-iterations-v2` |
+| `task` | `str` | required | Top-level task folder (e.g. `heilbron`, `hover`, `hotpotqa`) |
+| `status` | `str` | required | One of: `preregistered`, `implemented`, `running`, `complete`, `invalid` |
+| `branch` | `str` | `""` | Git branch hosting the experiment |
+| `max_generations` | `int` | `25` | Stopping rule target |
+| `pr_number` | `int \| None` | `None` | GitHub PR tracking the experiment |
+| `tracking_issue` | `int \| None` | `None` | GitHub Issue ID |
+| `prereg_commit` | `str \| None` | `None` | Git SHA of the pre-registration commit |
+
+#### `runs[]` — per-run specification
+
+| Field | Type | Required | Purpose |
+|---|---|---|---|
+| `label` | `str` | yes | Display label (e.g. `A1_G`, `C2_D`) |
+| `db` | `int` (≥0) | yes | Redis DB number (0–15) |
+| `prefix` | `str` | yes | Redis key prefix (= Hydra `problem.name`) |
+| `pipeline` | `str` | yes | Pipeline config name (`standard`, `adversarial_asymmetric`, …) |
+| `problem_name` | `str` | yes | Hydra `problem.name` override |
+| `condition` | `str` | yes | Human-readable arm/condition description |
+| `chain_url` | `str \| None` | no | Chain LLM endpoint (null ⇒ shared LB) |
+| `mutation_url` | `str \| None` | no | Mutation LLM endpoint |
+| `model_name` | `str` | yes | Model ID (e.g. `Qwen3-235B-A22B-Thinking-2507`) |
+| `pid` | `int \| None` | gated | Set by `launch.sh`; required when `status=running` |
+| `log_path` | `str \| None` | no | Relative log file path (default: `run_<label>.log`) |
+| `extra_overrides` | `list[str] \| None` | no | Per-run Hydra overrides (appended to `run.py` CLI) |
+| `run_env` | `dict[str, str] \| None` | no | Per-run env vars prepended to launch command |
+| `role` | `"constructor" \| "improver" \| None` | gated | Required when `watchdog.plugin=adversarial` |
+
+### Status state machine
+
+Forward transitions enforced by `set_status`:
+
+```
+preregistered ──► implemented ──► running ──► complete
+                                          └─► invalid ──► preregistered  (retry)
+```
+
+Recovery transitions allowed only via `gigaevo manifest reset-status` (escape hatch):
+
+```
+running ──► implemented    (launch failed; re-launch needed)
+running ──► preregistered  (invalid launch; release DB claims, re-implement)
+```
+
+Status gates (enforced at load time by `ExperimentManifest.validate_status_gates`):
+
+| Status | Required fields |
+|---|---|
+| `preregistered` | `experiment.*`, `schema_version` |
+| `implemented` | above + non-empty `runs[]`, `servers[]`, `config`, `smoke_test.completed=true` |
+| `running` | above + `launch.time`, `launch.commit`, every `runs[].pid` set |
+| `complete` | same as `running` (archival state) |
+| `invalid` | no additional gates (terminal; `reset-status` clears) |
+
+### CLI reference — `gigaevo manifest …`
+
+All subcommands require `-e/--experiment TASK/NAME`.
+
+| Subcommand | Purpose | Example |
+|---|---|---|
+| `get FIELD` | Read scalar field or dotted path | `gigaevo -e hover/foo manifest get status` |
+| `get runs` | Pretty-print runs table | `gigaevo -e hover/foo manifest get runs` |
+| `get <dotted.path>` | Traverse nested YAML | `gigaevo -e hover/foo manifest get launch.watchdog_pid` |
+| `set status VALUE` | Write via state machine | `gigaevo -e hover/foo manifest set status running` |
+| `update PATH VALUE` | Write any field (auto-coerces int/float/bool/null) | `gigaevo -e hover/foo manifest update launch.watchdog_pid 12345` |
+| `gate STATUS` | Assert status; exit 0 on match, 1 on mismatch | `gigaevo -e hover/foo manifest gate implemented` |
+| `pr-description [--push]` | Render Markdown PR body; optionally push via `gh` | `gigaevo -e hover/foo manifest pr-description --push` |
+| `record-pids --pids-file F --labels "A B C"` | Write launched PIDs into `runs[].pid` | Called by generated `launch.sh` |
+| `reset-status TARGET --reason 'why'` | Force status transition (escape hatch) | `gigaevo -e hover/foo manifest reset-status implemented --reason 'launch crashed'` |
+
+Notes:
+- `update` auto-coerces: `true`/`false` → bool, `null`/`none` → `None`, integer/float literals, else string.
+- `reset-status` from `running`: releases Redis DB claims and clears `launch.*` + `runs[].pid` (when target is `implemented`).
+- `pr-description --push` requires `experiment.pr_number` to be set.
+
+### Bijective mapping: `experiment.yaml` ↔ `launch.sh`
+
+`launch.sh` is regenerated from `experiment.yaml` with `gigaevo -e <exp> launch --generate-script`.
+The mapping is one-way deterministic — every field in the manifest corresponds to an observable
+fragment of `launch.sh`; every fragment of `launch.sh` is traceable back to a field.
+
+| Manifest field | `launch.sh` output |
+|---|---|
+| `experiment.name` | Banner header, regeneration comment, label in launch log |
+| `experiment.branch` | Header comment only |
+| `experiment.pr_number` | Header comment only |
+| `experiment.prereg_commit` | Header comment + launch banner |
+| `experiment.max_generations` | `max_generations=<N>` Hydra override per run |
+| `servers[]` | `NO_PROXY` export: `localhost,127.0.0.1,api.github.com,<servers...>` |
+| `custom_env{}` | `export KEY="VALUE"` lines, then propagated to every run |
+| `config.stage_timeout` | `stage_timeout=<N>` Hydra override |
+| `config.dag_timeout` | `dag_timeout=<N>` Hydra override |
+| `config.max_mutations_per_generation` | `max_mutations_per_generation=<N>` |
+| `config.max_elites_per_generation` | `max_elites_per_generation=<N>` |
+| `config.num_parents` | `num_parents=<N>` |
+| `config.mutation_mode` | `mutation_mode=<...>` (optional) |
+| `config.chain_url_env_var` | Name of per-run env var prefix (default `CHAIN_URL`) |
+| `runs[].label` | PID variable name `PID_<label>`, log file `run_<label>.log`, label in `pids.txt` |
+| `runs[].db` | `redis.db=<N>` Hydra override |
+| `runs[].pipeline` | `pipeline=<name>` Hydra override |
+| `runs[].problem_name` | `problem.name=<path>` Hydra override |
+| `runs[].condition` | Launch banner comment |
+| `runs[].model_name` | `model_name=<id>` Hydra override |
+| `runs[].mutation_url` | `llm_base_url="<url>"` Hydra override |
+| `runs[].chain_url` (non-null) | Per-run `${CHAIN_URL_ENV_VAR}=<url> nohup ...` prefix |
+| `runs[].run_env` | Per-run `KEY=VAL` prefix on the `nohup` invocation |
+| `runs[].extra_overrides` | Appended verbatim to the run's Hydra CLI (`${…}` refs single-quoted per KF-02) |
+| `runs[].log_path` | Stdout/stderr redirection target (default `run_<label>.log`) |
+
+#### Worked example: `heilbron/asymmetric-iterations-v2` run `A1_G`
+
+Manifest entry:
+
+```yaml
+- label: A1_G
+  db: 1
+  prefix: heilbron_adversarial/pop_a
+  pipeline: adversarial_asymmetric
+  problem_name: heilbron_adversarial/pop_a
+  condition: 'Arm A (Composition): Constructor, pair 1'
+  chain_url: null
+  mutation_url: http://localhost:8000/v1
+  model_name: Qwen3-235B-A22B-Thinking-2507
+  extra_overrides:
+    - evolution=steady_state
+    - opponent_redis_db=2
+    - opponent_redis_prefix=heilbron_adversarial/pop_b
+    - feedback_mode=composition
+    - population_role=constructor
+    - post_step_hook=${composition_injection_hook}
+  role: constructor
+```
+
+Generated `launch.sh` fragment:
+
+```bash
+# ── Run A1_G: Arm A (Composition): Constructor, pair 1
+nohup "$PYTHON" "$PROJ/run.py" \
+    problem.name=heilbron_adversarial/pop_a \
+    pipeline=adversarial_asymmetric \
+    prompts=default \
+    redis.db=1 \
+    stage_timeout=2400 \
+    dag_timeout=2400 \
+    max_generations=50 \
+    max_mutations_per_generation=8 \
+    max_elites_per_generation=8 \
+    num_parents=1 \
+    model_name=Qwen3-235B-A22B-Thinking-2507 \
+    llm_base_url="http://localhost:8000/v1" \
+    evolution=steady_state \
+    opponent_redis_db=2 \
+    opponent_redis_prefix=heilbron_adversarial/pop_b \
+    feedback_mode=composition \
+    population_role=constructor \
+    '${composition_injection_hook}' \
+    > "$LOG_DIR/run_A1_G.log" 2>&1 &
+PID_A1_G=$!
+```
+
+Notes:
+- `chain_url: null` ⇒ no per-run `CHAIN_URL=…` prefix; the run uses the shared LiteLLM proxy via `custom_env`.
+- `post_step_hook=${composition_injection_hook}` contains a Hydra interpolation ref; the generator single-quotes it so bash doesn't expand `${…}` as a shell variable (KF-02).
+- `role: constructor` does not appear in `launch.sh` — it is consumed only by the adversarial watchdog plugin for G/D dispatch and frontier suppression.
+
+### Manifest helpers
+
+Python API (`gigaevo.monitoring.manifest`):
+
+| Function | Purpose |
+|---|---|
+| `load_manifest(exp) -> ExperimentManifest` | Load + validate experiment.yaml (Pydantic) |
+| `set_status(exp, new, *, allow_recovery=False)` | State-machine-enforced status write |
+| `update_manifest(exp, updater)` | Atomic mutation under Redis lock |
+| `claim_dbs(exp, [dbs])` | Reserve Redis DBs with TTL=7d |
+| `refresh_db_claims(exp, [dbs])` | Extend existing claims |
+| `release_db_claims([dbs])` | Drop claims (e.g. on reset-status) |
+| `find_active_experiments()` | Discover all implemented/running experiments |
+| `generate_pr_description(exp)` | Render Markdown PR body |
+
+Atomicity: every write acquires a Redis lock (`experiments:<exp>:yaml_lock`, 30s TTL),
+writes to `experiment.yaml.tmp`, `fsync`s, then renames — FUSE-safe.
+
+---
+
 ## Benchmarking
 
 ### `benchmark.py` — Throughput benchmark runner
