@@ -13,10 +13,12 @@ Usage examples::
     gigaevo -e hover/foo manifest gate implemented
     gigaevo -e hover/foo manifest pr-description --push
     gigaevo -e hover/foo manifest record-pids --pids-file pids.txt --labels C1 C2 P1 P2
+    gigaevo -e hover/foo manifest reset-status implemented --reason "launch failed"
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 import subprocess
@@ -352,3 +354,93 @@ def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
 
     update_manifest(experiment, set_pids)
     click.echo(f"PIDs recorded: {label_to_pid}")
+
+
+# ---------------------------------------------------------------------------
+# reset-status
+# ---------------------------------------------------------------------------
+
+
+@manifest.command("reset-status")
+@click.argument("target_status")
+@click.option("--reason", required=True, help="Why the reset is needed (for audit).")
+@click.option(
+    "--force/--no-force", default=False, help="Skip interactive confirmation prompt."
+)
+@click.pass_context
+def reset_status(
+    ctx: click.Context,
+    target_status: str,
+    reason: str,
+    force: bool,
+) -> None:
+    """Reset experiment status — escape hatch for stuck states.
+
+    Allows recovery transitions the normal state machine forbids:
+      running -> implemented  (launch failed, need to re-launch)
+      invalid -> preregistered (retry after fixing)
+
+    When reverting from `running`:
+      - Redis DB claims are released.
+      - For target `implemented`, launch.* fields and runs[].pid are cleared.
+    """
+    experiment = _require_experiment(ctx)
+
+    from gigaevo.monitoring.manifest import (
+        load_manifest,
+        release_db_claims,
+        update_manifest,
+    )
+    from gigaevo.monitoring.manifest import (
+        set_status as _set_status,
+    )
+
+    m = load_manifest(experiment)
+    current = m.experiment.status
+    click.echo(f"Current status: {current}")
+    click.echo(f"Target status:  {target_status}")
+    click.echo(f"Reason:         {reason}")
+
+    if current == target_status:
+        click.echo("Already at target status. Nothing to do.")
+        return
+
+    if not force:
+        if not click.confirm("\nProceed?", default=False):
+            click.echo("Aborted.")
+            ctx.exit(1)
+            return
+
+    if current == "running" and target_status in ("implemented", "preregistered"):
+        dbs = [r.db for r in m.runs]
+        click.echo(f"Releasing DB claims: {dbs}")
+        release_db_claims(dbs)
+
+    if current == "running" and target_status == "implemented":
+
+        def clear_launch(raw: dict[str, Any]) -> None:
+            raw.setdefault("experiment", {})["status"] = target_status
+            raw["launch"] = {
+                "time": None,
+                "commit": None,
+                "watchdog_pid": None,
+                "confirmed_at": None,
+            }
+            for run in raw.get("runs", []):
+                run["pid"] = None
+
+        update_manifest(experiment, clear_launch)
+        click.echo(f"Status reset to {target_status}. Launch info and PIDs cleared.")
+    else:
+        try:
+            _set_status(experiment, target_status, allow_recovery=True)
+            click.echo(f"Status reset to {target_status}.")
+        except ValueError as exc:
+            click.echo(f"ERROR: {exc}", err=True)
+            ctx.exit(1)
+            return
+
+    timestamp = datetime.now(UTC).isoformat()
+    click.echo(f"\nReset logged at {timestamp}")
+    click.echo(f"Reason: {reason}")
+    click.echo("\nNext: fix the issue, then re-run the appropriate skill.")

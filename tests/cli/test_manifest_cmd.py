@@ -503,6 +503,114 @@ class TestManifestRecordPids:
         assert "expected" in result.output.lower()
 
 
+class TestManifestResetStatus:
+    def test_reset_noop_when_already_at_target(self):
+        """reset-status is a no-op when current status already matches target."""
+        manifest = _make_manifest(status="implemented")
+        with (
+            patch(f"{_MANIFEST_MOD}.load_manifest", return_value=manifest),
+            patch(f"{_MANIFEST_MOD}.set_status") as mock_set,
+            patch(f"{_MANIFEST_MOD}.update_manifest") as mock_update,
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "reset-status",
+                    "implemented",
+                    "--reason",
+                    "nothing broken",
+                    "--force",
+                ],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            assert "Nothing to do" in result.output
+            mock_set.assert_not_called()
+            mock_update.assert_not_called()
+
+    def test_reset_running_to_implemented_clears_launch_and_pids(self):
+        """running -> implemented releases DB claims and clears launch/PIDs."""
+        manifest = _make_manifest(status="running")
+        captured: dict[str, Any] = {}
+
+        def capture_update(experiment, updater):
+            raw = {
+                "experiment": {"status": "running"},
+                "launch": {"watchdog_pid": 9999, "time": "t"},
+                "runs": [
+                    {"label": "A", "pid": 111},
+                    {"label": "B", "pid": 222},
+                ],
+            }
+            updater(raw)
+            captured["raw"] = raw
+
+        with (
+            patch(f"{_MANIFEST_MOD}.load_manifest", return_value=manifest),
+            patch(f"{_MANIFEST_MOD}.release_db_claims") as mock_release,
+            patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_update),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "reset-status",
+                    "implemented",
+                    "--reason",
+                    "launch failed",
+                    "--force",
+                ],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            mock_release.assert_called_once_with([4, 5])
+            raw = captured["raw"]
+            assert raw["experiment"]["status"] == "implemented"
+            assert raw["launch"] == {
+                "time": None,
+                "commit": None,
+                "watchdog_pid": None,
+                "confirmed_at": None,
+            }
+            assert all(r["pid"] is None for r in raw["runs"])
+
+    def test_reset_other_transition_uses_set_status_with_recovery(self):
+        """Non-(running->implemented) transitions go through set_status(allow_recovery=True)."""
+        manifest = _make_manifest(status="invalid")
+        with (
+            patch(f"{_MANIFEST_MOD}.load_manifest", return_value=manifest),
+            patch(f"{_MANIFEST_MOD}.set_status") as mock_set,
+            patch(f"{_MANIFEST_MOD}.update_manifest") as mock_update,
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "reset-status",
+                    "preregistered",
+                    "--reason",
+                    "retry after fix",
+                    "--force",
+                ],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            mock_set.assert_called_once_with(
+                "hover/test", "preregistered", allow_recovery=True
+            )
+            mock_update.assert_not_called()
+
+
 class TestManifestRequiresExperiment:
     def test_get_without_experiment_exits_1(self):
         """get without --experiment flag exits 1 with error."""
