@@ -10,6 +10,7 @@ import yaml
 from gigaevo.experiment.manifest import (
     RECOVERY_TRANSITIONS,
     VALID_TRANSITIONS,
+    ExperimentManifest,
     _write_manifest_atomic,
     experiment_dir,
     generate_pr_description,
@@ -17,7 +18,6 @@ from gigaevo.experiment.manifest import (
     manifest_path,
     set_status,
 )
-from gigaevo.experiment.manifest import ExperimentManifest
 
 
 def _minimal_manifest_dict(
