@@ -16,12 +16,26 @@ export GIGAEVO_PYTHON=python3  # adjust for your environment
 | Flag | Description |
 |------|-------------|
 | `-e/--experiment TASK/NAME` | Experiment name — auto-discovers all runs, PIDs, watchdog from `experiment.yaml` |
-| `-r/--run PREFIX@DB:LABEL` | Manual run spec (repeatable for multiple runs) |
+| `-r/--run SPEC` | Manual run spec (repeatable). See "Run spec formats" below. |
 | `-f/--format FORMAT` | Output format: `table` (default for terminal), `json`, `csv`, `markdown` |
 | `-q/--quiet` | Suppress output |
 | `-v/--verbose` | Verbose output |
 | `--redis-host HOST` | Redis hostname (default: localhost) |
 | `--redis-port PORT` | Redis port (default: 6379) |
+
+#### Run spec formats (`-r`)
+
+The `-r/--run` flag accepts several shorthand forms. Prefix is auto-discovered from the Redis DB's `{prefix}:__instance_lock__` key when omitted.
+
+| Form | Example | Meaning |
+|------|---------|---------|
+| `prefix@db:label` | `chains/hover/static@4:O` | Full: explicit prefix, db, and display label |
+| `prefix@db` | `chains/hover/static@4` | Full without label (label defaults to `prefix@db`) |
+| `db` | `4` | Bare DB number — prefix auto-discovered from `:__instance_lock__` |
+| `@db` | `@4` | Same as bare `db` |
+| `db:label` | `4:O` | Bare DB with custom label |
+
+The auto-discover path fails if the DB is empty or contains multiple prefixes. Run `gigaevo inspect --db N` first to see what's there.
 
 ### Commands
 
@@ -79,6 +93,10 @@ gigaevo -r chains/hotpotqa/static@4:O export frontier -o data/frontier.csv --met
 #### Operations
 
 ```bash
+# Inspect — discover which experiment prefix(es) live in a Redis DB
+gigaevo inspect --db 4                     # single DB
+gigaevo inspect --db 1 --db 2 --db 3       # multiple DBs
+
 # Flush Redis DBs (kills workers first)
 gigaevo flush --db 4 5 --confirm           # execute
 gigaevo flush --db 4 5                     # dry-run (default)
@@ -88,6 +106,26 @@ gigaevo -e hover/my-exp checkpoint
 
 # Watchdog — start watchdog engine
 gigaevo -e hover/my-exp watchdog
+```
+
+#### Manifest (read/write experiment.yaml)
+
+```bash
+# Read fields (dotted paths supported)
+gigaevo -e hover/my-exp manifest get status
+gigaevo -e hover/my-exp manifest get launch.watchdog_pid
+gigaevo -e hover/my-exp manifest get runs --format json
+
+# Write fields
+gigaevo -e hover/my-exp manifest set status running           # uses status gate validator
+gigaevo -e hover/my-exp manifest update launch.watchdog_pid 12345
+
+# Gate checks (exit non-zero if gate not satisfied)
+gigaevo -e hover/my-exp manifest gate implemented
+gigaevo -e hover/my-exp manifest gate running
+
+# Generate and push PR description
+gigaevo -e hover/my-exp manifest pr-description --push
 ```
 
 #### Lifecycle (experiment management)
