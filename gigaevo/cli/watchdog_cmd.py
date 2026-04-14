@@ -49,9 +49,11 @@ def watchdog(
         return
 
     # Lazy imports to keep CLI startup fast
+    from gigaevo.monitoring.dispatcher import NotificationDispatcher
     from gigaevo.monitoring.experiment_monitor import RunConfig
     import gigaevo.monitoring.plugins  # noqa: F401 — triggers @register decorators
     from gigaevo.monitoring.run_spec import RunSpec
+    from gigaevo.monitoring.telegram_channel import TelegramChannel
     from gigaevo.monitoring.watchdog_config import WatchdogConfig
     from gigaevo.monitoring.watchdog_engine import WatchdogEngine
     from gigaevo.monitoring.watchdog_plugin import get_registry, resolve_plugin
@@ -118,6 +120,42 @@ def watchdog(
         ),
     )
 
+    # Build notification channels from env — load .env if needed
+    _dotenv_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    if os.path.exists(_dotenv_path):
+        for _line in open(_dotenv_path):
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _, _v = _line.partition("=")
+                os.environ.setdefault(_k.strip(), _v.strip())
+
+    _bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    _chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    _https_proxy = os.environ.get("HTTPS_PROXY", "") or os.environ.get(
+        "https_proxy", ""
+    )
+    channels = []
+    if _bot_token and _chat_id:
+        import httpx
+
+        _transport = (
+            httpx.AsyncHTTPTransport(proxy=_https_proxy) if _https_proxy else None
+        )
+        channels.append(
+            TelegramChannel(
+                bot_token=_bot_token,
+                chat_id=_chat_id,
+                transport=_transport,
+            )
+        )
+        click.echo(f"  Telegram: chat_id={_chat_id} proxy={_https_proxy or 'none'}")
+    else:
+        click.echo(
+            "  Telegram: disabled (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set)"
+        )
+
+    dispatcher = NotificationDispatcher(channels)
+
     click.echo(
         f"Starting watchdog for {experiment} "
         f"({len(run_configs)} runs, poll={poll_interval}s)"
@@ -129,5 +167,6 @@ def watchdog(
         run_configs=run_configs,
         config=config,
         max_generations=max_generations or manifest.max_generations,
+        dispatcher=dispatcher,
     )
     engine.run()
