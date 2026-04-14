@@ -443,7 +443,6 @@ class TestRedisCheckpoint:
 
     def test_checkpoint_not_overwritten(self):
         """Once a checkpoint is written, it is not overwritten on subsequent cycles."""
-        import json
 
         server = fakeredis.FakeServer()
         r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)

@@ -7,10 +7,10 @@ with SOTA comparison.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from collections import defaultdict
 from pathlib import Path
+import shutil
+import subprocess
 
 from loguru import logger
 

@@ -8,8 +8,8 @@ single run loop that replaces experiments/_template/run_watchdog.py.
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 import resource
 import signal

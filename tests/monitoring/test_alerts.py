@@ -761,8 +761,8 @@ class TestFullLifecycle:
 class TestModelDriftRule:
     def test_model_found_returns_none(self):
         """When expected model is in the /models response, returns None."""
-        from unittest.mock import patch, MagicMock
         import json
+        from unittest.mock import MagicMock, patch
 
         from gigaevo.monitoring.alerts import ModelDriftRule
 
@@ -781,8 +781,8 @@ class TestModelDriftRule:
 
     def test_model_not_found_returns_alert(self):
         """When expected model is NOT in /models response, returns MODEL_DRIFT alert."""
-        from unittest.mock import patch, MagicMock
         import json
+        from unittest.mock import MagicMock, patch
 
         from gigaevo.monitoring.alerts import ModelDriftRule
 
