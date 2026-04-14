@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import click
 
@@ -14,13 +15,48 @@ from gigaevo.cli.flush_ops import (
 )
 
 
+class _VarDbOption(click.Option):
+    """--db option that gobbles trailing non-flag args so --db 1 2 3 works.
+
+    Supports all three calling styles:
+      --db 1 2 3 4           (space-separated — grabs trailing non-flag args)
+      --db 1,2,3,4           (comma-separated in one token)
+      --db 1 --db 2 --db 3   (repeated flags, backward-compatible)
+    """
+
+    def add_to_parser(self, parser: Any, ctx: click.Context) -> None:  # type: ignore[override]
+        super().add_to_parser(parser, ctx)
+        for name in self.opts:
+            opt = parser._long_opt.get(name) or parser._short_opt.get(name)
+            if opt is None:
+                continue
+            orig_process = opt.process
+
+            def _process(
+                value: str,
+                state: Any,
+                _orig: Any = orig_process,
+            ) -> None:
+                # Gobble additional non-flag tokens into this --db group
+                while state.rargs and not state.rargs[0].startswith("-"):
+                    value = value + "," + state.rargs.pop(0)
+                _orig(value, state)
+
+            opt.process = _process
+
+
 @click.command()
 @click.option(
     "--db",
+    cls=_VarDbOption,
     multiple=True,
     required=True,
     type=str,
-    help="Redis DB numbers to flush. Repeat (--db 1 --db 2) or comma-separate (--db 1,2,3).",
+    help=(
+        "Redis DB numbers to flush. "
+        "Space-separated (--db 1 2 3), comma-separated (--db 1,2,3), "
+        "or repeated (--db 1 --db 2)."
+    ),
 )
 @click.option(
     "--confirm",
@@ -55,7 +91,7 @@ def flush(
     redis_host = ctx.obj["redis_host"]
     redis_port = ctx.obj["redis_port"]
 
-    # Parse: support --db 1 --db 2, --db 1,2,3, or --db '1 2 3'
+    # Parse: each db entry may be comma-separated (from gobbled space args or literal commas)
     raw: list[int] = []
     for entry in db:
         for part in entry.replace(",", " ").split():
