@@ -403,6 +403,106 @@ class TestManifestPrDescription:
 # ---------------------------------------------------------------------------
 
 
+class TestManifestRecordPids:
+    def test_record_pids_writes_labels_to_pids(self, tmp_path):
+        """record-pids reads pids.txt and updates runs[].pid by label."""
+        pids_file = tmp_path / "pids.txt"
+        pids_file.write_text("111 222 333\n")
+
+        captured: dict[str, Any] = {}
+
+        def capture_updater(experiment, updater):
+            raw = {
+                "runs": [
+                    {"label": "A", "pid": None},
+                    {"label": "B", "pid": None},
+                    {"label": "C", "pid": None},
+                    {"label": "D", "pid": None},
+                ]
+            }
+            updater(raw)
+            captured["raw"] = raw
+            captured["experiment"] = experiment
+            return None
+
+        with patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_updater):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "record-pids",
+                    "--pids-file",
+                    str(pids_file),
+                    "--labels",
+                    "A B C",
+                ],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            assert captured["experiment"] == "hover/test"
+            runs_by_label = {r["label"]: r["pid"] for r in captured["raw"]["runs"]}
+            assert runs_by_label == {"A": 111, "B": 222, "C": 333, "D": None}
+
+    def test_record_pids_comma_separated_labels(self, tmp_path):
+        """record-pids accepts comma-separated --labels."""
+        pids_file = tmp_path / "pids.txt"
+        pids_file.write_text("1 2\n")
+
+        captured: dict[str, Any] = {}
+
+        def capture_updater(experiment, updater):
+            raw = {"runs": [{"label": "X", "pid": None}, {"label": "Y", "pid": None}]}
+            updater(raw)
+            captured["raw"] = raw
+            return None
+
+        with patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_updater):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "record-pids",
+                    "--pids-file",
+                    str(pids_file),
+                    "--labels",
+                    "X,Y",
+                ],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            runs_by_label = {r["label"]: r["pid"] for r in captured["raw"]["runs"]}
+            assert runs_by_label == {"X": 1, "Y": 2}
+
+    def test_record_pids_label_count_mismatch_exits_1(self, tmp_path):
+        """Label count != PID count exits 1 with clear error."""
+        pids_file = tmp_path / "pids.txt"
+        pids_file.write_text("111 222\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-e",
+                "hover/test",
+                "manifest",
+                "record-pids",
+                "--pids-file",
+                str(pids_file),
+                "--labels",
+                "A B C",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 1
+        assert "expected" in result.output.lower()
+
+
 class TestManifestRequiresExperiment:
     def test_get_without_experiment_exits_1(self):
         """get without --experiment flag exits 1 with error."""

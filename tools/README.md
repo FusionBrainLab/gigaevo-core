@@ -180,10 +180,8 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 | `preflight_check.py` | 20-check validation before launch (configs, Redis, servers, treatment) | `--experiment task/name` |
 | `generate_launch.py` | Generate `launch.sh` from experiment.yaml manifest | `--experiment task/name`, `--dry-run` |
 | `manifest.py` | Load/update `experiment.yaml` programmatically | `import` — not a CLI tool |
-| `record_pids.py` | Record launched PIDs into experiment.yaml | `--experiment`, `--pids-file`, `--labels` |
 | `reset_status.py` | Force-reset experiment status (escape hatch) | `--experiment`, `--status` |
 | `process_cleanup.py` | Kill stale watchdog / run processes | `--experiment` |
-| `pr_comment.py` | Post checkpoint or status updates to experiment PR | `--experiment`, `--body` |
 | `check_all_watchdogs.sh` | Cron health check: scan Redis heartbeats, alert on stale watchdogs | standalone (no args) |
 | `skill_env.sh` | Shared env vars for skills (`$PROJ`, `$GIGAEVO_PYTHON`, `$PYTHONPATH`) | `source` — not executable |
 
@@ -472,7 +470,7 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 | `manifest.py` | Load/update `experiment.yaml` programmatically | `from tools.experiment.manifest import load_manifest, update_manifest` |
 | `preflight_check.py` | 20-check validation gate before launch | `gigaevo -e task/name preflight` |
 | `generate_launch.py` | Generate `launch.sh` from experiment.yaml | `gigaevo -e task/name generate-launch` |
-| `record_pids.py` | Record launched PIDs into experiment.yaml | Used internally by `launch.sh` |
+| `manifest record-pids` | Record launched PIDs into experiment.yaml | `gigaevo -e task/name manifest record-pids --pids-file pids.txt --labels "A B"` |
 | `reset_status.py` | Force-reset experiment status (escape hatch) | `gigaevo -e task/name reset-status --status implemented` |
 
 ---

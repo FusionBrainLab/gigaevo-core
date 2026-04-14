@@ -12,11 +12,13 @@ Usage examples::
     gigaevo -e hover/foo manifest update launch.watchdog_pid 12345
     gigaevo -e hover/foo manifest gate implemented
     gigaevo -e hover/foo manifest pr-description --push
+    gigaevo -e hover/foo manifest record-pids --pids-file pids.txt --labels C1 C2 P1 P2
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 from typing import Any
 
@@ -299,3 +301,54 @@ def pr_description(ctx: click.Context, push: bool) -> None:
             click.echo(f"PR #{manifest_obj.experiment.pr_number} description updated.")
         else:
             click.echo("Warning: No pr_number in manifest; --push skipped.", err=True)
+
+
+# ---------------------------------------------------------------------------
+# record-pids
+# ---------------------------------------------------------------------------
+
+
+@manifest.command("record-pids")
+@click.option(
+    "--pids-file",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="File containing whitespace-separated PIDs, one per launched run.",
+)
+@click.option(
+    "--labels",
+    required=True,
+    help="Comma- or space-separated run labels matching --pids-file order.",
+)
+@click.pass_context
+def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
+    """Write run PIDs from pids.txt into experiment.yaml runs[].pid.
+
+    Called by launch.sh after launching runs and verifying PIDs are alive.
+    Label count must match PID count; unknown labels are ignored.
+    """
+    experiment = _require_experiment(ctx)
+
+    pids_text = pids_file.read_text().strip()
+    pids = [int(p) for p in pids_text.split()]
+
+    label_list = [lbl for lbl in labels.replace(",", " ").split() if lbl]
+    if len(pids) != len(label_list):
+        click.echo(
+            f"Error: Expected {len(label_list)} PIDs, got {len(pids)}: {pids}",
+            err=True,
+        )
+        ctx.exit(1)
+        return
+
+    label_to_pid = dict(zip(label_list, pids))
+
+    from gigaevo.monitoring.manifest import update_manifest
+
+    def set_pids(raw: dict[str, Any]) -> None:
+        for run in raw.get("runs", []):
+            if run.get("label") in label_to_pid:
+                run["pid"] = label_to_pid[run["label"]]
+
+    update_manifest(experiment, set_pids)
+    click.echo(f"PIDs recorded: {label_to_pid}")
