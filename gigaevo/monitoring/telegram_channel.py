@@ -107,7 +107,11 @@ class TelegramChannel(NotificationChannel):
         return await self._post_with_retry("sendMessage", payload)
 
     async def _send_photo(self, photo_path: Path, caption: str = "") -> bool:
-        """Send a photo to Telegram with retry."""
+        """Send a photo to Telegram with retry.
+
+        On HTTP 400 (often file-too-large), falls back to sendDocument which
+        supports up to 50 MB vs sendPhoto's 10 MB limit.
+        """
         try:
             client = await self._get_client()
             with open(photo_path, "rb") as f:
@@ -130,6 +134,12 @@ class TelegramChannel(NotificationChannel):
                         if resp.status_code == 429 or resp.status_code >= 500:
                             await self._backoff(attempt)
                             continue
+                        if resp.status_code == 400:
+                            _log.warning(
+                                f"sendPhoto got 400 ({resp.text}), "
+                                "falling back to sendDocument"
+                            )
+                            return await self._send_document(photo_path, caption)
                         _log.warning(
                             f"sendPhoto failed: {resp.status_code} {resp.text}"
                         )
@@ -143,6 +153,45 @@ class TelegramChannel(NotificationChannel):
                 return False
         except Exception as exc:
             _log.error(f"sendPhoto error: {exc}")
+            return False
+
+    async def _send_document(self, doc_path: Path, caption: str = "") -> bool:
+        """Send a file as a document (up to 50 MB). Used as fallback for large photos."""
+        try:
+            client = await self._get_client()
+            with open(doc_path, "rb") as f:
+                files = {"document": (doc_path.name, f, "application/octet-stream")}
+                data = {
+                    "chat_id": self._chat_id,
+                    "caption": caption[:1024],
+                    "parse_mode": "HTML",
+                }
+                for attempt in range(_MAX_RETRIES):
+                    try:
+                        f.seek(0)
+                        resp = await client.post(
+                            self._api_url("sendDocument"),
+                            data=data,
+                            files=files,
+                        )
+                        if resp.status_code == 200:
+                            return True
+                        if resp.status_code == 429 or resp.status_code >= 500:
+                            await self._backoff(attempt)
+                            continue
+                        _log.warning(
+                            f"sendDocument failed: {resp.status_code} {resp.text}"
+                        )
+                        return False
+                    except httpx.HTTPError as exc:
+                        _log.warning(
+                            f"sendDocument network error (attempt {attempt + 1}): {exc}"
+                        )
+                        if attempt < _MAX_RETRIES - 1:
+                            await self._backoff(attempt)
+                return False
+        except Exception as exc:
+            _log.error(f"sendDocument error: {exc}")
             return False
 
     async def _post_with_retry(self, method: str, payload: dict) -> bool:
