@@ -52,6 +52,7 @@ class StatusUpdate:
     plots: list[PlotAttachment] = field(default_factory=list)
     max_generations: int | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    telegram_body: str | None = None
 
     @property
     def has_alerts(self) -> bool:

@@ -454,6 +454,68 @@ class TestSendStatus:
         await channel.close()
 
 
+class TestSendStatusWithTelegramBody:
+    """TelegramChannel uses plugin telegram_body when present (06-02)."""
+
+    @pytest.mark.asyncio
+    async def test_uses_telegram_body_when_present(self) -> None:
+        """When StatusUpdate has telegram_body, sends that instead of table."""
+        channel, recorded = _recording_channel()
+        update = StatusUpdate(
+            experiment_name="test/exp",
+            snapshots=[_make_snapshot()],
+            telegram_body="Custom plugin body here",
+        )
+
+        result = await channel.send_status(update)
+        assert result is True
+        assert len(recorded) == 1
+
+        body = json.loads(recorded[0].content)
+        assert body["text"] == "Custom plugin body here"
+        assert body["parse_mode"] == ""  # plain text, not HTML
+        await channel.close()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_table_when_no_telegram_body(self) -> None:
+        """When telegram_body is None, sends standard HTML table."""
+        channel, recorded = _recording_channel()
+        update = StatusUpdate(
+            experiment_name="test/exp",
+            snapshots=[_make_snapshot()],
+            telegram_body=None,
+        )
+
+        result = await channel.send_status(update)
+        assert result is True
+
+        body = json.loads(recorded[0].content)
+        assert body["parse_mode"] == "HTML"
+        assert "<pre>" in body["text"]
+        await channel.close()
+
+    @pytest.mark.asyncio
+    async def test_plots_still_sent_with_telegram_body(self, tmp_path: Path) -> None:
+        """Even with custom telegram_body, plots are still sent as photos."""
+        png_file = tmp_path / "plot.png"
+        png_file.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+        channel, recorded = _recording_channel()
+        update = StatusUpdate(
+            experiment_name="test/exp",
+            snapshots=[_make_snapshot()],
+            telegram_body="Custom body",
+            plots=[PlotAttachment(path=png_file, caption="test")],
+        )
+
+        result = await channel.send_status(update)
+        assert result is True
+        assert len(recorded) == 2  # text + photo
+        assert "/sendMessage" in str(recorded[0].url)
+        assert "/sendPhoto" in str(recorded[1].url)
+        await channel.close()
+
+
 class TestSendAlert:
     @pytest.mark.asyncio
     async def test_sends_formatted_message(self) -> None:

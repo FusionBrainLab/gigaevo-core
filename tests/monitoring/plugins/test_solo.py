@@ -1,9 +1,9 @@
-"""Tests for SoloPlugin -- standard MAP-Elites watchdog plugin."""
+"""Tests for SoloPlugin -- CLI-delegating plot generation + Telegram formatting."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+import subprocess
+from unittest.mock import patch
 
 from gigaevo.monitoring.notifications import PlotAttachment
 from gigaevo.monitoring.plugins.solo import SoloPlugin
@@ -21,7 +21,23 @@ def _make_snapshot(label="A", db=1, gen=10, fitness=0.65, pid=1234, alive=True):
         valid_programs=180,
         pid=pid,
         pid_alive=alive,
+        running_programs=5,
     )
+
+
+def _mock_subprocess_comparison(cmd, **kwargs):
+    """Side effect that creates the comparison output PNG."""
+    from pathlib import Path
+
+    out_dir = None
+    for i, arg in enumerate(cmd):
+        if arg == "-o" and i + 1 < len(cmd):
+            out_dir = Path(cmd[i + 1])
+            break
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "evolution_runs_comparison.png").write_bytes(b"fake-png")
+    return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
 
 class TestSoloPluginRegistration:
@@ -37,27 +53,35 @@ class TestSoloPluginRegistration:
         assert isinstance(plugin, WatchdogPlugin)
 
 
+class TestSoloPluginUsesSubprocess:
+    """Verify subprocess-based CLI delegation."""
+
+    def test_has_subprocess_import(self):
+        import inspect
+
+        source = inspect.getsource(SoloPlugin)
+        assert "subprocess" in source
+
+    def test_no_ax_bar_calls(self):
+        import inspect
+
+        source = inspect.getsource(SoloPlugin)
+        assert "ax.bar(" not in source
+
+
 class TestSoloPluginGeneratePlots:
     def test_generates_comparison_plot(self, tmp_path):
-        """Calls comparison.py subprocess and returns PlotAttachment."""
+        """Calls subprocess for comparison plot and returns PlotAttachment."""
         plugin = SoloPlugin()
         snapshots = [_make_snapshot("A", 1), _make_snapshot("B", 2)]
 
-        def fake_run(*args, **kwargs):
-            out_dir = None
-            cmd = args[0]
-            for i, arg in enumerate(cmd):
-                if arg == "--output-folder" and i + 1 < len(cmd):
-                    out_dir = Path(cmd[i + 1])
-            if out_dir:
-                out_dir.mkdir(parents=True, exist_ok=True)
-                (out_dir / "evolution_runs_comparison.png").write_text("fake")
-            return MagicMock(returncode=0)
-
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch(
+            "gigaevo.monitoring.plugins.solo.subprocess.run",
+            side_effect=_mock_subprocess_comparison,
+        ):
             plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
 
-        assert len(plots) >= 1
+        assert len(plots) == 1
         assert isinstance(plots[0], PlotAttachment)
         assert plots[0].path.exists()
 
@@ -67,31 +91,68 @@ class TestSoloPluginGeneratePlots:
         assert plots == []
 
     def test_subprocess_failure_returns_empty_list(self, tmp_path):
-        """If comparison.py fails, returns empty list (no crash)."""
         plugin = SoloPlugin()
         snapshots = [_make_snapshot()]
-        with patch("subprocess.run", side_effect=Exception("boom")):
+
+        with patch(
+            "gigaevo.monitoring.plugins.solo.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 1, b"", b"error"),
+        ):
             plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
         assert plots == []
 
-    def test_builds_correct_run_args(self, tmp_path):
-        """--run arguments use prefix@db:label format."""
+    def test_subprocess_timeout_returns_empty_list(self, tmp_path):
         plugin = SoloPlugin()
-        snapshots = [
-            _make_snapshot("A", 4),
-            _make_snapshot("B", 5),
-        ]
-        captured_cmd = []
+        snapshots = [_make_snapshot()]
 
-        def capture_run(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-            return MagicMock(returncode=0)
+        with patch(
+            "gigaevo.monitoring.plugins.solo.subprocess.run",
+            side_effect=subprocess.TimeoutExpired([], 120),
+        ):
+            plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
+        assert plots == []
 
-        with patch("subprocess.run", side_effect=capture_run):
+    def test_cycle_number_in_filename(self, tmp_path):
+        plugin = SoloPlugin()
+
+        with patch(
+            "gigaevo.monitoring.plugins.solo.subprocess.run",
+            side_effect=_mock_subprocess_comparison,
+        ):
+            plots = plugin.generate_plots([_make_snapshot()], tmp_path, cycle=42)
+        assert len(plots) == 1
+        assert "0042" in plots[0].path.name
+
+    def test_command_includes_ema_smoothing(self, tmp_path):
+        plugin = SoloPlugin()
+        snapshots = [_make_snapshot()]
+
+        with patch(
+            "gigaevo.monitoring.plugins.solo.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, b"", b""),
+        ) as mock_run:
             plugin.generate_plots(snapshots, tmp_path, cycle=1)
 
-        run_indices = [i for i, x in enumerate(captured_cmd) if x == "--run"]
-        assert len(run_indices) == 2
+        cmd = mock_run.call_args[0][0]
+        assert "comparison" in cmd
+        assert "--smoothing" in cmd
+        ema_idx = cmd.index("--smoothing")
+        assert cmd[ema_idx + 1] == "ema"
+
+    def test_run_args_built_from_snapshots(self, tmp_path):
+        plugin = SoloPlugin()
+        snapshots = [_make_snapshot("A", 1), _make_snapshot("B", 2)]
+
+        with patch(
+            "gigaevo.monitoring.plugins.solo.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, b"", b""),
+        ) as mock_run:
+            plugin.generate_plots(snapshots, tmp_path, cycle=1)
+
+        cmd = mock_run.call_args[0][0]
+        assert "-r" in cmd
+        assert "chains/hover/static_soft@1:A" in cmd
+        assert "chains/hover/static_soft@2:B" in cmd
 
 
 class TestSoloPluginFormatStatus:
@@ -122,6 +183,48 @@ class TestSoloPluginFormatStatus:
         body = plugin.format_status_body([], "test", cycle=1, max_generations=None)
         assert isinstance(body, str)
         assert len(body) > 0
+
+
+class TestSoloPluginFormatTelegramBody:
+    def test_contains_run_info(self):
+        plugin = SoloPlugin()
+        snapshots = [_make_snapshot("A", gen=10, fitness=0.65)]
+        body = plugin.format_telegram_body(
+            snapshots, "hover/test", cycle=1, max_generations=25
+        )
+        assert body is not None
+        assert "hover/test" in body
+        assert "A" in body
+        assert "0.65000" in body
+
+    def test_contains_baseline_when_set(self):
+        plugin = SoloPlugin()
+        body = plugin.format_telegram_body(
+            [_make_snapshot()], "test", cycle=1, max_generations=25, baseline=0.76
+        )
+        assert body is not None
+        assert "SOTA baseline" in body
+        assert "0.76000" in body
+
+    def test_no_baseline_when_none(self):
+        plugin = SoloPlugin()
+        body = plugin.format_telegram_body(
+            [_make_snapshot()], "test", cycle=1, max_generations=25, baseline=None
+        )
+        assert body is not None
+        assert "SOTA" not in body
+
+    def test_stalled_flag(self):
+        snap = RunSnapshot(
+            run_spec=RunSpec(prefix="test", db=1, label="X"),
+            generation=10,
+            metrics={"fitness": 0.5},
+            running_programs=0,
+        )
+        plugin = SoloPlugin()
+        body = plugin.format_telegram_body([snap], "test", cycle=1, max_generations=25)
+        assert body is not None
+        assert "! X" in body
 
 
 class TestSoloPluginDefaults:

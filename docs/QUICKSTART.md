@@ -58,15 +58,15 @@ Open a new terminal:
 ```bash
 # Show current run status (fitness, gen count, invalidity, etc.)
 # Preferred: use --experiment mode (auto-discovers runs from experiment.yaml)
-PYTHONPATH=. python tools/status.py --experiment <task>/<name>
+gigaevo status -e <task>/<name>
 # Or specify a single run directly:
-PYTHONPATH=. python tools/status.py --run heilbron@0:run-1
+gigaevo status -r heilbron@0:run-1
 
 # Show top N programs
-PYTHONPATH=. python tools/top_programs.py --run heilbron@0:run-1 -n 5
+gigaevo top -r heilbron@0:run-1 -n 5
 
 # Export results to CSV
-PYTHONPATH=. python tools/redis2pd.py --run heilbron@0:run-1
+gigaevo export csv -r heilbron@0:run-1
 ```
 
 ## Step 5: View Evolution Logs
@@ -82,13 +82,13 @@ After evolution completes:
 
 ```bash
 # Export to CSV
-PYTHONPATH=. python tools/redis2pd.py --run heilbron@0:run-1
+gigaevo export csv -r heilbron@0:run-1
 
 # Compare fitness curves across runs (pass multiple --run flags)
-PYTHONPATH=. python tools/comparison.py --run heilbron@0:run-1 --run heilbron@1:run-2
+gigaevo plot comparison -r heilbron@0:run-1 -r heilbron@1:run-2
 
 # View top programs
-PYTHONPATH=. python tools/top_programs.py --run heilbron@0:run-1 -n 10
+gigaevo top -r heilbron@0:run-1 -n 10
 ```
 
 ## Understanding the Output
@@ -121,8 +121,8 @@ PYTHONPATH=. python tools/top_programs.py --run heilbron@0:run-1 -n 10
 
 **Solution:**
 ```bash
-# Use tools/flush.py (kills exec_runner workers first):
-PYTHONPATH=. python tools/flush.py --db 0 --confirm
+# Flush the database (kills exec_runner workers first):
+gigaevo flush --db 0 --confirm
 # Or use a different database:
 python run.py problem.name=heilbron redis.db=1
 ```
@@ -134,10 +134,10 @@ python run.py problem.name=heilbron redis.db=1
 **Solution:**
 ```bash
 # Check invalidity rate
-PYTHONPATH=. python tools/status.py --run <prefix>@<db>:<label>
+gigaevo status -r <prefix>@<db>:<label>
 
 # View top programs and their fitness
-PYTHONPATH=. python tools/top_programs.py --run <prefix>@<db>:<label> -n 10
+gigaevo top -r <prefix>@<db>:<label> -n 10
 ```
 
 ### Issue: Evolution seems slow
@@ -221,18 +221,21 @@ python run.py experiment=<experiment> problem.name=<problem>
 python run.py problem.name=<problem> --cfg job
 
 # Check run status (--experiment mode preferred for managed experiments)
-PYTHONPATH=. python tools/status.py --experiment <task>/<name>
+gigaevo status -e <task>/<name>
 # Or for a single run:
-PYTHONPATH=. python tools/status.py --run <prefix>@<db>:<label>
+gigaevo status -r <prefix>@<db>:<label>
 
 # View top programs
-PYTHONPATH=. python tools/top_programs.py --run <prefix>@<db>:<label> -n 10
+gigaevo top -r <prefix>@<db>:<label> -n 10
 
 # Export results to CSV
-PYTHONPATH=. python tools/redis2pd.py --run <prefix>@<db>:<label>
+gigaevo export csv -r <prefix>@<db>:<label>
+
+# Compare fitness curves across runs
+gigaevo plot comparison -r <prefix>@<db>:A -r <prefix>@<db>:B
 
 # Flush Redis (kills exec_runners first — never use redis-cli FLUSHDB directly)
-PYTHONPATH=. python tools/flush.py --db 0 --confirm
+gigaevo flush --db 0 --confirm
 
 # View logs
 tail -f outputs/*/evolution_*.log
@@ -241,7 +244,7 @@ tail -f outputs/*/evolution_*.log
 ## Getting Help
 
 1. **Check logs**: Most issues are explained in the logs
-2. **Check run status**: `PYTHONPATH=. python tools/status.py --run <prefix>@<db>:<label>`
+2. **Check run status**: `gigaevo status -r <prefix>@<db>:<label>`
 3. **Read architecture doc**: `ARCHITECTURE.md` explains the system
 4. **Check examples**: Look at existing problems in `problems/`
 

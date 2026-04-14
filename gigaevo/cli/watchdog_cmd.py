@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import click
 
 
@@ -56,6 +58,19 @@ def watchdog(
 
     manifest = load_manifest(experiment)
 
+    # Auto-configure NO_PROXY from manifest servers
+    no_proxy = os.environ.get("NO_PROXY", "")
+    extra_hosts = list(manifest.servers) + ["api.github.com"]
+    watchdog_manifest = getattr(manifest, "watchdog", None)
+    if watchdog_manifest and watchdog_manifest.no_proxy_hosts:
+        extra_hosts.extend(watchdog_manifest.no_proxy_hosts)
+    for host in extra_hosts:
+        if host not in no_proxy:
+            no_proxy = ",".join(filter(None, [no_proxy, host]))
+    os.environ["NO_PROXY"] = no_proxy
+    os.environ["no_proxy"] = no_proxy
+    click.echo(f"  NO_PROXY: {no_proxy}")
+
     # Resolve plugin
     if plugin_name:
         registry = get_registry()
@@ -79,10 +94,27 @@ def watchdog(
         rc = RunConfig(run_spec=spec, pid=run.pid)
         run_configs.append(rc)
 
-    # Build config
+    # Build config -- CLI flags take precedence over manifest
+    effective_poll = (
+        poll_interval
+        if poll_interval != 3600
+        else (watchdog_manifest.poll_interval_s if watchdog_manifest else 3600)
+    )
+    effective_restarts = (
+        max_restarts if max_restarts != 3 else (5)  # default from WatchdogConfig
+    )
     config = WatchdogConfig(
-        poll_interval_s=poll_interval,
-        max_restarts=max_restarts,
+        poll_interval_s=effective_poll,
+        max_restarts=effective_restarts,
+        plot_retries=(watchdog_manifest.plot_retries if watchdog_manifest else 3),
+        plot_retry_delay_s=(
+            watchdog_manifest.plot_retry_delay_s if watchdog_manifest else 30
+        ),
+        checkpoint_milestones=(
+            tuple(watchdog_manifest.checkpoint_milestones)
+            if watchdog_manifest
+            else (0.1, 0.2, 0.5, 1.0)
+        ),
     )
 
     click.echo(

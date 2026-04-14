@@ -175,7 +175,7 @@ def _parse_run_arg(arg: str, default_host: str, default_port: int) -> RedisRunCo
         redis_port=default_port,
         redis_db=db,
         redis_prefix=prefix,
-        label=label,
+        label=label or "",
     )
 
 
@@ -678,7 +678,7 @@ def _annotate_frontier_points(
     significant_jumps = significant_jumps.sort_values("iteration")
 
     # Annotate significant jumps with staggered offsets to avoid overlap
-    used_y_offsets = []
+    used_y_offsets: list[float] = []
     for _, row in significant_jumps.iterrows():
         x = row["iteration"]
         y = row["frontier"]

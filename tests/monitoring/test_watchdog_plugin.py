@@ -53,7 +53,7 @@ class TestWatchdogPluginABC:
 
 
 class TestDefaultMethods:
-    """extra_telegram_content() and extra_redis_queries() have defaults."""
+    """extra_telegram_content(), extra_redis_queries(), and format_telegram_body() have defaults."""
 
     def _make_plugin(self):
         class MinimalPlugin(WatchdogPlugin):
@@ -72,6 +72,34 @@ class TestDefaultMethods:
     def test_extra_redis_queries_returns_empty_dict(self):
         plugin = self._make_plugin()
         assert plugin.extra_redis_queries() == {}
+
+    def test_format_telegram_body_returns_none_by_default(self):
+        plugin = self._make_plugin()
+        result = plugin.format_telegram_body(
+            snapshots=[],
+            experiment_name="test/exp",
+            cycle=1,
+            max_generations=50,
+            baseline=0.65,
+        )
+        assert result is None
+
+    def test_format_telegram_body_is_overridable(self):
+        class CustomPlugin(WatchdogPlugin):
+            def generate_plots(self, snapshots, output_dir, cycle):
+                return []
+
+            def format_status_body(self, snapshots, experiment_name, cycle, max_gen):
+                return ""
+
+            def format_telegram_body(
+                self, snapshots, experiment_name, cycle, max_generations, baseline=None
+            ):
+                return f"Custom body for {experiment_name}"
+
+        plugin = CustomPlugin()
+        result = plugin.format_telegram_body([], "test/exp", 1, 50)
+        assert result == "Custom body for test/exp"
 
 
 # ── Registry ─────────────────────────────────────────────────────────────────

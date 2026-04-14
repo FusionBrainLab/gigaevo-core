@@ -22,6 +22,7 @@ class AlertType(StrEnum):
     HIGH_INVALIDITY = "high_invalidity"
     COMPLETION = "completion"
     LOW_THROUGHPUT = "low_throughput"
+    MODEL_DRIFT = "model_drift"
 
 
 class AlertSeverity(StrEnum):
@@ -255,3 +256,65 @@ class AlertDetector:
             del self._cooldowns[key]
 
         return emitted
+
+
+class ModelDriftRule:
+    """Anomaly detector rule: probe LiteLLM /models endpoint to verify expected model.
+
+    Standalone callable rule, not part of AlertDetector.
+    Designed to be called by WatchdogEngine when model_drift_check is enabled.
+    """
+
+    def __init__(self, timeout: int = 15):
+        self._timeout = timeout
+
+    def check(
+        self,
+        run_label: str,
+        mutation_url: str,
+        expected_model: str,
+        api_key: str = "None",
+    ) -> Alert | None:
+        """Probe the /models endpoint. Returns Alert if expected model not found, None if OK."""
+        import json
+        import urllib.request
+
+        try:
+            req = urllib.request.Request(
+                f"{mutation_url}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                data = json.loads(resp.read())
+            model_ids = [m.get("id", "") for m in data.get("data", [])]
+            if expected_model in model_ids:
+                return None
+            return Alert(
+                alert_type=AlertType.MODEL_DRIFT,
+                severity=AlertSeverity.WARN,
+                run_label=run_label,
+                message=(
+                    f"Run {run_label}: {mutation_url} no longer serves "
+                    f"{expected_model}. Available: {model_ids[:5]}"
+                ),
+                details={
+                    "url": mutation_url,
+                    "expected": expected_model,
+                    "available": model_ids,
+                },
+            )
+        except Exception as exc:
+            return Alert(
+                alert_type=AlertType.MODEL_DRIFT,
+                severity=AlertSeverity.WARN,
+                run_label=run_label,
+                message=(
+                    f"Run {run_label}: model drift check failed "
+                    f"for {mutation_url}: {exc}"
+                ),
+                details={
+                    "url": mutation_url,
+                    "expected": expected_model,
+                    "error": str(exc),
+                },
+            )

@@ -21,6 +21,10 @@ class TestWatchdogConfigConstruction:
         assert cfg.model_drift_check is True
         assert cfg.redis_host == "localhost"
         assert cfg.redis_port == 6379
+        assert cfg.plot_retries == 3
+        assert cfg.plot_retry_delay_s == 30
+        assert cfg.rolling_comment_threshold_hours == 24
+        assert cfg.checkpoint_milestones == (0.1, 0.2, 0.5, 1.0)
 
     def test_custom_values(self):
         cfg = WatchdogConfig(
@@ -50,3 +54,25 @@ class TestWatchdogConfigHeartbeatTTL:
     def test_custom_heartbeat_ttl(self):
         cfg = WatchdogConfig(poll_interval_s=600, heartbeat_ttl_multiplier=2)
         assert cfg.heartbeat_ttl_s == 1200
+
+
+class TestWatchdogConfigNewFields:
+    """Test plot retry, rolling comment, and checkpoint milestone fields."""
+
+    def test_custom_plot_retries(self):
+        cfg = WatchdogConfig(plot_retries=5, plot_retry_delay_s=60)
+        assert cfg.plot_retries == 5
+        assert cfg.plot_retry_delay_s == 60
+
+    def test_custom_rolling_comment_threshold(self):
+        cfg = WatchdogConfig(rolling_comment_threshold_hours=48)
+        assert cfg.rolling_comment_threshold_hours == 48
+
+    def test_custom_checkpoint_milestones(self):
+        cfg = WatchdogConfig(checkpoint_milestones=(0.25, 0.5, 0.75, 1.0))
+        assert cfg.checkpoint_milestones == (0.25, 0.5, 0.75, 1.0)
+
+    def test_checkpoint_milestones_is_frozen(self):
+        cfg = WatchdogConfig()
+        with pytest.raises(AttributeError):
+            cfg.checkpoint_milestones = (0.5, 1.0)  # type: ignore[misc]

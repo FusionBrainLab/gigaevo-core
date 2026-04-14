@@ -4,8 +4,8 @@ Co-evolution experiments have two populations:
 - Code runs: evolve Python programs (prefix like chains/hover/static_soft)
 - Prompt runs: evolve mutation prompts (prefix like prompt_evolution_hover)
 
-This plugin groups runs by prefix and generates separate comparison plots
-for each population, with population-specific status formatting.
+Delegates plot generation to `gigaevo plot comparison` CLI command
+per population group via subprocess. Provides grouped Telegram formatting.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from collections import defaultdict
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 
 from loguru import logger
 
@@ -26,7 +25,8 @@ from gigaevo.monitoring.snapshot import RunSnapshot
 from gigaevo.monitoring.watchdog_plugin import WatchdogPlugin, register
 
 _log = logger.bind(component="plugin.prompt_coevo")
-_PROJ = Path(__file__).resolve().parent.parent.parent.parent
+
+_SUBPROCESS_TIMEOUT = 120
 
 
 @register("prompt_coevo")
@@ -34,8 +34,16 @@ class PromptCoevoPlugin(WatchdogPlugin):
     """Prompt co-evolution watchdog plugin.
 
     Groups runs by prefix (code vs prompt populations).
-    Each group gets its own comparison.py plot and status section.
+    Each group gets its own comparison plot via CLI subprocess.
     """
+
+    def __init__(self, sentinel_value: float | None = None, **kwargs):
+        self._sentinel_value = sentinel_value
+
+    def _sentinel_args(self) -> list[str]:
+        if self._sentinel_value is not None:
+            return ["--sentinel", str(self._sentinel_value)]
+        return []
 
     def _group_runs(self, snapshots: list[RunSnapshot]) -> dict[str, list[RunSnapshot]]:
         groups: dict[str, list[RunSnapshot]] = defaultdict(list)
@@ -48,6 +56,15 @@ class PromptCoevoPlugin(WatchdogPlugin):
         if "prompt" in group_name.lower():
             return "Prompt Population"
         return "Code Population"
+
+    @staticmethod
+    def _build_run_args(snapshots: list[RunSnapshot]) -> list[str]:
+        """Build -r args for CLI from snapshots."""
+        args: list[str] = []
+        for snap in snapshots:
+            spec = snap.run_spec
+            args.extend(["-r", f"{spec.prefix}@{spec.db}:{spec.label}"])
+        return args
 
     def generate_plots(
         self,
@@ -64,41 +81,45 @@ class PromptCoevoPlugin(WatchdogPlugin):
 
         for group_name, group_snaps in groups.items():
             safe_name = group_name.replace("/", "_")
-            group_dir = output_dir / safe_name
-            group_dir.mkdir(parents=True, exist_ok=True)
+            run_args = self._build_run_args(group_snaps)
+            pop_type = self._classify_group(group_name)
 
-            run_args: list[str] = []
-            for snap in group_snaps:
-                spec = snap.run_spec
-                run_args.extend(["--run", f"{spec.prefix}@{spec.db}:{spec.label}"])
-
-            cmd = [
-                sys.executable,
-                str(_PROJ / "tools" / "comparison.py"),
-                *run_args,
-                "--annotate-frontier",
-                "--output-folder",
-                str(group_dir),
-            ]
+            cmd = (
+                ["gigaevo"]
+                + run_args
+                + [
+                    "plot",
+                    "comparison",
+                    "--metric",
+                    "fitness",
+                    "--smoothing",
+                    "ema",
+                    "--window",
+                    "5",
+                    "-o",
+                    str(output_dir),
+                ]
+                + self._sentinel_args()
+            )
 
             try:
-                subprocess.run(
-                    cmd,
-                    cwd=str(_PROJ),
-                    env={"PYTHONPATH": str(_PROJ)},
-                    capture_output=True,
-                    timeout=120,
-                    check=True,
+                result = subprocess.run(
+                    cmd, capture_output=True, timeout=_SUBPROCESS_TIMEOUT
                 )
+                if result.returncode != 0:
+                    _log.warning(
+                        f"Plot for group {group_name} failed: "
+                        f"{result.stderr.decode()[:500]}"
+                    )
+                    continue
             except Exception as exc:
-                _log.error(f"comparison.py failed for group {group_name}: {exc}")
+                _log.error(f"Plot subprocess error for group {group_name}: {exc}")
                 continue
 
-            png = group_dir / "evolution_runs_comparison.png"
-            if png.exists():
-                pop_type = self._classify_group(group_name)
+            comp_png = output_dir / "evolution_runs_comparison.png"
+            if comp_png.exists():
                 stamped = output_dir / f"{safe_name}_cycle_{cycle:04d}.png"
-                shutil.copy2(png, stamped)
+                shutil.copy2(comp_png, stamped)
                 plots.append(
                     PlotAttachment(
                         path=stamped,
@@ -140,3 +161,39 @@ class PromptCoevoPlugin(WatchdogPlugin):
         )
 
         return header + body + footer
+
+    def format_telegram_body(
+        self,
+        snapshots: list[RunSnapshot],
+        experiment_name: str,
+        cycle: int,
+        max_generations: int | None,
+        baseline: float | None = None,
+    ) -> str | None:
+        lines = [f"Experiment: {experiment_name} #{cycle}"]
+        lines.append("")
+
+        groups = self._group_runs(snapshots)
+        for group_name, group_snaps in sorted(groups.items()):
+            pop_type = self._classify_group(group_name)
+            lines.append(f"{pop_type} ({group_name}):")
+            for s in group_snaps:
+                fit = s.metrics.get("fitness")
+                fit_str = f"{fit:.5f}" if fit is not None else "N/A"
+                gen = s.generation or 0
+                max_g = f"/{max_generations}" if max_generations else ""
+                stalled = (
+                    s.running_programs is not None
+                    and s.running_programs == 0
+                    and gen > 0
+                )
+                flag = "!" if stalled else "ok"
+                lines.append(
+                    f"  {flag} {s.run_spec.label}: gen {gen}{max_g} fit={fit_str}"
+                )
+            lines.append("")
+
+        if baseline is not None:
+            lines.append(f"SOTA baseline: {baseline:.5f}")
+
+        return "\n".join(lines)

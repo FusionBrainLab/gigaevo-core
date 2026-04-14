@@ -35,7 +35,6 @@ class DirectoryProgramLoader:
                     "source": "initial_program",
                     "strategy_name": program_file.stem,
                     "file_path": str(program_file),
-                    "iteration": 0,
                 }
                 await storage.add(program)
                 programs.append(program)
@@ -106,7 +105,6 @@ class RedisTopProgramsLoader:
                     "source_db": self.source_db,
                     "selection_rank": rank + 1,
                     "original_id": program.id,
-                    "iteration": 0,
                 }
                 copy.metadata = {**copy.metadata, **program.metadata}
                 copy.metrics = deepcopy(program.metrics)

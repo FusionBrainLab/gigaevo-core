@@ -595,6 +595,13 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 await self._await_idle()
                 await self.strategy.reindex_archive()
 
+            # 8a. Post-step hook (composition injection, etc.)
+            if self._post_step_hook:
+                try:
+                    await self._post_step_hook()
+                except Exception as e:
+                    logger.error("[SteadyState] post_step_hook failed: {}", e)
+
             # 9. Increment epoch counter
             self.metrics.total_generations += 1
             await self.storage.save_run_state(

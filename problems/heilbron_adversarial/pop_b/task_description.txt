@@ -14,11 +14,18 @@ YOUR FITNESS:
 
 You are tested against MULTIPLE opponent configurations each evaluation. Your fitness is the average normalized improvement across all of them. Making things worse counts as zero (clamped).
 
+IMPORTANT: RAPIDLY CHANGING CONTEXT
+The Constructor programs you face change EVERY generation. Your lineage insights and
+past metrics may refer to a different Constructor than the one you currently face.
+Focus on GENERAL improvement strategies rather than exploiting specific point arrangements.
+The best Improvers are those that work well against ANY Constructor — not just one.
+
 WHAT WINS THIS GAME
 - The opponent configurations you receive will get progressively harder to improve as the game advances
 - Early on, simple approaches may work on unoptimized configs
 - As opponents evolve, you need increasingly creative and powerful approaches
-- The winning approach ADAPTS to the difficulty of the input
+- The winning approach ADAPTS to the difficulty of the input — it uses general optimization
+  principles, not hardcoded responses to specific configurations
 
 OBJECTIVE
 Write an `improve(points)` function that:

@@ -950,23 +950,23 @@ python run.py \
 
 ```bash
 # Monitor all runs
-PYTHONPATH=. python tools/status.py \
-  --run "chains/hover/full7_no_deep@4:R1" \
-  --run "chains/hover/full7_no_deep@5:R2" \
-  --run "chains/hover/full7_no_deep@6:R3" \
-  --run "chains/hover/full7_no_deep@7:R4"
+gigaevo status \
+  -r "chains/hover/full7_no_deep@4:R1" \
+  -r "chains/hover/full7_no_deep@5:R2" \
+  -r "chains/hover/full7_no_deep@6:R3" \
+  -r "chains/hover/full7_no_deep@7:R4"
 
 # Compare fitness trajectories
-PYTHONPATH=. python tools/comparison.py \
-  --run "chains/hover/full7_no_deep@4:control-1" \
-  --run "chains/hover/full7_no_deep@5:control-2" \
-  --run "chains/hover/full7_no_deep@6:memory-1" \
-  --run "chains/hover/full7_no_deep@7:memory-2" \
+gigaevo plot comparison \
+  -r "chains/hover/full7_no_deep@4:control-1" \
+  -r "chains/hover/full7_no_deep@5:control-2" \
+  -r "chains/hover/full7_no_deep@6:memory-1" \
+  -r "chains/hover/full7_no_deep@7:memory-2" \
   --output-folder experiments/hover/memory/plots/
 
 # Check memory usage in treatment runs
-PYTHONPATH=. python tools/top_programs.py \
-  --run "chains/hover/full7_no_deep@6:memory-1" -n 5 --code
+gigaevo top \
+  -r "chains/hover/full7_no_deep@6:memory-1" -n 5 --code
 ```
 
 ---

@@ -17,6 +17,44 @@ SUPPORTED_SCHEMA_VERSIONS = {1}
 VALID_STATUSES = {"preregistered", "implemented", "running", "complete", "invalid"}
 
 
+class PlotCommand(BaseModel):
+    """A CLI plot command to invoke from the watchdog plugin."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    command: str
+    args: dict[str, Any] = {}
+    output_name: str = ""
+    caption: str = ""
+
+
+class AlertThresholds(BaseModel):
+    """Configurable alert thresholds for watchdog."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    invalidity_rate: float = 0.75
+    stagnation_window: int = 10
+    generation_gap_threshold: int = 5
+
+
+class WatchdogSection(BaseModel):
+    """Watchdog configuration section in experiment.yaml."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    plugin: str | None = None
+    plot_commands: list[PlotCommand] = []
+    plot_metrics: list[str] = []
+    alert_thresholds: AlertThresholds = AlertThresholds()
+    poll_interval_s: int = 3600
+    plot_retries: int = 3
+    plot_retry_delay_s: int = 30
+    rolling_comment_threshold_hours: int = 24
+    checkpoint_milestones: list[float] = [0.1, 0.2, 0.5, 1.0]
+    no_proxy_hosts: list[str] = []
+
+
 class ManifestRunSpec(BaseModel):
     """One run within an experiment."""
 
@@ -143,6 +181,9 @@ class ExperimentManifest(BaseModel):
     baseline: BaselineInfo = BaselineInfo()
     smoke_test: SmokeTestInfo = SmokeTestInfo()
     tools: list[dict[str, str]] = []
+    watchdog: WatchdogSection = WatchdogSection()
+    watchdog_plugin: str | None = None
+    watchdog_plugin_options: dict[str, Any] | None = None
 
     @field_validator("schema_version")
     @classmethod
@@ -153,6 +194,21 @@ class ExperimentManifest(BaseModel):
                 f"Supported: {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
             )
         return v
+
+    @model_validator(mode="after")
+    def migrate_legacy_watchdog_fields(self) -> ExperimentManifest:
+        """Migrate deprecated watchdog_plugin / watchdog_plugin_options to watchdog section."""
+        watchdog_is_default = (
+            self.watchdog.plugin is None and not self.watchdog.plot_metrics
+        )
+        if watchdog_is_default:
+            if self.watchdog_plugin is not None:
+                self.watchdog.plugin = self.watchdog_plugin
+            if self.watchdog_plugin_options:
+                plot_metrics = self.watchdog_plugin_options.get("plot_metrics", [])
+                if plot_metrics:
+                    self.watchdog.plot_metrics = list(plot_metrics)
+        return self
 
     @model_validator(mode="after")
     def validate_status_gates(self) -> ExperimentManifest:

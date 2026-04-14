@@ -241,7 +241,7 @@ runs:
 ### Status Check
 
 ```bash
-PYTHONPATH=. python tools/status.py --experiment <task>/<name>
+gigaevo status -e <task>/<name>
 ```
 
 Key things to watch:

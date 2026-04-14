@@ -94,7 +94,7 @@ class TestIncrementalUpdate:
             code="def run_code(): return 99",
             state=ProgramState.DONE,
             metrics={"fitness": 0.99, "is_valid": 1.0},
-            metadata={"iteration": bg_size + 1},
+            iteration=bg_size + 1,
         )
         new_prog.lineage.generation = bg_size // 5
 
@@ -136,7 +136,7 @@ class TestRefreshChangedFitness:
                 code=f"def run_code(): return {i}",
                 state=ProgramState.DONE,
                 metrics={"fitness": 0.5 + i * 0.001, "is_valid": 1.0},
-                metadata={"iteration": i},
+                iteration=i,
             )
             p.lineage.generation = i // 5
             await storage.add(p)

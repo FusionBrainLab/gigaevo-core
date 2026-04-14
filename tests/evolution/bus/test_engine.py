@@ -82,7 +82,7 @@ class TestNotifyHook:
     async def test_publishes_on_rejected_strategy_valid(self) -> None:
         engine = _make_engine()
         prog = _valid_prog()
-        prog.set_metadata("iteration", 5)
+        prog.iteration = 5
 
         await engine._notify_hook(prog, MutationOutcome.REJECTED_STRATEGY)
 

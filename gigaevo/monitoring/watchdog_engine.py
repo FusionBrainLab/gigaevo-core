@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 import resource
 import signal
@@ -53,12 +54,14 @@ class WatchdogEngine:
         dispatcher: NotificationDispatcher | None = None,
         heartbeat_redis: redis_lib.Redis | None = None,
         plot_dir: Path | None = None,
+        baseline: float | None = None,
     ):
         self.experiment_name = experiment_name
         self.plugin = plugin
         self.run_configs = list(run_configs)
         self.config = config or WatchdogConfig()
         self.max_generations = max_generations
+        self._baseline = baseline
         self._monitor = monitor or ExperimentMonitor(
             redis_host=self.config.redis_host,
             redis_port=self.config.redis_port,
@@ -136,14 +139,22 @@ class WatchdogEngine:
         stagnation_alerts = self._check_stagnation(snapshots)
         alerts.extend(stagnation_alerts)
 
-        # 5. Generate plots (with resource cleanup)
+        # 5. Generate plots (with retries per D-04)
         plots: list[PlotAttachment] = []
-        try:
-            plots = self.plugin.generate_plots(snapshots, self._plot_dir, cycle)
-        except Exception as exc:
-            _log.error(f"Plot generation failed: {exc}")
-        finally:
-            self._close_matplotlib_figures()
+        for attempt in range(self.config.plot_retries):
+            try:
+                plots = self.plugin.generate_plots(snapshots, self._plot_dir, cycle)
+                break  # Success
+            except Exception as exc:
+                _log.error(
+                    f"Plot generation attempt {attempt + 1}"
+                    f"/{self.config.plot_retries} failed: {exc}"
+                )
+                if attempt < self.config.plot_retries - 1:
+                    _log.info(f"Retrying in {self.config.plot_retry_delay_s}s...")
+                    time.sleep(self.config.plot_retry_delay_s)
+            finally:
+                self._close_matplotlib_figures()
 
         # 6. Format status
         try:
@@ -153,6 +164,19 @@ class WatchdogEngine:
         except Exception as exc:
             _log.error(f"Status formatting failed: {exc}")
 
+        # 6b. Format plugin-specific Telegram body
+        telegram_body: str | None = None
+        try:
+            telegram_body = self.plugin.format_telegram_body(
+                snapshots,
+                self.experiment_name,
+                cycle,
+                self.max_generations,
+                baseline=self._get_baseline(),
+            )
+        except Exception as exc:
+            _log.error(f"Telegram body formatting failed: {exc}")
+
         # 7. Build StatusUpdate and dispatch
         update = StatusUpdate(
             experiment_name=self.experiment_name,
@@ -161,13 +185,22 @@ class WatchdogEngine:
             plots=plots,
             max_generations=self.max_generations,
             timestamp=ts,
+            telegram_body=telegram_body,
         )
         await self._dispatcher.dispatch(update)
 
-        # 8. Cleanup old plots
+        # 8. Redis checkpoint markers
+        self._write_redis_checkpoint(snapshots, cycle)
+
+        # 9. Completion detection
+        if any(a.alert_type == AlertType.COMPLETION for a in alerts):
+            self._write_completion(snapshots)
+            self._shutdown = True
+
+        # 10. Cleanup old plots
         self._cleanup_plots()
 
-        # 9. Log memory
+        # 11. Log memory
         self._log_memory()
 
         _log.info(
@@ -234,6 +267,75 @@ class WatchdogEngine:
                         )
                     )
         return alerts
+
+    def _write_redis_checkpoint(self, snapshots: list[RunSnapshot], cycle: int) -> None:
+        """Write Redis checkpoint markers at milestone percentages."""
+        if self._heartbeat_redis is None or self.max_generations is None:
+            return
+        min_gen = min(
+            (s.generation for s in snapshots if s.generation is not None),
+            default=0,
+        )
+        milestones = [
+            int(self.max_generations * p) for p in self.config.checkpoint_milestones
+        ]
+        for milestone in milestones:
+            if min_gen >= milestone > 0:
+                key = f"experiments:{self.experiment_name}:checkpoint:{milestone}"
+                try:
+                    if self._heartbeat_redis.exists(key):
+                        continue
+                    metrics = {
+                        s.run_spec.label: {
+                            "gen": s.generation,
+                            "fitness": s.metrics.get("fitness"),
+                        }
+                        for s in snapshots
+                    }
+                    data = json.dumps(
+                        {
+                            "gen": milestone,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "metrics": metrics,
+                        }
+                    )
+                    self._heartbeat_redis.set(key, data)
+                except Exception as exc:
+                    _log.error(
+                        f"Checkpoint write failed for milestone {milestone}: {exc}"
+                    )
+
+    def _write_completion(self, snapshots: list[RunSnapshot]) -> None:
+        """Write Redis completion marker when all runs finish."""
+        if self._heartbeat_redis is None:
+            return
+        try:
+            completion_data = json.dumps(
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "run_states": [
+                        {
+                            "label": s.run_spec.label,
+                            "gen": s.generation,
+                            "fitness": s.metrics.get("fitness"),
+                        }
+                        for s in snapshots
+                    ],
+                }
+            )
+            self._heartbeat_redis.set(
+                f"experiments:{self.experiment_name}:completion",
+                completion_data,
+            )
+        except Exception as exc:
+            _log.error(f"Completion write failed: {exc}")
+
+    def _get_baseline(self) -> float | None:
+        """Return the SOTA baseline value for Telegram formatting.
+
+        Uses the baseline passed at construction time.
+        """
+        return self._baseline
 
     def _cleanup_plots(self) -> None:
         """Remove oldest plot files if count exceeds max_plot_files."""

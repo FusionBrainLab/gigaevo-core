@@ -20,9 +20,17 @@ class RunSpec:
         """Short display name for the run (the label)."""
         return self.label
 
+    @property
+    def needs_prefix(self) -> bool:
+        """True when prefix was not provided and must be auto-discovered."""
+        return self.prefix == ""
+
     @classmethod
     def parse(cls, raw: str) -> RunSpec:
-        """Parse 'prefix@db[:label]' into a RunSpec.
+        """Parse 'prefix@db[:label]' or just 'db' into a RunSpec.
+
+        When only a bare db number is given (e.g. '2'), the prefix is left
+        empty and must be resolved later via auto-discovery from Redis.
 
         Handles:
         - Quote stripping (single and double quotes)
@@ -32,8 +40,7 @@ class RunSpec:
         - Uses rfind("@") to handle any future '@' in prefixes
 
         Raises:
-            ValueError: If the format is invalid (no '@', non-numeric db,
-                        empty prefix, negative db).
+            ValueError: If the format is invalid (non-numeric db, negative db).
         """
         s = raw.strip().strip('"').strip("'").strip()
         if not s:
@@ -41,18 +48,27 @@ class RunSpec:
 
         at_idx = s.rfind("@")
         if at_idx == -1:
-            raise ValueError(
-                f"Run spec must contain '@': got {raw!r}. "
-                f"Expected format: prefix@db[:label]"
-            )
+            # Bare db number: "2" or "2:label"
+            if ":" in s:
+                db_str, label = s.split(":", 1)
+            else:
+                db_str = s
+                label = None
+            try:
+                db = int(db_str)
+            except ValueError:
+                raise ValueError(
+                    f"Run spec must contain '@' or be a bare db number: got {raw!r}. "
+                    f"Expected format: prefix@db[:label] or just db"
+                )
+            if db < 0:
+                raise ValueError(
+                    f"Negative db in run spec: {db} from {raw!r}. DB must be >= 0"
+                )
+            return cls(prefix="", db=db, label=label or f"@{db}")
 
         prefix = s[:at_idx]
         rest = s[at_idx + 1 :]
-
-        if not prefix:
-            raise ValueError(
-                f"Empty prefix in run spec: {raw!r}. Expected format: prefix@db[:label]"
-            )
 
         # Split rest into db and optional label
         if ":" in rest:
@@ -74,6 +90,9 @@ class RunSpec:
             raise ValueError(
                 f"Negative db in run spec: {db} from {raw!r}. DB must be >= 0"
             )
+
+        if not prefix:
+            return cls(prefix="", db=db, label=label or f"@{db}")
 
         if label is None:
             label = f"{prefix}@{db}"

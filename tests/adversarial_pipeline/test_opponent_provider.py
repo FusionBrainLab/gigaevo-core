@@ -34,6 +34,10 @@ class FakeOpponentProvider(OpponentArchiveProvider):
             self._programs, key=lambda o: o.fitness, reverse=higher_is_better
         )[:k]
 
+    async def get_programs_by_ids(self, ids: list[str]) -> list[OpponentProgram]:
+        id_set = set(ids)
+        return [p for p in self._programs if p.program_id in id_set]
+
     async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
         id_map = {p.program_id: p.code for p in self._programs}
         return [id_map[i] for i in ids if i in id_map]

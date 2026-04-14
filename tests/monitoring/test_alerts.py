@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-from gigaevo.monitoring.alerts import Alert, AlertDetector, AlertSeverity, AlertType
+from gigaevo.monitoring.alerts import (
+    Alert,
+    AlertDetector,
+    AlertSeverity,
+    AlertType,
+    ModelDriftRule,
+)
 from gigaevo.monitoring.run_spec import RunSpec
 from gigaevo.monitoring.snapshot import RunSnapshot
 
@@ -557,6 +565,7 @@ class TestAlertDataclass:
         assert AlertType.HIGH_INVALIDITY == "high_invalidity"
         assert AlertType.COMPLETION == "completion"
         assert AlertType.LOW_THROUGHPUT == "low_throughput"
+        assert AlertType.MODEL_DRIFT == "model_drift"
 
     def test_alert_severity_is_enum(self):
         """AlertSeverity values are strings via StrEnum."""
@@ -750,3 +759,80 @@ class TestFullLifecycle:
         alerts6 = detector.check([done_a, done_b])
         comp6 = [a for a in alerts6 if a.alert_type == AlertType.COMPLETION]
         assert len(comp6) == 0
+
+
+# ---------------------------------------------------------------------------
+# 10. ModelDriftRule tests
+# ---------------------------------------------------------------------------
+
+
+class TestModelDriftRule:
+    def test_returns_none_when_model_found(self):
+        """No alert when expected model is in the /models response."""
+        import json
+
+        response_data = json.dumps(
+            {"data": [{"id": "gpt-4"}, {"id": "claude-3"}]}
+        ).encode()
+
+        rule = ModelDriftRule(timeout=5)
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = response_data
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+
+            result = rule.check(
+                run_label="A",
+                mutation_url="http://localhost:4000/v1",
+                expected_model="gpt-4",
+            )
+            assert result is None
+
+    def test_returns_alert_when_model_not_found(self):
+        """Alert when expected model is NOT in the /models response."""
+        import json
+
+        response_data = json.dumps(
+            {"data": [{"id": "gpt-4"}, {"id": "claude-3"}]}
+        ).encode()
+
+        rule = ModelDriftRule(timeout=5)
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = response_data
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+
+            result = rule.check(
+                run_label="A",
+                mutation_url="http://localhost:4000/v1",
+                expected_model="gemini-pro",
+            )
+            assert result is not None
+            assert result.alert_type == AlertType.MODEL_DRIFT
+            assert result.severity == AlertSeverity.WARN
+            assert result.run_label == "A"
+            assert "gemini-pro" in result.message
+            assert "gpt-4" in str(result.details["available"])
+
+    def test_returns_alert_on_connection_error(self):
+        """Alert when /models endpoint is unreachable."""
+        rule = ModelDriftRule(timeout=1)
+        with patch("urllib.request.urlopen", side_effect=ConnectionError("refused")):
+            result = rule.check(
+                run_label="B",
+                mutation_url="http://unreachable:4000/v1",
+                expected_model="gpt-4",
+            )
+            assert result is not None
+            assert result.alert_type == AlertType.MODEL_DRIFT
+            assert "refused" in result.message
+            assert result.details["error"] == "refused"
+
+    def test_custom_timeout(self):
+        """ModelDriftRule respects custom timeout."""
+        rule = ModelDriftRule(timeout=30)
+        assert rule._timeout == 30

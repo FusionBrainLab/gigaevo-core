@@ -25,13 +25,13 @@ def launch(ctx: click.Context, confirm: bool) -> None:
         ctx.exit(1)
         return
 
-    from tools.experiment.manifest import load_manifest
+    from gigaevo.monitoring.manifest import load_manifest
 
     manifest = load_manifest(experiment)
 
     if not confirm:
         click.echo(f"[launch] DRY-RUN for {experiment}")
-        click.echo(f"  Status: {manifest.status}")
+        click.echo(f"  Status: {manifest.experiment.status}")
         click.echo(f"  Runs: {len(manifest.runs)}")
         click.echo(f"  Servers: {len(manifest.servers)}")
         click.echo("\nPass --confirm to execute launch.")
@@ -60,13 +60,13 @@ def closeout(ctx: click.Context, confirm: bool) -> None:
         ctx.exit(1)
         return
 
-    from tools.experiment.manifest import load_manifest
+    from gigaevo.monitoring.manifest import load_manifest
 
     manifest = load_manifest(experiment)
 
     if not confirm:
         click.echo(f"[closeout] DRY-RUN for {experiment}")
-        click.echo(f"  Status: {manifest.status}")
+        click.echo(f"  Status: {manifest.experiment.status}")
         click.echo(f"  Runs: {len(manifest.runs)}")
         click.echo("\nPass --confirm to execute closeout.")
         return
@@ -94,13 +94,13 @@ def restart(ctx: click.Context, confirm: bool) -> None:
         ctx.exit(1)
         return
 
-    from tools.experiment.manifest import load_manifest
+    from gigaevo.monitoring.manifest import load_manifest
 
     manifest = load_manifest(experiment)
 
     if not confirm:
         click.echo(f"[restart] DRY-RUN for {experiment}")
-        click.echo(f"  Status: {manifest.status}")
+        click.echo(f"  Status: {manifest.experiment.status}")
         click.echo(f"  Runs to kill: {len(manifest.runs)}")
         for run in manifest.runs:
             click.echo(f"    {run.label}: DB {run.db}, PID {run.pid}")

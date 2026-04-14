@@ -2,8 +2,8 @@
 
 Replaces the urllib.request code in watchdog templates with:
 - httpx.AsyncClient for all GitHub API calls
-- Rolling comment (POST once, PATCH thereafter)
-- Plot upload to GitHub Release assets with cache-busting URLs
+- Rolling comment (POST first N hours, PATCH thereafter using Redis-tracked ID)
+- Plot upload to experiment branch with cache-busting URLs
 - Cross-channel telegram_down header
 """
 
@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 from loguru import logger
+import redis as redis_lib
 
 from gigaevo.monitoring.alerts import Alert
 from gigaevo.monitoring.notifications import (
@@ -43,6 +44,9 @@ class GitHubPRChannel(NotificationChannel):
         base_url: str = _DEFAULT_BASE_URL,
         transport: httpx.AsyncBaseTransport | None = None,
         branch: str | None = None,
+        experiment_name: str | None = None,
+        rolling_comment_redis: redis_lib.Redis | None = None,
+        rolling_comment_threshold_hours: int = 24,
     ) -> None:
         self._repo = repo
         self._pr_number = pr_number
@@ -50,9 +54,19 @@ class GitHubPRChannel(NotificationChannel):
         self._base_url = base_url.rstrip("/")
         self._transport = transport
         self._branch = branch
+        self._experiment_name = experiment_name
+        self._rolling_redis = rolling_comment_redis
+        self._rolling_threshold_hours = rolling_comment_threshold_hours
         self._client: httpx.AsyncClient | None = None
         self._comment_id: int | None = None
+        self._status_count: int = 0
         self._telegram_down = False
+
+        if self._rolling_redis and self._experiment_name:
+            existing = self._get_rolling_comment_id()
+            if existing:
+                self._comment_id = existing
+                _log.info(f"Loaded rolling comment ID from Redis: {existing}")
 
     @property
     def telegram_down(self) -> bool:
@@ -179,7 +193,11 @@ class GitHubPRChannel(NotificationChannel):
             content = plot.path.read_bytes()
             encoded = base64.b64encode(content).decode()
 
-            upload_path = f"plots/{plot.path.name}"
+            upload_path = (
+                f"experiments/{self._experiment_name}/plots/{plot.path.name}"
+                if self._experiment_name
+                else f"plots/{plot.path.name}"
+            )
             api_url = f"{self._base_url}/repos/{self._repo}/contents/{upload_path}"
 
             client = await self._get_client()
@@ -198,11 +216,12 @@ class GitHubPRChannel(NotificationChannel):
 
             resp = await client.put(api_url, json=payload)
             if resp.status_code in (200, 201):
-                data = resp.json()
-                download_url = data.get("content", {}).get("download_url")
-                if download_url:
-                    _log.info(f"Plot uploaded: {download_url}")
-                    return download_url
+                raw_url = (
+                    f"https://raw.githubusercontent.com"
+                    f"/{self._repo}/{branch}/{upload_path}"
+                )
+                _log.info(f"Plot uploaded: {raw_url}")
+                return raw_url
             _log.warning(f"Plot upload failed: {resp.status_code}")
             return None
         except Exception as exc:
@@ -215,8 +234,35 @@ class GitHubPRChannel(NotificationChannel):
         separator = "&" if "?" in url else "?"
         return f"{url}{separator}v={timestamp}"
 
+    def _get_rolling_comment_id(self) -> int | None:
+        """Read rolling comment ID from Redis."""
+        if self._rolling_redis is None:
+            return self._comment_id
+        try:
+            key = f"experiments:{self._experiment_name}:rolling_comment_id"
+            raw = self._rolling_redis.get(key)
+            return int(raw) if raw else None
+        except Exception as exc:
+            _log.warning(f"Redis rolling comment read failed: {exc}")
+            return self._comment_id
+
+    def _set_rolling_comment_id(self, comment_id: int) -> None:
+        """Write rolling comment ID to Redis for persistence across restarts."""
+        if self._rolling_redis is None:
+            return
+        try:
+            key = f"experiments:{self._experiment_name}:rolling_comment_id"
+            self._rolling_redis.set(key, str(comment_id))
+        except Exception as exc:
+            _log.warning(f"Redis rolling comment write failed: {exc}")
+
     async def send_status(self, update: StatusUpdate) -> bool:
-        """Post or edit the rolling PR comment with status table + alerts + plots."""
+        """Post or edit the rolling PR comment with status table + alerts + plots.
+
+        Rolling comment strategy: create new comments for the first
+        ``rolling_comment_threshold_hours`` cycles (approx 1 cycle ≈ 1 hour),
+        then switch to editing the last comment in-place.
+        """
         # Upload plots first and collect URLs
         plot_urls: dict[int, str] = {}
         if update.has_plots and self._branch:
@@ -228,18 +274,23 @@ class GitHubPRChannel(NotificationChannel):
 
         body = self._build_status_body(update, plot_urls=plot_urls)
 
-        if self._comment_id is not None:
-            success = await self._edit_comment(self._comment_id, body)
-            if success:
-                return True
-            _log.info(
-                f"Rolling comment {self._comment_id} edit failed, creating new comment"
-            )
-            self._comment_id = None
+        self._status_count += 1
+        past_threshold = self._status_count > self._rolling_threshold_hours
+
+        if past_threshold:
+            comment_id = self._get_rolling_comment_id() or self._comment_id
+            if comment_id:
+                success = await self._edit_comment(comment_id, body)
+                if success:
+                    return True
+                _log.info(f"Rolling comment {comment_id} edit failed, creating new")
 
         new_id = await self._post_comment(body)
         if new_id is not None:
             self._comment_id = new_id
+            if self._status_count == self._rolling_threshold_hours:
+                self._set_rolling_comment_id(new_id)
+                _log.info(f"Rolling comment set: ID={new_id}")
             return True
         return False
 

@@ -75,6 +75,22 @@ class WatchdogPlugin(ABC):
         """
         ...
 
+    def format_telegram_body(
+        self,
+        snapshots: list[RunSnapshot],
+        experiment_name: str,
+        cycle: int,
+        max_generations: int | None,
+        baseline: float | None = None,
+    ) -> str | None:
+        """Optional: plugin-specific Telegram message body.
+
+        Returns None by default (uses generic table formatting).
+        Override to produce plugin-specific formatting (e.g., G/D-separated
+        summaries with emoji flags for adversarial).
+        """
+        return None
+
     def extra_telegram_content(self, snapshots: list[RunSnapshot]) -> str | None:
         """Optional: additional content for Telegram messages.
 

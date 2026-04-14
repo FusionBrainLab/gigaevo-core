@@ -5,20 +5,22 @@ from __future__ import annotations
 import click
 
 from gigaevo.cli.run_resolver import RunResolver
+from gigaevo.cli.status import _format_metric_value, _load_metric_specs
 from gigaevo.monitoring.experiment_monitor import ExperimentMonitor
 
 
-def _snapshot_to_row(snap) -> dict:
+def _snapshot_to_row(snap, metric_specs: dict[str, dict] | None = None) -> dict:
     """Convert a RunSnapshot to a display row."""
     row: dict = {
         "Label": snap.run_spec.label,
         "DB": snap.run_spec.db,
         "Gen": snap.generation,
     }
+    specs = metric_specs or {}
     if snap.metrics:
         for key, val in snap.metrics.items():
             col_name = key.replace("_", " ").title()
-            row[col_name] = val
+            row[col_name] = _format_metric_value(val, key, specs)
     row["Invalid%"] = snap.invalid_rate
     row["Total"] = snap.total_programs
     row["Valid"] = snap.valid_programs
@@ -69,6 +71,8 @@ def checkpoint(ctx: click.Context, no_notify: bool, no_plots: bool) -> None:
         redis_port=redis_port,
     )
 
+    metric_specs = _load_metric_specs(experiment)
+
     redis_factory = ctx.obj.get("redis_factory")
     monitor = ExperimentMonitor(
         redis_host=redis_host,
@@ -78,7 +82,7 @@ def checkpoint(ctx: click.Context, no_notify: bool, no_plots: bool) -> None:
     snapshots = monitor.collect(run_configs)
 
     # Display status
-    rows = [_snapshot_to_row(s) for s in snapshots]
+    rows = [_snapshot_to_row(s, metric_specs) for s in snapshots]
     columns = _build_columns(rows)
     formatter.echo(rows, columns=columns, title="Checkpoint Status")
 

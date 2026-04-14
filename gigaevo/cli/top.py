@@ -36,7 +36,8 @@ def _fetch_top_programs(
         programs.append(
             {
                 "id": prog.get("id", "?"),
-                "generation": prog.get("generation"),
+                "generation": prog.get("generation")
+                or prog.get("lineage", {}).get("generation"),
                 metric: val,
                 "state": prog.get("state", "?"),
                 "code": prog.get("code", ""),
@@ -72,6 +73,18 @@ def top(
     runs = ctx.obj["runs"]
     redis_host = ctx.obj["redis_host"]
     redis_port = ctx.obj["redis_port"]
+
+    # Use manifest's problem.metric_name as default when in --experiment mode
+    # and user didn't explicitly pass --metric (still has Click default "fitness")
+    if metric == "fitness" and experiment:
+        try:
+            from gigaevo.monitoring.manifest import load_manifest
+
+            manifest = load_manifest(experiment)
+            if manifest.problem.metric_name:
+                metric = manifest.problem.metric_name
+        except Exception:
+            pass  # fall back to "fitness"
 
     run_configs = RunResolver.resolve(
         experiment=experiment,

@@ -6,7 +6,7 @@ import time
 
 import click
 
-from tools.flush import (
+from gigaevo.cli.flush_ops import (
     find_exec_runner_pids,
     flush_db,
     kill_run_writers,

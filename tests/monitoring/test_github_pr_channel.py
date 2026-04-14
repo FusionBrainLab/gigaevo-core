@@ -244,7 +244,7 @@ class TestSendStatusRollingComment:
         assert ch._comment_id == 99
 
     @pytest.mark.asyncio
-    async def test_second_call_edits_existing_comment(self) -> None:
+    async def test_edits_existing_comment_after_threshold(self) -> None:
         recorder = RequestRecorder(
             responses={
                 "PATCH /repos/owner/repo/issues/comments/99": httpx.Response(
@@ -253,7 +253,8 @@ class TestSendStatusRollingComment:
             }
         )
         ch = _make_channel(recorder=recorder)
-        ch._comment_id = 99  # Simulate first call already happened
+        ch._comment_id = 99
+        ch._status_count = 25  # Past default threshold of 24
         update = _make_update()
 
         result = await ch.send_status(update)
@@ -281,6 +282,7 @@ class TestSendStatusRollingComment:
         )
         ch = _make_channel(recorder=recorder)
         ch._comment_id = 99
+        ch._status_count = 25  # Past threshold to trigger edit attempt
         update = _make_update()
 
         result = await ch.send_status(update)
@@ -613,3 +615,263 @@ class TestCacheBustUrl:
             "https://example.com/plot.png?ref=main", timestamp=1234567890
         )
         assert result == "https://example.com/plot.png?ref=main&v=1234567890"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. Experiment-name upload path tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestExperimentNameUploadPath:
+    @pytest.mark.asyncio
+    async def test_upload_uses_experiment_path(self, tmp_path: Path) -> None:
+        """With experiment_name set, uploads to experiments/{name}/plots/."""
+        png_file = tmp_path / "fitness.png"
+        png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+        plot = PlotAttachment(path=png_file, caption="Fitness")
+
+        recorder = RequestRecorder(
+            ordered_responses=[
+                (
+                    "GET /repos/owner/repo/contents/",
+                    httpx.Response(404, json={"message": "Not Found"}),
+                ),
+                (
+                    "PUT /repos/owner/repo/contents/",
+                    httpx.Response(201, json={"content": {}}),
+                ),
+            ]
+        )
+        transport = httpx.MockTransport(recorder.handler)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            transport=transport,
+            branch="exp/my-branch",
+            experiment_name="hover/test-exp",
+        )
+
+        url = await ch._upload_plot(plot, branch="exp/my-branch")
+
+        assert url is not None
+        assert "experiments/hover/test-exp/plots/fitness.png" in url
+        assert url.startswith("https://raw.githubusercontent.com/")
+
+        put_req = [r for r in recorder.requests if r.method == "PUT"][0]
+        assert "experiments/hover/test-exp/plots/" in str(put_req.url)
+
+    @pytest.mark.asyncio
+    async def test_upload_falls_back_to_generic_path(self, tmp_path: Path) -> None:
+        """Without experiment_name, uploads to plots/."""
+        png_file = tmp_path / "fitness.png"
+        png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
+        plot = PlotAttachment(path=png_file, caption="Fitness")
+
+        recorder = RequestRecorder(
+            ordered_responses=[
+                (
+                    "GET /repos/owner/repo/contents/",
+                    httpx.Response(404, json={"message": "Not Found"}),
+                ),
+                (
+                    "PUT /repos/owner/repo/contents/",
+                    httpx.Response(201, json={"content": {}}),
+                ),
+            ]
+        )
+        transport = httpx.MockTransport(recorder.handler)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            transport=transport,
+            branch="exp/my-branch",
+        )
+
+        url = await ch._upload_plot(plot, branch="exp/my-branch")
+
+        assert url is not None
+        assert "/plots/fitness.png" in url
+        assert "experiments/" not in url
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. Rolling comment Redis persistence tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRollingCommentRedis:
+    def test_set_and_get_rolling_comment_id(self) -> None:
+        """Rolling comment ID round-trips through Redis."""
+        import fakeredis
+
+        r = fakeredis.FakeRedis(decode_responses=True)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            experiment_name="hover/test",
+            rolling_comment_redis=r,
+        )
+
+        ch._set_rolling_comment_id(999)
+        result = ch._get_rolling_comment_id()
+        assert result == 999
+
+    def test_get_returns_none_when_no_key(self) -> None:
+        """Returns None when no rolling comment ID stored in Redis."""
+        import fakeredis
+
+        r = fakeredis.FakeRedis(decode_responses=True)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            experiment_name="hover/test",
+            rolling_comment_redis=r,
+        )
+
+        result = ch._get_rolling_comment_id()
+        assert result is None
+
+    def test_loads_existing_id_on_construction(self) -> None:
+        """Constructor loads rolling comment ID from Redis if present."""
+        import fakeredis
+
+        r = fakeredis.FakeRedis(decode_responses=True)
+        r.set("experiments:hover/test:rolling_comment_id", "555")
+
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            experiment_name="hover/test",
+            rolling_comment_redis=r,
+        )
+
+        assert ch._comment_id == 555
+
+    def test_no_redis_falls_back_to_memory(self) -> None:
+        """Without Redis, _get_rolling_comment_id returns in-memory comment_id."""
+        ch = _make_channel()
+        ch._comment_id = 123
+        assert ch._get_rolling_comment_id() == 123
+
+    def test_redis_key_includes_experiment_name(self) -> None:
+        """Redis key uses experiments:{name}:rolling_comment_id format."""
+        import fakeredis
+
+        r = fakeredis.FakeRedis(decode_responses=True)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            experiment_name="hover/my-exp",
+            rolling_comment_redis=r,
+        )
+
+        ch._set_rolling_comment_id(777)
+        assert r.get("experiments:hover/my-exp:rolling_comment_id") == "777"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. Rolling comment threshold tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRollingCommentThreshold:
+    @pytest.mark.asyncio
+    async def test_posts_new_comments_before_threshold(self) -> None:
+        """Before threshold, always creates new comments even if comment_id set."""
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    201, json={"id": 10}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        ch._comment_id = 99  # Already has a comment
+        ch._status_count = 0  # Below threshold
+        ch._rolling_threshold_hours = 24
+
+        result = await ch.send_status(_make_update())
+
+        assert result is True
+        assert recorder.requests[0].method == "POST"
+
+    @pytest.mark.asyncio
+    async def test_edits_comment_after_threshold(self) -> None:
+        """After threshold, edits the rolling comment."""
+        recorder = RequestRecorder(
+            responses={
+                "PATCH /repos/owner/repo/issues/comments/99": httpx.Response(
+                    200, json={"id": 99}
+                ),
+            }
+        )
+        ch = _make_channel(recorder=recorder)
+        ch._comment_id = 99
+        ch._status_count = 24  # Will become 25, past threshold of 24
+        ch._rolling_threshold_hours = 24
+
+        result = await ch.send_status(_make_update())
+
+        assert result is True
+        assert recorder.requests[0].method == "PATCH"
+
+    @pytest.mark.asyncio
+    async def test_persists_rolling_id_at_threshold_boundary(self) -> None:
+        """At exactly the threshold count, saves the comment ID to Redis."""
+        import fakeredis
+
+        r = fakeredis.FakeRedis(decode_responses=True)
+        recorder = RequestRecorder(
+            responses={
+                "POST /repos/owner/repo/issues/42/comments": httpx.Response(
+                    201, json={"id": 888}
+                ),
+            }
+        )
+        transport = httpx.MockTransport(recorder.handler)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            transport=transport,
+            experiment_name="hover/test",
+            rolling_comment_redis=r,
+            rolling_comment_threshold_hours=3,
+        )
+        ch._status_count = 2  # Next call will be count=3 (== threshold)
+
+        await ch.send_status(_make_update())
+
+        assert r.get("experiments:hover/test:rolling_comment_id") == "888"
+
+    @pytest.mark.asyncio
+    async def test_custom_threshold(self) -> None:
+        """Custom threshold of 1 means edit starts at cycle 2."""
+        recorder = RequestRecorder(
+            responses={
+                "PATCH /repos/owner/repo/issues/comments/50": httpx.Response(
+                    200, json={"id": 50}
+                ),
+            }
+        )
+        transport = httpx.MockTransport(recorder.handler)
+        ch = GitHubPRChannel(
+            repo="owner/repo",
+            pr_number=42,
+            token="ghp_test",
+            transport=transport,
+            rolling_comment_threshold_hours=1,
+        )
+        ch._comment_id = 50
+        ch._status_count = 1  # Will become 2, past threshold of 1
+
+        result = await ch.send_status(_make_update())
+
+        assert result is True
+        assert recorder.requests[0].method == "PATCH"

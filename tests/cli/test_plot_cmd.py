@@ -15,7 +15,7 @@ def _make_evolution_df(n_rows: int = 20, label: str = "A") -> pd.DataFrame:
     return pd.DataFrame(
         {
             "id": [f"prog_{label}_{i}" for i in range(n_rows)],
-            "metadata_iteration": list(range(1, n_rows + 1)),
+            "iteration": list(range(1, n_rows + 1)),
             "metric_fitness": [0.1 + 0.02 * i for i in range(n_rows)],
             "generation": [(i // 5) + 1 for i in range(n_rows)],
         }
@@ -29,7 +29,7 @@ def _make_iteration_df(n_rows: int = 20) -> pd.DataFrame:
     cummax = pd.Series(fitness).cummax().tolist()
     return pd.DataFrame(
         {
-            "metadata_iteration": iterations,
+            "iteration": iterations,
             "metric_fitness": fitness,
             "running_mean_fitness": fitness,
             "running_std_fitness": [0.01] * n_rows,

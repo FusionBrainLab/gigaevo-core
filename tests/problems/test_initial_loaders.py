@@ -46,7 +46,7 @@ class TestDirectoryProgramLoader:
                 assert prog.metadata["source"] == "initial_program"
                 assert "strategy_name" in prog.metadata
                 assert "file_path" in prog.metadata
-                assert prog.metadata["iteration"] == 0
+                assert prog.iteration == 0
 
     @pytest.mark.asyncio
     async def test_loads_specific_strategy_names(self):
@@ -453,7 +453,7 @@ class TestRedisTopProgramsLoader:
             assert loaded.metadata["source_db"] == 2
             assert loaded.metadata["selection_rank"] == 1
             assert loaded.metadata["original_id"] == original_id
-            assert loaded.metadata["iteration"] == 0
+            assert loaded.iteration == 0
 
     @pytest.mark.asyncio
     async def test_closes_source_even_on_error(self):

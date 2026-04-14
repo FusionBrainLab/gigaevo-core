@@ -217,6 +217,7 @@ def prepare_iteration_dataframe(
     iteration_col: str = "metadata_iteration",
     minimize: bool = False,
     compute_frontier: bool = True,
+    sentinel_value: float | None = None,
 ) -> pd.DataFrame:
     """Return a DataFrame sorted by iteration with rolling mean/std columns.
 
@@ -235,6 +236,9 @@ def prepare_iteration_dataframe(
         fitness_col: Name of the fitness column
         iteration_col: Name of the iteration column
         minimize: If True, lower fitness is better (for frontier calculation)
+        sentinel_value: Exact fitness value used for invalid programs (e.g. -1.0).
+            Rows matching this value are removed before any other processing.
+            None (default) disables sentinel filtering.
 
     Returns:
         DataFrame with iteration, fitness, and computed statistics columns
@@ -257,6 +261,22 @@ def prepare_iteration_dataframe(
         return pd.DataFrame()
 
     n_before = len(df)
+
+    # Step 0: Remove sentinel values (e.g., fitness=-1.0 for invalid programs)
+    if sentinel_value is not None:
+        sentinel_mask = df[fitness_col] == sentinel_value
+        n_sentinel = int(sentinel_mask.sum())
+        if n_sentinel > 0:
+            df = df[~sentinel_mask]
+            pct_sentinel = 100.0 * n_sentinel / n_before
+            logger.info(
+                f"Sentinel removal: removed {n_sentinel}/{n_before} "
+                f"({pct_sentinel:.1f}%) points with fitness == {sentinel_value}"
+            )
+            n_before = len(df)
+            if df.empty:
+                logger.warning("All data points were sentinel values")
+                return pd.DataFrame()
 
     # Step 1: Remove extreme values by absolute cutoff (e.g., hard-coded failure values)
     if extreme_value_cutoff is None:

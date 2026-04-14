@@ -22,12 +22,12 @@ class TestLaunchRequiresConfirm:
     def test_no_confirm_is_dry_run(self):
         """Launch without --confirm shows what would happen."""
         manifest = MagicMock()
-        manifest.name = "test/exp"
-        manifest.status = "implemented"
+        manifest.experiment.name = "test/exp"
+        manifest.experiment.status = "implemented"
         manifest.runs = []
         manifest.servers = []
 
-        with patch("tools.experiment.manifest.load_manifest", return_value=manifest):
+        with patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest):
             runner = CliRunner()
             result = runner.invoke(
                 main,
@@ -62,11 +62,11 @@ class TestRestartRequiresConfirm:
     def test_no_confirm_is_dry_run(self):
         """Restart without --confirm shows what would happen."""
         manifest = MagicMock()
-        manifest.name = "test/exp"
-        manifest.status = "running"
+        manifest.experiment.name = "test/exp"
+        manifest.experiment.status = "running"
         manifest.runs = [MagicMock(label="A", db=4, prefix="p", pid=12345)]
 
-        with patch("tools.experiment.manifest.load_manifest", return_value=manifest):
+        with patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest):
             runner = CliRunner()
             result = runner.invoke(
                 main,

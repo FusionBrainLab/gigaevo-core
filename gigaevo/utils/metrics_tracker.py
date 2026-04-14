@@ -142,14 +142,14 @@ class MetricsTracker:
     # -------- main loop --------
 
     async def run(self) -> None:
-        try:
-            while self._running:
+        while self._running:
+            try:
                 await self._drain_once()
-                await asyncio.sleep(self._interval)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("[MetricsTracker] run() error")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("[MetricsTracker] _drain_once() error, continuing")
+            await asyncio.sleep(self._interval)
 
     # -------- fetch & process --------
 
@@ -165,15 +165,21 @@ class MetricsTracker:
             for prog in programs:
                 if not prog:
                     continue
-                if await self._process_program(prog):
-                    self._seen_ids.add(prog.id)
-                    metrics = prog.metrics or {}
-                    metrics_hash = tuple(
-                        (k, v)
-                        for k, v in sorted(metrics.items())
-                        if isinstance(v, (int, float)) and k != VALIDITY_KEY
+                try:
+                    if await self._process_program(prog):
+                        self._seen_ids.add(prog.id)
+                        metrics = prog.metrics or {}
+                        metrics_hash = tuple(
+                            (k, v)
+                            for k, v in sorted(metrics.items())
+                            if isinstance(v, (int, float)) and k != VALIDITY_KEY
+                        )
+                        self._seen_fitness[prog.id] = metrics_hash
+                except Exception:
+                    logger.exception(
+                        "[MetricsTracker] Error processing program {}, skipping",
+                        prog.id[:8],
                     )
-                    self._seen_fitness[prog.id] = metrics_hash
 
         # Re-check already-seen programs for fitness changes
         # (handles NO_CACHE stages like PromptFitnessStage that update
@@ -206,7 +212,7 @@ class MetricsTracker:
 
             # Metrics changed — update stored value and valid_programs
             self._seen_fitness[prog.id] = metrics_hash
-            iteration = prog.metadata.get("iteration", 0)
+            iteration = prog.iteration
 
             numeric_metrics = {
                 k: float(v)
@@ -232,7 +238,7 @@ class MetricsTracker:
             return False
 
         is_valid = bool(v >= 0.5)
-        iteration = program.metadata["iteration"]  # set during mutation
+        iteration = program.iteration
         generation = program.generation
 
         # validity flag

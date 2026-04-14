@@ -99,7 +99,7 @@ All other fields are inherited from the base `EngineConfig`:
 | `max_generations` | Max steps | Max epochs |
 | Epoch / generation size | `max_mutations_per_generation` | Same field, same meaning |
 
-Status tools (`tools/status.py`, watchdog) work unchanged.
+Status tools (`gigaevo status`, watchdog) work unchanged.
 
 ## Why It's Faster
 
@@ -159,7 +159,7 @@ The mutation gate uses try/finally to always reopen, even on errors.
 ## Compatibility
 
 - **Hydra config**: Drop-in replacement — just add `evolution=steady_state`
-- **Status tools**: `tools/status.py`, watchdog, `tools/comparison.py` all work unchanged
+- **Status tools**: `gigaevo status`, watchdog, `gigaevo plot comparison` all work unchanged
 - **DagRunner**: No changes — communicates via Redis state transitions
 - **Strategies**: All strategies (MAP-Elites, islands, etc.) work unchanged
 - **Not compatible with `BusedEvolutionEngine`** — both override `run()`.

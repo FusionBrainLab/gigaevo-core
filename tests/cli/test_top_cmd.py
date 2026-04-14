@@ -9,6 +9,7 @@ from click.testing import CliRunner
 import fakeredis
 
 from gigaevo.cli import main
+from gigaevo.cli.run_resolver import RunResolver
 
 
 def _store_program(
@@ -170,3 +171,119 @@ class TestTopMinimize:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data[0]["Fitness"] == 0.10
+
+
+class TestTopManifestDefaultMetric:
+    def test_experiment_mode_uses_manifest_metric_name(self):
+        """When --experiment is used and manifest has problem.metric_name, top ranks by it."""
+        from unittest.mock import MagicMock, patch
+
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+        from gigaevo.monitoring.run_spec import RunSpec
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=4, decode_responses=True)
+        prog = {
+            "id": "aaa111111111",
+            "generation": 1,
+            "metrics": {"fitness": 0.50, "actual_fitness": 0.80},
+            "state": "DONE",
+            "code": "def solve(): pass",
+        }
+        r.set("p:program:aaa111111111", json.dumps(prog))
+
+        mock_manifest = MagicMock()
+        mock_manifest.problem.metric_name = "actual_fitness"
+
+        configs = [
+            RunConfig(
+                run_spec=RunSpec(prefix="p", db=4, label="A"),
+                metric_names=["actual_fitness"],
+            ),
+        ]
+
+        obj = _make_obj(server)
+        obj["experiment"] = "test/exp"
+        obj["runs"] = ()
+
+        with (
+            patch(
+                "tools.experiment.manifest.load_manifest",
+                return_value=mock_manifest,
+            ),
+            patch.object(RunResolver, "resolve", return_value=configs),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "test/exp", "-f", "json", "top", "-n", "1"],
+                obj=obj,
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert len(data) == 1
+            assert (
+                "Actual_Fitness" in data[0] or "actual_fitness" in str(data[0]).lower()
+            )
+
+    def test_explicit_metric_overrides_manifest(self):
+        """Explicit --metric quality overrides manifest default."""
+        from unittest.mock import MagicMock, patch
+
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+        from gigaevo.monitoring.run_spec import RunSpec
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=4, decode_responses=True)
+        prog = {
+            "id": "aaa111111111",
+            "generation": 1,
+            "metrics": {"fitness": 0.50, "quality": 0.95, "actual_fitness": 0.80},
+            "state": "DONE",
+            "code": "def solve(): pass",
+        }
+        r.set("p:program:aaa111111111", json.dumps(prog))
+
+        mock_manifest = MagicMock()
+        mock_manifest.problem.metric_name = "actual_fitness"
+
+        configs = [
+            RunConfig(
+                run_spec=RunSpec(prefix="p", db=4, label="A"),
+            ),
+        ]
+
+        obj = _make_obj(server)
+        obj["experiment"] = "test/exp"
+        obj["runs"] = ()
+
+        with (
+            patch(
+                "tools.experiment.manifest.load_manifest",
+                return_value=mock_manifest,
+            ),
+            patch.object(RunResolver, "resolve", return_value=configs),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "-e",
+                    "test/exp",
+                    "-f",
+                    "json",
+                    "top",
+                    "-n",
+                    "1",
+                    "--metric",
+                    "quality",
+                ],
+                obj=obj,
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert len(data) == 1
+            assert "Quality" in data[0]
+            assert data[0]["Quality"] == 0.95

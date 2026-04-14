@@ -56,6 +56,7 @@ def _engine(**overrides) -> EvolutionEngine:
         writer=writer,
         metrics_tracker=metrics_tracker,
         pre_step_hook=overrides.get("pre_step_hook"),
+        post_step_hook=overrides.get("post_step_hook"),
     )
     engine.state = AsyncMock()
     return engine
@@ -517,3 +518,141 @@ class TestIngestMixedBatch:
 
         # on_program_ingested called 3 times (not for archive prog)
         assert engine.mutation_operator.on_program_ingested.call_count == 3
+
+
+# ===================================================================
+# Category J: post_step_hook
+# ===================================================================
+
+
+class TestPostStepHook:
+    """core.py: post_step_hook is called after phases in step(), before gen increment."""
+
+    async def test_post_step_hook_called_after_step(self):
+        """post_step_hook is called exactly once per step."""
+        hook_calls = []
+
+        async def hook():
+            hook_calls.append("called")
+
+        engine = _engine(post_step_hook=hook)
+        engine.storage.count_by_status.return_value = 0
+        engine.storage.get_ids_by_status.return_value = []
+        engine.strategy.select_elites.return_value = []
+        engine.strategy.get_program_ids.return_value = []
+
+        with patch(
+            "gigaevo.evolution.engine.core.generate_mutations",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
+
+        assert hook_calls == ["called"]
+        assert engine.metrics.total_generations == 1
+
+    async def test_post_step_hook_none_works(self):
+        """When post_step_hook is None, step() works normally (backward compatible)."""
+        engine = _engine()
+        engine.storage.count_by_status.return_value = 0
+        engine.storage.get_ids_by_status.return_value = []
+        engine.strategy.select_elites.return_value = []
+        engine.strategy.get_program_ids.return_value = []
+
+        with patch(
+            "gigaevo.evolution.engine.core.generate_mutations",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
+
+        assert engine.metrics.total_generations == 1
+
+    async def test_post_step_hook_exception_caught(self):
+        """If post_step_hook raises, the exception is logged but engine continues."""
+
+        async def bad_hook():
+            raise RuntimeError("hook exploded")
+
+        engine = _engine(post_step_hook=bad_hook)
+        engine.storage.count_by_status.return_value = 0
+        engine.storage.get_ids_by_status.return_value = []
+        engine.strategy.select_elites.return_value = []
+        engine.strategy.get_program_ids.return_value = []
+
+        with patch(
+            "gigaevo.evolution.engine.core.generate_mutations",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            # Should NOT raise — exception is caught and logged
+            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
+
+        # Generation counter still incremented (engine continued)
+        assert engine.metrics.total_generations == 1
+
+    async def test_post_step_hook_called_after_pre_step_hook(self):
+        """Ordering: pre_step_hook before phases, post_step_hook after phases."""
+        call_order = []
+
+        async def pre_hook():
+            call_order.append("pre")
+
+        async def post_hook():
+            call_order.append("post")
+
+        engine = _engine(pre_step_hook=pre_hook, post_step_hook=post_hook)
+
+        async def tracked_await_idle():
+            call_order.append("await_idle")
+
+        async def tracked_select():
+            call_order.append("select")
+            return []
+
+        async def tracked_ingest(**kwargs):
+            call_order.append("ingest")
+
+        async def tracked_refresh():
+            call_order.append("refresh")
+            return 0
+
+        engine._await_idle = tracked_await_idle
+        engine._select_elites_for_mutation = tracked_select
+        engine._ingest_completed_programs = tracked_ingest
+        engine._refresh_archive_programs = tracked_refresh
+
+        await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
+
+        assert call_order[0] == "pre"
+        assert call_order[-1] == "post"
+
+    async def test_post_step_hook_called_even_without_refresh(self):
+        """post_step_hook is called even when refreshed == 0 (no refresh needed)."""
+        hook_calls = []
+
+        async def hook():
+            hook_calls.append("called")
+
+        engine = _engine(post_step_hook=hook)
+
+        async def no_op_idle():
+            pass
+
+        async def no_elites():
+            return []
+
+        async def no_ingest(**kwargs):
+            pass
+
+        async def no_refresh():
+            return 0  # refreshed == 0
+
+        engine._await_idle = no_op_idle
+        engine._select_elites_for_mutation = no_elites
+        engine._ingest_completed_programs = no_ingest
+        engine._refresh_archive_programs = no_refresh
+
+        await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
+
+        assert hook_calls == ["called"]

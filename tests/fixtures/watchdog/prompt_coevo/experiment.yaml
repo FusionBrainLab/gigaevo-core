@@ -1,0 +1,70 @@
+schema_version: 1
+experiment:
+  name: hover/prompt-coevo-test
+  task: hover
+  status: running
+  branch: exp/hover/prompt-coevo-test
+  max_generations: 25
+  pr_number: 150
+problem:
+  has_test_set: true
+  fitness_type: discrete
+  metric_name: accuracy
+runs:
+  - label: C1
+    db: 9
+    prefix: "chains/hover/static_soft"
+    pipeline: hover_feedback
+    problem_name: "chains/hover/static_soft"
+    condition: "code population"
+    mutation_url: "http://INTERNAL_IP:4000"
+    model_name: "gemini-2.5-flash"
+    pid: 30001
+  - label: C2
+    db: 10
+    prefix: "chains/hover/static_soft"
+    pipeline: hover_feedback
+    problem_name: "chains/hover/static_soft"
+    condition: "code population replicate"
+    mutation_url: "http://INTERNAL_IP:4000"
+    model_name: "gemini-2.5-flash"
+    pid: 30002
+  - label: P1
+    db: 11
+    prefix: "prompt_evolution_hover"
+    pipeline: prompt_evolution
+    problem_name: "prompt_evolution_hover"
+    condition: "prompt population"
+    mutation_url: "http://INTERNAL_IP:4000"
+    model_name: "gemini-2.5-flash"
+    pid: 30003
+  - label: P2
+    db: 12
+    prefix: "prompt_evolution_hover"
+    pipeline: prompt_evolution
+    problem_name: "prompt_evolution_hover"
+    condition: "prompt population replicate"
+    mutation_url: "http://INTERNAL_IP:4000"
+    model_name: "gemini-2.5-flash"
+    pid: 30004
+servers:
+  - "INTERNAL_IP"
+config:
+  num_parents: 1
+  max_elites_per_generation: 8
+baseline:
+  reference: "hover-baseline-v1"
+  mean: 0.80
+  metric: accuracy
+smoke_test:
+  completed: true
+  completed_at: "2026-04-10T10:00:00Z"
+launch:
+  time: "2026-04-10T10:00:00Z"
+  commit: "ghi789"
+watchdog:
+  plugin: prompt_coevo
+  plot_metrics: ["accuracy"]
+  alert_thresholds:
+    invalidity_rate: 0.75
+    stagnation_window: 10

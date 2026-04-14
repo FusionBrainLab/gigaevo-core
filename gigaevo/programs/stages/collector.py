@@ -505,7 +505,7 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
 
         # Program's generation
         generation = program.generation
-        iteration = program.get_metadata("iteration")
+        iteration = program.iteration
 
         # Generation statistics (cached)
         gen_best, gen_worst, gen_avg, gen_valid_rate = self._cached_gen_stats.get(
@@ -513,14 +513,9 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         )
 
         # Iteration statistics (programs in same iteration)
-        # Note: when metadata is excluded from the snapshot (for performance),
-        # p.get_metadata("iteration") returns None for all snapshot programs,
-        # so iter_programs will be empty.  In that case keep None semantics.
         iter_best, iter_worst, iter_avg, iter_valid_rate = None, None, None, None
         if iteration is not None:
-            iter_programs = [
-                p for p in programs if p.get_metadata("iteration") == iteration
-            ]
+            iter_programs = [p for p in programs if p.iteration == iteration]
             if iter_programs:
                 iter_best, iter_worst, iter_avg, iter_valid_rate = (
                     _compute_fitness_stats_all_metrics(

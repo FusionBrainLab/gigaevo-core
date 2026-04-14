@@ -55,6 +55,7 @@ class EvolutionEngine:
         metrics_tracker: MetricsTracker,
         pre_step_hook: Callable[[], Awaitable[None]] | None = None,
         post_run_hook: PostRunHook | None = None,
+        post_step_hook: Callable[[], Awaitable[None]] | None = None,
     ):
         self.storage = storage
         self.strategy = strategy
@@ -82,6 +83,7 @@ class EvolutionEngine:
         self.state = ProgramStateManager(self.storage)
         self._metrics_tracker = metrics_tracker
         self._pre_step_hook = pre_step_hook
+        self._post_step_hook = post_step_hook
         self._post_run_hook = post_run_hook or NullPostRunHook()
 
         logger.info(
@@ -256,6 +258,13 @@ class EvolutionEngine:
             # Phase 7: reindex archive with updated metrics (e.g., prompt fitness)
             await self.strategy.reindex_archive()
             logger.debug("[EvolutionEngine] gen={} Phase 7: Archive reindexed", gen)
+
+        # Post-step hook: composition injection, cross-population analysis, etc.
+        if self._post_step_hook:
+            try:
+                await self._post_step_hook()
+            except Exception as e:
+                logger.error("[EvolutionEngine] post_step_hook failed: {}", e)
 
         self.metrics.total_generations += 1
         await self.storage.save_run_state(

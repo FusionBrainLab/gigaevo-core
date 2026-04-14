@@ -34,6 +34,10 @@ class WatchdogConfig:
     model_drift_check: bool = True
     redis_host: str = "localhost"
     redis_port: int = 6379
+    plot_retries: int = 3
+    plot_retry_delay_s: int = 30
+    rolling_comment_threshold_hours: int = 24
+    checkpoint_milestones: tuple[float, ...] = (0.1, 0.2, 0.5, 1.0)
 
     @property
     def heartbeat_ttl_s(self) -> int:

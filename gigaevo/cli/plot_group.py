@@ -38,6 +38,7 @@ def _fetch_run_data(
     redis_port: int,
     metric: str = "fitness",
     no_frontier_labels: set[str] | None = None,
+    sentinel_value: float | None = None,
 ) -> list[tuple[str, pd.DataFrame]]:
     """Fetch and prepare DataFrames for each run. Returns list of (label, df).
 
@@ -45,11 +46,11 @@ def _fetch_run_data(
         no_frontier_labels: Set of run labels for which frontier (cummax) should
             be suppressed. Useful for adversarial Improver populations where
             fitness is non-monotonic.
+        sentinel_value: Exact fitness value used for invalid programs (e.g. -1.0).
+            Rows matching this value are removed before computing statistics.
     """
-    from tools.utils import (
-        fetch_evolution_dataframe,
-        prepare_iteration_dataframe,
-    )
+    from gigaevo.utils.dataframes import prepare_iteration_dataframe
+    from gigaevo.utils.redis import fetch_evolution_dataframe
 
     results: list[tuple[str, pd.DataFrame]] = []
     for rc in run_configs:
@@ -63,6 +64,7 @@ def _fetch_run_data(
             raw_df,
             fitness_col=f"metric_{metric}",
             compute_frontier=not skip_frontier,
+            sentinel_value=sentinel_value,
         )
         if prepared.empty:
             continue
@@ -140,6 +142,34 @@ def _smooth_series(series, window: int, method: SmoothingMethod):
     return pd.Series(smoothed, index=series.index)
 
 
+def _aggregate_per_iteration(
+    df: pd.DataFrame,
+    iteration_col: str,
+) -> pd.DataFrame:
+    """Aggregate multiple programs per iteration into one row per iteration.
+
+    Groups by iteration and computes:
+    - running_mean_fitness: mean across programs in the same iteration
+    - running_std_fitness: RMS of per-program stds (preserves variance scale)
+    - frontier_fitness: last value (frontier is already cumulative)
+
+    This reduces point-to-point noise and matches the old tools/comparison.py
+    behavior that produced smooth, clean curves.
+    """
+    import numpy as np
+
+    agg_spec: dict = {
+        "running_mean_fitness": "mean",
+        "running_std_fitness": lambda x: np.sqrt((x**2).mean()),
+    }
+    if "frontier_fitness" in df.columns:
+        agg_spec["frontier_fitness"] = "last"
+
+    grouped = df.groupby(iteration_col).agg(agg_spec).reset_index()
+    grouped = grouped.sort_values(iteration_col)
+    return grouped
+
+
 @click.group()
 def plot() -> None:
     """Generate plots from evolution runs."""
@@ -195,6 +225,12 @@ def plot() -> None:
     default=False,
     help="Use publication-quality styling (larger fonts, 300 DPI, colorblind-safe).",
 )
+@click.option(
+    "--sentinel",
+    type=float,
+    default=None,
+    help="Sentinel fitness value for invalid programs (e.g. -1.0). Filtered before plotting.",
+)
 @click.pass_context
 def comparison(
     ctx: click.Context,
@@ -208,6 +244,7 @@ def comparison(
     annotate_frontier: bool,
     max_annotations: int,
     paper: bool,
+    sentinel: float | None,
 ) -> None:
     """Plot fitness comparison across runs."""
     import matplotlib
@@ -215,7 +252,7 @@ def comparison(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from tools.comparison import _annotate_frontier_points
+    from gigaevo.utils.plotting import annotate_frontier_points
 
     # Build set of labels to suppress frontier for
     no_frontier_labels: set[str] | None = None
@@ -251,6 +288,7 @@ def comparison(
         ctx.obj["redis_port"],
         metric=metric,
         no_frontier_labels=actual_no_frontier,
+        sentinel_value=sentinel,
     )
 
     out_path = Path(output_dir)
@@ -300,14 +338,17 @@ def comparison(
             "#17becf",
         ]
 
-    iteration_col = "metadata_iteration"
+    iteration_col = "iteration"
 
     run_labels = []
     for i, (label, df) in enumerate(prepared_dfs):
         color = colors[i % len(colors)]
-        iters = df[iteration_col]
 
-        mean_vals = df["running_mean_fitness"]
+        # Aggregate to one point per iteration (matches old tools/comparison.py)
+        agg = _aggregate_per_iteration(df, iteration_col)
+        iters = agg[iteration_col]
+
+        mean_vals = agg["running_mean_fitness"]
         if smoothing != "none" and window > 1:
             mean_vals = _smooth_series(mean_vals, window, smoothing)  # type: ignore[arg-type]
 
@@ -316,8 +357,13 @@ def comparison(
             iters, mean_vals, label=f"{label} (mean)", color=color, linewidth=lw_mean
         )
 
-        if "running_std_fitness" in df.columns:
-            std_vals = df["running_std_fitness"]
+        if "running_std_fitness" in agg.columns:
+            std_vals = agg["running_std_fitness"]
+            if smoothing != "none" and window > 1:
+                std_vals = _smooth_series(std_vals, window, smoothing)  # type: ignore[arg-type]
+            import numpy as np
+
+            std_vals = np.maximum(std_vals, 0)
             ax.fill_between(
                 iters,
                 mean_vals - std_vals,
@@ -326,11 +372,11 @@ def comparison(
                 color=color,
             )
 
-        if "frontier_fitness" in df.columns:
+        if "frontier_fitness" in agg.columns:
             lw_best = 1.5 if paper else 1.0
             ax.plot(
                 iters,
-                df["frontier_fitness"],
+                agg["frontier_fitness"],
                 label=f"{label} (best)",
                 color=color,
                 linewidth=lw_best,
@@ -338,10 +384,10 @@ def comparison(
             )
 
             if annotate_frontier:
-                _annotate_frontier_points(
+                annotate_frontier_points(
                     ax,
                     iters.values,
-                    df["frontier_fitness"].values,
+                    agg["frontier_fitness"].values,
                     minimize=False,
                     max_annotations=max_annotations,
                     color=color,
@@ -405,6 +451,12 @@ def comparison(
     default=False,
     help="Suppress standard deviation band.",
 )
+@click.option(
+    "--sentinel",
+    type=float,
+    default=None,
+    help="Sentinel fitness value for invalid programs (e.g. -1.0). Filtered before plotting.",
+)
 @click.pass_context
 def trajectory(
     ctx: click.Context,
@@ -414,6 +466,7 @@ def trajectory(
     no_best: bool,
     no_mean: bool,
     no_std: bool,
+    sentinel: float | None,
 ) -> None:
     """Plot fitness trajectory for a run."""
     import matplotlib
@@ -433,6 +486,7 @@ def trajectory(
         ctx.obj["redis_host"],
         ctx.obj["redis_port"],
         metric=metric,
+        sentinel_value=sentinel,
     )
 
     out_path = Path(output_dir)
@@ -440,26 +494,27 @@ def trajectory(
 
     fig, ax = plt.subplots(figsize=(7.0, 4.5))
 
-    iteration_col = "metadata_iteration"
+    iteration_col = "iteration"
 
     for label, df in prepared_dfs:
-        iters = df[iteration_col]
+        agg = _aggregate_per_iteration(df, iteration_col)
+        iters = agg[iteration_col]
 
-        if not no_mean and "running_mean_fitness" in df.columns:
+        if not no_mean and "running_mean_fitness" in agg.columns:
             ax.plot(
                 iters,
-                df["running_mean_fitness"],
+                agg["running_mean_fitness"],
                 label=f"{label} (mean)",
                 linewidth=1.5,
             )
 
         if (
             not no_std
-            and "running_std_fitness" in df.columns
-            and "running_mean_fitness" in df.columns
+            and "running_std_fitness" in agg.columns
+            and "running_mean_fitness" in agg.columns
         ):
-            mean_vals = df["running_mean_fitness"]
-            std_vals = df["running_std_fitness"]
+            mean_vals = agg["running_mean_fitness"]
+            std_vals = agg["running_std_fitness"]
             ax.fill_between(
                 iters,
                 mean_vals - std_vals,
@@ -467,10 +522,10 @@ def trajectory(
                 alpha=0.15,
             )
 
-        if not no_best and "frontier_fitness" in df.columns:
+        if not no_best and "frontier_fitness" in agg.columns:
             ax.plot(
                 iters,
-                df["frontier_fitness"],
+                agg["frontier_fitness"],
                 label=f"{label} (best)",
                 linewidth=1.0,
                 linestyle="--",
@@ -527,6 +582,12 @@ def trajectory(
     help="Use publication-quality styling.",
 )
 @click.option("--show", is_flag=True, default=False, help="Show plot interactively.")
+@click.option(
+    "--sentinel",
+    type=float,
+    default=None,
+    help="Sentinel fitness value for invalid programs (e.g. -1.0). Filtered before plotting.",
+)
 @click.pass_context
 def arms_race(
     ctx: click.Context,
@@ -536,6 +597,7 @@ def arms_race(
     show_max: bool,
     paper: bool,
     show: bool,
+    sentinel: float | None,
 ) -> None:
     """Dual-panel arms race plot for adversarial co-evolution.
 
@@ -576,6 +638,7 @@ def arms_race(
         ctx.obj["redis_port"],
         metric=metric,
         no_frontier_labels=d_labels,
+        sentinel_value=sentinel,
     )
 
     # Index by label
@@ -604,7 +667,7 @@ def arms_race(
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    iteration_col = "metadata_iteration"
+    iteration_col = "iteration"
 
     fig, (ax_g, ax_d) = plt.subplots(
         2,
@@ -621,19 +684,19 @@ def arms_race(
 
         # Constructor (G) panel — top
         if g_label in df_by_label:
-            g_df = df_by_label[g_label]
-            g_iters = g_df[iteration_col]
+            g_agg = _aggregate_per_iteration(df_by_label[g_label], iteration_col)
+            g_iters = g_agg[iteration_col]
             ax_g.plot(
                 g_iters,
-                g_df["running_mean_fitness"],
+                g_agg["running_mean_fitness"],
                 label=f"{g_label} (mean)",
                 color=color,
                 linewidth=2.0 if paper else 1.5,
             )
-            if "frontier_fitness" in g_df.columns:
+            if "frontier_fitness" in g_agg.columns:
                 ax_g.plot(
                     g_iters,
-                    g_df["frontier_fitness"],
+                    g_agg["frontier_fitness"],
                     label=f"{g_label} (best)",
                     color=color,
                     linewidth=1.5 if paper else 1.0,
@@ -642,11 +705,11 @@ def arms_race(
 
         # Improver (D) panel — bottom (no frontier, non-monotonic)
         if d_label in df_by_label:
-            d_df = df_by_label[d_label]
-            d_iters = d_df[iteration_col]
+            d_agg = _aggregate_per_iteration(df_by_label[d_label], iteration_col)
+            d_iters = d_agg[iteration_col]
             ax_d.plot(
                 d_iters,
-                d_df["running_mean_fitness"],
+                d_agg["running_mean_fitness"],
                 label=f"{d_label} (mean)",
                 color=color,
                 linewidth=2.0 if paper else 1.5,
@@ -654,22 +717,22 @@ def arms_race(
 
         # max(G, D) overlay on G panel
         if show_max and g_label in df_by_label and d_label in df_by_label:
-            g_df = df_by_label[g_label]
-            d_df = df_by_label[d_label]
+            g_agg = _aggregate_per_iteration(df_by_label[g_label], iteration_col)
+            d_agg = _aggregate_per_iteration(df_by_label[d_label], iteration_col)
 
             # Align on common iterations
-            g_frontier = g_df.set_index(iteration_col)
-            d_mean = d_df.set_index(iteration_col)
+            g_indexed = g_agg.set_index(iteration_col)
+            d_indexed = d_agg.set_index(iteration_col)
 
             g_col = (
                 "frontier_fitness"
-                if "frontier_fitness" in g_frontier.columns
+                if "frontier_fitness" in g_indexed.columns
                 else "running_mean_fitness"
             )
-            common_iters = g_frontier.index.intersection(d_mean.index)
+            common_iters = g_indexed.index.intersection(d_indexed.index)
             if len(common_iters) > 0:
-                g_vals = g_frontier.loc[common_iters, g_col]
-                d_vals = d_mean.loc[common_iters, "running_mean_fitness"]
+                g_vals = g_indexed.loc[common_iters, g_col]
+                d_vals = d_indexed.loc[common_iters, "running_mean_fitness"]
                 max_vals = np.maximum(g_vals.values, d_vals.values)
                 ax_g.plot(
                     common_iters,
