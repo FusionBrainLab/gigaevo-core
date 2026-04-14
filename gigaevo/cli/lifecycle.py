@@ -6,7 +6,6 @@ All destructive operations require --confirm.
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 
 import click
@@ -22,17 +21,11 @@ def preflight(ctx: click.Context) -> None:
         ctx.exit(1)
         return
 
-    # Load preflight_check from project root (tools/experiment/preflight_check.py)
-    proj = Path(__file__).parent.parent.parent
-    sys.path.insert(0, str(proj))
-    try:
-        from tools.experiment.preflight_check import _report, run_checks
+    from gigaevo.experiment.preflight import _report, run_checks
 
-        results = run_checks(experiment)
-        exit_code = _report(results)
-        sys.exit(exit_code)
-    finally:
-        sys.path.pop(0)
+    results = run_checks(experiment)
+    exit_code = _report(results)
+    sys.exit(exit_code)
 
 
 @click.command()
@@ -58,16 +51,10 @@ def launch(ctx: click.Context, generate_script: bool, confirm: bool) -> None:
         return
 
     if generate_script:
-        # Generate launch.sh from experiment.yaml
-        proj = Path(__file__).parent.parent.parent
-        sys.path.insert(0, str(proj))
-        try:
-            from tools.experiment.generate_launch import generate
+        from gigaevo.experiment.launch_generator import generate
 
-            script = generate(experiment)
-            click.echo(script)
-        finally:
-            sys.path.pop(0)
+        script = generate(experiment)
+        click.echo(script)
         return
 
     from gigaevo.monitoring.manifest import load_manifest
