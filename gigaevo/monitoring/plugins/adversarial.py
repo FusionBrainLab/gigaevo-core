@@ -39,18 +39,11 @@ class AdversarialPlugin(WatchdogPlugin):
         self,
         plot_metrics: list[str] | None = None,
         plot_commands: list | None = None,
-        problem_name: str | None = None,
         sentinel_value: float | None = None,
     ):
         self._plot_metrics = plot_metrics or ["fitness"]
         self._plot_commands = plot_commands or []
         self._sentinel_value = sentinel_value
-        if plot_metrics and problem_name:
-            from gigaevo.monitoring.manifest_schema import WatchdogPluginOptions
-
-            WatchdogPluginOptions(plot_metrics=plot_metrics).validate_plot_metrics(
-                problem_name
-            )
 
     def _group_runs(self, snapshots: list[RunSnapshot]) -> dict[str, list[RunSnapshot]]:
         groups: dict[str, list[RunSnapshot]] = defaultdict(list)
