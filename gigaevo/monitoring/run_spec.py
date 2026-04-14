@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+RunRole = Literal["constructor", "improver"]
 
 
 @dataclass(frozen=True)
@@ -9,11 +12,15 @@ class RunSpec:
 
     Immutable. Used as the canonical representation of a run reference
     throughout the monitoring package.
+
+    ``role`` identifies adversarial population role (constructor=G, improver=D).
+    It is None for non-adversarial runs.
     """
 
     prefix: str
     db: int
     label: str
+    role: RunRole | None = None
 
     @property
     def display_name(self) -> str:

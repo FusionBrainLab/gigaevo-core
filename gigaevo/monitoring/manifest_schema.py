@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 import yaml
@@ -46,6 +46,7 @@ class WatchdogSection(BaseModel):
     plugin: str | None = None
     plot_commands: list[PlotCommand] = []
     plot_metrics: list[str] = []
+    sentinel_value: float | None = None
     alert_thresholds: AlertThresholds = AlertThresholds()
     poll_interval_s: int = 3600
     plot_retries: int = 3
@@ -73,6 +74,7 @@ class ManifestRunSpec(BaseModel):
     log_path: str | None = None
     extra_overrides: list[str] | None = None
     run_env: dict[str, str] | None = None
+    role: Literal["constructor", "improver"] | None = None
 
     @field_validator("db")
     @classmethod
@@ -182,8 +184,6 @@ class ExperimentManifest(BaseModel):
     smoke_test: SmokeTestInfo = SmokeTestInfo()
     tools: list[dict[str, str]] = []
     watchdog: WatchdogSection = WatchdogSection()
-    watchdog_plugin: str | None = None
-    watchdog_plugin_options: dict[str, Any] | None = None
 
     @field_validator("schema_version")
     @classmethod
@@ -194,21 +194,6 @@ class ExperimentManifest(BaseModel):
                 f"Supported: {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
             )
         return v
-
-    @model_validator(mode="after")
-    def migrate_legacy_watchdog_fields(self) -> ExperimentManifest:
-        """Migrate deprecated watchdog_plugin / watchdog_plugin_options to watchdog section."""
-        watchdog_is_default = (
-            self.watchdog.plugin is None and not self.watchdog.plot_metrics
-        )
-        if watchdog_is_default:
-            if self.watchdog_plugin is not None:
-                self.watchdog.plugin = self.watchdog_plugin
-            if self.watchdog_plugin_options:
-                plot_metrics = self.watchdog_plugin_options.get("plot_metrics", [])
-                if plot_metrics:
-                    self.watchdog.plot_metrics = list(plot_metrics)
-        return self
 
     @model_validator(mode="after")
     def validate_status_gates(self) -> ExperimentManifest:

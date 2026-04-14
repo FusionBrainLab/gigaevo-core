@@ -180,7 +180,7 @@ class TestResolvePlugin:
         manifest = MagicMock()
         manifest.experiment.task = task
         manifest.experiment.name = name
-        manifest.watchdog_plugin = watchdog_plugin
+        manifest.watchdog.plugin = watchdog_plugin
         return manifest
 
     def test_explicit_plugin_field(self):

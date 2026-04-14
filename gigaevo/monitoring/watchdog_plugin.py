@@ -4,7 +4,7 @@ Plugins control ONLY plot generation and status formatting.
 Everything else (loop, heartbeat, Redis, notifications) is the engine.
 
 Registry is a simple dict with @register decorator.
-resolve_plugin() priority: manifest.watchdog_plugin > task heuristic > "solo" fallback.
+resolve_plugin() priority: manifest.watchdog.plugin > task heuristic > "solo" fallback.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from gigaevo.monitoring.manifest_schema import ExperimentManifest
 from gigaevo.monitoring.notifications import PlotAttachment
 from gigaevo.monitoring.snapshot import RunSnapshot
 
@@ -152,16 +153,16 @@ def get_registry() -> dict[str, type[WatchdogPlugin]]:
     return dict(_REGISTRY)
 
 
-def resolve_plugin(manifest) -> type[WatchdogPlugin]:
+def resolve_plugin(manifest: ExperimentManifest | None) -> type[WatchdogPlugin]:
     """Resolve the correct WatchdogPlugin class for an experiment.
 
     Priority:
-      1. manifest.watchdog_plugin field (explicit override)
+      1. manifest.watchdog.plugin (explicit override)
       2. Task-prefix heuristic from manifest.experiment.task
       3. "solo" fallback
 
     Args:
-        manifest: ExperimentManifest or None (run mode).
+        manifest: Validated ExperimentManifest, or None when running without one.
 
     Returns:
         The WatchdogPlugin subclass (not an instance).
@@ -169,20 +170,20 @@ def resolve_plugin(manifest) -> type[WatchdogPlugin]:
     Raises:
         KeyError: If explicit plugin name is not in the registry.
     """
-    # 1. Explicit plugin field
     if manifest is not None:
-        explicit = getattr(manifest, "watchdog_plugin", None)
+        # 1. Explicit plugin field
+        explicit = manifest.watchdog.plugin
         if explicit:
             if explicit not in _REGISTRY:
                 raise KeyError(
                     f"Watchdog plugin '{explicit}' not found in registry. "
                     f"Available: {sorted(_REGISTRY.keys())}"
                 )
-            _log.info(f"Resolved plugin from manifest field: {explicit}")
+            _log.info(f"Resolved plugin from manifest.watchdog.plugin: {explicit}")
             return _REGISTRY[explicit]
 
         # 2. Task-prefix heuristic
-        task = manifest.task
+        task = manifest.experiment.task
         heuristic_name = _TASK_HEURISTIC.get(task)
         if heuristic_name and heuristic_name in _REGISTRY:
             _log.info(

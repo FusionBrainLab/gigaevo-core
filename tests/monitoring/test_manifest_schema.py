@@ -575,29 +575,3 @@ class TestAlertThresholdsSchema:
         assert thresholds.stagnation_window == 5
 
 
-class TestLegacyWatchdogMigration:
-    def test_legacy_watchdog_plugin_migrated(self) -> None:
-        raw = _minimal_preregistered()
-        raw["watchdog_plugin"] = "heilbron"
-        manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.watchdog.plugin == "heilbron"
-
-    def test_legacy_watchdog_plugin_options_migrated(self) -> None:
-        raw = _minimal_preregistered()
-        raw["watchdog_plugin_options"] = {"plot_metrics": ["fitness", "accuracy"]}
-        manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.watchdog.plot_metrics == ["fitness", "accuracy"]
-
-    def test_explicit_watchdog_section_not_overridden_by_legacy(self) -> None:
-        raw = _minimal_preregistered()
-        raw["watchdog"] = {"plugin": "adversarial", "plot_metrics": ["loss"]}
-        raw["watchdog_plugin"] = "solo"
-        manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.watchdog.plugin == "adversarial"
-        assert manifest.watchdog.plot_metrics == ["loss"]
-
-    def test_no_legacy_fields_no_migration(self) -> None:
-        raw = _minimal_preregistered()
-        manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.watchdog.plugin is None
-        assert manifest.watchdog.plot_metrics == []

@@ -576,6 +576,35 @@ def trajectory(
     help="Plot max(G, D) best-overall across each pair.",
 )
 @click.option(
+    "--smoothing",
+    type=click.Choice(["none", "ema", "rolling", "gaussian", "lowess", "boxcar"]),
+    default="ema",
+    help="Smoothing method for mean/std series (default: ema).",
+)
+@click.option(
+    "--window",
+    type=int,
+    default=10,
+    help="Smoothing window size (default: 10).",
+)
+@click.option(
+    "--bands/--no-bands",
+    default=True,
+    help="Shade +/- 1 std around the mean (default: on).",
+)
+@click.option(
+    "--annotate-frontier",
+    is_flag=True,
+    default=False,
+    help="Annotate significant frontier jumps on the Constructor panel.",
+)
+@click.option(
+    "--max-annotations",
+    type=int,
+    default=3,
+    help="Max frontier annotations per constructor run (default: 3).",
+)
+@click.option(
     "--paper",
     is_flag=True,
     default=False,
@@ -595,6 +624,11 @@ def arms_race(
     metric: str,
     paired: str,
     show_max: bool,
+    smoothing: str,
+    window: int,
+    bands: bool,
+    annotate_frontier: bool,
+    max_annotations: int,
     paper: bool,
     show: bool,
     sentinel: float | None,
@@ -612,6 +646,8 @@ def arms_race(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
+
+    from gigaevo.utils.plotting import annotate_frontier_points
 
     # Parse pair specs
     pairs: list[tuple[str, str]] = []
@@ -679,41 +715,62 @@ def arms_race(
     files_created = []
     pair_labels = []
 
+    def _plot_panel(ax, agg, label, color, *, show_frontier: bool) -> None:
+        """Plot mean (smoothed) + optional +/- 1 std band + optional frontier line."""
+        iters = agg[iteration_col]
+        mean_vals = agg["running_mean_fitness"]
+        if smoothing != "none" and window > 1:
+            mean_vals = _smooth_series(mean_vals, window, smoothing)  # type: ignore[arg-type]
+        ax.plot(
+            iters,
+            mean_vals,
+            label=f"{label} (mean)",
+            color=color,
+            linewidth=2.0 if paper else 1.5,
+        )
+        if bands and "running_std_fitness" in agg.columns:
+            std_vals = agg["running_std_fitness"]
+            if smoothing != "none" and window > 1:
+                std_vals = _smooth_series(std_vals, window, smoothing)  # type: ignore[arg-type]
+            std_vals = np.maximum(std_vals, 0)
+            ax.fill_between(
+                iters,
+                mean_vals - std_vals,
+                mean_vals + std_vals,
+                alpha=0.15,
+                color=color,
+            )
+        if show_frontier and "frontier_fitness" in agg.columns:
+            ax.plot(
+                iters,
+                agg["frontier_fitness"],
+                label=f"{label} (best)",
+                color=color,
+                linewidth=1.5 if paper else 1.0,
+                linestyle="--",
+            )
+            if annotate_frontier:
+                annotate_frontier_points(
+                    ax,
+                    iters.values,
+                    agg["frontier_fitness"].values,
+                    minimize=False,
+                    max_annotations=max_annotations,
+                    color=color,
+                )
+
     for i, (g_label, d_label) in enumerate(pairs):
         color = colors[i % len(colors)]
 
-        # Constructor (G) panel — top
+        # Constructor (G) panel — top (frontier is monotonic, show it)
         if g_label in df_by_label:
             g_agg = _aggregate_per_iteration(df_by_label[g_label], iteration_col)
-            g_iters = g_agg[iteration_col]
-            ax_g.plot(
-                g_iters,
-                g_agg["running_mean_fitness"],
-                label=f"{g_label} (mean)",
-                color=color,
-                linewidth=2.0 if paper else 1.5,
-            )
-            if "frontier_fitness" in g_agg.columns:
-                ax_g.plot(
-                    g_iters,
-                    g_agg["frontier_fitness"],
-                    label=f"{g_label} (best)",
-                    color=color,
-                    linewidth=1.5 if paper else 1.0,
-                    linestyle="--",
-                )
+            _plot_panel(ax_g, g_agg, g_label, color, show_frontier=True)
 
         # Improver (D) panel — bottom (no frontier, non-monotonic)
         if d_label in df_by_label:
             d_agg = _aggregate_per_iteration(df_by_label[d_label], iteration_col)
-            d_iters = d_agg[iteration_col]
-            ax_d.plot(
-                d_iters,
-                d_agg["running_mean_fitness"],
-                label=f"{d_label} (mean)",
-                color=color,
-                linewidth=2.0 if paper else 1.5,
-            )
+            _plot_panel(ax_d, d_agg, d_label, color, show_frontier=False)
 
         # max(G, D) overlay on G panel
         if show_max and g_label in df_by_label and d_label in df_by_label:
