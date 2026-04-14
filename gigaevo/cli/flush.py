@@ -76,6 +76,12 @@ class _VarDbOption(click.Option):
     default=False,
     help="Skip killing exec_runner workers.",
 )
+@click.option(
+    "--kill-only",
+    is_flag=True,
+    default=False,
+    help="Kill workers only, skip Redis flush.",
+)
 @click.pass_context
 def flush(
     ctx: click.Context,
@@ -83,6 +89,7 @@ def flush(
     confirm: bool,
     dry_run: bool,
     no_kill_workers: bool,
+    kill_only: bool,
 ) -> None:
     """Kill workers and flush Redis databases.
 
@@ -112,7 +119,9 @@ def flush(
     dbs = raw
     is_dry_run = not confirm or dry_run
 
-    if is_dry_run:
+    if kill_only:
+        click.echo("[flush] KILL-ONLY mode -- workers only, no DB flush\n")
+    elif is_dry_run:
         click.echo("[flush] DRY-RUN mode -- pass --confirm to execute\n")
     else:
         click.echo(f"[flush] DESTRUCTIVE OPERATION: Flushing Redis DBs {dbs}\n")
@@ -127,15 +136,18 @@ def flush(
     else:
         click.echo("[workers] Skipping exec_runner cleanup (--no-kill-workers)")
 
-    # Step 2: Flush each DB
+    # Step 2: Flush each DB (skip if --kill-only)
     all_ok = True
-    for d in dbs:
-        ok = flush_db(d, redis_host, redis_port, is_dry_run)
-        if not ok:
-            all_ok = False
+    if not kill_only:
+        for d in dbs:
+            ok = flush_db(d, redis_host, redis_port, is_dry_run)
+            if not ok:
+                all_ok = False
 
     # Step 3: Summary
-    if is_dry_run:
+    if kill_only:
+        click.echo("\n[summary] Workers cleanup complete.")
+    elif is_dry_run:
         click.echo("\n[summary] Dry-run complete. Run with --confirm to execute.")
     elif all_ok:
         click.echo("\n[summary] All DBs flushed successfully.")

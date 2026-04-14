@@ -180,7 +180,7 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 | `preflight_check.py` | 20-check validation before launch (configs, Redis, servers, treatment) | `--experiment task/name` |
 | `generate_launch.py` | Generate `launch.sh` from experiment.yaml manifest | `--experiment task/name`, `--dry-run` |
 | `manifest.py` | Load/update `experiment.yaml` programmatically | `import` — not a CLI tool |
-| `process_cleanup.py` | Kill stale watchdog / run processes | `--experiment` |
+| `flush --kill-only` | Kill stale watchdog / run processes | `gigaevo flush --db N1 N2 ... --kill-only` |
 | `check_all_watchdogs.sh` | Cron health check: scan Redis heartbeats, alert on stale watchdogs | standalone (no args) |
 | `skill_env.sh` | Shared env vars for skills (`$PROJ`, `$GIGAEVO_PYTHON`, `$PYTHONPATH`) | `source` — not executable |
 
