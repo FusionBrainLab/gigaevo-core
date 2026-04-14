@@ -20,14 +20,8 @@ import sys
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-# Defer manifest import to check #0
+# Repo root for resolving experiment directories and shelling out to sibling scripts.
 PROJ = Path(__file__).parent.parent.parent
-
-# Ensure repo root is on sys.path so `tools.experiment.manifest` is importable
-# when invoked via the `gigaevo` console script (editable install only exposes
-# the gigaevo package on sys.path, not the repo root).
-if str(PROJ) not in sys.path:
-    sys.path.insert(0, str(PROJ))
 
 
 def _find_run_pids_for_db(db: int) -> list[int]:
@@ -82,7 +76,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
     try:
         import redis  # noqa: F401
 
-        from tools.experiment.manifest import (
+        from gigaevo.experiment.manifest import (
             claim_dbs,
             load_manifest,
             release_db_claims,

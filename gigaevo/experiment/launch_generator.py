@@ -15,17 +15,12 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import sys
 
-# Derive project root from this file's location
+from gigaevo.experiment.manifest import experiment_dir, load_manifest
+
+# Derive project root from this file's location (still needed for the generated
+# launch.sh to reference the repo root via $PROJ).
 PROJ_PATH = str(Path(__file__).resolve().parent.parent.parent)
-
-# Ensure repo root is on sys.path so `tools.experiment.manifest` is importable
-# when invoked via the `gigaevo` console script.
-if PROJ_PATH not in sys.path:
-    sys.path.insert(0, PROJ_PATH)
-
-from tools.experiment.manifest import experiment_dir, load_manifest  # noqa: E402
 
 PYTHON_PATH = os.environ.get(
     "GIGAEVO_PYTHON", "python3"

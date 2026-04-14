@@ -42,7 +42,7 @@ class TestCheck22StoppingRule:
     def _run(self, stopping_rule=None):
         manifest = _make_manifest(stopping_rule=stopping_rule)
         with patch(
-            "tools.experiment.manifest.load_manifest",
+            "gigaevo.experiment.manifest.load_manifest",
             return_value=manifest,
         ):
             results = run_checks("test/smoke")
@@ -121,7 +121,7 @@ class TestCheck15SingleIV:
             stopping_rule=stopping_rule, factorial_design=factorial_design
         )
         manifest.runs = runs
-        with patch("tools.experiment.manifest.load_manifest", return_value=manifest):
+        with patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest):
             results = run_checks("test/smoke")
         return _get_check(results, 15)
 
@@ -184,7 +184,7 @@ class TestCheck9LiveWriters:
 
         pids = live_pids or []
         with (
-            patch("tools.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch("redis.Redis", return_value=mock_redis),
             patch(
                 "gigaevo.experiment.preflight._find_run_pids_for_db",

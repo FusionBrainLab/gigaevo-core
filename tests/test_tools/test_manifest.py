@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from tools.experiment.manifest import (
+from gigaevo.experiment.manifest import (
     VALID_STATUSES,
     VALID_TRANSITIONS,
     _validate,
@@ -271,13 +271,13 @@ class TestAtomicWrite:
 class TestLoadManifest:
     def test_load_valid(self, tmp_experiment):
         exp_name, tmp_root = tmp_experiment
-        with patch("tools.experiment.manifest.PROJ", tmp_root):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_root):
             m = load_manifest(exp_name)
         assert m.name == "test/smoke"
         assert m.status == "preregistered"
 
     def test_load_missing_file(self, tmp_path):
-        with patch("tools.experiment.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             with pytest.raises(FileNotFoundError):
                 load_manifest("nonexistent/exp")
 
@@ -285,7 +285,7 @@ class TestLoadManifest:
         exp_name, tmp_root = tmp_experiment
         path = tmp_root / "experiments" / "test" / "smoke" / "experiment.yaml"
         path.write_text("{{invalid yaml: [")
-        with patch("tools.experiment.manifest.PROJ", tmp_root):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_root):
             with pytest.raises(yaml.YAMLError):
                 load_manifest(exp_name)
 
@@ -316,8 +316,8 @@ class TestSetStatus:
         mock_r = self._mock_redis()
 
         with (
-            patch("tools.experiment.manifest.PROJ", root),
-            patch("tools.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.PROJ", root),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
         ):
             # Need to add running requirements
             raw["runs"][0]["pid"] = 99999
@@ -335,8 +335,8 @@ class TestSetStatus:
         mock_r = self._mock_redis()
 
         with (
-            patch("tools.experiment.manifest.PROJ", root),
-            patch("tools.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.PROJ", root),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status(exp_name, "running")
@@ -347,8 +347,8 @@ class TestSetStatus:
         mock_r = self._mock_redis()
 
         with (
-            patch("tools.experiment.manifest.PROJ", root),
-            patch("tools.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.PROJ", root),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
         ):
             # Normal transition: running -> implemented is NOT allowed
             with pytest.raises(ValueError, match="Invalid transition"):
@@ -379,8 +379,8 @@ class TestUpdateManifest:
             raw["experiment"]["tracking_issue"] = 42
 
         with (
-            patch("tools.experiment.manifest.PROJ", tmp_path),
-            patch("tools.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.PROJ", tmp_path),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
         ):
             m = update_manifest("test/smoke", add_tracking_issue)
             assert m.tracking_issue == 42
@@ -400,7 +400,7 @@ class TestDBClaims:
     def test_claim_success(self):
         mock_r = MagicMock()
         mock_r.set.return_value = True
-        with patch("tools.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
             failed = claim_dbs("test/exp", [9, 10])
         assert failed == []
         assert mock_r.set.call_count == 2
@@ -410,7 +410,7 @@ class TestDBClaims:
         # First call succeeds, second fails
         mock_r.set.side_effect = [True, False]
         mock_r.get.return_value = b"other/experiment"
-        with patch("tools.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
             failed = claim_dbs("test/exp", [9, 10])
         assert len(failed) == 1
         assert failed[0] == (10, "other/experiment")
@@ -419,20 +419,20 @@ class TestDBClaims:
         mock_r = MagicMock()
         mock_r.set.return_value = False  # already claimed
         mock_r.get.return_value = b"test/exp"  # by us
-        with patch("tools.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
             failed = claim_dbs("test/exp", [9])
         assert failed == []  # not a failure if we own it
 
     def test_refresh_uses_xx(self):
         mock_r = MagicMock()
-        with patch("tools.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
             refresh_db_claims("test/exp", [9, 10])
         for call in mock_r.set.call_args_list:
             assert call.kwargs.get("xx") is True
 
     def test_release(self):
         mock_r = MagicMock()
-        with patch("tools.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
             release_db_claims([9, 10])
         assert mock_r.delete.call_count == 2
 
@@ -451,7 +451,7 @@ class TestGeneratePRDescription:
         with open(path, "w") as f:
             yaml.safe_dump(raw, f, sort_keys=False)
 
-        with patch("tools.experiment.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             desc = generate_pr_description("test/smoke")
 
         assert "Pre-registered" in desc
@@ -466,7 +466,7 @@ class TestGeneratePRDescription:
         with open(path, "w") as f:
             yaml.safe_dump(raw, f, sort_keys=False)
 
-        with patch("tools.experiment.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             desc = generate_pr_description("test/smoke")
 
         assert "Running (gen 5/10)" in desc
@@ -482,7 +482,7 @@ class TestGeneratePRDescription:
         with open(path, "w") as f:
             yaml.safe_dump(raw, f, sort_keys=False)
 
-        with patch("tools.experiment.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             desc = generate_pr_description("test/smoke")
 
         assert "test/base" in desc
