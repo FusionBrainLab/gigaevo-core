@@ -130,8 +130,9 @@ def watchdog(
 
     # Build notification channels
     from gigaevo.monitoring.dispatcher import NotificationDispatcher
+    from gigaevo.monitoring.notifications import NotificationChannel
 
-    channels = []
+    channels: list[NotificationChannel] = []
 
     # GitHub PR channel: requires token + PR number
     gh_token = _get_github_token()
