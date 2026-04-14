@@ -268,9 +268,7 @@ class WatchdogEngine:
                     )
         return alerts
 
-    def _write_redis_checkpoint(
-        self, snapshots: list[RunSnapshot], cycle: int
-    ) -> None:
+    def _write_redis_checkpoint(self, snapshots: list[RunSnapshot], cycle: int) -> None:
         """Write Redis checkpoint markers at milestone percentages."""
         if self._heartbeat_redis is None or self.max_generations is None:
             return

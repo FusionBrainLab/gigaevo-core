@@ -101,16 +101,12 @@ def watchdog(
         else (watchdog_manifest.poll_interval_s if watchdog_manifest else 3600)
     )
     effective_restarts = (
-        max_restarts
-        if max_restarts != 3
-        else (5)  # default from WatchdogConfig
+        max_restarts if max_restarts != 3 else (5)  # default from WatchdogConfig
     )
     config = WatchdogConfig(
         poll_interval_s=effective_poll,
         max_restarts=effective_restarts,
-        plot_retries=(
-            watchdog_manifest.plot_retries if watchdog_manifest else 3
-        ),
+        plot_retries=(watchdog_manifest.plot_retries if watchdog_manifest else 3),
         plot_retry_delay_s=(
             watchdog_manifest.plot_retry_delay_s if watchdog_manifest else 30
         ),

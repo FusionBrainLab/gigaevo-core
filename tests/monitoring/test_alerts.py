@@ -821,9 +821,7 @@ class TestModelDriftRule:
     def test_returns_alert_on_connection_error(self):
         """Alert when /models endpoint is unreachable."""
         rule = ModelDriftRule(timeout=1)
-        with patch(
-            "urllib.request.urlopen", side_effect=ConnectionError("refused")
-        ):
+        with patch("urllib.request.urlopen", side_effect=ConnectionError("refused")):
             result = rule.check(
                 run_label="B",
                 mutation_url="http://unreachable:4000/v1",
