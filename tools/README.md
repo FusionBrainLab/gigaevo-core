@@ -468,7 +468,7 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 |---|---|---|
 | `manifest.py` | Load/update `experiment.yaml` programmatically | `from tools.experiment.manifest import load_manifest, update_manifest` |
 | `preflight` | 22-check validation gate before launch | `gigaevo -e task/name preflight` |
-| `generate_launch.py` | Generate `launch.sh` from experiment.yaml | `gigaevo -e task/name generate-launch` |
+| `launch --generate-script` | Generate `launch.sh` from experiment.yaml | `gigaevo -e task/name launch --generate-script` |
 | `manifest record-pids` | Record launched PIDs into experiment.yaml | `gigaevo -e task/name manifest record-pids --pids-file pids.txt --labels "A B"` |
 | `manifest reset-status` | Force-reset experiment status (escape hatch) | `gigaevo -e task/name manifest reset-status implemented --reason '...'` |
 

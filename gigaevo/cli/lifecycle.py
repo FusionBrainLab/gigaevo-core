@@ -37,18 +37,37 @@ def preflight(ctx: click.Context) -> None:
 
 @click.command()
 @click.option(
+    "--generate-script",
+    is_flag=True,
+    default=False,
+    help="Generate launch.sh script from experiment.yaml.",
+)
+@click.option(
     "--confirm",
     is_flag=True,
     default=False,
     help="Actually execute. Without this flag, dry-run only.",
 )
 @click.pass_context
-def launch(ctx: click.Context, confirm: bool) -> None:
+def launch(ctx: click.Context, generate_script: bool, confirm: bool) -> None:
     """Launch an experiment: preflight, config dump, start runs, verify PIDs."""
     experiment = ctx.obj.get("experiment")
     if not experiment:
         click.echo("Error: Launch requires --experiment flag.", err=True)
         ctx.exit(1)
+        return
+
+    if generate_script:
+        # Generate launch.sh from experiment.yaml
+        proj = Path(__file__).parent.parent.parent
+        sys.path.insert(0, str(proj))
+        try:
+            from tools.experiment.generate_launch import generate
+
+            script = generate(experiment)
+            click.echo(script)
+        finally:
+            sys.path.pop(0)
         return
 
     from gigaevo.monitoring.manifest import load_manifest
