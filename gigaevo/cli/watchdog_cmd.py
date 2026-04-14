@@ -52,6 +52,7 @@ def watchdog(
     from gigaevo.monitoring.dispatcher import NotificationDispatcher
     from gigaevo.monitoring.experiment_monitor import RunConfig
     from gigaevo.monitoring.manifest import load_manifest
+    from gigaevo.monitoring.notifications import NotificationChannel
     import gigaevo.monitoring.plugins  # noqa: F401 — triggers @register decorators
     from gigaevo.monitoring.run_spec import RunSpec
     from gigaevo.monitoring.telegram_channel import TelegramChannel
@@ -132,7 +133,9 @@ def watchdog(
     # Build notification channels. Each channel's from_env() returns None if its
     # required env vars are missing -- caller (shell/launch.sh) is responsible for
     # having the environment loaded (e.g. sourcing .env) before invoking watchdog.
-    channels = [ch for ch in (TelegramChannel.from_env(),) if ch is not None]
+    channels: list[NotificationChannel] = [
+        ch for ch in (TelegramChannel.from_env(),) if ch is not None
+    ]
     click.echo(
         f"  Telegram: {'enabled' if any(isinstance(c, TelegramChannel) for c in channels) else 'disabled'}"
     )
