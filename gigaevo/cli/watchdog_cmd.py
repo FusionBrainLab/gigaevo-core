@@ -49,8 +49,8 @@ def watchdog(
         return
 
     # Lazy imports to keep CLI startup fast
-    import gigaevo.monitoring.plugins  # noqa: F401 — triggers @register decorators
     from gigaevo.monitoring.experiment_monitor import RunConfig
+    import gigaevo.monitoring.plugins  # noqa: F401 — triggers @register decorators
     from gigaevo.monitoring.run_spec import RunSpec
     from gigaevo.monitoring.watchdog_config import WatchdogConfig
     from gigaevo.monitoring.watchdog_engine import WatchdogEngine
