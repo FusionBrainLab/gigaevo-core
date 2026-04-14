@@ -558,6 +558,66 @@ class TestPlotCommand:
         assert cmd.caption == "Arms-race dynamics"
 
 
+class TestAdversarialRoleRequirement:
+    """watchdog.plugin='adversarial' requires every run to declare a role."""
+
+    def _adversarial_manifest(self) -> dict:
+        raw = _minimal_implemented()
+        raw["watchdog"] = {"plugin": "adversarial"}
+        raw["runs"].append(
+            {
+                "label": "R2",
+                "db": 2,
+                "prefix": "chains/hover/test",
+                "pipeline": "standard",
+                "problem_name": "chains/hover/test",
+                "condition": "treatment",
+                "mutation_url": "http://localhost:4000/v1",
+                "model_name": "test-model",
+            }
+        )
+        return raw
+
+    def test_adversarial_without_any_role_fails(self) -> None:
+        raw = self._adversarial_manifest()
+        with pytest.raises(Exception) as exc_info:
+            ExperimentManifest.from_dict(raw)
+        error_str = str(exc_info.value)
+        assert "role" in error_str.lower()
+        assert "R1" in error_str
+        assert "R2" in error_str
+
+    def test_adversarial_with_partial_role_fails(self) -> None:
+        raw = self._adversarial_manifest()
+        raw["runs"][0]["role"] = "constructor"
+        with pytest.raises(Exception) as exc_info:
+            ExperimentManifest.from_dict(raw)
+        error_str = str(exc_info.value)
+        assert "R2" in error_str
+        assert "R1" not in error_str
+
+    def test_adversarial_with_all_roles_succeeds(self) -> None:
+        raw = self._adversarial_manifest()
+        raw["runs"][0]["role"] = "constructor"
+        raw["runs"][1]["role"] = "improver"
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.runs[0].role == "constructor"
+        assert manifest.runs[1].role == "improver"
+
+    def test_non_adversarial_plugin_does_not_require_role(self) -> None:
+        raw = self._adversarial_manifest()
+        raw["watchdog"]["plugin"] = "solo"
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.runs[0].role is None
+        assert manifest.runs[1].role is None
+
+    def test_no_watchdog_plugin_does_not_require_role(self) -> None:
+        raw = self._adversarial_manifest()
+        del raw["watchdog"]
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.runs[0].role is None
+
+
 class TestAlertThresholdsSchema:
     def test_alert_thresholds_defaults(self) -> None:
         thresholds = AlertThresholds()
@@ -573,5 +633,3 @@ class TestAlertThresholdsSchema:
         )
         assert thresholds.invalidity_rate == 0.9
         assert thresholds.stagnation_window == 5
-
-

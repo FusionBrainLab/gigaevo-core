@@ -251,6 +251,25 @@ class ExperimentManifest(BaseModel):
 
         return self
 
+    @model_validator(mode="after")
+    def validate_adversarial_roles(self) -> ExperimentManifest:
+        """When watchdog.plugin='adversarial', every run must declare a role.
+
+        The adversarial plugin dispatches snapshots by role ('constructor' /
+        'improver') for G/D panels, pairing, and frontier suppression. A run
+        with role=None would be silently dropped — fail-fast at load time
+        instead of producing misleading plots.
+        """
+        if self.watchdog.plugin == "adversarial":
+            missing = [r.label for r in self.runs if r.role is None]
+            if missing:
+                raise ValueError(
+                    f"watchdog.plugin='adversarial' requires every run to set "
+                    f"role: 'constructor' or 'improver'. Missing role on: "
+                    f"{missing}"
+                )
+        return self
+
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> ExperimentManifest:
         """Validate a raw dict and return an ExperimentManifest."""
