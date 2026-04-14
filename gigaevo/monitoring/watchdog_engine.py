@@ -137,14 +137,22 @@ class WatchdogEngine:
         stagnation_alerts = self._check_stagnation(snapshots)
         alerts.extend(stagnation_alerts)
 
-        # 5. Generate plots (with resource cleanup)
+        # 5. Generate plots (with retries per D-04)
         plots: list[PlotAttachment] = []
-        try:
-            plots = self.plugin.generate_plots(snapshots, self._plot_dir, cycle)
-        except Exception as exc:
-            _log.error(f"Plot generation failed: {exc}")
-        finally:
-            self._close_matplotlib_figures()
+        for attempt in range(self.config.plot_retries):
+            try:
+                plots = self.plugin.generate_plots(snapshots, self._plot_dir, cycle)
+                break  # Success
+            except Exception as exc:
+                _log.error(
+                    f"Plot generation attempt {attempt + 1}"
+                    f"/{self.config.plot_retries} failed: {exc}"
+                )
+                if attempt < self.config.plot_retries - 1:
+                    _log.info(f"Retrying in {self.config.plot_retry_delay_s}s...")
+                    time.sleep(self.config.plot_retry_delay_s)
+            finally:
+                self._close_matplotlib_figures()
 
         # 6. Format status
         try:

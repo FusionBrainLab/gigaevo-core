@@ -192,7 +192,11 @@ class TestEngineCycle:
         dispatcher = MagicMock()
         dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
 
-        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=1, plot_retry_delay_s=0),
+        )
         asyncio.run(engine._cycle(cycle=1))
 
         dispatcher.dispatch.assert_called_once()
@@ -524,6 +528,94 @@ class TestCompletionShutdown:
 
         key = "experiments:test/exp:completion"
         assert r.exists(key)
+
+
+class TestPlotRetryLogic:
+    """Plot generation retries 3 times with configurable delay."""
+
+    def test_retry_on_plot_generation_failure(self):
+        """If generate_plots raises, engine retries up to plot_retries times."""
+        plugin = _make_plugin()
+        call_count = [0]
+
+        def failing_plots(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise RuntimeError("plot boom")
+            return []
+
+        plugin.generate_plots.side_effect = failing_plots
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=3, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert call_count[0] == 3
+        dispatcher.dispatch.assert_called_once()
+
+    def test_no_retry_when_plots_succeed_first_try(self):
+        """If plots succeed on first try, no retry happens."""
+        plugin = _make_plugin()
+        plugin.generate_plots.return_value = []
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=3, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        plugin.generate_plots.assert_called_once()
+
+    def test_all_retries_exhausted_still_dispatches(self):
+        """If all plot retries fail, cycle still dispatches with no plots."""
+        plugin = _make_plugin()
+        plugin.generate_plots.side_effect = RuntimeError("always fails")
+
+        captured = []
+
+        async def capture(update):
+            captured.append(update)
+            return MagicMock(all_succeeded=True)
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(side_effect=capture)
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=3, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert len(captured) == 1
+        assert captured[0].plots == []
+
+    def test_uses_config_plot_retries(self):
+        """Retry count comes from config.plot_retries."""
+        plugin = _make_plugin()
+        plugin.generate_plots.side_effect = RuntimeError("fail")
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=5, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert plugin.generate_plots.call_count == 5
 
 
 class TestMemoryLogging:
