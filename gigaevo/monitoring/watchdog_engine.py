@@ -54,12 +54,14 @@ class WatchdogEngine:
         dispatcher: NotificationDispatcher | None = None,
         heartbeat_redis: redis_lib.Redis | None = None,
         plot_dir: Path | None = None,
+        baseline: float | None = None,
     ):
         self.experiment_name = experiment_name
         self.plugin = plugin
         self.run_configs = list(run_configs)
         self.config = config or WatchdogConfig()
         self.max_generations = max_generations
+        self._baseline = baseline
         self._monitor = monitor or ExperimentMonitor(
             redis_host=self.config.redis_host,
             redis_port=self.config.redis_port,
@@ -162,6 +164,19 @@ class WatchdogEngine:
         except Exception as exc:
             _log.error(f"Status formatting failed: {exc}")
 
+        # 6b. Format plugin-specific Telegram body
+        telegram_body: str | None = None
+        try:
+            telegram_body = self.plugin.format_telegram_body(
+                snapshots,
+                self.experiment_name,
+                cycle,
+                self.max_generations,
+                baseline=self._get_baseline(),
+            )
+        except Exception as exc:
+            _log.error(f"Telegram body formatting failed: {exc}")
+
         # 7. Build StatusUpdate and dispatch
         update = StatusUpdate(
             experiment_name=self.experiment_name,
@@ -170,6 +185,7 @@ class WatchdogEngine:
             plots=plots,
             max_generations=self.max_generations,
             timestamp=ts,
+            telegram_body=telegram_body,
         )
         await self._dispatcher.dispatch(update)
 
@@ -315,6 +331,13 @@ class WatchdogEngine:
             )
         except Exception as exc:
             _log.error(f"Completion write failed: {exc}")
+
+    def _get_baseline(self) -> float | None:
+        """Return the SOTA baseline value for Telegram formatting.
+
+        Uses the baseline passed at construction time.
+        """
+        return self._baseline
 
     def _cleanup_plots(self) -> None:
         """Remove oldest plot files if count exceeds max_plot_files."""

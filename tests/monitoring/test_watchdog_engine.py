@@ -530,6 +530,102 @@ class TestCompletionShutdown:
         assert r.exists(key)
 
 
+class TestTelegramBodyWiring:
+    """Engine calls plugin.format_telegram_body and passes result to StatusUpdate."""
+
+    def test_telegram_body_populated_from_plugin(self):
+        """Plugin's format_telegram_body output appears in StatusUpdate."""
+        plugin = _make_plugin()
+        plugin.format_telegram_body.return_value = "Custom telegram body"
+
+        captured = []
+
+        async def capture(update):
+            captured.append(update)
+            return MagicMock(all_succeeded=True)
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(side_effect=capture)
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=1, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert len(captured) == 1
+        assert captured[0].telegram_body == "Custom telegram body"
+
+    def test_telegram_body_none_when_plugin_returns_none(self):
+        """When plugin returns None, StatusUpdate.telegram_body is None."""
+        plugin = _make_plugin()
+        plugin.format_telegram_body.return_value = None
+
+        captured = []
+
+        async def capture(update):
+            captured.append(update)
+            return MagicMock(all_succeeded=True)
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(side_effect=capture)
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=1, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert len(captured) == 1
+        assert captured[0].telegram_body is None
+
+    def test_telegram_body_error_does_not_crash_cycle(self):
+        """If format_telegram_body raises, cycle continues with None body."""
+        plugin = _make_plugin()
+        plugin.format_telegram_body.side_effect = RuntimeError("format boom")
+
+        captured = []
+
+        async def capture(update):
+            captured.append(update)
+            return MagicMock(all_succeeded=True)
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(side_effect=capture)
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=1, plot_retry_delay_s=0),
+        )
+        asyncio.run(engine._cycle(cycle=1))
+
+        assert len(captured) == 1
+        assert captured[0].telegram_body is None
+
+    def test_baseline_passed_to_format_telegram_body(self):
+        """Engine passes baseline from _get_baseline() to plugin."""
+        plugin = _make_plugin()
+        plugin.format_telegram_body.return_value = "body"
+
+        dispatcher = MagicMock()
+        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+
+        engine = _make_engine(
+            plugin=plugin,
+            dispatcher=dispatcher,
+            config=WatchdogConfig(plot_retries=1, plot_retry_delay_s=0),
+        )
+        engine._baseline = 0.034
+
+        asyncio.run(engine._cycle(cycle=1))
+
+        call_kwargs = plugin.format_telegram_body.call_args
+        assert call_kwargs[1]["baseline"] == 0.034
+
+
 class TestPlotRetryLogic:
     """Plot generation retries 3 times with configurable delay."""
 
