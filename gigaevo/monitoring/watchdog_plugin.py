@@ -182,7 +182,7 @@ def resolve_plugin(manifest) -> type[WatchdogPlugin]:
             return _REGISTRY[explicit]
 
         # 2. Task-prefix heuristic
-        task = manifest.experiment.task
+        task = manifest.task
         heuristic_name = _TASK_HEURISTIC.get(task)
         if heuristic_name and heuristic_name in _REGISTRY:
             _log.info(
