@@ -1,4 +1,4 @@
-"""Lifecycle composite commands: launch, closeout, restart.
+"""Lifecycle composite commands: preflight, launch, closeout, restart.
 
 These are thin orchestrators that chain existing tool functions.
 All destructive operations require --confirm.
@@ -6,7 +6,33 @@ All destructive operations require --confirm.
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
 import click
+
+
+@click.command()
+@click.pass_context
+def preflight(ctx: click.Context) -> None:
+    """Run pre-launch checks on experiment configuration."""
+    experiment = ctx.obj.get("experiment")
+    if not experiment:
+        click.echo("Error: Preflight requires --experiment flag.", err=True)
+        ctx.exit(1)
+        return
+
+    # Load preflight_check from project root (tools/experiment/preflight_check.py)
+    proj = Path(__file__).parent.parent.parent
+    sys.path.insert(0, str(proj))
+    try:
+        from tools.experiment.preflight_check import _report, run_checks
+
+        results = run_checks(experiment)
+        exit_code = _report(results)
+        sys.exit(exit_code)
+    finally:
+        sys.path.pop(0)
 
 
 @click.command()
