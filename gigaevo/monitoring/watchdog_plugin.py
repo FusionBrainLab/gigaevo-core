@@ -4,7 +4,7 @@ Plugins control ONLY plot generation and status formatting.
 Everything else (loop, heartbeat, Redis, notifications) is the engine.
 
 Registry is a simple dict with @register decorator.
-resolve_plugin() priority: manifest.watchdog_plugin > "solo" fallback.
+resolve_plugin() priority: manifest.watchdog_plugin > task heuristic > "solo" fallback.
 """
 
 from __future__ import annotations
@@ -113,6 +113,15 @@ class WatchdogPlugin(ABC):
 
 _REGISTRY: dict[str, type[WatchdogPlugin]] = {}
 
+# Task name -> plugin name mapping for heuristic resolution
+_TASK_HEURISTIC: dict[str, str] = {
+    "adversarial": "adversarial",
+    "heilbron": "heilbron",
+    "hover": "solo",
+    "hotpotqa": "solo",
+    "toy": "solo",
+}
+
 
 def register(name: str):
     """Decorator to register a WatchdogPlugin subclass.
@@ -143,12 +152,13 @@ def get_registry() -> dict[str, type[WatchdogPlugin]]:
     return dict(_REGISTRY)
 
 
-def resolve_plugin(manifest=None) -> type[WatchdogPlugin]:
+def resolve_plugin(manifest) -> type[WatchdogPlugin]:
     """Resolve the correct WatchdogPlugin class for an experiment.
 
     Priority:
       1. manifest.watchdog_plugin field (explicit override)
-      2. "solo" fallback
+      2. Task-prefix heuristic from manifest.experiment.task
+      3. "solo" fallback
 
     Args:
         manifest: ExperimentManifest or None (run mode).
@@ -159,6 +169,7 @@ def resolve_plugin(manifest=None) -> type[WatchdogPlugin]:
     Raises:
         KeyError: If explicit plugin name is not in the registry.
     """
+    # 1. Explicit plugin field
     if manifest is not None:
         explicit = getattr(manifest, "watchdog_plugin", None)
         if explicit:
@@ -170,6 +181,16 @@ def resolve_plugin(manifest=None) -> type[WatchdogPlugin]:
             _log.info(f"Resolved plugin from manifest field: {explicit}")
             return _REGISTRY[explicit]
 
+        # 2. Task-prefix heuristic
+        task = manifest.experiment.task
+        heuristic_name = _TASK_HEURISTIC.get(task)
+        if heuristic_name and heuristic_name in _REGISTRY:
+            _log.info(
+                f"Resolved plugin from task heuristic: {task} -> {heuristic_name}"
+            )
+            return _REGISTRY[heuristic_name]
+
+    # 3. Fallback to "solo"
     if "solo" not in _REGISTRY:
         raise KeyError(
             "No 'solo' plugin registered as fallback. "
