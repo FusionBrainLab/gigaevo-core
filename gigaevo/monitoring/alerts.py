@@ -261,8 +261,8 @@ class AlertDetector:
 class ModelDriftRule:
     """Anomaly detector rule: probe LiteLLM /models endpoint to verify expected model.
 
-    Only runs if watchdog config has model_drift_check=True.
-    Designed to be called by WatchdogEngine, not by AlertDetector.
+    Standalone callable rule, not part of AlertDetector.
+    Designed to be called by WatchdogEngine when model_drift_check is enabled.
     """
 
     def __init__(self, timeout: int = 15):
@@ -275,8 +275,8 @@ class ModelDriftRule:
         expected_model: str,
         api_key: str = "None",
     ) -> Alert | None:
-        """Probe the /models endpoint. Returns Alert if expected model not found."""
-        import json as _json
+        """Probe the /models endpoint. Returns Alert if expected model not found, None if OK."""
+        import json
         import urllib.request
 
         try:
@@ -285,7 +285,7 @@ class ModelDriftRule:
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                data = _json.loads(resp.read())
+                data = json.loads(resp.read())
             model_ids = [m.get("id", "") for m in data.get("data", [])]
             if expected_model in model_ids:
                 return None

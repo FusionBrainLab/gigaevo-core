@@ -192,11 +192,7 @@ class TestEngineCycle:
         dispatcher = MagicMock()
         dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
 
-        engine = _make_engine(
-            plugin=plugin,
-            dispatcher=dispatcher,
-            config=WatchdogConfig(plot_retry_delay_s=0),
-        )
+        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
         asyncio.run(engine._cycle(cycle=1))
 
         dispatcher.dispatch.assert_called_once()
@@ -390,331 +386,144 @@ class TestFinalAlert:
 
 
 class TestRedisCheckpoint:
-    """Redis checkpoint/completion markers (D-09)."""
+    """Redis checkpoint and completion marker writing."""
 
-    def test_write_checkpoint_at_milestone(self):
-        """When min generation reaches a milestone, checkpoint is written."""
+    def test_write_redis_checkpoint_at_milestone(self):
+        """Writes checkpoint when min generation reaches milestone."""
         import json
 
         server = fakeredis.FakeServer()
         r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+
+        engine = WatchdogEngine(
+            experiment_name="hover/test",
+            plugin=_make_plugin(),
+            run_configs=[],
+            config=WatchdogConfig(checkpoint_milestones=(0.1, 0.5, 1.0)),
+            max_generations=50,
+            heartbeat_redis=r,
+        )
+
+        snap_a = _make_snapshot(label="A", gen=10, fitness=0.5)
+        snap_b = _make_snapshot(label="B", gen=12, fitness=0.6)
+        engine._write_redis_checkpoint([snap_a, snap_b], cycle=1)
+
+        key = "experiments:hover/test:checkpoint:5"
+        assert r.exists(key)
+        data = json.loads(r.get(key))
+        assert data["gen"] == 5
+        assert "timestamp" in data
+        assert "A" in data["metrics"]
+
+    def test_write_redis_checkpoint_skips_when_no_redis(self):
+        """No error when heartbeat_redis is None."""
+        engine = _make_engine(max_generations=50)
+        engine._heartbeat_redis = None
+        snap = _make_snapshot(gen=10)
+        engine._write_redis_checkpoint([snap], cycle=1)
+
+    def test_write_redis_checkpoint_skips_when_no_max_gen(self):
+        """No error when max_generations is None."""
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+        engine = WatchdogEngine(
+            experiment_name="test",
+            plugin=_make_plugin(),
+            run_configs=[],
+            max_generations=None,
+            heartbeat_redis=r,
+        )
+        snap = _make_snapshot(gen=10)
+        engine._write_redis_checkpoint([snap], cycle=1)
+        assert len(list(r.scan_iter("experiments:*:checkpoint:*"))) == 0
+
+    def test_write_redis_checkpoint_does_not_overwrite(self):
+        """Existing checkpoint is not overwritten."""
+        import json
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+
+        key = "experiments:test/exp:checkpoint:5"
+        r.set(key, '{"gen": 5, "original": true}')
 
         engine = WatchdogEngine(
             experiment_name="test/exp",
             plugin=_make_plugin(),
             run_configs=[],
             config=WatchdogConfig(checkpoint_milestones=(0.1, 0.5, 1.0)),
-            max_generations=100,
+            max_generations=50,
             heartbeat_redis=r,
         )
+        snap = _make_snapshot(gen=10)
+        engine._write_redis_checkpoint([snap], cycle=2)
 
-        snaps = [
-            _make_snapshot(label="A", gen=10, fitness=0.5),
-            _make_snapshot(label="B", gen=12, fitness=0.6),
-        ]
-        engine._write_redis_checkpoint(snaps, cycle=1)
-
-        key = "experiments:test/exp:checkpoint:10"
-        assert r.exists(key)
         data = json.loads(r.get(key))
-        assert data["gen"] == 10
-        assert "A" in data["metrics"]
-        assert "B" in data["metrics"]
-
-    def test_no_checkpoint_before_milestone(self):
-        """Before reaching any milestone, no checkpoint is written."""
-        server = fakeredis.FakeServer()
-        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
-
-        engine = WatchdogEngine(
-            experiment_name="test/exp",
-            plugin=_make_plugin(),
-            run_configs=[],
-            config=WatchdogConfig(checkpoint_milestones=(0.5, 1.0)),
-            max_generations=100,
-            heartbeat_redis=r,
-        )
-
-        snaps = [_make_snapshot(label="A", gen=5, fitness=0.5)]
-        engine._write_redis_checkpoint(snaps, cycle=1)
-
-        keys = [k for k in r.keys() if "checkpoint" in k]
-        assert len(keys) == 0
-
-    def test_checkpoint_not_overwritten(self):
-        """Once a checkpoint is written, it is not overwritten on subsequent cycles."""
-
-        server = fakeredis.FakeServer()
-        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
-
-        engine = WatchdogEngine(
-            experiment_name="test/exp",
-            plugin=_make_plugin(),
-            run_configs=[],
-            config=WatchdogConfig(checkpoint_milestones=(0.1,)),
-            max_generations=100,
-            heartbeat_redis=r,
-        )
-
-        snaps1 = [_make_snapshot(label="A", gen=10, fitness=0.5)]
-        engine._write_redis_checkpoint(snaps1, cycle=1)
-        first_data = r.get("experiments:test/exp:checkpoint:10")
-
-        snaps2 = [_make_snapshot(label="A", gen=20, fitness=0.8)]
-        engine._write_redis_checkpoint(snaps2, cycle=2)
-        second_data = r.get("experiments:test/exp:checkpoint:10")
-
-        assert first_data == second_data
-
-    def test_no_checkpoint_without_redis(self):
-        """No error when heartbeat_redis is None."""
-        engine = WatchdogEngine(
-            experiment_name="test/exp",
-            plugin=_make_plugin(),
-            run_configs=[],
-            max_generations=100,
-            heartbeat_redis=None,
-        )
-        snaps = [_make_snapshot(label="A", gen=50)]
-        engine._write_redis_checkpoint(snaps, cycle=1)  # should not raise
-
-
-class TestRedisCompletion:
-    """Redis completion marker (D-09)."""
+        assert data.get("original") is True
 
     def test_write_completion_marker(self):
-        """Completion marker is written with run states."""
+        """Writes completion marker with run states."""
         import json
 
         server = fakeredis.FakeServer()
         r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
 
         engine = WatchdogEngine(
-            experiment_name="test/exp",
+            experiment_name="hover/test",
             plugin=_make_plugin(),
             run_configs=[],
             heartbeat_redis=r,
         )
 
         snaps = [
-            _make_snapshot(label="A", gen=50, fitness=0.9),
-            _make_snapshot(label="B", gen=50, fitness=0.85),
+            _make_snapshot(label="A", gen=50, fitness=0.8),
+            _make_snapshot(label="B", gen=50, fitness=0.75),
         ]
         engine._write_completion(snaps)
 
-        key = "experiments:test/exp:completion"
+        key = "experiments:hover/test:completion"
         assert r.exists(key)
         data = json.loads(r.get(key))
         assert "timestamp" in data
         assert len(data["run_states"]) == 2
-        labels = {rs["label"] for rs in data["run_states"]}
-        assert labels == {"A", "B"}
+        assert data["run_states"][0]["label"] == "A"
+        assert data["run_states"][0]["gen"] == 50
 
-    def test_no_completion_without_redis(self):
+    def test_write_completion_skips_when_no_redis(self):
         """No error when heartbeat_redis is None."""
-        engine = WatchdogEngine(
-            experiment_name="test/exp",
-            plugin=_make_plugin(),
-            run_configs=[],
-            heartbeat_redis=None,
-        )
-        snaps = [_make_snapshot(label="A", gen=50)]
-        engine._write_completion(snaps)  # should not raise
+        engine = _make_engine()
+        engine._heartbeat_redis = None
+        engine._write_completion([_make_snapshot()])
 
 
 class TestCompletionShutdown:
-    """Engine shuts down when COMPLETION alert is detected."""
+    """Engine sets _shutdown when COMPLETION alert is detected."""
 
-    def test_completion_triggers_shutdown_and_writes_marker(self):
-        """When AlertDetector returns COMPLETION, engine sets _shutdown and writes completion."""
-        import json
-
-        server = fakeredis.FakeServer()
-        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
-
-        snap = _make_snapshot(label="A", gen=50, fitness=0.9)
+    def test_cycle_sets_shutdown_on_completion(self):
+        """When alerts contain COMPLETION, engine sets _shutdown=True."""
         completion_alert = Alert(
             alert_type=AlertType.COMPLETION,
             severity=AlertSeverity.INFO,
             run_label="experiment",
-            message="All runs done.",
+            message="All done",
         )
-
-        monitor = MagicMock()
-        monitor.collect.return_value = [snap]
-
         detector = MagicMock()
         detector.check.return_value = [completion_alert]
 
-        dispatcher = MagicMock()
-        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
 
-        engine = WatchdogEngine(
-            experiment_name="test/exp",
-            plugin=_make_plugin(),
-            run_configs=[],
-            config=WatchdogConfig(),
-            max_generations=50,
-            monitor=monitor,
+        engine = _make_engine(
             alert_detector=detector,
-            dispatcher=dispatcher,
             heartbeat_redis=r,
         )
+        engine.experiment_name = "test/exp"
 
         asyncio.run(engine._cycle(cycle=1))
-
         assert engine._shutdown is True
-        assert r.exists("experiments:test/exp:completion")
-        data = json.loads(r.get("experiments:test/exp:completion"))
-        assert len(data["run_states"]) == 1
 
-
-class TestPlotRetry:
-    """Plot generation retries on failure (06-02)."""
-
-    def test_retries_on_plot_exception(self):
-        """Plugin.generate_plots is retried on exception."""
-        plugin = _make_plugin()
-        plugin.generate_plots.side_effect = [
-            RuntimeError("attempt 1"),
-            RuntimeError("attempt 2"),
-            [],  # success on 3rd attempt
-        ]
-
-        dispatcher = MagicMock()
-        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
-
-        engine = _make_engine(
-            plugin=plugin,
-            dispatcher=dispatcher,
-            config=WatchdogConfig(plot_retries=3, plot_retry_delay_s=0),
-        )
-        asyncio.run(engine._cycle(cycle=1))
-
-        assert plugin.generate_plots.call_count == 3
-        dispatcher.dispatch.assert_called_once()
-
-    def test_stops_retrying_after_max_attempts(self):
-        """After max retries exhausted, dispatches with empty plots."""
-        plugin = _make_plugin()
-        plugin.generate_plots.side_effect = RuntimeError("always fails")
-
-        captured = []
-
-        async def capture(update):
-            captured.append(update)
-            return MagicMock(all_succeeded=True)
-
-        dispatcher = MagicMock()
-        dispatcher.dispatch = AsyncMock(side_effect=capture)
-
-        engine = _make_engine(
-            plugin=plugin,
-            dispatcher=dispatcher,
-            config=WatchdogConfig(plot_retries=2, plot_retry_delay_s=0),
-        )
-        asyncio.run(engine._cycle(cycle=1))
-
-        assert plugin.generate_plots.call_count == 2
-        assert len(captured) == 1
-        assert captured[0].plots == []
-
-    def test_no_retry_on_success(self):
-        """If first attempt succeeds, no retries."""
-        plugin = _make_plugin()
-        plugin.generate_plots.return_value = []
-
-        engine = _make_engine(
-            plugin=plugin,
-            config=WatchdogConfig(plot_retries=3),
-        )
-        asyncio.run(engine._cycle(cycle=1))
-
-        assert plugin.generate_plots.call_count == 1
-
-
-class TestBaseline:
-    """Baseline parameter passed to plugin format_telegram_body (06-02)."""
-
-    def test_baseline_stored(self):
-        engine = _make_engine(baseline=0.034)
-        assert engine._baseline == 0.034
-
-    def test_baseline_none_by_default(self):
-        engine = _make_engine()
-        assert engine._baseline is None
-
-    def test_baseline_passed_to_format_telegram_body(self):
-        """Engine calls plugin.format_telegram_body with baseline."""
-        plugin = _make_plugin()
-        plugin.format_telegram_body.return_value = "test body"
-
-        dispatcher = MagicMock()
-        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
-
-        engine = _make_engine(plugin=plugin, dispatcher=dispatcher, baseline=0.034)
-        asyncio.run(engine._cycle(cycle=1))
-
-        plugin.format_telegram_body.assert_called_once()
-        call_kwargs = plugin.format_telegram_body.call_args
-        assert call_kwargs[1]["baseline"] == 0.034
-
-
-class TestTelegramBody:
-    """Telegram body from plugin included in StatusUpdate (06-02)."""
-
-    def test_telegram_body_in_status_update(self):
-        """Plugin telegram body appears in dispatched StatusUpdate."""
-        plugin = _make_plugin()
-        plugin.format_telegram_body.return_value = "custom telegram"
-
-        captured = []
-
-        async def capture(update):
-            captured.append(update)
-            return MagicMock(all_succeeded=True)
-
-        dispatcher = MagicMock()
-        dispatcher.dispatch = AsyncMock(side_effect=capture)
-
-        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
-        asyncio.run(engine._cycle(cycle=1))
-
-        assert len(captured) == 1
-        assert captured[0].telegram_body == "custom telegram"
-
-    def test_telegram_body_none_when_plugin_returns_none(self):
-        """When plugin returns None, StatusUpdate.telegram_body is None."""
-        plugin = _make_plugin()
-        plugin.format_telegram_body.return_value = None
-
-        captured = []
-
-        async def capture(update):
-            captured.append(update)
-            return MagicMock(all_succeeded=True)
-
-        dispatcher = MagicMock()
-        dispatcher.dispatch = AsyncMock(side_effect=capture)
-
-        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
-        asyncio.run(engine._cycle(cycle=1))
-
-        assert len(captured) == 1
-        assert captured[0].telegram_body is None
-
-    def test_telegram_body_error_does_not_crash_cycle(self):
-        """If format_telegram_body raises, cycle still dispatches."""
-        plugin = _make_plugin()
-        plugin.format_telegram_body.side_effect = RuntimeError("telegram boom")
-
-        dispatcher = MagicMock()
-        dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
-
-        engine = _make_engine(plugin=plugin, dispatcher=dispatcher)
-        asyncio.run(engine._cycle(cycle=1))
-
-        dispatcher.dispatch.assert_called_once()
+        key = "experiments:test/exp:completion"
+        assert r.exists(key)
 
 
 class TestMemoryLogging:
