@@ -144,9 +144,7 @@ class CompositionInjectionHook:
                 timeout=_SUBPROCESS_TIMEOUT_S,
             )
         except (ExecRunnerError, TimeoutError, Exception) as e:
-            logger.warning(
-                "[CompositionInjection] Composed program exec failed: {}", e
-            )
+            logger.warning("[CompositionInjection] Composed program exec failed: {}", e)
             return None
 
         composed_points = np.asarray(composed_output, dtype=np.float64)

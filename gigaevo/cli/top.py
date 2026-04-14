@@ -36,7 +36,8 @@ def _fetch_top_programs(
         programs.append(
             {
                 "id": prog.get("id", "?"),
-                "generation": prog.get("generation"),
+                "generation": prog.get("generation")
+                or prog.get("lineage", {}).get("generation"),
                 metric: val,
                 "state": prog.get("state", "?"),
                 "code": prog.get("code", ""),

@@ -85,9 +85,7 @@ class SoloPlugin(WatchdogPlugin):
                 cmd, capture_output=True, timeout=_SUBPROCESS_TIMEOUT
             )
             if result.returncode != 0:
-                _log.warning(
-                    f"Comparison plot failed: {result.stderr.decode()[:500]}"
-                )
+                _log.warning(f"Comparison plot failed: {result.stderr.decode()[:500]}")
                 return []
         except Exception as exc:
             _log.error(f"Solo plot subprocess error: {exc}")
@@ -140,14 +138,10 @@ class SoloPlugin(WatchdogPlugin):
             gen = s.generation or 0
             max_g = f"/{max_generations}" if max_generations else ""
             stalled = (
-                s.running_programs is not None
-                and s.running_programs == 0
-                and gen > 0
+                s.running_programs is not None and s.running_programs == 0 and gen > 0
             )
             flag = "!" if stalled else "ok"
-            lines.append(
-                f"  {flag} {s.run_spec.label}: gen {gen}{max_g} fit={fit_str}"
-            )
+            lines.append(f"  {flag} {s.run_spec.label}: gen {gen}{max_g} fit={fit_str}")
         if baseline is not None:
             lines.append(f"\n  SOTA baseline: {baseline:.5f}")
         return "\n".join(lines)

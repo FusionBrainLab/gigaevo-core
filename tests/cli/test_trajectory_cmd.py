@@ -262,9 +262,7 @@ class TestTrajectoryMultiMetric:
             ),
         ]
 
-        with patch.object(
-            RunResolver, "resolve", return_value=configs
-        ):
+        with patch.object(RunResolver, "resolve", return_value=configs):
             runner = CliRunner()
             result = runner.invoke(
                 main,

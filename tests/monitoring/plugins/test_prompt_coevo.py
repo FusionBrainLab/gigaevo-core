@@ -257,9 +257,7 @@ class TestPromptCoevoPluginFormatTelegramBody:
             running_programs=0,
         )
         plugin = PromptCoevoPlugin()
-        body = plugin.format_telegram_body(
-            [snap], "test", cycle=1, max_generations=25
-        )
+        body = plugin.format_telegram_body([snap], "test", cycle=1, max_generations=25)
         assert body is not None
         assert "! C1" in body
 

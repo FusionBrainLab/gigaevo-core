@@ -140,8 +140,10 @@ class TestAdversarialPluginBuildRunArgs:
         ]
         args = AdversarialPlugin._build_run_args(snapshots)
         assert args == [
-            "-r", "heilbron_pop_a@1:G1",
-            "-r", "heilbron_pop_b@2:D1",
+            "-r",
+            "heilbron_pop_a@1:G1",
+            "-r",
+            "heilbron_pop_b@2:D1",
         ]
 
 
@@ -170,7 +172,10 @@ class TestAdversarialPluginGeneratePlots:
                     (out_dir / "evolution_runs_comparison.png").write_bytes(b"fake")
             return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
-        with patch("gigaevo.monitoring.plugins.adversarial.subprocess.run", side_effect=multi_output):
+        with patch(
+            "gigaevo.monitoring.plugins.adversarial.subprocess.run",
+            side_effect=multi_output,
+        ):
             plots = plugin.generate_plots(snapshots, tmp_path, cycle=1)
 
         assert len(plots) == 2

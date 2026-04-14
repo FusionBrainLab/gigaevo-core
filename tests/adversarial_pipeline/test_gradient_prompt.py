@@ -122,7 +122,9 @@ async def test_tracker_selects_per_program_d(stage_with_tracker, provider, dg_tr
     """When dg_tracker has data for the specific G, selects that D (not global best)."""
     dg_tracker.get_best_d_for_g.return_value = ("d-specific", 0.08)
     provider.get_programs_by_ids.return_value = [
-        OpponentProgram(program_id="d-specific", code="def improve(): pass", fitness=0.6)
+        OpponentProgram(
+            program_id="d-specific", code="def improve(): pass", fitness=0.6
+        )
     ]
     result = await stage_with_tracker.compute(_dummy_program("g-42"))
     dg_tracker.get_best_d_for_g.assert_called_once_with("g-42")
@@ -132,11 +134,15 @@ async def test_tracker_selects_per_program_d(stage_with_tracker, provider, dg_tr
 
 
 @pytest.mark.asyncio
-async def test_tracker_none_falls_back_to_global(stage_with_tracker, provider, dg_tracker):
+async def test_tracker_none_falls_back_to_global(
+    stage_with_tracker, provider, dg_tracker
+):
     """When dg_tracker returns None (no data for G), falls back to global best D."""
     dg_tracker.get_best_d_for_g.return_value = None
     provider.get_top_k.return_value = [
-        OpponentProgram(program_id="d-global", code="def global_improve(): pass", fitness=0.9)
+        OpponentProgram(
+            program_id="d-global", code="def global_improve(): pass", fitness=0.9
+        )
     ]
     result = await stage_with_tracker.compute(_dummy_program("g-99"))
     provider.get_top_k.assert_called_once_with(1, higher_is_better=True)
@@ -179,7 +185,9 @@ async def test_tracker_fetches_d_code_by_id(stage_with_tracker, provider, dg_tra
 
 
 @pytest.mark.asyncio
-async def test_tracker_d_evicted_falls_back_to_global(stage_with_tracker, provider, dg_tracker):
+async def test_tracker_d_evicted_falls_back_to_global(
+    stage_with_tracker, provider, dg_tracker
+):
     """When tracker returns d_id but get_programs_by_ids returns empty, falls back to global."""
     dg_tracker.get_best_d_for_g.return_value = ("d-evicted", 0.1)
     provider.get_programs_by_ids.return_value = []  # D was evicted
@@ -192,11 +200,17 @@ async def test_tracker_d_evicted_falls_back_to_global(stage_with_tracker, provid
 
 
 @pytest.mark.asyncio
-async def test_prompt_includes_d_fitness_and_code(stage_with_tracker, provider, dg_tracker):
+async def test_prompt_includes_d_fitness_and_code(
+    stage_with_tracker, provider, dg_tracker
+):
     """The prompt text includes the specific D's fitness and code."""
     dg_tracker.get_best_d_for_g.return_value = ("d-1", 0.07)
     provider.get_programs_by_ids.return_value = [
-        OpponentProgram(program_id="d-1", code="def special_improve(pts): return pts * 2", fitness=0.54321)
+        OpponentProgram(
+            program_id="d-1",
+            code="def special_improve(pts): return pts * 2",
+            fitness=0.54321,
+        )
     ]
     result = await stage_with_tracker.compute(_dummy_program("g-1"))
     assert "0.54321" in result.data
@@ -204,7 +218,9 @@ async def test_prompt_includes_d_fitness_and_code(stage_with_tracker, provider, 
 
 
 @pytest.mark.asyncio
-async def test_empty_archive_no_tracker_returns_empty(stage_with_tracker, provider, dg_tracker):
+async def test_empty_archive_no_tracker_returns_empty(
+    stage_with_tracker, provider, dg_tracker
+):
     """Empty D archive + no tracker data returns empty string (cold start)."""
     dg_tracker.get_best_d_for_g.return_value = None
     provider.get_top_k.return_value = []

@@ -289,31 +289,37 @@ class WatchdogEngine:
                         }
                         for s in snapshots
                     }
-                    data = json.dumps({
-                        "gen": milestone,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "metrics": metrics,
-                    })
+                    data = json.dumps(
+                        {
+                            "gen": milestone,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "metrics": metrics,
+                        }
+                    )
                     self._heartbeat_redis.set(key, data)
                 except Exception as exc:
-                    _log.error(f"Checkpoint write failed for milestone {milestone}: {exc}")
+                    _log.error(
+                        f"Checkpoint write failed for milestone {milestone}: {exc}"
+                    )
 
     def _write_completion(self, snapshots: list[RunSnapshot]) -> None:
         """Write Redis completion marker when all runs finish."""
         if self._heartbeat_redis is None:
             return
         try:
-            completion_data = json.dumps({
-                "timestamp": datetime.now(UTC).isoformat(),
-                "run_states": [
-                    {
-                        "label": s.run_spec.label,
-                        "gen": s.generation,
-                        "fitness": s.metrics.get("fitness"),
-                    }
-                    for s in snapshots
-                ],
-            })
+            completion_data = json.dumps(
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "run_states": [
+                        {
+                            "label": s.run_spec.label,
+                            "gen": s.generation,
+                            "fitness": s.metrics.get("fitness"),
+                        }
+                        for s in snapshots
+                    ],
+                }
+            )
             self._heartbeat_redis.set(
                 f"experiments:{self.experiment_name}:completion",
                 completion_data,

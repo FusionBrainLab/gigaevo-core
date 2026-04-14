@@ -71,17 +71,45 @@ class RunResolver:
             raise click.UsageError("Provide --experiment or at least one --run")
 
         if has_runs:
-            return RunResolver._resolve_from_runs(runs)
+            return RunResolver._resolve_from_runs(runs, redis_host, redis_port)
         assert experiment is not None  # guaranteed by checks above
         return RunResolver._resolve_from_experiment(experiment)
 
     @staticmethod
-    def _resolve_from_runs(runs: list[str] | tuple[str, ...]) -> list[RunConfig]:
+    def _resolve_from_runs(
+        runs: list[str] | tuple[str, ...],
+        redis_host: str = "localhost",
+        redis_port: int = 6379,
+    ) -> list[RunConfig]:
         configs = []
         for raw in runs:
             spec = RunSpec.parse(raw)
+            if spec.needs_prefix:
+                spec = RunResolver._autodiscover_prefix(spec, redis_host, redis_port)
             configs.append(RunConfig(run_spec=spec))
         return configs
+
+    @staticmethod
+    def _autodiscover_prefix(
+        spec: RunSpec, redis_host: str, redis_port: int
+    ) -> RunSpec:
+        """Resolve a prefix-less RunSpec by finding the instance lock in Redis."""
+        from gigaevo.cli.inspect_cmd import discover_prefixes
+
+        prefixes = discover_prefixes(redis_host, redis_port, spec.db)
+        if len(prefixes) == 0:
+            raise click.UsageError(f"No experiment prefix found in Redis DB {spec.db}")
+        if len(prefixes) > 1:
+            raise click.UsageError(
+                f"Multiple prefixes in DB {spec.db}: {', '.join(prefixes)}. "
+                f"Specify explicitly with prefix@{spec.db}"
+            )
+        prefix = prefixes[0]
+        return RunSpec(
+            prefix=prefix,
+            db=spec.db,
+            label=f"{prefix}@{spec.db}",
+        )
 
     @staticmethod
     def _resolve_from_experiment(experiment: str) -> list[RunConfig]:

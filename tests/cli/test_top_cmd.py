@@ -211,9 +211,7 @@ class TestTopManifestDefaultMetric:
                 "tools.experiment.manifest.load_manifest",
                 return_value=mock_manifest,
             ),
-            patch.object(
-                RunResolver, "resolve", return_value=configs
-            ),
+            patch.object(RunResolver, "resolve", return_value=configs),
         ):
             runner = CliRunner()
             result = runner.invoke(
@@ -225,7 +223,9 @@ class TestTopManifestDefaultMetric:
             assert result.exit_code == 0, result.output
             data = json.loads(result.output)
             assert len(data) == 1
-            assert "Actual_Fitness" in data[0] or "actual_fitness" in str(data[0]).lower()
+            assert (
+                "Actual_Fitness" in data[0] or "actual_fitness" in str(data[0]).lower()
+            )
 
     def test_explicit_metric_overrides_manifest(self):
         """Explicit --metric quality overrides manifest default."""
@@ -263,14 +263,22 @@ class TestTopManifestDefaultMetric:
                 "tools.experiment.manifest.load_manifest",
                 return_value=mock_manifest,
             ),
-            patch.object(
-                RunResolver, "resolve", return_value=configs
-            ),
+            patch.object(RunResolver, "resolve", return_value=configs),
         ):
             runner = CliRunner()
             result = runner.invoke(
                 main,
-                ["-e", "test/exp", "-f", "json", "top", "-n", "1", "--metric", "quality"],
+                [
+                    "-e",
+                    "test/exp",
+                    "-f",
+                    "json",
+                    "top",
+                    "-n",
+                    "1",
+                    "--metric",
+                    "quality",
+                ],
                 obj=obj,
                 catch_exceptions=False,
             )

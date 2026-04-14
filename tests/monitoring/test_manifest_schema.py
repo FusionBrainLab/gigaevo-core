@@ -578,7 +578,9 @@ class TestPlotCommand:
         assert cmd.args == {}
 
     def test_extra_fields_ignored(self) -> None:
-        cmd = PlotCommand.model_validate({"command": "comparison", "unknown_field": "test"})
+        cmd = PlotCommand.model_validate(
+            {"command": "comparison", "unknown_field": "test"}
+        )
         assert cmd.command == "comparison"
 
 

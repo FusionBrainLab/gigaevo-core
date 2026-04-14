@@ -113,6 +113,7 @@ class WatchdogPlugin(ABC):
 
 _REGISTRY: dict[str, type[WatchdogPlugin]] = {}
 
+
 def register(name: str):
     """Decorator to register a WatchdogPlugin subclass.
 

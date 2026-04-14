@@ -66,9 +66,7 @@ def _fetch_trajectory(
     help="Metric(s) to display. Repeatable. Auto-discovers from metrics.yaml in --experiment mode.",
 )
 @click.pass_context
-def trajectory(
-    ctx: click.Context, tail: int | None, metric: tuple[str, ...]
-) -> None:
+def trajectory(ctx: click.Context, tail: int | None, metric: tuple[str, ...]) -> None:
     """Show gen-by-gen fitness trajectory."""
     formatter = ctx.obj["formatter"]
     experiment = ctx.obj["experiment"]

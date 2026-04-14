@@ -143,7 +143,9 @@ def get(ctx: click.Context, field: str) -> None:
     if field == "stopping_rule":
         stopping_rule = manifest_obj.config.get("stopping_rule")
         if stopping_rule is None:
-            stopping_rule = manifest_obj.model_dump().get("config", {}).get("stopping_rule")
+            stopping_rule = (
+                manifest_obj.model_dump().get("config", {}).get("stopping_rule")
+            )
         if stopping_rule is None:
             click.echo("Error: Field not found: stopping_rule", err=True)
             ctx.exit(1)

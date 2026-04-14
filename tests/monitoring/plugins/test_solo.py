@@ -222,9 +222,7 @@ class TestSoloPluginFormatTelegramBody:
             running_programs=0,
         )
         plugin = SoloPlugin()
-        body = plugin.format_telegram_body(
-            [snap], "test", cycle=1, max_generations=25
-        )
+        body = plugin.format_telegram_body([snap], "test", cycle=1, max_generations=25)
         assert body is not None
         assert "! X" in body
 

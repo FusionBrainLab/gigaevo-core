@@ -48,13 +48,11 @@ class AdversarialPlugin(WatchdogPlugin):
         if plot_metrics and problem_name:
             from gigaevo.monitoring.manifest_schema import WatchdogPluginOptions
 
-            WatchdogPluginOptions(
-                plot_metrics=plot_metrics
-            ).validate_plot_metrics(problem_name)
+            WatchdogPluginOptions(plot_metrics=plot_metrics).validate_plot_metrics(
+                problem_name
+            )
 
-    def _group_runs(
-        self, snapshots: list[RunSnapshot]
-    ) -> dict[str, list[RunSnapshot]]:
+    def _group_runs(self, snapshots: list[RunSnapshot]) -> dict[str, list[RunSnapshot]]:
         groups: dict[str, list[RunSnapshot]] = defaultdict(list)
         for snap in snapshots:
             groups[snap.run_spec.prefix].append(snap)
@@ -116,12 +114,8 @@ class AdversarialPlugin(WatchdogPlugin):
         cycle: int,
         metric: str,
     ) -> PlotAttachment | None:
-        g_labels = [
-            s.run_spec.label for s in snapshots if "pop_a" in s.run_spec.prefix
-        ]
-        d_labels = [
-            s.run_spec.label for s in snapshots if "pop_b" in s.run_spec.prefix
-        ]
+        g_labels = [s.run_spec.label for s in snapshots if "pop_a" in s.run_spec.prefix]
+        d_labels = [s.run_spec.label for s in snapshots if "pop_b" in s.run_spec.prefix]
         if not g_labels or not d_labels:
             _log.warning("Cannot generate arms-race: missing G or D runs")
             return None
@@ -148,9 +142,7 @@ class AdversarialPlugin(WatchdogPlugin):
                 cmd, capture_output=True, timeout=_SUBPROCESS_TIMEOUT
             )
             if result.returncode != 0:
-                _log.warning(
-                    f"Arms-race plot failed: {result.stderr.decode()[:500]}"
-                )
+                _log.warning(f"Arms-race plot failed: {result.stderr.decode()[:500]}")
                 return None
         except Exception as exc:
             _log.error(f"Arms-race subprocess error: {exc}")
@@ -173,9 +165,7 @@ class AdversarialPlugin(WatchdogPlugin):
         cycle: int,
         metric: str,
     ) -> PlotAttachment | None:
-        d_labels = [
-            s.run_spec.label for s in snapshots if "pop_b" in s.run_spec.prefix
-        ]
+        d_labels = [s.run_spec.label for s in snapshots if "pop_b" in s.run_spec.prefix]
 
         cmd = (
             ["gigaevo"]
@@ -205,9 +195,7 @@ class AdversarialPlugin(WatchdogPlugin):
                 cmd, capture_output=True, timeout=_SUBPROCESS_TIMEOUT
             )
             if result.returncode != 0:
-                _log.warning(
-                    f"Comparison plot failed: {result.stderr.decode()[:500]}"
-                )
+                _log.warning(f"Comparison plot failed: {result.stderr.decode()[:500]}")
                 return None
         except Exception as exc:
             _log.error(f"Comparison subprocess error: {exc}")
@@ -246,8 +234,7 @@ class AdversarialPlugin(WatchdogPlugin):
             return None
 
         output_name = (
-            plot_command.output_name
-            or f"{plot_command.command.replace('-', '_')}.png"
+            plot_command.output_name or f"{plot_command.command.replace('-', '_')}.png"
         )
         out_file = output_dir / output_name
         if out_file.exists():
@@ -315,9 +302,7 @@ class AdversarialPlugin(WatchdogPlugin):
             gen = s.generation or 0
             max_g = f"/{max_generations}" if max_generations else ""
             stalled = (
-                s.running_programs is not None
-                and s.running_programs == 0
-                and gen > 0
+                s.running_programs is not None and s.running_programs == 0 and gen > 0
             )
             flag = "!" if stalled else "ok"
             lines.append(
@@ -336,14 +321,10 @@ class AdversarialPlugin(WatchdogPlugin):
             gen = s.generation or 0
             max_g = f"/{max_generations}" if max_generations else ""
             stalled = (
-                s.running_programs is not None
-                and s.running_programs == 0
-                and gen > 0
+                s.running_programs is not None and s.running_programs == 0 and gen > 0
             )
             flag = "!" if stalled else "ok"
-            lines.append(
-                f"  {flag} {s.run_spec.label}: gen {gen}{max_g} fit={fit_str}"
-            )
+            lines.append(f"  {flag} {s.run_spec.label}: gen {gen}{max_g} fit={fit_str}")
 
         if baseline is not None and g_snaps and d_snaps:
             lines.append("")

@@ -24,6 +24,7 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str]] = {
     "closeout": ("gigaevo.cli.lifecycle", "closeout"),
     "restart": ("gigaevo.cli.lifecycle", "restart"),
     "manifest": ("gigaevo.cli.manifest_cmd", "manifest"),
+    "inspect": ("gigaevo.cli.inspect_cmd", "inspect_cmd"),
 }
 
 

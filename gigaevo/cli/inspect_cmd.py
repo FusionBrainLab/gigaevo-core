@@ -9,7 +9,9 @@ _LOCK_SUFFIX = ":__instance_lock__"
 
 
 def discover_prefixes(
-    redis_host: str, redis_port: int, db: int,
+    redis_host: str,
+    redis_port: int,
+    db: int,
 ) -> list[str]:
     """Return experiment prefixes in a Redis DB by finding instance lock keys."""
     r = redis.Redis(host=redis_host, port=redis_port, db=db, decode_responses=True)

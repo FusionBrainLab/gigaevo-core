@@ -652,9 +652,7 @@ class TestBaseline:
         dispatcher = MagicMock()
         dispatcher.dispatch = AsyncMock(return_value=MagicMock(all_succeeded=True))
 
-        engine = _make_engine(
-            plugin=plugin, dispatcher=dispatcher, baseline=0.034
-        )
+        engine = _make_engine(plugin=plugin, dispatcher=dispatcher, baseline=0.034)
         asyncio.run(engine._cycle(cycle=1))
 
         plugin.format_telegram_body.assert_called_once()

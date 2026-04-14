@@ -69,7 +69,11 @@ class TestComposeGProgram:
         assert "def _d_entrypoint(" in result
         # The original entrypoint should not appear unmodified
         lines = result.split("\n")
-        d_section_lines = [line for line in lines if "def entrypoint" in line and "_d_entrypoint" not in line]
+        d_section_lines = [
+            line
+            for line in lines
+            if "def entrypoint" in line and "_d_entrypoint" not in line
+        ]
         # The wrapper's entrypoint should be there once
         assert len(d_section_lines) == 1
 
@@ -148,7 +152,9 @@ class TestInjectDeltaGating:
         g_storage.add.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_inject_returns_none_when_no_improvement(self, hook, d_provider, g_storage):
+    async def test_inject_returns_none_when_no_improvement(
+        self, hook, d_provider, g_storage
+    ):
         """inject() returns None when composed output equals original G output."""
         d_provider.get_top_k.return_value = [
             OpponentProgram(
@@ -186,7 +192,9 @@ class TestInjectDeltaGating:
 
 class TestInjectEmptyArchives:
     @pytest.mark.asyncio
-    async def test_inject_returns_none_when_d_archive_empty(self, hook, d_provider, g_storage):
+    async def test_inject_returns_none_when_d_archive_empty(
+        self, hook, d_provider, g_storage
+    ):
         """inject() returns None when D's archive is empty."""
         d_provider.get_top_k.return_value = []
         result = await hook.inject()
@@ -194,10 +202,14 @@ class TestInjectEmptyArchives:
         g_storage.add.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_inject_returns_none_when_g_archive_empty(self, hook, d_provider, g_storage):
+    async def test_inject_returns_none_when_g_archive_empty(
+        self, hook, d_provider, g_storage
+    ):
         """inject() returns None when G archive is empty (no G programs to improve)."""
         d_provider.get_top_k.return_value = [
-            OpponentProgram(program_id="d-1", code="def entrypoint(): pass", fitness=0.5)
+            OpponentProgram(
+                program_id="d-1", code="def entrypoint(): pass", fitness=0.5
+            )
         ]
         g_storage.get_all.return_value = []
         result = await hook.inject()
@@ -212,7 +224,9 @@ class TestInjectEmptyArchives:
 
 class TestInjectedProgramMetadata:
     @pytest.mark.asyncio
-    async def test_injected_program_has_correct_metadata(self, hook, d_provider, g_storage):
+    async def test_injected_program_has_correct_metadata(
+        self, hook, d_provider, g_storage
+    ):
         """Injected program contains mutation_type, d_source_id, g_source_id metadata."""
         d_provider.get_top_k.return_value = [
             OpponentProgram(
@@ -411,7 +425,9 @@ class TestDGTrackerRecording:
         self, hook_with_tracker, d_provider, g_storage, dg_tracker
     ):
         """When dg_tracker.record_improvement raises, injection still succeeds."""
-        dg_tracker.record_improvement.side_effect = RuntimeError("Redis connection lost")
+        dg_tracker.record_improvement.side_effect = RuntimeError(
+            "Redis connection lost"
+        )
         d_provider.get_top_k.return_value = [
             OpponentProgram(
                 program_id="d-1",
