@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from gigaevo.monitoring.manifest_schema import (
+from gigaevo.experiment.manifest import (
     VALID_STATUSES,
     AlertThresholds,
     ExperimentManifest,

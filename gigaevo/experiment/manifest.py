@@ -2,42 +2,36 @@
 
 Provides the single source of truth for experiment automation. All tools
 read from experiment.yaml via this module. Handles:
-- Schema validation with status-gated required fields
+- Pydantic v2 schema validation with status-gated required fields
 - Status transitions with state machine enforcement
 - Atomic writes via Redis lock + write-then-rename (FUSE-safe)
 - PR description generation from manifest state
+- DB claim lifecycle with TTL-based Redis locking
 
 Usage:
     from gigaevo.experiment.manifest import load_manifest, set_status, update_manifest
 
     manifest = load_manifest("hover/feedback_softfit")
     set_status("hover/feedback_softfit", "running")
-    update_manifest("hover/feedback_softfit", lambda m: m.update({"launch": {"time": "..."}}))
+    update_manifest("hover/feedback_softfit", lambda raw: raw.update(...))
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 import redis
 import yaml
 
-# ---------------------------------------------------------------------------
-# Project root
-# ---------------------------------------------------------------------------
-PROJ = Path(
-    __file__
-).parent.parent.parent  # gigaevo/experiment/manifest.py -> repo root
+PROJ = Path(__file__).parent.parent.parent
 
-
-# ---------------------------------------------------------------------------
-# Status state machine
-# ---------------------------------------------------------------------------
+SUPPORTED_SCHEMA_VERSIONS = {1}
 VALID_STATUSES = {"preregistered", "implemented", "running", "complete", "invalid"}
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -45,49 +39,106 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "implemented": {"running"},
     "running": {"complete", "invalid"},
     "complete": set(),
-    "invalid": {"preregistered"},  # allow retry after fixing
+    "invalid": {"preregistered"},
 }
 
-# Recovery transitions allowed only by `gigaevo manifest reset-status`
 RECOVERY_TRANSITIONS: dict[str, set[str]] = {
     "running": {"implemented"},
 }
 
+DB_CLAIM_TTL = 86400 * 7
+
 
 # ---------------------------------------------------------------------------
-# Dataclasses
+# Pydantic Schema Models
 # ---------------------------------------------------------------------------
-@dataclass
-class RunSpec:
+
+
+class PlotCommand(BaseModel):
+    """A CLI plot command to invoke from the watchdog plugin."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    command: str
+    args: dict[str, Any] = {}
+    output_name: str = ""
+    caption: str = ""
+
+
+class AlertThresholds(BaseModel):
+    """Configurable alert thresholds for watchdog."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    invalidity_rate: float = 0.75
+    stagnation_window: int = 10
+    generation_gap_threshold: int = 5
+
+
+class WatchdogSection(BaseModel):
+    """Watchdog configuration section in experiment.yaml."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    plugin: str | None = None
+    plot_commands: list[PlotCommand] = []
+    plot_metrics: list[str] = []
+    sentinel_value: float | None = None
+    alert_thresholds: AlertThresholds = AlertThresholds()
+    poll_interval_s: int = 3600
+    plot_retries: int = 3
+    plot_retry_delay_s: int = 30
+    rolling_comment_threshold_hours: int = 24
+    checkpoint_milestones: list[float] = [0.1, 0.2, 0.5, 1.0]
+    no_proxy_hosts: list[str] = []
+
+
+class RunSpec(BaseModel):
+    """One run within an experiment."""
+
+    model_config = ConfigDict(extra="ignore")
+
     label: str
     db: int
     prefix: str
     pipeline: str
     problem_name: str
     condition: str
-    chain_url: str
-    mutation_url: str
+    chain_url: str | None = None
+    mutation_url: str | None = None
     model_name: str
     pid: int | None = None
     log_path: str | None = None
     extra_overrides: list[str] | None = None
-    run_env: dict[str, str] | None = (
-        None  # per-run env vars prepended to launch command
-    )
+    run_env: dict[str, str] | None = None
+    role: Literal["constructor", "improver"] | None = None
+
+    @field_validator("db")
+    @classmethod
+    def db_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"db must be >= 0, got {v}")
+        return v
 
 
-@dataclass
-class ProblemSpec:
-    has_test_set: bool
-    fitness_type: str
-    metric_name: str
+class ProblemSpec(BaseModel):
+    """Problem configuration section."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    has_test_set: bool = True
+    fitness_type: str = "discrete"
+    metric_name: str = ""
     test_set_path: str | None = None
     test_set_sha256: str | None = None
     max_val_test_gap: float | None = None
 
 
-@dataclass
-class LaunchInfo:
+class LaunchInfo(BaseModel):
+    """Launch state information."""
+
+    model_config = ConfigDict(extra="ignore")
+
     time: str | None = None
     commit: str | None = None
     watchdog_pid: int | None = None
@@ -95,15 +146,21 @@ class LaunchInfo:
     attempt: int | None = None
 
 
-@dataclass
-class BaselineInfo:
+class BaselineInfo(BaseModel):
+    """Baseline reference for comparison."""
+
+    model_config = ConfigDict(extra="ignore")
+
     reference: str | None = None
     mean: float | None = None
     metric: str | None = None
 
 
-@dataclass
-class SmokeTestInfo:
+class SmokeTestInfo(BaseModel):
+    """Smoke test state."""
+
+    model_config = ConfigDict(extra="ignore")
+
     completed: bool = False
     db: int | None = None
     generations: int = 3
@@ -111,98 +168,193 @@ class SmokeTestInfo:
     completed_at: str | None = None
 
 
-@dataclass
-class ExperimentManifest:
-    schema_version: int
+class ExperimentSection(BaseModel):
+    """The 'experiment' section of experiment.yaml."""
+
+    model_config = ConfigDict(extra="ignore")
+
     name: str
     task: str
     status: str
-    max_generations: int
-    branch: str
-    problem: ProblemSpec
-    runs: list[RunSpec] = field(default_factory=list)
-    servers: list[str] = field(default_factory=list)
-    config: dict[str, Any] = field(default_factory=dict)
-    custom_env: dict[str, str] = field(default_factory=dict)
-    checkpoints: list[dict[str, Any]] = field(default_factory=list)
-    launch: LaunchInfo = field(default_factory=LaunchInfo)
-    baseline: BaselineInfo = field(default_factory=BaselineInfo)
-    smoke_test: SmokeTestInfo = field(default_factory=SmokeTestInfo)
-    tools: list[dict[str, str]] = field(default_factory=list)
+    branch: str = ""
+    max_generations: int = 25
     pr_number: int | None = None
     tracking_issue: int | None = None
     prereg_commit: str | None = None
-    watchdog_plugin: str | None = None
 
-    # ---- Raw dict for round-trip fidelity ----
-    _raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in VALID_STATUSES:
+            raise ValueError(
+                f"Invalid status '{v}'. Valid statuses: {sorted(VALID_STATUSES)}"
+            )
+        return v
 
-
-# ---------------------------------------------------------------------------
-# Parsing helpers
-# ---------------------------------------------------------------------------
-
-
-def _parse_run(d: dict[str, Any]) -> RunSpec:
-    return RunSpec(
-        label=d["label"],
-        db=int(d["db"]),
-        prefix=d["prefix"],
-        pipeline=d["pipeline"],
-        problem_name=d["problem_name"],
-        condition=d["condition"],
-        chain_url=d["chain_url"],
-        mutation_url=d["mutation_url"],
-        model_name=d["model_name"],
-        pid=d.get("pid"),
-        log_path=d.get("log_path"),
-        extra_overrides=d.get("extra_overrides"),
-        run_env=d.get("run_env"),
-    )
+    @field_validator("max_generations")
+    @classmethod
+    def validate_max_generations(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"max_generations must be >= 0, got {v}")
+        return v
 
 
-def _parse_problem(d: dict[str, Any]) -> ProblemSpec:
-    return ProblemSpec(
-        has_test_set=bool(d.get("has_test_set", True)),
-        fitness_type=d.get("fitness_type", "discrete"),
-        metric_name=d.get("metric_name", ""),
-        test_set_path=d.get("test_set_path"),
-        test_set_sha256=d.get("test_set_sha256"),
-        max_val_test_gap=d.get("max_val_test_gap"),
-    )
+class ExperimentManifest(BaseModel):
+    """Pydantic-validated schema for experiment.yaml.
+
+    Status-gated validation: fields that are required depend on the
+    current experiment status (preregistered < implemented < running < complete).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: int
+    experiment: ExperimentSection
+    problem: ProblemSpec = ProblemSpec()
+    runs: list[RunSpec] = []
+    servers: list[str] = []
+    config: dict[str, Any] = {}
+    custom_env: dict[str, str] = {}
+    checkpoints: list[dict[str, Any]] = []
+    launch: LaunchInfo = LaunchInfo()
+    baseline: BaselineInfo = BaselineInfo()
+    smoke_test: SmokeTestInfo = SmokeTestInfo()
+    tools: list[dict[str, str]] = []
+    watchdog: WatchdogSection = WatchdogSection()
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, v: int) -> int:
+        if v not in SUPPORTED_SCHEMA_VERSIONS:
+            raise ValueError(
+                f"Unsupported schema_version: {v}. "
+                f"Supported: {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def validate_status_gates(self) -> ExperimentManifest:
+        """Validate required fields based on experiment status."""
+        status = self.experiment.status
+        errors: list[str] = []
+
+        # implemented+ requires runs, servers, config, smoke_test.completed
+        if status in ("implemented", "running", "complete"):
+            if not self.runs:
+                errors.append(
+                    f"runs[] must be non-empty for status={status}. "
+                    f"Add at least one run configuration."
+                )
+            if not self.servers:
+                errors.append(
+                    f"servers[] must be non-empty for status={status}. "
+                    f"Add the server hostnames used by this experiment."
+                )
+            if not self.config:
+                errors.append(
+                    f"config must be non-empty for status={status}. "
+                    f"Add the shared Hydra config overrides."
+                )
+            if not self.smoke_test.completed:
+                errors.append(
+                    f"smoke_test.completed must be true for status={status}. "
+                    f"Run a smoke test first."
+                )
+
+        # running+ requires launch info and PIDs
+        if status in ("running", "complete"):
+            if not self.launch.time:
+                errors.append(
+                    f"launch.time is required for status={status}. "
+                    f"Set to the ISO timestamp of the launch."
+                )
+            if not self.launch.commit:
+                errors.append(
+                    f"launch.commit is required for status={status}. "
+                    f"Set to the git commit hash at launch."
+                )
+            for run in self.runs:
+                if run.pid is None:
+                    errors.append(
+                        f"runs[{run.label}].pid is required for status={status}. "
+                        f"Record the PID after launching."
+                    )
+
+        if errors:
+            raise ValueError(
+                f"Manifest validation failed (status={status}):\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_adversarial_roles(self) -> ExperimentManifest:
+        """When watchdog.plugin='adversarial', every run must declare a role."""
+        if self.watchdog.plugin == "adversarial":
+            missing = [r.label for r in self.runs if r.role is None]
+            if missing:
+                raise ValueError(
+                    f"watchdog.plugin='adversarial' requires every run to set "
+                    f"role: 'constructor' or 'improver'. Missing role on: "
+                    f"{missing}"
+                )
+        return self
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> ExperimentManifest:
+        """Validate a raw dict and return an ExperimentManifest."""
+        return cls.model_validate(raw)
+
+    @classmethod
+    def from_yaml(cls, yaml_content: str) -> ExperimentManifest:
+        """Parse YAML string and validate."""
+        try:
+            raw = yaml.safe_load(yaml_content)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML syntax: {exc}") from exc
+
+        if not isinstance(raw, dict):
+            raise ValueError(
+                "YAML content must be a mapping (dict), not a scalar or list"
+            )
+
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_yaml_file(cls, path: str | Path) -> ExperimentManifest:
+        """Load and validate from a YAML file path."""
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No experiment.yaml at {path}. "
+                f"Create one from experiments/_template/experiment.yaml"
+            )
+        try:
+            content = path.read_text()
+        except OSError as exc:
+            raise ValueError(f"Cannot read {path}: {exc}") from exc
+
+        try:
+            return cls.from_yaml(content)
+        except ValueError as exc:
+            raise ValueError(
+                f"Validation failed for {path}:\n{exc}\nRecovery: git checkout {path}"
+            ) from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        """Export to a dict suitable for YAML serialization."""
+        return self.model_dump(mode="python", exclude_none=False)
 
 
-def _parse_launch(d: dict[str, Any] | None) -> LaunchInfo:
-    if not d:
-        return LaunchInfo()
-    return LaunchInfo(
-        time=d.get("time"),
-        commit=d.get("commit"),
-        watchdog_pid=d.get("watchdog_pid"),
-        confirmed_at=d.get("confirmed_at"),
-    )
-
-
-def _parse_baseline(d: dict[str, Any] | None) -> BaselineInfo:
-    if not d:
-        return BaselineInfo()
-    return BaselineInfo(
-        reference=d.get("reference"),
-        mean=d.get("mean"),
-        metric=d.get("metric"),
-    )
-
-
-def _parse_smoke_test(d: dict[str, Any] | None) -> SmokeTestInfo:
-    if not d:
-        return SmokeTestInfo()
-    return SmokeTestInfo(
-        completed=bool(d.get("completed", False)),
-        db=d.get("db"),
-        generations=d.get("generations", 3),
-        log_path=d.get("log_path"),
-        completed_at=d.get("completed_at"),
-    )
+def export_json_schema(output_path: str | Path) -> None:
+    """Export the ExperimentManifest JSON Schema to a file."""
+    schema = ExperimentManifest.model_json_schema()
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(schema, f, indent=2)
+        f.write("\n")
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +370,85 @@ def experiment_dir(experiment: str) -> Path:
 def manifest_path(experiment: str) -> Path:
     """Return the path to experiment.yaml."""
     return experiment_dir(experiment) / "experiment.yaml"
+
+
+# ---------------------------------------------------------------------------
+# Redis Utilities
+# ---------------------------------------------------------------------------
+
+
+def _get_redis() -> redis.Redis:
+    """Get a Redis connection for manifest locking.
+
+    Configuration:
+        REDIS_HOST (env): Redis hostname (default: "localhost")
+        REDIS_PORT (env): Redis port (default: 6379)
+
+    Uses database 0 for locking and DB claims. This follows the same pattern
+    as gigaevo.utils.redis.RedisRunConfig for consistency.
+
+    Returns:
+        A Redis client configured with synchronous operations.
+
+    Raises:
+        RuntimeError: If Redis connection fails (unavailable, port error, etc).
+            Solution: Ensure Redis is running with: redis-server or check REDIS_HOST/REDIS_PORT.
+    """
+    host = os.environ.get("REDIS_HOST", "localhost")
+    port_str = os.environ.get("REDIS_PORT", "6379")
+
+    try:
+        port = int(port_str)
+    except ValueError:
+        raise RuntimeError(
+            f"Invalid REDIS_PORT='{port_str}' (must be an integer). "
+            f"Fix: export REDIS_PORT=6379 or check environment variables."
+        ) from None
+
+    try:
+        r = redis.Redis(host=host, port=port, db=0)
+        # Verify connection is actually working
+        r.ping()
+        return r
+    except (redis.ConnectionError, redis.TimeoutError, OSError) as e:
+        raise RuntimeError(
+            f"Cannot connect to Redis at {host}:{port}. "
+            f"Fix: Start Redis with `redis-server` or set REDIS_HOST/REDIS_PORT. "
+            f"Error: {e}"
+        ) from e
+
+
+def _acquire_lock(r: redis.Redis, experiment: str, timeout: float = 5.0) -> str:
+    """Acquire Redis-based lock. Returns lock key. Raises on timeout."""
+    lock_key = f"experiments:{experiment}:yaml_lock"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if r.set(lock_key, str(os.getpid()), nx=True, ex=30):
+            return lock_key
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"Could not acquire lock {lock_key} after {timeout}s. "
+        f"Current holder: {r.get(lock_key)}"
+    )
+
+
+def _release_lock(r: redis.Redis, lock_key: str) -> None:
+    r.delete(lock_key)
+
+
+def _write_manifest_atomic(path: Path, data: dict[str, Any]) -> None:
+    """Write YAML atomically via tmp + rename."""
+    tmp = path.with_suffix(".yaml.tmp")
+    with open(tmp, "w") as f:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.rename(path)
+
+
+# ---------------------------------------------------------------------------
+# Load and Validate
+# ---------------------------------------------------------------------------
 
 
 def load_manifest(experiment: str) -> ExperimentManifest:
@@ -251,148 +482,11 @@ def load_manifest(experiment: str) -> ExperimentManifest:
 
 def _validate(raw: dict[str, Any], experiment: str) -> ExperimentManifest:
     """Validate raw YAML dict and return ExperimentManifest."""
-    # Schema version
-    sv = raw.get("schema_version", 1)
-    if sv != 1:
-        raise ValueError(f"Unsupported schema_version: {sv} (expected 1)")
-
-    # Experiment section
-    exp = raw.get("experiment", {})
-    name = exp.get("name", experiment)
-    task = exp.get("task", "")
-    status = exp.get("status", "preregistered")
-    if status not in VALID_STATUSES:
-        raise ValueError(f"Invalid status '{status}'. Valid: {VALID_STATUSES}")
-
-    branch = exp.get("branch", "")
-    max_gen = exp.get("max_generations", 25)
-
-    # Problem section
-    problem = _parse_problem(raw.get("problem", {}))
-
-    # Runs
-    runs_raw = raw.get("runs") or []
-    runs = [_parse_run(r) for r in runs_raw]
-
-    # Other sections
-    servers = raw.get("servers") or []
-    config = raw.get("config") or {}
-    custom_env = raw.get("custom_env") or {}
-    checkpoints = raw.get("checkpoints") or []
-    launch = _parse_launch(raw.get("launch"))
-    baseline = _parse_baseline(raw.get("baseline"))
-    smoke_test = _parse_smoke_test(raw.get("smoke_test"))
-    tools = raw.get("tools") or []
-
-    manifest = ExperimentManifest(
-        schema_version=sv,
-        name=name,
-        task=task,
-        status=status,
-        max_generations=max_gen,
-        branch=branch,
-        problem=problem,
-        runs=runs,
-        servers=servers,
-        config=config,
-        custom_env=custom_env,
-        checkpoints=checkpoints,
-        launch=launch,
-        baseline=baseline,
-        smoke_test=smoke_test,
-        tools=tools,
-        pr_number=exp.get("pr_number"),
-        tracking_issue=exp.get("tracking_issue"),
-        prereg_commit=exp.get("prereg_commit"),
-        watchdog_plugin=raw.get("watchdog_plugin")
-        or raw.get("watchdog", {}).get("plugin"),
-        _raw=raw,
-    )
-
-    # Status-gated required fields
-    _validate_for_status(manifest)
-    return manifest
-
-
-def _validate_for_status(m: ExperimentManifest) -> None:
-    """Check required fields based on current status."""
-    errors: list[str] = []
-
-    # All statuses need basic experiment info
-    if not m.name:
-        errors.append("experiment.name is required")
-    if not m.task:
-        errors.append("experiment.task is required")
-
-    # implemented+ needs runs, servers, config
-    if m.status in ("implemented", "running", "complete"):
-        if not m.runs:
-            errors.append(f"runs[] must be non-empty for status={m.status}")
-        if not m.servers:
-            errors.append(f"servers[] must be non-empty for status={m.status}")
-        if not m.config:
-            errors.append(f"config must be non-empty for status={m.status}")
-        if not m.smoke_test.completed:
-            errors.append(f"smoke_test.completed must be true for status={m.status}")
-
-    # running+ needs launch info
-    if m.status in ("running", "complete"):
-        if not m.launch.time:
-            errors.append(f"launch.time is required for status={m.status}")
-        if not m.launch.commit:
-            errors.append(f"launch.commit is required for status={m.status}")
-        for run in m.runs:
-            if run.pid is None:
-                errors.append(
-                    f"runs[{run.label}].pid is required for status={m.status}"
-                )
-
-    if errors:
-        raise ValueError(
-            f"Validation errors for {m.name} (status={m.status}):\n"
-            + "\n".join(f"  - {e}" for e in errors)
-        )
+    return ExperimentManifest.from_dict(raw)
 
 
 # ---------------------------------------------------------------------------
-# Redis locking (FUSE-safe — replaces fcntl.flock)
-# ---------------------------------------------------------------------------
-
-
-def _get_redis() -> redis.Redis:
-    return redis.Redis(host="localhost", port=6379, db=0)
-
-
-def _acquire_lock(r: redis.Redis, experiment: str, timeout: float = 5.0) -> str:
-    """Acquire Redis-based lock. Returns lock key. Raises on timeout."""
-    lock_key = f"experiments:{experiment}:yaml_lock"
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if r.set(lock_key, str(os.getpid()), nx=True, ex=30):
-            return lock_key
-        time.sleep(0.25)
-    raise RuntimeError(
-        f"Could not acquire lock {lock_key} after {timeout}s. "
-        f"Current holder: {r.get(lock_key)}"
-    )
-
-
-def _release_lock(r: redis.Redis, lock_key: str) -> None:
-    r.delete(lock_key)
-
-
-def _write_manifest_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Write YAML atomically via tmp + rename."""
-    tmp = path.with_suffix(".yaml.tmp")
-    with open(tmp, "w") as f:
-        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
-        f.flush()
-        os.fsync(f.fileno())
-    tmp.rename(path)
-
-
-# ---------------------------------------------------------------------------
-# Mutation API
+# Status Transitions
 # ---------------------------------------------------------------------------
 
 
@@ -478,10 +572,8 @@ def update_manifest(
 
 
 # ---------------------------------------------------------------------------
-# DB claims (Redis SET NX)
+# DB Claims
 # ---------------------------------------------------------------------------
-
-DB_CLAIM_TTL = 86400 * 7  # 7 days
 
 
 def claim_dbs(experiment: str, dbs: list[int]) -> list[tuple[int, str]]:
@@ -546,7 +638,7 @@ def has_test_set(experiment: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# PR description generation (P1)
+# PR Description Generation
 # ---------------------------------------------------------------------------
 
 _STATUS_BADGES = {
@@ -561,26 +653,26 @@ _STATUS_BADGES = {
 def generate_pr_description(experiment: str) -> str:
     """Generate PR_DESCRIPTION.md content from experiment.yaml."""
     m = load_manifest(experiment)
-    badge = _STATUS_BADGES.get(m.status, m.status)
+    badge = _STATUS_BADGES.get(m.experiment.status, m.experiment.status)
 
     # Running badge includes generation info
-    if m.status == "running" and m.checkpoints:
+    if m.experiment.status == "running" and m.checkpoints:
         last_cp = m.checkpoints[-1]
         gen = last_cp.get("gen", "?")
-        badge = f"🟡 Running (gen {gen}/{m.max_generations})"
-    elif m.status == "running":
-        badge = f"🟡 Running (gen 0/{m.max_generations})"
+        badge = f"🟡 Running (gen {gen}/{m.experiment.max_generations})"
+    elif m.experiment.status == "running":
+        badge = f"🟡 Running (gen 0/{m.experiment.max_generations})"
 
     lines = [
-        f"# exp: {m.name}",
+        f"# exp: {m.experiment.name}",
         "",
         f"**Status**: {badge}",
-        f"**Branch**: `{m.branch}`",
-        f"**Tracking issue**: #{m.tracking_issue}" if m.tracking_issue else "",
+        f"**Branch**: `{m.experiment.branch}`",
+        f"**Tracking issue**: #{m.experiment.tracking_issue}" if m.experiment.tracking_issue else "",
         "",
         "## Design",
         "",
-        f"See `experiments/{m.name}/01_design.md` for full design.",
+        f"See `experiments/{m.experiment.name}/01_design.md` for full design.",
         "",
         "## Runs",
         "",
@@ -620,5 +712,37 @@ def generate_pr_description(experiment: str) -> str:
 
     lines.extend(["", "## Archives", "", "_(pending)_", ""])
 
-    # Filter empty lines from conditional sections
     return "\n".join(line for line in lines if line is not None) + "\n"
+
+
+__all__ = [
+    "VALID_STATUSES",
+    "VALID_TRANSITIONS",
+    "RECOVERY_TRANSITIONS",
+    "DB_CLAIM_TTL",
+    "PROJ",
+    "RunSpec",
+    "ProblemSpec",
+    "LaunchInfo",
+    "BaselineInfo",
+    "SmokeTestInfo",
+    "ExperimentSection",
+    "ExperimentManifest",
+    "WatchdogSection",
+    "AlertThresholds",
+    "PlotCommand",
+    "export_json_schema",
+    "experiment_dir",
+    "manifest_path",
+    "load_manifest",
+    "set_status",
+    "update_manifest",
+    "claim_dbs",
+    "refresh_db_claims",
+    "release_db_claims",
+    "find_active_experiments",
+    "has_test_set",
+    "generate_pr_description",
+    "_validate",
+    "_write_manifest_atomic",
+]

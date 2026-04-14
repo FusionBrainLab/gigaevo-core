@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from gigaevo.monitoring.manifest import (
+from gigaevo.experiment.manifest import (
     RECOVERY_TRANSITIONS,
     VALID_TRANSITIONS,
     _write_manifest_atomic,
@@ -17,7 +17,7 @@ from gigaevo.monitoring.manifest import (
     manifest_path,
     set_status,
 )
-from gigaevo.monitoring.manifest_schema import ExperimentManifest
+from gigaevo.experiment.manifest import ExperimentManifest
 
 
 def _minimal_manifest_dict(
@@ -93,7 +93,7 @@ class TestExperimentDir:
 
 class TestLoadManifest:
     def test_load_missing_raises(self, tmp_path):
-        with patch("gigaevo.monitoring.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             with pytest.raises(FileNotFoundError):
                 load_manifest("nonexistent/exp")
 
@@ -104,7 +104,7 @@ class TestLoadManifest:
         data = _minimal_manifest_dict()
         yaml_path.write_text(yaml.safe_dump(data))
 
-        with patch("gigaevo.monitoring.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             result = load_manifest("hover/test-exp")
 
         assert isinstance(result, ExperimentManifest)
@@ -124,8 +124,8 @@ class TestSetStatus:
         mock_redis.set.return_value = True
 
         with (
-            patch("gigaevo.monitoring.manifest.PROJ", tmp_path),
-            patch("gigaevo.monitoring.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.PROJ", tmp_path),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
         ):
             result = set_status("hover/test-exp", "implemented")
 
@@ -142,8 +142,8 @@ class TestSetStatus:
         mock_redis.set.return_value = True
 
         with (
-            patch("gigaevo.monitoring.manifest.PROJ", tmp_path),
-            patch("gigaevo.monitoring.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.PROJ", tmp_path),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status("hover/test-exp", "running")
@@ -159,8 +159,8 @@ class TestSetStatus:
         mock_redis.set.return_value = True
 
         with (
-            patch("gigaevo.monitoring.manifest.PROJ", tmp_path),
-            patch("gigaevo.monitoring.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.PROJ", tmp_path),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
         ):
             result = set_status("hover/test-exp", "implemented", allow_recovery=True)
 
@@ -192,7 +192,7 @@ class TestGeneratePrDescription:
         data = _minimal_manifest_dict()
         yaml_path.write_text(yaml.safe_dump(data))
 
-        with patch("gigaevo.monitoring.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             result = generate_pr_description("hover/test-exp")
 
         assert "hover/test-exp" in result

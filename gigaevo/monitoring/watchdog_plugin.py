@@ -14,7 +14,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from gigaevo.monitoring.manifest_schema import ExperimentManifest
+from gigaevo.experiment.manifest import ExperimentManifest
 from gigaevo.monitoring.notifications import PlotAttachment
 from gigaevo.monitoring.snapshot import RunSnapshot
 

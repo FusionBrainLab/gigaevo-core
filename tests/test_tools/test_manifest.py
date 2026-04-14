@@ -113,9 +113,9 @@ class TestValidation:
     def test_minimal_preregistered(self):
         raw = _minimal_raw()
         m = _validate(raw, "test/smoke")
-        assert m.status == "preregistered"
-        assert m.name == "test/smoke"
-        assert m.task == "test"
+        assert m.experiment.status == "preregistered"
+        assert m.experiment.name == "test/smoke"
+        assert m.experiment.task == "test"
 
     def test_invalid_status_rejected(self):
         raw = _minimal_raw(status="bogus")
@@ -164,14 +164,14 @@ class TestValidation:
     def test_valid_implemented(self):
         raw = _implemented_raw()
         m = _validate(raw, "test/smoke")
-        assert m.status == "implemented"
+        assert m.experiment.status == "implemented"
         assert len(m.runs) == 1
         assert m.runs[0].label == "A1"
 
     def test_valid_running(self):
         raw = _running_raw()
         m = _validate(raw, "test/smoke")
-        assert m.status == "running"
+        assert m.experiment.status == "running"
         assert m.runs[0].pid == 12345
         assert m.launch.time == "2026-01-01T00:00:00Z"
 
@@ -273,8 +273,8 @@ class TestLoadManifest:
         exp_name, tmp_root = tmp_experiment
         with patch("gigaevo.experiment.manifest.PROJ", tmp_root):
             m = load_manifest(exp_name)
-        assert m.name == "test/smoke"
-        assert m.status == "preregistered"
+        assert m.experiment.name == "test/smoke"
+        assert m.experiment.status == "preregistered"
 
     def test_load_missing_file(self, tmp_path):
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
@@ -327,7 +327,7 @@ class TestSetStatus:
                 yaml.safe_dump(raw, f, sort_keys=False)
 
             m = set_status(exp_name, "running")
-            assert m.status == "running"
+            assert m.experiment.status == "running"
 
     def test_invalid_transition_rejected(self, tmp_path: Path):
         raw = _minimal_raw(status="preregistered")
@@ -360,7 +360,7 @@ class TestSetStatus:
                 yaml.safe_dump(raw, f, sort_keys=False)
 
             m = set_status(exp_name, "implemented", allow_recovery=True)
-            assert m.status == "implemented"
+            assert m.experiment.status == "implemented"
 
 
 class TestUpdateManifest:
@@ -383,7 +383,7 @@ class TestUpdateManifest:
             patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
         ):
             m = update_manifest("test/smoke", add_tracking_issue)
-            assert m.tracking_issue == 42
+            assert m.experiment.tracking_issue == 42
 
         # Verify persisted
         with open(path) as f:

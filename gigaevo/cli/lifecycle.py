@@ -57,7 +57,7 @@ def launch(ctx: click.Context, generate_script: bool, confirm: bool) -> None:
         click.echo(script)
         return
 
-    from gigaevo.monitoring.manifest import load_manifest
+    from gigaevo.experiment.manifest import load_manifest
 
     manifest = load_manifest(experiment)
 
@@ -92,7 +92,7 @@ def closeout(ctx: click.Context, confirm: bool) -> None:
         ctx.exit(1)
         return
 
-    from gigaevo.monitoring.manifest import load_manifest
+    from gigaevo.experiment.manifest import load_manifest
 
     manifest = load_manifest(experiment)
 
@@ -126,7 +126,7 @@ def restart(ctx: click.Context, confirm: bool) -> None:
         ctx.exit(1)
         return
 
-    from gigaevo.monitoring.manifest import load_manifest
+    from gigaevo.experiment.manifest import load_manifest
 
     manifest = load_manifest(experiment)
 

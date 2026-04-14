@@ -4,7 +4,7 @@ from gigaevo.monitoring.alerts import Alert, AlertDetector, AlertSeverity, Alert
 from gigaevo.monitoring.dispatcher import DispatchResult, NotificationDispatcher
 from gigaevo.monitoring.experiment_monitor import ExperimentMonitor, RunConfig
 from gigaevo.monitoring.github_pr_channel import GitHubPRChannel
-from gigaevo.monitoring.manifest_schema import ExperimentManifest, export_json_schema
+from gigaevo.experiment.manifest import ExperimentManifest, export_json_schema
 from gigaevo.monitoring.notifications import (
     NotificationChannel,
     PlotAttachment,

@@ -1,6 +1,6 @@
 """Manifest subcommand group: read, write, and gate experiment.yaml fields.
 
-Replaces inline ``PYTHONPATH=. python -c "from gigaevo.monitoring.manifest import ..."``
+Replaces inline ``PYTHONPATH=. python -c "from gigaevo.experiment.manifest import ..."``
 snippets in experiment lifecycle skills with proper CLI calls.
 
 Usage examples::
@@ -114,7 +114,7 @@ def get(ctx: click.Context, field: str) -> None:
 
     experiment = _require_experiment(ctx)
 
-    from gigaevo.monitoring.manifest import load_manifest
+    from gigaevo.experiment.manifest import load_manifest
 
     manifest_obj = load_manifest(experiment)
     formatter: OutputFormatter = ctx.obj["formatter"]
@@ -197,7 +197,7 @@ def set_field(ctx: click.Context, field: str, value: str) -> None:
         ctx.exit(1)
         return
 
-    from gigaevo.monitoring.manifest import set_status
+    from gigaevo.experiment.manifest import set_status
 
     updated = set_status(experiment, value)
     click.echo(f"Status updated: {updated.experiment.status}")
@@ -222,7 +222,7 @@ def update(ctx: click.Context, path: str, value: str) -> None:
 
     coerced = _coerce_value(value)
 
-    from gigaevo.monitoring.manifest import update_manifest
+    from gigaevo.experiment.manifest import update_manifest
 
     def updater(raw: dict[str, Any]) -> None:
         _set_nested(raw, path, coerced)
@@ -246,7 +246,7 @@ def gate(ctx: click.Context, expected_status: str) -> None:
     """
     experiment = _require_experiment(ctx)
 
-    from gigaevo.monitoring.manifest import load_manifest
+    from gigaevo.experiment.manifest import load_manifest
 
     manifest_obj = load_manifest(experiment)
 
@@ -279,13 +279,13 @@ def pr_description(ctx: click.Context, push: bool) -> None:
     """
     experiment = _require_experiment(ctx)
 
-    from gigaevo.monitoring.manifest import generate_pr_description
+    from gigaevo.experiment.manifest import generate_pr_description
 
     description = generate_pr_description(experiment)
     click.echo(description)
 
     if push:
-        from gigaevo.monitoring.manifest import load_manifest
+        from gigaevo.experiment.manifest import load_manifest
 
         manifest_obj = load_manifest(experiment)
         if manifest_obj.experiment.pr_number:
@@ -345,7 +345,7 @@ def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
 
     label_to_pid = dict(zip(label_list, pids))
 
-    from gigaevo.monitoring.manifest import update_manifest
+    from gigaevo.experiment.manifest import update_manifest
 
     def set_pids(raw: dict[str, Any]) -> None:
         for run in raw.get("runs", []):
@@ -386,12 +386,12 @@ def reset_status(
     """
     experiment = _require_experiment(ctx)
 
-    from gigaevo.monitoring.manifest import (
+    from gigaevo.experiment.manifest import (
         load_manifest,
         release_db_claims,
         update_manifest,
     )
-    from gigaevo.monitoring.manifest import (
+    from gigaevo.experiment.manifest import (
         set_status as _set_status,
     )
 
