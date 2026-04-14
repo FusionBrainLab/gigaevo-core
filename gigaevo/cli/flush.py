@@ -19,8 +19,8 @@ from gigaevo.cli.flush_ops import (
     "--db",
     multiple=True,
     required=True,
-    type=int,
-    help="Redis DB numbers to flush (repeat for multiple).",
+    type=str,
+    help="Redis DB numbers to flush. Repeat (--db 1 --db 2) or comma-separate (--db 1,2,3).",
 )
 @click.option(
     "--confirm",
@@ -43,7 +43,7 @@ from gigaevo.cli.flush_ops import (
 @click.pass_context
 def flush(
     ctx: click.Context,
-    db: tuple[int, ...],
+    db: tuple[str, ...],
     confirm: bool,
     dry_run: bool,
     no_kill_workers: bool,
@@ -55,14 +55,25 @@ def flush(
     redis_host = ctx.obj["redis_host"]
     redis_port = ctx.obj["redis_port"]
 
+    # Parse: support --db 1 --db 2, --db 1,2,3, or --db '1 2 3'
+    raw: list[int] = []
+    for entry in db:
+        for part in entry.replace(",", " ").split():
+            try:
+                raw.append(int(part))
+            except ValueError:
+                click.echo(f"Error: '{part}' is not a valid DB number", err=True)
+                ctx.exit(1)
+                return
+
     # Validate DB range
-    for d in db:
+    for d in raw:
         if not 0 <= d <= 15:
             click.echo(f"Error: DB number {d} out of range (0-15)", err=True)
             ctx.exit(1)
             return
 
-    dbs = list(db)
+    dbs = raw
     is_dry_run = not confirm or dry_run
 
     if is_dry_run:
