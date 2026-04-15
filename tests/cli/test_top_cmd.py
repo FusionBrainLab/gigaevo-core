@@ -193,7 +193,7 @@ class TestTopManifestDefaultMetric:
         r.set("p:program:aaa111111111", json.dumps(prog))
 
         mock_manifest = MagicMock()
-        mock_manifest.problem.metric_name = "actual_fitness"
+        mock_manifest.contract.problem.metric_name = "actual_fitness"
 
         configs = [
             RunConfig(
@@ -246,7 +246,7 @@ class TestTopManifestDefaultMetric:
         r.set("p:program:aaa111111111", json.dumps(prog))
 
         mock_manifest = MagicMock()
-        mock_manifest.problem.metric_name = "actual_fitness"
+        mock_manifest.contract.problem.metric_name = "actual_fitness"
 
         configs = [
             RunConfig(

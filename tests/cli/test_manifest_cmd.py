@@ -52,6 +52,11 @@ def _make_manifest(
     m.experiment.prereg_commit = "abc1234"
     m.runs = runs if runs is not None else [_make_run("A", 4), _make_run("B", 5)]
     m.servers = ["server1.example.com"]
+    # v2 nested accessors (required for nested path code)
+    m.contract.runs = m.runs
+    m.contract.max_generations = max_generations
+    m.contract.identity.prereg_commit = "abc1234"
+    m.lifecycle.status = status
     _raw = (
         raw
         if raw is not None
