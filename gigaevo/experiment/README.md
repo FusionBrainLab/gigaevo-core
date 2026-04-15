@@ -53,39 +53,83 @@ from gigaevo.experiment.launch_generator import generate
 - Include config verification step
 - Hydra parameter binding for all runs
 
-## Schema: ExperimentManifest
+## Schema: ExperimentManifest (v2)
 
-Pydantic v2 dataclass-style model with strict validation.
+Pydantic v2 model with strict validation. **Schema v2** restructures the
+manifest into four named sub-sections, each reflecting a distinct concern:
 
-**Top-level structure:**
+| Sub-section | Writer | When it changes | Example fields |
+|---|---|---|---|
+| `contract` | Researcher | Frozen at `preregistered` (amendment required to change) | identity, problem, config, runs, servers, stopping_rule, baseline |
+| `lifecycle` | System | Mutates constantly | status, launch, smoke_test, treatment_verification |
+| `telemetry` | System | Append-only during `running` | checkpoints, mid_run_test_eval, checkpoint_analysis, treatment_checks |
+| `control_plane` | System | Mutates during setup + live ops | watchdog, notifications, watchdog_pid, cron IDs |
+
+### Sub-model layout
+
 ```python
 ExperimentManifest(
-    schema_version: int,                    # Currently 1
-    experiment: ExperimentSection,          # Name, task, status, branch, max_generations
-    problem: ProblemSpec,                   # has_test_set, fitness_type, metric_name
-    runs: list[RunSpec],                    # Each run's DB, pipeline, model, condition
-    servers: list[str],                     # Server hostnames
-    config: dict,                           # Shared Hydra config overrides
-    custom_env: dict[str, str],             # Shared environment variables
-    checkpoints: list[dict],                # Gen, timestamp, notes
-    launch: LaunchInfo,                     # Time, commit, watchdog_pid, confirmed_at
-    baseline: BaselineInfo,                 # Reference experiment, mean, metric
-    smoke_test: SmokeTestInfo,              # completed, db, generations
-    watchdog: WatchdogSection,              # Plugin, plot commands, alerts, polling
+    schema_version: int = 2,
+    # Nested @property views (canonical read path)
+    contract: ContractSection(
+        identity: ExperimentIdentity,       # name, task, branch, prereg_commit, pr_number
+        problem: ProblemSpec,
+        config: ConfigSpec,                 # typed standard keys + extra dict
+        runs: list[RunSpec],                # role: str (open), wave: int | None
+        servers: list[str],
+        custom_env: dict[str, str],
+        max_generations: int,
+        stopping_rule: StoppingRule,        # description + structured conditions[]
+        baseline: BaselineInfo,
+        tools: list[ToolRef],
+    ),
+    lifecycle: LifecycleState(
+        status: Literal["preregistered", "implemented", "running", "complete", "invalid"],
+        launch: LaunchInfo,                 # time, commit, confirmed_at
+        smoke_test: SmokeTestInfo,
+        treatment_verification: TreatmentVerificationInfo,
+    ),
+    telemetry: TelemetryLog(
+        checkpoints: list[CheckpointEntry],
+        mid_run_test_eval: MidRunTestEvalInfo,
+        checkpoint_analysis: CheckpointAnalysisInfo,
+        treatment_checks: TreatmentChecksInfo,
+    ),
+    control_plane: ControlPlane(
+        watchdog: WatchdogSection,          # plugin, plot_commands, alert_thresholds, ...
+        notifications: NotificationsSection, # pr + telegram channel config
+        watchdog_pid: int | None,
+        anomaly_detector_cron_id: str | None,
+        checkpoint_cron_id: str | None,
+    ),
 )
 ```
 
-**Access patterns:**
+### Access patterns (read via nested @property, write via nested dotted paths)
+
+Read paths use the four sub-sections:
+
 ```python
 m = load_manifest("hover/feedback_softfit")
 
-# Nested structure (canonical)
-m.experiment.name                           # "hover/feedback_softfit"
-m.experiment.status                         # "preregistered" | "implemented" | "running" | ...
-m.experiment.max_generations                # 25 (or whatever)
-m.runs[0].label                             # "A1"
-m.runs[0].db                                # Redis DB number
-m.launch.time                               # ISO timestamp or None
+m.contract.identity.name                    # "hover/feedback_softfit"
+m.contract.identity.task                    # "hover"
+m.contract.runs[0].label                    # "A1"
+m.contract.stopping_rule.conditions         # list[StopCondition]
+m.lifecycle.status                          # "preregistered" | "implemented" | ...
+m.lifecycle.launch.time                     # ISO timestamp or None
+m.telemetry.mid_run_test_eval.completed     # bool
+m.control_plane.watchdog.plugin             # "adversarial" | "solo" | ...
+m.control_plane.watchdog_pid                # int | None
+```
+
+Write paths (via CLI) also use the nested shape — `_set_nested()` creates
+intermediate dicts automatically:
+
+```bash
+gigaevo -e "$EXP" manifest update lifecycle.launch.time "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+gigaevo -e "$EXP" manifest update control_plane.watchdog_pid 12345
+gigaevo -e "$EXP" manifest update telemetry.mid_run_test_eval.completed true
 ```
 
 ## State Machine
