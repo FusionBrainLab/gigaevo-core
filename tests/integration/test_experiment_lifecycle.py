@@ -87,13 +87,13 @@ class TestHappyPath:
                 raw["smoke_test"] = {"completed": True}
 
             manifest = update_manifest("hover/test-exp", make_implementable)
-            assert manifest.experiment.status == "preregistered"
+            assert manifest.lifecycle.status == "preregistered"
 
             # Now transition to implemented
             manifest = set_status("hover/test-exp", "implemented")
-            assert manifest.experiment.status == "implemented"
+            assert manifest.lifecycle.status == "implemented"
 
-            # Verify on disk
+            # Verify on disk (flat field structure)
             reloaded = yaml.safe_load(yaml_path.read_text())
             assert reloaded["experiment"]["status"] == "implemented"
 
@@ -107,10 +107,10 @@ class TestHappyPath:
                 raw["runs"][0]["pid"] = 12345
 
             manifest = update_manifest("hover/test-exp", add_launch_info)
-            assert manifest.experiment.status == "implemented"
+            assert manifest.lifecycle.status == "implemented"
 
             manifest = set_status("hover/test-exp", "running")
-            assert manifest.experiment.status == "running"
+            assert manifest.lifecycle.status == "running"
 
             reloaded = yaml.safe_load(yaml_path.read_text())
             assert reloaded["experiment"]["status"] == "running"
@@ -118,7 +118,7 @@ class TestHappyPath:
 
             # Step 3: running → complete
             manifest = set_status("hover/test-exp", "complete")
-            assert manifest.experiment.status == "complete"
+            assert manifest.lifecycle.status == "complete"
 
             reloaded = yaml.safe_load(yaml_path.read_text())
             assert reloaded["experiment"]["status"] == "complete"
@@ -132,7 +132,7 @@ class TestInvalidTransitions:
         yaml_path = exp_dir / "experiment.yaml"
 
         data = _minimal_manifest_dict()
-        data["status"] = "complete"
+        data["experiment"]["status"] = "complete"
         yaml_path.write_text(yaml.safe_dump(data))
 
         with (
@@ -149,7 +149,7 @@ class TestInvalidTransitions:
         exp_dir.mkdir(parents=True)
         yaml_path = exp_dir / "experiment.yaml"
 
-        data = _minimal_manifest_dict()
+        data = _minimal_manifest_dict(status="preregistered")
         yaml_path.write_text(yaml.safe_dump(data))
 
         with (
@@ -169,8 +169,7 @@ class TestRecovery:
         exp_dir.mkdir(parents=True)
         yaml_path = exp_dir / "experiment.yaml"
 
-        data = _minimal_manifest_dict()
-        data["status"] = "running"
+        data = _minimal_manifest_dict(status="running")
         data["runs"] = [
             {
                 "label": "R1",
@@ -186,7 +185,10 @@ class TestRecovery:
         data["servers"] = ["server1"]
         data["config"] = {"key": "value"}
         data["smoke_test"] = {"completed": True}
-        data["launch"] = {"time": "2026-04-14T10:00:00Z", "commit": "abc123"}
+        data["launch"] = {
+            "time": "2026-04-14T10:00:00Z",
+            "commit": "abc123",
+        }
         yaml_path.write_text(yaml.safe_dump(data))
 
         with (
@@ -195,10 +197,10 @@ class TestRecovery:
         ):
             # With allow_recovery=True, the transition is allowed
             manifest = set_status("hover/test-exp", "implemented", allow_recovery=True)
-            assert manifest.experiment.status == "implemented"
+            assert manifest.lifecycle.status == "implemented"
 
             # PIDs should still be present
-            assert manifest.runs[0].pid == 12345
+            assert manifest.contract.runs[0].pid == 12345
 
 
 class TestAtomicWrites:

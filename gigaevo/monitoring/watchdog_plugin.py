@@ -172,18 +172,20 @@ def resolve_plugin(manifest: ExperimentManifest | None) -> type[WatchdogPlugin]:
     """
     if manifest is not None:
         # 1. Explicit plugin field
-        explicit = manifest.watchdog.plugin
+        explicit = manifest.control_plane.watchdog.plugin
         if explicit:
             if explicit not in _REGISTRY:
                 raise KeyError(
                     f"Watchdog plugin '{explicit}' not found in registry. "
                     f"Available: {sorted(_REGISTRY.keys())}"
                 )
-            _log.info(f"Resolved plugin from manifest.watchdog.plugin: {explicit}")
+            _log.info(
+                f"Resolved plugin from manifest.control_plane.watchdog.plugin: {explicit}"
+            )
             return _REGISTRY[explicit]
 
         # 2. Task-prefix heuristic
-        task = manifest.experiment.task
+        task = manifest.contract.identity.task
         heuristic_name = _TASK_HEURISTIC.get(task)
         if heuristic_name and heuristic_name in _REGISTRY:
             _log.info(

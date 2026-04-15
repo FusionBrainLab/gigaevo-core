@@ -170,11 +170,15 @@ def generate(experiment: str) -> str:
     )
     lines.append(f'echo "All {len(m.contract.runs)} runs launched."')
 
-    pid_echo = "  ".join(f"{r.label}=$PID_{r.label.replace('-', '_')}" for r in m.contract.runs)
+    pid_echo = "  ".join(
+        f"{r.label}=$PID_{r.label.replace('-', '_')}" for r in m.contract.runs
+    )
     lines.append(f'echo "PIDs: {pid_echo}"')
 
     # Write PIDs to file
-    pid_file_content = " ".join(f"$PID_{r.label.replace('-', '_')}" for r in m.contract.runs)
+    pid_file_content = " ".join(
+        f"$PID_{r.label.replace('-', '_')}" for r in m.contract.runs
+    )
     lines.append(f'echo "{pid_file_content}" > "$LOG_DIR/pids.txt"')
     lines.append("")
 
