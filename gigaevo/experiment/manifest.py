@@ -623,7 +623,26 @@ class ExperimentManifest(BaseModel):
 
     @property
     def contract(self) -> ContractSection:
-        """ContractSection view derived from flat fields."""
+        """ContractSection view derived from flat fields.
+
+        ``stopping_rule`` is resolved in priority order:
+          1. Nested ``contract.stopping_rule`` dict in model_extra (v2 shape).
+          2. Top-level ``stopping_rule`` dict in model_extra (intermediate v2).
+          3. ``experiment.stopping_rule`` prose string (v1 fallback).
+
+        This lets structured ``conditions`` survive loading even while the
+        on-disk yamls carry only the v1 prose string.
+        """
+        extras = self.model_extra or {}
+        nested_contract = extras.get("contract") or {}
+        sr_raw = nested_contract.get("stopping_rule") or extras.get("stopping_rule")
+        if isinstance(sr_raw, dict):
+            stopping_rule = StoppingRule.model_validate(sr_raw)
+        else:
+            stopping_rule = StoppingRule(
+                description=self.experiment.stopping_rule or ""
+            )
+
         return ContractSection(
             identity=ExperimentIdentity(
                 name=self.experiment.name,
@@ -639,7 +658,7 @@ class ExperimentManifest(BaseModel):
             servers=list(self.servers),
             custom_env=dict(self.custom_env),
             max_generations=self.experiment.max_generations,
-            stopping_rule=StoppingRule(description=self.experiment.stopping_rule or ""),
+            stopping_rule=stopping_rule,
             baseline=self.baseline,
             tools=[
                 ToolRef.model_validate(t) if isinstance(t, dict) else t

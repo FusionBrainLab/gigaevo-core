@@ -166,12 +166,24 @@ class TestManifestContractView:
         m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
         assert m.contract.max_generations == m.experiment.max_generations
 
-    def test_contract_stopping_rule_description_from_flat_prose(self):
-        """v1 prose stopping_rule lifts into StoppingRule.description."""
+    def test_contract_stopping_rule_prefers_structured_top_level(self):
+        """When yaml has a top-level ``stopping_rule:`` dict, use the structured shape."""
         m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
-        assert m.experiment.stopping_rule  # prose exists on the flat yaml
+        rule = m.contract.stopping_rule
+        assert rule.description  # migrated yaml has both prose and structured form
+        assert rule.conditions, "migrated heilbron yaml carries structured conditions"
+        assert rule.conditions[0].kind in ("fitness_plateau", "invalidity_window")
+
+    def test_contract_stopping_rule_description_from_flat_prose_only(self):
+        """v1-shaped manifest (prose only, no structured dict) lifts into description."""
+        raw = _heilbron_v2_yaml()
+        # Strip both v2 locations: nested contract.stopping_rule and top-level stopping_rule
+        raw.pop("stopping_rule", None)
+        if isinstance(raw.get("contract"), dict):
+            raw["contract"].pop("stopping_rule", None)
+        assert raw["experiment"]["stopping_rule"]  # prose still present
+        m = ExperimentManifest.from_dict(raw)
         assert m.contract.stopping_rule.description == m.experiment.stopping_rule
-        # conditions stay empty until an explicit structured rule is authored
         assert m.contract.stopping_rule.conditions == []
 
 

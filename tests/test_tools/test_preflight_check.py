@@ -2,22 +2,42 @@
 
 from unittest.mock import MagicMock, patch
 
+from gigaevo.experiment.manifest import StopCondition, StoppingRule
 from gigaevo.experiment.preflight import run_checks
 
 
-def _make_manifest(stopping_rule=None, status="implemented", factorial_design=False):
-    """Return a minimal mock manifest suitable for run_checks."""
+def _make_manifest(
+    stopping_rule=None,
+    status="implemented",
+    factorial_design=False,
+    stopping_conditions=None,
+):
+    """Return a minimal mock manifest suitable for run_checks.
+
+    ``stopping_rule`` is the prose description (v1 shape). ``stopping_conditions``
+    is a list of StopCondition or dicts, exercising the structured v2 path in
+    Check 22.
+    """
     raw: dict = {"experiment": {}}
     if stopping_rule is not None:
         raw["experiment"]["stopping_rule"] = stopping_rule
     if factorial_design:
         raw["experiment"]["factorial_design"] = True
 
+    conditions = []
+    for c in stopping_conditions or []:
+        conditions.append(c if isinstance(c, StopCondition) else StopCondition(**c))
+    rule_obj = StoppingRule(
+        description=stopping_rule or "",
+        conditions=conditions,
+    )
+
     m = MagicMock()
     m.status = status
     m.runs = []
     m.servers = []
     m._raw = raw
+    m.contract.stopping_rule = rule_obj
     return m
 
 
@@ -111,6 +131,36 @@ class TestCheck22StoppingRule:
         assert c.num == 22
         assert c.group == "Design"
         assert c.severity == "CRITICAL"
+
+    def test_structured_conditions_pass_even_when_description_is_vague(self):
+        """Structured conditions[] are machine-checkable and override vague prose."""
+        manifest = _make_manifest(
+            stopping_rule="TBD",
+            stopping_conditions=[
+                {"kind": "fitness_plateau", "threshold": 0.03, "window": 25},
+            ],
+        )
+        with patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest):
+            results = run_checks("test/smoke")
+        c = _get_check(results, 22)
+        assert c.passed
+        assert "fitness_plateau" in c.message
+        assert "structured" in c.message
+
+    def test_structured_conditions_pass_without_description(self):
+        """Conditions-only stopping rule passes — description is optional."""
+        manifest = _make_manifest(
+            stopping_conditions=[
+                {"kind": "invalidity_window", "threshold": 0.75, "window": 10},
+                {"kind": "manual"},
+            ],
+        )
+        with patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest):
+            results = run_checks("test/smoke")
+        c = _get_check(results, 22)
+        assert c.passed
+        assert "invalidity_window" in c.message
+        assert "manual" in c.message
 
 
 class TestCheck15SingleIV:
