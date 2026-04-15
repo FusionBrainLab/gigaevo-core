@@ -659,11 +659,18 @@ class ExperimentManifest(BaseModel):
 
     @property
     def telemetry(self) -> TelemetryLog:
-        """TelemetryLog view derived from flat fields + raw extras."""
+        """TelemetryLog view derived from flat fields + raw extras.
+
+        Prefers a nested top-level ``telemetry:`` dict (v2 shape) over the
+        flat v1 extras. This lets migrated yamls surface checkpoint analysis,
+        mid-run test eval, and treatment checks correctly even after the
+        v1 flat fields have been stripped.
+        """
         extras = self.model_extra or {}
-        mre_raw = extras.get("mid_run_test_eval")
-        ca_raw = extras.get("checkpoint_analysis")
-        tc_raw = extras.get("treatment_checks")
+        nested = extras.get("telemetry") or {}
+        mre_raw = nested.get("mid_run_test_eval") or extras.get("mid_run_test_eval")
+        ca_raw = nested.get("checkpoint_analysis") or extras.get("checkpoint_analysis")
+        tc_raw = nested.get("treatment_checks") or extras.get("treatment_checks")
 
         mid_run = (
             MidRunTestEvalInfo.model_validate(mre_raw)
@@ -700,14 +707,42 @@ class ExperimentManifest(BaseModel):
 
     @property
     def control_plane(self) -> ControlPlane:
-        """ControlPlane view derived from flat fields + LaunchInfo extras."""
+        """ControlPlane view derived from flat fields + LaunchInfo extras.
+
+        Prefers a nested top-level ``control_plane:`` dict (v2 shape) over
+        the flat v1 fields. This lets migrated yamls surface watchdog PID,
+        cron IDs, and notification channels correctly once the v1 fields
+        under ``launch.*`` have been stripped.
+        """
+        extras = self.model_extra or {}
+        nested = extras.get("control_plane") or {}
         launch_extras = self.launch.model_extra or {}
+
+        watchdog_pid = nested.get("watchdog_pid")
+        if watchdog_pid is None:
+            watchdog_pid = self.launch.watchdog_pid
+        anomaly_cron = nested.get("anomaly_detector_cron_id") or launch_extras.get(
+            "anomaly_detector_cron_id"
+        )
+        checkpoint_cron = nested.get("checkpoint_cron_id") or launch_extras.get(
+            "checkpoint_cron_id"
+        )
+        watchdog = (
+            WatchdogSection.model_validate(nested["watchdog"])
+            if isinstance(nested.get("watchdog"), dict)
+            else self.watchdog
+        )
+        notifications = (
+            NotificationsSection.model_validate(nested["notifications"])
+            if isinstance(nested.get("notifications"), dict)
+            else NotificationsSection()
+        )
         return ControlPlane(
-            watchdog=self.watchdog,
-            notifications=NotificationsSection(),  # v1 has no notifications — defaults
-            watchdog_pid=self.launch.watchdog_pid,
-            anomaly_detector_cron_id=launch_extras.get("anomaly_detector_cron_id"),
-            checkpoint_cron_id=launch_extras.get("checkpoint_cron_id"),
+            watchdog=watchdog,
+            notifications=notifications,
+            watchdog_pid=watchdog_pid,
+            anomaly_detector_cron_id=anomaly_cron,
+            checkpoint_cron_id=checkpoint_cron,
         )
 
     @classmethod
@@ -800,22 +835,52 @@ def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
 
     src = copy.deepcopy(raw)
 
+    # Allow idempotent re-runs: if the input already carries v2 sub-sections,
+    # prefer their content over the flat fallbacks so values that were lifted
+    # on a previous pass (e.g. ``control_plane.watchdog_pid``) survive.
+    existing_contract = src.get("contract", {}) or {}
+    existing_lifecycle = src.get("lifecycle", {}) or {}
+    existing_telemetry = src.get("telemetry", {}) or {}
+    existing_control_plane = src.get("control_plane", {}) or {}
+
     exp = src.get("experiment", {}) or {}
-    problem = src.get("problem", {}) or {}
-    runs = src.get("runs", []) or []
-    servers = src.get("servers", []) or []
+    problem = src.get("problem", {}) or existing_contract.get("problem", {}) or {}
+    runs = src.get("runs", []) or existing_contract.get("runs", []) or []
+    servers = src.get("servers", []) or existing_contract.get("servers", []) or []
     config_raw = src.get("config", {}) or {}
-    custom_env = src.get("custom_env", {}) or {}
-    baseline = src.get("baseline", {}) or {}
-    tools = src.get("tools", []) or []
-    launch = dict(src.get("launch", {}) or {})
-    smoke_test = src.get("smoke_test", {}) or {}
-    treatment_verification = src.get("treatment_verification", {}) or {}
-    watchdog = src.get("watchdog", {}) or {}
-    checkpoints = src.get("checkpoints", []) or []
-    mid_run_test_eval = src.get("mid_run_test_eval", {}) or {}
-    checkpoint_analysis = src.get("checkpoint_analysis", {}) or {}
-    treatment_checks_raw = src.get("treatment_checks")
+    custom_env = (
+        src.get("custom_env", {}) or existing_contract.get("custom_env", {}) or {}
+    )
+    baseline = src.get("baseline", {}) or existing_contract.get("baseline", {}) or {}
+    tools = src.get("tools", []) or existing_contract.get("tools", []) or []
+    launch = dict(src.get("launch", {}) or existing_lifecycle.get("launch", {}) or {})
+    smoke_test = (
+        src.get("smoke_test", {}) or existing_lifecycle.get("smoke_test", {}) or {}
+    )
+    treatment_verification = (
+        src.get("treatment_verification", {})
+        or existing_lifecycle.get("treatment_verification", {})
+        or {}
+    )
+    watchdog = (
+        src.get("watchdog", {}) or existing_control_plane.get("watchdog", {}) or {}
+    )
+    checkpoints = (
+        src.get("checkpoints", []) or existing_telemetry.get("checkpoints", []) or []
+    )
+    mid_run_test_eval = (
+        src.get("mid_run_test_eval", {})
+        or existing_telemetry.get("mid_run_test_eval", {})
+        or {}
+    )
+    checkpoint_analysis = (
+        src.get("checkpoint_analysis", {})
+        or existing_telemetry.get("checkpoint_analysis", {})
+        or {}
+    )
+    treatment_checks_raw = src.get("treatment_checks") or existing_telemetry.get(
+        "treatment_checks"
+    )
 
     # contract.identity — pull identity fields off of ``experiment.*``
     identity = {
@@ -863,9 +928,17 @@ def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
     # control_plane sidecars (cron IDs + watchdog PID) are pulled off launch.*
-    watchdog_pid = launch.pop("watchdog_pid", None)
-    anomaly_cron = launch.pop("anomaly_detector_cron_id", None)
-    checkpoint_cron = launch.pop("checkpoint_cron_id", None)
+    # with fallback to an already-lifted nested ``control_plane`` section so
+    # re-running the migration on v2 input is idempotent.
+    watchdog_pid = launch.pop("watchdog_pid", None) or existing_control_plane.get(
+        "watchdog_pid"
+    )
+    anomaly_cron = launch.pop(
+        "anomaly_detector_cron_id", None
+    ) or existing_control_plane.get("anomaly_detector_cron_id")
+    checkpoint_cron = launch.pop(
+        "checkpoint_cron_id", None
+    ) or existing_control_plane.get("checkpoint_cron_id")
 
     lifecycle = {
         "status": exp.get("status", "preregistered"),

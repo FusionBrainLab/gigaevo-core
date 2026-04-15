@@ -223,16 +223,15 @@ class TestManifestControlPlaneView:
         assert m.control_plane.watchdog == m.watchdog
 
     def test_watchdog_pid_lifts_from_launch(self):
+        """``watchdog_pid`` is sourced from either the v1 flat ``launch.*``
+        field or the v2 nested ``control_plane.watchdog_pid`` — whichever
+        is present in the manifest."""
         m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
-        # heilbron-v2 has launch.watchdog_pid: 1133798
-        assert m.control_plane.watchdog_pid == m.launch.watchdog_pid
         assert m.control_plane.watchdog_pid == 1133798
 
     def test_cron_ids_lift_from_launch_extras(self):
-        """launch.anomaly_detector_cron_id and launch.checkpoint_cron_id
-        are v1 dotted fields dropped by LaunchInfo.extra='ignore'. For v1
-        inputs we surface them on control_plane via the raw dict.
-        """
+        """Cron IDs live under ``control_plane.*`` in v2; v1 kept them under
+        ``launch.*``. The migration and property resolver accept either."""
         m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
         assert m.control_plane.anomaly_detector_cron_id == "17f15a1c"
         assert m.control_plane.checkpoint_cron_id == "1960d819"
