@@ -61,12 +61,12 @@ def watchdog(
     from gigaevo.monitoring.watchdog_plugin import get_registry, resolve_plugin
 
     manifest = load_manifest(experiment)
-    watchdog_manifest = manifest.watchdog
+    watchdog_manifest = manifest.control_plane.watchdog
 
     # Auto-configure NO_PROXY from manifest servers
     no_proxy = os.environ.get("NO_PROXY", "")
     extra_hosts = (
-        list(manifest.servers)
+        list(manifest.contract.servers)
         + ["api.github.com"]
         + list(watchdog_manifest.no_proxy_hosts)
     )
@@ -110,7 +110,7 @@ def watchdog(
     # Build RunConfigs from manifest
     run_configs = []
     metric_names = list(watchdog_manifest.plot_metrics) or ["fitness"]
-    for run in manifest.runs:
+    for run in manifest.contract.runs:
         spec = RunSpec(prefix=run.prefix, db=run.db, label=run.label, role=run.role)
         rc = RunConfig(run_spec=spec, metric_names=metric_names, pid=run.pid)
         run_configs.append(rc)
@@ -151,7 +151,7 @@ def watchdog(
         plugin=plugin,
         run_configs=run_configs,
         config=config,
-        max_generations=max_generations or manifest.experiment.max_generations,
+        max_generations=max_generations or manifest.contract.max_generations,
         dispatcher=dispatcher,
     )
     engine.run()

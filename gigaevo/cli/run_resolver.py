@@ -115,7 +115,7 @@ class RunResolver:
     def _resolve_from_experiment(experiment: str) -> list[RunConfig]:
         manifest = _load_manifest(experiment)
         configs = []
-        for run in manifest.runs:
+        for run in manifest.contract.runs:
             spec = RunSpec(prefix=run.prefix, db=run.db, label=run.label)
             metric_names = _load_metric_names(run.problem_name)
             configs.append(

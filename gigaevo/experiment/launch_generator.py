@@ -32,7 +32,7 @@ def generate(experiment: str) -> str:
     exp_dir_rel = f"experiments/{experiment}"
 
     # Collect all server IPs for NO_PROXY
-    no_proxy_hosts = ["localhost", "127.0.0.1", "api.github.com"] + m.servers
+    no_proxy_hosts = ["localhost", "127.0.0.1", "api.github.com"] + m.contract.servers
     no_proxy = ",".join(no_proxy_hosts)
 
     lines: list[str] = []
@@ -44,14 +44,14 @@ def generate(experiment: str) -> str:
         f"# Regenerate: PYTHONPATH=. $GIGAEVO_PYTHON tools/experiment/generate_launch.py --experiment {experiment}"
     )
     lines.append("#")
-    lines.append(f"# Experiment: {m.name}")
-    lines.append(f"# Branch: {m.branch}")
-    if m.pr_number:
-        lines.append(f"# PR: #{m.pr_number}")
-    if m.prereg_commit:
-        lines.append(f"# Pre-reg commit: {m.prereg_commit}")
+    lines.append(f"# Experiment: {m.contract.identity.name}")
+    lines.append(f"# Branch: {m.contract.identity.branch}")
+    if m.contract.identity.pr_number:
+        lines.append(f"# PR: #{m.contract.identity.pr_number}")
+    if m.contract.identity.prereg_commit:
+        lines.append(f"# Pre-reg commit: {m.contract.identity.prereg_commit}")
     lines.append("#")
-    lines.append(f"# Runs: {', '.join(r.label for r in m.runs)}")
+    lines.append(f"# Runs: {', '.join(r.label for r in m.contract.runs)}")
     lines.append("")
     lines.append("set -euo pipefail")
     lines.append("")
@@ -67,11 +67,11 @@ def generate(experiment: str) -> str:
     lines.append("")
 
     # Custom env vars
-    if m.custom_env:
+    if m.contract.custom_env:
         lines.append(
             "# Task-specific environment variables (from experiment.yaml custom_env)"
         )
-        for key, val in m.custom_env.items():
+        for key, val in m.contract.custom_env.items():
             lines.append(f'export {key}="{val}"')
         lines.append("")
 
@@ -80,11 +80,11 @@ def generate(experiment: str) -> str:
         'echo "================================================================"'
     )
     lines.append(
-        f"echo \"{m.name} experiment launch — $(date -u '+%Y-%m-%d %H:%M UTC')\""
+        f"echo \"{m.contract.identity.name} experiment launch — $(date -u '+%Y-%m-%d %H:%M UTC')\""
     )
-    if m.prereg_commit:
-        lines.append(f'echo "Pre-reg commit: {m.prereg_commit}"')
-    for run in m.runs:
+    if m.contract.identity.prereg_commit:
+        lines.append(f'echo "Pre-reg commit: {m.contract.identity.prereg_commit}"')
+    for run in m.contract.runs:
         lines.append(f'echo "{run.label}: {run.condition} — pipeline={run.pipeline}"')
     lines.append(
         'echo "================================================================"'
@@ -106,7 +106,7 @@ def generate(experiment: str) -> str:
     lines.append(
         "# ── Config verification (--cfg job) ───────────────────────────────────────"
     )
-    for run in m.runs:
+    for run in m.contract.runs:
         lines.append(f'echo "--- {run.label} config ---"')
         cfg_cmd = _build_run_cmd(run, m, cfg_only=True)
         lines.append('"$PYTHON" "$PROJ/run.py" \\')
@@ -137,7 +137,7 @@ def generate(experiment: str) -> str:
         "# ── Launch runs ────────────────────────────────────────────────────────────"
     )
     pid_vars: list[str] = []
-    for run in m.runs:
+    for run in m.contract.runs:
         pid_var = f"PID_{run.label.replace('-', '_')}"
         pid_vars.append(pid_var)
         cmd_params = _build_run_cmd(run, m, cfg_only=False)
@@ -146,7 +146,7 @@ def generate(experiment: str) -> str:
         # skip if null — the global export from custom_env handles shared LB)
         env_prefix = ""
         if run.chain_url:
-            chain_url_env_var = m.config.get("chain_url_env_var", "CHAIN_URL")
+            chain_url_env_var = m.contract.config.get("chain_url_env_var", "CHAIN_URL")
             env_prefix = f'{chain_url_env_var}="{run.chain_url}" '
 
         lines.append(f"# ── Run {run.label}: {run.condition}")
@@ -168,13 +168,13 @@ def generate(experiment: str) -> str:
     lines.append(
         'echo "================================================================"'
     )
-    lines.append(f'echo "All {len(m.runs)} runs launched."')
+    lines.append(f'echo "All {len(m.contract.runs)} runs launched."')
 
-    pid_echo = "  ".join(f"{r.label}=$PID_{r.label.replace('-', '_')}" for r in m.runs)
+    pid_echo = "  ".join(f"{r.label}=$PID_{r.label.replace('-', '_')}" for r in m.contract.runs)
     lines.append(f'echo "PIDs: {pid_echo}"')
 
     # Write PIDs to file
-    pid_file_content = " ".join(f"$PID_{r.label.replace('-', '_')}" for r in m.runs)
+    pid_file_content = " ".join(f"$PID_{r.label.replace('-', '_')}" for r in m.contract.runs)
     lines.append(f'echo "{pid_file_content}" > "$LOG_DIR/pids.txt"')
     lines.append("")
 
@@ -184,7 +184,7 @@ def generate(experiment: str) -> str:
     )
     lines.append("sleep 5")
     lines.append("ALL_ALIVE=true")
-    for run in m.runs:
+    for run in m.contract.runs:
         pv = f"PID_{run.label.replace('-', '_')}"
         lines.append(
             f'kill -0 ${pv} 2>/dev/null || {{ echo "DEAD: {run.label} (PID=${pv})"; ALL_ALIVE=false; }}'
@@ -200,7 +200,7 @@ def generate(experiment: str) -> str:
     lines.append(
         "# ── Record PIDs in experiment.yaml ────────────────────────────────────────"
     )
-    label_list = " ".join(r.label for r in m.runs)
+    label_list = " ".join(r.label for r in m.contract.runs)
     lines.append(
         f"gigaevo -e {experiment} manifest record-pids"
         f' --pids-file "$LOG_DIR/pids.txt"'
@@ -223,7 +223,7 @@ def generate(experiment: str) -> str:
 
 def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
     """Build run.py command-line parameters for a run."""
-    c = manifest.config
+    c = manifest.contract.config
     params = [
         f"problem.name={run.problem_name}",
         f"pipeline={run.pipeline}",
@@ -231,7 +231,7 @@ def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
         f"redis.db={run.db}",
         f"stage_timeout={c.get('stage_timeout', 3000)}",
         f"dag_timeout={c.get('dag_timeout', 7200)}",
-        f"max_generations={manifest.max_generations}",
+        f"max_generations={manifest.contract.max_generations}",
         f"max_mutations_per_generation={c.get('max_mutations_per_generation', 8)}",
         f"max_elites_per_generation={c.get('max_elites_per_generation', 8)}",
         f"num_parents={c.get('num_parents', 1)}",

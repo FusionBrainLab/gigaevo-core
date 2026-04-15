@@ -27,7 +27,7 @@ def _load_metric_specs(experiment: str | None) -> dict[str, dict]:
         manifest = _load_manifest(experiment)
         all_specs: dict[str, dict] = {}
         seen: set[str] = set()
-        for run in manifest.runs:
+        for run in manifest.contract.runs:
             if run.problem_name not in seen:
                 seen.add(run.problem_name)
                 path = Path("problems") / run.problem_name / "metrics.yaml"
