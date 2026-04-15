@@ -372,8 +372,10 @@ def run_checks(experiment: str) -> list[CheckResult]:
     c9 = CheckResult(9, "Redis", "dbsize() == 0 for all run DBs", "CRITICAL")
     try:
         issues = []
+        redis_host = os.environ.get("REDIS_HOST", "localhost")
+        redis_port = int(os.environ.get("REDIS_PORT", "6379"))
         for run in m.runs:
-            r = redis.Redis(host="localhost", port=6379, db=run.db)
+            r = redis.Redis(host=redis_host, port=redis_port, db=run.db)
             size = r.dbsize()
             if size > 0:
                 msg = f"DB {run.db}: {size} keys (flush first)"
@@ -457,8 +459,8 @@ def run_checks(experiment: str) -> list[CheckResult]:
     # the `watchdog:` section in experiment.yaml. No run_watchdog.py needed.
     c12 = CheckResult(12, "Files", "Watchdog configured (CLI mode)", "CRITICAL")
     try:
-        wd_cfg = m._raw.get("watchdog") or {}
-        plugin = wd_cfg.get("plugin")
+        # Access watchdog via Pydantic model, not _raw (which doesn't exist post-refactor)
+        plugin = m.watchdog.plugin if m.watchdog else None
         if not plugin:
             c12.fail(
                 "watchdog.plugin not set in experiment.yaml. "
@@ -513,7 +515,10 @@ def run_checks(experiment: str) -> list[CheckResult]:
     # ── Check 15: Single IV per comparison ──────────────────────────────────
     c15 = CheckResult(15, "Design", "Single IV per run comparison", "MAJOR")
     try:
-        is_factorial = m._raw.get("experiment", {}).get("factorial_design", False)
+        # Read factorial_design from manifest raw dump (backward compat for YAML files that have it)
+        is_factorial = (
+            m.model_dump().get("experiment", {}).get("factorial_design", False)
+        )
         # Group runs by (pipeline, problem_name) to identify cells
         cells: dict[tuple[str, str], list[str]] = {}
         for r in m.runs:
@@ -584,7 +589,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
     # ── Check 18: Test-set usage count (conditional) ────────────────────────
     c18 = CheckResult(18, "Test", "Test-set usage count", "WARN")
     if m.problem.has_test_set:
-        c18.ok("Usage tracking not yet implemented")
+        c18.ok("PLACEHOLDER: test-set usage count not yet implemented")
     else:
         c18.ok("N/A (no test set)")
     results.append(c18)
@@ -599,9 +604,9 @@ def run_checks(experiment: str) -> list[CheckResult]:
 
     # ── Check 20: Treatment verification completed ────────────────────────
     c20 = CheckResult(20, "Treatment", "Treatment verification completed", "CRITICAL")
-    tv = m._raw.get("treatment_verification", {})
-    if tv.get("completed"):
-        c20.ok(f"Completed at {tv.get('completed_at', 'unknown')}")
+    tv = m.treatment_verification
+    if tv.completed:
+        c20.ok(f"Completed at {tv.completed_at or 'unknown'}")
     else:
         c20.fail(
             "treatment_verification.completed is false/missing in experiment.yaml. "
@@ -747,7 +752,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
     # ── Check 22: Stopping rule present and non-vague ────────────────────────
     c22 = CheckResult(22, "Design", "Stopping rule present and non-vague", "CRITICAL")
     try:
-        stopping_rule = m._raw.get("experiment", {}).get("stopping_rule", "")
+        stopping_rule = m.experiment.stopping_rule or ""
         if not stopping_rule or not str(stopping_rule).strip():
             c22.fail(
                 "experiment.stopping_rule not set in experiment.yaml. "

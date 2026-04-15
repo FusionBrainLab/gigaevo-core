@@ -161,7 +161,9 @@ class TestInvalidTransitions:
 
 
 class TestRecovery:
-    def test_running_to_implemented_allowed_with_allow_recovery_true(self, tmp_path, fake_redis):
+    def test_running_to_implemented_allowed_with_allow_recovery_true(
+        self, tmp_path, fake_redis
+    ):
         """Running → implemented transition is allowed when allow_recovery=True."""
         exp_dir = tmp_path / "experiments" / "hover" / "test-exp"
         exp_dir.mkdir(parents=True)
@@ -192,9 +194,7 @@ class TestRecovery:
             patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
         ):
             # With allow_recovery=True, the transition is allowed
-            manifest = set_status(
-                "hover/test-exp", "implemented", allow_recovery=True
-            )
+            manifest = set_status("hover/test-exp", "implemented", allow_recovery=True)
             assert manifest.experiment.status == "implemented"
 
             # PIDs should still be present

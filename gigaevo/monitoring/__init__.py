@@ -1,10 +1,10 @@
 """GigaEvo monitoring library -- shared Redis queries, snapshots, and alerts."""
 
+from gigaevo.experiment.manifest import ExperimentManifest, export_json_schema
 from gigaevo.monitoring.alerts import Alert, AlertDetector, AlertSeverity, AlertType
 from gigaevo.monitoring.dispatcher import DispatchResult, NotificationDispatcher
 from gigaevo.monitoring.experiment_monitor import ExperimentMonitor, RunConfig
 from gigaevo.monitoring.github_pr_channel import GitHubPRChannel
-from gigaevo.experiment.manifest import ExperimentManifest, export_json_schema
 from gigaevo.monitoring.notifications import (
     NotificationChannel,
     PlotAttachment,

@@ -68,7 +68,7 @@ def _make_manifest(
     return m
 
 
-_MANIFEST_MOD = "gigaevo.monitoring.manifest"
+_MANIFEST_MOD = "gigaevo.experiment.manifest"
 
 
 # ---------------------------------------------------------------------------

@@ -172,6 +172,16 @@ class SmokeTestInfo(BaseModel):
     completed_at: str | None = None
 
 
+class TreatmentVerificationInfo(BaseModel):
+    """Treatment verification state."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    completed: bool = False
+    completed_at: str | None = None
+    note: str = ""
+
+
 class ExperimentSection(BaseModel):
     """The 'experiment' section of experiment.yaml."""
 
@@ -185,6 +195,9 @@ class ExperimentSection(BaseModel):
     pr_number: int | None = None
     tracking_issue: int | None = None
     prereg_commit: str | None = None
+    stopping_rule: str = ""
+    inner_iterations: int | None = None
+    supersedes: str | None = None
 
     @field_validator("status")
     @classmethod
@@ -225,6 +238,7 @@ class ExperimentManifest(BaseModel):
     smoke_test: SmokeTestInfo = SmokeTestInfo()
     tools: list[dict[str, str]] = []
     watchdog: WatchdogSection = WatchdogSection()
+    treatment_verification: TreatmentVerificationInfo = TreatmentVerificationInfo()
 
     @field_validator("schema_version")
     @classmethod
@@ -598,7 +612,9 @@ def generate_pr_description(experiment: str) -> str:
         "",
         f"**Status**: {badge}",
         f"**Branch**: `{m.experiment.branch}`",
-        f"**Tracking issue**: #{m.experiment.tracking_issue}" if m.experiment.tracking_issue else "",
+        f"**Tracking issue**: #{m.experiment.tracking_issue}"
+        if m.experiment.tracking_issue
+        else "",
         "",
         "## Design",
         "",

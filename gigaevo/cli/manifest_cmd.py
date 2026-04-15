@@ -82,9 +82,7 @@ def _traverse_raw(raw: dict[str, Any], dotted_path: str) -> Any:
             if not isinstance(seq, list):
                 raise KeyError(dotted_path)
             if not (-len(seq) <= idx < len(seq)):
-                raise KeyError(
-                    f"{dotted_path} (index {idx} out of range for {key})"
-                )
+                raise KeyError(f"{dotted_path} (index {idx} out of range for {key})")
             current = seq[idx]
         else:
             # Plain dict key: 'launch' or 'experiment'

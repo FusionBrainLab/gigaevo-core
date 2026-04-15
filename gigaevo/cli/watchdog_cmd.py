@@ -49,9 +49,9 @@ def watchdog(
         return
 
     # Lazy imports to keep CLI startup fast
+    from gigaevo.experiment.manifest import load_manifest
     from gigaevo.monitoring.dispatcher import NotificationDispatcher
     from gigaevo.monitoring.experiment_monitor import RunConfig
-    from gigaevo.experiment.manifest import load_manifest
     from gigaevo.monitoring.notifications import NotificationChannel
     import gigaevo.monitoring.plugins  # noqa: F401 — triggers @register decorators
     from gigaevo.monitoring.run_spec import RunSpec
