@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 import yaml
@@ -179,6 +179,195 @@ class TreatmentVerificationInfo(BaseModel):
     completed: bool = False
     completed_at: str | None = None
     note: str = ""
+
+
+# ---------------------------------------------------------------------------
+# New typed sub-models for schema v2 (added additively in step 3).
+#
+# These are not yet wired into ExperimentManifest — step 4 will introduce the
+# ContractSection / LifecycleState / TelemetryLog / ControlPlane groups that
+# use them. For now they exist as first-class, round-trippable types so
+# downstream code (migration script, preflight, checkpoint skill) can start
+# consuming them in subsequent steps.
+# ---------------------------------------------------------------------------
+
+
+class RunMetric(BaseModel):
+    """One row inside ``CheckpointEntry.run_metrics``.
+
+    Metric field names vary by problem (``best_fitness``, ``best_actual_fitness``,
+    ``best_retrieval_coverage``, ...). We keep ``extra="allow"`` so the field
+    round-trips unchanged regardless of problem type.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str
+    gen: int
+    recent_invalidity: float | None = None
+
+
+class CheckpointEntry(BaseModel):
+    """One entry in the manifest's ``checkpoints`` list."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    gen: int
+    timestamp: str
+    run_metrics: list[RunMetric] = []
+    notes: str = ""
+    metric_name: str | None = None
+
+
+class MidRunTestEvalInfo(BaseModel):
+    """State for the mid-run test set evaluation gate.
+
+    Shape varies across v1 yamls: some use a ``results`` dict per run, others
+    write free-form ``notes``. ``extra="allow"`` keeps both shapes safe.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    completed: bool = False
+    completed_at: str | None = None
+    notes: str = ""
+    results: dict[str, Any] | None = None
+
+
+class CheckpointAnalysisEntry(BaseModel):
+    """Per-stage analyst entry (e.g. ``mid_run``)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    completed: bool = False
+    completed_at: str | None = None
+    summary: str = ""
+    notes: str = ""
+
+
+class CheckpointAnalysisInfo(BaseModel):
+    """Checkpoint analyst state, keyed by stage.
+
+    ``extra="allow"`` so future stages (``final``, ``post_freeze``, ...) round-trip
+    without schema changes.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    mid_run: CheckpointAnalysisEntry = CheckpointAnalysisEntry()
+
+
+class CheckResult(BaseModel):
+    """Result of one treatment verification check."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    passed: bool
+    detail: str = ""
+
+
+class TreatmentChecksInfo(BaseModel):
+    """Target v2 shape for treatment-check verification state.
+
+    The v1 yamls store this field in multiple shapes (list of checks, dict of
+    pattern lists, ...). The migration script in step 6 normalizes them into
+    this single shape.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    completed: bool = False
+    completed_at: str | None = None
+    results: list[CheckResult] = []
+
+
+class StopCondition(BaseModel):
+    """Structured component of ``StoppingRule.conditions``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    kind: Literal["invalidity_window", "fitness_plateau", "manual"]
+    threshold: float | None = None
+    window: int | None = None
+    note: str = ""
+
+
+class StoppingRule(BaseModel):
+    """Structured stopping rule — replaces the unenforced prose string in v2.
+
+    ``description`` preserves the pre-registered prose; ``conditions`` holds the
+    machine-checkable variant; ``enforce_at`` selects whether the engine, the
+    checkpoint skill, or neither enforces the rule. Engine enforcement is
+    deferred to a follow-up PR (see plan §Stopping Rule).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    description: str = ""
+    conditions: list[StopCondition] = []
+    enforce_at: Literal["engine", "checkpoint", "none"] = "checkpoint"
+
+
+class ToolRef(BaseModel):
+    """Reference to an auxiliary tool/script used by the experiment."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    path: str = ""
+    purpose: str = ""
+
+
+class ConfigSpec(BaseModel):
+    """Shared Hydra config overrides.
+
+    Standard keys are typed; problem-specific extras live in ``extra`` so the
+    model doesn't have to know every Hydra override that experiments use.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    problem_name: str | None = None
+    pipeline: str | None = None
+    prompt_fetcher: str | None = None
+    evolution: str | None = None
+    llm_model: str | None = None
+    n_workers: int | None = None
+    max_generations: int | None = None
+    extra: dict[str, Any] = {}
+
+
+class PrChannelConfig(BaseModel):
+    """PR notification channel configuration."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    comment_mode: Literal["new", "rolling"] = "rolling"
+
+
+class TelegramChannelConfig(BaseModel):
+    """Telegram notification channel configuration.
+
+    Token and chat-id are always read from the environment — the manifest
+    only records which env-var names to consult, never the secrets themselves.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    chat_id_env: str = "TELEGRAM_CHAT_ID"
+    token_env: str = "TELEGRAM_BOT_TOKEN"
+
+
+class NotificationsSection(BaseModel):
+    """Notification channel configuration (v2)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    pr: PrChannelConfig = PrChannelConfig()
+    telegram: TelegramChannelConfig = TelegramChannelConfig()
 
 
 class ExperimentSection(BaseModel):
@@ -689,6 +878,21 @@ __all__ = [
     "WatchdogSection",
     "AlertThresholds",
     "PlotCommand",
+    # v2 sub-models (added step 3 — not yet wired into ExperimentManifest)
+    "RunMetric",
+    "CheckpointEntry",
+    "MidRunTestEvalInfo",
+    "CheckpointAnalysisEntry",
+    "CheckpointAnalysisInfo",
+    "CheckResult",
+    "TreatmentChecksInfo",
+    "StopCondition",
+    "StoppingRule",
+    "ToolRef",
+    "ConfigSpec",
+    "PrChannelConfig",
+    "TelegramChannelConfig",
+    "NotificationsSection",
     "export_json_schema",
     "experiment_dir",
     "manifest_path",
