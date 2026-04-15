@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
+from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 import yaml
 
@@ -731,7 +732,13 @@ class ExperimentManifest(BaseModel):
 
     @classmethod
     def from_yaml_file(cls, path: str | Path) -> ExperimentManifest:
-        """Load and validate from a YAML file path."""
+        """Load and validate from a YAML file path.
+
+        Uses OmegaConf so ``${oc.env:NAME,default}`` and cross-section
+        interpolations like ``${experiment.max_generations}`` resolve at load
+        time. A missing env var with no default raises loudly rather than
+        leaving a literal ``${...}`` string in the manifest.
+        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(
@@ -739,12 +746,19 @@ class ExperimentManifest(BaseModel):
                 f"Create one from experiments/_template/experiment.yaml"
             )
         try:
-            content = path.read_text()
-        except OSError as exc:
-            raise ValueError(f"Cannot read {path}: {exc}") from exc
+            raw = _load_yaml_with_omegaconf(path)
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to load {path}: {exc}\nRecovery: git checkout {path}"
+            ) from exc
+
+        if not isinstance(raw, dict):
+            raise ValueError(f"{path} must be a YAML mapping, not {type(raw).__name__}")
 
         try:
-            return cls.from_yaml(content)
+            return cls.from_dict(raw)
         except ValueError as exc:
             raise ValueError(
                 f"Validation failed for {path}:\n{exc}\nRecovery: git checkout {path}"
@@ -937,12 +951,36 @@ def manifest_path(experiment: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _load_yaml_with_omegaconf(path: Path) -> Any:
+    """Load a YAML file via OmegaConf, resolving ``${...}`` interpolations.
+
+    Supports ``${oc.env:NAME,default}`` for env-var secrets and
+    cross-section references like ``${experiment.max_generations}``.
+    Missing ``${oc.env:X}`` with no default raises loudly rather than
+    leaving a literal ``${...}`` string in the manifest.
+
+    Convention for pass-through interpolations (OmegaConf-native):
+    Strings meant to survive into downstream Hydra composition — e.g.
+    ``post_step_hook=${composition_injection_hook}`` inside
+    ``runs[].extra_overrides`` — must be escaped in YAML as
+    ``post_step_hook=\\${composition_injection_hook}``. OmegaConf treats
+    ``\\${...}`` as a literal dollar; the backslash is stripped during
+    ``to_container`` and the string arrives in the manifest as
+    ``post_step_hook=${composition_injection_hook}`` — ready for
+    ``run.py``'s Hydra compose step to resolve.
+    """
+    cfg = OmegaConf.load(path)
+    return OmegaConf.to_container(cfg, resolve=True)
+
+
 def load_manifest(experiment: str) -> ExperimentManifest:
     """Load and validate experiment.yaml.
 
+    Uses OmegaConf so ``${oc.env:NAME,default}`` and cross-section
+    interpolations resolve at load time.
+
     Raises FileNotFoundError if the file doesn't exist.
-    Raises ValueError on schema validation failure.
-    Raises yaml.YAMLError on parse failure (with path hint).
+    Raises ValueError on schema validation failure or interpolation failure.
     """
     path = manifest_path(experiment)
     if not path.exists():
@@ -952,11 +990,10 @@ def load_manifest(experiment: str) -> ExperimentManifest:
         )
 
     try:
-        with open(path) as f:
-            raw = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise yaml.YAMLError(
-            f"Failed to parse {path}: {e}\n"
+        raw = _load_yaml_with_omegaconf(path)
+    except Exception as e:
+        raise ValueError(
+            f"Failed to load {path}: {e}\n"
             f"Recovery: git checkout {path.relative_to(PROJ)}"
         ) from e
 
