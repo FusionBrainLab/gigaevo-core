@@ -41,7 +41,7 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 def _minimal_preregistered() -> dict:
     """Minimal valid manifest at status=preregistered."""
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment": {
             "name": "hover/test",
             "task": "hover",

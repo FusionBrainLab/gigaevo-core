@@ -28,7 +28,7 @@ def _minimal_manifest_dict(
 ) -> dict:
     """Minimal valid manifest for initial preregistered state."""
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment": {
             "name": name,
             "task": task,

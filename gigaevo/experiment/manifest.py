@@ -36,7 +36,7 @@ from gigaevo.experiment.lock import (
 
 PROJ = Path(__file__).parent.parent.parent
 
-SUPPORTED_SCHEMA_VERSIONS = {1, 2}
+SUPPORTED_SCHEMA_VERSIONS = {2}
 VALID_STATUSES = {"preregistered", "implemented", "running", "complete", "invalid"}
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -815,196 +815,6 @@ def export_json_schema(output_path: str | Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# v1 → v2 migration (pure dict transform used by step 6 migration CLI)
-# ---------------------------------------------------------------------------
-
-
-def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
-    """Transform a flat v1 manifest dict into a nested v2 dict.
-
-    Input (v1):   top-level ``experiment``, ``runs``, ``watchdog``, ``launch``,
-                  ``checkpoints``, etc. scattered across the root.
-    Output (v2):  four sub-sections ``contract`` / ``lifecycle`` / ``telemetry``
-                  / ``control_plane`` with the same content re-homed.
-
-    This is a pure function — the input dict is not mutated. The output must
-    validate against ``ExperimentManifest`` (which accepts both shapes during
-    the transition).
-    """
-    import copy
-
-    src = copy.deepcopy(raw)
-
-    # Allow idempotent re-runs: if the input already carries v2 sub-sections,
-    # prefer their content over the flat fallbacks so values that were lifted
-    # on a previous pass (e.g. ``control_plane.watchdog_pid``) survive.
-    existing_contract = src.get("contract", {}) or {}
-    existing_lifecycle = src.get("lifecycle", {}) or {}
-    existing_telemetry = src.get("telemetry", {}) or {}
-    existing_control_plane = src.get("control_plane", {}) or {}
-
-    exp = src.get("experiment", {}) or {}
-    problem = src.get("problem", {}) or existing_contract.get("problem", {}) or {}
-    runs = src.get("runs", []) or existing_contract.get("runs", []) or []
-    servers = src.get("servers", []) or existing_contract.get("servers", []) or []
-    config_raw = src.get("config", {}) or {}
-    custom_env = (
-        src.get("custom_env", {}) or existing_contract.get("custom_env", {}) or {}
-    )
-    baseline = src.get("baseline", {}) or existing_contract.get("baseline", {}) or {}
-    tools = src.get("tools", []) or existing_contract.get("tools", []) or []
-    launch = dict(src.get("launch", {}) or existing_lifecycle.get("launch", {}) or {})
-    smoke_test = (
-        src.get("smoke_test", {}) or existing_lifecycle.get("smoke_test", {}) or {}
-    )
-    treatment_verification = (
-        src.get("treatment_verification", {})
-        or existing_lifecycle.get("treatment_verification", {})
-        or {}
-    )
-    watchdog = (
-        src.get("watchdog", {}) or existing_control_plane.get("watchdog", {}) or {}
-    )
-    checkpoints = (
-        src.get("checkpoints", []) or existing_telemetry.get("checkpoints", []) or []
-    )
-    mid_run_test_eval = (
-        src.get("mid_run_test_eval", {})
-        or existing_telemetry.get("mid_run_test_eval", {})
-        or {}
-    )
-    checkpoint_analysis = (
-        src.get("checkpoint_analysis", {})
-        or existing_telemetry.get("checkpoint_analysis", {})
-        or {}
-    )
-    treatment_checks_raw = src.get("treatment_checks") or existing_telemetry.get(
-        "treatment_checks"
-    )
-
-    # contract.identity — pull identity fields off of ``experiment.*``
-    identity = {
-        "name": exp.get("name"),
-        "task": exp.get("task"),
-        "branch": exp.get("branch", ""),
-        "prereg_commit": exp.get("prereg_commit") or src.get("prereg_commit"),
-        "pr_number": exp.get("pr_number") or src.get("pr_number"),
-        "tracking_issue": exp.get("tracking_issue") or src.get("tracking_issue"),
-    }
-
-    # contract.config — v1 is a flat dict; v2 nests problem-specific knobs
-    # under ``extra`` so the typed keys stay separate.
-    typed_cfg_keys = {
-        "problem_name",
-        "pipeline",
-        "prompt_fetcher",
-        "evolution",
-        "llm_model",
-        "n_workers",
-        "max_generations",
-    }
-    cfg_typed = {k: config_raw[k] for k in typed_cfg_keys if k in config_raw}
-    cfg_extra = {k: v for k, v in config_raw.items() if k not in typed_cfg_keys}
-    config_v2: dict[str, Any] = dict(cfg_typed)
-    config_v2["extra"] = cfg_extra
-
-    # contract.stopping_rule — prose in v1 becomes StoppingRule.description
-    stopping_rule_v2 = {
-        "description": exp.get("stopping_rule", "") or "",
-        "conditions": [],
-    }
-
-    contract = {
-        "identity": identity,
-        "problem": problem,
-        "config": config_v2,
-        "runs": runs,
-        "servers": servers,
-        "custom_env": custom_env,
-        "max_generations": exp.get("max_generations", 25),
-        "stopping_rule": stopping_rule_v2,
-        "baseline": baseline,
-        "tools": tools,
-    }
-
-    # control_plane sidecars (cron IDs + watchdog PID) are pulled off launch.*
-    # with fallback to an already-lifted nested ``control_plane`` section so
-    # re-running the migration on v2 input is idempotent.
-    watchdog_pid = launch.pop("watchdog_pid", None) or existing_control_plane.get(
-        "watchdog_pid"
-    )
-    anomaly_cron = launch.pop(
-        "anomaly_detector_cron_id", None
-    ) or existing_control_plane.get("anomaly_detector_cron_id")
-    checkpoint_cron = launch.pop(
-        "checkpoint_cron_id", None
-    ) or existing_control_plane.get("checkpoint_cron_id")
-
-    lifecycle = {
-        "status": exp.get("status", "preregistered"),
-        "launch": launch,
-        "smoke_test": smoke_test,
-        "treatment_verification": treatment_verification,
-    }
-
-    # telemetry.treatment_checks — v1 has two incompatible shapes. Only carry
-    # forward when the v1 shape already matches the v2 target (list-of-dicts
-    # under a ``results`` key). Otherwise emit an empty default; operators can
-    # hand-populate after migration.
-    if (
-        isinstance(treatment_checks_raw, dict)
-        and "results" in treatment_checks_raw
-        and isinstance(treatment_checks_raw.get("results"), list)
-    ):
-        treatment_checks_v2 = treatment_checks_raw
-    else:
-        treatment_checks_v2 = {"completed": False, "results": []}
-
-    telemetry = {
-        "checkpoints": checkpoints,
-        "mid_run_test_eval": mid_run_test_eval,
-        "checkpoint_analysis": checkpoint_analysis,
-        "treatment_checks": treatment_checks_v2,
-    }
-
-    control_plane = {
-        "watchdog": watchdog,
-        "notifications": {
-            "pr": {"enabled": True, "comment_mode": "rolling"},
-            "telegram": {
-                "enabled": True,
-                "chat_id_env": "TELEGRAM_CHAT_ID",
-                "token_env": "TELEGRAM_BOT_TOKEN",
-            },
-        },
-        "watchdog_pid": watchdog_pid,
-        "anomaly_detector_cron_id": anomaly_cron,
-        "checkpoint_cron_id": checkpoint_cron,
-    }
-
-    return {
-        "schema_version": 2,
-        "experiment": exp,  # keep flat ExperimentSection for backward-compat reads
-        "problem": problem,
-        "runs": runs,
-        "servers": servers,
-        "config": config_raw,
-        "custom_env": custom_env,
-        "baseline": baseline,
-        "smoke_test": smoke_test,
-        "launch": launch,
-        "treatment_verification": treatment_verification,
-        "watchdog": watchdog,
-        "checkpoints": checkpoints,
-        "tools": tools,
-        "contract": contract,
-        "lifecycle": lifecycle,
-        "telemetry": telemetry,
-        "control_plane": control_plane,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Core API
 # ---------------------------------------------------------------------------
 
@@ -1351,7 +1161,6 @@ __all__ = [
     "TelemetryLog",
     "ControlPlane",
     "SUPPORTED_SCHEMA_VERSIONS",
-    "_migrate_v1_to_v2",
     "export_json_schema",
     "experiment_dir",
     "manifest_path",

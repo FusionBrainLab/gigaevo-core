@@ -27,7 +27,7 @@ def _minimal_manifest_dict(
     status: str = "preregistered",
 ) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment": {
             "name": name,
             "task": task,

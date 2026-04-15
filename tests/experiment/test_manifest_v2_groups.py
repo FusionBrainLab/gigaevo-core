@@ -12,9 +12,8 @@ For v1 yamls, these are computed views over the existing flat fields so
 existing callers continue to work unchanged. Step 5 will switch the loader
 to OmegaConf and make v2 (nested) the canonical on-disk shape.
 
-Also locks down ``_migrate_v1_to_v2`` — a pure dict transformation used by
-the step 6 migration CLI — and asserts that ``plot_commands`` round-trip
-bit-for-bit through migration (watchdog fence).
+Also asserts that ``plot_commands`` round-trip bit-for-bit between the
+flat v1-compat fields and the nested v2 sections (watchdog fence).
 """
 
 from __future__ import annotations
@@ -32,7 +31,6 @@ from gigaevo.experiment.manifest import (
     ExperimentManifest,
     LifecycleState,
     TelemetryLog,
-    _migrate_v1_to_v2,
 )
 
 REPO_ROOT = Path(__file__).parent.parent.parent
@@ -47,13 +45,13 @@ def _all_v1_yamls() -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
-# Schema version — now accepts both 1 and 2
+# Schema version — v2 only (step 8 removed v1 support)
 # ---------------------------------------------------------------------------
 
 
 class TestSchemaVersionRange:
-    def test_accepts_v1_and_v2(self):
-        assert SUPPORTED_SCHEMA_VERSIONS == {1, 2}
+    def test_accepts_v2_only(self):
+        assert SUPPORTED_SCHEMA_VERSIONS == {2}
 
 
 # ---------------------------------------------------------------------------
@@ -244,165 +242,8 @@ class TestManifestControlPlaneView:
 
 
 # ---------------------------------------------------------------------------
-# _migrate_v1_to_v2 — pure dict transform used by step 6 migration CLI
-# ---------------------------------------------------------------------------
-
-
-class TestMigrateV1ToV2Core:
-    """Top-level structural transformation."""
-
-    def test_bumps_schema_version(self):
-        v1 = _heilbron_v2_yaml()
-        v2 = _migrate_v1_to_v2(v1)
-        assert v2["schema_version"] == 2
-
-    def test_produces_four_sections(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert set(["contract", "lifecycle", "telemetry", "control_plane"]).issubset(
-            set(v2.keys())
-        )
-
-    def test_input_not_mutated(self):
-        v1 = _heilbron_v2_yaml()
-        snapshot = yaml.safe_dump(v1)
-        _migrate_v1_to_v2(v1)
-        # Pure function — input should survive unchanged.
-        assert yaml.safe_dump(v1) == snapshot
-
-    def test_output_validates_with_experiment_manifest(self):
-        """The v2 shape must load through the model without error."""
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        m = ExperimentManifest.from_dict(v2)
-        assert m.schema_version == 2
-
-
-class TestMigrateV1ToV2Identity:
-    def test_identity_fields_move_under_contract(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        idv = v2["contract"]["identity"]
-        assert idv["name"] == "heilbron/asymmetric-iterations-v2"
-        assert idv["task"] == "heilbron"
-        assert idv["branch"] == "exp/heilbron/asymmetric-iterations-v2"
-        assert idv["pr_number"] == 206
-        assert idv["prereg_commit"] == "3f4dc1e6"
-
-
-class TestMigrateV1ToV2ContractContents:
-    def test_runs_preserved(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert len(v2["contract"]["runs"]) == 8
-        assert v2["contract"]["runs"][0]["label"] == "A1_G"
-        # roles preserved
-        assert v2["contract"]["runs"][0]["role"] == "constructor"
-
-    def test_servers_preserved(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["contract"]["servers"] == ["INTERNAL_IP"]
-
-    def test_custom_env_preserved(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["contract"]["custom_env"]["OPENAI_API_KEY"] == "sk-gigaevo"
-
-    def test_config_becomes_configspec_extra(self):
-        """Problem-specific knobs land in contract.config.extra."""
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        extra = v2["contract"]["config"]["extra"]
-        assert extra["num_parents"] == 1
-        assert extra["max_elites_per_generation"] == 8
-
-    def test_max_generations_lives_under_contract(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["contract"]["max_generations"] == 50
-
-    def test_baseline_preserved(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["contract"]["baseline"]["mean"] == 0.03449
-
-    def test_stopping_rule_prose_becomes_description(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        sr = v2["contract"]["stopping_rule"]
-        assert "max_generations=50" in sr["description"]
-        assert isinstance(sr.get("conditions", []), list)
-
-
-class TestMigrateV1ToV2Lifecycle:
-    def test_status_lifts_into_lifecycle(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["lifecycle"]["status"] == "running"
-
-    def test_launch_fields_land_under_lifecycle(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        launch = v2["lifecycle"]["launch"]
-        assert launch["time"] == "2026-04-14T15:08:16Z"
-        assert launch["commit"].startswith("4022d407")
-
-    def test_smoke_test_lifts(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["lifecycle"]["smoke_test"]["completed"] is True
-
-    def test_treatment_verification_lifts(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["lifecycle"]["treatment_verification"]["completed"] is True
-
-
-class TestMigrateV1ToV2Telemetry:
-    def test_checkpoints_lift(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert len(v2["telemetry"]["checkpoints"]) == 3
-        # Shape preserved — run_metrics and nested best_actual_fitness intact
-        first = v2["telemetry"]["checkpoints"][0]
-        assert first["run_metrics"][0]["best_actual_fitness"] > 0
-
-    def test_checkpoint_analysis_lifts(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["telemetry"]["checkpoint_analysis"]["mid_run"]["completed"] is True
-
-    def test_mid_run_test_eval_absent_in_heilbron_but_valid_default(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        mre = v2["telemetry"].get("mid_run_test_eval", {})
-        # either absent or present with completed=false — both acceptable
-        assert mre.get("completed", False) is False
-
-    def test_treatment_checks_absent_in_heilbron_ok(self):
-        """heilbron-v2 doesn't carry v1 treatment_checks — migration emits empty."""
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        tc = v2["telemetry"].get("treatment_checks", {})
-        assert tc.get("completed", False) is False
-        assert tc.get("results", []) == []
-
-
-class TestMigrateV1ToV2ControlPlane:
-    def test_watchdog_moves_under_control_plane(self):
-        v1 = _heilbron_v2_yaml()
-        v2 = _migrate_v1_to_v2(v1)
-        assert v2["control_plane"]["watchdog"] == v1["watchdog"]
-
-    def test_watchdog_pid_lifts_from_launch(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["control_plane"]["watchdog_pid"] == 1133798
-
-    def test_cron_ids_lift_from_launch(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        assert v2["control_plane"]["anomaly_detector_cron_id"] == "17f15a1c"
-        assert v2["control_plane"]["checkpoint_cron_id"] == "1960d819"
-
-    def test_launch_no_longer_carries_watchdog_pid(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        launch = v2["lifecycle"]["launch"]
-        # These keys moved to control_plane — launch should not duplicate them.
-        assert "watchdog_pid" not in launch
-        assert "anomaly_detector_cron_id" not in launch
-        assert "checkpoint_cron_id" not in launch
-
-    def test_notifications_defaulted_when_absent(self):
-        v2 = _migrate_v1_to_v2(_heilbron_v2_yaml())
-        notif = v2["control_plane"]["notifications"]
-        assert notif["pr"]["enabled"] is True
-        assert notif["telegram"]["enabled"] is True
-
-
-# ---------------------------------------------------------------------------
-# Watchdog fence — plot_commands round-trip bit-for-bit (hard requirement)
+# Watchdog fence — every live yaml's control_plane.watchdog matches the flat
+# WatchdogSection bit-for-bit during the transition, then validates cleanly.
 # ---------------------------------------------------------------------------
 
 
@@ -412,15 +253,14 @@ class TestWatchdogFencePlotCommands:
         _all_v1_yamls(),
         ids=lambda p: str(p.relative_to(REPO_ROOT)),
     )
-    def test_plot_commands_preserved_through_migration(self, yaml_path: Path):
-        v1 = yaml.safe_load(yaml_path.read_text())
-        original_pc = (v1.get("watchdog") or {}).get("plot_commands", [])
-        v2 = _migrate_v1_to_v2(v1)
-        migrated_pc = (v2["control_plane"].get("watchdog") or {}).get(
+    def test_plot_commands_preserved(self, yaml_path: Path):
+        raw = yaml.safe_load(yaml_path.read_text())
+        original_pc = (raw.get("watchdog") or {}).get("plot_commands", [])
+        nested_pc = ((raw.get("control_plane") or {}).get("watchdog") or {}).get(
             "plot_commands", []
         )
-        assert migrated_pc == original_pc, (
-            f"plot_commands diverged in migration for {yaml_path}"
+        assert nested_pc == original_pc, (
+            f"plot_commands diverged between flat and nested for {yaml_path}"
         )
 
     @pytest.mark.parametrize(
@@ -429,13 +269,12 @@ class TestWatchdogFencePlotCommands:
         ids=lambda p: str(p.relative_to(REPO_ROOT)),
     )
     def test_alert_thresholds_preserved(self, yaml_path: Path):
-        v1 = yaml.safe_load(yaml_path.read_text())
-        original_at = (v1.get("watchdog") or {}).get("alert_thresholds")
-        v2 = _migrate_v1_to_v2(v1)
-        migrated_at = (v2["control_plane"].get("watchdog") or {}).get(
+        raw = yaml.safe_load(yaml_path.read_text())
+        original_at = (raw.get("watchdog") or {}).get("alert_thresholds")
+        nested_at = ((raw.get("control_plane") or {}).get("watchdog") or {}).get(
             "alert_thresholds"
         )
-        assert migrated_at == original_at
+        assert nested_at == original_at
 
     @pytest.mark.parametrize(
         "yaml_path",
@@ -443,30 +282,26 @@ class TestWatchdogFencePlotCommands:
         ids=lambda p: str(p.relative_to(REPO_ROOT)),
     )
     def test_checkpoint_milestones_preserved(self, yaml_path: Path):
-        v1 = yaml.safe_load(yaml_path.read_text())
-        original = (v1.get("watchdog") or {}).get("checkpoint_milestones")
-        v2 = _migrate_v1_to_v2(v1)
-        migrated = (v2["control_plane"].get("watchdog") or {}).get(
+        raw = yaml.safe_load(yaml_path.read_text())
+        original = (raw.get("watchdog") or {}).get("checkpoint_milestones")
+        nested = ((raw.get("control_plane") or {}).get("watchdog") or {}).get(
             "checkpoint_milestones"
         )
-        assert migrated == original
+        assert nested == original
 
 
 # ---------------------------------------------------------------------------
-# Regression: migration output validates against ExperimentManifest for every
-# real yaml
+# Regression: every migrated yaml validates against ExperimentManifest
 # ---------------------------------------------------------------------------
 
 
-class TestMigrationOutputValidates:
+class TestEveryYamlValidates:
     @pytest.mark.parametrize(
         "yaml_path",
         _all_v1_yamls(),
         ids=lambda p: str(p.relative_to(REPO_ROOT)),
     )
-    def test_every_real_yaml_migrates_and_validates(self, yaml_path: Path):
-        v1 = yaml.safe_load(yaml_path.read_text())
-        v2 = _migrate_v1_to_v2(v1)
-        # The migrated dict must load through the current model cleanly.
-        m = ExperimentManifest.from_dict(v2)
+    def test_every_real_yaml_validates(self, yaml_path: Path):
+        raw = yaml.safe_load(yaml_path.read_text())
+        m = ExperimentManifest.from_dict(raw)
         assert m.schema_version == 2

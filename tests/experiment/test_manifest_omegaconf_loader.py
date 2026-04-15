@@ -37,10 +37,10 @@ from gigaevo.experiment.manifest import ExperimentManifest, load_manifest
 REPO_ROOT = Path(__file__).parent.parent.parent
 
 
-def _minimal_v1_dict() -> dict:
-    """Smallest well-formed v1 manifest that passes validation."""
+def _minimal_v2_dict() -> dict:
+    """Smallest well-formed v2 manifest that passes validation."""
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment": {
             "name": "hover/omegaconf-test",
             "task": "hover",
@@ -68,15 +68,15 @@ def _write_manifest(tmp_path: Path, data: dict, *, name: str = "foo/bar") -> Pat
 
 
 # ---------------------------------------------------------------------------
-# Baseline: existing yamls still load
+# Baseline: all v2 yamls load and validate
 # ---------------------------------------------------------------------------
 
 
-class TestRegressionV1YamlsStillLoad:
-    """The new loader must not break any of the 18 real experiment.yamls."""
+class TestAllV2YamlsLoad:
+    """Every live experiment.yaml must validate under schema v2."""
 
-    def test_minimal_v1_roundtrips(self, tmp_path):
-        _write_manifest(tmp_path, _minimal_v1_dict(), name="hover/omegaconf-test")
+    def test_minimal_v2_roundtrips(self, tmp_path):
+        _write_manifest(tmp_path, _minimal_v2_dict(), name="hover/omegaconf-test")
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             m = load_manifest("hover/omegaconf-test")
         assert isinstance(m, ExperimentManifest)
@@ -110,7 +110,7 @@ class TestOcEnvInterpolation:
 
     def test_env_var_resolves_when_set(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GIGAEVO_TEST_KEY", "resolved-secret")
-        data = _minimal_v1_dict()
+        data = _minimal_v2_dict()
         data["custom_env"] = {
             "OPENAI_API_KEY": "${oc.env:GIGAEVO_TEST_KEY,fallback}",
         }
@@ -124,7 +124,7 @@ class TestOcEnvInterpolation:
 
     def test_env_var_falls_back_to_default(self, tmp_path, monkeypatch):
         monkeypatch.delenv("GIGAEVO_TEST_KEY_UNSET", raising=False)
-        data = _minimal_v1_dict()
+        data = _minimal_v2_dict()
         data["custom_env"] = {
             "OPENAI_API_KEY": "${oc.env:GIGAEVO_TEST_KEY_UNSET,sk-gigaevo}",
         }
@@ -138,7 +138,7 @@ class TestOcEnvInterpolation:
     def test_missing_env_without_default_raises(self, tmp_path, monkeypatch):
         """Unset env + no default must fail loudly (not silently store ${...})."""
         monkeypatch.delenv("GIGAEVO_ABSENT", raising=False)
-        data = _minimal_v1_dict()
+        data = _minimal_v2_dict()
         data["custom_env"] = {"SECRET": "${oc.env:GIGAEVO_ABSENT}"}
         _write_manifest(tmp_path, data, name="hover/omegaconf-test")
 
@@ -148,7 +148,7 @@ class TestOcEnvInterpolation:
 
     def test_literal_dollar_strings_preserved(self, tmp_path):
         """Plain strings without ${...} must survive unchanged."""
-        data = _minimal_v1_dict()
+        data = _minimal_v2_dict()
         data["custom_env"] = {"NOTE": "plain value, no interpolation"}
         _write_manifest(tmp_path, data, name="hover/omegaconf-test")
 
@@ -167,7 +167,7 @@ class TestCrossSectionInterpolation:
     """Interpolations that point at another field in the same file resolve."""
 
     def test_stopping_rule_references_max_generations(self, tmp_path):
-        data = _minimal_v1_dict()
+        data = _minimal_v2_dict()
         data["experiment"]["max_generations"] = 50
         data["experiment"]["stopping_rule"] = (
             "max_generations=${experiment.max_generations}"
@@ -197,7 +197,7 @@ class TestHydraPassThroughEscape:
     """
 
     def test_escaped_interpolation_roundtrips_as_literal_dollar(self, tmp_path):
-        data = _minimal_v1_dict()
+        data = _minimal_v2_dict()
         # Write the escape via YAML literal so the backslash survives the dump.
         data["runs"] = [
             {
@@ -228,7 +228,7 @@ class TestHydraPassThroughEscape:
     def test_mixed_resolvable_and_passthrough_in_same_file(self, tmp_path, monkeypatch):
         """``${oc.env:X}`` resolves; escaped ``\\${Y}`` survives as literal."""
         monkeypatch.setenv("GIGAEVO_TEST_KEY", "resolved-secret")
-        data = _minimal_v1_dict()
+        data = _minimal_v2_dict()
         data["custom_env"] = {
             "OPENAI_API_KEY": "${oc.env:GIGAEVO_TEST_KEY,fallback}",
         }
