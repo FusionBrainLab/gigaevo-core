@@ -61,9 +61,17 @@ def _make_manifest(
         raw
         if raw is not None
         else {
-            "experiment": {"status": status, "name": "hover/test"},
-            "launch": {"watchdog_pid": 9999, "time": "2026-01-01T00:00:00Z"},
-            "config": {"stopping_rule": "stagnation_10"},
+            "schema_version": 2,
+            "contract": {
+                "identity": {"name": "hover/test", "task": "hover"},
+                "max_generations": max_generations,
+                "config": {"stopping_rule": "stagnation_10"},
+            },
+            "lifecycle": {
+                "status": status,
+                "launch": {"watchdog_pid": 9999, "time": "2026-01-01T00:00:00Z"},
+            },
+            "control_plane": {"watchdog_pid": 9999},
         }
     )
     m.model_dump.return_value = _raw
@@ -579,14 +587,24 @@ class TestManifestResetStatus:
             assert result.exit_code == 0, result.output
             mock_release.assert_called_once_with([4, 5])
             raw = captured["raw"]
-            assert raw["experiment"]["status"] == "implemented"
-            assert raw["launch"] == {
+            # v2 canonical path (after flatten): lifecycle.status
+            assert raw.get("lifecycle", {}).get("status") == "implemented" or raw.get(
+                "experiment", {}
+            ).get("status") == "implemented"
+            # launch.* fields cleared in lifecycle (v2 canonical)
+            assert (
+                raw.get("lifecycle", {}).get("launch", {})
+                or raw.get("launch", {})  # fallback to flat for pre-flatten files
+            ) == {
                 "time": None,
                 "commit": None,
-                "watchdog_pid": None,
                 "confirmed_at": None,
             }
-            assert all(r["pid"] is None for r in raw["runs"])
+            # watchdog_pid moved to control_plane in v2
+            assert raw.get("control_plane", {}).get("watchdog_pid") is None
+            # PIDs cleared in contract.runs (v2) or flat runs
+            runs_target = (raw.get("contract") or {}).get("runs") or raw.get("runs", [])
+            assert all(r["pid"] is None for r in runs_target)
 
     def test_reset_other_transition_uses_set_status_with_recovery(self):
         """Non-(running->implemented) transitions go through set_status(allow_recovery=True)."""

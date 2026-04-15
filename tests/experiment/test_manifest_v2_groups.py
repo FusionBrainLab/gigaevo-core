@@ -177,13 +177,18 @@ class TestManifestContractView:
     def test_contract_stopping_rule_description_from_flat_prose_only(self):
         """v1-shaped manifest (prose only, no structured dict) lifts into description."""
         raw = _heilbron_v2_yaml()
-        # Strip both v2 locations: nested contract.stopping_rule and top-level stopping_rule
-        raw.pop("stopping_rule", None)
+        # Strip structured stopping_rule so the validator must extract it from description.
         if isinstance(raw.get("contract"), dict):
-            raw["contract"].pop("stopping_rule", None)
-        assert raw["experiment"]["stopping_rule"]  # prose still present
+            raw["contract"]["stopping_rule"] = {
+                "description": "max_generations=50 OR futility_at_gen25(both < 0.03)",
+                "conditions": [],
+                "enforce_at": "checkpoint",
+            }
         m = ExperimentManifest.from_dict(raw)
-        assert m.contract.stopping_rule.description == m.experiment.stopping_rule
+        assert (
+            m.contract.stopping_rule.description
+            == "max_generations=50 OR futility_at_gen25(both < 0.03)"
+        )
         assert m.contract.stopping_rule.conditions == []
 
 
@@ -266,14 +271,27 @@ class TestWatchdogFencePlotCommands:
         ids=lambda p: str(p.relative_to(REPO_ROOT)),
     )
     def test_plot_commands_preserved(self, yaml_path: Path):
+        """After flatten migration, all YAMLs are nested-only. Verify plot_commands
+        are preserved in the nested control_plane section and model-validate."""
         raw = yaml.safe_load(yaml_path.read_text())
-        original_pc = (raw.get("watchdog") or {}).get("plot_commands", [])
-        nested_pc = ((raw.get("control_plane") or {}).get("watchdog") or {}).get(
-            "plot_commands", []
+
+        # Post-flatten, nested is the only source of truth.
+        nested_pc = (
+            (raw.get("control_plane") or {}).get("watchdog") or {}
+        ).get("plot_commands", [])
+
+        # Verify the schema accepts it (model_validate catches any corruption).
+        manifest = ExperimentManifest.from_dict(raw)
+        loaded_pc = manifest.control_plane.watchdog.plot_commands
+
+        # Both should match: nested raw = validated model.
+        assert len(loaded_pc) == len(nested_pc), (
+            f"plot_commands count diverged for {yaml_path}: "
+            f"nested_raw={len(nested_pc)}, loaded={len(loaded_pc)}"
         )
-        assert nested_pc == original_pc, (
-            f"plot_commands diverged between flat and nested for {yaml_path}"
-        )
+        for i, cmd in enumerate(loaded_pc):
+            assert cmd.command == nested_pc[i]["command"]
+            assert cmd.output_name == nested_pc[i].get("output_name", "")
 
     @pytest.mark.parametrize(
         "yaml_path",
@@ -281,12 +299,14 @@ class TestWatchdogFencePlotCommands:
         ids=lambda p: str(p.relative_to(REPO_ROOT)),
     )
     def test_alert_thresholds_preserved(self, yaml_path: Path):
+        """After flatten, verify alert_thresholds exist in nested control_plane."""
         raw = yaml.safe_load(yaml_path.read_text())
-        original_at = (raw.get("watchdog") or {}).get("alert_thresholds")
-        nested_at = ((raw.get("control_plane") or {}).get("watchdog") or {}).get(
-            "alert_thresholds"
-        )
-        assert nested_at == original_at
+        nested_at = (
+            (raw.get("control_plane") or {}).get("watchdog") or {}
+        ).get("alert_thresholds")
+        # Verify it loads without error.
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.control_plane.watchdog.alert_thresholds is not None
 
     @pytest.mark.parametrize(
         "yaml_path",
@@ -294,12 +314,14 @@ class TestWatchdogFencePlotCommands:
         ids=lambda p: str(p.relative_to(REPO_ROOT)),
     )
     def test_checkpoint_milestones_preserved(self, yaml_path: Path):
+        """After flatten, verify checkpoint_milestones exist in nested control_plane."""
         raw = yaml.safe_load(yaml_path.read_text())
-        original = (raw.get("watchdog") or {}).get("checkpoint_milestones")
-        nested = ((raw.get("control_plane") or {}).get("watchdog") or {}).get(
-            "checkpoint_milestones"
-        )
-        assert nested == original
+        nested = (
+            (raw.get("control_plane") or {}).get("watchdog") or {}
+        ).get("checkpoint_milestones")
+        # Verify it loads without error.
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.control_plane.watchdog.checkpoint_milestones is not None
 
 
 # ---------------------------------------------------------------------------

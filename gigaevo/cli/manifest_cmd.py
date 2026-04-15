@@ -93,8 +93,53 @@ def _traverse_raw(raw: dict[str, Any], dotted_path: str) -> Any:
     return current
 
 
+def _rewrite_legacy_path(dotted_path: str) -> str:
+    """Rewrite legacy v1 dotted paths to the v2 nested storage equivalent.
+
+    Skills, docs, and muscle-memory CLIs still use paths like
+    ``launch.watchdog_pid`` or ``mid_run_test_eval.completed``. After the
+    schema-v2 flatten migration these paths no longer exist in
+    ``experiment.yaml``; their canonical home is under ``control_plane``,
+    ``lifecycle``, or ``telemetry``. Rewriting here keeps the documented
+    commands working without forcing every skill edit in the same PR.
+    """
+    # Exact matches first — watchdog_pid and cron IDs were relocated.
+    exact_map = {
+        "launch.watchdog_pid": "control_plane.watchdog_pid",
+        "launch.anomaly_detector_cron_id": "control_plane.anomaly_detector_cron_id",
+        "launch.checkpoint_cron_id": "control_plane.checkpoint_cron_id",
+    }
+    if dotted_path in exact_map:
+        return exact_map[dotted_path]
+
+    # Prefix rewrites — everything else under ``launch.*`` stays in lifecycle.
+    prefix_map = {
+        "launch.": "lifecycle.launch.",
+        "smoke_test.": "lifecycle.smoke_test.",
+        "treatment_verification.": "lifecycle.treatment_verification.",
+        "mid_run_test_eval.": "telemetry.mid_run_test_eval.",
+        "checkpoint_analysis.": "telemetry.checkpoint_analysis.",
+        "treatment_checks.": "telemetry.treatment_checks.",
+        "watchdog.": "control_plane.watchdog.",
+    }
+    for legacy, canonical in prefix_map.items():
+        if dotted_path.startswith(legacy):
+            return canonical + dotted_path[len(legacy) :]
+
+    # ``experiment.status`` writes must hit ``lifecycle.status`` in v2.
+    if dotted_path == "experiment.status":
+        return "lifecycle.status"
+
+    return dotted_path
+
+
 def _set_nested(raw: dict[str, Any], dotted_path: str, value: Any) -> None:
-    """Set a value at a dotted path, creating intermediate dicts as needed."""
+    """Set a value at a dotted path, creating intermediate dicts as needed.
+
+    Legacy v1 paths are transparently rewritten to their v2 canonical location
+    (e.g. ``launch.watchdog_pid`` → ``control_plane.watchdog_pid``).
+    """
+    dotted_path = _rewrite_legacy_path(dotted_path)
     parts = dotted_path.split(".")
     current = raw
     for part in parts[:-1]:
@@ -179,8 +224,9 @@ def get(ctx: click.Context, field: str) -> None:
         click.echo(stopping_rule)
         return
 
+    canonical_field = _rewrite_legacy_path(field)
     try:
-        value = _traverse_raw(manifest_obj.model_dump(), field)
+        value = _traverse_raw(manifest_obj.model_dump(), canonical_field)
     except KeyError:
         click.echo(f"Error: Field not found: {field}", err=True)
         ctx.exit(1)
@@ -370,7 +416,12 @@ def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
     from gigaevo.experiment.manifest import update_manifest
 
     def set_pids(raw: dict[str, Any]) -> None:
-        for run in raw.get("runs", []):
+        # v2 canonical: contract.runs. Fall back to legacy flat runs for files
+        # that haven't been flattened yet.
+        runs_target = (raw.get("contract") or {}).get("runs")
+        if runs_target is None:
+            runs_target = raw.get("runs", [])
+        for run in runs_target:
             if run.get("label") in label_to_pid:
                 run["pid"] = label_to_pid[run["label"]]
 
@@ -441,14 +492,28 @@ def reset_status(
     if current == "running" and target_status == "implemented":
 
         def clear_launch(raw: dict[str, Any]) -> None:
-            raw.setdefault("experiment", {})["status"] = target_status
-            raw["launch"] = {
+            # v2 canonical paths; keep legacy flat paths in sync for files
+            # that still carry them (pre-flatten intermediate shape).
+            raw.setdefault("lifecycle", {})["status"] = target_status
+            if isinstance(raw.get("experiment"), dict):
+                raw["experiment"]["status"] = target_status
+
+            cleared_launch = {
                 "time": None,
                 "commit": None,
-                "watchdog_pid": None,
                 "confirmed_at": None,
             }
-            for run in raw.get("runs", []):
+            raw.setdefault("lifecycle", {})["launch"] = dict(cleared_launch)
+            if isinstance(raw.get("launch"), dict):
+                raw["launch"] = dict(cleared_launch)
+
+            # watchdog_pid lives under control_plane in v2, not launch.
+            raw.setdefault("control_plane", {})["watchdog_pid"] = None
+
+            runs_target = (raw.get("contract") or {}).get("runs")
+            if runs_target is None:
+                runs_target = raw.get("runs", [])
+            for run in runs_target:
                 run["pid"] = None
 
         update_manifest(experiment, clear_launch)
