@@ -93,9 +93,9 @@ def run_checks(experiment: str) -> list[CheckResult]:
     # ── Set NO_PROXY for all server IPs before any HTTP calls ───────────────
     try:
         m_tmp = load_manifest(experiment)
-        if m_tmp.servers:
+        if m_tmp.contract.servers:
             existing = os.environ.get("NO_PROXY", "")
-            all_ips = ",".join(m_tmp.servers)
+            all_ips = ",".join(m_tmp.contract.servers)
             os.environ["NO_PROXY"] = f"{existing},{all_ips}" if existing else all_ips
             os.environ["no_proxy"] = os.environ["NO_PROXY"]
     except Exception:
@@ -105,10 +105,10 @@ def run_checks(experiment: str) -> list[CheckResult]:
     c1 = CheckResult(1, "Status", "experiment.yaml status == implemented", "CRITICAL")
     try:
         m = load_manifest(experiment)
-        if m.status == "implemented":
+        if m.lifecycle.status == "implemented":
             c1.ok()
         else:
-            c1.fail(f"status={m.status}, expected 'implemented'")
+            c1.fail(f"status={m.lifecycle.status}, expected 'implemented'")
     except Exception as e:
         c1.fail(str(e))
         results.append(c1)
@@ -124,7 +124,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
         issues = []
         # Build per-problem pipeline set
         prob_pipelines: dict[str, set[str]] = {}
-        for r in m.runs:
+        for r in m.contract.runs:
             prob_pipelines.setdefault(r.problem_name, set()).add(r.pipeline)
 
         for prob, pls in prob_pipelines.items():
@@ -174,7 +174,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
         import yaml
 
         issues = []
-        for run in m.runs:
+        for run in m.contract.runs:
             # Check if run uses custom local prompts via prompts_dir override.
             # prompt_fetcher=coevolved reads from Redis — prompts_dir is irrelevant.
             uses_coevolved = any(
@@ -232,13 +232,13 @@ def run_checks(experiment: str) -> list[CheckResult]:
     try:
         issues = []
         checked_urls: set[str] = set()
-        for run in m.runs:
+        for run in m.contract.runs:
             url = run.mutation_url
             if not url or url in checked_urls:
                 continue
             checked_urls.add(url)
             try:
-                api_key = (m.custom_env or {}).get("OPENAI_API_KEY", "None")
+                api_key = (m.contract.custom_env or {}).get("OPENAI_API_KEY", "None")
                 req = Request(
                     f"{url}/models",
                     headers={"Authorization": f"Bearer {api_key}"},
@@ -246,7 +246,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
                 resp = urlopen(req, timeout=15)
                 data = json.loads(resp.read())
                 model_ids = [m_obj.get("id", "") for m_obj in data.get("data", [])]
-                for run2 in m.runs:
+                for run2 in m.contract.runs:
                     if run2.mutation_url == url and run2.model_name not in model_ids:
                         issues.append(
                             f"{run2.label}: model '{run2.model_name}' not in {model_ids}"
@@ -281,7 +281,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
         else:
             launch_content = launch_path.read_text()
             issues = []
-            for run in m.runs:
+            for run in m.contract.runs:
                 if f"redis.db={run.db}" not in launch_content:
                     issues.append(f"{run.label}: db={run.db} not in launch.sh")
                 if run.model_name not in launch_content:
@@ -304,14 +304,14 @@ def run_checks(experiment: str) -> list[CheckResult]:
     try:
         issues = []
         all_urls: set[str] = set()
-        for run in m.runs:
+        for run in m.contract.runs:
             if run.chain_url:
                 all_urls.add(run.chain_url)
             if run.mutation_url:
                 all_urls.add(run.mutation_url)
         for url in sorted(all_urls):
             try:
-                api_key = (m.custom_env or {}).get("OPENAI_API_KEY", "None")
+                api_key = (m.contract.custom_env or {}).get("OPENAI_API_KEY", "None")
                 req = Request(
                     f"{url}/models", headers={"Authorization": f"Bearer {api_key}"}
                 )
@@ -332,7 +332,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
         issues = []
         # Build chain_url -> model_name mapping from manifest
         chain_url_model: dict[str, str] = {}
-        for run in m.runs:
+        for run in m.contract.runs:
             if run.chain_url and run.chain_url not in chain_url_model:
                 chain_url_model[run.chain_url] = run.model_name
         for url, model in sorted(chain_url_model.items()):
@@ -345,7 +345,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
                         "temperature": 0.1,
                     }
                 ).encode()
-                api_key = (m.custom_env or {}).get("OPENAI_API_KEY", "None")
+                api_key = (m.contract.custom_env or {}).get("OPENAI_API_KEY", "None")
                 req = Request(
                     f"{url}/chat/completions",
                     data=payload,
@@ -374,7 +374,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
         issues = []
         redis_host = os.environ.get("REDIS_HOST", "localhost")
         redis_port = int(os.environ.get("REDIS_PORT", "6379"))
-        for run in m.runs:
+        for run in m.contract.runs:
             r = redis.Redis(host=redis_host, port=redis_port, db=run.db)
             size = r.dbsize()
             if size > 0:
@@ -394,7 +394,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
     # ── Check 10: DB claim via SET NX ───────────────────────────────────────
     c10 = CheckResult(10, "Redis", "DB claim — no collision", "CRITICAL")
     try:
-        dbs = [run.db for run in m.runs]
+        dbs = [run.db for run in m.contract.runs]
         failed = claim_dbs(experiment, dbs)
         if failed:
             # Auto-release stale claims from completed experiments
@@ -403,7 +403,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
             for db, owner in failed:
                 try:
                     owner_m = load_manifest(owner)
-                    if owner_m.status == "complete":
+                    if owner_m.lifecycle.status == "complete":
                         release_db_claims([db])
                         re_failed = claim_dbs(experiment, [db])
                         if not re_failed:
@@ -414,7 +414,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
                             )
                     else:
                         still_blocked.append(
-                            f"DB {db} owned by {owner} (status={owner_m.status})"
+                            f"DB {db} owned by {owner} (status={owner_m.lifecycle.status})"
                         )
                 except Exception as lookup_err:
                     still_blocked.append(
@@ -437,7 +437,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
     try:
         issues = []
         seen_problems: set[str] = set()
-        for run in m.runs:
+        for run in m.contract.runs:
             if run.problem_name in seen_problems:
                 continue
             seen_problems.add(run.problem_name)
@@ -460,7 +460,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
     c12 = CheckResult(12, "Files", "Watchdog configured (CLI mode)", "CRITICAL")
     try:
         # Access watchdog via Pydantic model, not _raw (which doesn't exist post-refactor)
-        plugin = m.watchdog.plugin if m.watchdog else None
+        plugin = m.control_plane.watchdog.plugin if m.control_plane.watchdog else None
         if not plugin:
             c12.fail(
                 "watchdog.plugin not set in experiment.yaml. "
@@ -494,8 +494,8 @@ def run_checks(experiment: str) -> list[CheckResult]:
     # ── Check 14: prereg_commit exists on branch ────────────────────────────
     c14 = CheckResult(14, "Design", "prereg_commit exists on branch", "MAJOR")
     try:
-        if m.prereg_commit:
-            commit_str = str(m.prereg_commit)
+        if m.contract.identity.prereg_commit:
+            commit_str = str(m.contract.identity.prereg_commit)
             proc = subprocess.run(
                 ["git", "log", "--oneline", "-1", commit_str],
                 cwd=str(PROJ),
@@ -505,7 +505,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
             if proc.returncode == 0:
                 c14.ok(proc.stdout.strip())
             else:
-                c14.fail(f"Commit {m.prereg_commit} not found")
+                c14.fail(f"Commit {m.contract.identity.prereg_commit} not found")
         else:
             c14.fail("prereg_commit not set in experiment.yaml")
     except Exception as e:
@@ -521,7 +521,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
         )
         # Group runs by (pipeline, problem_name) to identify cells
         cells: dict[tuple[str, str], list[str]] = {}
-        for r in m.runs:
+        for r in m.contract.runs:
             key = (r.pipeline, r.problem_name)
             cells.setdefault(key, []).append(r.label)
         if is_factorial:
@@ -544,7 +544,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
     c16 = CheckResult(16, "Design", "N >= 2 per cell", "MAJOR")
     try:
         cells: dict[tuple[str, str], list[str]] = {}
-        for r in m.runs:
+        for r in m.contract.runs:
             if r.pipeline in _META_EVO_PIPELINES:
                 continue  # Hub runs are not replicated cells
             key = (r.pipeline, r.problem_name)
@@ -563,17 +563,17 @@ def run_checks(experiment: str) -> list[CheckResult]:
 
     # ── Check 17: Dataset SHA-256 (conditional: has_test_set) ───────────────
     c17 = CheckResult(17, "Test", "Dataset SHA-256 matches manifest", "CRITICAL")
-    if m.problem.has_test_set:
+    if m.contract.problem.has_test_set:
         try:
-            if m.problem.test_set_path and m.problem.test_set_sha256:
-                test_path = PROJ / m.problem.test_set_path
+            if m.contract.problem.test_set_path and m.contract.problem.test_set_sha256:
+                test_path = PROJ / m.contract.problem.test_set_path
                 if test_path.exists():
                     actual = hashlib.sha256(test_path.read_bytes()).hexdigest()
-                    if actual == m.problem.test_set_sha256:
+                    if actual == m.contract.problem.test_set_sha256:
                         c17.ok()
                     else:
                         c17.fail(
-                            f"SHA mismatch: expected {m.problem.test_set_sha256[:16]}..., "
+                            f"SHA mismatch: expected {m.contract.problem.test_set_sha256[:16]}..., "
                             f"got {actual[:16]}..."
                         )
                 else:
@@ -588,7 +588,7 @@ def run_checks(experiment: str) -> list[CheckResult]:
 
     # ── Check 18: Test-set usage count (conditional) ────────────────────────
     c18 = CheckResult(18, "Test", "Test-set usage count", "WARN")
-    if m.problem.has_test_set:
+    if m.contract.problem.has_test_set:
         c18.ok("PLACEHOLDER: test-set usage count not yet implemented")
     else:
         c18.ok("N/A (no test set)")
@@ -596,15 +596,15 @@ def run_checks(experiment: str) -> list[CheckResult]:
 
     # ── Check 19: Smoke test completed ──────────────────────────────────────
     c19 = CheckResult(19, "Smoke", "3-gen smoke test completed", "CRITICAL")
-    if m.smoke_test.completed:
-        c19.ok(f"Completed at {m.smoke_test.completed_at or 'unknown'}")
+    if m.lifecycle.smoke_test.completed:
+        c19.ok(f"Completed at {m.lifecycle.smoke_test.completed_at or 'unknown'}")
     else:
         c19.fail("smoke_test.completed is false in experiment.yaml")
     results.append(c19)
 
     # ── Check 20: Treatment verification completed ────────────────────────
     c20 = CheckResult(20, "Treatment", "Treatment verification completed", "CRITICAL")
-    tv = m.treatment_verification
+    tv = m.lifecycle.treatment_verification
     if tv.completed:
         c20.ok(f"Completed at {tv.completed_at or 'unknown'}")
     else:
@@ -619,14 +619,14 @@ def run_checks(experiment: str) -> list[CheckResult]:
     try:
         import time
 
-        api_key = (m.custom_env or {}).get("OPENAI_API_KEY", "None")
+        api_key = (m.contract.custom_env or {}).get("OPENAI_API_KEY", "None")
         issues = []
         # Collect latencies and tokens/sec for each unique server URL
         url_latencies: dict[str, list[float]] = {}
         url_tps: dict[str, list[float]] = {}  # tokens per second
         url_roles: dict[str, list[str]] = {}  # url -> ["D1-chain", "D2-mutation", ...]
 
-        for run in m.runs:
+        for run in m.contract.runs:
             for role, url in [("chain", run.chain_url), ("mutation", run.mutation_url)]:
                 if not url:
                     continue
