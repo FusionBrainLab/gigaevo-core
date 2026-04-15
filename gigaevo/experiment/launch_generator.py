@@ -148,10 +148,6 @@ def generate(experiment: str) -> str:
         if run.chain_url:
             chain_url_env_var = m.config.get("chain_url_env_var", "CHAIN_URL")
             env_prefix = f'{chain_url_env_var}="{run.chain_url}" '
-        # Per-run env vars (e.g. GIGAEVO_SOFT_FITNESS=1 for soft fitness IV)
-        if run.run_env:
-            for key, val in run.run_env.items():
-                env_prefix += f'{key}="{val}" '
 
         lines.append(f"# ── Run {run.label}: {run.condition}")
         lines.append(f'{env_prefix}nohup "$PYTHON" "$PROJ/run.py" \\')

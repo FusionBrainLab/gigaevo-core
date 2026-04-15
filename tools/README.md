@@ -538,7 +538,6 @@ Source: `gigaevo/monitoring/manifest_schema.py`. Top-level keys, in canonical or
 | `pid` | `int \| None` | gated | Set by `launch.sh`; required when `status=running` |
 | `log_path` | `str \| None` | no | Relative log file path (default: `run_<label>.log`) |
 | `extra_overrides` | `list[str] \| None` | no | Per-run Hydra overrides (appended to `run.py` CLI) |
-| `run_env` | `dict[str, str] \| None` | no | Per-run env vars prepended to launch command |
 | `role` | `"constructor" \| "improver" \| None` | gated | Required when `watchdog.plugin=adversarial` |
 
 ### Status state machine
@@ -618,7 +617,6 @@ fragment of `launch.sh`; every fragment of `launch.sh` is traceable back to a fi
 | `runs[].model_name` | `model_name=<id>` Hydra override |
 | `runs[].mutation_url` | `llm_base_url="<url>"` Hydra override |
 | `runs[].chain_url` (non-null) | Per-run `${CHAIN_URL_ENV_VAR}=<url> nohup ...` prefix |
-| `runs[].run_env` | Per-run `KEY=VAL` prefix on the `nohup` invocation |
 | `runs[].extra_overrides` | Appended verbatim to the run's Hydra CLI (`${…}` refs single-quoted per KF-02) |
 | `runs[].log_path` | Stdout/stderr redirection target (default `run_<label>.log`) |
 

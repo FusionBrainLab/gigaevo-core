@@ -114,7 +114,6 @@ class RunSpec(BaseModel):
     pid: int | None = None
     log_path: str | None = None
     extra_overrides: list[str] | None = None
-    run_env: dict[str, str] | None = None
     role: Literal["constructor", "improver"] | None = None
 
     @field_validator("db")
@@ -196,8 +195,6 @@ class ExperimentSection(BaseModel):
     tracking_issue: int | None = None
     prereg_commit: str | None = None
     stopping_rule: str = ""
-    inner_iterations: int | None = None
-    supersedes: str | None = None
 
     @field_validator("status")
     @classmethod

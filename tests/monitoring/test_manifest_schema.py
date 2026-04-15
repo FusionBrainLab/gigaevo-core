@@ -376,6 +376,15 @@ class TestRoundTrip:
         manifest = ExperimentManifest.from_dict(raw)
         assert manifest.experiment.name == "hover/test"
 
+    def test_run_spec_has_no_run_env_field(self) -> None:
+        """RunSpec.run_env was removed — dead field, never set in any real manifest.
+
+        Regression guard: if this field is re-added without a use case, tests fail.
+        """
+        from gigaevo.experiment.manifest import RunSpec as ManifestRunSpec
+
+        assert "run_env" not in ManifestRunSpec.model_fields
+
 
 # ---------------------------------------------------------------------------
 # 7. Manifest-optional tests (RunSpec works independently)
