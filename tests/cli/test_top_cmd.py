@@ -208,7 +208,7 @@ class TestTopManifestDefaultMetric:
 
         with (
             patch(
-                "gigaevo.monitoring.manifest.load_manifest",
+                "gigaevo.experiment.manifest.load_manifest",
                 return_value=mock_manifest,
             ),
             patch.object(RunResolver, "resolve", return_value=configs),
@@ -260,7 +260,7 @@ class TestTopManifestDefaultMetric:
 
         with (
             patch(
-                "gigaevo.monitoring.manifest.load_manifest",
+                "gigaevo.experiment.manifest.load_manifest",
                 return_value=mock_manifest,
             ),
             patch.object(RunResolver, "resolve", return_value=configs),

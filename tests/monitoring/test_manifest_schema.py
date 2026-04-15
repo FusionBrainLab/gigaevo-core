@@ -626,6 +626,35 @@ class TestAdversarialRoleRequirement:
         manifest = ExperimentManifest.from_dict(raw)
         assert manifest.runs[0].role is None
 
+    def test_role_accepts_arbitrary_strings_for_non_adversarial_plugins(
+        self,
+    ) -> None:
+        """Role is open str at the schema level — general experiment flows
+        (prompt_coevo, chain, optimizer, heilbron_prover, ...) use their own
+        vocabularies. Per-plugin vocabularies are enforced by plugin-specific
+        validators (see test_adversarial_rejects_unknown_role_values).
+        """
+        raw = self._adversarial_manifest()
+        del raw["watchdog"]  # no plugin → no per-plugin role enforcement
+        raw["runs"][0]["role"] = "heilbron_prover"
+        raw["runs"][1]["role"] = "optimizer"
+        manifest = ExperimentManifest.from_dict(raw)
+        assert manifest.runs[0].role == "heilbron_prover"
+        assert manifest.runs[1].role == "optimizer"
+
+    def test_adversarial_rejects_unknown_role_values(self) -> None:
+        """When plugin=adversarial, roles outside {constructor, improver} are
+        rejected at manifest load time — prevents silent empty-population
+        failures when the plugin filters snapshots by role.
+        """
+        raw = self._adversarial_manifest()
+        raw["runs"][0]["role"] = "constructor"
+        raw["runs"][1]["role"] = "bogus"
+        with pytest.raises(Exception) as exc_info:
+            ExperimentManifest.from_dict(raw)
+        assert "bogus" in str(exc_info.value)
+        assert "R2" in str(exc_info.value)
+
 
 class TestAlertThresholdsSchema:
     def test_alert_thresholds_defaults(self) -> None:

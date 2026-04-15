@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 import yaml
@@ -114,7 +114,7 @@ class RunSpec(BaseModel):
     pid: int | None = None
     log_path: str | None = None
     extra_overrides: list[str] | None = None
-    role: Literal["constructor", "improver"] | None = None
+    role: str | None = None
 
     @field_validator("db")
     @classmethod
@@ -305,14 +305,29 @@ class ExperimentManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_adversarial_roles(self) -> ExperimentManifest:
-        """When watchdog.plugin='adversarial', every run must declare a role."""
+        """When watchdog.plugin='adversarial', every run's role must be one of
+        the plugin's recognized values.
+
+        The schema keeps ``role`` as an open ``str`` so other experiment types
+        (prompt_coevo, chain, optimizer, heilbron_prover, ...) can use their
+        own vocabularies. Plugin-specific vocabularies are enforced here, so
+        misconfiguration is caught at manifest load time rather than surfacing
+        as empty population filters at runtime.
+        """
         if self.watchdog.plugin == "adversarial":
+            allowed = {"constructor", "improver"}
             missing = [r.label for r in self.runs if r.role is None]
             if missing:
                 raise ValueError(
                     f"watchdog.plugin='adversarial' requires every run to set "
                     f"role: 'constructor' or 'improver'. Missing role on: "
                     f"{missing}"
+                )
+            bad = [(r.label, r.role) for r in self.runs if r.role not in allowed]
+            if bad:
+                raise ValueError(
+                    f"watchdog.plugin='adversarial' only recognizes roles "
+                    f"{sorted(allowed)}. Got: {bad}"
                 )
         return self
 

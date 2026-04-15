@@ -1,4 +1,4 @@
-"""Tests for gigaevo.monitoring.manifest — Pydantic manifest operations."""
+"""Tests for gigaevo.experiment.manifest — Pydantic manifest operations."""
 
 from __future__ import annotations
 

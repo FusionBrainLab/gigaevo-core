@@ -54,7 +54,7 @@ class TestWatchdogStartsEngine:
         manifest = _make_fake_manifest()
 
         with (
-            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
             patch(
                 "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
@@ -85,7 +85,7 @@ class TestWatchdogPollInterval:
         manifest = _make_fake_manifest()
 
         with (
-            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
             patch(
                 "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
@@ -115,7 +115,7 @@ class TestWatchdogPluginOverride:
         mock_plugin_cls.__name__ = "MockPlugin"
 
         with (
-            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch(
                 "gigaevo.monitoring.watchdog_plugin.get_registry",
                 return_value={"solo": mock_plugin_cls},
@@ -141,7 +141,7 @@ class TestWatchdogPluginOverride:
         manifest = _make_fake_manifest()
 
         with (
-            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch(
                 "gigaevo.monitoring.watchdog_plugin.get_registry",
                 return_value={"solo": MagicMock()},
@@ -165,7 +165,7 @@ class TestWatchdogNoProxy:
         manifest = _make_fake_manifest()
 
         with (
-            patch("gigaevo.monitoring.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
             patch(
                 "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
