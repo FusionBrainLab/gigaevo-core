@@ -6,8 +6,10 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
+import pytest
 
 from gigaevo.cli import main
+from gigaevo.cli.manifest_cmd import _traverse_raw as _traverse_raw
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -609,6 +611,39 @@ class TestManifestResetStatus:
                 "hover/test", "preregistered", allow_recovery=True
             )
             mock_update.assert_not_called()
+
+
+class TestTraverseRawBrackets:
+    """Bracket-indexed path support in _traverse_raw (B2 reproducer + fix)."""
+
+    def test_plain_dotted_path_still_works(self):
+        raw = {"experiment": {"status": "running"}}
+        assert _traverse_raw(raw, "experiment.status") == "running"
+
+    def test_bracket_index_reads_list_element(self):
+        raw = {"runs": [{"db": 5, "label": "A"}, {"db": 6, "label": "B"}]}
+        assert _traverse_raw(raw, "runs[0].db") == 5
+        assert _traverse_raw(raw, "runs[1].label") == "B"
+
+    def test_bracket_negative_index(self):
+        raw = {"runs": [{"label": "A"}, {"label": "B"}, {"label": "C"}]}
+        assert _traverse_raw(raw, "runs[-1].label") == "C"
+        assert _traverse_raw(raw, "runs[-2].label") == "B"
+
+    def test_bracket_index_without_trailing_field(self):
+        raw = {"servers": ["host1", "host2"]}
+        assert _traverse_raw(raw, "servers[0]") == "host1"
+        assert _traverse_raw(raw, "servers[-1]") == "host2"
+
+    def test_bracket_out_of_range_raises_keyerror(self):
+        raw = {"runs": [{"db": 5}]}
+        with pytest.raises(KeyError):
+            _traverse_raw(raw, "runs[99].db")
+
+    def test_bracket_missing_parent_key_raises_keyerror(self):
+        raw = {"runs": [{"db": 5}]}
+        with pytest.raises(KeyError):
+            _traverse_raw(raw, "nonexistent[0].db")
 
 
 class TestManifestRequiresExperiment:

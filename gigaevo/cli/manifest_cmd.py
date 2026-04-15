@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+import re
 import subprocess
 from typing import Any
 
@@ -61,13 +62,36 @@ def _coerce_value(raw_value: str) -> Any:
 
 
 def _traverse_raw(raw: dict[str, Any], dotted_path: str) -> Any:
-    """Walk a dotted path through nested dicts. Raises KeyError if not found."""
+    """Walk a dotted path through nested dicts.
+
+    Supports bracket indexing: e.g., 'runs[0].db' or 'runs[-1].label'.
+    Raises KeyError if not found or index out of range.
+    """
+    _BRACKET_RE = re.compile(r"^([^\[]+)\[(-?\d+)\]$")
     parts = dotted_path.split(".")
     current: Any = raw
+
     for part in parts:
-        if not isinstance(current, dict) or part not in current:
-            raise KeyError(dotted_path)
-        current = current[part]
+        m = _BRACKET_RE.match(part)
+        if m:
+            # Bracket-indexed access: 'runs[0]' or 'servers[-1]'
+            key, idx = m.group(1), int(m.group(2))
+            if not isinstance(current, dict) or key not in current:
+                raise KeyError(dotted_path)
+            seq = current[key]
+            if not isinstance(seq, list):
+                raise KeyError(dotted_path)
+            if not (-len(seq) <= idx < len(seq)):
+                raise KeyError(
+                    f"{dotted_path} (index {idx} out of range for {key})"
+                )
+            current = seq[idx]
+        else:
+            # Plain dict key: 'launch' or 'experiment'
+            if not isinstance(current, dict) or part not in current:
+                raise KeyError(dotted_path)
+            current = current[part]
+
     return current
 
 

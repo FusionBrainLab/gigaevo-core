@@ -8,10 +8,9 @@ refactor. These tests cover the four package-private symbols directly, using
 from __future__ import annotations
 
 import os
-import threading
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+import time
+from unittest.mock import patch
 
 import fakeredis
 import pytest
@@ -24,7 +23,6 @@ from gigaevo.experiment.lock import (
     _release_lock,
     _write_manifest_atomic,
 )
-
 
 # ---------------------------------------------------------------------------
 # _get_redis
