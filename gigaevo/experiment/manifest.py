@@ -1049,7 +1049,7 @@ def find_active_experiments() -> list[ExperimentManifest]:
         experiment = str(rel)
         try:
             m = load_manifest(experiment)
-            if m.status in ("implemented", "running"):
+            if m.lifecycle.status in ("implemented", "running"):
                 active.append(m)
         except (ValueError, yaml.YAMLError, FileNotFoundError):
             continue
@@ -1059,7 +1059,7 @@ def find_active_experiments() -> list[ExperimentManifest]:
 def has_test_set(experiment: str) -> bool:
     """Quick check: does this experiment have a test set?"""
     m = load_manifest(experiment)
-    return m.problem.has_test_set
+    return m.contract.problem.has_test_set
 
 
 # ---------------------------------------------------------------------------
@@ -1078,28 +1078,31 @@ _STATUS_BADGES = {
 def generate_pr_description(experiment: str) -> str:
     """Generate PR_DESCRIPTION.md content from experiment.yaml."""
     m = load_manifest(experiment)
-    badge = _STATUS_BADGES.get(m.experiment.status, m.experiment.status)
+    identity = m.contract.identity
+    lifecycle = m.lifecycle
+    checkpoints = m.telemetry.checkpoints
+    badge = _STATUS_BADGES.get(lifecycle.status, lifecycle.status)
 
     # Running badge includes generation info
-    if m.experiment.status == "running" and m.checkpoints:
-        last_cp = m.checkpoints[-1]
-        gen = last_cp.get("gen", "?")
-        badge = f"🟡 Running (gen {gen}/{m.experiment.max_generations})"
-    elif m.experiment.status == "running":
-        badge = f"🟡 Running (gen 0/{m.experiment.max_generations})"
+    if lifecycle.status == "running" and checkpoints:
+        last_cp = checkpoints[-1]
+        gen = last_cp.gen
+        badge = f"🟡 Running (gen {gen}/{m.contract.max_generations})"
+    elif lifecycle.status == "running":
+        badge = f"🟡 Running (gen 0/{m.contract.max_generations})"
 
     lines = [
-        f"# exp: {m.experiment.name}",
+        f"# exp: {identity.name}",
         "",
         f"**Status**: {badge}",
-        f"**Branch**: `{m.experiment.branch}`",
-        f"**Tracking issue**: #{m.experiment.tracking_issue}"
-        if m.experiment.tracking_issue
+        f"**Branch**: `{identity.branch}`",
+        f"**Tracking issue**: #{identity.tracking_issue}"
+        if identity.tracking_issue
         else "",
         "",
         "## Design",
         "",
-        f"See `experiments/{m.experiment.name}/01_design.md` for full design.",
+        f"See `experiments/{identity.name}/01_design.md` for full design.",
         "",
         "## Runs",
         "",
@@ -1107,7 +1110,7 @@ def generate_pr_description(experiment: str) -> str:
         "|-------|----|-----------|----------|-----|",
     ]
 
-    for run in m.runs:
+    for run in m.contract.runs:
         pid_str = str(run.pid) if run.pid else "-"
         lines.append(
             f"| {run.label} | {run.db} | {run.condition} | {run.pipeline} | {pid_str} |"
@@ -1115,25 +1118,23 @@ def generate_pr_description(experiment: str) -> str:
 
     lines.extend(["", "## Checkpoints", ""])
 
-    if m.checkpoints:
+    if checkpoints:
         lines.append("| Gen | Time | Notes |")
         lines.append("|-----|------|-------|")
-        for cp in m.checkpoints:
-            gen = cp.get("gen", "?")
-            ts = cp.get("timestamp", "")
-            notes = cp.get("notes", "")
-            lines.append(f"| {gen} | {ts} | {notes} |")
+        for cp in checkpoints:
+            lines.append(f"| {cp.gen} | {cp.timestamp} | {cp.notes} |")
     else:
         lines.append("_No checkpoints yet._")
 
-    if m.baseline.reference:
+    baseline = m.contract.baseline
+    if baseline.reference:
         lines.extend(
             [
                 "",
                 "## Baseline",
                 "",
-                f"Reference: `{m.baseline.reference}` "
-                f"(mean={m.baseline.mean}, metric={m.baseline.metric})",
+                f"Reference: `{baseline.reference}` "
+                f"(mean={baseline.mean}, metric={baseline.metric})",
             ]
         )
 

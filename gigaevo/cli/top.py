@@ -81,8 +81,8 @@ def top(
             from gigaevo.experiment.manifest import load_manifest
 
             manifest = load_manifest(experiment)
-            if manifest.problem.metric_name:
-                metric = manifest.problem.metric_name
+            if manifest.contract.problem.metric_name:
+                metric = manifest.contract.problem.metric_name
         except Exception:
             pass  # fall back to "fitness"
 

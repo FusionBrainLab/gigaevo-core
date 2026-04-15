@@ -418,7 +418,7 @@ def reset_status(
     )
 
     m = load_manifest(experiment)
-    current = m.experiment.status
+    current = m.lifecycle.status
     click.echo(f"Current status: {current}")
     click.echo(f"Target status:  {target_status}")
     click.echo(f"Reason:         {reason}")
@@ -434,7 +434,7 @@ def reset_status(
             return
 
     if current == "running" and target_status in ("implemented", "preregistered"):
-        dbs = [r.db for r in m.runs]
+        dbs = [r.db for r in m.contract.runs]
         click.echo(f"Releasing DB claims: {dbs}")
         release_db_claims(dbs)
 
