@@ -35,7 +35,7 @@ from gigaevo.experiment.lock import (
 
 PROJ = Path(__file__).parent.parent.parent
 
-SUPPORTED_SCHEMA_VERSIONS = {1}
+SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 VALID_STATUSES = {"preregistered", "implemented", "running", "complete", "invalid"}
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -138,9 +138,15 @@ class ProblemSpec(BaseModel):
 
 
 class LaunchInfo(BaseModel):
-    """Launch state information."""
+    """Launch state information.
 
-    model_config = ConfigDict(extra="ignore")
+    ``extra="allow"`` preserves v1 sidecar fields (``anomaly_detector_cron_id``,
+    ``checkpoint_cron_id``) that the v2 schema relocates under ``control_plane``.
+    Keeping them round-trippable here lets ``ExperimentManifest.control_plane``
+    surface them for in-memory reads until the step-7 yaml migration lands.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     time: str | None = None
     commit: str | None = None
@@ -370,6 +376,86 @@ class NotificationsSection(BaseModel):
     telegram: TelegramChannelConfig = TelegramChannelConfig()
 
 
+# ---------------------------------------------------------------------------
+# Schema v2 top-level sub-model groups (step 4).
+#
+# These bundle the existing flat fields under four concerns:
+#   contract      — pre-registered, researcher-authored, frozen at preregistered
+#   lifecycle     — operational state (status, launch, smoke test, treatment verify)
+#   telemetry     — append-only runtime records (checkpoints, analyses, checks)
+#   control_plane — live processes + dashboards (watchdog, notifications, crons)
+#
+# For v1 inputs (flat yaml), ExperimentManifest exposes these as computed views
+# derived from the flat fields. Step 5 switches the loader so v2 (nested) yamls
+# become the canonical on-disk shape; at that point flat fields are derived
+# from the nested sub-groups (and finally removed in step 9).
+# ---------------------------------------------------------------------------
+
+
+class ExperimentIdentity(BaseModel):
+    """Pre-registered identity of an experiment (immutable after preregistration)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    task: str
+    branch: str = ""
+    prereg_commit: str | None = None
+    pr_number: int | None = None
+    tracking_issue: int | None = None
+
+
+class ContractSection(BaseModel):
+    """The scientific contract — what was pre-registered and must not drift."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    identity: ExperimentIdentity
+    problem: ProblemSpec = ProblemSpec()
+    config: ConfigSpec = ConfigSpec()
+    runs: list[RunSpec] = []
+    servers: list[str] = []
+    custom_env: dict[str, str] = {}
+    max_generations: int = 25
+    stopping_rule: StoppingRule = StoppingRule()
+    baseline: BaselineInfo = BaselineInfo()
+    tools: list[ToolRef] = []
+
+
+class LifecycleState(BaseModel):
+    """Operational state — status, launch info, one-shot lifecycle gates."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: str
+    launch: LaunchInfo = LaunchInfo()
+    smoke_test: SmokeTestInfo = SmokeTestInfo()
+    treatment_verification: TreatmentVerificationInfo = TreatmentVerificationInfo()
+
+
+class TelemetryLog(BaseModel):
+    """Append-only runtime records produced during the run."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    checkpoints: list[CheckpointEntry] = []
+    mid_run_test_eval: MidRunTestEvalInfo = MidRunTestEvalInfo()
+    checkpoint_analysis: CheckpointAnalysisInfo = CheckpointAnalysisInfo()
+    treatment_checks: TreatmentChecksInfo = TreatmentChecksInfo()
+
+
+class ControlPlane(BaseModel):
+    """Live control-plane state — watchdog, notifications, cron IDs, PIDs."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    watchdog: WatchdogSection = WatchdogSection()
+    notifications: NotificationsSection = NotificationsSection()
+    watchdog_pid: int | None = None
+    anomaly_detector_cron_id: str | None = None
+    checkpoint_cron_id: str | None = None
+
+
 class ExperimentSection(BaseModel):
     """The 'experiment' section of experiment.yaml."""
 
@@ -407,9 +493,15 @@ class ExperimentManifest(BaseModel):
 
     Status-gated validation: fields that are required depend on the
     current experiment status (preregistered < implemented < running < complete).
+
+    ``extra="allow"`` is required for v1 compatibility: v1 yamls carry
+    ``mid_run_test_eval``, ``checkpoint_analysis`` and ``treatment_checks``
+    at the top level. The v2 schema relocates them under ``telemetry``;
+    until the step-7 yaml migration lands we keep them round-trippable here
+    so the computed ``telemetry`` view can surface them.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
 
     schema_version: int
     experiment: ExperimentSection
@@ -520,6 +612,103 @@ class ExperimentManifest(BaseModel):
                 )
         return self
 
+    # ---- schema v2 view properties (step 4) ------------------------------
+    #
+    # These derive the four target sub-groups from the current flat fields so
+    # downstream code can start consuming ``m.contract.*`` / ``m.lifecycle.*``
+    # / ``m.telemetry.*`` / ``m.control_plane.*`` while the on-disk yamls
+    # remain v1. Step 5 (OmegaConf loader) and step 7 (yaml migration) flip
+    # the primary direction so nested becomes canonical.
+
+    @property
+    def contract(self) -> ContractSection:
+        """ContractSection view derived from flat fields."""
+        return ContractSection(
+            identity=ExperimentIdentity(
+                name=self.experiment.name,
+                task=self.experiment.task,
+                branch=self.experiment.branch,
+                prereg_commit=self.experiment.prereg_commit,
+                pr_number=self.experiment.pr_number,
+                tracking_issue=self.experiment.tracking_issue,
+            ),
+            problem=self.problem,
+            config=ConfigSpec(extra=dict(self.config)) if self.config else ConfigSpec(),
+            runs=list(self.runs),
+            servers=list(self.servers),
+            custom_env=dict(self.custom_env),
+            max_generations=self.experiment.max_generations,
+            stopping_rule=StoppingRule(description=self.experiment.stopping_rule or ""),
+            baseline=self.baseline,
+            tools=[
+                ToolRef.model_validate(t) if isinstance(t, dict) else t
+                for t in self.tools
+            ],
+        )
+
+    @property
+    def lifecycle(self) -> LifecycleState:
+        """LifecycleState view derived from flat fields."""
+        return LifecycleState(
+            status=self.experiment.status,
+            launch=self.launch,
+            smoke_test=self.smoke_test,
+            treatment_verification=self.treatment_verification,
+        )
+
+    @property
+    def telemetry(self) -> TelemetryLog:
+        """TelemetryLog view derived from flat fields + raw extras."""
+        extras = self.model_extra or {}
+        mre_raw = extras.get("mid_run_test_eval")
+        ca_raw = extras.get("checkpoint_analysis")
+        tc_raw = extras.get("treatment_checks")
+
+        mid_run = (
+            MidRunTestEvalInfo.model_validate(mre_raw)
+            if isinstance(mre_raw, dict)
+            else MidRunTestEvalInfo()
+        )
+        ca = (
+            CheckpointAnalysisInfo.model_validate(ca_raw)
+            if isinstance(ca_raw, dict)
+            else CheckpointAnalysisInfo()
+        )
+        # v1 ``treatment_checks`` has two shapes (list of checks vs dict of
+        # pattern lists) — neither matches the v2 target shape. Normalize by
+        # returning the default; the step 6 migration CLI handles conversion.
+        tc = (
+            TreatmentChecksInfo.model_validate(tc_raw)
+            if isinstance(tc_raw, dict)
+            and "results" in tc_raw
+            and isinstance(tc_raw.get("results"), list)
+            else TreatmentChecksInfo()
+        )
+
+        checkpoints = [
+            CheckpointEntry.model_validate(cp) if isinstance(cp, dict) else cp
+            for cp in self.checkpoints
+        ]
+
+        return TelemetryLog(
+            checkpoints=checkpoints,
+            mid_run_test_eval=mid_run,
+            checkpoint_analysis=ca,
+            treatment_checks=tc,
+        )
+
+    @property
+    def control_plane(self) -> ControlPlane:
+        """ControlPlane view derived from flat fields + LaunchInfo extras."""
+        launch_extras = self.launch.model_extra or {}
+        return ControlPlane(
+            watchdog=self.watchdog,
+            notifications=NotificationsSection(),  # v1 has no notifications — defaults
+            watchdog_pid=self.launch.watchdog_pid,
+            anomaly_detector_cron_id=launch_extras.get("anomaly_detector_cron_id"),
+            checkpoint_cron_id=launch_extras.get("checkpoint_cron_id"),
+        )
+
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> ExperimentManifest:
         """Validate a raw dict and return an ExperimentManifest."""
@@ -574,6 +763,158 @@ def export_json_schema(output_path: str | Path) -> None:
     with open(path, "w") as f:
         json.dump(schema, f, indent=2)
         f.write("\n")
+
+
+# ---------------------------------------------------------------------------
+# v1 → v2 migration (pure dict transform used by step 6 migration CLI)
+# ---------------------------------------------------------------------------
+
+
+def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
+    """Transform a flat v1 manifest dict into a nested v2 dict.
+
+    Input (v1):   top-level ``experiment``, ``runs``, ``watchdog``, ``launch``,
+                  ``checkpoints``, etc. scattered across the root.
+    Output (v2):  four sub-sections ``contract`` / ``lifecycle`` / ``telemetry``
+                  / ``control_plane`` with the same content re-homed.
+
+    This is a pure function — the input dict is not mutated. The output must
+    validate against ``ExperimentManifest`` (which accepts both shapes during
+    the transition).
+    """
+    import copy
+
+    src = copy.deepcopy(raw)
+
+    exp = src.get("experiment", {}) or {}
+    problem = src.get("problem", {}) or {}
+    runs = src.get("runs", []) or []
+    servers = src.get("servers", []) or []
+    config_raw = src.get("config", {}) or {}
+    custom_env = src.get("custom_env", {}) or {}
+    baseline = src.get("baseline", {}) or {}
+    tools = src.get("tools", []) or []
+    launch = dict(src.get("launch", {}) or {})
+    smoke_test = src.get("smoke_test", {}) or {}
+    treatment_verification = src.get("treatment_verification", {}) or {}
+    watchdog = src.get("watchdog", {}) or {}
+    checkpoints = src.get("checkpoints", []) or []
+    mid_run_test_eval = src.get("mid_run_test_eval", {}) or {}
+    checkpoint_analysis = src.get("checkpoint_analysis", {}) or {}
+    treatment_checks_raw = src.get("treatment_checks")
+
+    # contract.identity — pull identity fields off of ``experiment.*``
+    identity = {
+        "name": exp.get("name"),
+        "task": exp.get("task"),
+        "branch": exp.get("branch", ""),
+        "prereg_commit": exp.get("prereg_commit") or src.get("prereg_commit"),
+        "pr_number": exp.get("pr_number") or src.get("pr_number"),
+        "tracking_issue": exp.get("tracking_issue") or src.get("tracking_issue"),
+    }
+
+    # contract.config — v1 is a flat dict; v2 nests problem-specific knobs
+    # under ``extra`` so the typed keys stay separate.
+    typed_cfg_keys = {
+        "problem_name",
+        "pipeline",
+        "prompt_fetcher",
+        "evolution",
+        "llm_model",
+        "n_workers",
+        "max_generations",
+    }
+    cfg_typed = {k: config_raw[k] for k in typed_cfg_keys if k in config_raw}
+    cfg_extra = {k: v for k, v in config_raw.items() if k not in typed_cfg_keys}
+    config_v2: dict[str, Any] = dict(cfg_typed)
+    config_v2["extra"] = cfg_extra
+
+    # contract.stopping_rule — prose in v1 becomes StoppingRule.description
+    stopping_rule_v2 = {
+        "description": exp.get("stopping_rule", "") or "",
+        "conditions": [],
+    }
+
+    contract = {
+        "identity": identity,
+        "problem": problem,
+        "config": config_v2,
+        "runs": runs,
+        "servers": servers,
+        "custom_env": custom_env,
+        "max_generations": exp.get("max_generations", 25),
+        "stopping_rule": stopping_rule_v2,
+        "baseline": baseline,
+        "tools": tools,
+    }
+
+    # control_plane sidecars (cron IDs + watchdog PID) are pulled off launch.*
+    watchdog_pid = launch.pop("watchdog_pid", None)
+    anomaly_cron = launch.pop("anomaly_detector_cron_id", None)
+    checkpoint_cron = launch.pop("checkpoint_cron_id", None)
+
+    lifecycle = {
+        "status": exp.get("status", "preregistered"),
+        "launch": launch,
+        "smoke_test": smoke_test,
+        "treatment_verification": treatment_verification,
+    }
+
+    # telemetry.treatment_checks — v1 has two incompatible shapes. Only carry
+    # forward when the v1 shape already matches the v2 target (list-of-dicts
+    # under a ``results`` key). Otherwise emit an empty default; operators can
+    # hand-populate after migration.
+    if (
+        isinstance(treatment_checks_raw, dict)
+        and "results" in treatment_checks_raw
+        and isinstance(treatment_checks_raw.get("results"), list)
+    ):
+        treatment_checks_v2 = treatment_checks_raw
+    else:
+        treatment_checks_v2 = {"completed": False, "results": []}
+
+    telemetry = {
+        "checkpoints": checkpoints,
+        "mid_run_test_eval": mid_run_test_eval,
+        "checkpoint_analysis": checkpoint_analysis,
+        "treatment_checks": treatment_checks_v2,
+    }
+
+    control_plane = {
+        "watchdog": watchdog,
+        "notifications": {
+            "pr": {"enabled": True, "comment_mode": "rolling"},
+            "telegram": {
+                "enabled": True,
+                "chat_id_env": "TELEGRAM_CHAT_ID",
+                "token_env": "TELEGRAM_BOT_TOKEN",
+            },
+        },
+        "watchdog_pid": watchdog_pid,
+        "anomaly_detector_cron_id": anomaly_cron,
+        "checkpoint_cron_id": checkpoint_cron,
+    }
+
+    return {
+        "schema_version": 2,
+        "experiment": exp,  # keep flat ExperimentSection for backward-compat reads
+        "problem": problem,
+        "runs": runs,
+        "servers": servers,
+        "config": config_raw,
+        "custom_env": custom_env,
+        "baseline": baseline,
+        "smoke_test": smoke_test,
+        "launch": launch,
+        "treatment_verification": treatment_verification,
+        "watchdog": watchdog,
+        "checkpoints": checkpoints,
+        "tools": tools,
+        "contract": contract,
+        "lifecycle": lifecycle,
+        "telemetry": telemetry,
+        "control_plane": control_plane,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -893,6 +1234,14 @@ __all__ = [
     "PrChannelConfig",
     "TelegramChannelConfig",
     "NotificationsSection",
+    # v2 sub-model groups (added step 4)
+    "ExperimentIdentity",
+    "ContractSection",
+    "LifecycleState",
+    "TelemetryLog",
+    "ControlPlane",
+    "SUPPORTED_SCHEMA_VERSIONS",
+    "_migrate_v1_to_v2",
     "export_json_schema",
     "experiment_dir",
     "manifest_path",
