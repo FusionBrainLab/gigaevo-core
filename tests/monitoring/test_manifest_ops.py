@@ -11,12 +11,13 @@ from gigaevo.experiment.manifest import (
     RECOVERY_TRANSITIONS,
     VALID_TRANSITIONS,
     ExperimentManifest,
-    _write_manifest_atomic,
     experiment_dir,
     generate_pr_description,
     load_manifest,
     manifest_path,
+    recover_status,
     set_status,
+    write_manifest_atomic,
 )
 
 
@@ -68,7 +69,7 @@ def _implementable_manifest_dict(
         }
     ]
     d["contract"]["servers"] = ["server1"]
-    d["contract"]["config"] = {"extra": {"key": "value"}}
+    d["contract"]["config"] = {"key": "value"}
     d["lifecycle"]["smoke_test"] = {"completed": True}
     return d
 
@@ -115,6 +116,35 @@ class TestLoadManifest:
         assert result.contract.identity.name == "hover/test-exp"
         assert result.lifecycle.status == "preregistered"
 
+    def test_strict_rejects_unknown_top_level_key(self, tmp_path):
+        """strict=True must catch typos that the model would otherwise drop."""
+        exp_dir = tmp_path / "experiments" / "hover" / "test-exp"
+        exp_dir.mkdir(parents=True)
+        data = _minimal_manifest_dict()
+        data["lifeycycle"] = {"status": "preregistered"}  # typo, sibling
+        (exp_dir / "experiment.yaml").write_text(yaml.safe_dump(data))
+
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
+            # default (non-strict) silently ignores it
+            load_manifest("hover/test-exp")
+            # strict mode raises with a helpful message
+            with pytest.raises(Exception, match="lifeycycle"):
+                load_manifest("hover/test-exp", strict=True)
+
+    def test_strict_accepts_canonical_v2_keys(self, tmp_path):
+        """strict mode must NOT reject any of the documented v2 sections."""
+        exp_dir = tmp_path / "experiments" / "hover" / "test-exp"
+        exp_dir.mkdir(parents=True)
+        data = _minimal_manifest_dict()
+        data["telemetry"] = {"checkpoints": []}
+        data["control_plane"] = {}
+        (exp_dir / "experiment.yaml").write_text(yaml.safe_dump(data))
+
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
+            result = load_manifest("hover/test-exp", strict=True)
+
+        assert result.contract.identity.name == "hover/test-exp"
+
 
 class TestSetStatus:
     def test_valid_transition(self, tmp_path):
@@ -129,7 +159,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_redis),
         ):
             result = set_status("hover/test-exp", "implemented")
 
@@ -147,7 +177,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_redis),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status("hover/test-exp", "running")
@@ -164,9 +194,9 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_redis),
         ):
-            result = set_status("hover/test-exp", "implemented", allow_recovery=True)
+            result = recover_status("hover/test-exp", "implemented")
 
         assert result.lifecycle.status == "implemented"
 
@@ -175,7 +205,7 @@ class TestWriteManifestAtomic:
     def test_writes_yaml_file(self, tmp_path):
         target = tmp_path / "test.yaml"
         data = {"key": "value", "nested": {"a": 1}}
-        _write_manifest_atomic(target, data)
+        write_manifest_atomic(target, data)
 
         assert target.exists()
         loaded = yaml.safe_load(target.read_text())
@@ -184,7 +214,7 @@ class TestWriteManifestAtomic:
 
     def test_tmp_file_cleaned_up(self, tmp_path):
         target = tmp_path / "test.yaml"
-        _write_manifest_atomic(target, {"key": "value"})
+        write_manifest_atomic(target, {"key": "value"})
         assert not target.with_suffix(".yaml.tmp").exists()
 
 
