@@ -107,5 +107,6 @@ pipeline_builder:
   source_prompt_k: ${source_prompt_k}
   per_opponent_timeout: 300.0
   archive_reeval: false
+  dg_tracker: ${dg_tracker}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}

@@ -18,6 +18,7 @@ from typing import Literal
 
 from loguru import logger
 
+from gigaevo.adversarial.dg_tracker_stage import DGTrackerStage
 from gigaevo.adversarial.gradient_prompt import GradientInPromptStage
 from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
 from gigaevo.adversarial.pipeline import AdversarialPipelineBuilder
@@ -70,6 +71,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         per_opponent_timeout: float = 10.0,
         fallback_dir: str = "fallback",
         archive_reeval: bool = False,
+        dg_tracker: object = None,
         *,
         dag_timeout: float = 7200.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
@@ -96,15 +98,39 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
                     "gradient_in_prompt feedback mode requires d_provider "
                     "(OpponentArchiveProvider pointing to D's archive)"
                 )
-            self._add_gradient_prompt(d_provider, stage_timeout)
+            self._add_gradient_prompt(d_provider, dg_tracker, stage_timeout)
+
+        # Wire DGTrackerStage to record per-opponent fitness deltas into tracker.
+        if dg_tracker is not None:
+            self._add_dg_tracker_stage(dg_tracker, population_role, stage_timeout)
+
+        # Wire cache_on edges so InsightsStage/LineageStage invalidate when the
+        # opponent set rotates. The InputsModel of each is CacheOnlyInput, so
+        # the field value (opponent IDs) is folded into the cache hash without
+        # affecting compute(). Guarded so non-default pipelines stay safe.
+        self._wire_cache_on_edges()
 
         logger.info(
-            "[AsymmetricPipeline] role={} feedback={} n_opp={} source_prompt_k={}",
+            "[AsymmetricPipeline] role={} feedback={} n_opp={} source_prompt_k={} "
+            "dg_tracker={}",
             population_role,
             feedback_mode,
             n_opponents,
             source_prompt_k,
+            "yes" if dg_tracker is not None else "no",
         )
+
+    def _wire_cache_on_edges(self) -> None:
+        """Attach FetchOpponentIdsStage output as cache_on for LLM stages.
+
+        Idempotent and safe: only fires when the target stage is registered.
+        """
+        if "InsightsStage" in self._nodes:
+            self.add_data_flow_edge(
+                "FetchOpponentIdsStage", "InsightsStage", "cache_on"
+            )
+        if "LineageStage" in self._nodes:
+            self.add_data_flow_edge("FetchOpponentIdsStage", "LineageStage", "cache_on")
 
     def _add_source_injection(
         self,
@@ -135,13 +161,18 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
     def _add_gradient_prompt(
         self,
         d_provider: OpponentArchiveProvider,
+        dg_tracker: object | None,
         stage_timeout: float,
     ) -> None:
+        provider = d_provider  # Capture for lambda closure.
+        tracker = dg_tracker  # Capture for lambda closure.
+
         self.remove_data_flow_edge("FormatterStage", "MutationContextStage")
         self.add_stage(
             "GradientInPromptStage",
             lambda: GradientInPromptStage(
-                opponent_provider=d_provider,
+                opponent_provider=provider,
+                dg_tracker=tracker,
                 timeout=stage_timeout,
             ),
         )
@@ -151,4 +182,43 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         self.add_exec_dep(
             "GradientInPromptStage",
             ExecutionOrderDependency.on_success("ValidateCodeStage"),
+        )
+
+    def _add_dg_tracker_stage(
+        self, dg_tracker: object, population_role: str, stage_timeout: float
+    ) -> None:
+        """Add DGTrackerStage to record per-opponent fitness deltas into the tracker.
+
+        This stage is a pass-through that extracts per-opponent fitness deltas from
+        the validator artifact and records them into the DGImprovementTracker for
+        feedback pathways (gradient_in_prompt, composition injection).
+
+        Args:
+            dg_tracker: DGImprovementTracker instance.
+            population_role: "constructor" or "improver".
+            stage_timeout: Per-stage execution timeout.
+        """
+        tracker = dg_tracker  # Capture for lambda closure.
+        role = population_role  # Capture for lambda closure.
+        timeout = stage_timeout  # Capture for lambda closure.
+
+        def make_stage():
+            return DGTrackerStage(
+                dg_tracker=tracker,
+                role=role,
+                timeout=timeout,
+            )
+
+        self.add_stage("DGTrackerStage", make_stage)
+        # Wire: opponent_ids from FetchOpponentIdsStage, validation_result from CallValidatorFunction
+        self.add_data_flow_edge(
+            "FetchOpponentIdsStage", "DGTrackerStage", "opponent_ids"
+        )
+        self.add_data_flow_edge(
+            "CallValidatorFunction", "DGTrackerStage", "validation_result"
+        )
+        # Execution: run after CallValidatorFunction completes
+        self.add_exec_dep(
+            "DGTrackerStage",
+            ExecutionOrderDependency.on_success("CallValidatorFunction"),
         )
