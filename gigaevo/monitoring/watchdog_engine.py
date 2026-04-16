@@ -18,6 +18,7 @@ import time
 from loguru import logger
 import redis as redis_lib
 
+from gigaevo.experiment.manifest import set_status
 from gigaevo.monitoring.alerts import Alert, AlertDetector, AlertSeverity, AlertType
 from gigaevo.monitoring.dispatcher import NotificationDispatcher
 from gigaevo.monitoring.experiment_monitor import ExperimentMonitor, RunConfig
@@ -195,6 +196,11 @@ class WatchdogEngine:
         # 9. Completion detection
         if any(a.alert_type == AlertType.COMPLETION for a in alerts):
             self._write_completion(snapshots)
+            try:
+                set_status(self.experiment_name, "complete")
+                _log.info("Manifest status transitioned to 'complete'")
+            except Exception as exc:
+                _log.error(f"Failed to set manifest status to complete: {exc}")
             self._shutdown = True
 
         # 10. Cleanup old plots

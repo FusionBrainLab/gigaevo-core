@@ -529,6 +529,34 @@ class TestCompletionShutdown:
         key = "experiments:test/exp:completion"
         assert r.exists(key)
 
+    def test_cycle_transitions_manifest_to_complete(self):
+        """When COMPLETION alert fires, watchdog calls set_status(complete)."""
+        from unittest.mock import patch
+
+        completion_alert = Alert(
+            alert_type=AlertType.COMPLETION,
+            severity=AlertSeverity.INFO,
+            run_label="experiment",
+            message="All done",
+        )
+        detector = MagicMock()
+        detector.check.return_value = [completion_alert]
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
+
+        engine = _make_engine(
+            alert_detector=detector,
+            heartbeat_redis=r,
+        )
+        engine.experiment_name = "test/exp"
+
+        with patch(
+            "gigaevo.monitoring.watchdog_engine.set_status"
+        ) as mock_set_status:
+            asyncio.run(engine._cycle(cycle=1))
+            mock_set_status.assert_called_once_with("test/exp", "complete")
+
 
 class TestTelegramBodyWiring:
     """Engine calls plugin.format_telegram_body and passes result to StatusUpdate."""
