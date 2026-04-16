@@ -271,8 +271,7 @@ def test_sync_min_delta_decoupled_from_max_mutations():
             *_ADVERSARIAL_OVERRIDES,
         )
         assert cfg.pre_step_hook.min_delta == 1, (
-            f"pipeline={pipeline}: overriding sync_min_delta=1 should set "
-            f"min_delta=1"
+            f"pipeline={pipeline}: overriding sync_min_delta=1 should set min_delta=1"
         )
 
 
