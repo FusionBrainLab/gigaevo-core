@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 """Generate launch.sh from experiment.yaml manifest.
 
-Eliminates hand-written launch scripts that drift from the manifest.
+Called internally by ``gigaevo.experiment.launch.run_launch()``.
 All values (servers, runs, config, custom_env) come from experiment.yaml.
-
-DEPRECATED: Use `gigaevo -e task/name generate-launch` instead.
-
-Usage (legacy):
-    PYTHONPATH=. $GIGAEVO_PYTHON tools/experiment/generate_launch.py --experiment hover/feedback_softfit
 """
 
 from __future__ import annotations
 
-import argparse
 import os
 from pathlib import Path
 
-from gigaevo.experiment.manifest import experiment_dir, load_manifest
+from gigaevo.experiment.manifest import load_manifest
 
 # Derive project root from this file's location (still needed for the generated
 # launch.sh to reference the repo root via $PROJ).
@@ -40,9 +34,7 @@ def generate(experiment: str) -> str:
     # Header
     lines.append("#!/usr/bin/env bash")
     lines.append("# GENERATED from experiment.yaml — do not edit manually.")
-    lines.append(
-        f"# Regenerate: PYTHONPATH=. $GIGAEVO_PYTHON tools/experiment/generate_launch.py --experiment {experiment}"
-    )
+    lines.append(f"# Regenerate: gigaevo -e {experiment} launch --dry-run")
     lines.append("#")
     lines.append(f"# Experiment: {m.contract.identity.name}")
     lines.append(f"# Branch: {m.contract.identity.branch}")
@@ -252,30 +244,3 @@ def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
         params.append("--cfg job")
 
     return params
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Generate launch.sh from experiment.yaml"
-    )
-    parser.add_argument(
-        "--experiment", required=True, help="e.g. hover/feedback_softfit"
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Print to stdout instead of writing"
-    )
-    args = parser.parse_args()
-
-    content = generate(args.experiment)
-
-    if args.dry_run:
-        print(content)
-    else:
-        out_path = experiment_dir(args.experiment) / "launch.sh"
-        out_path.write_text(content)
-        out_path.chmod(0o755)
-        print(f"Written: {out_path}")
-
-
-if __name__ == "__main__":
-    main()

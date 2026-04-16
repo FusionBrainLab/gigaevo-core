@@ -178,8 +178,7 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 | `check_phase_order.sh` | Pre-launch gate: verify protocol docs, experiment.yaml, launch.sh, N>=2 | `<experiment-name>` |
 | `check_experiment_complete.sh` | Pre-merge gate: verify all 5 phases, archives, release assets, INDEX.md | `<experiment-name>` |
 | ~~`preflight_check.py`~~ | Replaced by `gigaevo.experiment.checks` (10 principled checks) | `gigaevo -e task/name launch` |
-| `generate_launch.py` | Generate `launch.sh` from experiment.yaml manifest | `--experiment task/name`, `--dry-run` |
-| `manifest.py` | Load/update `experiment.yaml` programmatically | `import` — not a CLI tool |
+| ~~`generate_launch.py`~~ | Replaced by `gigaevo.experiment.launch_generator` (called by `gigaevo launch`) | `gigaevo -e task/name launch` |
 | `flush --kill-only` | Kill stale watchdog / run processes | `gigaevo flush --db N1 N2 ... --kill-only` |
 | `check_all_watchdogs.sh` | Cron health check: scan Redis heartbeats, alert on stale watchdogs | standalone (no args) |
 | `skill_env.sh` | Shared env vars for skills (`$PROJ`, `$GIGAEVO_PYTHON`, `$PYTHONPATH`) | `source` — not executable |

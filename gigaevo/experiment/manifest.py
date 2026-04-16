@@ -271,12 +271,7 @@ class CheckResult(BaseModel):
 
 
 class TreatmentChecksInfo(BaseModel):
-    """Target v2 shape for treatment-check verification state.
-
-    The v1 yamls store this field in multiple shapes (list of checks, dict of
-    pattern lists, ...). The migration script in step 6 normalizes them into
-    this single shape.
-    """
+    """Treatment-check verification state."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -347,18 +342,13 @@ class NotificationsSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Schema v2 top-level sub-model groups (step 4).
+# ---------------------------------------------------------------------------
+# Top-level sub-model groups.
 #
-# These bundle the existing flat fields under four concerns:
 #   contract      — pre-registered, researcher-authored, frozen at preregistered
 #   lifecycle     — operational state (status, launch, smoke test, treatment verify)
 #   telemetry     — append-only runtime records (checkpoints, analyses, checks)
 #   control_plane — live processes + dashboards (watchdog, notifications, crons)
-#
-# For v1 inputs (flat yaml), ExperimentManifest exposes these as computed views
-# derived from the flat fields. Step 5 switches the loader so v2 (nested) yamls
-# become the canonical on-disk shape; at that point flat fields are derived
-# from the nested sub-groups (and finally removed in step 9).
 # ---------------------------------------------------------------------------
 
 
@@ -974,7 +964,6 @@ __all__ = [
     "LifecycleState",
     "TelemetryLog",
     "ControlPlane",
-    "SUPPORTED_SCHEMA_VERSIONS",
     "export_json_schema",
     "experiment_dir",
     "manifest_path",
