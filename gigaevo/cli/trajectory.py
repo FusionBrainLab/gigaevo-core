@@ -7,6 +7,7 @@ import json
 import click
 import redis as redis_lib
 
+from gigaevo.cli.output_formatter import OutputFormatter
 from gigaevo.cli.run_resolver import RunResolver
 
 
@@ -65,10 +66,26 @@ def _fetch_trajectory(
     default=None,
     help="Metric(s) to display. Repeatable. Auto-discovers from metrics.yaml in --experiment mode.",
 )
+@click.option(
+    "-f",
+    "--format",
+    "format_name",
+    type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
+    default=None,
+    help="Output format override.",
+)
 @click.pass_context
-def trajectory(ctx: click.Context, tail: int | None, metric: tuple[str, ...]) -> None:
+def trajectory(
+    ctx: click.Context,
+    tail: int | None,
+    metric: tuple[str, ...],
+    format_name: str | None,
+) -> None:
     """Show gen-by-gen fitness trajectory."""
     formatter = ctx.obj["formatter"]
+    if format_name is not None:
+        formatter = OutputFormatter(format_name=format_name)
+        ctx.obj["formatter"] = formatter
     experiment = ctx.obj["experiment"]
     runs = ctx.obj["runs"]
     redis_host = ctx.obj["redis_host"]

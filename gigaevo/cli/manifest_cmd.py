@@ -27,6 +27,8 @@ from typing import Any
 
 import click
 
+from gigaevo.cli.output_formatter import OutputFormatter
+
 
 def _require_experiment(ctx: click.Context) -> str:
     """Extract experiment name from context or exit with error."""
@@ -131,22 +133,31 @@ _SCALAR_FIELD_TO_PATH = {
 
 @manifest.command()
 @click.argument("field")
+@click.option(
+    "-f",
+    "--format",
+    "format_name",
+    type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
+    default=None,
+    help="Output format override (propagates to parent formatter).",
+)
 @click.pass_context
-def get(ctx: click.Context, field: str) -> None:
+def get(ctx: click.Context, field: str, format_name: str | None) -> None:
     """Read a manifest field by name or dotted path.
 
     Special fields: status, runs, max_generations, servers.
     Dotted paths traverse the canonical nested YAML dict (e.g.
     ``control_plane.watchdog_pid`` or ``lifecycle.launch.time``).
     """
-    from gigaevo.cli.output_formatter import OutputFormatter
-
     experiment = _require_experiment(ctx)
 
     from gigaevo.experiment.manifest import load_manifest
 
     manifest_obj = load_manifest(experiment)
     formatter: OutputFormatter = ctx.obj["formatter"]
+    if format_name is not None:
+        formatter = OutputFormatter(format_name=format_name)
+        ctx.obj["formatter"] = formatter
 
     if field == "runs":
         rows = [

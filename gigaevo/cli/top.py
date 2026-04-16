@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 import redis as redis_lib
 
+from gigaevo.cli.output_formatter import OutputFormatter
 from gigaevo.cli.run_resolver import RunResolver
 
 
@@ -58,6 +59,14 @@ def _fetch_top_programs(
 @click.option(
     "--save-dir", type=click.Path(), default=None, help="Save programs to files."
 )
+@click.option(
+    "-f",
+    "--format",
+    "format_name",
+    type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
+    default=None,
+    help="Output format override.",
+)
 @click.pass_context
 def top(
     ctx: click.Context,
@@ -66,9 +75,13 @@ def top(
     minimize: bool,
     show_code: bool,
     save_dir: str | None,
+    format_name: str | None,
 ) -> None:
     """Inspect top programs by fitness."""
     formatter = ctx.obj["formatter"]
+    if format_name is not None:
+        formatter = OutputFormatter(format_name=format_name)
+        ctx.obj["formatter"] = formatter
     experiment = ctx.obj["experiment"]
     runs = ctx.obj["runs"]
     redis_host = ctx.obj["redis_host"]
