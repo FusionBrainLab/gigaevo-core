@@ -217,6 +217,65 @@ def test_pipeline_constants_default_values():
     assert cfg.max_code_length == 30000, "max_code_length changed from 30000 chars"
 
 
+def test_sync_min_delta_decoupled_from_max_mutations():
+    """sync_min_delta must be an independent config constant.
+
+    The ProgressBasedSyncHook's min_delta controls how many programs the
+    opponent must process before this population unblocks.  It was historically
+    coupled to max_mutations_per_generation via Hydra interpolation, which made
+    it impossible to set a K=5 compute budget (max_mutations=40) with loose
+    coupling (min_delta=1) without an explicit per-run override.
+
+    After the decoupling fix, sync_min_delta is its own constant.  Changing
+    max_mutations_per_generation must NOT change pre_step_hook.min_delta.
+    """
+    # 1. sync_min_delta exists as a top-level constant with default 8
+    cfg = _compose()
+    assert cfg.sync_min_delta == 8, (
+        "sync_min_delta should default to 8 (epoch-level sync parity with "
+        "max_mutations_per_generation)"
+    )
+
+    # 2. Both adversarial pipelines wire min_delta from sync_min_delta
+    _ADVERSARIAL_OVERRIDES = [
+        "opponent_redis_db=0",
+        "opponent_redis_prefix=test",
+    ]
+    for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
+        cfg = _compose(f"pipeline={pipeline}", *_ADVERSARIAL_OVERRIDES)
+        assert cfg.pre_step_hook.min_delta == 8, (
+            f"pipeline={pipeline}: pre_step_hook.min_delta should be 8 "
+            f"(from sync_min_delta), got {cfg.pre_step_hook.min_delta}"
+        )
+
+    # 3. Changing max_mutations does NOT change min_delta
+    for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
+        cfg = _compose(
+            f"pipeline={pipeline}",
+            "max_mutations_per_generation=40",
+            *_ADVERSARIAL_OVERRIDES,
+        )
+        assert cfg.pre_step_hook.min_delta == 8, (
+            f"pipeline={pipeline}: min_delta should stay 8 when "
+            f"max_mutations_per_generation=40 — coupling not decoupled!"
+        )
+        assert cfg.max_mutations_per_generation == 40, (
+            "max_mutations_per_generation override should take effect"
+        )
+
+    # 4. sync_min_delta can be overridden independently
+    for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
+        cfg = _compose(
+            f"pipeline={pipeline}",
+            "sync_min_delta=1",
+            *_ADVERSARIAL_OVERRIDES,
+        )
+        assert cfg.pre_step_hook.min_delta == 1, (
+            f"pipeline={pipeline}: overriding sync_min_delta=1 should set "
+            f"min_delta=1"
+        )
+
+
 @pytest.mark.parametrize("variant", _group_choices("pipeline"))
 def test_pipeline_evolution_context_prompts_dir_when_defined(variant: str):
     """Any pipeline that defines evolution_context must include prompts_dir in it.
