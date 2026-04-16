@@ -396,44 +396,68 @@ class TestUpdateManifest:
 
 
 class TestDBClaims:
-    def test_claim_success(self):
-        mock_r = MagicMock()
-        mock_r.set.return_value = True
-        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
-            failed = claim_dbs("test/exp", [9, 10])
-        assert failed == []
-        assert mock_r.set.call_count == 2
+    """Tests the Lua-backed DB claim primitives against a real fakeredis.
 
-    def test_claim_collision(self):
-        mock_r = MagicMock()
-        # First call succeeds, second fails
-        mock_r.set.side_effect = [True, False]
-        mock_r.get.return_value = b"other/experiment"
-        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
-            failed = claim_dbs("test/exp", [9, 10])
-        assert len(failed) == 1
-        assert failed[0] == (10, "other/experiment")
+    The functions were rewritten to use server-side Lua for atomicity and
+    owner-checked CAS on release/refresh; these tests exercise the actual
+    Redis protocol rather than mocking call-level details.
+    """
 
-    def test_claim_idempotent_same_owner(self):
-        mock_r = MagicMock()
-        mock_r.set.return_value = False  # already claimed
-        mock_r.get.return_value = b"test/exp"  # by us
-        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
-            failed = claim_dbs("test/exp", [9])
-        assert failed == []  # not a failure if we own it
+    def _fake(self, monkeypatch):
+        import fakeredis
 
-    def test_refresh_uses_xx(self):
-        mock_r = MagicMock()
-        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
-            refresh_db_claims("test/exp", [9, 10])
-        for call in mock_r.set.call_args_list:
-            assert call.kwargs.get("xx") is True
+        r = fakeredis.FakeRedis()
+        monkeypatch.setattr("gigaevo.experiment.manifest.get_redis", lambda: r)
+        return r
 
-    def test_release(self):
-        mock_r = MagicMock()
-        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
-            release_db_claims([9, 10])
-        assert mock_r.delete.call_count == 2
+    def test_claim_success(self, monkeypatch):
+        r = self._fake(monkeypatch)
+        assert claim_dbs("test/exp", [9, 10]) == []
+        assert r.get("experiments:db_claim:9") == b"test/exp"
+        assert r.get("experiments:db_claim:10") == b"test/exp"
+
+    def test_claim_collision_writes_nothing(self, monkeypatch):
+        """All-or-nothing: a single conflict prevents ANY claim from landing."""
+        r = self._fake(monkeypatch)
+        r.set("experiments:db_claim:10", "other/experiment", ex=3600)
+
+        failed = claim_dbs("test/exp", [9, 10])
+        assert failed == [(10, "other/experiment")]
+        # DB 9 must NOT have been claimed — atomic rollback.
+        assert r.get("experiments:db_claim:9") is None
+        assert r.get("experiments:db_claim:10") == b"other/experiment"
+
+    def test_claim_idempotent_same_owner(self, monkeypatch):
+        r = self._fake(monkeypatch)
+        r.set("experiments:db_claim:9", "test/exp", ex=3600)
+        assert claim_dbs("test/exp", [9]) == []
+        assert r.get("experiments:db_claim:9") == b"test/exp"
+
+    def test_claim_empty_list_is_noop(self, monkeypatch):
+        self._fake(monkeypatch)
+        assert claim_dbs("test/exp", []) == []
+
+    def test_refresh_only_refreshes_own_claims(self, monkeypatch):
+        r = self._fake(monkeypatch)
+        r.set("experiments:db_claim:9", "test/exp", ex=10)
+        r.set("experiments:db_claim:10", "other/exp", ex=10)
+
+        refreshed = refresh_db_claims("test/exp", [9, 10])
+        assert refreshed == 1
+        # Our claim got a fresh long TTL; foreign claim's TTL was left alone.
+        assert r.ttl("experiments:db_claim:9") > 100
+        assert r.ttl("experiments:db_claim:10") <= 10
+
+    def test_release_only_releases_own_claims(self, monkeypatch):
+        r = self._fake(monkeypatch)
+        r.set("experiments:db_claim:9", "test/exp", ex=3600)
+        r.set("experiments:db_claim:10", "other/exp", ex=3600)
+
+        released = release_db_claims("test/exp", [9, 10])
+        assert released == 1
+        assert r.get("experiments:db_claim:9") is None
+        # Foreign claim MUST survive — this is the whole point of CAS release.
+        assert r.get("experiments:db_claim:10") == b"other/exp"
 
 
 # ---------------------------------------------------------------------------

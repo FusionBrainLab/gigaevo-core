@@ -911,32 +911,134 @@ def update_manifest(
 # ---------------------------------------------------------------------------
 
 
+def _db_claim_key(db: int) -> str:
+    return f"experiments:db_claim:{db}"
+
+
+# Lua: atomic all-or-nothing claim.
+# KEYS: N db_claim keys. ARGV[1]=experiment, ARGV[2]=TTL, ARGV[3..]=db numbers.
+# Returns a flat list [db1, owner1, db2, owner2, ...] of conflicts. An empty
+# list means every claim succeeded (new or idempotent re-claim by same owner).
+# On any conflict, NO keys are written.
+_CLAIM_DBS_LUA = """
+local failed = {}
+local exp = ARGV[1]
+local ttl = ARGV[2]
+for i=1,#KEYS do
+  local cur = redis.call('GET', KEYS[i])
+  if cur and cur ~= exp then
+    table.insert(failed, ARGV[2+i])
+    table.insert(failed, cur)
+  end
+end
+if #failed > 0 then
+  return failed
+end
+for i=1,#KEYS do
+  redis.call('SET', KEYS[i], exp, 'EX', ttl)
+end
+return {}
+"""
+
+# Lua: CAS refresh — extend TTL only if the current owner matches.
+# Returns number of keys refreshed. Silently skips keys owned by others or
+# already expired; caller can compare against len(dbs) to detect drift.
+_REFRESH_DB_CLAIMS_LUA = """
+local refreshed = 0
+local exp = ARGV[1]
+local ttl = ARGV[2]
+for i=1,#KEYS do
+  if redis.call('GET', KEYS[i]) == exp then
+    redis.call('EXPIRE', KEYS[i], ttl)
+    refreshed = refreshed + 1
+  end
+end
+return refreshed
+"""
+
+# Lua: CAS release — delete only if the current owner matches.
+# Prevents experiment A from releasing experiment B's claim on the same DB.
+_RELEASE_DB_CLAIMS_LUA = """
+local released = 0
+local exp = ARGV[1]
+for i=1,#KEYS do
+  if redis.call('GET', KEYS[i]) == exp then
+    redis.call('DEL', KEYS[i])
+    released = released + 1
+  end
+end
+return released
+"""
+
+
 def claim_dbs(experiment: str, dbs: list[int]) -> list[tuple[int, str]]:
-    """Atomically claim Redis DBs. Returns list of (db, owner) that failed."""
+    """Atomically claim Redis DBs — all or nothing.
+
+    If any requested DB is currently owned by a different experiment, NO
+    claims are written and the conflict list is returned as
+    ``[(db, owner), ...]``. Re-claiming a DB already owned by the same
+    experiment is idempotent (TTL is not refreshed — use
+    :func:`refresh_db_claims` for that).
+
+    Uses a server-side Lua script so the check-then-set is atomic across
+    all DBs; there is no window where a half-claimed state is visible.
+    """
+    if not dbs:
+        return []
     r = get_redis()
+    keys = [_db_claim_key(db) for db in dbs]
+    args = [experiment, str(DB_CLAIM_TTL_SECONDS), *[str(db) for db in dbs]]
+    result = r.eval(_CLAIM_DBS_LUA, len(keys), *keys, *args)
+    if not result:
+        return []
     failed: list[tuple[int, str]] = []
-    for db in dbs:
-        key = f"experiments:db_claim:{db}"
-        if not r.set(key, experiment, nx=True, ex=DB_CLAIM_TTL_SECONDS):
-            owner = (r.get(key) or b"unknown").decode()
-            if owner != experiment:
-                failed.append((db, owner))
+    for i in range(0, len(result), 2):
+        db = int(result[i].decode() if isinstance(result[i], bytes) else result[i])
+        owner = (
+            result[i + 1].decode()
+            if isinstance(result[i + 1], bytes)
+            else str(result[i + 1])
+        )
+        failed.append((db, owner))
     return failed
 
 
-def refresh_db_claims(experiment: str, dbs: list[int]) -> None:
-    """Refresh TTL on already-claimed DBs (called by watchdog each cycle)."""
+def refresh_db_claims(experiment: str, dbs: list[int]) -> int:
+    """Refresh TTL on already-claimed DBs (called by watchdog each cycle).
+
+    Owner-checked (CAS): a claim is refreshed only when its current owner
+    matches ``experiment``. Returns the number of keys successfully
+    refreshed — callers can compare against ``len(dbs)`` to detect
+    claim drift (keys that expired or got stolen).
+    """
+    if not dbs:
+        return 0
     r = get_redis()
-    for db in dbs:
-        key = f"experiments:db_claim:{db}"
-        r.set(key, experiment, xx=True, ex=DB_CLAIM_TTL_SECONDS)
+    keys = [_db_claim_key(db) for db in dbs]
+    return int(
+        r.eval(
+            _REFRESH_DB_CLAIMS_LUA,
+            len(keys),
+            *keys,
+            experiment,
+            str(DB_CLAIM_TTL_SECONDS),
+        )
+    )
 
 
-def release_db_claims(dbs: list[int]) -> None:
-    """Release DB claims (called by reset_status and closeout)."""
+def release_db_claims(experiment: str, dbs: list[int]) -> int:
+    """Release DB claims (called by reset_status and closeout).
+
+    Owner-checked (CAS): a claim is released only when its current owner
+    matches ``experiment``. Prevents experiment A from accidentally
+    releasing experiment B's claim on a shared DB number. Returns the
+    number of claims actually released.
+    """
+    if not dbs:
+        return 0
     r = get_redis()
-    for db in dbs:
-        r.delete(f"experiments:db_claim:{db}")
+    keys = [_db_claim_key(db) for db in dbs]
+    return int(r.eval(_RELEASE_DB_CLAIMS_LUA, len(keys), *keys, experiment))
 
 
 # ---------------------------------------------------------------------------
