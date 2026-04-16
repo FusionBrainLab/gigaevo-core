@@ -3,6 +3,10 @@
 Delegates plot generation to `gigaevo plot` CLI commands (arms-race,
 comparison) via subprocess. Provides G/D-separated Telegram formatting
 with SOTA comparison.
+
+Population role detection uses ``run_spec.role`` (``"constructor"`` = G,
+``"improver"`` = D). The role field is populated from the manifest via
+``ManifestRunSpec`` — runs with no role indicator are skipped.
 """
 
 from __future__ import annotations
@@ -20,6 +24,15 @@ from gigaevo.monitoring.notifications import (
 )
 from gigaevo.monitoring.snapshot import RunSnapshot
 from gigaevo.monitoring.watchdog_plugin import WatchdogPlugin, register
+
+
+def _constructors(snapshots: list[RunSnapshot]) -> list[RunSnapshot]:
+    return [s for s in snapshots if s.run_spec.role == "constructor"]
+
+
+def _improvers(snapshots: list[RunSnapshot]) -> list[RunSnapshot]:
+    return [s for s in snapshots if s.run_spec.role == "improver"]
+
 
 _log = logger.bind(component="plugin.adversarial")
 
@@ -81,7 +94,9 @@ class AdversarialPlugin(WatchdogPlugin):
 
         if self._plot_commands:
             for pc in self._plot_commands:
-                plot = self._run_plot_command(pc, run_args, output_dir, cycle)
+                plot = self._run_plot_command(
+                    pc, run_args, snapshots, output_dir, cycle
+                )
                 if plot:
                     plots.append(plot)
         else:
@@ -107,8 +122,8 @@ class AdversarialPlugin(WatchdogPlugin):
         cycle: int,
         metric: str,
     ) -> PlotAttachment | None:
-        g_labels = [s.run_spec.label for s in snapshots if "pop_a" in s.run_spec.prefix]
-        d_labels = [s.run_spec.label for s in snapshots if "pop_b" in s.run_spec.prefix]
+        g_labels = [s.run_spec.label for s in _constructors(snapshots)]
+        d_labels = [s.run_spec.label for s in _improvers(snapshots)]
         if not g_labels or not d_labels:
             _log.warning("Cannot generate arms-race: missing G or D runs")
             return None
@@ -158,7 +173,7 @@ class AdversarialPlugin(WatchdogPlugin):
         cycle: int,
         metric: str,
     ) -> PlotAttachment | None:
-        d_labels = [s.run_spec.label for s in snapshots if "pop_b" in s.run_spec.prefix]
+        d_labels = [s.run_spec.label for s in _improvers(snapshots)]
 
         cmd = (
             ["gigaevo"]
@@ -204,11 +219,39 @@ class AdversarialPlugin(WatchdogPlugin):
         return None
 
     def _run_plot_command(
-        self, plot_command, run_args: list[str], output_dir: Path, cycle: int
+        self,
+        plot_command,
+        run_args: list[str],
+        snapshots: list[RunSnapshot],
+        output_dir: Path,
+        cycle: int,
     ) -> PlotAttachment | None:
+        # Auto-inject --paired for arms-race when not provided: pair constructor
+        # (G) runs with improver (D) runs in declaration order.
+        args = dict(plot_command.args)
+        if plot_command.command == "arms-race" and "paired" not in args:
+            g_labels = [s.run_spec.label for s in _constructors(snapshots)]
+            d_labels = [s.run_spec.label for s in _improvers(snapshots)]
+            if g_labels and d_labels:
+                args["paired"] = ",".join(
+                    f"{g}:{d}" for g, d in zip(g_labels, d_labels)
+                )
+
+        # Auto-inject --no-frontier-for on improver labels for comparison so we
+        # don't draw monotonic frontiers over a non-monotonic D population.
+        if plot_command.command == "comparison" and "no-frontier-for" not in args:
+            d_labels = [s.run_spec.label for s in _improvers(snapshots)]
+            if d_labels:
+                args["no-frontier-for"] = ",".join(d_labels)
+
         cmd = ["gigaevo"] + run_args + ["plot", plot_command.command]
-        for key, val in plot_command.args.items():
-            cmd.extend([f"--{key}", str(val)])
+        for key, val in args.items():
+            # Booleans map to Click-style flags: True -> --key, False -> --no-key.
+            # Everything else is rendered as "--key value".
+            if isinstance(val, bool):
+                cmd.append(f"--{key}" if val else f"--no-{key}")
+            else:
+                cmd.extend([f"--{key}", str(val)])
         cmd.extend(["-o", str(output_dir)])
         cmd.extend(self._sentinel_args())
 
@@ -279,8 +322,8 @@ class AdversarialPlugin(WatchdogPlugin):
         lines = [f"Experiment: {experiment_name} #{cycle}"]
         lines.append("")
 
-        g_snaps = [s for s in snapshots if "pop_a" in s.run_spec.prefix]
-        d_snaps = [s for s in snapshots if "pop_b" in s.run_spec.prefix]
+        g_snaps = _constructors(snapshots)
+        d_snaps = _improvers(snapshots)
 
         metric = self._plot_metrics[0] if self._plot_metrics else "fitness"
 

@@ -193,7 +193,7 @@ class TestTopManifestDefaultMetric:
         r.set("p:program:aaa111111111", json.dumps(prog))
 
         mock_manifest = MagicMock()
-        mock_manifest.problem.metric_name = "actual_fitness"
+        mock_manifest.contract.problem.metric_name = "actual_fitness"
 
         configs = [
             RunConfig(
@@ -208,7 +208,7 @@ class TestTopManifestDefaultMetric:
 
         with (
             patch(
-                "tools.experiment.manifest.load_manifest",
+                "gigaevo.experiment.manifest.load_manifest",
                 return_value=mock_manifest,
             ),
             patch.object(RunResolver, "resolve", return_value=configs),
@@ -246,7 +246,7 @@ class TestTopManifestDefaultMetric:
         r.set("p:program:aaa111111111", json.dumps(prog))
 
         mock_manifest = MagicMock()
-        mock_manifest.problem.metric_name = "actual_fitness"
+        mock_manifest.contract.problem.metric_name = "actual_fitness"
 
         configs = [
             RunConfig(
@@ -260,7 +260,7 @@ class TestTopManifestDefaultMetric:
 
         with (
             patch(
-                "tools.experiment.manifest.load_manifest",
+                "gigaevo.experiment.manifest.load_manifest",
                 return_value=mock_manifest,
             ),
             patch.object(RunResolver, "resolve", return_value=configs),

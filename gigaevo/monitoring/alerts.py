@@ -63,7 +63,7 @@ class AlertDetector:
     alert history between calls.
 
     Usage:
-        detector = AlertDetector(max_generations=50)
+        detector = AlertDetector()
         alerts = detector.check(current_snapshots)
         # ... next cycle ...
         alerts = detector.check(current_snapshots)
@@ -71,12 +71,10 @@ class AlertDetector:
 
     def __init__(
         self,
-        max_generations: int | None = None,
         invalidity_threshold: float = 0.75,
         invalidity_min_generation: int = 3,
         cooldown_cycles: int = 2,
     ):
-        self._max_generations = max_generations
         self._invalidity_threshold = invalidity_threshold
         self._invalidity_min_gen = invalidity_min_generation
         self._cooldown_cycles = cooldown_cycles
@@ -172,37 +170,33 @@ class AlertDetector:
                 )
 
         # --- Completion detection (global, not per-run) ---
-        if self._max_generations is not None and snapshots:
-            all_complete = all(
-                snap.generation is not None and snap.generation >= self._max_generations
-                for snap in snapshots
+        if snapshots and all(snap.completed for snap in snapshots):
+            reasons = {
+                s.run_spec.label: s.completion_reason or "unknown" for s in snapshots
+            }
+            gen_summary = ", ".join(
+                f"{s.run_spec.label}={s.generation}" for s in snapshots
             )
-            if all_complete:
-                gen_summary = ", ".join(
-                    f"{s.run_spec.label}={s.generation}" for s in snapshots
-                )
-                logger.bind(component="alerts").info(
-                    f"Experiment complete: all runs at "
-                    f"max_generations={self._max_generations}"
-                )
-                raw_alerts.append(
-                    Alert(
-                        alert_type=AlertType.COMPLETION,
-                        severity=AlertSeverity.INFO,
-                        run_label="experiment",
-                        message=(
-                            f"All {len(snapshots)} runs have reached "
-                            f"max_generations ({self._max_generations}): "
-                            f"{gen_summary}."
-                        ),
-                        details={
-                            "max_generations": self._max_generations,
-                            "run_generations": {
-                                s.run_spec.label: s.generation for s in snapshots
-                            },
+            logger.bind(component="alerts").info(
+                "Experiment complete: all runs signaled completion"
+            )
+            raw_alerts.append(
+                Alert(
+                    alert_type=AlertType.COMPLETION,
+                    severity=AlertSeverity.INFO,
+                    run_label="experiment",
+                    message=(
+                        f"All {len(snapshots)} runs completed: "
+                        f"{gen_summary}. Reasons: {reasons}"
+                    ),
+                    details={
+                        "run_generations": {
+                            s.run_spec.label: s.generation for s in snapshots
                         },
-                    )
+                        "run_reasons": reasons,
+                    },
                 )
+            )
 
         # --- Apply cooldowns ---
         alerts = self._apply_cooldowns(raw_alerts)

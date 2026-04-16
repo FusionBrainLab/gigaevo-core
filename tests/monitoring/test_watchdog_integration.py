@@ -97,7 +97,7 @@ class TestFullCycleIntegration:
         snap = _make_snapshot("A", gen=5, fitness=0.65)
         monitor.collect.return_value = [snap]
 
-        detector = AlertDetector(max_generations=50)
+        detector = AlertDetector()
         plugin = StubPlugin()
         channel = StubChannel()
         dispatcher = NotificationDispatcher([channel])
@@ -150,7 +150,7 @@ class TestMultiCycleStagnation:
         snap = _make_snapshot("A", gen=10, fitness=0.5)
         monitor.collect.return_value = [snap]
 
-        detector = AlertDetector(max_generations=50)
+        detector = AlertDetector()
         plugin = StubPlugin()
         channel = StubChannel()
         dispatcher = NotificationDispatcher([channel])
@@ -233,8 +233,17 @@ def _snapshots_from_fixture(redis_data: dict) -> list[RunSnapshot]:
     """Create RunSnapshot objects from fixture redis_data.json."""
     snapshots = []
     for run in redis_data["runs"]:
+        # Infer role from label (G/D suffix) for adversarial runs
+        label = run["label"]
+        role = None
+        if label.endswith("_G"):
+            role = "constructor"
+        elif label.endswith("_D"):
+            role = "improver"
         snap = RunSnapshot(
-            run_spec=RunSpec(prefix=run["prefix"], db=run["db"], label=run["label"]),
+            run_spec=RunSpec(
+                prefix=run["prefix"], db=run["db"], label=label, role=role
+            ),
             generation=run.get("generation"),
             metrics={"fitness": run.get("fitness")},
             total_programs=run.get("total_programs"),
@@ -494,7 +503,7 @@ class TestAlertFlowIntegration:
         monitor = MagicMock(spec=ExperimentMonitor)
         monitor.collect.return_value = [dead_snap]
 
-        detector = AlertDetector(max_generations=50)
+        detector = AlertDetector()
         plugin = StubPlugin()
         channel = StubChannel()
         dispatcher = NotificationDispatcher([channel])

@@ -1,0 +1,3 @@
+_target_: gigaevo.evolution.engine.stopper.FitnessPlateauStopper
+window: 10
+min_delta: 0.001

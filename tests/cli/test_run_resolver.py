@@ -52,7 +52,7 @@ class TestResolveFromExperiment:
         mock_run_b.problem_name = "chains/hover/static"
         mock_run_b.pid = 12346
 
-        mock_manifest.runs = [mock_run_a, mock_run_b]
+        mock_manifest.contract.runs = [mock_run_a, mock_run_b]
 
         with (
             patch(

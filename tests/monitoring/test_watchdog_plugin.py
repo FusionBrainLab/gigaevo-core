@@ -178,9 +178,9 @@ class TestResolvePlugin:
     ):
         """Build a mock manifest with minimal fields for resolve_plugin."""
         manifest = MagicMock()
-        manifest.experiment.task = task
-        manifest.experiment.name = name
-        manifest.watchdog_plugin = watchdog_plugin
+        manifest.contract.identity.task = task
+        manifest.contract.identity.name = name
+        manifest.control_plane.watchdog.plugin = watchdog_plugin
         return manifest
 
     def test_explicit_plugin_field(self):

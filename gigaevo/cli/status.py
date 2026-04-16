@@ -27,7 +27,7 @@ def _load_metric_specs(experiment: str | None) -> dict[str, dict]:
         manifest = _load_manifest(experiment)
         all_specs: dict[str, dict] = {}
         seen: set[str] = set()
-        for run in manifest.runs:
+        for run in manifest.contract.runs:
             if run.problem_name not in seen:
                 seen.add(run.problem_name)
                 path = Path("problems") / run.problem_name / "metrics.yaml"
@@ -132,10 +132,21 @@ def _build_columns(rows: list[dict]) -> list[str]:
 
 
 @click.command()
+@click.option(
+    "-f",
+    "--format",
+    "format_name",
+    type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
+    default=None,
+    help="Output format override.",
+)
 @click.pass_context
-def status(ctx: click.Context) -> None:
+def status(ctx: click.Context, format_name: str | None) -> None:
     """Show current run status from Redis."""
     formatter: OutputFormatter = ctx.obj["formatter"]
+    if format_name is not None:
+        formatter = OutputFormatter(format_name=format_name)
+        ctx.obj["formatter"] = formatter
     experiment: str | None = ctx.obj["experiment"]
     runs: tuple[str, ...] = ctx.obj["runs"]
     redis_host: str = ctx.obj["redis_host"]

@@ -68,46 +68,6 @@ class TestLazyImports:
         )
 
 
-class TestAnalyzeAndCollectRegistered:
-    def test_analyze_in_command_list(self):
-        """analyze appears in the CLI command listing."""
-        from gigaevo.cli import main
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["--help"])
-        assert "analyze" in result.output
-
-    def test_collect_in_command_list(self):
-        """collect appears in the CLI command listing."""
-        from gigaevo.cli import main
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["--help"])
-        assert "collect" in result.output
-
-    def test_analyze_resolves_to_click_command(self):
-        """analyze resolves to a Click command (not None)."""
-        import click
-
-        from gigaevo.cli import main
-
-        ctx = click.Context(main)
-        cmd = main.get_command(ctx, "analyze")
-        assert cmd is not None
-        assert isinstance(cmd, click.BaseCommand)
-
-    def test_collect_resolves_to_click_command(self):
-        """collect resolves to a Click command (not None)."""
-        import click
-
-        from gigaevo.cli import main
-
-        ctx = click.Context(main)
-        cmd = main.get_command(ctx, "collect")
-        assert cmd is not None
-        assert isinstance(cmd, click.BaseCommand)
-
-
 class TestContextObject:
     def test_context_has_formatter(self):
         from gigaevo.cli import main

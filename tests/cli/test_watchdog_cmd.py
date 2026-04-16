@@ -12,29 +12,27 @@ from gigaevo.cli import main
 def _make_fake_manifest():
     """Build a fake manifest object for testing."""
     mock = MagicMock()
-    mock.name = "test/exp"
-    mock.task = "hover"
-    mock.max_generations = 50
-    mock.watchdog_plugin = None
-    mock.servers = ["10.0.0.1", "10.0.0.2"]
 
-    watchdog = MagicMock()
-    watchdog.no_proxy_hosts = ["custom.host.com"]
-    watchdog.poll_interval_s = 3600
-    watchdog.plot_retries = 3
-    watchdog.plot_retry_delay_s = 30
-    watchdog.checkpoint_milestones = [0.1, 0.2, 0.5, 1.0]
-    mock.watchdog = watchdog
+    # contract section
+    mock.contract.identity.name = "test/exp"
+    mock.contract.servers = ["10.0.0.1", "10.0.0.2"]
+    mock.contract.max_generations = 50
 
     run1 = MagicMock()
     run1.prefix = "test/prefix"
     run1.db = 4
     run1.label = "A"
     run1.pid = 12345
+    mock.contract.runs = [run1]
 
-    mock.runs = [run1]
-    mock.experiment = MagicMock()
-    mock.experiment.task = "hover"
+    # control_plane section
+    watchdog = MagicMock()
+    watchdog.no_proxy_hosts = ["custom.host.com"]
+    watchdog.poll_interval_s = 3600
+    watchdog.plot_retries = 3
+    watchdog.plot_retry_delay_s = 30
+    watchdog.checkpoint_milestones = [0.1, 0.2, 0.5, 1.0]
+    mock.control_plane.watchdog = watchdog
 
     return mock
 
@@ -54,13 +52,14 @@ class TestWatchdogStartsEngine:
         manifest = _make_fake_manifest()
 
         with (
-            patch("tools.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
             patch(
                 "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
             ) as mock_engine_cls,
         ):
             mock_plugin_cls = MagicMock()
+            mock_plugin_cls.__name__ = "MockPlugin"
             mock_resolve.return_value = mock_plugin_cls
             mock_engine = mock_engine_cls.return_value
             mock_engine.run.return_value = None
@@ -84,13 +83,15 @@ class TestWatchdogPollInterval:
         manifest = _make_fake_manifest()
 
         with (
-            patch("tools.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
             patch(
                 "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
             ) as mock_engine_cls,
         ):
-            mock_resolve.return_value = MagicMock()
+            plugin_mock = MagicMock()
+            plugin_mock.__name__ = "MockPlugin"
+            mock_resolve.return_value = plugin_mock
             mock_engine_cls.return_value.run.return_value = None
 
             runner = CliRunner()
@@ -109,9 +110,10 @@ class TestWatchdogPluginOverride:
         """--plugin forces a specific plugin from registry."""
         manifest = _make_fake_manifest()
         mock_plugin_cls = MagicMock()
+        mock_plugin_cls.__name__ = "MockPlugin"
 
         with (
-            patch("tools.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch(
                 "gigaevo.monitoring.watchdog_plugin.get_registry",
                 return_value={"solo": mock_plugin_cls},
@@ -137,7 +139,7 @@ class TestWatchdogPluginOverride:
         manifest = _make_fake_manifest()
 
         with (
-            patch("tools.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch(
                 "gigaevo.monitoring.watchdog_plugin.get_registry",
                 return_value={"solo": MagicMock()},
@@ -161,14 +163,16 @@ class TestWatchdogNoProxy:
         manifest = _make_fake_manifest()
 
         with (
-            patch("tools.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
             patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
             patch(
                 "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
             ) as mock_engine_cls,
             patch.dict(os.environ, {"NO_PROXY": ""}, clear=False),
         ):
-            mock_resolve.return_value = MagicMock()
+            plugin_mock = MagicMock()
+            plugin_mock.__name__ = "MockPlugin"
+            mock_resolve.return_value = plugin_mock
             mock_engine_cls.return_value.run.return_value = None
 
             runner = CliRunner()

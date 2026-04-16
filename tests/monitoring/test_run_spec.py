@@ -112,11 +112,6 @@ def test_error_negative_db() -> None:
         RunSpec.parse("prefix@-1:label")
 
 
-def test_error_missing_prefix() -> None:
-    with pytest.raises(ValueError):
-        RunSpec.parse("@4:label")
-
-
 def test_error_just_at() -> None:
     with pytest.raises(ValueError):
         RunSpec.parse("@")

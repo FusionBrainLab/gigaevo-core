@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import click
 
+from gigaevo.cli.output_formatter import OutputFormatter
 from gigaevo.cli.run_resolver import RunResolver
 from gigaevo.cli.status import _format_metric_value, _load_metric_specs
 from gigaevo.monitoring.experiment_monitor import ExperimentMonitor
@@ -50,10 +51,23 @@ def _build_columns(rows: list[dict]) -> list[str]:
     default=False,
     help="Skip plot generation.",
 )
+@click.option(
+    "-f",
+    "--format",
+    "format_name",
+    type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
+    default=None,
+    help="Output format override.",
+)
 @click.pass_context
-def checkpoint(ctx: click.Context, no_notify: bool, no_plots: bool) -> None:
+def checkpoint(
+    ctx: click.Context, no_notify: bool, no_plots: bool, format_name: str | None
+) -> None:
     """Run a checkpoint: collect status, generate plots, dispatch notifications."""
     formatter = ctx.obj["formatter"]
+    if format_name is not None:
+        formatter = OutputFormatter(format_name=format_name)
+        ctx.obj["formatter"] = formatter
     experiment = ctx.obj["experiment"]
     runs = ctx.obj["runs"]
     redis_host = ctx.obj["redis_host"]

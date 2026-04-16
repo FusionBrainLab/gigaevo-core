@@ -6,6 +6,7 @@ from gigaevo.evolution.engine.acceptor import (
     DefaultProgramEvolutionAcceptor,
     ProgramEvolutionAcceptor,
 )
+from gigaevo.evolution.engine.stopper import EvolutionStopper
 from gigaevo.evolution.mutation.parent_selector import (
     ParentSelector,
     RandomParentSelector,
@@ -37,6 +38,12 @@ class EngineConfig(BaseModel):
     program_acceptor: ProgramEvolutionAcceptor = Field(
         default_factory=lambda: DefaultProgramEvolutionAcceptor(),
         description="Acceptor for determining if programs should be accepted for evolution",
+    )
+    stopper: EvolutionStopper | None = Field(
+        default=None,
+        description="Pluggable stopping criterion. When set, overrides max_generations. "
+        "When None, falls back to MaxGenerationsStopper(max_generations) if max_generations "
+        "is set, otherwise the engine runs indefinitely.",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

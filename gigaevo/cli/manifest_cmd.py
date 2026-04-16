@@ -1,26 +1,33 @@
 """Manifest subcommand group: read, write, and gate experiment.yaml fields.
 
-Replaces inline ``PYTHONPATH=. python -c "from gigaevo.monitoring.manifest import ..."``
+Replaces inline ``PYTHONPATH=. python -c "from gigaevo.experiment.manifest import ..."``
 snippets in experiment lifecycle skills with proper CLI calls.
 
 Usage examples::
 
     gigaevo -e hover/foo manifest get status
     gigaevo -e hover/foo manifest get runs
-    gigaevo -e hover/foo manifest get launch.watchdog_pid
+    gigaevo -e hover/foo manifest get control_plane.watchdog_pid
     gigaevo -e hover/foo manifest set status running
-    gigaevo -e hover/foo manifest update launch.watchdog_pid 12345
+    gigaevo -e hover/foo manifest update control_plane.watchdog_pid 12345
     gigaevo -e hover/foo manifest gate implemented
     gigaevo -e hover/foo manifest pr-description --push
+    gigaevo -e hover/foo manifest record-pids --pids-file pids.txt --labels C1 C2 P1 P2
+    gigaevo -e hover/foo manifest reset-status implemented --reason "launch failed"
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
+from pathlib import Path
+import re
 import subprocess
 from typing import Any
 
 import click
+
+from gigaevo.cli.output_formatter import OutputFormatter
 
 
 def _require_experiment(ctx: click.Context) -> str:
@@ -57,13 +64,34 @@ def _coerce_value(raw_value: str) -> Any:
 
 
 def _traverse_raw(raw: dict[str, Any], dotted_path: str) -> Any:
-    """Walk a dotted path through nested dicts. Raises KeyError if not found."""
+    """Walk a dotted path through nested dicts.
+
+    Supports bracket indexing: e.g., 'runs[0].db' or 'runs[-1].label'.
+    Raises KeyError if not found or index out of range.
+    """
+    _BRACKET_RE = re.compile(r"^([^\[]+)\[(-?\d+)\]$")
     parts = dotted_path.split(".")
     current: Any = raw
+
     for part in parts:
-        if not isinstance(current, dict) or part not in current:
-            raise KeyError(dotted_path)
-        current = current[part]
+        m = _BRACKET_RE.match(part)
+        if m:
+            # Bracket-indexed access: 'runs[0]' or 'servers[-1]'
+            key, idx = m.group(1), int(m.group(2))
+            if not isinstance(current, dict) or key not in current:
+                raise KeyError(dotted_path)
+            seq = current[key]
+            if not isinstance(seq, list):
+                raise KeyError(dotted_path)
+            if not (-len(seq) <= idx < len(seq)):
+                raise KeyError(f"{dotted_path} (index {idx} out of range for {key})")
+            current = seq[idx]
+        else:
+            # Plain dict key: 'launch' or 'experiment'
+            if not isinstance(current, dict) or part not in current:
+                raise KeyError(dotted_path)
+            current = current[part]
+
     return current
 
 
@@ -94,26 +122,42 @@ def manifest(ctx: click.Context) -> None:
 # get
 # ---------------------------------------------------------------------------
 
-_KNOWN_SCALAR_FIELDS = {"status", "max_generations", "branch", "task", "name"}
+_SCALAR_FIELD_TO_PATH = {
+    "status": ("lifecycle", "status"),
+    "max_generations": ("contract", "max_generations"),
+    "branch": ("contract", "identity", "branch"),
+    "task": ("contract", "identity", "task"),
+    "name": ("contract", "identity", "name"),
+}
 
 
 @manifest.command()
 @click.argument("field")
+@click.option(
+    "-f",
+    "--format",
+    "format_name",
+    type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
+    default=None,
+    help="Output format override (propagates to parent formatter).",
+)
 @click.pass_context
-def get(ctx: click.Context, field: str) -> None:
+def get(ctx: click.Context, field: str, format_name: str | None) -> None:
     """Read a manifest field by name or dotted path.
 
-    Special fields: status, runs, max_generations, stopping_rule, servers.
-    Dotted paths (e.g. launch.watchdog_pid) traverse the raw YAML dict.
+    Special fields: status, runs, max_generations, servers.
+    Dotted paths traverse the canonical nested YAML dict (e.g.
+    ``control_plane.watchdog_pid`` or ``lifecycle.launch.time``).
     """
-    from gigaevo.cli.output_formatter import OutputFormatter
-
     experiment = _require_experiment(ctx)
 
-    from gigaevo.monitoring.manifest import load_manifest
+    from gigaevo.experiment.manifest import load_manifest
 
     manifest_obj = load_manifest(experiment)
     formatter: OutputFormatter = ctx.obj["formatter"]
+    if format_name is not None:
+        formatter = OutputFormatter(format_name=format_name)
+        ctx.obj["formatter"] = formatter
 
     if field == "runs":
         rows = [
@@ -124,7 +168,7 @@ def get(ctx: click.Context, field: str) -> None:
                 "Pipeline": run.pipeline,
                 "PID": run.pid if run.pid is not None else "-",
             }
-            for run in manifest_obj.runs
+            for run in manifest_obj.contract.runs
         ]
         formatter.echo(
             rows, columns=["Label", "DB", "Prefix", "Pipeline", "PID"], title="Runs"
@@ -132,25 +176,15 @@ def get(ctx: click.Context, field: str) -> None:
         return
 
     if field == "servers":
-        for server in manifest_obj.servers:
+        for server in manifest_obj.contract.servers:
             click.echo(server)
         return
 
-    if field in _KNOWN_SCALAR_FIELDS:
-        click.echo(getattr(manifest_obj.experiment, field))
-        return
-
-    if field == "stopping_rule":
-        stopping_rule = manifest_obj.config.get("stopping_rule")
-        if stopping_rule is None:
-            stopping_rule = (
-                manifest_obj.model_dump().get("config", {}).get("stopping_rule")
-            )
-        if stopping_rule is None:
-            click.echo("Error: Field not found: stopping_rule", err=True)
-            ctx.exit(1)
-            return
-        click.echo(stopping_rule)
+    if field in _SCALAR_FIELD_TO_PATH:
+        obj: Any = manifest_obj
+        for attr in _SCALAR_FIELD_TO_PATH[field]:
+            obj = getattr(obj, attr)
+        click.echo(obj)
         return
 
     try:
@@ -193,10 +227,10 @@ def set_field(ctx: click.Context, field: str, value: str) -> None:
         ctx.exit(1)
         return
 
-    from gigaevo.monitoring.manifest import set_status
+    from gigaevo.experiment.manifest import set_status
 
     updated = set_status(experiment, value)
-    click.echo(f"Status updated: {updated.experiment.status}")
+    click.echo(f"Status updated: {updated.lifecycle.status}")
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +243,7 @@ def set_field(ctx: click.Context, field: str, value: str) -> None:
 @click.argument("value")
 @click.pass_context
 def update(ctx: click.Context, path: str, value: str) -> None:
-    """Write any field by dotted path (e.g. launch.watchdog_pid 12345).
+    """Write any field by dotted path (e.g. control_plane.watchdog_pid 12345).
 
     Auto-converts values: integers, floats, booleans (true/false),
     null/None, or keeps as string.
@@ -218,7 +252,7 @@ def update(ctx: click.Context, path: str, value: str) -> None:
 
     coerced = _coerce_value(value)
 
-    from gigaevo.monitoring.manifest import update_manifest
+    from gigaevo.experiment.manifest import update_manifest
 
     def updater(raw: dict[str, Any]) -> None:
         _set_nested(raw, path, coerced)
@@ -242,19 +276,21 @@ def gate(ctx: click.Context, expected_status: str) -> None:
     """
     experiment = _require_experiment(ctx)
 
-    from gigaevo.monitoring.manifest import load_manifest
+    from gigaevo.experiment.manifest import load_manifest
 
     manifest_obj = load_manifest(experiment)
 
-    if manifest_obj.experiment.status == expected_status:
+    status = manifest_obj.lifecycle.status
+    if status == expected_status:
         click.echo(
-            f"GATE PASSED: {manifest_obj.experiment.name} status={manifest_obj.experiment.status} "
-            f"({len(manifest_obj.runs)} runs, max_gen={manifest_obj.experiment.max_generations})"
+            f"GATE PASSED: {manifest_obj.contract.identity.name} status={status} "
+            f"({len(manifest_obj.contract.runs)} runs, "
+            f"max_gen={manifest_obj.contract.max_generations})"
         )
         return
 
     click.echo(
-        f"BLOCKED: status={manifest_obj.experiment.status}, expected {expected_status}",
+        f"BLOCKED: status={status}, expected {expected_status}",
         err=True,
     )
     ctx.exit(1)
@@ -275,27 +311,170 @@ def pr_description(ctx: click.Context, push: bool) -> None:
     """
     experiment = _require_experiment(ctx)
 
-    from gigaevo.monitoring.manifest import generate_pr_description
+    from gigaevo.experiment.manifest import generate_pr_description
 
     description = generate_pr_description(experiment)
     click.echo(description)
 
     if push:
-        from gigaevo.monitoring.manifest import load_manifest
+        from gigaevo.experiment.manifest import load_manifest
 
         manifest_obj = load_manifest(experiment)
-        if manifest_obj.experiment.pr_number:
+        pr_number = manifest_obj.contract.identity.pr_number
+        if pr_number:
             subprocess.run(
                 [
                     "gh",
                     "pr",
                     "edit",
-                    str(manifest_obj.experiment.pr_number),
+                    str(pr_number),
                     "--body",
                     description,
                 ],
                 check=True,
             )
-            click.echo(f"PR #{manifest_obj.experiment.pr_number} description updated.")
+            click.echo(f"PR #{pr_number} description updated.")
         else:
             click.echo("Warning: No pr_number in manifest; --push skipped.", err=True)
+
+
+# ---------------------------------------------------------------------------
+# record-pids
+# ---------------------------------------------------------------------------
+
+
+@manifest.command("record-pids")
+@click.option(
+    "--pids-file",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="File containing whitespace-separated PIDs, one per launched run.",
+)
+@click.option(
+    "--labels",
+    required=True,
+    help="Comma- or space-separated run labels matching --pids-file order.",
+)
+@click.pass_context
+def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
+    """Write run PIDs from pids.txt into experiment.yaml runs[].pid.
+
+    Called by launch.sh after launching runs and verifying PIDs are alive.
+    Label count must match PID count; unknown labels are ignored.
+    """
+    experiment = _require_experiment(ctx)
+
+    pids_text = pids_file.read_text().strip()
+    pids = [int(p) for p in pids_text.split()]
+
+    label_list = [lbl for lbl in labels.replace(",", " ").split() if lbl]
+    if len(pids) != len(label_list):
+        click.echo(
+            f"Error: Expected {len(label_list)} PIDs, got {len(pids)}: {pids}",
+            err=True,
+        )
+        ctx.exit(1)
+        return
+
+    label_to_pid = dict(zip(label_list, pids))
+
+    from gigaevo.experiment.manifest import update_manifest
+
+    def set_pids(raw: dict[str, Any]) -> None:
+        runs_target = (raw.get("contract") or {}).get("runs") or []
+        for run in runs_target:
+            if run.get("label") in label_to_pid:
+                run["pid"] = label_to_pid[run["label"]]
+
+    update_manifest(experiment, set_pids)
+    click.echo(f"PIDs recorded: {label_to_pid}")
+
+
+# ---------------------------------------------------------------------------
+# reset-status
+# ---------------------------------------------------------------------------
+
+
+@manifest.command("reset-status")
+@click.argument("target_status")
+@click.option("--reason", required=True, help="Why the reset is needed (for audit).")
+@click.option(
+    "--force/--no-force", default=False, help="Skip interactive confirmation prompt."
+)
+@click.pass_context
+def reset_status(
+    ctx: click.Context,
+    target_status: str,
+    reason: str,
+    force: bool,
+) -> None:
+    """Reset experiment status — escape hatch for stuck states.
+
+    Allows recovery transitions the normal state machine forbids:
+      running -> implemented  (launch failed, need to re-launch)
+      invalid -> preregistered (retry after fixing)
+
+    When reverting from `running`:
+      - Redis DB claims are released.
+      - For target `implemented`, launch.* fields and runs[].pid are cleared.
+    """
+    experiment = _require_experiment(ctx)
+
+    from gigaevo.experiment.manifest import (
+        load_manifest,
+        release_db_claims,
+        update_manifest,
+    )
+    from gigaevo.experiment.manifest import (
+        set_status as _set_status,
+    )
+
+    m = load_manifest(experiment)
+    current = m.lifecycle.status
+    click.echo(f"Current status: {current}")
+    click.echo(f"Target status:  {target_status}")
+    click.echo(f"Reason:         {reason}")
+
+    if current == target_status:
+        click.echo("Already at target status. Nothing to do.")
+        return
+
+    if not force:
+        if not click.confirm("\nProceed?", default=False):
+            click.echo("Aborted.")
+            ctx.exit(1)
+            return
+
+    if current == "running" and target_status in ("implemented", "preregistered"):
+        dbs = [r.db for r in m.contract.runs]
+        click.echo(f"Releasing DB claims: {dbs}")
+        release_db_claims(dbs)
+
+    if current == "running" and target_status == "implemented":
+
+        def clear_launch(raw: dict[str, Any]) -> None:
+            raw.setdefault("lifecycle", {})["status"] = target_status
+            raw.setdefault("lifecycle", {})["launch"] = {
+                "time": None,
+                "commit": None,
+                "confirmed_at": None,
+            }
+            raw.setdefault("control_plane", {})["watchdog_pid"] = None
+            for run in (raw.get("contract") or {}).get("runs") or []:
+                run["pid"] = None
+
+        update_manifest(experiment, clear_launch)
+        click.echo(f"Status reset to {target_status}. Launch info and PIDs cleared.")
+    else:
+        try:
+            _set_status(experiment, target_status, allow_recovery=True)
+            click.echo(f"Status reset to {target_status}.")
+        except ValueError as exc:
+            click.echo(f"ERROR: {exc}", err=True)
+            ctx.exit(1)
+            return
+
+    timestamp = datetime.now(UTC).isoformat()
+    click.echo(f"\nReset logged at {timestamp}")
+    click.echo(f"Reason: {reason}")
+    click.echo("\nNext: fix the issue, then re-run the appropriate skill.")

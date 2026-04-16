@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 import redis as redis_lib
 
+from gigaevo.cli.output_formatter import OutputFormatter
 from gigaevo.cli.run_resolver import RunResolver
 
 
@@ -58,6 +59,14 @@ def _fetch_top_programs(
 @click.option(
     "--save-dir", type=click.Path(), default=None, help="Save programs to files."
 )
+@click.option(
+    "-f",
+    "--format",
+    "format_name",
+    type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
+    default=None,
+    help="Output format override.",
+)
 @click.pass_context
 def top(
     ctx: click.Context,
@@ -66,9 +75,13 @@ def top(
     minimize: bool,
     show_code: bool,
     save_dir: str | None,
+    format_name: str | None,
 ) -> None:
     """Inspect top programs by fitness."""
     formatter = ctx.obj["formatter"]
+    if format_name is not None:
+        formatter = OutputFormatter(format_name=format_name)
+        ctx.obj["formatter"] = formatter
     experiment = ctx.obj["experiment"]
     runs = ctx.obj["runs"]
     redis_host = ctx.obj["redis_host"]
@@ -78,11 +91,11 @@ def top(
     # and user didn't explicitly pass --metric (still has Click default "fitness")
     if metric == "fitness" and experiment:
         try:
-            from gigaevo.monitoring.manifest import load_manifest
+            from gigaevo.experiment.manifest import load_manifest
 
             manifest = load_manifest(experiment)
-            if manifest.problem.metric_name:
-                metric = manifest.problem.metric_name
+            if manifest.contract.problem.metric_name:
+                metric = manifest.contract.problem.metric_name
         except Exception:
             pass  # fall back to "fitness"
 

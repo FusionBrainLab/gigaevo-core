@@ -39,14 +39,46 @@ def _make_snapshot(
 
 
 def _make_g_snapshot(label="G1", db=1, gen=10, fitness=0.03):
-    return _make_snapshot(
+    snap = _make_snapshot(
         label=label, db=db, prefix="heilbron_pop_a", gen=gen, fitness=fitness
+    )
+    # Set role explicitly (was inferred from pop_a/pop_b prefix, now explicit)
+    return RunSnapshot(
+        run_spec=RunSpec(
+            prefix=snap.run_spec.prefix,
+            db=snap.run_spec.db,
+            label=snap.run_spec.label,
+            role="constructor",
+        ),
+        generation=snap.generation,
+        metrics=snap.metrics,
+        total_programs=snap.total_programs,
+        valid_programs=snap.valid_programs,
+        pid=snap.pid,
+        pid_alive=snap.pid_alive,
+        running_programs=snap.running_programs,
     )
 
 
 def _make_d_snapshot(label="D1", db=2, gen=10, fitness=0.02):
-    return _make_snapshot(
+    snap = _make_snapshot(
         label=label, db=db, prefix="heilbron_pop_b", gen=gen, fitness=fitness
+    )
+    # Set role explicitly (was inferred from pop_a/pop_b prefix, now explicit)
+    return RunSnapshot(
+        run_spec=RunSpec(
+            prefix=snap.run_spec.prefix,
+            db=snap.run_spec.db,
+            label=snap.run_spec.label,
+            role="improver",
+        ),
+        generation=snap.generation,
+        metrics=snap.metrics,
+        total_programs=snap.total_programs,
+        valid_programs=snap.valid_programs,
+        pid=snap.pid,
+        pid_alive=snap.pid_alive,
+        running_programs=snap.running_programs,
     )
 
 
@@ -355,7 +387,9 @@ class TestAdversarialPluginFormatTelegramBody:
     def test_stalled_flag_when_no_running_programs(self):
         plugin = AdversarialPlugin()
         snap = RunSnapshot(
-            run_spec=RunSpec(prefix="heilbron_pop_a", db=1, label="G1"),
+            run_spec=RunSpec(
+                prefix="heilbron_pop_a", db=1, label="G1", role="constructor"
+            ),
             generation=10,
             metrics={"fitness": 0.03},
             running_programs=0,

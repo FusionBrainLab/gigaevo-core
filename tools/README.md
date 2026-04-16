@@ -16,12 +16,26 @@ export GIGAEVO_PYTHON=python3  # adjust for your environment
 | Flag | Description |
 |------|-------------|
 | `-e/--experiment TASK/NAME` | Experiment name — auto-discovers all runs, PIDs, watchdog from `experiment.yaml` |
-| `-r/--run PREFIX@DB:LABEL` | Manual run spec (repeatable for multiple runs) |
+| `-r/--run SPEC` | Manual run spec (repeatable). See "Run spec formats" below. |
 | `-f/--format FORMAT` | Output format: `table` (default for terminal), `json`, `csv`, `markdown` |
 | `-q/--quiet` | Suppress output |
 | `-v/--verbose` | Verbose output |
 | `--redis-host HOST` | Redis hostname (default: localhost) |
 | `--redis-port PORT` | Redis port (default: 6379) |
+
+#### Run spec formats (`-r`)
+
+The `-r/--run` flag accepts several shorthand forms. Prefix is auto-discovered from the Redis DB's `{prefix}:__instance_lock__` key when omitted.
+
+| Form | Example | Meaning |
+|------|---------|---------|
+| `prefix@db:label` | `chains/hover/static@4:O` | Full: explicit prefix, db, and display label |
+| `prefix@db` | `chains/hover/static@4` | Full without label (label defaults to `prefix@db`) |
+| `db` | `4` | Bare DB number — prefix auto-discovered from `:__instance_lock__` |
+| `@db` | `@4` | Same as bare `db` |
+| `db:label` | `4:O` | Bare DB with custom label |
+
+The auto-discover path fails if the DB is empty or contains multiple prefixes. Run `gigaevo inspect --db N` first to see what's there.
 
 ### Commands
 
@@ -79,6 +93,10 @@ gigaevo -r chains/hotpotqa/static@4:O export frontier -o data/frontier.csv --met
 #### Operations
 
 ```bash
+# Inspect — discover which experiment prefix(es) live in a Redis DB
+gigaevo inspect --db 4                     # single DB
+gigaevo inspect --db 1 --db 2 --db 3       # multiple DBs
+
 # Flush Redis DBs (kills workers first)
 gigaevo flush --db 4 5 --confirm           # execute
 gigaevo flush --db 4 5                     # dry-run (default)
@@ -90,11 +108,31 @@ gigaevo -e hover/my-exp checkpoint
 gigaevo -e hover/my-exp watchdog
 ```
 
+#### Manifest (read/write experiment.yaml)
+
+```bash
+# Read fields (dotted paths supported)
+gigaevo -e hover/my-exp manifest get status
+gigaevo -e hover/my-exp manifest get control_plane.watchdog_pid
+gigaevo -e hover/my-exp manifest get runs --format json
+
+# Write fields
+gigaevo -e hover/my-exp manifest set status running           # uses status gate validator
+gigaevo -e hover/my-exp manifest update control_plane.watchdog_pid 12345
+
+# Gate checks (exit non-zero if gate not satisfied)
+gigaevo -e hover/my-exp manifest gate implemented
+gigaevo -e hover/my-exp manifest gate running
+
+# Generate and push PR description
+gigaevo -e hover/my-exp manifest pr-description --push
+```
+
 #### Lifecycle (experiment management)
 
 ```bash
-# Launch — preflight + start runs (use experiment-launch skill for full workflow)
-gigaevo -e hover/my-exp launch --confirm
+# Launch — checks + start runs (use experiment-launch skill for full workflow)
+gigaevo -e hover/my-exp launch
 
 # Closeout — archive + analyze + update PR
 gigaevo -e hover/my-exp closeout --confirm
@@ -124,7 +162,6 @@ Work on any GigaEvo run — no experiment.yaml required.
 | `pareto_plot.py` | Multi-objective Pareto frontier visualization | `--run`, `--output-folder` |
 | `throughput_plot.py` | Throughput evolution curves | `--run`, `--output-folder` |
 | `csv_memory_comparison.py` | Compare CSV exports from memory experiments | `--run` (multiple), `--output-folder` |
-| `check_docs_freshness.py` | Verify documentation tables match actual files on disk | standalone (no args) |
 | `resource_manager.py` | Auto-detect available GPU servers and free Redis DBs; assign runs to servers/DBs | `--check`, `--experiment task/name` |
 | `telegram_notify.py` | Send Telegram notifications and wait for async approval at experiment gates | `import` — not a CLI tool |
 | `no_proxy.py` | NO_PROXY environment helper for backend access | used by `litellm.sh` and launch scripts |
@@ -139,13 +176,9 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 | `archive_run.sh` | Export Redis data to local files + upload as GitHub Release asset | `--exp task/name`, `--run "prefix@db:label"`, `--upload` |
 | `check_phase_order.sh` | Pre-launch gate: verify protocol docs, experiment.yaml, launch.sh, N>=2 | `<experiment-name>` |
 | `check_experiment_complete.sh` | Pre-merge gate: verify all 5 phases, archives, release assets, INDEX.md | `<experiment-name>` |
-| `preflight_check.py` | 20-check validation before launch (configs, Redis, servers, treatment) | `--experiment task/name` |
-| `generate_launch.py` | Generate `launch.sh` from experiment.yaml manifest | `--experiment task/name`, `--dry-run` |
-| `manifest.py` | Load/update `experiment.yaml` programmatically | `import` — not a CLI tool |
-| `record_pids.py` | Record launched PIDs into experiment.yaml | `--experiment`, `--pids-file`, `--labels` |
-| `reset_status.py` | Force-reset experiment status (escape hatch) | `--experiment`, `--status` |
-| `process_cleanup.py` | Kill stale watchdog / run processes | `--experiment` |
-| `pr_comment.py` | Post checkpoint or status updates to experiment PR | `--experiment`, `--body` |
+| ~~`preflight_check.py`~~ | Replaced by `gigaevo.experiment.checks` (10 principled checks) | `gigaevo -e task/name launch` |
+| ~~`generate_launch.py`~~ | Replaced by `gigaevo.experiment.launch_generator` (called by `gigaevo launch`) | `gigaevo -e task/name launch` |
+| `flush --kill-only` | Kill stale watchdog / run processes | `gigaevo flush --db N1 N2 ... --kill-only` |
 | `check_all_watchdogs.sh` | Cron health check: scan Redis heartbeats, alert on stale watchdogs | standalone (no args) |
 | `skill_env.sh` | Shared env vars for skills (`$PROJ`, `$GIGAEVO_PYTHON`, `$PYTHONPATH`) | `source` — not executable |
 
@@ -432,10 +465,260 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 | Tool | Purpose | Command |
 |---|---|---|
 | `manifest.py` | Load/update `experiment.yaml` programmatically | `from tools.experiment.manifest import load_manifest, update_manifest` |
-| `preflight_check.py` | 20-check validation gate before launch | `gigaevo -e task/name preflight` |
-| `generate_launch.py` | Generate `launch.sh` from experiment.yaml | `gigaevo -e task/name generate-launch` |
-| `record_pids.py` | Record launched PIDs into experiment.yaml | Used internally by `launch.sh` |
-| `reset_status.py` | Force-reset experiment status (escape hatch) | `gigaevo -e task/name reset-status --status implemented` |
+| `launch` | Preflight + generate script + exec + set running + spawn watchdog | `gigaevo -e task/name launch [--dry-run] [--skip-preflight]` |
+| `manifest record-pids` | Record launched PIDs into experiment.yaml | `gigaevo -e task/name manifest record-pids --pids-file pids.txt --labels "A B"` |
+| `manifest reset-status` | Force-reset experiment status (escape hatch) | `gigaevo -e task/name manifest reset-status implemented --reason '...'` |
+
+---
+
+## Experiment Manifest (`experiment.yaml`)
+
+Every experiment has a single source of truth: `experiments/<task>/<name>/experiment.yaml`.
+It is the machine-readable declaration of the experiment — Pydantic-validated, read by every
+CLI command, skill, watchdog, and plot. `launch.sh` is **generated** from it (never hand-edited).
+
+Load with `gigaevo.experiment.manifest.load_manifest(exp)` → Pydantic `ExperimentManifest`.
+Readers access fields through the four canonical sub-sections (`m.contract.*`,
+`m.lifecycle.*`, `m.telemetry.*`, `m.control_plane.*`). There are no flat
+compatibility views.
+
+### Schema (Pydantic `ExperimentManifest`, schema_version 2)
+
+Source: `gigaevo/experiment/manifest.py`. Top-level sub-sections:
+
+| Key | Type | Required | Notes |
+|---|---|---|---|
+| `schema_version` | `int` | always | `2` (only currently supported version) |
+| `contract` | `ContractSection` | always | Pre-registered identity, problem, runs, servers, config, stopping rule, baseline |
+| `lifecycle` | `LifecycleState` | always | `status`, `launch`, `smoke_test`, `treatment_verification` |
+| `telemetry` | `TelemetryLog` | no (defaults) | `checkpoints`, `mid_run_test_eval`, `checkpoint_analysis`, `treatment_checks` |
+| `control_plane` | `ControlPlane` | no (defaults) | `watchdog`, `notifications`, `watchdog_pid`, `anomaly_detector_cron_id`, `checkpoint_cron_id` |
+
+#### `contract` section
+
+| Field | Type | Required | Purpose |
+|---|---|---|---|
+| `identity.name` | `str` | yes | `<task>/<short-name>`, e.g. `heilbron/asymmetric-iterations-v2` |
+| `identity.task` | `str` | yes | Top-level task folder (e.g. `heilbron`, `hover`, `hotpotqa`) |
+| `identity.branch` | `str` | `""` | Git branch hosting the experiment |
+| `identity.pr_number` | `int \| None` | no | GitHub PR tracking the experiment |
+| `identity.tracking_issue` | `int \| None` | no | GitHub Issue ID |
+| `identity.prereg_commit` | `str \| None` | no | Git SHA of the pre-registration commit |
+| `problem` | `ProblemSpec` | defaults | Test set, fitness type, metric name |
+| `runs` | `list[RunSpec]` | gated | Required when `lifecycle.status ≥ implemented` |
+| `servers` | `list[str]` | gated | Required when `lifecycle.status ≥ implemented` |
+| `config` | `ConfigSpec` | gated | Typed standard keys + `extra: dict[str, Any]` for Hydra overrides |
+| `custom_env` | `dict[str, str]` | no | Env vars exported in generated `launch.sh` |
+| `max_generations` | `int` | `25` | Stopping-rule target |
+| `stopping_rule` | `StoppingRule` | no | Structured conditions (see `conditions[]`) + prose `description` |
+| `baseline` | `BaselineInfo` | no | Reference / mean / metric for comparison |
+| `tools` | `list[ToolRef]` | no | Experiment-specific tool registry |
+
+#### `lifecycle` section
+
+| Field | Type | Required | Purpose |
+|---|---|---|---|
+| `status` | `str` | yes | `preregistered`, `implemented`, `running`, `complete`, `invalid` |
+| `launch.time` | `str \| None` | gated | ISO timestamp, required when `status ≥ running` |
+| `launch.commit` | `str \| None` | gated | Git SHA at launch, required when `status ≥ running` |
+| `launch.confirmed_at` | `str \| None` | no | Researcher confirmation timestamp |
+| `launch.attempt` | `int \| None` | no | Launch attempt number |
+| `smoke_test.completed` | `bool` | gated | Must be `true` for `status ≥ implemented` |
+| `smoke_test.completed_at` | `str \| None` | no | Smoke-test completion timestamp |
+| `treatment_verification.completed` | `bool` | no | Treatment checks recorded |
+| `treatment_verification.alignment_check_completed` | `bool` | no | Implementation-aligner verdict recorded |
+
+#### `telemetry` section
+
+| Field | Type | Purpose |
+|---|---|---|
+| `checkpoints` | `list[CheckpointEntry]` | Appended by `/experiment-checkpoint` (gen, timestamp, run_metrics, notes) |
+| `mid_run_test_eval` | `MidRunTestEvalInfo` | `completed`, `completed_at` |
+| `checkpoint_analysis` | `CheckpointAnalysisInfo` | `mid_run.completed`, `mid_run.completed_at` |
+| `treatment_checks` | `TreatmentChecksInfo` | `completed`, `completed_at`, `results[]` |
+
+#### `control_plane` section
+
+| Field | Type | Purpose |
+|---|---|---|
+| `watchdog` | `WatchdogSection` | Plugin, plot commands, alert thresholds, poll interval |
+| `notifications` | `NotificationsSection` | `pr` and `telegram` channel configs |
+| `watchdog_pid` | `int \| None` | Live watchdog PID |
+| `anomaly_detector_cron_id` | `str \| None` | Cron ID for the anomaly-detector recurring agent |
+| `checkpoint_cron_id` | `str \| None` | Cron ID for the checkpoint recurring skill |
+
+#### `contract.runs[]` — per-run specification
+
+| Field | Type | Required | Purpose |
+|---|---|---|---|
+| `label` | `str` | yes | Display label (e.g. `A1_G`, `C2_D`) |
+| `db` | `int` (≥0) | yes | Redis DB number (0–15) |
+| `prefix` | `str` | yes | Redis key prefix (= Hydra `problem.name`) |
+| `pipeline` | `str` | yes | Pipeline config name (`standard`, `adversarial_asymmetric`, …) |
+| `problem_name` | `str` | yes | Hydra `problem.name` override |
+| `condition` | `str` | yes | Human-readable arm/condition description |
+| `chain_url` | `str \| None` | no | Chain LLM endpoint (null ⇒ shared LB) |
+| `mutation_url` | `str \| None` | no | Mutation LLM endpoint |
+| `model_name` | `str` | yes | Model ID (e.g. `Qwen3-235B-A22B-Thinking-2507`) |
+| `pid` | `int \| None` | gated | Set by `launch.sh`; required when `status=running` |
+| `log_path` | `str \| None` | no | Relative log file path (default: `run_<label>.log`) |
+| `extra_overrides` | `list[str] \| None` | no | Per-run Hydra overrides (appended to `run.py` CLI) |
+| `role` | `str \| None` | gated | Required when `control_plane.watchdog.plugin=adversarial` (values: `constructor`, `improver`) |
+| `wave` | `int \| None` | no | Wave grouping for sequential launches |
+
+### Status state machine
+
+Forward transitions enforced by `set_status`:
+
+```
+preregistered ──► implemented ──► running ──► complete
+                                          └─► invalid ──► preregistered  (retry)
+```
+
+Recovery transitions allowed only via `gigaevo manifest reset-status` (escape hatch):
+
+```
+running ──► implemented    (launch failed; re-launch needed)
+running ──► preregistered  (invalid launch; release DB claims, re-implement)
+```
+
+Status gates (enforced at load time by `ExperimentManifest.validate_status_gates`):
+
+| Status | Required fields |
+|---|---|
+| `preregistered` | `experiment.*`, `schema_version` |
+| `implemented` | above + non-empty `runs[]`, `servers[]`, `config`, `smoke_test.completed=true` |
+| `running` | above + `launch.time`, `launch.commit`, every `runs[].pid` set |
+| `complete` | same as `running` (archival state) |
+| `invalid` | no additional gates (terminal; `reset-status` clears) |
+
+### CLI reference — `gigaevo manifest …`
+
+All subcommands require `-e/--experiment TASK/NAME`.
+
+| Subcommand | Purpose | Example |
+|---|---|---|
+| `get FIELD` | Read scalar field or dotted path | `gigaevo -e hover/foo manifest get status` |
+| `get runs` | Pretty-print runs table | `gigaevo -e hover/foo manifest get runs` |
+| `get <dotted.path>` | Traverse nested YAML | `gigaevo -e hover/foo manifest get control_plane.watchdog_pid` |
+| `set status VALUE` | Write via state machine | `gigaevo -e hover/foo manifest set status running` |
+| `update PATH VALUE` | Write any field (auto-coerces int/float/bool/null) | `gigaevo -e hover/foo manifest update control_plane.watchdog_pid 12345` |
+| `gate STATUS` | Assert status; exit 0 on match, 1 on mismatch | `gigaevo -e hover/foo manifest gate implemented` |
+| `pr-description [--push]` | Render Markdown PR body; optionally push via `gh` | `gigaevo -e hover/foo manifest pr-description --push` |
+| `record-pids --pids-file F --labels "A B C"` | Write launched PIDs into `runs[].pid` | Called by generated `launch.sh` |
+| `reset-status TARGET --reason 'why'` | Force status transition (escape hatch) | `gigaevo -e hover/foo manifest reset-status implemented --reason 'launch crashed'` |
+
+Notes:
+- `update` auto-coerces: `true`/`false` → bool, `null`/`none` → `None`, integer/float literals, else string.
+- `reset-status` from `running`: releases Redis DB claims and clears `launch.*` + `runs[].pid` (when target is `implemented`).
+- `pr-description --push` requires `experiment.pr_number` to be set.
+
+### Bijective mapping: `experiment.yaml` ↔ `launch.sh`
+
+`launch.sh` is regenerated from `experiment.yaml` with `gigaevo -e <exp> launch --generate-script`.
+The mapping is one-way deterministic — every field in the manifest corresponds to an observable
+fragment of `launch.sh`; every fragment of `launch.sh` is traceable back to a field.
+
+| Manifest field | `launch.sh` output |
+|---|---|
+| `experiment.name` | Banner header, regeneration comment, label in launch log |
+| `experiment.branch` | Header comment only |
+| `experiment.pr_number` | Header comment only |
+| `experiment.prereg_commit` | Header comment + launch banner |
+| `experiment.max_generations` | `max_generations=<N>` Hydra override per run |
+| `servers[]` | `NO_PROXY` export: `localhost,127.0.0.1,api.github.com,<servers...>` |
+| `custom_env{}` | `export KEY="VALUE"` lines, then propagated to every run |
+| `config.stage_timeout` | `stage_timeout=<N>` Hydra override |
+| `config.dag_timeout` | `dag_timeout=<N>` Hydra override |
+| `config.max_mutations_per_generation` | `max_mutations_per_generation=<N>` |
+| `config.max_elites_per_generation` | `max_elites_per_generation=<N>` |
+| `config.num_parents` | `num_parents=<N>` |
+| `config.mutation_mode` | `mutation_mode=<...>` (optional) |
+| `config.chain_url_env_var` | Name of per-run env var prefix (default `CHAIN_URL`) |
+| `runs[].label` | PID variable name `PID_<label>`, log file `run_<label>.log`, label in `pids.txt` |
+| `runs[].db` | `redis.db=<N>` Hydra override |
+| `runs[].pipeline` | `pipeline=<name>` Hydra override |
+| `runs[].problem_name` | `problem.name=<path>` Hydra override |
+| `runs[].condition` | Launch banner comment |
+| `runs[].model_name` | `model_name=<id>` Hydra override |
+| `runs[].mutation_url` | `llm_base_url="<url>"` Hydra override |
+| `runs[].chain_url` (non-null) | Per-run `${CHAIN_URL_ENV_VAR}=<url> nohup ...` prefix |
+| `runs[].extra_overrides` | Appended verbatim to the run's Hydra CLI (`${…}` refs single-quoted per KF-02) |
+| `runs[].log_path` | Stdout/stderr redirection target (default `run_<label>.log`) |
+
+#### Worked example: `heilbron/asymmetric-iterations-v2` run `A1_G`
+
+Manifest entry:
+
+```yaml
+- label: A1_G
+  db: 1
+  prefix: heilbron_adversarial/pop_a
+  pipeline: adversarial_asymmetric
+  problem_name: heilbron_adversarial/pop_a
+  condition: 'Arm A (Composition): Constructor, pair 1'
+  chain_url: null
+  mutation_url: http://localhost:8000/v1
+  model_name: Qwen3-235B-A22B-Thinking-2507
+  extra_overrides:
+    - evolution=steady_state
+    - opponent_redis_db=2
+    - opponent_redis_prefix=heilbron_adversarial/pop_b
+    - feedback_mode=composition
+    - population_role=constructor
+    - post_step_hook=${composition_injection_hook}
+  role: constructor
+```
+
+Generated `launch.sh` fragment:
+
+```bash
+# ── Run A1_G: Arm A (Composition): Constructor, pair 1
+nohup "$PYTHON" "$PROJ/run.py" \
+    problem.name=heilbron_adversarial/pop_a \
+    pipeline=adversarial_asymmetric \
+    prompts=default \
+    redis.db=1 \
+    stage_timeout=2400 \
+    dag_timeout=2400 \
+    max_generations=50 \
+    max_mutations_per_generation=8 \
+    max_elites_per_generation=8 \
+    num_parents=1 \
+    model_name=Qwen3-235B-A22B-Thinking-2507 \
+    llm_base_url="http://localhost:8000/v1" \
+    evolution=steady_state \
+    opponent_redis_db=2 \
+    opponent_redis_prefix=heilbron_adversarial/pop_b \
+    feedback_mode=composition \
+    population_role=constructor \
+    '${composition_injection_hook}' \
+    > "$LOG_DIR/run_A1_G.log" 2>&1 &
+PID_A1_G=$!
+```
+
+Notes:
+- `chain_url: null` ⇒ no per-run `CHAIN_URL=…` prefix; the run uses the shared LiteLLM proxy via `custom_env`.
+- `post_step_hook=${composition_injection_hook}` contains a Hydra interpolation ref; the generator single-quotes it so bash doesn't expand `${…}` as a shell variable (KF-02).
+- `role: constructor` does not appear in `launch.sh` — it is consumed only by the adversarial watchdog plugin for G/D dispatch and frontier suppression.
+
+### Manifest helpers
+
+Python API (`gigaevo.monitoring.manifest`):
+
+| Function | Purpose |
+|---|---|
+| `load_manifest(exp) -> ExperimentManifest` | Load + validate experiment.yaml (Pydantic) |
+| `set_status(exp, new, *, allow_recovery=False)` | State-machine-enforced status write |
+| `update_manifest(exp, updater)` | Atomic mutation under Redis lock |
+| `claim_dbs(exp, [dbs])` | Reserve Redis DBs with TTL=7d |
+| `refresh_db_claims(exp, [dbs])` | Extend existing claims |
+| `release_db_claims([dbs])` | Drop claims (e.g. on reset-status) |
+| `find_active_experiments()` | Discover all implemented/running experiments |
+| `generate_pr_description(exp)` | Render Markdown PR body |
+
+Atomicity: every write acquires a Redis lock (`experiments:<exp>:yaml_lock`, 30s TTL),
+writes to `experiment.yaml.tmp`, `fsync`s, then renames — FUSE-safe.
 
 ---
 

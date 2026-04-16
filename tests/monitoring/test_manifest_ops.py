@@ -1,4 +1,4 @@
-"""Tests for gigaevo.monitoring.manifest — Pydantic manifest operations."""
+"""Tests for gigaevo.experiment.manifest — Pydantic manifest operations."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from gigaevo.monitoring.manifest import (
+from gigaevo.experiment.manifest import (
     RECOVERY_TRANSITIONS,
     VALID_TRANSITIONS,
+    ExperimentManifest,
     _write_manifest_atomic,
     experiment_dir,
     generate_pr_description,
@@ -17,7 +18,6 @@ from gigaevo.monitoring.manifest import (
     manifest_path,
     set_status,
 )
-from gigaevo.monitoring.manifest_schema import ExperimentManifest
 
 
 def _minimal_manifest_dict(
@@ -27,22 +27,26 @@ def _minimal_manifest_dict(
     status: str = "preregistered",
 ) -> dict:
     return {
-        "schema_version": 1,
-        "experiment": {
-            "name": name,
-            "task": task,
-            "status": status,
-            "branch": "exp/hover/test-exp",
+        "schema_version": 2,
+        "contract": {
+            "identity": {
+                "name": name,
+                "task": task,
+                "branch": "exp/hover/test-exp",
+            },
             "max_generations": 25,
+            "problem": {
+                "has_test_set": True,
+                "fitness_type": "discrete",
+                "metric_name": "accuracy",
+            },
+            "runs": [],
+            "servers": [],
+            "config": {},
         },
-        "problem": {
-            "has_test_set": True,
-            "fitness_type": "discrete",
-            "metric_name": "accuracy",
+        "lifecycle": {
+            "status": status,
         },
-        "runs": [],
-        "servers": [],
-        "config": {},
     }
 
 
@@ -50,7 +54,7 @@ def _implementable_manifest_dict(
     *, name: str = "hover/test-exp", task: str = "hover", status: str = "preregistered"
 ) -> dict:
     d = _minimal_manifest_dict(name=name, task=task, status=status)
-    d["runs"] = [
+    d["contract"]["runs"] = [
         {
             "label": "R1",
             "db": 5,
@@ -63,9 +67,9 @@ def _implementable_manifest_dict(
             "model_name": "gpt-4",
         }
     ]
-    d["servers"] = ["server1"]
-    d["config"] = {"key": "value"}
-    d["smoke_test"] = {"completed": True}
+    d["contract"]["servers"] = ["server1"]
+    d["contract"]["config"] = {"extra": {"key": "value"}}
+    d["lifecycle"]["smoke_test"] = {"completed": True}
     return d
 
 
@@ -73,8 +77,8 @@ def _running_manifest_dict(
     *, name: str = "hover/test-exp", task: str = "hover"
 ) -> dict:
     d = _implementable_manifest_dict(name=name, task=task, status="running")
-    d["runs"][0]["pid"] = 12345
-    d["launch"] = {"time": "2026-04-13T00:00:00", "commit": "abc123"}
+    d["contract"]["runs"][0]["pid"] = 12345
+    d["lifecycle"]["launch"] = {"time": "2026-04-13T00:00:00", "commit": "abc123"}
     return d
 
 
@@ -93,7 +97,7 @@ class TestExperimentDir:
 
 class TestLoadManifest:
     def test_load_missing_raises(self, tmp_path):
-        with patch("gigaevo.monitoring.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             with pytest.raises(FileNotFoundError):
                 load_manifest("nonexistent/exp")
 
@@ -104,12 +108,12 @@ class TestLoadManifest:
         data = _minimal_manifest_dict()
         yaml_path.write_text(yaml.safe_dump(data))
 
-        with patch("gigaevo.monitoring.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             result = load_manifest("hover/test-exp")
 
         assert isinstance(result, ExperimentManifest)
-        assert result.experiment.name == "hover/test-exp"
-        assert result.experiment.status == "preregistered"
+        assert result.contract.identity.name == "hover/test-exp"
+        assert result.lifecycle.status == "preregistered"
 
 
 class TestSetStatus:
@@ -124,12 +128,12 @@ class TestSetStatus:
         mock_redis.set.return_value = True
 
         with (
-            patch("gigaevo.monitoring.manifest.PROJ", tmp_path),
-            patch("gigaevo.monitoring.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.PROJ", tmp_path),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
         ):
             result = set_status("hover/test-exp", "implemented")
 
-        assert result.experiment.status == "implemented"
+        assert result.lifecycle.status == "implemented"
 
     def test_invalid_transition_raises(self, tmp_path):
         exp_dir = tmp_path / "experiments" / "hover" / "test-exp"
@@ -142,8 +146,8 @@ class TestSetStatus:
         mock_redis.set.return_value = True
 
         with (
-            patch("gigaevo.monitoring.manifest.PROJ", tmp_path),
-            patch("gigaevo.monitoring.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.PROJ", tmp_path),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status("hover/test-exp", "running")
@@ -159,12 +163,12 @@ class TestSetStatus:
         mock_redis.set.return_value = True
 
         with (
-            patch("gigaevo.monitoring.manifest.PROJ", tmp_path),
-            patch("gigaevo.monitoring.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.PROJ", tmp_path),
+            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
         ):
             result = set_status("hover/test-exp", "implemented", allow_recovery=True)
 
-        assert result.experiment.status == "implemented"
+        assert result.lifecycle.status == "implemented"
 
 
 class TestWriteManifestAtomic:
@@ -192,7 +196,7 @@ class TestGeneratePrDescription:
         data = _minimal_manifest_dict()
         yaml_path.write_text(yaml.safe_dump(data))
 
-        with patch("gigaevo.monitoring.manifest.PROJ", tmp_path):
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             result = generate_pr_description("hover/test-exp")
 
         assert "hover/test-exp" in result
