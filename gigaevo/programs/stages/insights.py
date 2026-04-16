@@ -9,9 +9,10 @@ from langchain_openai import ChatOpenAI
 from gigaevo.llm.agents.factories import create_insights_agent
 from gigaevo.llm.agents.insights import ProgramInsights
 from gigaevo.llm.models import MultiModelRouter
-from gigaevo.programs.core_types import StageIO, VoidInput
+from gigaevo.programs.core_types import StageIO
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
+from gigaevo.programs.stages.common import CacheOnlyInput
 from gigaevo.programs.stages.langgraph_stage import LangGraphStage
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
@@ -27,12 +28,14 @@ class InsightsStage(LangGraphStage):
     """
     Runs the Insights agent on the current Program.
 
-    - InputsModel: none (DAG provides no inputs here)
+    - InputsModel: CacheOnlyInput — `cache_on` is folded into the cache key
+      so an upstream stage (e.g. FetchOpponentIdsStage) can invalidate cached
+      insights when the opponent set rotates. `compute()` does not read it.
     - OutputModel: InsightsOutput (wraps ProgramInsights)
     - Injects the live Program into the agent call as `program`
     """
 
-    InputsModel: type[StageIO] = VoidInput
+    InputsModel: type[StageIO] = CacheOnlyInput
     OutputModel: type[StageIO] = InsightsOutput
 
     def __init__(

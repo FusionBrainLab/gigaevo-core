@@ -12,13 +12,12 @@ from gigaevo.llm.models import ChatOpenAI, MultiModelRouter
 from gigaevo.programs.core_types import (
     ProgramStageResult,
     StageIO,
-    VoidInput,
 )
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
-from gigaevo.programs.stages.common import ListOf
+from gigaevo.programs.stages.common import CacheOnlyInput, ListOf
 from gigaevo.programs.stages.langgraph_stage import LangGraphStage
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
@@ -42,7 +41,10 @@ class LineageStage(LangGraphStage):
     as `program`, calls the lineage agent, and returns analyses (same order as parents).
     """
 
-    InputsModel: type[StageIO] = VoidInput
+    # CacheOnlyInput.cache_on lets an upstream stage (e.g. FetchOpponentIdsStage)
+    # invalidate cached lineage analyses when the opponent set rotates without
+    # changing what `preprocess()`/`compute()` actually read.
+    InputsModel: type[StageIO] = CacheOnlyInput
     OutputModel: type[StageIO] = LineageAnalysesOutput
 
     def __init__(
