@@ -16,3 +16,8 @@ checkpoint_dir: null
 
 # Optional override for api.namespace in memory config.
 namespace: null
+
+# Stopper: pluggable stopping criterion for the evolution engine.
+# Override with stopper=max_generations, stopper=fitness_plateau, etc.
+# When null, engine falls back to evolution.max_generations.
+stopper: null

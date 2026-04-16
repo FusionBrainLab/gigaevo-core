@@ -1,0 +1,2 @@
+_target_: gigaevo.evolution.engine.stopper.WallClockStopper
+budget_seconds: 21600  # 6 hours

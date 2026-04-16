@@ -14,6 +14,11 @@ from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.hooks import NullPostRunHook, PostRunHook
 from gigaevo.evolution.engine.metrics import EngineMetrics
 from gigaevo.evolution.engine.mutation import generate_mutations
+from gigaevo.evolution.engine.stopper import (
+    EvolutionStopper,
+    MaxGenerationsStopper,
+    StopContext,
+)
 from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.evolution.mutation.mutation_operator import (
     LLMMutationOperator,
@@ -87,9 +92,10 @@ class EvolutionEngine:
         self._post_run_hook = post_run_hook or NullPostRunHook()
 
         logger.info(
-            "[EvolutionEngine] Init | strategy={}, acceptor={}",
+            "[EvolutionEngine] Init | strategy={}, acceptor={}, stopper={}",
             type(self.strategy).__name__,
             type(self.config.program_acceptor).__name__,
+            type(self.stopper).__name__,
         )
 
     def start(self) -> None:
@@ -173,10 +179,11 @@ class EvolutionEngine:
                     await asyncio.sleep(self.config.loop_interval)
                     continue
 
-                if self._reached_generation_cap():
+                stop_decision = self.stopper.should_stop(self._build_stop_context())
+                if stop_decision.stop:
                     logger.info(
-                        "[EvolutionEngine] Stop: max_generations={}",
-                        self.config.max_generations,
+                        "[EvolutionEngine] Stop: {}",
+                        stop_decision.reason,
                     )
                     break
 
@@ -677,6 +684,25 @@ class EvolutionEngine:
             self.metrics.programs_processed = pp
             logger.info("[EvolutionEngine] Restored programs_processed={}", pp)
 
+    @property
+    def stopper(self) -> EvolutionStopper:
+        if self.config.stopper is not None:
+            return self.config.stopper
+        if self.config.max_generations is not None:
+            return MaxGenerationsStopper(self.config.max_generations)
+        return EvolutionStopper()
+
+    def _build_stop_context(self) -> StopContext:
+        elapsed = (
+            time.monotonic() - self._run_start_time
+            if self._run_start_time is not None
+            else 0.0
+        )
+        return StopContext(
+            total_generations=self.metrics.total_generations,
+            elapsed_seconds=elapsed,
+            programs_processed=self.metrics.programs_processed,
+        )
+
     def _reached_generation_cap(self) -> bool:
-        cap = self.config.max_generations
-        return cap is not None and self.metrics.total_generations >= cap
+        return self.stopper.should_stop(self._build_stop_context()).stop

@@ -24,6 +24,7 @@ engine_config:
   max_generations: ${max_generations}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
+  stopper: ${stopper}
 
 metrics_tracker:
   _target_: gigaevo.utils.metrics_tracker.MetricsTracker
