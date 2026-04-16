@@ -1,14 +1,12 @@
 """Redis connection + manifest locking + atomic file writes.
 
-Internal helpers for ``gigaevo.experiment.manifest``. These are low-level
-primitives for concurrency-safe manifest mutation:
+Low-level primitives for concurrency-safe manifest mutation:
 
-- :func:`_get_redis` — connect to Redis (db 0) with actionable errors
-- :func:`_acquire_lock` / :func:`_release_lock` — Redis-based mutual exclusion
-- :func:`_write_manifest_atomic` — write YAML via tmp + rename (FUSE-safe)
+- :func:`get_redis` — connect to Redis (db 0) with actionable errors
+- :func:`acquire_lock` / :func:`release_lock` — Redis-based mutual exclusion
+- :func:`write_manifest_atomic` — write YAML via tmp + rename (FUSE-safe)
 
-All functions are prefixed with ``_`` and considered package-private. External
-callers should use the higher-level API in ``gigaevo.experiment.manifest``.
+Public API used by :mod:`gigaevo.experiment.manifest` and tests.
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ import redis
 import yaml
 
 
-def _get_redis() -> redis.Redis:
+def get_redis() -> redis.Redis:
     """Get a Redis connection for manifest locking.
 
     Configuration:
@@ -52,7 +50,6 @@ def _get_redis() -> redis.Redis:
 
     try:
         r = redis.Redis(host=host, port=port, db=0)
-        # Verify connection is actually working
         r.ping()
         return r
     except (redis.ConnectionError, redis.TimeoutError, OSError) as e:
@@ -63,7 +60,7 @@ def _get_redis() -> redis.Redis:
         ) from e
 
 
-def _acquire_lock(r: redis.Redis, experiment: str, timeout: float = 5.0) -> str:
+def acquire_lock(r: redis.Redis, experiment: str, timeout: float = 5.0) -> str:
     """Acquire Redis-based lock. Returns lock key. Raises on timeout."""
     lock_key = f"experiments:{experiment}:yaml_lock"
     deadline = time.monotonic() + timeout
@@ -77,11 +74,11 @@ def _acquire_lock(r: redis.Redis, experiment: str, timeout: float = 5.0) -> str:
     )
 
 
-def _release_lock(r: redis.Redis, lock_key: str) -> None:
+def release_lock(r: redis.Redis, lock_key: str) -> None:
     r.delete(lock_key)
 
 
-def _write_manifest_atomic(path: Path, data: dict[str, Any]) -> None:
+def write_manifest_atomic(path: Path, data: dict[str, Any]) -> None:
     """Write YAML atomically via tmp + rename."""
     tmp = path.with_suffix(".yaml.tmp")
     with open(tmp, "w") as f:
@@ -92,8 +89,8 @@ def _write_manifest_atomic(path: Path, data: dict[str, Any]) -> None:
 
 
 __all__ = [
-    "_get_redis",
-    "_acquire_lock",
-    "_release_lock",
-    "_write_manifest_atomic",
+    "get_redis",
+    "acquire_lock",
+    "release_lock",
+    "write_manifest_atomic",
 ]

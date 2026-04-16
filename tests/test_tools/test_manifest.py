@@ -7,10 +7,9 @@ import pytest
 import yaml
 
 from gigaevo.experiment.manifest import (
-    Status,
     VALID_TRANSITIONS,
+    Status,
     _validate,
-    _write_manifest_atomic,
     claim_dbs,
     generate_pr_description,
     load_manifest,
@@ -19,6 +18,7 @@ from gigaevo.experiment.manifest import (
     release_db_claims,
     set_status,
     update_manifest,
+    write_manifest_atomic,
 )
 
 # ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ class TestAtomicWrite:
     def test_write_then_rename(self, tmp_path: Path):
         target = tmp_path / "test.yaml"
         data = {"key": "value", "nested": {"a": 1}}
-        _write_manifest_atomic(target, data)
+        write_manifest_atomic(target, data)
 
         assert target.exists()
         with open(target) as f:
@@ -249,14 +249,14 @@ class TestAtomicWrite:
 
     def test_tmp_cleaned_up(self, tmp_path: Path):
         target = tmp_path / "test.yaml"
-        _write_manifest_atomic(target, {"x": 1})
+        write_manifest_atomic(target, {"x": 1})
         tmp = target.with_suffix(".yaml.tmp")
         assert not tmp.exists()
 
     def test_overwrites_existing(self, tmp_path: Path):
         target = tmp_path / "test.yaml"
-        _write_manifest_atomic(target, {"version": 1})
-        _write_manifest_atomic(target, {"version": 2})
+        write_manifest_atomic(target, {"version": 1})
+        write_manifest_atomic(target, {"version": 2})
         with open(target) as f:
             loaded = yaml.safe_load(f)
         assert loaded["version"] == 2
@@ -316,7 +316,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", root),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r),
         ):
             # Need to add running requirements
             raw["contract"]["runs"][0]["pid"] = 99999
@@ -335,7 +335,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", root),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status(exp_name, "running")
@@ -347,7 +347,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", root),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r),
         ):
             # Normal transition: running -> implemented is NOT allowed
             with pytest.raises(ValueError, match="Invalid transition"):
@@ -379,7 +379,7 @@ class TestUpdateManifest:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r),
         ):
             m = update_manifest("test/smoke", add_tracking_issue)
             assert m.contract.identity.tracking_issue == 42
@@ -399,7 +399,7 @@ class TestDBClaims:
     def test_claim_success(self):
         mock_r = MagicMock()
         mock_r.set.return_value = True
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
             failed = claim_dbs("test/exp", [9, 10])
         assert failed == []
         assert mock_r.set.call_count == 2
@@ -409,7 +409,7 @@ class TestDBClaims:
         # First call succeeds, second fails
         mock_r.set.side_effect = [True, False]
         mock_r.get.return_value = b"other/experiment"
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
             failed = claim_dbs("test/exp", [9, 10])
         assert len(failed) == 1
         assert failed[0] == (10, "other/experiment")
@@ -418,20 +418,20 @@ class TestDBClaims:
         mock_r = MagicMock()
         mock_r.set.return_value = False  # already claimed
         mock_r.get.return_value = b"test/exp"  # by us
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
             failed = claim_dbs("test/exp", [9])
         assert failed == []  # not a failure if we own it
 
     def test_refresh_uses_xx(self):
         mock_r = MagicMock()
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
             refresh_db_claims("test/exp", [9, 10])
         for call in mock_r.set.call_args_list:
             assert call.kwargs.get("xx") is True
 
     def test_release(self):
         mock_r = MagicMock()
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
+        with patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r):
             release_db_claims([9, 10])
         assert mock_r.delete.call_count == 2
 

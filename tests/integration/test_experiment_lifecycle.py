@@ -85,7 +85,7 @@ class TestHappyPath:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=fake_redis),
         ):
             # Step 1: populate required fields, then preregistered → implemented.
             def make_implementable(raw):
@@ -142,7 +142,7 @@ class TestInvalidTransitions:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=fake_redis),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status("hover/test-exp", "running")
@@ -158,7 +158,7 @@ class TestInvalidTransitions:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=fake_redis),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status("hover/test-exp", "running")
@@ -186,7 +186,7 @@ class TestRecovery:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=fake_redis),
         ):
             manifest = recover_status("hover/test-exp", "implemented")
             assert manifest.lifecycle.status == "implemented"
@@ -209,7 +209,7 @@ class TestAtomicWrites:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=fake_redis),
         ):
             set_status("hover/test-exp", "implemented")
 
@@ -231,7 +231,7 @@ class TestAtomicWrites:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=fake_redis),
         ):
             set_status("hover/test-exp", "implemented")
 

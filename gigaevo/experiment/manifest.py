@@ -21,18 +21,29 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import StrEnum
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
+from loguru import logger
 from omegaconf import OmegaConf
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    field_validator,
+    model_validator,
+)
+from pydantic import (
+    ValidationError as PydanticValidationError,
+)
 import yaml
 
+from gigaevo.exceptions import ManifestValidationError
 from gigaevo.experiment.lock import (
-    _acquire_lock,
-    _get_redis,
-    _release_lock,
-    _write_manifest_atomic,
+    acquire_lock,
+    get_redis,
+    release_lock,
+    write_manifest_atomic,
 )
 
 
@@ -49,25 +60,50 @@ class Status(StrEnum):
     INVALID = "invalid"
 
 
-PROJ = Path(__file__).parent.parent.parent
+def _resolve_proj() -> Path:
+    """Resolve the project root, honoring the ``GIGAEVO_PROJ`` env override.
+
+    Useful for tests, non-standard checkouts, and integration harnesses that
+    want to point the manifest system at a scratch directory without
+    monkey-patching module state.
+    """
+    override = os.environ.get("GIGAEVO_PROJ")
+    if override:
+        p = Path(override).expanduser().resolve()
+        if not p.is_dir():
+            raise RuntimeError(
+                f"GIGAEVO_PROJ={override!r} does not point to an existing directory. "
+                f"Unset it or create the directory."
+            )
+        return p
+    return Path(__file__).parent.parent.parent
+
+
+PROJ = _resolve_proj()
 
 SUPPORTED_SCHEMA_VERSIONS = {2}
 
-REQUIRES_IMPLEMENTATION: frozenset[Status] = frozenset({
-    Status.IMPLEMENTED,
-    Status.RUNNING,
-    Status.COMPLETE,
-})
+REQUIRES_IMPLEMENTATION: frozenset[Status] = frozenset(
+    {
+        Status.IMPLEMENTED,
+        Status.RUNNING,
+        Status.COMPLETE,
+    }
+)
 
-REQUIRES_RUNTIME: frozenset[Status] = frozenset({
-    Status.RUNNING,
-    Status.COMPLETE,
-})
+REQUIRES_RUNTIME: frozenset[Status] = frozenset(
+    {
+        Status.RUNNING,
+        Status.COMPLETE,
+    }
+)
 
-TERMINAL: frozenset[Status] = frozenset({
-    Status.COMPLETE,
-    Status.INVALID,
-})
+TERMINAL: frozenset[Status] = frozenset(
+    {
+        Status.COMPLETE,
+        Status.INVALID,
+    }
+)
 
 VALID_TRANSITIONS: dict[Status, set[Status]] = {
     Status.PREREGISTERED: {Status.IMPLEMENTED},
@@ -81,7 +117,10 @@ RECOVERY_TRANSITIONS: dict[Status, set[Status]] = {
     Status.RUNNING: {Status.IMPLEMENTED},
 }
 
-DB_CLAIM_TTL = 86400 * 7
+# 7 days — covers long runs + weekend without manual refresh.
+DB_CLAIM_TTL_SECONDS = 7 * 24 * 60 * 60
+# Backwards-compatible alias; prefer DB_CLAIM_TTL_SECONDS going forward.
+DB_CLAIM_TTL = DB_CLAIM_TTL_SECONDS
 
 # ---------------------------------------------------------------------------
 # Pydantic Schema Models
@@ -488,8 +527,7 @@ class ExperimentManifest(BaseModel):
         except ValueError:
             valid = ", ".join(s.value for s in Status)
             raise ValueError(
-                f"Invalid lifecycle.status '{status_str}'. "
-                f"Valid statuses: {valid}"
+                f"Invalid lifecycle.status '{status_str}'. Valid statuses: {valid}"
             ) from None
 
         errors: list[str] = []
@@ -616,26 +654,10 @@ class ExperimentManifest(BaseModel):
         leaving a literal ``${...}`` string in the manifest.
         """
         path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(
-                f"No experiment.yaml at {path}. "
-                f"Create one from experiments/_template/experiment.yaml"
-            )
-        try:
-            raw = _load_yaml_with_omegaconf(path)
-        except FileNotFoundError:
-            raise
-        except Exception as exc:
-            raise ValueError(
-                f"Failed to load {path}: {exc}\nRecovery: git checkout {path}"
-            ) from exc
-
-        if not isinstance(raw, dict):
-            raise ValueError(f"{path} must be a YAML mapping, not {type(raw).__name__}")
-
+        raw = _read_yaml_file(path)
         try:
             return cls.from_dict(raw)
-        except ValueError as exc:
+        except (PydanticValidationError, ValueError) as exc:
             raise ValueError(
                 f"Validation failed for {path}:\n{exc}\nRecovery: git checkout {path}"
             ) from exc
@@ -697,6 +719,30 @@ def _load_yaml_with_omegaconf(path: Path) -> Any:
     return OmegaConf.to_container(cfg, resolve=True)
 
 
+def _read_yaml_file(path: Path) -> dict[str, Any]:
+    """Read and parse experiment.yaml via OmegaConf.
+
+    Shared IO path for ``load_manifest`` and ``ExperimentManifest.from_yaml_file``.
+    Raises ``FileNotFoundError`` for missing files and ``ValueError`` for
+    unreadable/non-mapping YAML — never a bare ``Exception``.
+    """
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No experiment.yaml at {path}. "
+            f"Create one from experiments/_template/experiment.yaml"
+        )
+    try:
+        raw = _load_yaml_with_omegaconf(path)
+    except (yaml.YAMLError, OSError, ValueError) as exc:
+        raise ValueError(
+            f"Failed to load {path}: {exc}\nRecovery: git checkout {path}"
+        ) from exc
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must be a YAML mapping, not {type(raw).__name__}")
+    return raw
+
+
 def load_manifest(experiment: str) -> ExperimentManifest:
     """Load and validate experiment.yaml.
 
@@ -704,32 +750,25 @@ def load_manifest(experiment: str) -> ExperimentManifest:
     interpolations resolve at load time.
 
     Raises FileNotFoundError if the file doesn't exist.
-    Raises ValueError on schema validation failure or interpolation failure.
+    Raises ManifestValidationError on schema validation failure.
+    Raises ValueError on YAML parse / interpolation failure.
     """
     path = manifest_path(experiment)
-    if not path.exists():
-        raise FileNotFoundError(
-            f"No experiment.yaml at {path}. "
-            f"Create one from experiments/_template/experiment.yaml"
-        )
-
-    try:
-        raw = _load_yaml_with_omegaconf(path)
-    except Exception as e:
-        raise ValueError(
-            f"Failed to load {path}: {e}\n"
-            f"Recovery: git checkout {path.relative_to(PROJ)}"
-        ) from e
-
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path} is not a YAML mapping")
-
+    raw = _read_yaml_file(path)
     return _validate(raw, experiment)
 
 
 def _validate(raw: dict[str, Any], experiment: str) -> ExperimentManifest:
-    """Validate raw YAML dict and return ExperimentManifest."""
-    return ExperimentManifest.from_dict(raw)
+    """Validate raw YAML dict and return ExperimentManifest.
+
+    Wraps Pydantic ``ValidationError`` in ``ManifestValidationError`` so
+    downstream callers can recognize manifest-shape failures (as opposed
+    to IO or YAML parsing errors) without inspecting exception messages.
+    """
+    try:
+        return ExperimentManifest.from_dict(raw)
+    except (PydanticValidationError, ValueError) as exc:
+        raise ManifestValidationError(experiment, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -753,8 +792,8 @@ def set_status(
     Raises:
         ValueError on invalid transition or validation failure.
     """
-    r = _get_redis()
-    lock_key = _acquire_lock(r, experiment)
+    r = get_redis()
+    lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
         with open(path) as f:
@@ -776,13 +815,12 @@ def set_status(
 
         raw.setdefault("lifecycle", {})["status"] = new_status
 
-        # Validate the new state (will raise if required fields missing)
         manifest = _validate(raw, experiment)
 
-        _write_manifest_atomic(path, raw)
+        write_manifest_atomic(path, raw)
         return manifest
     finally:
-        _release_lock(r, lock_key)
+        release_lock(r, lock_key)
 
 
 def recover_status(
@@ -804,8 +842,8 @@ def recover_status(
     Raises:
         ValueError on invalid recovery transition or validation failure.
     """
-    r = _get_redis()
-    lock_key = _acquire_lock(r, experiment)
+    r = get_redis()
+    lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
         with open(path) as f:
@@ -823,16 +861,16 @@ def recover_status(
         if target_status not in allowed:
             raise ValueError(
                 f"Cannot recover to {new_status} from {current}. "
-                f"Recovery transitions: {', '.join(f'{k.value} → {', '.join(s.value for s in v)}' for k, v in RECOVERY_TRANSITIONS.items())}"
+                f"Recovery transitions: {', '.join(f'{k.value} → {", ".join(s.value for s in v)}' for k, v in RECOVERY_TRANSITIONS.items())}"
             )
 
         raw.setdefault("lifecycle", {})["status"] = new_status
 
         manifest = _validate(raw, experiment)
-        _write_manifest_atomic(path, raw)
+        write_manifest_atomic(path, raw)
         return manifest
     finally:
-        _release_lock(r, lock_key)
+        release_lock(r, lock_key)
 
 
 def update_manifest(
@@ -852,8 +890,8 @@ def update_manifest(
 
         update_manifest("hover/feedback_softfit", set_pids)
     """
-    r = _get_redis()
-    lock_key = _acquire_lock(r, experiment)
+    r = get_redis()
+    lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
         with open(path) as f:
@@ -862,10 +900,10 @@ def update_manifest(
         updater(raw)
 
         manifest = _validate(raw, experiment)
-        _write_manifest_atomic(path, raw)
+        write_manifest_atomic(path, raw)
         return manifest
     finally:
-        _release_lock(r, lock_key)
+        release_lock(r, lock_key)
 
 
 # ---------------------------------------------------------------------------
@@ -875,11 +913,11 @@ def update_manifest(
 
 def claim_dbs(experiment: str, dbs: list[int]) -> list[tuple[int, str]]:
     """Atomically claim Redis DBs. Returns list of (db, owner) that failed."""
-    r = _get_redis()
+    r = get_redis()
     failed: list[tuple[int, str]] = []
     for db in dbs:
         key = f"experiments:db_claim:{db}"
-        if not r.set(key, experiment, nx=True, ex=DB_CLAIM_TTL):
+        if not r.set(key, experiment, nx=True, ex=DB_CLAIM_TTL_SECONDS):
             owner = (r.get(key) or b"unknown").decode()
             if owner != experiment:
                 failed.append((db, owner))
@@ -888,15 +926,15 @@ def claim_dbs(experiment: str, dbs: list[int]) -> list[tuple[int, str]]:
 
 def refresh_db_claims(experiment: str, dbs: list[int]) -> None:
     """Refresh TTL on already-claimed DBs (called by watchdog each cycle)."""
-    r = _get_redis()
+    r = get_redis()
     for db in dbs:
         key = f"experiments:db_claim:{db}"
-        r.set(key, experiment, xx=True, ex=DB_CLAIM_TTL)
+        r.set(key, experiment, xx=True, ex=DB_CLAIM_TTL_SECONDS)
 
 
 def release_db_claims(dbs: list[int]) -> None:
     """Release DB claims (called by reset_status and closeout)."""
-    r = _get_redis()
+    r = get_redis()
     for db in dbs:
         r.delete(f"experiments:db_claim:{db}")
 
@@ -910,21 +948,33 @@ def find_active_experiments() -> list[ExperimentManifest]:
     """Scan for experiments with status in (implemented, running).
 
     Includes 'implemented' to prevent TOCTOU race with DB claims.
+
+    Silently skipping broken manifests has historically masked real bugs
+    (stale PROJ root, malformed YAML, schema drift). We still *continue*
+    past a broken manifest — otherwise one stale yaml would block all
+    launches — but each skip is logged at WARNING so it shows up in CI.
     """
     active: list[ExperimentManifest] = []
     experiments_dir = PROJ / "experiments"
     for yaml_path in experiments_dir.glob("*/*/experiment.yaml"):
-        # Skip template
         if "_template" in str(yaml_path):
             continue
         rel = yaml_path.parent.relative_to(experiments_dir)
         experiment = str(rel)
         try:
             m = load_manifest(experiment)
-            if m.lifecycle.status in ("implemented", "running"):
-                active.append(m)
-        except (ValueError, yaml.YAMLError, FileNotFoundError):
+        except FileNotFoundError:
             continue
+        except (ManifestValidationError, ValueError, yaml.YAMLError) as exc:
+            logger.warning(
+                "find_active_experiments: skipping {} — {}: {}",
+                experiment,
+                type(exc).__name__,
+                exc,
+            )
+            continue
+        if m.lifecycle.status in ("implemented", "running"):
+            active.append(m)
     return active
 
 
@@ -1016,6 +1066,7 @@ def generate_pr_description(experiment: str) -> str:
 
 
 __all__ = [
+    "ManifestValidationError",
     "Status",
     "REQUIRES_IMPLEMENTATION",
     "REQUIRES_RUNTIME",
@@ -1023,6 +1074,7 @@ __all__ = [
     "VALID_TRANSITIONS",
     "RECOVERY_TRANSITIONS",
     "DB_CLAIM_TTL",
+    "DB_CLAIM_TTL_SECONDS",
     "PROJ",
     "RunSpec",
     "ProblemSpec",
@@ -1033,7 +1085,6 @@ __all__ = [
     "WatchdogSection",
     "AlertThresholds",
     "PlotCommand",
-    # v2 sub-models (added step 3 — not yet wired into ExperimentManifest)
     "RunMetric",
     "CheckpointEntry",
     "MidRunTestEvalInfo",
@@ -1046,7 +1097,6 @@ __all__ = [
     "PrChannelConfig",
     "TelegramChannelConfig",
     "NotificationsSection",
-    # v2 sub-model groups (added step 4)
     "ExperimentIdentity",
     "ContractSection",
     "LifecycleState",
@@ -1065,6 +1115,11 @@ __all__ = [
     "find_active_experiments",
     "has_test_set",
     "generate_pr_description",
-    "_validate",
-    "_write_manifest_atomic",
+    # Re-exports from gigaevo.experiment.lock for callers that already
+    # import from manifest. Prefer importing directly from the lock module
+    # for new code.
+    "get_redis",
+    "acquire_lock",
+    "release_lock",
+    "write_manifest_atomic",
 ]

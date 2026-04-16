@@ -11,6 +11,23 @@ class ValidationError(GigaEvoError):
     pass
 
 
+class ManifestValidationError(ValidationError, ValueError):
+    """Raised when an experiment.yaml manifest fails schema validation.
+
+    Inherits from both the project's :class:`ValidationError` (so it can be
+    caught by callers handling validation failures as a family) and the
+    builtin :class:`ValueError` (so existing ``except ValueError`` blocks
+    in tests and caller code continue to catch manifest issues).
+
+    Carries the offending experiment slug so callers can surface useful
+    errors without re-parsing the message text.
+    """
+
+    def __init__(self, experiment: str, message: str) -> None:
+        self.experiment = experiment
+        super().__init__(f"[{experiment}] {message}")
+
+
 class StorageError(GigaEvoError):
     """Storage operation failures."""
 

@@ -11,13 +11,13 @@ from gigaevo.experiment.manifest import (
     RECOVERY_TRANSITIONS,
     VALID_TRANSITIONS,
     ExperimentManifest,
-    _write_manifest_atomic,
     experiment_dir,
     generate_pr_description,
     load_manifest,
     manifest_path,
     recover_status,
     set_status,
+    write_manifest_atomic,
 )
 
 
@@ -130,7 +130,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_redis),
         ):
             result = set_status("hover/test-exp", "implemented")
 
@@ -148,7 +148,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_redis),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status("hover/test-exp", "running")
@@ -165,7 +165,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_redis),
         ):
             result = recover_status("hover/test-exp", "implemented")
 
@@ -176,7 +176,7 @@ class TestWriteManifestAtomic:
     def test_writes_yaml_file(self, tmp_path):
         target = tmp_path / "test.yaml"
         data = {"key": "value", "nested": {"a": 1}}
-        _write_manifest_atomic(target, data)
+        write_manifest_atomic(target, data)
 
         assert target.exists()
         loaded = yaml.safe_load(target.read_text())
@@ -185,7 +185,7 @@ class TestWriteManifestAtomic:
 
     def test_tmp_file_cleaned_up(self, tmp_path):
         target = tmp_path / "test.yaml"
-        _write_manifest_atomic(target, {"key": "value"})
+        write_manifest_atomic(target, {"key": "value"})
         assert not target.with_suffix(".yaml.tmp").exists()
 
 
