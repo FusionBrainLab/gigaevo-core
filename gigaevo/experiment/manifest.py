@@ -880,14 +880,23 @@ def recover_status(
 
 def update_manifest(
     experiment: str,
-    updater: Callable[[dict[str, Any]], None],
+    updater: Callable[[dict[str, Any]], dict[str, Any] | None],
 ) -> ExperimentManifest:
-    """Read-modify-write experiment.yaml under lock.
+    """Read-modify-write ``experiment.yaml`` under a Redis lock.
 
-    The updater function receives the raw dict and modifies it in-place.
-    Validation runs after the update.
+    The updater receives the parsed manifest as a round-trip
+    :class:`ruamel.yaml.comments.CommentedMap` and may either:
 
-    Usage:
+    - **mutate it in-place** and return ``None`` (preferred — preserves
+      comments and key order on disk), or
+    - **return a new mapping** that replaces it entirely (loses any
+      comments not present on the new mapping).
+
+    In both cases validation runs against the post-update mapping before
+    the atomic write.
+
+    Usage::
+
         def set_pids(raw):
             for run in raw["contract"]["runs"]:
                 if run["label"] == "F1":
@@ -901,7 +910,9 @@ def update_manifest(
         path = manifest_path(experiment)
         raw = read_manifest_rt(path)
 
-        updater(raw)
+        result = updater(raw)
+        if result is not None:
+            raw = result
 
         manifest = _validate(raw, experiment)
         write_manifest_atomic(path, raw)
