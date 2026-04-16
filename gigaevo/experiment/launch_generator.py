@@ -130,7 +130,9 @@ def generate(experiment: str) -> str:
         # skip if null — the global export from custom_env handles shared LB)
         env_prefix = ""
         if run.chain_url:
-            chain_url_env_var = m.contract.config.get("chain_url_env_var", "CHAIN_URL")
+            chain_url_env_var = m.contract.config.extra.get(
+                "chain_url_env_var", "CHAIN_URL"
+            )
             env_prefix = f'{chain_url_env_var}="{run.chain_url}" '
 
         lines.append(f"# ── Run {run.label}: {run.condition}")
@@ -211,24 +213,24 @@ def generate(experiment: str) -> str:
 
 def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
     """Build run.py command-line parameters for a run."""
-    c = manifest.contract.config
+    x = manifest.contract.config.extra
     params = [
         f"problem.name={run.problem_name}",
         f"pipeline={run.pipeline}",
         "prompts=default",
         f"redis.db={run.db}",
-        f"stage_timeout={c.get('stage_timeout', 3000)}",
-        f"dag_timeout={c.get('dag_timeout', 7200)}",
+        f"stage_timeout={x.get('stage_timeout', 3000)}",
+        f"dag_timeout={x.get('dag_timeout', 7200)}",
         f"max_generations={manifest.contract.max_generations}",
-        f"max_mutations_per_generation={c.get('max_mutations_per_generation', 8)}",
-        f"max_elites_per_generation={c.get('max_elites_per_generation', 8)}",
-        f"num_parents={c.get('num_parents', 1)}",
+        f"max_mutations_per_generation={x.get('max_mutations_per_generation', 8)}",
+        f"max_elites_per_generation={x.get('max_elites_per_generation', 8)}",
+        f"num_parents={x.get('num_parents', 1)}",
         f"model_name={run.model_name}",
         f'llm_base_url="{run.mutation_url}"',
     ]
 
-    if c.get("mutation_mode"):
-        params.append(f"mutation_mode={c['mutation_mode']}")
+    if x.get("mutation_mode"):
+        params.append(f"mutation_mode={x['mutation_mode']}")
 
     # Extra per-run overrides from experiment.yaml (e.g. prompt_fetcher config)
     # Single-quote any override containing ${...} Hydra interpolation refs
