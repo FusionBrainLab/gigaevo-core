@@ -7,9 +7,9 @@ Usage examples::
 
     gigaevo -e hover/foo manifest get status
     gigaevo -e hover/foo manifest get runs
-    gigaevo -e hover/foo manifest get launch.watchdog_pid
+    gigaevo -e hover/foo manifest get control_plane.watchdog_pid
     gigaevo -e hover/foo manifest set status running
-    gigaevo -e hover/foo manifest update launch.watchdog_pid 12345
+    gigaevo -e hover/foo manifest update control_plane.watchdog_pid 12345
     gigaevo -e hover/foo manifest gate implemented
     gigaevo -e hover/foo manifest pr-description --push
     gigaevo -e hover/foo manifest record-pids --pids-file pids.txt --labels C1 C2 P1 P2
@@ -93,53 +93,8 @@ def _traverse_raw(raw: dict[str, Any], dotted_path: str) -> Any:
     return current
 
 
-def _rewrite_legacy_path(dotted_path: str) -> str:
-    """Rewrite legacy v1 dotted paths to the v2 nested storage equivalent.
-
-    Skills, docs, and muscle-memory CLIs still use paths like
-    ``launch.watchdog_pid`` or ``mid_run_test_eval.completed``. After the
-    schema-v2 flatten migration these paths no longer exist in
-    ``experiment.yaml``; their canonical home is under ``control_plane``,
-    ``lifecycle``, or ``telemetry``. Rewriting here keeps the documented
-    commands working without forcing every skill edit in the same PR.
-    """
-    # Exact matches first — watchdog_pid and cron IDs were relocated.
-    exact_map = {
-        "launch.watchdog_pid": "control_plane.watchdog_pid",
-        "launch.anomaly_detector_cron_id": "control_plane.anomaly_detector_cron_id",
-        "launch.checkpoint_cron_id": "control_plane.checkpoint_cron_id",
-    }
-    if dotted_path in exact_map:
-        return exact_map[dotted_path]
-
-    # Prefix rewrites — everything else under ``launch.*`` stays in lifecycle.
-    prefix_map = {
-        "launch.": "lifecycle.launch.",
-        "smoke_test.": "lifecycle.smoke_test.",
-        "treatment_verification.": "lifecycle.treatment_verification.",
-        "mid_run_test_eval.": "telemetry.mid_run_test_eval.",
-        "checkpoint_analysis.": "telemetry.checkpoint_analysis.",
-        "treatment_checks.": "telemetry.treatment_checks.",
-        "watchdog.": "control_plane.watchdog.",
-    }
-    for legacy, canonical in prefix_map.items():
-        if dotted_path.startswith(legacy):
-            return canonical + dotted_path[len(legacy) :]
-
-    # ``experiment.status`` writes must hit ``lifecycle.status`` in v2.
-    if dotted_path == "experiment.status":
-        return "lifecycle.status"
-
-    return dotted_path
-
-
 def _set_nested(raw: dict[str, Any], dotted_path: str, value: Any) -> None:
-    """Set a value at a dotted path, creating intermediate dicts as needed.
-
-    Legacy v1 paths are transparently rewritten to their v2 canonical location
-    (e.g. ``launch.watchdog_pid`` → ``control_plane.watchdog_pid``).
-    """
-    dotted_path = _rewrite_legacy_path(dotted_path)
+    """Set a value at a dotted path, creating intermediate dicts as needed."""
     parts = dotted_path.split(".")
     current = raw
     for part in parts[:-1]:
@@ -165,7 +120,13 @@ def manifest(ctx: click.Context) -> None:
 # get
 # ---------------------------------------------------------------------------
 
-_KNOWN_SCALAR_FIELDS = {"status", "max_generations", "branch", "task", "name"}
+_SCALAR_FIELD_TO_PATH = {
+    "status": ("lifecycle", "status"),
+    "max_generations": ("contract", "max_generations"),
+    "branch": ("contract", "identity", "branch"),
+    "task": ("contract", "identity", "task"),
+    "name": ("contract", "identity", "name"),
+}
 
 
 @manifest.command()
@@ -174,8 +135,9 @@ _KNOWN_SCALAR_FIELDS = {"status", "max_generations", "branch", "task", "name"}
 def get(ctx: click.Context, field: str) -> None:
     """Read a manifest field by name or dotted path.
 
-    Special fields: status, runs, max_generations, stopping_rule, servers.
-    Dotted paths (e.g. launch.watchdog_pid) traverse the raw YAML dict.
+    Special fields: status, runs, max_generations, servers.
+    Dotted paths traverse the canonical nested YAML dict (e.g.
+    ``control_plane.watchdog_pid`` or ``lifecycle.launch.time``).
     """
     from gigaevo.cli.output_formatter import OutputFormatter
 
@@ -195,7 +157,7 @@ def get(ctx: click.Context, field: str) -> None:
                 "Pipeline": run.pipeline,
                 "PID": run.pid if run.pid is not None else "-",
             }
-            for run in manifest_obj.runs
+            for run in manifest_obj.contract.runs
         ]
         formatter.echo(
             rows, columns=["Label", "DB", "Prefix", "Pipeline", "PID"], title="Runs"
@@ -203,30 +165,19 @@ def get(ctx: click.Context, field: str) -> None:
         return
 
     if field == "servers":
-        for server in manifest_obj.servers:
+        for server in manifest_obj.contract.servers:
             click.echo(server)
         return
 
-    if field in _KNOWN_SCALAR_FIELDS:
-        click.echo(getattr(manifest_obj.experiment, field))
+    if field in _SCALAR_FIELD_TO_PATH:
+        obj: Any = manifest_obj
+        for attr in _SCALAR_FIELD_TO_PATH[field]:
+            obj = getattr(obj, attr)
+        click.echo(obj)
         return
 
-    if field == "stopping_rule":
-        stopping_rule = manifest_obj.config.get("stopping_rule")
-        if stopping_rule is None:
-            stopping_rule = (
-                manifest_obj.model_dump().get("config", {}).get("stopping_rule")
-            )
-        if stopping_rule is None:
-            click.echo("Error: Field not found: stopping_rule", err=True)
-            ctx.exit(1)
-            return
-        click.echo(stopping_rule)
-        return
-
-    canonical_field = _rewrite_legacy_path(field)
     try:
-        value = _traverse_raw(manifest_obj.model_dump(), canonical_field)
+        value = _traverse_raw(manifest_obj.model_dump(), field)
     except KeyError:
         click.echo(f"Error: Field not found: {field}", err=True)
         ctx.exit(1)
@@ -268,7 +219,7 @@ def set_field(ctx: click.Context, field: str, value: str) -> None:
     from gigaevo.experiment.manifest import set_status
 
     updated = set_status(experiment, value)
-    click.echo(f"Status updated: {updated.experiment.status}")
+    click.echo(f"Status updated: {updated.lifecycle.status}")
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +232,7 @@ def set_field(ctx: click.Context, field: str, value: str) -> None:
 @click.argument("value")
 @click.pass_context
 def update(ctx: click.Context, path: str, value: str) -> None:
-    """Write any field by dotted path (e.g. launch.watchdog_pid 12345).
+    """Write any field by dotted path (e.g. control_plane.watchdog_pid 12345).
 
     Auto-converts values: integers, floats, booleans (true/false),
     null/None, or keeps as string.
@@ -318,15 +269,17 @@ def gate(ctx: click.Context, expected_status: str) -> None:
 
     manifest_obj = load_manifest(experiment)
 
-    if manifest_obj.experiment.status == expected_status:
+    status = manifest_obj.lifecycle.status
+    if status == expected_status:
         click.echo(
-            f"GATE PASSED: {manifest_obj.experiment.name} status={manifest_obj.experiment.status} "
-            f"({len(manifest_obj.runs)} runs, max_gen={manifest_obj.experiment.max_generations})"
+            f"GATE PASSED: {manifest_obj.contract.identity.name} status={status} "
+            f"({len(manifest_obj.contract.runs)} runs, "
+            f"max_gen={manifest_obj.contract.max_generations})"
         )
         return
 
     click.echo(
-        f"BLOCKED: status={manifest_obj.experiment.status}, expected {expected_status}",
+        f"BLOCKED: status={status}, expected {expected_status}",
         err=True,
     )
     ctx.exit(1)
@@ -356,19 +309,20 @@ def pr_description(ctx: click.Context, push: bool) -> None:
         from gigaevo.experiment.manifest import load_manifest
 
         manifest_obj = load_manifest(experiment)
-        if manifest_obj.experiment.pr_number:
+        pr_number = manifest_obj.contract.identity.pr_number
+        if pr_number:
             subprocess.run(
                 [
                     "gh",
                     "pr",
                     "edit",
-                    str(manifest_obj.experiment.pr_number),
+                    str(pr_number),
                     "--body",
                     description,
                 ],
                 check=True,
             )
-            click.echo(f"PR #{manifest_obj.experiment.pr_number} description updated.")
+            click.echo(f"PR #{pr_number} description updated.")
         else:
             click.echo("Warning: No pr_number in manifest; --push skipped.", err=True)
 
@@ -416,11 +370,7 @@ def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
     from gigaevo.experiment.manifest import update_manifest
 
     def set_pids(raw: dict[str, Any]) -> None:
-        # v2 canonical: contract.runs. Fall back to legacy flat runs for files
-        # that haven't been flattened yet.
-        runs_target = (raw.get("contract") or {}).get("runs")
-        if runs_target is None:
-            runs_target = raw.get("runs", [])
+        runs_target = (raw.get("contract") or {}).get("runs") or []
         for run in runs_target:
             if run.get("label") in label_to_pid:
                 run["pid"] = label_to_pid[run["label"]]
@@ -492,28 +442,14 @@ def reset_status(
     if current == "running" and target_status == "implemented":
 
         def clear_launch(raw: dict[str, Any]) -> None:
-            # v2 canonical paths; keep legacy flat paths in sync for files
-            # that still carry them (pre-flatten intermediate shape).
             raw.setdefault("lifecycle", {})["status"] = target_status
-            if isinstance(raw.get("experiment"), dict):
-                raw["experiment"]["status"] = target_status
-
-            cleared_launch = {
+            raw.setdefault("lifecycle", {})["launch"] = {
                 "time": None,
                 "commit": None,
                 "confirmed_at": None,
             }
-            raw.setdefault("lifecycle", {})["launch"] = dict(cleared_launch)
-            if isinstance(raw.get("launch"), dict):
-                raw["launch"] = dict(cleared_launch)
-
-            # watchdog_pid lives under control_plane in v2, not launch.
             raw.setdefault("control_plane", {})["watchdog_pid"] = None
-
-            runs_target = (raw.get("contract") or {}).get("runs")
-            if runs_target is None:
-                runs_target = raw.get("runs", [])
-            for run in runs_target:
+            for run in (raw.get("contract") or {}).get("runs") or []:
                 run["pid"] = None
 
         update_manifest(experiment, clear_launch)

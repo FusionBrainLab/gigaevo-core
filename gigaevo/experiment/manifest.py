@@ -53,34 +53,6 @@ RECOVERY_TRANSITIONS: dict[str, set[str]] = {
 
 DB_CLAIM_TTL = 86400 * 7
 
-# Top-level flat keys produced by v1 yamls (and by v2 intermediate yamls that
-# still carry duplicated flat+nested sections via YAML anchors). The ``before``
-# validator synthesizes the canonical nested sections from these, then strips
-# them so ``extra="allow"`` doesn't also round-trip the flat shape. Any key
-# added here must also be covered in ``tools/experiment/flatten_manifest_v2.py``.
-_LEGACY_FLAT_KEYS = frozenset(
-    {
-        "experiment",
-        "problem",
-        "runs",
-        "servers",
-        "config",
-        "custom_env",
-        "baseline",
-        "tools",
-        "stopping_rule",
-        "launch",
-        "smoke_test",
-        "treatment_verification",
-        "watchdog",
-        "checkpoints",
-        "mid_run_test_eval",
-        "checkpoint_analysis",
-        "treatment_checks",
-    }
-)
-
-
 # ---------------------------------------------------------------------------
 # Pydantic Schema Models
 # ---------------------------------------------------------------------------
@@ -166,19 +138,16 @@ class ProblemSpec(BaseModel):
 
 
 class LaunchInfo(BaseModel):
-    """Launch state information.
-
-    ``extra="allow"`` preserves v1 sidecar fields (``anomaly_detector_cron_id``,
-    ``checkpoint_cron_id``) that the v2 schema relocates under ``control_plane``.
-    Keeping them round-trippable here lets ``ExperimentManifest.control_plane``
-    surface them for in-memory reads until the step-7 yaml migration lands.
+    """Launch state information recorded when an experiment transitions to
+    ``running``. Live process/cron handles (``watchdog_pid``,
+    ``anomaly_detector_cron_id``, ``checkpoint_cron_id``) live under
+    ``control_plane`` and are intentionally absent here.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     time: str | None = None
     commit: str | None = None
-    watchdog_pid: int | None = None
     confirmed_at: str | None = None
     attempt: int | None = None
 
@@ -316,33 +285,6 @@ class TreatmentChecksInfo(BaseModel):
     results: list[CheckResult] = []
 
 
-class StopCondition(BaseModel):
-    """Structured component of ``StoppingRule.conditions``."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    kind: Literal["invalidity_window", "fitness_plateau", "manual"]
-    threshold: float | None = None
-    window: int | None = None
-    note: str = ""
-
-
-class StoppingRule(BaseModel):
-    """Structured stopping rule — replaces the unenforced prose string in v2.
-
-    ``description`` preserves the pre-registered prose; ``conditions`` holds the
-    machine-checkable variant; ``enforce_at`` selects whether the engine, the
-    checkpoint skill, or neither enforces the rule. Engine enforcement is
-    deferred to a follow-up PR (see plan §Stopping Rule).
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    description: str = ""
-    conditions: list[StopCondition] = []
-    enforce_at: Literal["engine", "checkpoint", "none"] = "checkpoint"
-
-
 class ToolRef(BaseModel):
     """Reference to an auxiliary tool/script used by the experiment."""
 
@@ -445,7 +387,6 @@ class ContractSection(BaseModel):
     servers: list[str] = []
     custom_env: dict[str, str] = {}
     max_generations: int = 25
-    stopping_rule: StoppingRule = StoppingRule()
     baseline: BaselineInfo = BaselineInfo()
     tools: list[ToolRef] = []
 
@@ -484,206 +425,28 @@ class ControlPlane(BaseModel):
     checkpoint_cron_id: str | None = None
 
 
-class ExperimentSection(BaseModel):
-    """The 'experiment' section of experiment.yaml."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    name: str
-    task: str
-    status: str
-    branch: str = ""
-    max_generations: int = 25
-    pr_number: int | None = None
-    tracking_issue: int | None = None
-    prereg_commit: str | None = None
-    stopping_rule: str = ""
-
-    @field_validator("status")
-    @classmethod
-    def validate_status(cls, v: str) -> str:
-        if v not in VALID_STATUSES:
-            raise ValueError(
-                f"Invalid status '{v}'. Valid statuses: {sorted(VALID_STATUSES)}"
-            )
-        return v
-
-    @field_validator("max_generations")
-    @classmethod
-    def validate_max_generations(cls, v: int) -> int:
-        if v < 0:
-            raise ValueError(f"max_generations must be >= 0, got {v}")
-        return v
-
-
 class ExperimentManifest(BaseModel):
     """Pydantic-validated schema for experiment.yaml (schema v2, nested storage).
 
     Storage is the four canonical sub-sections: ``contract``, ``lifecycle``,
-    ``telemetry``, ``control_plane``. A ``model_validator(mode="before")``
-    reshuffles legacy flat-shaped v1 yamls into nested form so older files
-    keep loading during the transition.
-
-    Flat compatibility views (``experiment``, ``runs``, ``servers``, ``problem``,
-    ``config``, ``custom_env``, ``baseline``, ``smoke_test``, ``tools``,
-    ``launch``, ``watchdog``, ``checkpoints``, ``treatment_verification``) are
-    exposed as computed properties that derive from the nested storage. They
-    exist only to let legacy readers keep working; new code should read the
-    nested sub-sections directly.
+    ``telemetry``, ``control_plane``. Readers access fields through these
+    sub-sections — there are no flat compatibility views.
 
     Status-gated validation: fields that are required depend on the current
     experiment status (preregistered < implemented < running < complete).
 
-    ``extra="allow"`` absorbs any legacy top-level keys that survive the
-    normalizing step (e.g. unknown task-specific metadata) without failing
-    validation.
+    ``extra="ignore"`` silently drops any unknown top-level keys without
+    failing validation, so task-specific metadata added outside the schema
+    does not block loads.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     schema_version: int
     contract: ContractSection
     lifecycle: LifecycleState
     telemetry: TelemetryLog = TelemetryLog()
     control_plane: ControlPlane = ControlPlane()
-
-    # ---- legacy-shape normalizer ----------------------------------------
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_legacy_shape(cls, data: Any) -> Any:
-        """Accept both nested-only (v2 canonical) and flat-with-nested (v2
-        intermediate) and legacy flat-only v1 yamls.
-
-        When the caller provides only flat v1 keys (no ``contract`` /
-        ``lifecycle`` sections), build the nested sub-sections from them. When
-        both shapes are present, the nested sections win — they are the
-        canonical source of truth.
-        """
-        if not isinstance(data, dict):
-            return data
-
-        # If the canonical nested sections are already present, trust them.
-        has_contract = isinstance(data.get("contract"), dict)
-        has_lifecycle = isinstance(data.get("lifecycle"), dict)
-        if has_contract and has_lifecycle:
-            # Strip duplicated flat keys so the model doesn't also see them
-            # via ``extra="allow"`` (which would cause confusion in tests
-            # that inspect ``model_extra``).
-            for k in _LEGACY_FLAT_KEYS:
-                data.pop(k, None)
-            return data
-
-        # Legacy flat-shaped v1 yaml: synthesize nested sections.
-        flat_experiment = data.get("experiment") or {}
-        flat_runs = data.get("runs") or []
-        flat_servers = data.get("servers") or []
-        flat_config = data.get("config") or {}
-        flat_custom_env = data.get("custom_env") or {}
-        flat_problem = data.get("problem") or {}
-        flat_baseline = data.get("baseline") or {}
-        flat_tools = data.get("tools") or []
-        flat_launch = data.get("launch") or {}
-        flat_smoke = data.get("smoke_test") or {}
-        flat_tv = data.get("treatment_verification") or {}
-        flat_watchdog = data.get("watchdog") or {}
-        flat_checkpoints = data.get("checkpoints") or []
-        flat_mid_run = data.get("mid_run_test_eval") or {}
-        flat_ca = data.get("checkpoint_analysis") or {}
-        flat_tc = data.get("treatment_checks") or {}
-        flat_stopping_rule = data.get("stopping_rule")
-
-        sr_prose = flat_experiment.get("stopping_rule", "") or ""
-        if isinstance(flat_stopping_rule, dict):
-            stopping_rule = flat_stopping_rule
-        else:
-            stopping_rule = {"description": sr_prose, "conditions": []}
-
-        # Normalize config: flat is a raw dict; contract.config is a typed
-        # ConfigSpec with most keys under ``extra``.
-        config_block: dict[str, Any] = {"extra": dict(flat_config)}
-        for k in (
-            "problem_name",
-            "pipeline",
-            "prompt_fetcher",
-            "evolution",
-            "llm_model",
-            "n_workers",
-            "max_generations",
-        ):
-            if k in flat_config:
-                config_block[k] = flat_config[k]
-                config_block["extra"].pop(k, None)
-
-        # Build identity block, letting Pydantic catch missing required name/task
-        # rather than defaulting them to empty strings.
-        identity_block: dict[str, Any] = {}
-        if "name" in flat_experiment:
-            identity_block["name"] = flat_experiment["name"]
-        if "task" in flat_experiment:
-            identity_block["task"] = flat_experiment["task"]
-        identity_block.update({
-            "branch": flat_experiment.get("branch", ""),
-            "prereg_commit": flat_experiment.get("prereg_commit"),
-            "pr_number": flat_experiment.get("pr_number"),
-            "tracking_issue": flat_experiment.get("tracking_issue"),
-        })
-
-        data["contract"] = {
-            "identity": identity_block,
-            "problem": flat_problem,
-            "config": config_block,
-            "runs": flat_runs,
-            "servers": flat_servers,
-            "custom_env": flat_custom_env,
-            "max_generations": flat_experiment.get("max_generations", 25),
-            "stopping_rule": stopping_rule,
-            "baseline": flat_baseline,
-            "tools": flat_tools,
-        }
-
-        # Cron IDs historically lived inside ``launch.*``. Move them to the
-        # control plane where they belong in v2.
-        launch_extras: dict[str, Any] = {k: v for k, v in flat_launch.items()}
-        anomaly_cron = launch_extras.pop("anomaly_detector_cron_id", None)
-        checkpoint_cron = launch_extras.pop("checkpoint_cron_id", None)
-        watchdog_pid = launch_extras.pop("watchdog_pid", None)
-
-        data["lifecycle"] = {
-            "status": flat_experiment.get("status", "preregistered"),
-            "launch": launch_extras,
-            "smoke_test": flat_smoke,
-            "treatment_verification": flat_tv,
-        }
-
-        # treatment_checks can arrive in multiple v1 shapes. Only accept the
-        # v2 shape (dict with ``results`` list); otherwise drop to defaults.
-        tc_block: dict[str, Any] = {}
-        if (
-            isinstance(flat_tc, dict)
-            and "results" in flat_tc
-            and isinstance(flat_tc.get("results"), list)
-        ):
-            tc_block = flat_tc
-
-        data["telemetry"] = {
-            "checkpoints": flat_checkpoints,
-            "mid_run_test_eval": flat_mid_run,
-            "checkpoint_analysis": flat_ca,
-            "treatment_checks": tc_block,
-        }
-
-        data["control_plane"] = {
-            "watchdog": flat_watchdog,
-            "watchdog_pid": watchdog_pid,
-            "anomaly_detector_cron_id": anomaly_cron,
-            "checkpoint_cron_id": checkpoint_cron,
-        }
-
-        # Drop the flat keys so ``extra="allow"`` doesn't also carry them.
-        for k in _LEGACY_FLAT_KEYS:
-            data.pop(k, None)
-
-        return data
 
     @field_validator("schema_version")
     @classmethod
@@ -797,102 +560,6 @@ class ExperimentManifest(BaseModel):
                     f"roles {sorted(allowed)}. Got: {bad}"
                 )
         return self
-
-    # ---- flat compatibility views ---------------------------------------
-    # These properties exist so legacy readers (``m.runs``, ``m.experiment.status``,
-    # ``m.watchdog.plugin``, ...) keep working while the codebase transitions
-    # to nested-only access. New code should read ``self.contract.*`` /
-    # ``self.lifecycle.*`` / ``self.telemetry.*`` / ``self.control_plane.*``
-    # directly — these views will be removed in a follow-up cleanup.
-
-    @property
-    def experiment(self) -> ExperimentSection:
-        """Legacy flat ``experiment:`` view derived from nested storage."""
-        return ExperimentSection(
-            name=self.contract.identity.name,
-            task=self.contract.identity.task,
-            status=self.lifecycle.status,
-            branch=self.contract.identity.branch,
-            max_generations=self.contract.max_generations,
-            pr_number=self.contract.identity.pr_number,
-            tracking_issue=self.contract.identity.tracking_issue,
-            prereg_commit=self.contract.identity.prereg_commit,
-            stopping_rule=self.contract.stopping_rule.description,
-        )
-
-    @property
-    def runs(self) -> list[RunSpec]:
-        """Legacy flat ``runs`` view — use ``self.contract.runs`` in new code."""
-        return self.contract.runs
-
-    @property
-    def servers(self) -> list[str]:
-        """Legacy flat ``servers`` view — use ``self.contract.servers``."""
-        return self.contract.servers
-
-    @property
-    def problem(self) -> ProblemSpec:
-        """Legacy flat ``problem`` view — use ``self.contract.problem``."""
-        return self.contract.problem
-
-    @property
-    def config(self) -> dict[str, Any]:
-        """Legacy flat ``config`` dict view — merge of typed + extra fields."""
-        cs = self.contract.config
-        merged: dict[str, Any] = dict(cs.extra or {})
-        for k in (
-            "problem_name",
-            "pipeline",
-            "prompt_fetcher",
-            "evolution",
-            "llm_model",
-            "n_workers",
-            "max_generations",
-        ):
-            v = getattr(cs, k, None)
-            if v is not None:
-                merged[k] = v
-        return merged
-
-    @property
-    def custom_env(self) -> dict[str, str]:
-        """Legacy flat ``custom_env`` view."""
-        return self.contract.custom_env
-
-    @property
-    def baseline(self) -> BaselineInfo:
-        """Legacy flat ``baseline`` view."""
-        return self.contract.baseline
-
-    @property
-    def tools(self) -> list[ToolRef]:
-        """Legacy flat ``tools`` view."""
-        return self.contract.tools
-
-    @property
-    def launch(self) -> LaunchInfo:
-        """Legacy flat ``launch`` view — use ``self.lifecycle.launch``."""
-        return self.lifecycle.launch
-
-    @property
-    def smoke_test(self) -> SmokeTestInfo:
-        """Legacy flat ``smoke_test`` view."""
-        return self.lifecycle.smoke_test
-
-    @property
-    def treatment_verification(self) -> TreatmentVerificationInfo:
-        """Legacy flat ``treatment_verification`` view."""
-        return self.lifecycle.treatment_verification
-
-    @property
-    def watchdog(self) -> WatchdogSection:
-        """Legacy flat ``watchdog`` view — use ``self.control_plane.watchdog``."""
-        return self.control_plane.watchdog
-
-    @property
-    def checkpoints(self) -> list[CheckpointEntry]:
-        """Legacy flat ``checkpoints`` view — use ``self.telemetry.checkpoints``."""
-        return self.telemetry.checkpoints
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> ExperimentManifest:
@@ -1071,12 +738,7 @@ def set_status(
         with open(path) as f:
             raw = yaml.safe_load(f)
 
-        # Read current status from nested v2 shape, falling back to legacy flat.
-        current = (
-            (raw.get("lifecycle") or {}).get("status")
-            or (raw.get("experiment") or {}).get("status")
-            or "preregistered"
-        )
+        current = (raw.get("lifecycle") or {}).get("status", "preregistered")
 
         allowed = VALID_TRANSITIONS.get(current, set())
         if allow_recovery:
@@ -1087,12 +749,7 @@ def set_status(
                 f"Invalid transition: {current} -> {new_status}. Allowed: {allowed}"
             )
 
-        # Write to the canonical nested path. If a legacy flat ``experiment:``
-        # block still exists (pre-flatten yamls), keep it in sync so other
-        # readers that haven't migrated yet still see a consistent value.
         raw.setdefault("lifecycle", {})["status"] = new_status
-        if isinstance(raw.get("experiment"), dict):
-            raw["experiment"]["status"] = new_status
 
         # Validate the new state (will raise if required fields missing)
         manifest = _validate(raw, experiment)
@@ -1114,7 +771,7 @@ def update_manifest(
 
     Usage:
         def set_pids(raw):
-            for run in raw["runs"]:
+            for run in raw["contract"]["runs"]:
                 if run["label"] == "F1":
                     run["pid"] = 12345
 
@@ -1294,7 +951,6 @@ __all__ = [
     "LaunchInfo",
     "BaselineInfo",
     "SmokeTestInfo",
-    "ExperimentSection",
     "ExperimentManifest",
     "WatchdogSection",
     "AlertThresholds",
@@ -1307,8 +963,6 @@ __all__ = [
     "CheckpointAnalysisInfo",
     "CheckResult",
     "TreatmentChecksInfo",
-    "StopCondition",
-    "StoppingRule",
     "ToolRef",
     "ConfigSpec",
     "PrChannelConfig",

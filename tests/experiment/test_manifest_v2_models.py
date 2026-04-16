@@ -30,8 +30,6 @@ from gigaevo.experiment.manifest import (
     NotificationsSection,
     PrChannelConfig,
     RunMetric,
-    StopCondition,
-    StoppingRule,
     TelegramChannelConfig,
     ToolRef,
     TreatmentChecksInfo,
@@ -208,51 +206,6 @@ class TestTreatmentChecksInfo:
         assert info.completed is True
         assert len(info.results) == 2
         assert info.results[1].passed is False
-
-
-# ---------------------------------------------------------------------------
-# Stopping rule (structured)
-# ---------------------------------------------------------------------------
-
-
-class TestStoppingRule:
-    def test_defaults(self):
-        r = StoppingRule()
-        assert r.description == ""
-        assert r.conditions == []
-        assert r.enforce_at == "checkpoint"
-
-    def test_prose_only(self):
-        r = StoppingRule(description="max_generations=50")
-        assert r.description == "max_generations=50"
-        assert r.conditions == []
-
-    def test_structured_conditions(self):
-        r = StoppingRule.model_validate(
-            {
-                "description": "max_generations=50 OR futility_at_gen25",
-                "conditions": [
-                    {
-                        "kind": "fitness_plateau",
-                        "threshold": 0.03,
-                        "window": 25,
-                        "note": "futility gate",
-                    }
-                ],
-                "enforce_at": "checkpoint",
-            }
-        )
-        assert len(r.conditions) == 1
-        assert r.conditions[0].kind == "fitness_plateau"
-        assert r.conditions[0].threshold == 0.03
-
-    def test_enforce_at_rejects_unknown_values(self):
-        with pytest.raises(Exception):
-            StoppingRule.model_validate({"enforce_at": "bogus"})
-
-    def test_condition_kind_rejects_unknown(self):
-        with pytest.raises(Exception):
-            StopCondition.model_validate({"kind": "eventually_done"})
 
 
 # ---------------------------------------------------------------------------

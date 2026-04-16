@@ -42,21 +42,20 @@ def _make_manifest(
     raw: dict[str, Any] | None = None,
 ) -> MagicMock:
     m = MagicMock()
-    m.experiment.name = "hover/test"
-    m.experiment.task = "hover"
-    m.experiment.status = status
-    m.experiment.max_generations = max_generations
-    m.experiment.branch = "exp/hover/test"
-    m.experiment.pr_number = pr_number
-    m.experiment.tracking_issue = 42
-    m.experiment.prereg_commit = "abc1234"
-    m.runs = runs if runs is not None else [_make_run("A", 4), _make_run("B", 5)]
-    m.servers = ["server1.example.com"]
-    # v2 nested accessors (required for nested path code)
-    m.contract.runs = m.runs
-    m.contract.max_generations = max_generations
+    resolved_runs = runs if runs is not None else [_make_run("A", 4), _make_run("B", 5)]
+    # v2 canonical nested accessors
+    m.contract.identity.name = "hover/test"
+    m.contract.identity.task = "hover"
+    m.contract.identity.branch = "exp/hover/test"
+    m.contract.identity.pr_number = pr_number
+    m.contract.identity.tracking_issue = 42
     m.contract.identity.prereg_commit = "abc1234"
+    m.contract.max_generations = max_generations
+    m.contract.runs = resolved_runs
+    m.contract.servers = ["server1.example.com"]
     m.lifecycle.status = status
+    m.lifecycle.launch.time = "2026-01-01T00:00:00Z"
+    m.control_plane.watchdog_pid = 9999
     _raw = (
         raw
         if raw is not None
@@ -65,19 +64,16 @@ def _make_manifest(
             "contract": {
                 "identity": {"name": "hover/test", "task": "hover"},
                 "max_generations": max_generations,
-                "config": {"stopping_rule": "stagnation_10"},
+                "config": {},
             },
             "lifecycle": {
                 "status": status,
-                "launch": {"watchdog_pid": 9999, "time": "2026-01-01T00:00:00Z"},
+                "launch": {"time": "2026-01-01T00:00:00Z"},
             },
             "control_plane": {"watchdog_pid": 9999},
         }
     )
     m.model_dump.return_value = _raw
-    m.config = _raw.get("config", {})
-    m.launch = MagicMock()
-    m.launch.watchdog_pid = 9999
     return m
 
 
@@ -133,21 +129,6 @@ class TestManifestGetRuns:
             assert '"Label"' in result.output or '"label"' in result.output.lower()
 
 
-class TestManifestGetStoppingRule:
-    def test_get_stopping_rule_prints_value(self):
-        """get stopping_rule prints the config stopping rule."""
-        manifest = _make_manifest()
-        with patch(f"{_MANIFEST_MOD}.load_manifest", return_value=manifest):
-            runner = CliRunner()
-            result = runner.invoke(
-                main,
-                ["-e", "hover/test", "manifest", "get", "stopping_rule"],
-                catch_exceptions=False,
-            )
-            assert result.exit_code == 0, result.output
-            assert "stagnation_10" in result.output
-
-
 class TestManifestGetMaxGenerations:
     def test_get_max_generations_prints_integer(self):
         """get max_generations prints the integer value."""
@@ -165,13 +146,13 @@ class TestManifestGetMaxGenerations:
 
 class TestManifestGetDottedPath:
     def test_get_nested_field_via_dotted_path(self):
-        """get launch.watchdog_pid traverses dotted path to nested field."""
+        """get control_plane.watchdog_pid traverses dotted path to nested field."""
         manifest = _make_manifest()
         with patch(f"{_MANIFEST_MOD}.load_manifest", return_value=manifest):
             runner = CliRunner()
             result = runner.invoke(
                 main,
-                ["-e", "hover/test", "manifest", "get", "launch.watchdog_pid"],
+                ["-e", "hover/test", "manifest", "get", "control_plane.watchdog_pid"],
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
@@ -264,7 +245,7 @@ class TestManifestSet:
 
 class TestManifestUpdate:
     def test_update_nested_field(self):
-        """update launch.watchdog_pid 12345 calls update_manifest."""
+        """update control_plane.watchdog_pid 12345 calls update_manifest."""
         updated_manifest = _make_manifest()
         with patch(
             f"{_MANIFEST_MOD}.update_manifest", return_value=updated_manifest
@@ -277,7 +258,7 @@ class TestManifestUpdate:
                     "hover/test",
                     "manifest",
                     "update",
-                    "launch.watchdog_pid",
+                    "control_plane.watchdog_pid",
                     "12345",
                 ],
                 catch_exceptions=False,
@@ -288,7 +269,7 @@ class TestManifestUpdate:
             assert experiment_arg == "hover/test"
 
     def test_update_string_value(self):
-        """update launch.time sets string value via updater."""
+        """update lifecycle.launch.time sets string value via updater."""
         updated_manifest = _make_manifest()
         with patch(
             f"{_MANIFEST_MOD}.update_manifest", return_value=updated_manifest
@@ -301,7 +282,7 @@ class TestManifestUpdate:
                     "hover/test",
                     "manifest",
                     "update",
-                    "launch.time",
+                    "lifecycle.launch.time",
                     "2026-01-01T00:00:00Z",
                 ],
                 catch_exceptions=False,
@@ -310,12 +291,13 @@ class TestManifestUpdate:
             mock_update.assert_called_once()
 
     def test_update_int_conversion(self):
-        """update converts integer-looking values to int."""
+        """update converts integer-looking values to int and writes them at
+        the canonical v2 nested path."""
         updated_manifest = _make_manifest()
         captured_updater = {}
 
         def capture_updater(experiment, updater):
-            raw = {"launch": {"watchdog_pid": 0}}
+            raw: dict = {}
             updater(raw)
             captured_updater["raw"] = raw
             return updated_manifest
@@ -329,21 +311,22 @@ class TestManifestUpdate:
                     "hover/test",
                     "manifest",
                     "update",
-                    "launch.watchdog_pid",
+                    "control_plane.watchdog_pid",
                     "12345",
                 ],
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
-            assert captured_updater["raw"]["launch"]["watchdog_pid"] == 12345
+            assert captured_updater["raw"]["control_plane"]["watchdog_pid"] == 12345
 
     def test_update_bool_conversion(self):
-        """update converts true/false strings to bool."""
+        """update converts true/false strings to bool at the canonical
+        v2 nested path."""
         updated_manifest = _make_manifest()
         captured_updater = {}
 
         def capture_updater(experiment, updater):
-            raw = {"smoke_test": {"completed": False}}
+            raw: dict = {}
             updater(raw)
             captured_updater["raw"] = raw
             return updated_manifest
@@ -357,13 +340,15 @@ class TestManifestUpdate:
                     "hover/test",
                     "manifest",
                     "update",
-                    "smoke_test.completed",
+                    "lifecycle.smoke_test.completed",
                     "true",
                 ],
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
-            assert captured_updater["raw"]["smoke_test"]["completed"] is True
+            assert (
+                captured_updater["raw"]["lifecycle"]["smoke_test"]["completed"] is True
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -428,12 +413,14 @@ class TestManifestRecordPids:
 
         def capture_updater(experiment, updater):
             raw = {
-                "runs": [
-                    {"label": "A", "pid": None},
-                    {"label": "B", "pid": None},
-                    {"label": "C", "pid": None},
-                    {"label": "D", "pid": None},
-                ]
+                "contract": {
+                    "runs": [
+                        {"label": "A", "pid": None},
+                        {"label": "B", "pid": None},
+                        {"label": "C", "pid": None},
+                        {"label": "D", "pid": None},
+                    ]
+                }
             }
             updater(raw)
             captured["raw"] = raw
@@ -458,7 +445,9 @@ class TestManifestRecordPids:
             )
             assert result.exit_code == 0, result.output
             assert captured["experiment"] == "hover/test"
-            runs_by_label = {r["label"]: r["pid"] for r in captured["raw"]["runs"]}
+            runs_by_label = {
+                r["label"]: r["pid"] for r in captured["raw"]["contract"]["runs"]
+            }
             assert runs_by_label == {"A": 111, "B": 222, "C": 333, "D": None}
 
     def test_record_pids_comma_separated_labels(self, tmp_path):
@@ -469,7 +458,14 @@ class TestManifestRecordPids:
         captured: dict[str, Any] = {}
 
         def capture_updater(experiment, updater):
-            raw = {"runs": [{"label": "X", "pid": None}, {"label": "Y", "pid": None}]}
+            raw = {
+                "contract": {
+                    "runs": [
+                        {"label": "X", "pid": None},
+                        {"label": "Y", "pid": None},
+                    ]
+                }
+            }
             updater(raw)
             captured["raw"] = raw
             return None
@@ -491,7 +487,9 @@ class TestManifestRecordPids:
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
-            runs_by_label = {r["label"]: r["pid"] for r in captured["raw"]["runs"]}
+            runs_by_label = {
+                r["label"]: r["pid"] for r in captured["raw"]["contract"]["runs"]
+            }
             assert runs_by_label == {"X": 1, "Y": 2}
 
     def test_record_pids_label_count_mismatch_exits_1(self, tmp_path):
@@ -554,12 +552,17 @@ class TestManifestResetStatus:
 
         def capture_update(experiment, updater):
             raw = {
-                "experiment": {"status": "running"},
-                "launch": {"watchdog_pid": 9999, "time": "t"},
-                "runs": [
-                    {"label": "A", "pid": 111},
-                    {"label": "B", "pid": 222},
-                ],
+                "lifecycle": {
+                    "status": "running",
+                    "launch": {"time": "t", "commit": "c", "confirmed_at": "ct"},
+                },
+                "control_plane": {"watchdog_pid": 9999},
+                "contract": {
+                    "runs": [
+                        {"label": "A", "pid": 111},
+                        {"label": "B", "pid": 222},
+                    ]
+                },
             }
             updater(raw)
             captured["raw"] = raw
@@ -587,24 +590,14 @@ class TestManifestResetStatus:
             assert result.exit_code == 0, result.output
             mock_release.assert_called_once_with([4, 5])
             raw = captured["raw"]
-            # v2 canonical path (after flatten): lifecycle.status
-            assert raw.get("lifecycle", {}).get("status") == "implemented" or raw.get(
-                "experiment", {}
-            ).get("status") == "implemented"
-            # launch.* fields cleared in lifecycle (v2 canonical)
-            assert (
-                raw.get("lifecycle", {}).get("launch", {})
-                or raw.get("launch", {})  # fallback to flat for pre-flatten files
-            ) == {
+            assert raw["lifecycle"]["status"] == "implemented"
+            assert raw["lifecycle"]["launch"] == {
                 "time": None,
                 "commit": None,
                 "confirmed_at": None,
             }
-            # watchdog_pid moved to control_plane in v2
-            assert raw.get("control_plane", {}).get("watchdog_pid") is None
-            # PIDs cleared in contract.runs (v2) or flat runs
-            runs_target = (raw.get("contract") or {}).get("runs") or raw.get("runs", [])
-            assert all(r["pid"] is None for r in runs_target)
+            assert raw["control_plane"]["watchdog_pid"] is None
+            assert all(r["pid"] is None for r in raw["contract"]["runs"])
 
     def test_reset_other_transition_uses_set_status_with_recovery(self):
         """Non-(running->implemented) transitions go through set_status(allow_recovery=True)."""

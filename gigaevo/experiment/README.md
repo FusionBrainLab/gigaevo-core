@@ -60,7 +60,7 @@ manifest into four named sub-sections, each reflecting a distinct concern:
 
 | Sub-section | Writer | When it changes | Example fields |
 |---|---|---|---|
-| `contract` | Researcher | Frozen at `preregistered` (amendment required to change) | identity, problem, config, runs, servers, stopping_rule, baseline |
+| `contract` | Researcher | Frozen at `preregistered` (amendment required to change) | identity, problem, config, runs, servers, baseline |
 | `lifecycle` | System | Mutates constantly | status, launch, smoke_test, treatment_verification |
 | `telemetry` | System | Append-only during `running` | checkpoints, mid_run_test_eval, checkpoint_analysis, treatment_checks |
 | `control_plane` | System | Mutates during setup + live ops | watchdog, notifications, watchdog_pid, cron IDs |
@@ -79,7 +79,6 @@ ExperimentManifest(
         servers: list[str],
         custom_env: dict[str, str],
         max_generations: int,
-        stopping_rule: StoppingRule,        # description + structured conditions[]
         baseline: BaselineInfo,
         tools: list[ToolRef],
     ),
@@ -115,7 +114,6 @@ m = load_manifest("hover/feedback_softfit")
 m.contract.identity.name                    # "hover/feedback_softfit"
 m.contract.identity.task                    # "hover"
 m.contract.runs[0].label                    # "A1"
-m.contract.stopping_rule.conditions         # list[StopCondition]
 m.lifecycle.status                          # "preregistered" | "implemented" | ...
 m.lifecycle.launch.time                     # ISO timestamp or None
 m.telemetry.mid_run_test_eval.completed     # bool
@@ -214,7 +212,7 @@ from gigaevo.experiment.manifest import (
 
 # 1. Load manifest
 m = load_manifest("hover/my-exp")
-print(f"Status: {m.experiment.status}")  # preregistered
+print(f"Status: {m.lifecycle.status}")  # preregistered
 
 # 2. Claim databases
 failed = claim_dbs("hover/my-exp", [15, 16])
@@ -227,7 +225,7 @@ assert all(r.passed for r in results if r.severity == "CRITICAL")
 
 # 4. Transition status
 m = set_status("hover/my-exp", "implemented")
-print(f"Status: {m.experiment.status}")  # implemented
+print(f"Status: {m.lifecycle.status}")  # implemented
 
 # 5. Update manifest (e.g., add PIDs)
 def record_pids(raw):

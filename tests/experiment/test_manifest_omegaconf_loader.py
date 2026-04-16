@@ -18,8 +18,8 @@ Contract the loader must honor after step 5:
   3. ``${oc.env:NAME}`` raises a clear error when ``NAME`` is unset and no
      default is given — we prefer loud failure to a stringly-typed secret.
   4. Cross-section interpolation resolves at load time — e.g. a yaml whose
-     ``stopping_rule`` references ``${experiment.max_generations}`` arrives
-     in Python as the resolved string.
+     field references ``${contract.identity.task}`` arrives in Python as the
+     resolved string.
   5. Non-dict roots still raise ``ValueError`` (same guardrail as before).
   6. Missing files still raise ``FileNotFoundError``.
 """
@@ -41,21 +41,25 @@ def _minimal_v2_dict() -> dict:
     """Smallest well-formed v2 manifest that passes validation."""
     return {
         "schema_version": 2,
-        "experiment": {
-            "name": "hover/omegaconf-test",
-            "task": "hover",
-            "status": "preregistered",
-            "branch": "exp/hover/omegaconf-test",
+        "contract": {
+            "identity": {
+                "name": "hover/omegaconf-test",
+                "task": "hover",
+                "branch": "exp/hover/omegaconf-test",
+            },
             "max_generations": 25,
+            "problem": {
+                "has_test_set": True,
+                "fitness_type": "discrete",
+                "metric_name": "accuracy",
+            },
+            "runs": [],
+            "servers": [],
+            "config": {},
         },
-        "problem": {
-            "has_test_set": True,
-            "fitness_type": "discrete",
-            "metric_name": "accuracy",
+        "lifecycle": {
+            "status": "preregistered",
         },
-        "runs": [],
-        "servers": [],
-        "config": {},
     }
 
 
@@ -80,8 +84,8 @@ class TestAllV2YamlsLoad:
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             m = load_manifest("hover/omegaconf-test")
         assert isinstance(m, ExperimentManifest)
-        assert m.experiment.name == "hover/omegaconf-test"
-        assert m.experiment.max_generations == 25
+        assert m.contract.identity.name == "hover/omegaconf-test"
+        assert m.contract.max_generations == 25
 
     @pytest.mark.parametrize(
         "yaml_path",
@@ -97,7 +101,7 @@ class TestAllV2YamlsLoad:
         # Load via the classmethod (same code path load_manifest uses).
         m = ExperimentManifest.from_yaml_file(yaml_path)
         assert isinstance(m, ExperimentManifest)
-        assert m.experiment.name  # non-empty
+        assert m.contract.identity.name  # non-empty
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +115,7 @@ class TestOcEnvInterpolation:
     def test_env_var_resolves_when_set(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GIGAEVO_TEST_KEY", "resolved-secret")
         data = _minimal_v2_dict()
-        data["custom_env"] = {
+        data["contract"]["custom_env"] = {
             "OPENAI_API_KEY": "${oc.env:GIGAEVO_TEST_KEY,fallback}",
         }
         _write_manifest(tmp_path, data, name="hover/omegaconf-test")
@@ -120,12 +124,12 @@ class TestOcEnvInterpolation:
             m = load_manifest("hover/omegaconf-test")
 
         # ${oc.env:X,default} must be resolved — not stored as literal ${...}
-        assert m.custom_env["OPENAI_API_KEY"] == "resolved-secret"
+        assert m.contract.custom_env["OPENAI_API_KEY"] == "resolved-secret"
 
     def test_env_var_falls_back_to_default(self, tmp_path, monkeypatch):
         monkeypatch.delenv("GIGAEVO_TEST_KEY_UNSET", raising=False)
         data = _minimal_v2_dict()
-        data["custom_env"] = {
+        data["contract"]["custom_env"] = {
             "OPENAI_API_KEY": "${oc.env:GIGAEVO_TEST_KEY_UNSET,sk-gigaevo}",
         }
         _write_manifest(tmp_path, data, name="hover/omegaconf-test")
@@ -133,13 +137,13 @@ class TestOcEnvInterpolation:
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             m = load_manifest("hover/omegaconf-test")
 
-        assert m.custom_env["OPENAI_API_KEY"] == "sk-gigaevo"
+        assert m.contract.custom_env["OPENAI_API_KEY"] == "sk-gigaevo"
 
     def test_missing_env_without_default_raises(self, tmp_path, monkeypatch):
         """Unset env + no default must fail loudly (not silently store ${...})."""
         monkeypatch.delenv("GIGAEVO_ABSENT", raising=False)
         data = _minimal_v2_dict()
-        data["custom_env"] = {"SECRET": "${oc.env:GIGAEVO_ABSENT}"}
+        data["contract"]["custom_env"] = {"SECRET": "${oc.env:GIGAEVO_ABSENT}"}
         _write_manifest(tmp_path, data, name="hover/omegaconf-test")
 
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
@@ -149,13 +153,13 @@ class TestOcEnvInterpolation:
     def test_literal_dollar_strings_preserved(self, tmp_path):
         """Plain strings without ${...} must survive unchanged."""
         data = _minimal_v2_dict()
-        data["custom_env"] = {"NOTE": "plain value, no interpolation"}
+        data["contract"]["custom_env"] = {"NOTE": "plain value, no interpolation"}
         _write_manifest(tmp_path, data, name="hover/omegaconf-test")
 
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             m = load_manifest("hover/omegaconf-test")
 
-        assert m.custom_env["NOTE"] == "plain value, no interpolation"
+        assert m.contract.custom_env["NOTE"] == "plain value, no interpolation"
 
 
 # ---------------------------------------------------------------------------
@@ -166,18 +170,16 @@ class TestOcEnvInterpolation:
 class TestCrossSectionInterpolation:
     """Interpolations that point at another field in the same file resolve."""
 
-    def test_stopping_rule_references_max_generations(self, tmp_path):
+    def test_identity_name_references_task(self, tmp_path):
         data = _minimal_v2_dict()
-        data["experiment"]["max_generations"] = 50
-        data["experiment"]["stopping_rule"] = (
-            "max_generations=${experiment.max_generations}"
-        )
+        data["contract"]["identity"]["task"] = "hover"
+        data["contract"]["identity"]["name"] = "hover/cross-ref-${contract.identity.task}"
         _write_manifest(tmp_path, data, name="hover/omegaconf-test")
 
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             m = load_manifest("hover/omegaconf-test")
 
-        assert m.experiment.stopping_rule == "max_generations=50"
+        assert m.contract.identity.name == "hover/cross-ref-hover"
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +201,7 @@ class TestHydraPassThroughEscape:
     def test_escaped_interpolation_roundtrips_as_literal_dollar(self, tmp_path):
         data = _minimal_v2_dict()
         # Write the escape via YAML literal so the backslash survives the dump.
-        data["runs"] = [
+        data["contract"]["runs"] = [
             {
                 "label": "R1",
                 "db": 5,
@@ -221,7 +223,7 @@ class TestHydraPassThroughEscape:
             m = load_manifest("hover/omegaconf-test")
 
         assert (
-            m.runs[0].extra_overrides[0]
+            m.contract.runs[0].extra_overrides[0]
             == "post_step_hook=${composition_injection_hook}"
         )
 
@@ -229,10 +231,10 @@ class TestHydraPassThroughEscape:
         """``${oc.env:X}`` resolves; escaped ``\\${Y}`` survives as literal."""
         monkeypatch.setenv("GIGAEVO_TEST_KEY", "resolved-secret")
         data = _minimal_v2_dict()
-        data["custom_env"] = {
+        data["contract"]["custom_env"] = {
             "OPENAI_API_KEY": "${oc.env:GIGAEVO_TEST_KEY,fallback}",
         }
-        data["runs"] = [
+        data["contract"]["runs"] = [
             {
                 "label": "R1",
                 "db": 5,
@@ -253,9 +255,9 @@ class TestHydraPassThroughEscape:
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
             m = load_manifest("hover/omegaconf-test")
 
-        assert m.custom_env["OPENAI_API_KEY"] == "resolved-secret"
+        assert m.contract.custom_env["OPENAI_API_KEY"] == "resolved-secret"
         assert (
-            m.runs[0].extra_overrides[0]
+            m.contract.runs[0].extra_overrides[0]
             == "post_step_hook=${composition_injection_hook}"
         )
 

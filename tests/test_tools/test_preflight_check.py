@@ -1,43 +1,25 @@
-"""Tests for gigaevo.experiment.preflight — checks 9, 15, 22."""
+"""Tests for gigaevo.experiment.preflight — checks 9, 15."""
 
 from unittest.mock import MagicMock, patch
 
-from gigaevo.experiment.manifest import StopCondition, StoppingRule
 from gigaevo.experiment.preflight import run_checks
 
 
 def _make_manifest(
-    stopping_rule=None,
     status="implemented",
     factorial_design=False,
-    stopping_conditions=None,
 ):
-    """Return a minimal mock manifest suitable for run_checks.
-
-    ``stopping_rule`` is the prose description (v1 shape). ``stopping_conditions``
-    is a list of StopCondition or dicts, exercising the structured v2 path in
-    Check 22.
-    """
+    """Return a minimal mock manifest suitable for run_checks."""
     raw: dict = {"experiment": {}}
-    if stopping_rule is not None:
-        raw["experiment"]["stopping_rule"] = stopping_rule
     if factorial_design:
         raw["experiment"]["factorial_design"] = True
 
-    conditions = []
-    for c in stopping_conditions or []:
-        conditions.append(c if isinstance(c, StopCondition) else StopCondition(**c))
-    rule_obj = StoppingRule(
-        description=stopping_rule or "",
-        conditions=conditions,
-    )
-
     m = MagicMock()
-    m.status = status
-    m.runs = []
-    m.servers = []
+    m.lifecycle.status = status
+    m.contract.runs = []
+    m.contract.servers = []
     m._raw = raw
-    m.contract.stopping_rule = rule_obj
+    m.model_dump.return_value = raw
     return m
 
 
@@ -56,121 +38,12 @@ def _get_check(results, num: int):
     return next(r for r in results if r.num == num)
 
 
-class TestCheck22StoppingRule:
-    """Check 22: stopping rule present and non-vague."""
-
-    def _run(self, stopping_rule=None):
-        manifest = _make_manifest(stopping_rule=stopping_rule)
-        with patch(
-            "gigaevo.experiment.manifest.load_manifest",
-            return_value=manifest,
-        ):
-            results = run_checks("test/smoke")
-        return _get_check(results, 22)
-
-    def test_valid_max_generations_passes(self):
-        c = self._run("max_generations=50")
-        assert c.passed
-        assert "max_generations=50" in c.message
-
-    def test_valid_with_metric_threshold_passes(self):
-        c = self._run(
-            "max_generations=100 OR frontier_fitness>0.90_for_3_consecutive_gens"
-        )
-        assert c.passed
-
-    def test_missing_stopping_rule_fails_critical(self):
-        c = self._run(stopping_rule=None)
-        assert not c.passed
-        assert c.severity == "CRITICAL"
-        assert "not set" in c.message
-
-    def test_empty_string_stopping_rule_fails(self):
-        c = self._run(stopping_rule="")
-        assert not c.passed
-        assert c.severity == "CRITICAL"
-
-    def test_whitespace_only_stopping_rule_fails(self):
-        c = self._run(stopping_rule="   ")
-        assert not c.passed
-        assert c.severity == "CRITICAL"
-
-    def test_tbd_is_vague(self):
-        c = self._run(stopping_rule="TBD")
-        assert not c.passed
-        assert "vague" in c.message
-        assert "tbd" in c.message
-
-    def test_todo_is_vague(self):
-        c = self._run(stopping_rule="TODO: fill this in later")
-        assert not c.passed
-        assert "vague" in c.message
-
-    def test_na_is_vague(self):
-        c = self._run(stopping_rule="N/A")
-        assert not c.passed
-        assert "vague" in c.message
-
-    def test_when_results_look_good_is_vague(self):
-        c = self._run(stopping_rule="stop when results look good enough")
-        assert not c.passed
-        assert "vague" in c.message
-
-    def test_when_we_have_enough_is_vague(self):
-        c = self._run(stopping_rule="continue until when we have enough data")
-        assert not c.passed
-        assert "vague" in c.message
-
-    def test_none_literal_is_vague(self):
-        c = self._run(stopping_rule="none")
-        assert not c.passed
-        assert "vague" in c.message
-
-    def test_check_number_and_group(self):
-        c = self._run("max_generations=50")
-        assert c.num == 22
-        assert c.group == "Design"
-        assert c.severity == "CRITICAL"
-
-    def test_structured_conditions_pass_even_when_description_is_vague(self):
-        """Structured conditions[] are machine-checkable and override vague prose."""
-        manifest = _make_manifest(
-            stopping_rule="TBD",
-            stopping_conditions=[
-                {"kind": "fitness_plateau", "threshold": 0.03, "window": 25},
-            ],
-        )
-        with patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest):
-            results = run_checks("test/smoke")
-        c = _get_check(results, 22)
-        assert c.passed
-        assert "fitness_plateau" in c.message
-        assert "structured" in c.message
-
-    def test_structured_conditions_pass_without_description(self):
-        """Conditions-only stopping rule passes — description is optional."""
-        manifest = _make_manifest(
-            stopping_conditions=[
-                {"kind": "invalidity_window", "threshold": 0.75, "window": 10},
-                {"kind": "manual"},
-            ],
-        )
-        with patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest):
-            results = run_checks("test/smoke")
-        c = _get_check(results, 22)
-        assert c.passed
-        assert "invalidity_window" in c.message
-        assert "manual" in c.message
-
-
 class TestCheck15SingleIV:
     """Check 15: single IV per run comparison / factorial design support."""
 
-    def _run(self, runs, factorial_design=False, stopping_rule="max_generations=50"):
-        manifest = _make_manifest(
-            stopping_rule=stopping_rule, factorial_design=factorial_design
-        )
-        manifest.runs = runs
+    def _run(self, runs, factorial_design=False):
+        manifest = _make_manifest(factorial_design=factorial_design)
+        manifest.contract.runs = runs
         with patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest):
             results = run_checks("test/smoke")
         return _get_check(results, 15)
@@ -224,10 +97,10 @@ class TestCheck9LiveWriters:
     """Check 9: dbsize==0, with live writer reporting."""
 
     def _run(self, dbsize=0, live_pids=None):
-        manifest = _make_manifest(stopping_rule="max_generations=50")
+        manifest = _make_manifest()
         run = _make_run("A")
         run.db = 15
-        manifest.runs = [run]
+        manifest.contract.runs = [run]
 
         mock_redis = MagicMock()
         mock_redis.dbsize.return_value = dbsize

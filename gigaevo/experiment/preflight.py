@@ -749,49 +749,6 @@ def run_checks(experiment: str) -> list[CheckResult]:
         c21.fail(str(e))
     results.append(c21)
 
-    # ── Check 22: Stopping rule present and non-vague ────────────────────────
-    c22 = CheckResult(22, "Design", "Stopping rule present and non-vague", "CRITICAL")
-    try:
-        rule = m.contract.stopping_rule
-        description = (rule.description or "").strip()
-        conditions = list(rule.conditions or [])
-
-        # Structured conditions always pass — they are machine-checkable.
-        if conditions:
-            kinds = ", ".join(c.kind for c in conditions)
-            c22.ok(
-                f"{len(conditions)} structured condition(s) [{kinds}]"
-                + (f" — {description}" if description else "")
-            )
-        elif not description:
-            c22.fail(
-                "contract.stopping_rule not set in experiment.yaml. "
-                "Add a structured rule with conditions[] or a machine-readable "
-                "description, e.g. 'max_generations=50'."
-            )
-        else:
-            _vague = [
-                "when results look",
-                "when we have enough",
-                "tbd",
-                "todo",
-                "n/a",
-                "none",
-            ]
-            rule_lower = description.lower()
-            vague_match = next((v for v in _vague if v in rule_lower), None)
-            if vague_match:
-                c22.fail(
-                    f"stopping_rule is vague (matched '{vague_match}'): {description!r}. "
-                    "A valid rule names an exact generation count or metric threshold, "
-                    "or provides structured conditions[]."
-                )
-            else:
-                c22.ok(description)
-    except Exception as e:
-        c22.fail(str(e))
-    results.append(c22)
-
     return results
 
 
