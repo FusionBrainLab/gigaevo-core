@@ -92,8 +92,8 @@ def watchdog(
     else:
         plugin_cls = resolve_plugin(manifest=manifest)
 
-    # Wire plugin from manifest.watchdog section — plot_metrics, plot_commands,
-    # and sentinel_value all come from the yaml (see WatchdogSection schema).
+    # Wire plugin from manifest.control_plane.watchdog section — plot_metrics,
+    # plot_commands, and sentinel_value all come from the yaml (see WatchdogSection).
     plugin_kwargs: dict = {
         "plot_metrics": list(watchdog_manifest.plot_metrics),
         "plot_commands": list(watchdog_manifest.plot_commands),

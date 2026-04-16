@@ -31,6 +31,8 @@ def make_snapshot(
     pid: int | None = None,
     pid_alive: bool | None = None,
     error: str | None = None,
+    completed: bool = False,
+    completion_reason: str | None = None,
 ) -> RunSnapshot:
     metrics = {"fitness": fitness} if fitness is not None else {}
     return RunSnapshot(
@@ -45,6 +47,8 @@ def make_snapshot(
         pid=pid,
         pid_alive=pid_alive,
         error=error,
+        completed=completed,
+        completion_reason=completion_reason,
     )
 
 
@@ -262,13 +266,28 @@ class TestHighInvalidity:
 
 
 class TestCompletionDetection:
-    def test_completion_detected_all_at_max(self):
-        """3 runs, all at generation=50, max_generations=50 -> COMPLETION alert."""
-        detector = AlertDetector(max_generations=50)
+    def test_completion_detected_when_all_runs_completed(self):
+        """All runs have completed=True -> COMPLETION alert."""
+        detector = AlertDetector()
         snaps = [
-            make_snapshot(label="A", generation=50),
-            make_snapshot(label="B", generation=50),
-            make_snapshot(label="C", generation=50),
+            make_snapshot(
+                label="A",
+                generation=50,
+                completed=True,
+                completion_reason="max_generations reached",
+            ),
+            make_snapshot(
+                label="B",
+                generation=50,
+                completed=True,
+                completion_reason="max_generations reached",
+            ),
+            make_snapshot(
+                label="C",
+                generation=50,
+                completed=True,
+                completion_reason="max_generations reached",
+            ),
         ]
 
         alerts = detector.check(snaps)
@@ -277,23 +296,43 @@ class TestCompletionDetection:
         assert len(comp_alerts) == 1
         assert comp_alerts[0].severity == AlertSeverity.INFO
 
-    def test_completion_detected_beyond_max(self):
-        """Run at generation=55, max=50 -> still counts as complete."""
-        detector = AlertDetector(max_generations=50)
-        snaps = [make_snapshot(generation=55)]
+    def test_completion_includes_reason_in_message(self):
+        """COMPLETION alert message includes the stopper reason."""
+        detector = AlertDetector()
+        snaps = [
+            make_snapshot(
+                label="A",
+                completed=True,
+                completion_reason="fitness plateau for 10 gens",
+            ),
+        ]
 
         alerts = detector.check(snaps)
 
         comp_alerts = [a for a in alerts if a.alert_type == AlertType.COMPLETION]
         assert len(comp_alerts) == 1
+        assert "fitness plateau" in comp_alerts[0].message
 
     def test_no_completion_when_some_not_done(self):
-        """3 runs, 2 at gen=50, 1 at gen=40, max=50 -> no completion."""
-        detector = AlertDetector(max_generations=50)
+        """3 runs, 2 completed, 1 still running -> no completion."""
+        detector = AlertDetector()
+        snaps = [
+            make_snapshot(label="A", generation=50, completed=True),
+            make_snapshot(label="B", generation=50, completed=True),
+            make_snapshot(label="C", generation=40, completed=False),
+        ]
+
+        alerts = detector.check(snaps)
+
+        comp_alerts = [a for a in alerts if a.alert_type == AlertType.COMPLETION]
+        assert len(comp_alerts) == 0
+
+    def test_no_completion_when_no_completed_field(self):
+        """Runs without completed field (default False) -> no completion."""
+        detector = AlertDetector()
         snaps = [
             make_snapshot(label="A", generation=50),
             make_snapshot(label="B", generation=50),
-            make_snapshot(label="C", generation=40),
         ]
 
         alerts = detector.check(snaps)
@@ -301,18 +340,22 @@ class TestCompletionDetection:
         comp_alerts = [a for a in alerts if a.alert_type == AlertType.COMPLETION]
         assert len(comp_alerts) == 0
 
-    def test_no_completion_when_generation_none(self):
-        """A run with generation=None -> not complete."""
-        detector = AlertDetector(max_generations=50)
+    def test_completion_no_longer_needs_max_generations(self):
+        """AlertDetector works without max_generations — relies on snapshot.completed."""
+        detector = AlertDetector()
         snaps = [
-            make_snapshot(label="A", generation=50),
-            make_snapshot(label="B", generation=None),
+            make_snapshot(
+                label="A",
+                generation=25,
+                completed=True,
+                completion_reason="wall clock 6h",
+            ),
         ]
 
         alerts = detector.check(snaps)
 
         comp_alerts = [a for a in alerts if a.alert_type == AlertType.COMPLETION]
-        assert len(comp_alerts) == 0
+        assert len(comp_alerts) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -634,8 +677,8 @@ class TestEdgeCases:
         assert any(a.alert_type == AlertType.HIGH_INVALIDITY for a in alerts_above)
 
     def test_completion_with_zero_runs(self):
-        """Empty snapshots list with max_generations set -> no completion alert."""
-        detector = AlertDetector(max_generations=50)
+        """Empty snapshots list -> no completion alert."""
+        detector = AlertDetector()
         alerts = detector.check([])
         assert not any(a.alert_type == AlertType.COMPLETION for a in alerts)
 
@@ -701,10 +744,10 @@ class TestFullLifecycle:
         Cycle 2: One run stalls -> STALL alert (cooldown set to 2)
         Cycle 3: Same run still stalled -> STALL suppressed (2 -> 1)
         Cycle 4: Same run still stalled -> STALL suppressed (1 -> 0, deleted)
-        Cycle 5: All runs reach max_gen -> COMPLETION + STALL resumes
+        Cycle 5: All runs complete (engine signals) -> COMPLETION + STALL resumes
         Cycle 6: Completion suppressed (cooldown)
         """
-        detector = AlertDetector(max_generations=50, cooldown_cycles=2)
+        detector = AlertDetector(cooldown_cycles=2)
 
         # Cycle 1: healthy
         healthy_a = make_snapshot(
@@ -744,12 +787,22 @@ class TestFullLifecycle:
         stalls4 = [a for a in alerts4 if a.alert_type == AlertType.STALL]
         assert len(stalls4) == 0
 
-        # Cycle 5: all reach max_gen -> COMPLETION + STALL resumes for A
+        # Cycle 5: all runs complete (engine-signaled) -> COMPLETION + STALL resumes for A
         done_a = make_snapshot(
-            label="A", generation=50, running_programs=0, total_programs=100
+            label="A",
+            generation=50,
+            running_programs=0,
+            total_programs=100,
+            completed=True,
+            completion_reason="max_generations reached",
         )
         done_b = make_snapshot(
-            label="B", generation=50, running_programs=2, total_programs=200
+            label="B",
+            generation=50,
+            running_programs=2,
+            total_programs=200,
+            completed=True,
+            completion_reason="max_generations reached",
         )
         alerts5 = detector.check([done_a, done_b])
         comp5 = [a for a in alerts5 if a.alert_type == AlertType.COMPLETION]

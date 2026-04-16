@@ -215,18 +215,18 @@ class TestTreatmentChecksInfo:
 
 class TestToolRef:
     def test_minimum(self):
-        t = ToolRef(name="preflight")
-        assert t.name == "preflight"
+        t = ToolRef(name="diagnose")
+        assert t.name == "diagnose"
         assert t.path == ""
 
     def test_full(self):
         t = ToolRef(
-            name="preflight",
-            path="tools/experiment/preflight_check.py",
-            purpose="pre-launch validation",
+            name="diagnose",
+            path="tools/experiment/diagnose.py",
+            purpose="runtime diagnostics",
         )
         assert t.path.endswith(".py")
-        assert "validation" in t.purpose
+        assert "diagnostics" in t.purpose
 
 
 class TestConfigSpec:

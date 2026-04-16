@@ -22,6 +22,7 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str]] = {
     "checkpoint": ("gigaevo.cli.checkpoint", "checkpoint"),
     "manifest": ("gigaevo.cli.manifest_cmd", "manifest"),
     "inspect": ("gigaevo.cli.inspect_cmd", "inspect_cmd"),
+    "launch": ("gigaevo.cli.launch_cmd", "launch"),
 }
 
 

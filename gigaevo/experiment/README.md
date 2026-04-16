@@ -23,20 +23,30 @@ from gigaevo.experiment.manifest import load_manifest, set_status, update_manife
 - PR description generation
 - Discovery of active experiments
 
-### `preflight.py` — Pre-Launch Validation
+### `checks.py` — Pre-Launch Validation
 
-22 checks covering schema validation, infrastructure, and configuration readiness.
+10 principled checks targeting real operator failure modes.
 
 **Import:**
 ```python
-from gigaevo.experiment.preflight import run_checks
+from gigaevo.experiment.checks import run_checks
 ```
 
 **Purpose:**
 - Validate experiment configuration before launch (hard gate)
-- Check database allocations, server connectivity, manifest syntax
-- Report blocking vs warning severity
-- Exit codes: 0 (pass), 1 (CRITICAL failures), 2 (WARNINGS)
+- Check server connectivity, model IDs, Redis DBs, DB claims, seed programs, test-set SHA, smoke test, treatment verification
+- Exit codes: 0 (pass), 1 (CRITICAL failures)
+
+### `launch.py` — Unified Launch Orchestrator
+
+Sequences: gate → preflight → claim DBs → generate script → exec → record PIDs → set status → spawn watchdog. Returns typed `LaunchResult`.
+
+**Import:**
+```python
+from gigaevo.experiment.launch import run_launch
+```
+
+**CLI:** `gigaevo -e <exp> launch [--dry-run] [--skip-preflight]`
 
 ### `launch_generator.py` — Launch Script Generation
 
@@ -219,7 +229,7 @@ failed = claim_dbs("hover/my-exp", [15, 16])
 assert not failed, "DBs already claimed"
 
 # 3. Run preflight checks
-from gigaevo.experiment.preflight import run_checks
+from gigaevo.experiment.checks import run_checks
 results = run_checks("hover/my-exp")
 assert all(r.passed for r in results if r.severity == "CRITICAL")
 

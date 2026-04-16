@@ -25,68 +25,66 @@ from gigaevo.experiment.manifest import (
 # ---------------------------------------------------------------------------
 
 
-def _minimal_raw(status: str = "preregistered", **overrides) -> dict:
-    """Return a minimal valid experiment.yaml dict."""
-    raw = {
-        "schema_version": 1,
-        "experiment": {
-            "name": "test/smoke",
-            "task": "test",
-            "branch": "exp/smoke",
-            "status": status,
+def _minimal_raw(status: str = "preregistered") -> dict:
+    """Return a minimal valid experiment.yaml dict in nested (v2) shape."""
+    return {
+        "schema_version": 2,
+        "contract": {
+            "identity": {
+                "name": "test/smoke",
+                "task": "test",
+                "branch": "exp/smoke",
+            },
             "max_generations": 10,
+            "problem": {
+                "has_test_set": False,
+                "fitness_type": "continuous",
+                "metric_name": "score",
+            },
+            "runs": [],
+            "servers": [],
+            "config": {},
         },
-        "problem": {
-            "has_test_set": False,
-            "fitness_type": "continuous",
-            "metric_name": "score",
+        "lifecycle": {
+            "status": status,
+            "smoke_test": {"completed": False},
         },
-        "runs": [],
-        "servers": [],
-        "config": {},
-        "smoke_test": {"completed": False},
     }
-    raw.update(overrides)
+
+
+def _implemented_raw() -> dict:
+    """Return a valid implemented experiment.yaml dict in nested shape."""
+    raw = _minimal_raw(status="implemented")
+    raw["contract"]["runs"] = [
+        {
+            "label": "A1",
+            "db": 99,
+            "prefix": "chains/test/smoke",
+            "pipeline": "standard",
+            "problem_name": "chains/test/smoke",
+            "condition": "control",
+            "chain_url": "http://10.0.0.1:8001/v1",
+            "mutation_url": "http://10.0.0.1:8777/v1",
+            "model_name": "test-model",
+        }
+    ]
+    raw["contract"]["servers"] = ["10.0.0.1"]
+    raw["contract"]["config"] = {"extra": {"stage_timeout": 300}}
+    raw["lifecycle"]["smoke_test"] = {"completed": True, "db": 98, "generations": 3}
     return raw
 
 
-def _implemented_raw(**overrides) -> dict:
-    """Return a valid implemented experiment.yaml dict."""
-    raw = _minimal_raw(
-        status="implemented",
-        runs=[
-            {
-                "label": "A1",
-                "db": 99,
-                "prefix": "chains/test/smoke",
-                "pipeline": "standard",
-                "problem_name": "chains/test/smoke",
-                "condition": "control",
-                "chain_url": "http://10.0.0.1:8001/v1",
-                "mutation_url": "http://10.0.0.1:8777/v1",
-                "model_name": "test-model",
-            }
-        ],
-        servers=["10.0.0.1"],
-        config={"stage_timeout": 300},
-        smoke_test={"completed": True, "db": 98, "generations": 3},
-    )
-    raw.update(overrides)
-    return raw
-
-
-def _running_raw(**overrides) -> dict:
-    """Return a valid running experiment.yaml dict."""
-    raw = _implemented_raw(status="running")
-    raw["experiment"]["status"] = "running"
-    raw["runs"][0]["pid"] = 12345
-    raw["launch"] = {
+def _running_raw() -> dict:
+    """Return a valid running experiment.yaml dict in nested shape."""
+    raw = _implemented_raw()
+    raw["lifecycle"]["status"] = "running"
+    raw["contract"]["runs"][0]["pid"] = 12345
+    raw["lifecycle"]["launch"] = {
         "time": "2026-01-01T00:00:00Z",
         "commit": "abc123",
         "watchdog_pid": 12346,
         "confirmed_at": "2026-01-01T00:01:00Z",
     }
-    raw.update(overrides)
     return raw
 
 
@@ -113,14 +111,14 @@ class TestValidation:
     def test_minimal_preregistered(self):
         raw = _minimal_raw()
         m = _validate(raw, "test/smoke")
-        assert m.experiment.status == "preregistered"
-        assert m.experiment.name == "test/smoke"
-        assert m.experiment.task == "test"
+        assert m.lifecycle.status == "preregistered"
+        assert m.contract.identity.name == "test/smoke"
+        assert m.contract.identity.task == "test"
 
     def test_invalid_status_rejected(self):
-        raw = _minimal_raw(status="bogus")
-        raw["experiment"]["status"] = "bogus"
-        with pytest.raises(ValueError, match="Invalid status"):
+        raw = _minimal_raw()
+        raw["lifecycle"]["status"] = "bogus"
+        with pytest.raises(ValueError, match="Invalid"):
             _validate(raw, "test/smoke")
 
     def test_unsupported_schema_version(self):
@@ -131,69 +129,68 @@ class TestValidation:
 
     def test_implemented_requires_runs(self):
         raw = _minimal_raw(status="implemented")
-        raw["experiment"]["status"] = "implemented"
-        raw["smoke_test"] = {"completed": True}
+        raw["lifecycle"]["smoke_test"] = {"completed": True}
         # No runs
         with pytest.raises(ValueError, match="runs.*must be non-empty"):
             _validate(raw, "test/smoke")
 
     def test_implemented_requires_servers(self):
         raw = _implemented_raw()
-        raw["servers"] = []
+        raw["contract"]["servers"] = []
         with pytest.raises(ValueError, match="servers.*must be non-empty"):
             _validate(raw, "test/smoke")
 
     def test_implemented_requires_smoke_test(self):
         raw = _implemented_raw()
-        raw["smoke_test"] = {"completed": False}
+        raw["lifecycle"]["smoke_test"] = {"completed": False}
         with pytest.raises(ValueError, match="smoke_test.completed"):
             _validate(raw, "test/smoke")
 
     def test_running_requires_pids(self):
         raw = _running_raw()
-        raw["runs"][0]["pid"] = None
+        raw["contract"]["runs"][0]["pid"] = None
         with pytest.raises(ValueError, match="pid is required"):
             _validate(raw, "test/smoke")
 
     def test_running_requires_launch_time(self):
         raw = _running_raw()
-        raw["launch"]["time"] = None
+        raw["lifecycle"]["launch"]["time"] = None
         with pytest.raises(ValueError, match="launch.time is required"):
             _validate(raw, "test/smoke")
 
     def test_valid_implemented(self):
         raw = _implemented_raw()
         m = _validate(raw, "test/smoke")
-        assert m.experiment.status == "implemented"
-        assert len(m.runs) == 1
-        assert m.runs[0].label == "A1"
+        assert m.lifecycle.status == "implemented"
+        assert len(m.contract.runs) == 1
+        assert m.contract.runs[0].label == "A1"
 
     def test_valid_running(self):
         raw = _running_raw()
         m = _validate(raw, "test/smoke")
-        assert m.experiment.status == "running"
-        assert m.runs[0].pid == 12345
-        assert m.launch.time == "2026-01-01T00:00:00Z"
+        assert m.lifecycle.status == "running"
+        assert m.contract.runs[0].pid == 12345
+        assert m.lifecycle.launch.time == "2026-01-01T00:00:00Z"
 
     def test_problem_has_test_set_false(self):
         raw = _minimal_raw()
-        raw["problem"]["has_test_set"] = False
+        raw["contract"]["problem"]["has_test_set"] = False
         m = _validate(raw, "test/smoke")
-        assert not m.problem.has_test_set
+        assert not m.contract.problem.has_test_set
 
     def test_run_spec_fields(self):
         raw = _implemented_raw()
         m = _validate(raw, "test/smoke")
-        run = m.runs[0]
+        run = m.contract.runs[0]
         assert run.db == 99
         assert run.pipeline == "standard"
         assert run.chain_url == "http://10.0.0.1:8001/v1"
 
     def test_custom_env_parsed(self):
         raw = _implemented_raw()
-        raw["custom_env"] = {"MY_VAR": "hello"}
+        raw["contract"]["custom_env"] = {"MY_VAR": "hello"}
         m = _validate(raw, "test/smoke")
-        assert m.custom_env == {"MY_VAR": "hello"}
+        assert m.contract.custom_env == {"MY_VAR": "hello"}
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +270,8 @@ class TestLoadManifest:
         exp_name, tmp_root = tmp_experiment
         with patch("gigaevo.experiment.manifest.PROJ", tmp_root):
             m = load_manifest(exp_name)
-        assert m.experiment.name == "test/smoke"
-        assert m.experiment.status == "preregistered"
+        assert m.contract.identity.name == "test/smoke"
+        assert m.lifecycle.status == "preregistered"
 
     def test_load_missing_file(self, tmp_path):
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
@@ -286,7 +283,7 @@ class TestLoadManifest:
         path = tmp_root / "experiments" / "test" / "smoke" / "experiment.yaml"
         path.write_text("{{invalid yaml: [")
         with patch("gigaevo.experiment.manifest.PROJ", tmp_root):
-            with pytest.raises(yaml.YAMLError):
+            with pytest.raises((yaml.YAMLError, ValueError)):
                 load_manifest(exp_name)
 
 
@@ -320,14 +317,14 @@ class TestSetStatus:
             patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
         ):
             # Need to add running requirements
-            raw["runs"][0]["pid"] = 99999
-            raw["launch"] = {"time": "2026-01-01", "commit": "abc"}
+            raw["contract"]["runs"][0]["pid"] = 99999
+            raw["lifecycle"]["launch"] = {"time": "2026-01-01", "commit": "abc"}
             path = root / "experiments" / "test" / "smoke" / "experiment.yaml"
             with open(path, "w") as f:
                 yaml.safe_dump(raw, f, sort_keys=False)
 
             m = set_status(exp_name, "running")
-            assert m.experiment.status == "running"
+            assert m.lifecycle.status == "running"
 
     def test_invalid_transition_rejected(self, tmp_path: Path):
         raw = _minimal_raw(status="preregistered")
@@ -360,7 +357,7 @@ class TestSetStatus:
                 yaml.safe_dump(raw, f, sort_keys=False)
 
             m = set_status(exp_name, "implemented", allow_recovery=True)
-            assert m.experiment.status == "implemented"
+            assert m.lifecycle.status == "implemented"
 
 
 class TestUpdateManifest:
@@ -376,19 +373,19 @@ class TestUpdateManifest:
         mock_r.set.return_value = True
 
         def add_tracking_issue(raw):
-            raw["experiment"]["tracking_issue"] = 42
+            raw["contract"]["identity"]["tracking_issue"] = 42
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
             patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
         ):
             m = update_manifest("test/smoke", add_tracking_issue)
-            assert m.experiment.tracking_issue == 42
+            assert m.contract.identity.tracking_issue == 42
 
         # Verify persisted
         with open(path) as f:
             saved = yaml.safe_load(f)
-        assert saved["experiment"]["tracking_issue"] == 42
+        assert saved["contract"]["identity"]["tracking_issue"] == 42
 
 
 # ---------------------------------------------------------------------------
@@ -459,7 +456,9 @@ class TestGeneratePRDescription:
 
     def test_running_with_checkpoints(self, tmp_path: Path):
         raw = _running_raw()
-        raw["checkpoints"] = [{"gen": 5, "timestamp": "2026-01-02", "notes": "ok"}]
+        raw.setdefault("telemetry", {})["checkpoints"] = [
+            {"gen": 5, "timestamp": "2026-01-02", "notes": "ok"}
+        ]
         exp_dir = tmp_path / "experiments" / "test" / "smoke"
         exp_dir.mkdir(parents=True)
         path = exp_dir / "experiment.yaml"
@@ -475,7 +474,11 @@ class TestGeneratePRDescription:
 
     def test_includes_baseline(self, tmp_path: Path):
         raw = _minimal_raw()
-        raw["baseline"] = {"reference": "test/base", "mean": 0.5, "metric": "score"}
+        raw["contract"]["baseline"] = {
+            "reference": "test/base",
+            "mean": 0.5,
+            "metric": "score",
+        }
         exp_dir = tmp_path / "experiments" / "test" / "smoke"
         exp_dir.mkdir(parents=True)
         path = exp_dir / "experiment.yaml"

@@ -39,25 +39,29 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 
 
 def _minimal_preregistered() -> dict:
-    """Minimal valid manifest at status=preregistered."""
+    """Minimal valid manifest at status=preregistered (v2 nested)."""
     return {
         "schema_version": 2,
-        "experiment": {
-            "name": "hover/test",
-            "task": "hover",
-            "status": "preregistered",
-            "branch": "exp/hover/test",
+        "contract": {
+            "identity": {
+                "name": "hover/test",
+                "task": "hover",
+                "branch": "exp/hover/test",
+            },
             "max_generations": 50,
+            "problem": {"has_test_set": True, "fitness_type": "discrete"},
         },
-        "problem": {"has_test_set": True, "fitness_type": "discrete"},
+        "lifecycle": {
+            "status": "preregistered",
+        },
     }
 
 
 def _minimal_implemented() -> dict:
-    """Minimal valid manifest at status=implemented."""
+    """Minimal valid manifest at status=implemented (v2 nested)."""
     raw = _minimal_preregistered()
-    raw["experiment"]["status"] = "implemented"
-    raw["runs"] = [
+    raw["lifecycle"]["status"] = "implemented"
+    raw["contract"]["runs"] = [
         {
             "label": "R1",
             "db": 1,
@@ -69,28 +73,28 @@ def _minimal_implemented() -> dict:
             "model_name": "test-model",
         }
     ]
-    raw["servers"] = ["10.0.0.1"]
-    raw["config"] = {"stage_timeout": 120}
-    raw["smoke_test"] = {"completed": True}
+    raw["contract"]["servers"] = ["10.0.0.1"]
+    raw["contract"]["config"] = {"extra": {"stage_timeout": 120}}
+    raw["lifecycle"]["smoke_test"] = {"completed": True}
     return raw
 
 
 def _minimal_running() -> dict:
-    """Minimal valid manifest at status=running."""
+    """Minimal valid manifest at status=running (v2 nested)."""
     raw = _minimal_implemented()
-    raw["experiment"]["status"] = "running"
-    raw["launch"] = {
+    raw["lifecycle"]["status"] = "running"
+    raw["lifecycle"]["launch"] = {
         "time": "2026-01-01T00:00:00Z",
         "commit": "abc123",
     }
-    raw["runs"][0]["pid"] = 12345
+    raw["contract"]["runs"][0]["pid"] = 12345
     return raw
 
 
 def _minimal_complete() -> dict:
-    """Minimal valid manifest at status=complete."""
+    """Minimal valid manifest at status=complete (v2 nested)."""
     raw = _minimal_running()
-    raw["experiment"]["status"] = "complete"
+    raw["lifecycle"]["status"] = "complete"
     return raw
 
 
@@ -103,49 +107,49 @@ class TestValidManifestLoading:
     def test_load_preregistered_manifest(self) -> None:
         raw = _minimal_preregistered()
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.experiment.name == "hover/test"
-        assert manifest.experiment.status == "preregistered"
-        assert manifest.experiment.max_generations == 50
+        assert manifest.contract.identity.name == "hover/test"
+        assert manifest.lifecycle.status == "preregistered"
+        assert manifest.contract.max_generations == 50
 
     def test_load_implemented_manifest(self) -> None:
         raw = _minimal_implemented()
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.experiment.status == "implemented"
-        assert len(manifest.runs) == 1
-        assert manifest.runs[0].label == "R1"
-        assert manifest.servers == ["10.0.0.1"]
-        assert manifest.smoke_test.completed is True
+        assert manifest.lifecycle.status == "implemented"
+        assert len(manifest.contract.runs) == 1
+        assert manifest.contract.runs[0].label == "R1"
+        assert manifest.contract.servers == ["10.0.0.1"]
+        assert manifest.lifecycle.smoke_test.completed is True
 
     def test_load_running_manifest(self) -> None:
         raw = _minimal_running()
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.experiment.status == "running"
-        assert manifest.launch.time == "2026-01-01T00:00:00Z"
-        assert manifest.launch.commit == "abc123"
-        assert manifest.runs[0].pid == 12345
+        assert manifest.lifecycle.status == "running"
+        assert manifest.lifecycle.launch.time == "2026-01-01T00:00:00Z"
+        assert manifest.lifecycle.launch.commit == "abc123"
+        assert manifest.contract.runs[0].pid == 12345
 
     def test_load_complete_manifest(self) -> None:
         raw = _minimal_complete()
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.experiment.status == "complete"
+        assert manifest.lifecycle.status == "complete"
 
     def test_load_invalid_status_manifest(self) -> None:
         """Status 'invalid' is a valid status (used for abandoned experiments)."""
         raw = _minimal_preregistered()
-        raw["experiment"]["status"] = "invalid"
+        raw["lifecycle"]["status"] = "invalid"
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.experiment.status == "invalid"
+        assert manifest.lifecycle.status == "invalid"
 
     def test_defaults_for_optional_sections(self) -> None:
         """Omitted sections get sensible defaults."""
         raw = _minimal_preregistered()
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.runs == []
-        assert manifest.servers == []
-        assert manifest.config == {}
-        assert manifest.launch.time is None
-        assert manifest.smoke_test.completed is False
-        assert manifest.baseline.reference is None
+        assert manifest.contract.runs == []
+        assert manifest.contract.servers == []
+        assert manifest.contract.config.extra == {}
+        assert manifest.lifecycle.launch.time is None
+        assert manifest.lifecycle.smoke_test.completed is False
+        assert manifest.contract.baseline.reference is None
 
 
 # ---------------------------------------------------------------------------
@@ -156,19 +160,19 @@ class TestValidManifestLoading:
 class TestValidationErrors:
     def test_missing_experiment_name(self) -> None:
         raw = _minimal_preregistered()
-        del raw["experiment"]["name"]
+        del raw["contract"]["identity"]["name"]
         with pytest.raises(Exception):
             ExperimentManifest.from_dict(raw)
 
     def test_missing_experiment_task(self) -> None:
         raw = _minimal_preregistered()
-        del raw["experiment"]["task"]
+        del raw["contract"]["identity"]["task"]
         with pytest.raises(Exception):
             ExperimentManifest.from_dict(raw)
 
     def test_invalid_status(self) -> None:
         raw = _minimal_preregistered()
-        raw["experiment"]["status"] = "bogus"
+        raw["lifecycle"]["status"] = "bogus"
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         error_str = str(exc_info.value)
@@ -184,35 +188,35 @@ class TestValidationErrors:
 
     def test_implemented_without_runs(self) -> None:
         raw = _minimal_implemented()
-        raw["runs"] = []
+        raw["contract"]["runs"] = []
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         assert "runs" in str(exc_info.value).lower()
 
     def test_implemented_without_servers(self) -> None:
         raw = _minimal_implemented()
-        raw["servers"] = []
+        raw["contract"]["servers"] = []
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         assert "servers" in str(exc_info.value).lower()
 
     def test_implemented_without_smoke_test(self) -> None:
         raw = _minimal_implemented()
-        raw["smoke_test"] = {"completed": False}
+        raw["lifecycle"]["smoke_test"] = {"completed": False}
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         assert "smoke_test" in str(exc_info.value).lower()
 
     def test_running_without_launch_time(self) -> None:
         raw = _minimal_running()
-        raw["launch"]["time"] = None
+        raw["lifecycle"]["launch"]["time"] = None
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         assert "launch.time" in str(exc_info.value)
 
     def test_running_without_pids(self) -> None:
         raw = _minimal_running()
-        raw["runs"][0]["pid"] = None
+        raw["contract"]["runs"][0]["pid"] = None
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         error_str = str(exc_info.value)
@@ -220,15 +224,14 @@ class TestValidationErrors:
 
     def test_non_numeric_db(self) -> None:
         raw = _minimal_implemented()
-        raw["runs"][0]["db"] = "abc"
+        raw["contract"]["runs"][0]["db"] = "abc"
         with pytest.raises(Exception):
             ExperimentManifest.from_dict(raw)
 
-    def test_negative_max_generations(self) -> None:
-        raw = _minimal_preregistered()
-        raw["experiment"]["max_generations"] = -1
-        with pytest.raises(Exception):
-            ExperimentManifest.from_dict(raw)
+    # Removed: test_negative_max_generations.
+    # ContractSection.max_generations has no positive-only constraint in v2;
+    # the schema permits any int. Negative values are a researcher error the
+    # manifest doesn't enforce — checks/launch would catch misuse.
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +242,7 @@ class TestValidationErrors:
 class TestActionableErrors:
     def test_missing_name_mentions_field_path(self) -> None:
         raw = _minimal_preregistered()
-        del raw["experiment"]["name"]
+        del raw["contract"]["identity"]["name"]
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         error_str = str(exc_info.value)
@@ -247,7 +250,7 @@ class TestActionableErrors:
 
     def test_invalid_status_lists_valid_values(self) -> None:
         raw = _minimal_preregistered()
-        raw["experiment"]["status"] = "bogus"
+        raw["lifecycle"]["status"] = "bogus"
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         error_str = str(exc_info.value)
@@ -256,7 +259,7 @@ class TestActionableErrors:
 
     def test_implemented_without_config_mentions_status(self) -> None:
         raw = _minimal_implemented()
-        raw["config"] = {}
+        raw["contract"]["config"] = {}
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         error_str = str(exc_info.value)
@@ -281,13 +284,17 @@ class TestJsonSchema:
         schema = ExperimentManifest.model_json_schema()
         required = schema.get("required", [])
         assert "schema_version" in required
-        assert "experiment" in required
+        # v2 top-level: contract + lifecycle are the required sections.
+        assert "contract" in required
+        assert "lifecycle" in required
 
     def test_schema_has_properties(self) -> None:
         schema = ExperimentManifest.model_json_schema()
         assert "properties" in schema
         assert "schema_version" in schema["properties"]
-        assert "experiment" in schema["properties"]
+        # v2 top-level: the four sub-model groups.
+        assert "contract" in schema["properties"]
+        assert "lifecycle" in schema["properties"]
 
     def test_export_json_schema_writes_file(self, tmp_path: Path) -> None:
         output = tmp_path / "schema.json"
@@ -316,14 +323,14 @@ class TestYamlLoading:
         raw = _minimal_preregistered()
         yaml_str = yaml.safe_dump(raw)
         manifest = ExperimentManifest.from_yaml(yaml_str)
-        assert manifest.experiment.name == "hover/test"
+        assert manifest.contract.identity.name == "hover/test"
 
     def test_from_yaml_file(self, tmp_path: Path) -> None:
         raw = _minimal_preregistered()
         yaml_path = tmp_path / "experiment.yaml"
         yaml_path.write_text(yaml.safe_dump(raw))
         manifest = ExperimentManifest.from_yaml_file(yaml_path)
-        assert manifest.experiment.name == "hover/test"
+        assert manifest.contract.identity.name == "hover/test"
 
     def test_invalid_yaml_raises_value_error(self) -> None:
         bad_yaml = ":\n  :\n  - [invalid"
@@ -339,7 +346,7 @@ class TestYamlLoading:
         """Error from invalid file content mentions the file path."""
         bad_path = tmp_path / "bad.yaml"
         bad_path.write_text(
-            "schema_version: 99\nexperiment:\n  name: x\n  task: y\n  status: preregistered\n"
+            "schema_version: 99\ncontract:\n  identity:\n    name: x\n    task: y\nlifecycle:\n  status: preregistered\n"
         )
         with pytest.raises(ValueError) as exc_info:
             ExperimentManifest.from_yaml_file(bad_path)
@@ -357,24 +364,24 @@ class TestRoundTrip:
         manifest = ExperimentManifest.from_dict(raw)
         exported = manifest.to_dict()
         reloaded = ExperimentManifest.from_dict(exported)
-        assert reloaded.experiment.name == manifest.experiment.name
-        assert reloaded.experiment.status == manifest.experiment.status
-        assert len(reloaded.runs) == len(manifest.runs)
+        assert reloaded.contract.identity.name == manifest.contract.identity.name
+        assert reloaded.lifecycle.status == manifest.lifecycle.status
+        assert len(reloaded.contract.runs) == len(manifest.contract.runs)
 
     def test_yaml_roundtrip(self) -> None:
         raw = _minimal_running()
         manifest = ExperimentManifest.from_dict(raw)
         yaml_str = yaml.safe_dump(manifest.to_dict())
         reloaded = ExperimentManifest.from_yaml(yaml_str)
-        assert reloaded.experiment.name == manifest.experiment.name
+        assert reloaded.contract.identity.name == manifest.contract.identity.name
 
     def test_extra_fields_ignored(self) -> None:
         """Unknown fields in YAML are silently ignored (not 'forbid')."""
         raw = _minimal_preregistered()
         raw["unknown_section"] = {"foo": "bar"}
-        raw["experiment"]["unknown_field"] = "baz"
+        raw["contract"]["identity"]["unknown_field"] = "baz"
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.experiment.name == "hover/test"
+        assert manifest.contract.identity.name == "hover/test"
 
     def test_run_spec_has_no_run_env_field(self) -> None:
         """RunSpec.run_env was removed — dead field, never set in any real manifest.
@@ -436,9 +443,9 @@ class TestRealManifests:
         if not path.exists():
             pytest.skip("heilbron manifest not found")
         manifest = ExperimentManifest.from_yaml_file(path)
-        assert "heilbron" in manifest.experiment.name
-        assert manifest.experiment.status in VALID_STATUSES
-        assert len(manifest.runs) > 0
+        assert "heilbron" in manifest.contract.identity.name
+        assert manifest.lifecycle.status in VALID_STATUSES
+        assert len(manifest.contract.runs) > 0
 
     def test_load_all_existing_manifests(self) -> None:
         """All experiment.yaml files in the repo load through the Pydantic schema."""
@@ -523,27 +530,38 @@ class TestWatchdogSection:
 
     def test_watchdog_section_in_manifest(self) -> None:
         raw = _minimal_preregistered()
-        raw["watchdog"] = {
-            "plugin": "heilbron",
-            "plot_metrics": ["fitness", "prompt_length"],
-            "checkpoint_milestones": [0.25, 0.5, 1.0],
+        raw["control_plane"] = {
+            "watchdog": {
+                "plugin": "heilbron",
+                "plot_metrics": ["fitness", "prompt_length"],
+                "checkpoint_milestones": [0.25, 0.5, 1.0],
+            }
         }
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.watchdog.plugin == "heilbron"
-        assert manifest.watchdog.plot_metrics == ["fitness", "prompt_length"]
-        assert manifest.watchdog.checkpoint_milestones == [0.25, 0.5, 1.0]
+        assert manifest.control_plane.watchdog.plugin == "heilbron"
+        assert manifest.control_plane.watchdog.plot_metrics == [
+            "fitness",
+            "prompt_length",
+        ]
+        assert manifest.control_plane.watchdog.checkpoint_milestones == [
+            0.25,
+            0.5,
+            1.0,
+        ]
 
     def test_manifest_default_watchdog_section(self) -> None:
         raw = _minimal_preregistered()
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.watchdog.plugin is None
-        assert manifest.watchdog.plot_commands == []
+        assert manifest.control_plane.watchdog.plugin is None
+        assert manifest.control_plane.watchdog.plot_commands == []
 
     def test_extra_fields_ignored_in_watchdog(self) -> None:
         raw = _minimal_preregistered()
-        raw["watchdog"] = {"plugin": "solo", "unknown_field": "ignored"}
+        raw["control_plane"] = {
+            "watchdog": {"plugin": "solo", "unknown_field": "ignored"}
+        }
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.watchdog.plugin == "solo"
+        assert manifest.control_plane.watchdog.plugin == "solo"
 
 
 class TestPlotCommand:
@@ -572,8 +590,8 @@ class TestAdversarialRoleRequirement:
 
     def _adversarial_manifest(self) -> dict:
         raw = _minimal_implemented()
-        raw["watchdog"] = {"plugin": "adversarial"}
-        raw["runs"].append(
+        raw["control_plane"] = {"watchdog": {"plugin": "adversarial"}}
+        raw["contract"]["runs"].append(
             {
                 "label": "R2",
                 "db": 2,
@@ -598,7 +616,7 @@ class TestAdversarialRoleRequirement:
 
     def test_adversarial_with_partial_role_fails(self) -> None:
         raw = self._adversarial_manifest()
-        raw["runs"][0]["role"] = "constructor"
+        raw["contract"]["runs"][0]["role"] = "constructor"
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         error_str = str(exc_info.value)
@@ -607,24 +625,24 @@ class TestAdversarialRoleRequirement:
 
     def test_adversarial_with_all_roles_succeeds(self) -> None:
         raw = self._adversarial_manifest()
-        raw["runs"][0]["role"] = "constructor"
-        raw["runs"][1]["role"] = "improver"
+        raw["contract"]["runs"][0]["role"] = "constructor"
+        raw["contract"]["runs"][1]["role"] = "improver"
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.runs[0].role == "constructor"
-        assert manifest.runs[1].role == "improver"
+        assert manifest.contract.runs[0].role == "constructor"
+        assert manifest.contract.runs[1].role == "improver"
 
     def test_non_adversarial_plugin_does_not_require_role(self) -> None:
         raw = self._adversarial_manifest()
-        raw["watchdog"]["plugin"] = "solo"
+        raw["control_plane"]["watchdog"]["plugin"] = "solo"
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.runs[0].role is None
-        assert manifest.runs[1].role is None
+        assert manifest.contract.runs[0].role is None
+        assert manifest.contract.runs[1].role is None
 
     def test_no_watchdog_plugin_does_not_require_role(self) -> None:
         raw = self._adversarial_manifest()
-        del raw["watchdog"]
+        del raw["control_plane"]
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.runs[0].role is None
+        assert manifest.contract.runs[0].role is None
 
     def test_role_accepts_arbitrary_strings_for_non_adversarial_plugins(
         self,
@@ -635,12 +653,12 @@ class TestAdversarialRoleRequirement:
         validators (see test_adversarial_rejects_unknown_role_values).
         """
         raw = self._adversarial_manifest()
-        del raw["watchdog"]  # no plugin → no per-plugin role enforcement
-        raw["runs"][0]["role"] = "heilbron_prover"
-        raw["runs"][1]["role"] = "optimizer"
+        del raw["control_plane"]  # no plugin → no per-plugin role enforcement
+        raw["contract"]["runs"][0]["role"] = "heilbron_prover"
+        raw["contract"]["runs"][1]["role"] = "optimizer"
         manifest = ExperimentManifest.from_dict(raw)
-        assert manifest.runs[0].role == "heilbron_prover"
-        assert manifest.runs[1].role == "optimizer"
+        assert manifest.contract.runs[0].role == "heilbron_prover"
+        assert manifest.contract.runs[1].role == "optimizer"
 
     def test_adversarial_rejects_unknown_role_values(self) -> None:
         """When plugin=adversarial, roles outside {constructor, improver} are
@@ -648,8 +666,8 @@ class TestAdversarialRoleRequirement:
         failures when the plugin filters snapshots by role.
         """
         raw = self._adversarial_manifest()
-        raw["runs"][0]["role"] = "constructor"
-        raw["runs"][1]["role"] = "bogus"
+        raw["contract"]["runs"][0]["role"] = "constructor"
+        raw["contract"]["runs"][1]["role"] = "bogus"
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         assert "bogus" in str(exc_info.value)

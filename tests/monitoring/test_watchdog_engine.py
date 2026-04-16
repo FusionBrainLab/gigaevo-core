@@ -551,9 +551,7 @@ class TestCompletionShutdown:
         )
         engine.experiment_name = "test/exp"
 
-        with patch(
-            "gigaevo.monitoring.watchdog_engine.set_status"
-        ) as mock_set_status:
+        with patch("gigaevo.monitoring.watchdog_engine.set_status") as mock_set_status:
             asyncio.run(engine._cycle(cycle=1))
             mock_set_status.assert_called_once_with("test/exp", "complete")
 

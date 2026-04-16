@@ -28,21 +28,25 @@ def _minimal_manifest_dict(
 ) -> dict:
     return {
         "schema_version": 2,
-        "experiment": {
-            "name": name,
-            "task": task,
-            "status": status,
-            "branch": "exp/hover/test-exp",
+        "contract": {
+            "identity": {
+                "name": name,
+                "task": task,
+                "branch": "exp/hover/test-exp",
+            },
             "max_generations": 25,
+            "problem": {
+                "has_test_set": True,
+                "fitness_type": "discrete",
+                "metric_name": "accuracy",
+            },
+            "runs": [],
+            "servers": [],
+            "config": {},
         },
-        "problem": {
-            "has_test_set": True,
-            "fitness_type": "discrete",
-            "metric_name": "accuracy",
+        "lifecycle": {
+            "status": status,
         },
-        "runs": [],
-        "servers": [],
-        "config": {},
     }
 
 
@@ -50,7 +54,7 @@ def _implementable_manifest_dict(
     *, name: str = "hover/test-exp", task: str = "hover", status: str = "preregistered"
 ) -> dict:
     d = _minimal_manifest_dict(name=name, task=task, status=status)
-    d["runs"] = [
+    d["contract"]["runs"] = [
         {
             "label": "R1",
             "db": 5,
@@ -63,9 +67,9 @@ def _implementable_manifest_dict(
             "model_name": "gpt-4",
         }
     ]
-    d["servers"] = ["server1"]
-    d["config"] = {"key": "value"}
-    d["smoke_test"] = {"completed": True}
+    d["contract"]["servers"] = ["server1"]
+    d["contract"]["config"] = {"extra": {"key": "value"}}
+    d["lifecycle"]["smoke_test"] = {"completed": True}
     return d
 
 
@@ -73,8 +77,8 @@ def _running_manifest_dict(
     *, name: str = "hover/test-exp", task: str = "hover"
 ) -> dict:
     d = _implementable_manifest_dict(name=name, task=task, status="running")
-    d["runs"][0]["pid"] = 12345
-    d["launch"] = {"time": "2026-04-13T00:00:00", "commit": "abc123"}
+    d["contract"]["runs"][0]["pid"] = 12345
+    d["lifecycle"]["launch"] = {"time": "2026-04-13T00:00:00", "commit": "abc123"}
     return d
 
 
@@ -108,8 +112,8 @@ class TestLoadManifest:
             result = load_manifest("hover/test-exp")
 
         assert isinstance(result, ExperimentManifest)
-        assert result.experiment.name == "hover/test-exp"
-        assert result.experiment.status == "preregistered"
+        assert result.contract.identity.name == "hover/test-exp"
+        assert result.lifecycle.status == "preregistered"
 
 
 class TestSetStatus:
@@ -129,7 +133,7 @@ class TestSetStatus:
         ):
             result = set_status("hover/test-exp", "implemented")
 
-        assert result.experiment.status == "implemented"
+        assert result.lifecycle.status == "implemented"
 
     def test_invalid_transition_raises(self, tmp_path):
         exp_dir = tmp_path / "experiments" / "hover" / "test-exp"
@@ -164,7 +168,7 @@ class TestSetStatus:
         ):
             result = set_status("hover/test-exp", "implemented", allow_recovery=True)
 
-        assert result.experiment.status == "implemented"
+        assert result.lifecycle.status == "implemented"
 
 
 class TestWriteManifestAtomic:

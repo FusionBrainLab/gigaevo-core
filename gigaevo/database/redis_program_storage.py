@@ -701,8 +701,8 @@ class RedisProgramStorage(ProgramStorage):
 
     # --------------------- Run State (resume support) ---------------------
 
-    async def save_run_state(self, field: str, value: int) -> None:
-        """Persist a named integer counter into the run-state hash."""
+    async def save_run_state(self, field: str, value: int | str) -> None:
+        """Persist a named field into the run-state hash."""
         self._check_write_allowed("save_run_state")
 
         async def _set(r: aioredis.Redis) -> None:
@@ -718,6 +718,15 @@ class RedisProgramStorage(ProgramStorage):
 
         raw = await self._conn.execute("load_run_state", _get)
         return int(raw) if raw is not None else None
+
+    async def load_run_state_str(self, field: str) -> str | None:
+        """Load a previously saved string field. Returns None if not found."""
+
+        async def _get(r: aioredis.Redis) -> str | None:
+            return await r.hget(self._keys.run_state(), field)
+
+        raw = await self._conn.execute("load_run_state_str", _get)
+        return raw if raw is not None else None
 
     async def recover_stranded_programs(self) -> int:
         """Reset all RUNNING programs to QUEUED after a crash/kill.

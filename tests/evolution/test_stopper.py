@@ -164,9 +164,7 @@ class TestCompositeStopper:
                 WallClockStopper(budget_seconds=3600),
             ],
         )
-        result = stopper.should_stop(
-            _ctx(total_generations=10, elapsed_seconds=3600)
-        )
+        result = stopper.should_stop(_ctx(total_generations=10, elapsed_seconds=3600))
         assert result.stop is True
 
     def test_reason_aggregates_child_reasons(self) -> None:
@@ -177,9 +175,7 @@ class TestCompositeStopper:
                 WallClockStopper(budget_seconds=100),
             ],
         )
-        result = stopper.should_stop(
-            _ctx(total_generations=5, elapsed_seconds=200)
-        )
+        result = stopper.should_stop(_ctx(total_generations=5, elapsed_seconds=200))
         assert result.stop is True
         assert result.reason  # non-empty
 

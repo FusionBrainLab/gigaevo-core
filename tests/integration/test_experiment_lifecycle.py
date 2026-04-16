@@ -4,6 +4,8 @@ Tests the full `preregistered → implemented → running → complete` transiti
 sequence using real YAML files on disk + `fakeredis` for Redis state. This catches
 regressions in the refactored manifest/lock code where intermediate state-transition
 steps may break.
+
+All fixtures use the v2 canonical nested shape (contract/lifecycle/telemetry/control_plane).
 """
 
 from __future__ import annotations
@@ -26,25 +28,42 @@ def _minimal_manifest_dict(
     task: str = "hover",
     status: str = "preregistered",
 ) -> dict:
-    """Minimal valid manifest for initial preregistered state."""
+    """Minimal valid v2 manifest (nested shape) for initial preregistered state."""
     return {
         "schema_version": 2,
-        "experiment": {
-            "name": name,
-            "task": task,
-            "status": status,
-            "branch": "exp/hover/test-exp",
+        "contract": {
+            "identity": {
+                "name": name,
+                "task": task,
+                "branch": "exp/hover/test-exp",
+            },
+            "problem": {
+                "has_test_set": True,
+                "fitness_type": "discrete",
+                "metric_name": "accuracy",
+            },
             "max_generations": 25,
+            "runs": [],
+            "servers": [],
+            "config": {"extra": {}},
         },
-        "problem": {
-            "has_test_set": True,
-            "fitness_type": "discrete",
-            "metric_name": "accuracy",
-        },
-        "runs": [],
-        "servers": [],
-        "config": {},
+        "lifecycle": {"status": status},
     }
+
+
+def _run_entry(*, pid: int | None = None) -> dict:
+    run = {
+        "label": "R1",
+        "db": 5,
+        "prefix": "r1",
+        "pipeline": "standard",
+        "problem_name": "hover",
+        "condition": "control",
+        "model_name": "gpt-4",
+    }
+    if pid is not None:
+        run["pid"] = pid
+    return run
 
 
 @pytest.fixture
@@ -60,7 +79,6 @@ class TestHappyPath:
         exp_dir.mkdir(parents=True)
         yaml_path = exp_dir / "experiment.yaml"
 
-        # Seed with minimal preregistered manifest
         data = _minimal_manifest_dict()
         yaml_path.write_text(yaml.safe_dump(data))
 
@@ -68,43 +86,30 @@ class TestHappyPath:
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
             patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
         ):
-            # Step 1: preregistered → implemented
-            # First populate required fields
+            # Step 1: populate required fields, then preregistered → implemented.
             def make_implementable(raw):
-                raw["runs"] = [
-                    {
-                        "label": "R1",
-                        "db": 5,
-                        "prefix": "r1",
-                        "pipeline": "standard",
-                        "problem_name": "hover",
-                        "condition": "control",
-                        "model_name": "gpt-4",
-                    }
-                ]
-                raw["servers"] = ["server1"]
-                raw["config"] = {"key": "value"}
-                raw["smoke_test"] = {"completed": True}
+                raw["contract"]["runs"] = [_run_entry()]
+                raw["contract"]["servers"] = ["server1"]
+                raw["contract"]["config"] = {"extra": {"key": "value"}}
+                raw.setdefault("lifecycle", {})["smoke_test"] = {"completed": True}
 
             manifest = update_manifest("hover/test-exp", make_implementable)
             assert manifest.lifecycle.status == "preregistered"
 
-            # Now transition to implemented
             manifest = set_status("hover/test-exp", "implemented")
             assert manifest.lifecycle.status == "implemented"
 
-            # Verify on disk (flat field structure)
             reloaded = yaml.safe_load(yaml_path.read_text())
-            assert reloaded["experiment"]["status"] == "implemented"
+            assert reloaded["lifecycle"]["status"] == "implemented"
 
-            # Step 2: implemented → running
-            # Add launch info and PIDs
+            # Step 2: implemented → running. Launch info under lifecycle.launch;
+            # PIDs under contract.runs[].pid.
             def add_launch_info(raw):
-                raw["launch"] = {
+                raw.setdefault("lifecycle", {})["launch"] = {
                     "time": "2026-04-14T10:00:00Z",
                     "commit": "abc123def",
                 }
-                raw["runs"][0]["pid"] = 12345
+                raw["contract"]["runs"][0]["pid"] = 12345
 
             manifest = update_manifest("hover/test-exp", add_launch_info)
             assert manifest.lifecycle.status == "implemented"
@@ -113,15 +118,15 @@ class TestHappyPath:
             assert manifest.lifecycle.status == "running"
 
             reloaded = yaml.safe_load(yaml_path.read_text())
-            assert reloaded["experiment"]["status"] == "running"
-            assert reloaded["runs"][0]["pid"] == 12345
+            assert reloaded["lifecycle"]["status"] == "running"
+            assert reloaded["contract"]["runs"][0]["pid"] == 12345
 
-            # Step 3: running → complete
+            # Step 3: running → complete.
             manifest = set_status("hover/test-exp", "complete")
             assert manifest.lifecycle.status == "complete"
 
             reloaded = yaml.safe_load(yaml_path.read_text())
-            assert reloaded["experiment"]["status"] == "complete"
+            assert reloaded["lifecycle"]["status"] == "complete"
 
 
 class TestInvalidTransitions:
@@ -131,15 +136,13 @@ class TestInvalidTransitions:
         exp_dir.mkdir(parents=True)
         yaml_path = exp_dir / "experiment.yaml"
 
-        data = _minimal_manifest_dict()
-        data["experiment"]["status"] = "complete"
+        data = _minimal_manifest_dict(status="complete")
         yaml_path.write_text(yaml.safe_dump(data))
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
             patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
         ):
-            # Try to transition from complete to anything → should fail
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status("hover/test-exp", "running")
 
@@ -170,22 +173,11 @@ class TestRecovery:
         yaml_path = exp_dir / "experiment.yaml"
 
         data = _minimal_manifest_dict(status="running")
-        data["runs"] = [
-            {
-                "label": "R1",
-                "db": 5,
-                "prefix": "r1",
-                "pipeline": "standard",
-                "problem_name": "hover",
-                "condition": "control",
-                "model_name": "gpt-4",
-                "pid": 12345,
-            }
-        ]
-        data["servers"] = ["server1"]
-        data["config"] = {"key": "value"}
-        data["smoke_test"] = {"completed": True}
-        data["launch"] = {
+        data["contract"]["runs"] = [_run_entry(pid=12345)]
+        data["contract"]["servers"] = ["server1"]
+        data["contract"]["config"] = {"extra": {"key": "value"}}
+        data["lifecycle"]["smoke_test"] = {"completed": True}
+        data["lifecycle"]["launch"] = {
             "time": "2026-04-14T10:00:00Z",
             "commit": "abc123",
         }
@@ -195,11 +187,8 @@ class TestRecovery:
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
             patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
         ):
-            # With allow_recovery=True, the transition is allowed
             manifest = set_status("hover/test-exp", "implemented", allow_recovery=True)
             assert manifest.lifecycle.status == "implemented"
-
-            # PIDs should still be present
             assert manifest.contract.runs[0].pid == 12345
 
 
@@ -211,20 +200,10 @@ class TestAtomicWrites:
         yaml_path = exp_dir / "experiment.yaml"
 
         data = _minimal_manifest_dict()
-        data["runs"] = [
-            {
-                "label": "R1",
-                "db": 5,
-                "prefix": "r1",
-                "pipeline": "standard",
-                "problem_name": "hover",
-                "condition": "control",
-                "model_name": "gpt-4",
-            }
-        ]
-        data["servers"] = ["server1"]
-        data["config"] = {"key": "value"}
-        data["smoke_test"] = {"completed": True}
+        data["contract"]["runs"] = [_run_entry()]
+        data["contract"]["servers"] = ["server1"]
+        data["contract"]["config"] = {"extra": {"key": "value"}}
+        data["lifecycle"]["smoke_test"] = {"completed": True}
         yaml_path.write_text(yaml.safe_dump(data))
 
         with (
@@ -233,7 +212,6 @@ class TestAtomicWrites:
         ):
             set_status("hover/test-exp", "implemented")
 
-            # Lock key should not exist (or have been deleted)
             lock_key = "experiments:hover/test-exp:yaml_lock"
             assert fake_redis.get(lock_key) is None
 
@@ -244,20 +222,10 @@ class TestAtomicWrites:
         yaml_path = exp_dir / "experiment.yaml"
 
         data = _minimal_manifest_dict()
-        data["runs"] = [
-            {
-                "label": "R1",
-                "db": 5,
-                "prefix": "r1",
-                "pipeline": "standard",
-                "problem_name": "hover",
-                "condition": "control",
-                "model_name": "gpt-4",
-            }
-        ]
-        data["servers"] = ["server1"]
-        data["config"] = {"key": "value"}
-        data["smoke_test"] = {"completed": True}
+        data["contract"]["runs"] = [_run_entry()]
+        data["contract"]["servers"] = ["server1"]
+        data["contract"]["config"] = {"extra": {"key": "value"}}
+        data["lifecycle"]["smoke_test"] = {"completed": True}
         yaml_path.write_text(yaml.safe_dump(data))
 
         with (
@@ -266,6 +234,5 @@ class TestAtomicWrites:
         ):
             set_status("hover/test-exp", "implemented")
 
-            # No .tmp file should remain
             tmp_file = yaml_path.with_suffix(".yaml.tmp")
             assert not tmp_file.exists()

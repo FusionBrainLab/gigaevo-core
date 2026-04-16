@@ -92,15 +92,7 @@ def generate(experiment: str) -> str:
     lines.append('echo ""')
     lines.append("")
 
-    # Preflight call
-    lines.append(
-        "# ── Preflight check (hard gate) ──────────────────────────────────────────"
-    )
-    lines.append(
-        f'PYTHONPATH="$PROJ" "$PYTHON" "$PROJ/tools/experiment/preflight_check.py" --experiment {experiment}'
-    )
-    lines.append('echo ""')
-    lines.append("")
+    # Preflight is now run by `gigaevo launch` before exec — not in this script.
 
     # Config verification
     lines.append(

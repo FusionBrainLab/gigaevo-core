@@ -34,10 +34,6 @@ def _make_fake_manifest():
     watchdog.checkpoint_milestones = [0.1, 0.2, 0.5, 1.0]
     mock.control_plane.watchdog = watchdog
 
-    # Legacy compatibility (if needed for other parts of code)
-    mock.experiment = MagicMock()
-    mock.experiment.task = "hover"
-
     return mock
 
 

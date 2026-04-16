@@ -190,7 +190,7 @@ class TreatmentVerificationInfo(BaseModel):
 # These are not yet wired into ExperimentManifest — step 4 will introduce the
 # ContractSection / LifecycleState / TelemetryLog / ControlPlane groups that
 # use them. For now they exist as first-class, round-trippable types so
-# downstream code (migration script, preflight, checkpoint skill) can start
+# downstream code (migration script, checks, checkpoint skill) can start
 # consuming them in subsequent steps.
 # ---------------------------------------------------------------------------
 

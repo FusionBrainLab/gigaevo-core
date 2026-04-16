@@ -4,7 +4,7 @@ Plugins control ONLY plot generation and status formatting.
 Everything else (loop, heartbeat, Redis, notifications) is the engine.
 
 Registry is a simple dict with @register decorator.
-resolve_plugin() priority: manifest.watchdog.plugin > task heuristic > "solo" fallback.
+resolve_plugin() priority: manifest.control_plane.watchdog.plugin > task heuristic > "solo" fallback.
 """
 
 from __future__ import annotations
@@ -157,8 +157,8 @@ def resolve_plugin(manifest: ExperimentManifest | None) -> type[WatchdogPlugin]:
     """Resolve the correct WatchdogPlugin class for an experiment.
 
     Priority:
-      1. manifest.watchdog.plugin (explicit override)
-      2. Task-prefix heuristic from manifest.experiment.task
+      1. manifest.control_plane.watchdog.plugin (explicit override)
+      2. Task-prefix heuristic from manifest.contract.identity.task
       3. "solo" fallback
 
     Args:

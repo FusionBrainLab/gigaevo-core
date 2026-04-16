@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 # Redis run-state field names (used for resume persistence)
 _RUN_STATE_TOTAL_GENERATIONS = "engine:total_generations"
 _RUN_STATE_PROGRAMS_PROCESSED = "engine:programs_processed"
+_RUN_STATE_COMPLETION_REASON = "engine:completion_reason"
 
 
 class EvolutionEngine:
@@ -184,6 +185,9 @@ class EvolutionEngine:
                     logger.info(
                         "[EvolutionEngine] Stop: {}",
                         stop_decision.reason,
+                    )
+                    await self.storage.save_run_state(
+                        _RUN_STATE_COMPLETION_REASON, stop_decision.reason
                     )
                     break
 

@@ -342,11 +342,15 @@ class ProgramStorage(ABC):
         """
         await asyncio.sleep(timeout)
 
-    async def save_run_state(self, field: str, value: int) -> None:
-        """Persist a named integer counter for resume support. No-op by default."""
+    async def save_run_state(self, field: str, value: int | str) -> None:
+        """Persist a named field for resume support. No-op by default."""
 
     async def load_run_state(self, field: str) -> int | None:
         """Load a previously saved integer counter. Returns None if not found."""
+        return None
+
+    async def load_run_state_str(self, field: str) -> str | None:
+        """Load a previously saved string field. Returns None if not found."""
         return None
 
     async def recover_stranded_programs(self) -> int:

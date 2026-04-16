@@ -50,7 +50,7 @@ All commands inherit these global flags from the `main()` group:
 
 **Subcommands**:
 
-- `get FIELD` — Read a field from experiment.yaml using dotted path syntax (e.g., `experiment.status`, `runs[0].db`, `launch.time`)
+- `get FIELD` — Read a field from experiment.yaml using dotted path syntax (e.g., `lifecycle.status`, `contract.runs[0].db`, `lifecycle.launch.time`)
 - `set FIELD VALUE` — Set a field and enforce state machine rules (e.g., set status → validates new status is in VALID_TRANSITIONS)
 - `update FIELD VALUE` — Update a field via closure function (low-level; prefer `set` for status changes)
 - `gate STATUS` — Verify experiment is in given status without reading output. Exit code 0 if match, non-zero otherwise. Used as a hard gate in shell scripts.
@@ -68,7 +68,7 @@ gigaevo -e hover/foo manifest gate implemented
 gigaevo -e hover/foo manifest get runs --format json
 
 # Update launch time
-gigaevo -e hover/foo manifest update launch.time "2026-04-14T10:00:00Z"
+gigaevo -e hover/foo manifest update lifecycle.launch.time "2026-04-14T10:00:00Z"
 
 # Transition status with validation
 gigaevo -e hover/foo manifest set status running

@@ -97,7 +97,7 @@ class TestFullCycleIntegration:
         snap = _make_snapshot("A", gen=5, fitness=0.65)
         monitor.collect.return_value = [snap]
 
-        detector = AlertDetector(max_generations=50)
+        detector = AlertDetector()
         plugin = StubPlugin()
         channel = StubChannel()
         dispatcher = NotificationDispatcher([channel])
@@ -150,7 +150,7 @@ class TestMultiCycleStagnation:
         snap = _make_snapshot("A", gen=10, fitness=0.5)
         monitor.collect.return_value = [snap]
 
-        detector = AlertDetector(max_generations=50)
+        detector = AlertDetector()
         plugin = StubPlugin()
         channel = StubChannel()
         dispatcher = NotificationDispatcher([channel])
@@ -503,7 +503,7 @@ class TestAlertFlowIntegration:
         monitor = MagicMock(spec=ExperimentMonitor)
         monitor.collect.return_value = [dead_snap]
 
-        detector = AlertDetector(max_generations=50)
+        detector = AlertDetector()
         plugin = StubPlugin()
         channel = StubChannel()
         dispatcher = NotificationDispatcher([channel])

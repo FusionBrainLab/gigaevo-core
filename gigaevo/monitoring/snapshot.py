@@ -26,6 +26,8 @@ class RunSnapshot:
     total_keys: int | None = None
     pid: int | None = None
     pid_alive: bool | None = None
+    completed: bool = False
+    completion_reason: str | None = None
     error: str | None = None
 
     @property

@@ -66,7 +66,10 @@ class FitnessPlateauStopper(EvolutionStopper):
         if ctx.best_fitness is None:
             return StopDecision(stop=False, reason="")
 
-        if self._best_seen is None or (ctx.best_fitness - self._best_seen) >= self.min_delta:
+        if (
+            self._best_seen is None
+            or (ctx.best_fitness - self._best_seen) >= self.min_delta
+        ):
             self._best_seen = ctx.best_fitness
             self._stagnant_count = 0
         else:

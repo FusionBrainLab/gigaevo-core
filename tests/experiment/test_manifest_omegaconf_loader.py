@@ -173,7 +173,9 @@ class TestCrossSectionInterpolation:
     def test_identity_name_references_task(self, tmp_path):
         data = _minimal_v2_dict()
         data["contract"]["identity"]["task"] = "hover"
-        data["contract"]["identity"]["name"] = "hover/cross-ref-${contract.identity.task}"
+        data["contract"]["identity"]["name"] = (
+            "hover/cross-ref-${contract.identity.task}"
+        )
         _write_manifest(tmp_path, data, name="hover/omegaconf-test")
 
         with patch("gigaevo.experiment.manifest.PROJ", tmp_path):

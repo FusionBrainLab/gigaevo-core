@@ -153,6 +153,9 @@ def collect_snapshot(
         val_mean, val_max = get_validator_duration(r, run_spec.prefix)
         status_counts = get_status_counts(r, run_spec.prefix)
         total_keys = r.dbsize()
+        completion_reason = r.hget(
+            f"{run_spec.prefix}:run_state", "engine:completion_reason"
+        )
 
         pid_alive = None
         if pid is not None:
@@ -178,6 +181,8 @@ def collect_snapshot(
             total_keys=total_keys,
             pid=pid,
             pid_alive=pid_alive,
+            completed=completion_reason is not None,
+            completion_reason=completion_reason,
             error=None,
         )
     except Exception as exc:

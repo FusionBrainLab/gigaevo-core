@@ -159,6 +159,7 @@ class TestManifestContractView:
         assert isinstance(m.contract.max_generations, int)
         assert m.contract.max_generations > 0
 
+
 class TestManifestLifecycleView:
     def test_status_set(self):
         m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
