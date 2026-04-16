@@ -188,7 +188,7 @@ class TreatmentVerificationInfo(BaseModel):
 
     completed: bool = False
     completed_at: str | None = None
-    note: str = ""
+    note: str | None = None
 
 
 # ---------------------------------------------------------------------------
