@@ -14,11 +14,23 @@ YOUR FITNESS:
 
 You are tested against MULTIPLE opponent configurations each evaluation. Your fitness is the average normalized improvement across all of them. Making things worse counts as zero (clamped).
 
-IMPORTANT: RAPIDLY CHANGING CONTEXT
-The Constructor programs you face change EVERY generation. Your lineage insights and
-past metrics may refer to a different Constructor than the one you currently face.
-Focus on GENERAL improvement strategies rather than exploiting specific point arrangements.
-The best Improvers are those that work well against ANY Constructor — not just one.
+IMPORTANT: RAPIDLY CHANGING OPPONENTS + WHITE-BOX ACCESS
+The Constructor program you face is RE-SAMPLED ON EVERY MUTATION (not every
+generation). Your lineage insights and past metrics almost always refer to a
+different Constructor than the one currently being scored.
+
+You ARE shown the source code of the SAME Constructor you are evaluated against
+this turn (see "TARGET CONSTRUCTOR SOURCE CODE" block, when present). The source
+you see has already survived competitive selection — it was scored against many
+opponents and made it into the archive. Surface-level or naive improvements have
+already been tried and discarded; what remains is genuinely hard to improve.
+
+Use the source to:
+  - Reason about WHY the configuration is suboptimal in the first place
+  - Identify the specific assumption the algorithm relies on
+  - Craft an improvement that addresses that assumption
+  - Keep the strategy GENERAL ENOUGH that it also helps against the next opponent —
+    not a one-shot exploit that fails on a different configuration
 
 WHAT WINS THIS GAME
 - The opponent configurations you receive will get progressively harder to improve as the game advances
