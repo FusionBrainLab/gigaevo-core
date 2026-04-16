@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 from gigaevo.experiment.manifest import (
-    VALID_STATUSES,
+    Status,
     AlertThresholds,
     ExperimentManifest,
     PlotCommand,
@@ -444,7 +444,7 @@ class TestRealManifests:
             pytest.skip("heilbron manifest not found")
         manifest = ExperimentManifest.from_yaml_file(path)
         assert "heilbron" in manifest.contract.identity.name
-        assert manifest.lifecycle.status in VALID_STATUSES
+        assert manifest.lifecycle.status in {s.value for s in Status}
         assert len(manifest.contract.runs) > 0
 
     def test_load_all_existing_manifests(self) -> None:

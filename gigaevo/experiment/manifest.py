@@ -41,21 +41,44 @@ class RunRole(StrEnum):
     IMPROVER = "improver"
 
 
+class Status(StrEnum):
+    PREREGISTERED = "preregistered"
+    IMPLEMENTED = "implemented"
+    RUNNING = "running"
+    COMPLETE = "complete"
+    INVALID = "invalid"
+
+
 PROJ = Path(__file__).parent.parent.parent
 
 SUPPORTED_SCHEMA_VERSIONS = {2}
-VALID_STATUSES = {"preregistered", "implemented", "running", "complete", "invalid"}
 
-VALID_TRANSITIONS: dict[str, set[str]] = {
-    "preregistered": {"implemented"},
-    "implemented": {"running"},
-    "running": {"complete", "invalid"},
-    "complete": set(),
-    "invalid": {"preregistered"},
+REQUIRES_IMPLEMENTATION: frozenset[Status] = frozenset({
+    Status.IMPLEMENTED,
+    Status.RUNNING,
+    Status.COMPLETE,
+})
+
+REQUIRES_RUNTIME: frozenset[Status] = frozenset({
+    Status.RUNNING,
+    Status.COMPLETE,
+})
+
+TERMINAL: frozenset[Status] = frozenset({
+    Status.COMPLETE,
+    Status.INVALID,
+})
+
+VALID_TRANSITIONS: dict[Status, set[Status]] = {
+    Status.PREREGISTERED: {Status.IMPLEMENTED},
+    Status.IMPLEMENTED: {Status.RUNNING},
+    Status.RUNNING: {Status.COMPLETE, Status.INVALID},
+    Status.COMPLETE: set(),
+    Status.INVALID: {Status.PREREGISTERED},
 }
 
-RECOVERY_TRANSITIONS: dict[str, set[str]] = {
-    "running": {"implemented"},
+RECOVERY_TRANSITIONS: dict[Status, set[Status]] = {
+    Status.RUNNING: {Status.IMPLEMENTED},
 }
 
 DB_CLAIM_TTL = 86400 * 7
@@ -430,7 +453,8 @@ class ExperimentManifest(BaseModel):
     sub-sections — there are no flat compatibility views.
 
     Status-gated validation: fields that are required depend on the current
-    experiment status (preregistered < implemented < running < complete).
+    experiment status. Forward transitions: preregistered → implemented → running
+    → {complete | invalid}. Recovery edge: running → implemented via recover_status.
 
     ``extra="ignore"`` silently drops any unknown top-level keys without
     failing validation, so task-specific metadata added outside the schema
@@ -458,24 +482,28 @@ class ExperimentManifest(BaseModel):
     @model_validator(mode="after")
     def validate_status_gates(self) -> ExperimentManifest:
         """Validate required fields based on experiment status."""
-        status = self.lifecycle.status
-        if status not in VALID_STATUSES:
+        status_str = self.lifecycle.status
+        try:
+            status = Status(status_str)
+        except ValueError:
+            valid = ", ".join(s.value for s in Status)
             raise ValueError(
-                f"Invalid lifecycle.status '{status}'. "
-                f"Valid statuses: {sorted(VALID_STATUSES)}"
-            )
+                f"Invalid lifecycle.status '{status_str}'. "
+                f"Valid statuses: {valid}"
+            ) from None
+
         errors: list[str] = []
 
         # implemented+ requires runs, servers, config, smoke_test.completed
-        if status in ("implemented", "running", "complete"):
+        if status in REQUIRES_IMPLEMENTATION:
             if not self.contract.runs:
                 errors.append(
-                    f"contract.runs[] must be non-empty for status={status}. "
+                    f"contract.runs[] must be non-empty for status={status.value}. "
                     f"Add at least one run configuration."
                 )
             if not self.contract.servers:
                 errors.append(
-                    f"contract.servers[] must be non-empty for status={status}. "
+                    f"contract.servers[] must be non-empty for status={status.value}. "
                     f"Add the server hostnames used by this experiment."
                 )
             config_extras = self.contract.config.extra or {}
@@ -493,37 +521,37 @@ class ExperimentManifest(BaseModel):
             )
             if not config_extras and not config_typed_set:
                 errors.append(
-                    f"contract.config must be non-empty for status={status}. "
+                    f"contract.config must be non-empty for status={status.value}. "
                     f"Add the shared Hydra config overrides."
                 )
             if not self.lifecycle.smoke_test.completed:
                 errors.append(
-                    f"lifecycle.smoke_test.completed must be true for status={status}. "
+                    f"lifecycle.smoke_test.completed must be true for status={status.value}. "
                     f"Run a smoke test first."
                 )
 
         # running+ requires launch info and PIDs
-        if status in ("running", "complete"):
+        if status in REQUIRES_RUNTIME:
             if not self.lifecycle.launch.time:
                 errors.append(
-                    f"lifecycle.launch.time is required for status={status}. "
+                    f"lifecycle.launch.time is required for status={status.value}. "
                     f"Set to the ISO timestamp of the launch."
                 )
             if not self.lifecycle.launch.commit:
                 errors.append(
-                    f"lifecycle.launch.commit is required for status={status}. "
+                    f"lifecycle.launch.commit is required for status={status.value}. "
                     f"Set to the git commit hash at launch."
                 )
             for run in self.contract.runs:
                 if run.pid is None:
                     errors.append(
-                        f"contract.runs[{run.label}].pid is required for status={status}. "
+                        f"contract.runs[{run.label}].pid is required for status={status.value}. "
                         f"Record the PID after launching."
                     )
 
         if errors:
             raise ValueError(
-                f"Manifest validation failed (status={status}):\n"
+                f"Manifest validation failed (status={status.value}):\n"
                 + "\n".join(f"  - {e}" for e in errors)
             )
 
@@ -938,7 +966,10 @@ def generate_pr_description(experiment: str) -> str:
 
 
 __all__ = [
-    "VALID_STATUSES",
+    "Status",
+    "REQUIRES_IMPLEMENTATION",
+    "REQUIRES_RUNTIME",
+    "TERMINAL",
     "VALID_TRANSITIONS",
     "RECOVERY_TRANSITIONS",
     "DB_CLAIM_TTL",

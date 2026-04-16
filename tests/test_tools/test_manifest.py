@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from gigaevo.experiment.manifest import (
-    VALID_STATUSES,
+    Status,
     VALID_TRANSITIONS,
     _validate,
     _write_manifest_atomic,
@@ -201,10 +201,11 @@ class TestValidation:
 class TestTransitions:
     def test_all_valid_transitions(self):
         """Every status in VALID_TRANSITIONS maps to valid statuses."""
+        valid_statuses = {s.value for s in Status}
         for source, targets in VALID_TRANSITIONS.items():
-            assert source in VALID_STATUSES
+            assert source.value in valid_statuses
             for t in targets:
-                assert t in VALID_STATUSES
+                assert t.value in valid_statuses
 
     def test_preregistered_to_implemented(self):
         assert "implemented" in VALID_TRANSITIONS["preregistered"]
