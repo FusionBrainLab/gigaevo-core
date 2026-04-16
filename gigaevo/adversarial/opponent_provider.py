@@ -222,9 +222,16 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         if not self._cache or (now - self._cache_time) > self._cache_ttl:
             await self._refresh_cache()
             self._cache_time = now
-        return sorted(self._cache, key=lambda o: o.fitness, reverse=higher_is_better)[
-            :k
-        ]
+        # Two-key sort: primary on fitness, secondary on program_id for
+        # deterministic tiebreak. Without the id key, Python's stable sort
+        # would preserve cache-insertion order — and that order depends on
+        # Redis HVALS iteration which is not guaranteed stable across
+        # cache refreshes. F25 in FAILURE_MODES.md.
+        if higher_is_better:
+            return sorted(
+                self._cache, key=lambda o: (-o.fitness, o.program_id)
+            )[:k]
+        return sorted(self._cache, key=lambda o: (o.fitness, o.program_id))[:k]
 
     async def _refresh_cache(self) -> None:
         """Read all opponent programs from all source archives."""

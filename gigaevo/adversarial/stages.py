@@ -63,9 +63,17 @@ class FetchOpponentIdsStage(Stage):
         self._n = n_opponents
 
     async def compute(self, program: Program) -> Box[Any]:
-        opponents = await self._provider.get_opponents(n=self._n)
+        # get_top_k() is deterministic top-K-by-fitness (Hall of Fame).
+        # Replaces stochastic get_opponents() so cache invalidation is governed
+        # by the archive ranking, not per-call sampling noise.
+        opponents = await self._provider.get_top_k(self._n)
         ids = [o.program_id for o in opponents]
-        logger.debug("[FetchOpponentIds] sampled {} opponent IDs", len(ids))
+        logger.info(
+            "[FetchOpponentIds] get_top_k({}) -> {} ids: {}",
+            self._n,
+            len(ids),
+            ids[:3],
+        )
         return Box[Any](data=ids)
 
 
