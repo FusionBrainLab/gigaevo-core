@@ -750,18 +750,38 @@ def _read_yaml_file(path: Path) -> dict[str, Any]:
     return raw
 
 
-def load_manifest(experiment: str) -> ExperimentManifest:
-    """Load and validate experiment.yaml.
+_KNOWN_TOP_LEVEL_KEYS = frozenset(
+    {"schema_version", "contract", "lifecycle", "telemetry", "control_plane"}
+)
+
+
+def load_manifest(experiment: str, *, strict: bool = False) -> ExperimentManifest:
+    """Load and validate ``experiment.yaml``.
 
     Uses OmegaConf so ``${oc.env:NAME,default}`` and cross-section
     interpolations resolve at load time.
 
+    When ``strict=True``, reject any unknown top-level keys. This catches
+    typos at the v2 root (``lifeycycle:`` vs ``lifecycle:``) that would
+    otherwise be silently dropped by the model's ``extra="ignore"`` policy.
+    Sub-section extras are by design (``ConfigSpec`` Hydra knobs,
+    ``RunMetric`` problem-specific ``best_X`` metrics) and remain allowed.
+
     Raises FileNotFoundError if the file doesn't exist.
-    Raises ManifestValidationError on schema validation failure.
+    Raises ManifestValidationError on schema validation failure or
+        (in strict mode) on unknown top-level keys.
     Raises ValueError on YAML parse / interpolation failure.
     """
     path = manifest_path(experiment)
     raw = _read_yaml_file(path)
+    if strict:
+        unknown = sorted(set(raw) - _KNOWN_TOP_LEVEL_KEYS)
+        if unknown:
+            raise ManifestValidationError(
+                experiment,
+                f"unknown top-level keys: {unknown}. "
+                f"Allowed: {sorted(_KNOWN_TOP_LEVEL_KEYS)}",
+            )
     return _validate(raw, experiment)
 
 
@@ -1192,9 +1212,7 @@ def _render_baseline(baseline: BaselineInfo) -> list[str]:
 def generate_pr_description(experiment: str) -> str:
     """Render ``PR_DESCRIPTION.md`` content from the experiment manifest."""
     m = load_manifest(experiment)
-    last_cp_gen = (
-        m.telemetry.checkpoints[-1].gen if m.telemetry.checkpoints else None
-    )
+    last_cp_gen = m.telemetry.checkpoints[-1].gen if m.telemetry.checkpoints else None
     badge = _format_status_badge(
         m.lifecycle.status, m.contract.max_generations, last_cp_gen
     )

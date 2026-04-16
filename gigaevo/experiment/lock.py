@@ -115,9 +115,7 @@ def read_manifest_rt(path: Path) -> CommentedMap:
     if data is None:
         return CommentedMap()
     if not isinstance(data, CommentedMap):
-        raise ValueError(
-            f"{path} must be a YAML mapping, not {type(data).__name__}"
-        )
+        raise ValueError(f"{path} must be a YAML mapping, not {type(data).__name__}")
     return data
 
 

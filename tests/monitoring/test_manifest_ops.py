@@ -116,6 +116,35 @@ class TestLoadManifest:
         assert result.contract.identity.name == "hover/test-exp"
         assert result.lifecycle.status == "preregistered"
 
+    def test_strict_rejects_unknown_top_level_key(self, tmp_path):
+        """strict=True must catch typos that the model would otherwise drop."""
+        exp_dir = tmp_path / "experiments" / "hover" / "test-exp"
+        exp_dir.mkdir(parents=True)
+        data = _minimal_manifest_dict()
+        data["lifeycycle"] = {"status": "preregistered"}  # typo, sibling
+        (exp_dir / "experiment.yaml").write_text(yaml.safe_dump(data))
+
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
+            # default (non-strict) silently ignores it
+            load_manifest("hover/test-exp")
+            # strict mode raises with a helpful message
+            with pytest.raises(Exception, match="lifeycycle"):
+                load_manifest("hover/test-exp", strict=True)
+
+    def test_strict_accepts_canonical_v2_keys(self, tmp_path):
+        """strict mode must NOT reject any of the documented v2 sections."""
+        exp_dir = tmp_path / "experiments" / "hover" / "test-exp"
+        exp_dir.mkdir(parents=True)
+        data = _minimal_manifest_dict()
+        data["telemetry"] = {"checkpoints": []}
+        data["control_plane"] = {}
+        (exp_dir / "experiment.yaml").write_text(yaml.safe_dump(data))
+
+        with patch("gigaevo.experiment.manifest.PROJ", tmp_path):
+            result = load_manifest("hover/test-exp", strict=True)
+
+        assert result.contract.identity.name == "hover/test-exp"
+
 
 class TestSetStatus:
     def test_valid_transition(self, tmp_path):
