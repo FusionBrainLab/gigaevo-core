@@ -1103,72 +1103,99 @@ _STATUS_BADGES = {
 }
 
 
-def generate_pr_description(experiment: str) -> str:
-    """Generate PR_DESCRIPTION.md content from experiment.yaml."""
-    m = load_manifest(experiment)
-    identity = m.contract.identity
-    lifecycle = m.lifecycle
-    checkpoints = m.telemetry.checkpoints
-    badge = _STATUS_BADGES.get(lifecycle.status, lifecycle.status)
+def _format_status_badge(
+    status: str, max_generations: int, last_checkpoint_gen: int | None
+) -> str:
+    """Pick the badge string for a given lifecycle status.
 
-    # Running badge includes generation info
-    if lifecycle.status == "running" and checkpoints:
-        last_cp = checkpoints[-1]
-        gen = last_cp.gen
-        badge = f"🟡 Running (gen {gen}/{m.contract.max_generations})"
-    elif lifecycle.status == "running":
-        badge = f"🟡 Running (gen 0/{m.contract.max_generations})"
+    The ``running`` badge is overlaid with current/total generations so the
+    PR title reflects live progress; everything else is a static lookup.
+    """
+    if status != "running":
+        return _STATUS_BADGES.get(status, status)
+    gen = last_checkpoint_gen if last_checkpoint_gen is not None else 0
+    return f"🟡 Running (gen {gen}/{max_generations})"
 
+
+def _render_header(identity: ExperimentIdentity, badge: str) -> list[str]:
     lines = [
         f"# exp: {identity.name}",
         "",
         f"**Status**: {badge}",
         f"**Branch**: `{identity.branch}`",
-        f"**Tracking issue**: #{identity.tracking_issue}"
-        if identity.tracking_issue
-        else "",
+    ]
+    if identity.tracking_issue:
+        lines.append(f"**Tracking issue**: #{identity.tracking_issue}")
+    return lines
+
+
+def _render_design_link(name: str) -> list[str]:
+    return [
         "",
         "## Design",
         "",
-        f"See `experiments/{identity.name}/01_design.md` for full design.",
+        f"See `experiments/{name}/01_design.md` for full design.",
+    ]
+
+
+def _render_runs_table(runs: list[RunSpec]) -> list[str]:
+    lines = [
         "",
         "## Runs",
         "",
         "| Label | DB | Condition | Pipeline | PID |",
         "|-------|----|-----------|----------|-----|",
     ]
-
-    for run in m.contract.runs:
+    for run in runs:
         pid_str = str(run.pid) if run.pid else "-"
         lines.append(
             f"| {run.label} | {run.db} | {run.condition} | {run.pipeline} | {pid_str} |"
         )
+    return lines
 
-    lines.extend(["", "## Checkpoints", ""])
 
-    if checkpoints:
-        lines.append("| Gen | Time | Notes |")
-        lines.append("|-----|------|-------|")
-        for cp in checkpoints:
-            lines.append(f"| {cp.gen} | {cp.timestamp} | {cp.notes} |")
-    else:
+def _render_checkpoints(checkpoints: list[CheckpointEntry]) -> list[str]:
+    lines = ["", "## Checkpoints", ""]
+    if not checkpoints:
         lines.append("_No checkpoints yet._")
+        return lines
+    lines.append("| Gen | Time | Notes |")
+    lines.append("|-----|------|-------|")
+    for cp in checkpoints:
+        lines.append(f"| {cp.gen} | {cp.timestamp} | {cp.notes} |")
+    return lines
 
-    baseline = m.contract.baseline
-    if baseline.reference:
-        lines.extend(
-            [
-                "",
-                "## Baseline",
-                "",
-                f"Reference: `{baseline.reference}` "
-                f"(mean={baseline.mean}, metric={baseline.metric})",
-            ]
-        )
 
-    lines.extend(["", "## Archives", "", "_(pending)_", ""])
+def _render_baseline(baseline: BaselineInfo) -> list[str]:
+    if not baseline.reference:
+        return []
+    return [
+        "",
+        "## Baseline",
+        "",
+        f"Reference: `{baseline.reference}` "
+        f"(mean={baseline.mean}, metric={baseline.metric})",
+    ]
 
-    return "\n".join(line for line in lines if line is not None) + "\n"
+
+def generate_pr_description(experiment: str) -> str:
+    """Render ``PR_DESCRIPTION.md`` content from the experiment manifest."""
+    m = load_manifest(experiment)
+    last_cp_gen = (
+        m.telemetry.checkpoints[-1].gen if m.telemetry.checkpoints else None
+    )
+    badge = _format_status_badge(
+        m.lifecycle.status, m.contract.max_generations, last_cp_gen
+    )
+
+    sections: list[str] = []
+    sections += _render_header(m.contract.identity, badge)
+    sections += _render_design_link(m.contract.identity.name)
+    sections += _render_runs_table(m.contract.runs)
+    sections += _render_checkpoints(m.telemetry.checkpoints)
+    sections += _render_baseline(m.contract.baseline)
+    sections += ["", "## Archives", "", "_(pending)_", ""]
+    return "\n".join(sections) + "\n"
 
 
 __all__ = [
