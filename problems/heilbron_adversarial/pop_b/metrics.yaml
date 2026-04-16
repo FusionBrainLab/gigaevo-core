@@ -8,7 +8,7 @@ specs:
     upper_bound: 1.0
     include_in_prompts: true
     significant_change: 0.01
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   is_valid:
     description: "Whether the improver callable is valid (1 valid, 0 invalid)"
     decimals: 0
@@ -28,7 +28,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: true
     significant_change: 0.001
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   mean_improvement_raw:
     description: "Mean raw improvement in min_area units across opponent configs"
     decimals: 6
@@ -38,7 +38,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: false
     significant_change: 0.001
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   mean_pre_quality:
     description: "Mean min_area of opponent configs before improvement"
     decimals: 5
@@ -48,7 +48,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: false
     significant_change: 0.001
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   mean_post_quality:
     description: "Mean min_area of opponent configs after improvement"
     decimals: 5
@@ -58,7 +58,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: false
     significant_change: 0.001
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   max_post_quality:
     description: "Best min_area achieved after improvement across all opponents"
     decimals: 5
@@ -68,7 +68,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: false
     significant_change: 0.001
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   n_opponents:
     description: "Number of opponent configurations evaluated against"
     decimals: 0
@@ -78,4 +78,4 @@ specs:
     upper_bound: 10.0
     include_in_prompts: false
     significant_change: 1.0
-    sentinel_value: -1.0
+    sentinel_value: -1000.0

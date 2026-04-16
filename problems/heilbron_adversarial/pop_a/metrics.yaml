@@ -8,7 +8,7 @@ specs:
     upper_bound: 1.0
     include_in_prompts: true
     significant_change: 0.01
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   is_valid:
     description: "Whether the constructor output is valid (1 valid, 0 invalid)"
     decimals: 0
@@ -28,7 +28,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: true
     significant_change: 0.001
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   quality:
     description: "Normalized quality = min(min_area / 0.0365, 1.0)"
     decimals: 5
@@ -38,7 +38,7 @@ specs:
     upper_bound: 1.0
     include_in_prompts: false
     significant_change: 0.01
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   resistance:
     description: "Fraction of opponents that failed to improve the config (binary: 1 if delta==0, 0 otherwise)"
     decimals: 5
@@ -48,7 +48,7 @@ specs:
     upper_bound: 1.0
     include_in_prompts: true
     significant_change: 0.01
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   mean_improvement:
     description: "Mean raw improvement (delta in min_area units) achieved by opponents"
     decimals: 6
@@ -58,7 +58,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: false
     significant_change: 0.001
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   best_post_improvement:
     description: "Best min_area achieved by any opponent improver on this config"
     decimals: 5
@@ -68,7 +68,7 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: false
     significant_change: 0.001
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
   n_opponents:
     description: "Number of opponent improvers evaluated against"
     decimals: 0
@@ -78,4 +78,4 @@ specs:
     upper_bound: 10.0
     include_in_prompts: false
     significant_change: 1.0
-    sentinel_value: -1.0
+    sentinel_value: -1000.0
