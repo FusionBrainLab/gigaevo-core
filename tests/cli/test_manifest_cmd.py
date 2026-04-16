@@ -623,9 +623,7 @@ class TestManifestResetStatus:
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
-            mock_set.assert_called_once_with(
-                "hover/test", "preregistered"
-            )
+            mock_set.assert_called_once_with("hover/test", "preregistered")
             mock_update.assert_not_called()
 
 

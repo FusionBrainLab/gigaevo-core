@@ -422,12 +422,10 @@ def reset_status(
 
     from gigaevo.experiment.manifest import (
         load_manifest,
-        release_db_claims,
-        update_manifest,
-    )
-    from gigaevo.experiment.manifest import (
         recover_status,
+        release_db_claims,
         set_status,
+        update_manifest,
     )
 
     m = load_manifest(experiment)

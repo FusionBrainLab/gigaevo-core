@@ -19,10 +19,10 @@ import pytest
 import yaml
 
 from gigaevo.experiment.manifest import (
-    Status,
     AlertThresholds,
     ExperimentManifest,
     PlotCommand,
+    Status,
     WatchdogSection,
     export_json_schema,
 )
