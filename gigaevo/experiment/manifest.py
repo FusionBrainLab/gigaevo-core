@@ -740,15 +740,12 @@ def _validate(raw: dict[str, Any], experiment: str) -> ExperimentManifest:
 def set_status(
     experiment: str,
     new_status: str,
-    *,
-    allow_recovery: bool = False,
 ) -> ExperimentManifest:
-    """Transition experiment to new_status. Validates transition.
+    """Forward-only status transition. Validates state machine.
 
     Args:
         experiment: e.g. "hover/feedback_softfit"
-        new_status: target status
-        allow_recovery: if True, also allow RECOVERY_TRANSITIONS
+        new_status: target status (must be reachable via VALID_TRANSITIONS)
 
     Returns:
         Updated manifest.
@@ -764,14 +761,17 @@ def set_status(
             raw = yaml.safe_load(f)
 
         current = (raw.get("lifecycle") or {}).get("status", "preregistered")
+        try:
+            current_status = Status(current)
+        except ValueError:
+            raise ValueError(f"Invalid current status: {current}") from None
 
-        allowed = VALID_TRANSITIONS.get(current, set())
-        if allow_recovery:
-            allowed = allowed | RECOVERY_TRANSITIONS.get(current, set())
+        allowed = VALID_TRANSITIONS.get(current_status, set())
+        target_status = Status(new_status)
 
-        if new_status not in allowed:
+        if target_status not in allowed:
             raise ValueError(
-                f"Invalid transition: {current} -> {new_status}. Allowed: {allowed}"
+                f"Invalid transition: {current} -> {new_status}. Allowed: {', '.join(s.value for s in allowed)}"
             )
 
         raw.setdefault("lifecycle", {})["status"] = new_status
@@ -779,6 +779,56 @@ def set_status(
         # Validate the new state (will raise if required fields missing)
         manifest = _validate(raw, experiment)
 
+        _write_manifest_atomic(path, raw)
+        return manifest
+    finally:
+        _release_lock(r, lock_key)
+
+
+def recover_status(
+    experiment: str,
+    new_status: str,
+) -> ExperimentManifest:
+    """Recovery-only status transition. For running → implemented recovery.
+
+    Allows transitions defined in RECOVERY_TRANSITIONS (currently: running → implemented).
+    Used when rolling back a stuck experiment to retry from an earlier state.
+
+    Args:
+        experiment: e.g. "hover/feedback_softfit"
+        new_status: target status (must be reachable via RECOVERY_TRANSITIONS)
+
+    Returns:
+        Updated manifest.
+
+    Raises:
+        ValueError on invalid recovery transition or validation failure.
+    """
+    r = _get_redis()
+    lock_key = _acquire_lock(r, experiment)
+    try:
+        path = manifest_path(experiment)
+        with open(path) as f:
+            raw = yaml.safe_load(f)
+
+        current = (raw.get("lifecycle") or {}).get("status", "preregistered")
+        try:
+            current_status = Status(current)
+        except ValueError:
+            raise ValueError(f"Invalid current status: {current}") from None
+
+        allowed = RECOVERY_TRANSITIONS.get(current_status, set())
+        target_status = Status(new_status)
+
+        if target_status not in allowed:
+            raise ValueError(
+                f"Cannot recover to {new_status} from {current}. "
+                f"Recovery transitions: {', '.join(f'{k.value} → {', '.join(s.value for s in v)}' for k, v in RECOVERY_TRANSITIONS.items())}"
+            )
+
+        raw.setdefault("lifecycle", {})["status"] = new_status
+
+        manifest = _validate(raw, experiment)
         _write_manifest_atomic(path, raw)
         return manifest
     finally:
@@ -1007,6 +1057,7 @@ __all__ = [
     "manifest_path",
     "load_manifest",
     "set_status",
+    "recover_status",
     "update_manifest",
     "claim_dbs",
     "refresh_db_claims",

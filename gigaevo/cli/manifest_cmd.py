@@ -426,7 +426,8 @@ def reset_status(
         update_manifest,
     )
     from gigaevo.experiment.manifest import (
-        set_status as _set_status,
+        recover_status,
+        set_status,
     )
 
     m = load_manifest(experiment)
@@ -467,7 +468,10 @@ def reset_status(
         click.echo(f"Status reset to {target_status}. Launch info and PIDs cleared.")
     else:
         try:
-            _set_status(experiment, target_status, allow_recovery=True)
+            if current == "running" and target_status == "implemented":
+                recover_status(experiment, target_status)
+            else:
+                set_status(experiment, target_status)
             click.echo(f"Status reset to {target_status}.")
         except ValueError as exc:
             click.echo(f"ERROR: {exc}", err=True)

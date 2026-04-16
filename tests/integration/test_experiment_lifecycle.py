@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from gigaevo.experiment.manifest import (
+    recover_status,
     set_status,
     update_manifest,
 )
@@ -164,10 +165,10 @@ class TestInvalidTransitions:
 
 
 class TestRecovery:
-    def test_running_to_implemented_allowed_with_allow_recovery_true(
+    def test_running_to_implemented_allowed_via_recover_status(
         self, tmp_path, fake_redis
     ):
-        """Running → implemented transition is allowed when allow_recovery=True."""
+        """Running → implemented recovery transition via recover_status."""
         exp_dir = tmp_path / "experiments" / "hover" / "test-exp"
         exp_dir.mkdir(parents=True)
         yaml_path = exp_dir / "experiment.yaml"
@@ -187,7 +188,7 @@ class TestRecovery:
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
             patch("gigaevo.experiment.manifest._get_redis", return_value=fake_redis),
         ):
-            manifest = set_status("hover/test-exp", "implemented", allow_recovery=True)
+            manifest = recover_status("hover/test-exp", "implemented")
             assert manifest.lifecycle.status == "implemented"
             assert manifest.contract.runs[0].pid == 12345
 

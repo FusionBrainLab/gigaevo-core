@@ -14,6 +14,7 @@ from gigaevo.experiment.manifest import (
     claim_dbs,
     generate_pr_description,
     load_manifest,
+    recover_status,
     refresh_db_claims,
     release_db_claims,
     set_status,
@@ -357,7 +358,7 @@ class TestSetStatus:
             with open(root / "experiments/test/smoke/experiment.yaml", "w") as f:
                 yaml.safe_dump(raw, f, sort_keys=False)
 
-            m = set_status(exp_name, "implemented", allow_recovery=True)
+            m = recover_status(exp_name, "implemented")
             assert m.lifecycle.status == "implemented"
 
 

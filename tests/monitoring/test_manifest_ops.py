@@ -16,6 +16,7 @@ from gigaevo.experiment.manifest import (
     generate_pr_description,
     load_manifest,
     manifest_path,
+    recover_status,
     set_status,
 )
 
@@ -166,7 +167,7 @@ class TestSetStatus:
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
             patch("gigaevo.experiment.manifest._get_redis", return_value=mock_redis),
         ):
-            result = set_status("hover/test-exp", "implemented", allow_recovery=True)
+            result = recover_status("hover/test-exp", "implemented")
 
         assert result.lifecycle.status == "implemented"
 
