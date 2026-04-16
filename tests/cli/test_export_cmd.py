@@ -254,3 +254,203 @@ class TestFrontierExportCommand:
             ["-r", "test/prefix@0:A", "export", "frontier"],
         )
         assert result.exit_code != 0
+
+
+class TestCsvMultiRun:
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_multi_run_fans_out_paths(self, mock_fetch, tmp_path):
+        """Multiple runs → one CSV per label with _<label> suffix in filename."""
+        from gigaevo.cli import main
+
+        mock_fetch.side_effect = [
+            _make_evolution_df(5, label="A"),
+            _make_evolution_df(7, label="B"),
+        ]
+        output_file = tmp_path / "out.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "pfx@0:A",
+                "-r",
+                "pfx@1:B",
+                "export",
+                "csv",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert not output_file.exists()
+        assert (tmp_path / "out_A.csv").exists()
+        assert (tmp_path / "out_B.csv").exists()
+
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_multi_run_summary_is_list(self, mock_fetch, tmp_path):
+        """Multi-run summary is a JSON list of per-run summaries."""
+        from gigaevo.cli import main
+
+        mock_fetch.side_effect = [
+            _make_evolution_df(5, label="A"),
+            _make_evolution_df(7, label="B"),
+        ]
+        output_file = tmp_path / "out.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "pfx@0:A",
+                "-r",
+                "pfx@1:B",
+                "export",
+                "csv",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0
+        summary = json.loads(result.output.strip())
+        assert isinstance(summary, list)
+        assert len(summary) == 2
+        labels = {s["label"] for s in summary}
+        assert labels == {"A", "B"}
+
+
+class TestCsvPositionalLabel:
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_positional_label_filters_to_one(self, mock_fetch, tmp_path):
+        """Positional label filters resolved runs; single remaining → single output."""
+        from gigaevo.cli import main
+
+        mock_fetch.return_value = _make_evolution_df(5, label="A")
+        output_file = tmp_path / "out.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "pfx@0:A",
+                "-r",
+                "pfx@1:B",
+                "export",
+                "csv",
+                "A",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert output_file.exists()
+        assert mock_fetch.call_count == 1
+
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_unknown_label_errors_with_known(self, mock_fetch, tmp_path):
+        """Unknown label exits with error listing known labels."""
+        from gigaevo.cli import main
+
+        output_file = tmp_path / "out.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "pfx@0:A",
+                "-r",
+                "pfx@1:B",
+                "export",
+                "csv",
+                "BOGUS",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "BOGUS" in result.output
+        assert "A" in result.output
+        assert "B" in result.output
+        assert mock_fetch.call_count == 0
+
+
+class TestFrontierMultiRunAndLabel:
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_frontier_multi_run_fans_out(self, mock_fetch, tmp_path):
+        """frontier fans out paths for multiple runs."""
+        from gigaevo.cli import main
+
+        mock_fetch.side_effect = [
+            _make_evolution_df(5, label="A"),
+            _make_evolution_df(7, label="B"),
+        ]
+        output_file = tmp_path / "front.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "pfx@0:A",
+                "-r",
+                "pfx@1:B",
+                "export",
+                "frontier",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert not output_file.exists()
+        assert (tmp_path / "front_A.csv").exists()
+        assert (tmp_path / "front_B.csv").exists()
+        summary = json.loads(result.output.strip())
+        assert isinstance(summary, list)
+        assert len(summary) == 2
+
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_frontier_positional_label_filters(self, mock_fetch, tmp_path):
+        """frontier filters by positional label."""
+        from gigaevo.cli import main
+
+        mock_fetch.return_value = _make_evolution_df(10, label="A")
+        output_file = tmp_path / "front.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "pfx@0:A",
+                "-r",
+                "pfx@1:B",
+                "export",
+                "frontier",
+                "A",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert output_file.exists()
+        assert mock_fetch.call_count == 1
+
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_frontier_unknown_label_errors(self, mock_fetch, tmp_path):
+        """frontier unknown label errors with known labels listed."""
+        from gigaevo.cli import main
+
+        output_file = tmp_path / "front.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "pfx@0:A",
+                "export",
+                "frontier",
+                "BOGUS",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "BOGUS" in result.output
+        assert mock_fetch.call_count == 0
