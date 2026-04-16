@@ -588,7 +588,7 @@ class TestManifestResetStatus:
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
-            mock_release.assert_called_once_with([4, 5])
+            mock_release.assert_called_once_with("hover/test", [4, 5])
             raw = captured["raw"]
             assert raw["lifecycle"]["status"] == "implemented"
             assert raw["lifecycle"]["launch"] == {

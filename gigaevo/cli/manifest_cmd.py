@@ -447,7 +447,7 @@ def reset_status(
     if current == "running" and target_status in ("implemented", "preregistered"):
         dbs = [r.db for r in m.contract.runs]
         click.echo(f"Releasing DB claims: {dbs}")
-        release_db_claims(dbs)
+        release_db_claims(experiment, dbs)
 
     if current == "running" and target_status == "implemented":
 

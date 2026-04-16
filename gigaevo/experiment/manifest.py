@@ -928,7 +928,9 @@ def update_manifest(
     lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
-        raw = read_manifest_rt(path)
+        # Widened type so the optional dict-replacement branch type-checks;
+        # CommentedMap is a MutableMapping but isn't a dict subclass.
+        raw: dict[str, Any] = read_manifest_rt(path)
 
         result = updater(raw)
         if result is not None:
