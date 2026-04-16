@@ -4,6 +4,7 @@ Low-level primitives for concurrency-safe manifest mutation:
 
 - :func:`get_redis` — connect to Redis (db 0) with actionable errors
 - :func:`acquire_lock` / :func:`release_lock` — Redis-based mutual exclusion
+- :func:`read_manifest_rt` — read YAML preserving comments and key order
 - :func:`write_manifest_atomic` — write YAML via tmp + rename (FUSE-safe)
 
 Public API used by :mod:`gigaevo.experiment.manifest` and tests.
@@ -11,13 +12,27 @@ Public API used by :mod:`gigaevo.experiment.manifest` and tests.
 
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
 import time
 from typing import Any
 
 import redis
-import yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
+
+
+def _make_rt_yaml() -> YAML:
+    """Build a configured round-trip YAML parser/emitter."""
+    y = YAML(typ="rt")
+    y.preserve_quotes = True
+    y.indent(mapping=2, sequence=4, offset=2)
+    y.width = 4096
+    return y
+
+
+_RT_YAML = _make_rt_yaml()
 
 
 def get_redis() -> redis.Redis:
@@ -78,11 +93,38 @@ def release_lock(r: redis.Redis, lock_key: str) -> None:
     r.delete(lock_key)
 
 
+def read_manifest_rt(path: Path) -> CommentedMap:
+    """Round-trip read of ``experiment.yaml`` via ruamel.yaml.
+
+    Preserves comments, key order, and quoting so a subsequent
+    :func:`write_manifest_atomic` call leaves untouched fields byte-stable.
+    Always returns a ``CommentedMap`` (which is a regular ``MutableMapping``
+    that Pydantic accepts).
+    """
+    with open(path) as f:
+        data = _RT_YAML.load(f)
+    if data is None:
+        return CommentedMap()
+    if not isinstance(data, CommentedMap):
+        raise ValueError(
+            f"{path} must be a YAML mapping, not {type(data).__name__}"
+        )
+    return data
+
+
 def write_manifest_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Write YAML atomically via tmp + rename."""
+    """Write YAML atomically via tmp + rename.
+
+    Accepts either a ``CommentedMap`` (round-trip dump preserves comments
+    and key order) or a plain ``dict`` (clean dump). The dump goes to a
+    sibling ``.yaml.tmp`` first, then ``rename(2)`` to make the swap
+    atomic on POSIX/FUSE filesystems.
+    """
+    buf = io.StringIO()
+    _RT_YAML.dump(data, buf)
     tmp = path.with_suffix(".yaml.tmp")
     with open(tmp, "w") as f:
-        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+        f.write(buf.getvalue())
         f.flush()
         os.fsync(f.fileno())
     tmp.rename(path)
@@ -92,5 +134,6 @@ __all__ = [
     "get_redis",
     "acquire_lock",
     "release_lock",
+    "read_manifest_rt",
     "write_manifest_atomic",
 ]

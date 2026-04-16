@@ -42,6 +42,7 @@ from gigaevo.exceptions import ManifestValidationError
 from gigaevo.experiment.lock import (
     acquire_lock,
     get_redis,
+    read_manifest_rt,
     release_lock,
     write_manifest_atomic,
 )
@@ -796,8 +797,7 @@ def set_status(
     lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
-        with open(path) as f:
-            raw = yaml.safe_load(f)
+        raw = read_manifest_rt(path)
 
         current = (raw.get("lifecycle") or {}).get("status", "preregistered")
         try:
@@ -846,8 +846,7 @@ def recover_status(
     lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
-        with open(path) as f:
-            raw = yaml.safe_load(f)
+        raw = read_manifest_rt(path)
 
         current = (raw.get("lifecycle") or {}).get("status", "preregistered")
         try:
@@ -894,8 +893,7 @@ def update_manifest(
     lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
-        with open(path) as f:
-            raw = yaml.safe_load(f)
+        raw = read_manifest_rt(path)
 
         updater(raw)
 
