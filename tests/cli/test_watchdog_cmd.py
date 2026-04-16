@@ -187,3 +187,70 @@ class TestWatchdogNoProxy:
             assert "10.0.0.2" in result.output
             assert "api.github.com" in result.output
             assert "custom.host.com" in result.output
+
+
+class TestWatchdogLoadsDotenv:
+    def test_loads_dotenv_on_startup(self, tmp_path, monkeypatch):
+        """Watchdog sources .env from project root so Telegram credentials
+        are available without the caller pre-loading the shell environment."""
+        import os
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "GIGAEVO_WATCHDOG_TEST_VAR=from_dotenv\nHTTPS_PROXY=http://proxy.test:8080\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("GIGAEVO_WATCHDOG_TEST_VAR", raising=False)
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+
+        manifest = _make_fake_manifest()
+        with (
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+        ):
+            plugin_mock = MagicMock()
+            plugin_mock.__name__ = "MockPlugin"
+            mock_resolve.return_value = plugin_mock
+            mock_engine_cls.return_value.run.return_value = None
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main, ["-e", "test/exp", "watchdog"], catch_exceptions=False
+            )
+
+            assert result.exit_code == 0, result.output
+            assert os.environ.get("GIGAEVO_WATCHDOG_TEST_VAR") == "from_dotenv"
+            assert os.environ.get("HTTPS_PROXY") == "http://proxy.test:8080"
+
+    def test_dotenv_does_not_override_existing_env(self, tmp_path, monkeypatch):
+        """Pre-existing env vars win over .env (override=False)."""
+        import os
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("GIGAEVO_WATCHDOG_TEST_VAR2=from_dotenv\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GIGAEVO_WATCHDOG_TEST_VAR2", "from_shell")
+
+        manifest = _make_fake_manifest()
+        with (
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
+            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
+            patch(
+                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
+            ) as mock_engine_cls,
+        ):
+            plugin_mock = MagicMock()
+            plugin_mock.__name__ = "MockPlugin"
+            mock_resolve.return_value = plugin_mock
+            mock_engine_cls.return_value.run.return_value = None
+
+            runner = CliRunner()
+            result = runner.invoke(
+                main, ["-e", "test/exp", "watchdog"], catch_exceptions=False
+            )
+
+            assert result.exit_code == 0
+            assert os.environ.get("GIGAEVO_WATCHDOG_TEST_VAR2") == "from_shell"

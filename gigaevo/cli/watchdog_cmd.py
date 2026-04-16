@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import click
+from dotenv import find_dotenv, load_dotenv
 
 
 @click.command("watchdog")
@@ -47,6 +49,16 @@ def watchdog(
         click.echo("Error: Watchdog requires --experiment flag.", err=True)
         ctx.exit(1)
         return
+
+    # Load .env so Telegram credentials and HTTPS_PROXY are available without
+    # the caller (launch.sh, subprocess.Popen) having to pre-source the shell env.
+    # override=False keeps any pre-existing shell vars authoritative.
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+        click.echo(f"  .env: loaded from {Path(dotenv_path)}")
+    else:
+        click.echo("  .env: not found (skipping)")
 
     # Lazy imports to keep CLI startup fast
     from gigaevo.experiment.manifest import load_manifest
