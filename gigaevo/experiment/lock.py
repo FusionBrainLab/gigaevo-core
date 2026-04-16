@@ -24,11 +24,20 @@ from ruamel.yaml.comments import CommentedMap
 
 
 def _make_rt_yaml() -> YAML:
-    """Build a configured round-trip YAML parser/emitter."""
+    """Build a configured round-trip YAML parser/emitter.
+
+    Emits ``None`` as the explicit literal ``null`` so that diffs stay quiet
+    when a tool reads → mutates → writes a manifest (ruamel's default would
+    drop the value entirely, producing churn against the prior PyYAML output).
+    """
     y = YAML(typ="rt")
     y.preserve_quotes = True
-    y.indent(mapping=2, sequence=4, offset=2)
+    y.indent(mapping=2, sequence=2, offset=0)
     y.width = 4096
+    y.representer.add_representer(
+        type(None),
+        lambda repr_, _: repr_.represent_scalar("tag:yaml.org,2002:null", "null"),
+    )
     return y
 
 

@@ -289,7 +289,6 @@ class CheckpointEntry(BaseModel):
     timestamp: str
     run_metrics: list[RunMetric] = []
     notes: str = ""
-    metric_name: str | None = None
 
 
 class MidRunTestEvalInfo(BaseModel):
@@ -363,11 +362,14 @@ class ToolRef(BaseModel):
 class ConfigSpec(BaseModel):
     """Shared Hydra config overrides.
 
-    Standard keys are typed; problem-specific extras live in ``extra`` so the
-    model doesn't have to know every Hydra override that experiments use.
+    Standard keys are explicitly typed (``problem_name``, ``pipeline``, …).
+    Problem-specific extras (e.g. ``stage_timeout``, ``mutation_mode``)
+    arrive as plain top-level keys and are captured in
+    :pyattr:`pydantic.BaseModel.model_extra`. The :pyattr:`extras` property
+    is the canonical accessor — never reach into ``model_extra`` directly.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
 
     problem_name: str | None = None
     pipeline: str | None = None
@@ -376,7 +378,11 @@ class ConfigSpec(BaseModel):
     llm_model: str | None = None
     n_workers: int | None = None
     max_generations: int | None = None
-    extra: dict[str, Any] = {}
+
+    @property
+    def extras(self) -> dict[str, Any]:
+        """Return the un-typed extras dict (always materialized, never ``None``)."""
+        return dict(self.model_extra or {})
 
 
 class PrChannelConfig(BaseModel):
@@ -545,7 +551,7 @@ class ExperimentManifest(BaseModel):
                     f"contract.servers[] must be non-empty for status={status.value}. "
                     f"Add the server hostnames used by this experiment."
                 )
-            config_extras = self.contract.config.extra or {}
+            config_extras = self.contract.config.extras
             config_typed_set = any(
                 getattr(self.contract.config, k) is not None
                 for k in (

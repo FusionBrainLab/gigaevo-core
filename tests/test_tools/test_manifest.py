@@ -70,7 +70,7 @@ def _implemented_raw() -> dict:
         }
     ]
     raw["contract"]["servers"] = ["10.0.0.1"]
-    raw["contract"]["config"] = {"extra": {"stage_timeout": 300}}
+    raw["contract"]["config"] = {"stage_timeout": 300}
     raw["lifecycle"]["smoke_test"] = {"completed": True, "db": 98, "generations": 3}
     return raw
 

@@ -33,13 +33,12 @@ def dummy_experiment(tmp_path: Path, monkeypatch):
             fitness_type: fractional
             metric_name: fitness
           config:
-            extra:
-              stage_timeout: 99
-              dag_timeout: 199
-              max_mutations_per_generation: 3
-              max_elites_per_generation: 4
-              num_parents: 2
-              mutation_mode: rewrite
+            stage_timeout: 99
+            dag_timeout: 199
+            max_mutations_per_generation: 3
+            max_elites_per_generation: 4
+            num_parents: 2
+            mutation_mode: rewrite
           runs:
           - label: A1
             db: 15

@@ -130,7 +130,7 @@ def generate(experiment: str) -> str:
         # skip if null — the global export from custom_env handles shared LB)
         env_prefix = ""
         if run.chain_url:
-            chain_url_env_var = m.contract.config.extra.get(
+            chain_url_env_var = m.contract.config.extras.get(
                 "chain_url_env_var", "CHAIN_URL"
             )
             env_prefix = f'{chain_url_env_var}="{run.chain_url}" '
@@ -213,7 +213,7 @@ def generate(experiment: str) -> str:
 
 def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
     """Build run.py command-line parameters for a run."""
-    x = manifest.contract.config.extra
+    x = manifest.contract.config.extras
     params = [
         f"problem.name={run.problem_name}",
         f"pipeline={run.pipeline}",

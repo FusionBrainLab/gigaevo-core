@@ -69,7 +69,7 @@ def _implementable_manifest_dict(
         }
     ]
     d["contract"]["servers"] = ["server1"]
-    d["contract"]["config"] = {"extra": {"key": "value"}}
+    d["contract"]["config"] = {"key": "value"}
     d["lifecycle"]["smoke_test"] = {"completed": True}
     return d
 

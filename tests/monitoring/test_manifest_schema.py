@@ -74,7 +74,7 @@ def _minimal_implemented() -> dict:
         }
     ]
     raw["contract"]["servers"] = ["10.0.0.1"]
-    raw["contract"]["config"] = {"extra": {"stage_timeout": 120}}
+    raw["contract"]["config"] = {"stage_timeout": 120}
     raw["lifecycle"]["smoke_test"] = {"completed": True}
     return raw
 
@@ -146,7 +146,7 @@ class TestValidManifestLoading:
         manifest = ExperimentManifest.from_dict(raw)
         assert manifest.contract.runs == []
         assert manifest.contract.servers == []
-        assert manifest.contract.config.extra == {}
+        assert manifest.contract.config.extras == {}
         assert manifest.lifecycle.launch.time is None
         assert manifest.lifecycle.smoke_test.completed is False
         assert manifest.contract.baseline.reference is None

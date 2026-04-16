@@ -73,14 +73,13 @@ class TestCheckpointEntry:
         assert cp.gen == 10
         assert cp.run_metrics == []
         assert cp.notes == ""
-        assert cp.metric_name is None
 
     def test_with_run_metrics(self):
         cp = CheckpointEntry.model_validate(
             {
                 "gen": 20,
                 "timestamp": "2026-04-15T07:24:03Z",
-                "metric_name": "actual_fitness",
+                "metric_name": "actual_fitness",  # legacy field, dropped silently
                 "run_metrics": [
                     {"label": "A1_G", "gen": 29, "best_actual_fitness": 0.028},
                     {"label": "A1_D", "gen": 29, "best_actual_fitness": 0.031},
@@ -92,7 +91,9 @@ class TestCheckpointEntry:
         assert cp.run_metrics[0].label == "A1_G"
         # Metric preserved via extra="allow" on RunMetric
         assert cp.run_metrics[0].model_dump()["best_actual_fitness"] == 0.028
-        assert cp.metric_name == "actual_fitness"
+        # metric_name on the checkpoint itself was removed; canonical source
+        # is contract.problem.metric_name.
+        assert "metric_name" not in cp.model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +234,7 @@ class TestConfigSpec:
     def test_defaults(self):
         c = ConfigSpec()
         assert c.pipeline is None
-        assert c.extra == {}
+        assert c.extras == {}
 
     def test_structured_plus_extra(self):
         c = ConfigSpec.model_validate(
@@ -242,15 +243,15 @@ class TestConfigSpec:
                 "problem_name": "heilbron_adversarial",
                 "llm_model": "Qwen3-235B",
                 "max_generations": 50,
-                "extra": {
-                    "num_parents": 1,
-                    "max_elites_per_generation": 8,
-                    "stage_timeout": 2400,
-                },
+                # untyped knobs flow into model_extra automatically
+                "num_parents": 1,
+                "max_elites_per_generation": 8,
+                "stage_timeout": 2400,
             }
         )
         assert c.pipeline == "adversarial_asymmetric"
-        assert c.extra["num_parents"] == 1
+        assert c.extras["num_parents"] == 1
+        assert c.extras["stage_timeout"] == 2400
 
 
 # ---------------------------------------------------------------------------
