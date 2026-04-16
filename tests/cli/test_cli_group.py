@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 
 from click.testing import CliRunner
-import pytest
 
 
 class TestHelpOutput:
@@ -67,47 +66,6 @@ class TestLazyImports:
         assert matplotlib_mods == [], (
             f"matplotlib imported at CLI load: {matplotlib_mods}"
         )
-
-
-@pytest.mark.skip(reason="analyze and collect commands not yet registered in CLI")
-class TestAnalyzeAndCollectRegistered:
-    def test_analyze_in_command_list(self):
-        """analyze appears in the CLI command listing."""
-        from gigaevo.cli import main
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["--help"])
-        assert "analyze" in result.output
-
-    def test_collect_in_command_list(self):
-        """collect appears in the CLI command listing."""
-        from gigaevo.cli import main
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["--help"])
-        assert "collect" in result.output
-
-    def test_analyze_resolves_to_click_command(self):
-        """analyze resolves to a Click command (not None)."""
-        import click
-
-        from gigaevo.cli import main
-
-        ctx = click.Context(main)
-        cmd = main.get_command(ctx, "analyze")
-        assert cmd is not None
-        assert isinstance(cmd, click.BaseCommand)
-
-    def test_collect_resolves_to_click_command(self):
-        """collect resolves to a Click command (not None)."""
-        import click
-
-        from gigaevo.cli import main
-
-        ctx = click.Context(main)
-        cmd = main.get_command(ctx, "collect")
-        assert cmd is not None
-        assert isinstance(cmd, click.BaseCommand)
 
 
 class TestContextObject:

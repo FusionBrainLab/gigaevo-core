@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 from collections.abc import Callable
+from enum import StrEnum
 import json
 from pathlib import Path
 from typing import Any, Literal
@@ -33,6 +34,12 @@ from gigaevo.experiment.lock import (
     _release_lock,
     _write_manifest_atomic,
 )
+
+
+class RunRole(StrEnum):
+    CONSTRUCTOR = "constructor"
+    IMPROVER = "improver"
+
 
 PROJ = Path(__file__).parent.parent.parent
 
@@ -114,7 +121,7 @@ class RunSpec(BaseModel):
     pid: int | None = None
     log_path: str | None = None
     extra_overrides: list[str] | None = None
-    role: str | None = None
+    role: RunRole | None = None
 
     @field_validator("db")
     @classmethod

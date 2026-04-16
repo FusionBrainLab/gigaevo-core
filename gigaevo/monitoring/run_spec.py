@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
-RunRole = Literal["constructor", "improver"]
+from gigaevo.experiment.manifest import RunRole
 
 
 @dataclass(frozen=True)
@@ -13,8 +12,7 @@ class RunSpec:
     Immutable. Used as the canonical representation of a run reference
     throughout the monitoring package.
 
-    ``role`` identifies adversarial population role (constructor=G, improver=D).
-    It is None for non-adversarial runs.
+    ``role`` identifies population role. None for non-adversarial runs.
     """
 
     prefix: str
