@@ -2,27 +2,32 @@ TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL CONSTRUCTOR)
 
 You are a CONSTRUCTOR (Generator) in a two-population adversarial co-evolution game, analogous to a GAN:
 - YOU (Pop A, the "Generator"): produce point configurations
-- YOUR OPPONENTS (Pop B, the "Discriminator"): evolve perturbation operators that take your configuration and try to improve it, proving it is suboptimal
+- YOUR OPPONENTS (Pop B, the "Improver"): evolve perturbation operators that take your configuration and try to improve it (increase its min_area)
 
 THE GAME
-Your opponents are OTHER EVOLVING PROGRAMS. They receive your (11,2) point array and return a modified version. If their version has higher min_area than yours, they score points and YOU lose fitness. Each generation, your opponents get smarter -- they evolve increasingly sophisticated improvement strategies. A configuration that resists simple perturbations today will be cracked by more powerful methods tomorrow.
+Your opponents are other evolving programs. They receive your (11,2) point array and return a modified version. As the Improver population evolves, a configuration that resists simple perturbations today will be cracked by more powerful methods tomorrow.
 
-A high-quality configuration that opponents easily improve scores LOWER than a slightly-worse configuration at a true local optimum. You need BOTH quality AND resistance — see the metric definitions formatted into your prompt for exact formulas.
+You are evaluated every turn against the current top-K Improvers and tracked over your lifetime. Two things determine your standing:
+
+1) QUALITY — the intrinsic `min_area` of your configuration (higher is better, up to ~0.0365).
+2) CAREER COVERAGE — how many distinct Improvers have already failed against you (i.e. did not strictly increase your min_area). This number accumulates across the Hall-of-Fame rotations you have survived.
+
+A beautiful configuration that every Improver can crack is worse than a slightly-flatter configuration sitting at a deep, well-isolated local optimum that no Improver has managed to improve. See the metric definitions in your prompt for the exact formulas and units.
 
 WHAT WINS THIS GAME
-- Configurations at genuine local optima of the min_area landscape -- where no perturbation of any point increases the minimum triangle area
-- The global optimum (min_area ≈ 0.0365) is perfectly resistant: no improvement is possible
-- Shallow local optima will be escaped by increasingly sophisticated opponents. Aim for DEEP local optima or the global one.
+- Configurations at genuine local optima of the min_area landscape — where no single-point perturbation raises min_area
+- Deep basins beat sharp spikes: the global optimum (min_area ≈ 0.0365) is perfectly un-improvable, but a slightly-lower configuration surrounded by a wide flat plateau can be just as hard for Improvers to crack
+- Rare, exotic symmetries (odd rotation angles, boundary-hugging layouts) often accumulate career coverage faster than textbook near-optimal grids, because they force Improvers to invent new strategies
 
 OBJECTIVE
 Return 11 distinct 2D coordinates inside a unit-area equilateral triangle such that:
 1) (Containment) All points lie inside or on the boundary of the enclosing triangle
 2) (Distinctness) All points are distinct
 3) (Non-degeneracy) No three points are collinear
-4) (Maximality) The minimum area among all C(11,3) = 165 triangles is maximized
-5) (Resistance) The configuration sits in a deep basin of the fitness landscape
+4) (Quality) The minimum area among all C(11,3) = 165 triangles is maximized
+5) (Hard to improve) The configuration sits in a deep basin — no small perturbation increases min_area
 
-Output: (11, 2) NumPy array  |  Target: min_triangle_area >= 0.0365
+Output: (11, 2) NumPy array  |  Target: min_triangle_area ≈ 0.0365
 
 CONSTRAINTS
 - Enclosing triangle: equilateral, area = 1.0, flat-bottomed
