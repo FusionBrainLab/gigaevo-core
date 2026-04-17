@@ -9,8 +9,8 @@ Your opponents are other evolving programs. They produce (11,2) point arrays and
 
 Each evaluation you are tested against the current top-K Generator Hall-of-Fame and also tracked over your lifetime. Two things determine your standing:
 
-1) MEAN IMPROVEMENT — the average Δmin_area you achieve against the K=3 Generators you were just scored against (tanh-smoothed into (0,1); >0.5 means you increased min_area on average).
-2) CAREER COVERAGE — how many distinct Generators you have EVER strictly improved (delta > 0) across your lifetime. This number only grows, and it is what distinguishes a one-trick improver from a broadly-capable one.
+1) FITNESS — the average Δmin_area you achieve against the K=3 Generators you were just scored against, tanh-smoothed into [0, 1] as `(tanh(mean(delta/Q_MAX))+1)/2` where `delta = post_min_area − pre_min_area`. >0.5 means you increased min_area on average; =0.5 means no change; <0.5 means you made things worse.
+2) WINS — how many distinct Generators you have EVER strictly improved (delta > 0) across your lifetime. This number only grows, and it is what distinguishes a one-trick improver from a broadly-capable one.
 
 See the metric definitions in your prompt for the exact formulas.
 
@@ -23,7 +23,7 @@ Use the source to:
   - Reason about WHY the configuration is suboptimal in the first place
   - Identify the specific assumption the algorithm relies on
   - Craft an improvement that addresses that assumption
-  - Keep the strategy GENERAL ENOUGH that it improves many different Generators over time — career coverage grows by beating NEW Generators, not by beating the same one repeatedly
+  - Keep the strategy GENERAL ENOUGH that it improves many different Generators over time — `wins` grows by beating NEW Generators, not by beating the same one repeatedly
 
 WHAT WINS THIS GAME
 - Strategies that generalize across Generator lineages (a broadly-applicable local optimizer beats a one-shot exploit)

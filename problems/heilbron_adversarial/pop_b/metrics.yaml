@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: "Smoothed improvement fitness in (0,1): mean over opponent configs of (tanh(delta/Q_MAX)+1)/2 where delta = post_min_area - pre_min_area (Q_MAX=0.0365, the Heilbron upper bound). >0.5 means the improver increased min_area on average (good for D); =0.5 means no change or D-did-nothing; <0.5 means it made things worse."
+    description: "Smoothed mean improvement in [0, 1]: mean over opponents of (tanh(delta/Q_MAX)+1)/2 where delta = post_min_area - pre_min_area. >0.5 means the improver increased min_area on average; =0.5 means no change; <0.5 means it made things worse. BD x-axis and selection key."
     decimals: 5
     is_primary: true
     higher_is_better: true
@@ -79,8 +79,8 @@ specs:
     include_in_prompts: false
     significant_change: 1.0
     sentinel_value: -1000.0
-  tracker_coverage_count:
-    description: "Career count of distinct G constructors this D has beaten (delta > 0)."
+  wins:
+    description: "Career count of distinct G constructors this D has beaten (delta > 0). BD y-axis."
     decimals: 0
     is_primary: false
     higher_is_better: true

@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: "Adversarial fitness in (0,1): ALPHA*quality + (1-ALPHA)*resistance, ALPHA=0.5. Resistance is smoothed via tanh on opponent improvement (see resistance metric); not a hard threshold."
+    description: "Normalized min_area in [0, 1]: min(min_area / 0.0365, 1.0). BD x-axis and selection key."
     decimals: 5
     is_primary: true
     higher_is_better: true
@@ -28,26 +28,6 @@ specs:
     upper_bound: 0.0365
     include_in_prompts: true
     significant_change: 0.001
-    sentinel_value: -1000.0
-  quality:
-    description: "Normalized quality = min(min_area / 0.0365, 1.0)"
-    decimals: 5
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 1.0
-    include_in_prompts: false
-    significant_change: 0.01
-    sentinel_value: -1000.0
-  resistance:
-    description: "Smoothed resistance to opponents in (0,1): mean over opponents of (tanh(-delta/Q_MAX)+1)/2 where delta = post_quality - raw_quality. >0.5 means opponents made the config worse on average; <0.5 means they improved it. Equals 1.0 only when no opponent ran (cold start / all failed)."
-    decimals: 5
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 1.0
-    include_in_prompts: true
-    significant_change: 0.01
     sentinel_value: -1000.0
   mean_improvement:
     description: "Mean raw improvement (delta in min_area units) achieved by opponents"
@@ -79,8 +59,8 @@ specs:
     include_in_prompts: false
     significant_change: 1.0
     sentinel_value: -1000.0
-  g_tracker_coverage_count:
-    description: "Career count of distinct D improvers this G has resisted (delta <= 0)."
+  wins:
+    description: "Career count of distinct D improvers this G has resisted (delta <= 0). BD y-axis."
     decimals: 0
     is_primary: false
     higher_is_better: true

@@ -9,22 +9,22 @@ Your opponents are other evolving programs. They receive your (11,2) point array
 
 You are evaluated every turn against the current top-K Improvers and tracked over your lifetime. Two things determine your standing:
 
-1) QUALITY — the intrinsic `min_area` of your configuration (higher is better, up to ~0.0365).
-2) CAREER COVERAGE — how many distinct Improvers have already failed against you (i.e. did not strictly increase your min_area). This number accumulates across the Hall-of-Fame rotations you have survived.
+1) FITNESS — the intrinsic `min_area` of your configuration, normalized to [0, 1] as `min(min_area / 0.0365, 1.0)`. Higher is better.
+2) WINS — how many distinct Improvers have already failed against you (i.e. did not strictly increase your min_area). This number accumulates across the Hall-of-Fame rotations you have survived.
 
 A beautiful configuration that every Improver can crack is worse than a slightly-flatter configuration sitting at a deep, well-isolated local optimum that no Improver has managed to improve. See the metric definitions in your prompt for the exact formulas and units.
 
 WHAT WINS THIS GAME
 - Configurations at genuine local optima of the min_area landscape — where no single-point perturbation raises min_area
 - Deep basins beat sharp spikes: the global optimum (min_area ≈ 0.0365) is perfectly un-improvable, but a slightly-lower configuration surrounded by a wide flat plateau can be just as hard for Improvers to crack
-- Rare, exotic symmetries (odd rotation angles, boundary-hugging layouts) often accumulate career coverage faster than textbook near-optimal grids, because they force Improvers to invent new strategies
+- Rare, exotic symmetries (odd rotation angles, boundary-hugging layouts) often accumulate `wins` faster than textbook near-optimal grids, because they force Improvers to invent new strategies
 
 OBJECTIVE
 Return 11 distinct 2D coordinates inside a unit-area equilateral triangle such that:
 1) (Containment) All points lie inside or on the boundary of the enclosing triangle
 2) (Distinctness) All points are distinct
 3) (Non-degeneracy) No three points are collinear
-4) (Quality) The minimum area among all C(11,3) = 165 triangles is maximized
+4) (Fitness) The minimum area among all C(11,3) = 165 triangles is maximized
 5) (Hard to improve) The configuration sits in a deep basin — no small perturbation increases min_area
 
 Output: (11, 2) NumPy array  |  Target: min_triangle_area ≈ 0.0365

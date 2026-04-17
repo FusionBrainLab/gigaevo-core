@@ -1,10 +1,10 @@
-"""Smoothed-fitness unit tests for heilbron_adversarial pop_a / pop_b.
+"""Unit tests for heilbron_adversarial pop_a / pop_b under v3 semantics.
 
-Validates the redesign in experiments/heilbron/k5-budget-loose/REDESIGN.md:
-  - Pop A resistance uses tanh smoothing; cold-start matches main branch formula.
-  - Pop B fitness uses tanh smoothing; D-did-nothing maps to neutral 0.5.
+Pop A (Constructor) — fitness is normalized min_area in [0, 1] (ALPHA/quality/
+resistance are gone; fitness IS quality by another name). The artifact still
+carries per-opponent fitness deltas for the DGTracker.
 
-These tests cover the 5 cases listed in Phase 1 Step 7 of the implementation plan.
+Pop B (Improver) — unchanged: tanh-smoothed mean Δ (D-did-nothing → 0.5).
 """
 
 from __future__ import annotations
@@ -73,51 +73,47 @@ def _seed_grid(n: int = 11, seed: int = 42) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Pop A — Constructor (resistance smoothing + cold-start consistency)
+# Pop A — Constructor (v3: fitness = normalized min_area; per-opp delta artifact)
 # ---------------------------------------------------------------------------
 
 
-class TestPopASmoothedResistance:
-    def test_cold_start_returns_consistent_fitness(self):
-        """Cold start (no opponents): resistance=1.0, fitness=ALPHA*q + (1-ALPHA)*1.0."""
+class TestPopAv3Fitness:
+    def test_cold_start_returns_normalized_quality(self):
+        """No opponents → fitness = min(raw_quality / Q_MAX, 1.0); artifact carries no deltas."""
         pts = _seed_grid()
         out, artifact = pop_a.evaluate([], pts)
-        q = out["quality"]
-        assert out["resistance"] == pytest.approx(1.0)
-        assert out["fitness"] == pytest.approx(
-            pop_a.ALPHA * q + (1.0 - pop_a.ALPHA) * 1.0
-        )
+        raw_q = out["actual_fitness"]
+        assert out["fitness"] == pytest.approx(min(raw_q / pop_a.Q_MAX, 1.0))
         assert out["is_valid"] == 1.0
-        # Cold-start artifact: zero-length per-opp arrays, role="constructor".
+        assert out["n_opponents"] == 0.0
+        assert out["mean_improvement"] == pytest.approx(0.0)
+        # Cold-start artifact per v3 evaluate: NaN-filled per-opp arrays, role="constructor".
         assert artifact["role"] == "constructor"
         assert artifact["n_opponents"] == 0
-        assert artifact["per_opp_delta"] == []
 
-    def test_all_opponents_fail_returns_max_resistance(self):
-        """All opponents raise → resistance=1.0 (full upper bound)."""
+    def test_all_opponents_fail_keeps_fitness_equal_to_baseline(self):
+        """All opponents raise → fitness unchanged (depends only on raw_quality)."""
         pts = _seed_grid()
 
         def boom(_pts):
             raise RuntimeError("boom")
 
         out, artifact = pop_a.evaluate([boom, boom, boom], pts)
-        q = out["quality"]
-        assert out["resistance"] == pytest.approx(1.0)
-        # Same formula as cold-start branch.
-        assert out["fitness"] == pytest.approx(
-            pop_a.ALPHA * q + (1.0 - pop_a.ALPHA) * 1.0
-        )
-        # Failed opponents → NaN sentinels (no measurement).
+        raw_q = out["actual_fitness"]
+        # v3: fitness = normalized quality — opponent outcomes don't enter the scalar.
+        assert out["fitness"] == pytest.approx(min(raw_q / pop_a.Q_MAX, 1.0))
+        # No successful improver → mean_improvement is 0 (empty deltas).
+        assert out["mean_improvement"] == pytest.approx(0.0)
+        # Failed opponents → NaN sentinels in artifact (no measurement).
         assert artifact["n_opponents"] == 3
         assert len(artifact["per_opp_delta"]) == 3
         assert all(math.isnan(d) for d in artifact["per_opp_delta"])
 
-    def test_mixed_outcomes_lands_above_neutral(self):
-        """Mix of failure (1.0) and success (delta>0 → tanh<0) → resistance ∈ (0.5, 1)."""
+    def test_mixed_outcomes_record_per_opp_delta(self):
+        """Mix of failure and real improver → artifact[0] finite, [1:] NaN."""
         pts = _seed_grid()
 
         def winner(p):
-            # Move one point inward so the smallest triangle area grows.
             p = p.copy()
             centroid = p.mean(axis=0)
             p[0] = 0.7 * p[0] + 0.3 * centroid
@@ -127,42 +123,30 @@ class TestPopASmoothedResistance:
             raise RuntimeError("nope")
 
         out, artifact = pop_a.evaluate([winner, loser, loser], pts)
-        # winner pulls resistance below 1.0 a little; two losers anchor it high.
-        assert 0.5 < out["resistance"] < 1.0
-        # Index alignment: slot 0 (winner) has a real delta, slots 1,2 (losers) NaN.
+        # Fitness is normalized quality; unaffected by opponent outcomes in v3.
+        raw_q = out["actual_fitness"]
+        assert out["fitness"] == pytest.approx(min(raw_q / pop_a.Q_MAX, 1.0))
+        # Index alignment in the artifact: slot 0 finite, 1 & 2 NaN.
         assert math.isfinite(artifact["per_opp_delta"][0])
         assert math.isnan(artifact["per_opp_delta"][1])
         assert math.isnan(artifact["per_opp_delta"][2])
 
-    def test_strong_success_drives_resistance_low(self):
-        """All opponents succeed strongly (delta ≈ Q_MAX) → resistance ≈ (tanh(-1)+1)/2 ≈ 0.12."""
+    def test_strong_success_records_positive_delta_in_artifact(self):
+        """Monkey-patched helper yields delta=+Q_MAX for every opponent."""
         pts = _seed_grid()
         Q_MAX = pop_a.Q_MAX
         raw_q = float(pop_a_helper.get_smallest_triangle_area(pts))
 
-        # Hand-craft a fake "improver" that returns a config with min-area ≈ raw + Q_MAX.
-        # Easiest mock: replace the module-level get_smallest_triangle_area used by
-        # evaluate so that improved configs report raw+Q_MAX. Less invasive: write
-        # an improver that scales the input slightly so post-area is larger.
         def strong(p):
-            p = p.copy()
-            # Scale all points slightly toward the centroid by a tiny amount; this
-            # generally INCREASES the smallest triangle area for a near-degenerate
-            # config, but to guarantee a target delta we monkey-patch the helper
-            # below instead.
-            return p
+            return p.copy()
 
-        # Monkey-patch the helper used inside pop_a.evaluate so that the
-        # improver's output reports area = raw_q + Q_MAX (delta = Q_MAX exactly).
         original = pop_a.get_smallest_triangle_area
         call_idx = {"i": 0}
 
         def fake_area(arr):
             call_idx["i"] += 1
-            # First call evaluates the constructor's points themselves → real value.
             if call_idx["i"] == 1:
                 return original(arr)
-            # All subsequent calls (one per opponent) return raw_q + Q_MAX.
             return raw_q + Q_MAX
 
         pop_a.get_smallest_triangle_area = fake_area
@@ -171,16 +155,15 @@ class TestPopASmoothedResistance:
         finally:
             pop_a.get_smallest_triangle_area = original
 
-        # tanh(-1) ≈ -0.7616 → rescale to ~0.119
-        expected = (math.tanh(-1.0) + 1.0) / 2.0
-        assert out["resistance"] == pytest.approx(expected, abs=1e-3)
-        # All three D succeeded → all per-opp deltas finite and ≈ Q_MAX.
+        # All three D succeeded → all per-opp deltas finite and ≈ +Q_MAX.
         assert all(
             d == pytest.approx(Q_MAX, abs=1e-9) for d in artifact["per_opp_delta"]
         )
+        # mean_improvement is the raw mean delta, not tanh-smoothed.
+        assert out["mean_improvement"] == pytest.approx(Q_MAX, abs=1e-9)
 
-    def test_negative_delta_increases_resistance(self):
-        """When D makes config WORSE (negative delta), resistance > 0.5."""
+    def test_negative_delta_recorded_as_negative(self):
+        """When the improver makes things WORSE, the artifact preserves the negative sign."""
         pts = _seed_grid()
         Q_MAX = pop_a.Q_MAX
         raw_q = float(pop_a_helper.get_smallest_triangle_area(pts))
@@ -195,7 +178,7 @@ class TestPopASmoothedResistance:
             call_idx["i"] += 1
             if call_idx["i"] == 1:
                 return original(arr)
-            return raw_q - 0.5 * Q_MAX  # delta = -0.5*Q_MAX
+            return raw_q - 0.5 * Q_MAX
 
         pop_a.get_smallest_triangle_area = fake_area
         try:
@@ -203,15 +186,12 @@ class TestPopASmoothedResistance:
         finally:
             pop_a.get_smallest_triangle_area = original
 
-        # tanh(0.5)≈0.462 → rescale to (0.462+1)/2 = 0.731
-        expected = (math.tanh(0.5) + 1.0) / 2.0
-        assert out["resistance"] == pytest.approx(expected, abs=1e-3)
-        assert out["resistance"] > 0.5
-        # Negative delta (D made it worse) is preserved as a finite negative number.
+        # Negative delta preserved as-is in the artifact (DGTracker routes it to dg_g_resisted).
         assert all(
             d == pytest.approx(-0.5 * Q_MAX, abs=1e-9)
             for d in artifact["per_opp_delta"]
         )
+        assert out["mean_improvement"] == pytest.approx(-0.5 * Q_MAX, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
