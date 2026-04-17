@@ -98,6 +98,9 @@ def run_launch(
             )
     _log.info("Preflight passed")
 
+    # Step 2b: LAUNCH_PREVIEW.md (best-effort — failure here does not block launch)
+    _write_launch_preview(experiment)
+
     # Step 3: Claim DBs
     dbs = [r.db for r in manifest.contract.runs]
     claim_failures = _claim_dbs(experiment, dbs)
@@ -161,6 +164,19 @@ def _run_preflight(experiment: str) -> list[str]:
 
     results = run_checks(experiment)
     return [str(r) for r in results if r.is_blocking]
+
+
+def _write_launch_preview(experiment: str) -> None:
+    """Render LAUNCH_PREVIEW.md for reviewer Gate 2. Best-effort."""
+    try:
+        from gigaevo.experiment.dry_run import dry_run
+        from gigaevo.experiment.launch_preview import write_launch_preview
+
+        result = dry_run(experiment)
+        out = write_launch_preview(experiment, result)
+        _log.info("Wrote launch preview: {}", out)
+    except Exception as exc:
+        _log.warning("Launch preview skipped: {}", exc)
 
 
 def _claim_dbs(experiment: str, dbs: list[int]) -> list[tuple[int, str]]:

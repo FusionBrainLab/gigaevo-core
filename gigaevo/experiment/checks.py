@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from gigaevo.experiment.dry_run import dry_run
 from gigaevo.experiment.manifest import load_manifest
 
 PROJ = Path(__file__).resolve().parent.parent.parent
@@ -88,6 +89,12 @@ def run_checks(experiment: str) -> list[CheckResult]:
 
     # 4. Model IDs match
     _check_model_ids(results, m)
+
+    # 4b. Resolved Hydra config matches declared pins
+    _check_resolved_config_matches_pinned(results, m, experiment)
+
+    # 4c. Config fingerprint stable (active only on re-launch)
+    _check_config_fingerprint_stable(results, m, experiment)
 
     # 5. Redis DBs empty
     _check_redis_empty(results, m)
@@ -318,6 +325,121 @@ def _check_treatment_verification(results: list[CheckResult], m) -> None:
     else:
         c.fail("treatment_verification.completed is false/missing")
     results.append(c)
+
+
+def _check_resolved_config_matches_pinned(
+    results: list[CheckResult], m, experiment: str
+) -> None:
+    """Diff resolved Hydra config against contract/run pinned assertions.
+
+    Runs ``dry_run`` to compile the resolved config per run, then iterates
+    over ``contract.config.pinned`` merged with each run's ``pinned`` delta.
+    Any missing key or value mismatch is a CRITICAL — the experiment's
+    declared contract is not what Hydra will actually produce.
+    """
+    c = CheckResult("Resolved config matches pinned contract", Severity.CRITICAL)
+    contract_pins = dict(m.contract.config.pinned or {})
+    runs_with_pins = [r for r in m.contract.runs if r.pinned]
+    if not contract_pins and not runs_with_pins:
+        c.ok("no pins declared — skipping (add contract.config.pinned to assert)")
+        results.append(c)
+        return
+
+    try:
+        result = dry_run(experiment)
+    except Exception as e:  # Hydra compose / subprocess failure
+        c.fail(f"dry_run failed: {e}")
+        results.append(c)
+        return
+
+    violations: list[str] = []
+    for run in m.contract.runs:
+        resolved = result.resolved.get(run.label, {})
+        pins = {**contract_pins, **(run.pinned or {})}
+        for path, expected in pins.items():
+            actual = _lookup_dotted(resolved, path)
+            if actual is _MISSING:
+                violations.append(f"{run.label}: '{path}' not in resolved config")
+                continue
+            if not _values_equal(actual, expected):
+                violations.append(
+                    f"{run.label}: {path} = {actual!r} (pinned {expected!r})"
+                )
+
+    if violations:
+        c.fail("; ".join(violations))
+    else:
+        total = sum(len({**contract_pins, **(r.pinned or {})}) for r in m.contract.runs)
+        c.ok(f"{total} pin assertion(s) satisfied across {len(m.contract.runs)} run(s)")
+    results.append(c)
+
+
+def _check_config_fingerprint_stable(
+    results: list[CheckResult], m, experiment: str
+) -> None:
+    """Compare current Hydra config file digests against the recorded fingerprint.
+
+    Active only on re-launches (``lifecycle.launch.config_fingerprint`` non-empty).
+    Any drift in a hashed file → CRITICAL. Fresh launches pass trivially since
+    there is nothing to compare against yet.
+    """
+    c = CheckResult("Config fingerprint stable (re-launch)", Severity.CRITICAL)
+    recorded = dict(m.lifecycle.launch.config_fingerprint or {})
+    if not recorded:
+        c.ok("fresh launch — no fingerprint recorded yet")
+        results.append(c)
+        return
+
+    try:
+        result = dry_run(experiment)
+    except Exception as e:
+        c.fail(f"dry_run failed: {e}")
+        results.append(c)
+        return
+
+    current = result.fingerprint
+    drifted: list[str] = []
+    missing: list[str] = []
+    for path, digest in recorded.items():
+        cur = current.get(path)
+        if cur is None:
+            missing.append(path)
+        elif cur != digest:
+            drifted.append(f"{path}: {digest[:12]}... -> {cur[:12]}...")
+
+    if drifted or missing:
+        parts: list[str] = []
+        if drifted:
+            parts.append("drift: " + "; ".join(drifted))
+        if missing:
+            parts.append("missing from current scan: " + ", ".join(missing))
+        c.fail(" | ".join(parts))
+    else:
+        c.ok(f"{len(recorded)} config file(s) unchanged since recorded launch")
+    results.append(c)
+
+
+# Sentinel for missing nested keys (None is a valid pinned value).
+_MISSING = object()
+
+
+def _lookup_dotted(doc: dict, path: str):
+    """Follow ``a.b.c`` into a nested dict, returning _MISSING on gap."""
+    cur = doc
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return _MISSING
+        cur = cur[part]
+    return cur
+
+
+def _values_equal(a, b) -> bool:
+    """Compare with type coercion for int/float so 1 == 1.0."""
+    if type(a) is type(b):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return float(a) == float(b)
+    return a == b
 
 
 # ---------------------------------------------------------------------------
