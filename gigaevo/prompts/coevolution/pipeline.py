@@ -64,6 +64,9 @@ class PromptEvolutionPipelineBuilder:
         stats_provider: PromptStatsProvider,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
         dag_timeout: float = 3600.0,
+        max_insights: int = DEFAULT_MAX_INSIGHTS,
+        max_code_length: int = MAX_CODE_LENGTH,
+        max_parallel: int | None = None,
         prior_alpha: float = 1.0,
         prior_beta: float = 3.0,
     ):
@@ -71,6 +74,11 @@ class PromptEvolutionPipelineBuilder:
         self._stats_provider = stats_provider
         self._stage_timeout = stage_timeout
         self._dag_timeout = dag_timeout
+        self._max_insights = max_insights
+        self._max_code_length = max_code_length
+        self._max_parallel = (
+            max_parallel if max_parallel is not None else DEFAULT_DAG_CONCURRENCY
+        )
         self._prior_alpha = prior_alpha
         self._prior_beta = prior_beta
 
@@ -84,9 +92,11 @@ class PromptEvolutionPipelineBuilder:
         prompts_dir = ctx.prompts_dir
         stats_provider = self._stats_provider
 
+        max_insights = self._max_insights
+        max_code_length = self._max_code_length
         nodes = {
             "ValidateCodeStage": lambda: ValidateCodeStage(
-                max_code_length=MAX_CODE_LENGTH,
+                max_code_length=max_code_length,
                 timeout=st,
                 safe_mode=True,
             ),
@@ -108,7 +118,7 @@ class PromptEvolutionPipelineBuilder:
                 llm=llm_wrapper,
                 task_description=task_description,
                 metrics_context=metrics_context,
-                max_insights=DEFAULT_MAX_INSIGHTS,
+                max_insights=max_insights,
                 timeout=st,
                 prompts_dir=prompts_dir,
             ),
@@ -257,5 +267,5 @@ class PromptEvolutionPipelineBuilder:
             data_flow_edges=data_flow_edges,
             exec_order_deps=exec_deps,
             dag_timeout=self._dag_timeout,
-            max_parallel_stages=DEFAULT_DAG_CONCURRENCY,
+            max_parallel_stages=self._max_parallel,
         )

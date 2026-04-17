@@ -48,6 +48,7 @@ class InsightsStage(LangGraphStage):
         prompts_dir: str | Path | None = None,
         **kwargs: Any,
     ) -> None:
+        self._max_insights = max_insights
         super().__init__(
             agent=create_insights_agent(
                 llm,

@@ -60,13 +60,21 @@ StageFactory = Callable[[], Stage]
 class PipelineBuilder:
     """Mutable builder for pipeline nodes/edges/deps producing a DAGBlueprint."""
 
-    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
+    def __init__(
+        self,
+        ctx: EvolutionContext,
+        *,
+        dag_timeout: float = 3600.0,
+        max_parallel: int | None = None,
+    ):
         self.ctx = ctx
         self._nodes: dict[str, StageFactory] = {}
         self._data_flow_edges: list[DataFlowEdge] = []
         self._deps: dict[str, list[ExecutionOrderDependency]] = {}
         self._dag_timeout: float = dag_timeout
-        self._max_parallel: int = DEFAULT_DAG_CONCURRENCY
+        self._max_parallel: int = (
+            max_parallel if max_parallel is not None else DEFAULT_DAG_CONCURRENCY
+        )
 
     # Stage operations - add, replace, remove
     def add_stage(self, name: str, factory: StageFactory) -> PipelineBuilder:
@@ -161,9 +169,14 @@ class DefaultPipelineBuilder(PipelineBuilder):
         *,
         dag_timeout: float = 3600.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
+        max_parallel: int | None = None,
+        max_insights: int = DEFAULT_MAX_INSIGHTS,
+        max_code_length: int = MAX_CODE_LENGTH,
     ):
-        super().__init__(ctx, dag_timeout=dag_timeout)
+        super().__init__(ctx, dag_timeout=dag_timeout, max_parallel=max_parallel)
         self._stage_timeout = stage_timeout
+        self._max_insights = max_insights
+        self._max_code_length = max_code_length
         self._contribute_default_nodes()
         self._contribute_default_edges()
         self._contribute_default_deps()
@@ -178,6 +191,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
         task_description = self.ctx.problem_ctx.task_description
         prompts_dir = self.ctx.prompts_dir
         stage_timeout = self._stage_timeout
+        max_code_length = self._max_code_length
         metrics_formatter = MetricsFormatter(metrics_context)
         metrics_description = metrics_formatter.format_metrics_description()
 
@@ -185,7 +199,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
         self.add_stage(
             "ValidateCodeStage",
             lambda: ValidateCodeStage(
-                max_code_length=MAX_CODE_LENGTH,
+                max_code_length=max_code_length,
                 timeout=stage_timeout,
                 safe_mode=True,
             ),
@@ -231,13 +245,14 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
         # Insights stages
+        max_insights = self._max_insights
         self.add_stage(
             "InsightsStage",
             lambda: InsightsStage(
                 llm=llm_wrapper,
                 task_description=task_description,
                 metrics_context=metrics_context,
-                max_insights=DEFAULT_MAX_INSIGHTS,
+                max_insights=max_insights,
                 timeout=stage_timeout,
                 prompts_dir=prompts_dir,
             ),
@@ -421,12 +436,29 @@ class DefaultPipelineBuilder(PipelineBuilder):
 class ContextPipelineBuilder(DefaultPipelineBuilder):
     """Default pipeline with AddContext stage and wiring enabled."""
 
-    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
-        super().__init__(ctx, dag_timeout=dag_timeout)
+    def __init__(
+        self,
+        ctx: EvolutionContext,
+        *,
+        dag_timeout: float = 3600.0,
+        stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
+        max_parallel: int | None = None,
+        max_insights: int = DEFAULT_MAX_INSIGHTS,
+        max_code_length: int = MAX_CODE_LENGTH,
+    ):
+        super().__init__(
+            ctx,
+            dag_timeout=dag_timeout,
+            stage_timeout=stage_timeout,
+            max_parallel=max_parallel,
+            max_insights=max_insights,
+            max_code_length=max_code_length,
+        )
         self._add_context_stage_and_edges()
 
     def _add_context_stage_and_edges(self) -> None:
         problem_ctx = self.ctx.problem_ctx
+        stage_timeout = self._stage_timeout
 
         # AddContext stage: runs build_context from context.py to produce a dict
         self.add_stage(
@@ -434,7 +466,7 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
             lambda: CallFileFunction(
                 path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
                 function_name="build_context",
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
 
@@ -445,8 +477,24 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
 class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
     """Context pipeline variant using execution speed as the primary fitness."""
 
-    def __init__(self, ctx: EvolutionContext, *, dag_timeout: float = 3600.0):
-        super().__init__(ctx, dag_timeout=dag_timeout)
+    def __init__(
+        self,
+        ctx: EvolutionContext,
+        *,
+        dag_timeout: float = 3600.0,
+        stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
+        max_parallel: int | None = None,
+        max_insights: int = DEFAULT_MAX_INSIGHTS,
+        max_code_length: int = MAX_CODE_LENGTH,
+    ):
+        super().__init__(
+            ctx,
+            dag_timeout=dag_timeout,
+            stage_timeout=stage_timeout,
+            max_parallel=max_parallel,
+            max_insights=max_insights,
+            max_code_length=max_code_length,
+        )
         self._add_runtime_fitness_stage()
 
     def _load_runtime_evaluation_config(self) -> tuple[int, int]:
@@ -471,6 +519,7 @@ class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
     def _add_runtime_fitness_stage(self) -> None:
         repetitions, warmups = self._load_runtime_evaluation_config()
         problem_dir = self.ctx.problem_ctx.problem_dir
+        stage_timeout = self._stage_timeout
         self.add_stage(
             "RuntimeFitnessStage",
             lambda: RuntimeFitnessStage(
@@ -478,7 +527,7 @@ class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
                 problem_dir=problem_dir,
                 timing_repetitions=repetitions,
                 warmup_repetitions=warmups,
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
         self.remove_data_flow_edge("FetchMetrics", "MergeMetricsStage")
@@ -522,9 +571,20 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         ctx: EvolutionContext,
         *,
         dag_timeout: float = 3600.0,
+        stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
+        max_parallel: int | None = None,
+        max_insights: int = DEFAULT_MAX_INSIGHTS,
+        max_code_length: int = MAX_CODE_LENGTH,
         optimization_time_budget: float | None = None,
     ):
-        super().__init__(ctx, dag_timeout=dag_timeout)
+        super().__init__(
+            ctx,
+            dag_timeout=dag_timeout,
+            stage_timeout=stage_timeout,
+            max_parallel=max_parallel,
+            max_insights=max_insights,
+            max_code_length=max_code_length,
+        )
         self._optimization_time_budget = (
             optimization_time_budget
             if optimization_time_budget is not None
@@ -538,12 +598,13 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
     def _add_context_stage_and_edges(self) -> None:
         """Add the AddContext stage (same as ContextPipelineBuilder)."""
         problem_ctx = self.ctx.problem_ctx
+        stage_timeout = self._stage_timeout
         self.add_stage(
             "AddContext",
             lambda: CallFileFunction(
                 path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
                 function_name="build_context",
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
         self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
@@ -648,9 +709,20 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         ctx: EvolutionContext,
         *,
         dag_timeout: float = 7200.0,
+        stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
+        max_parallel: int | None = None,
+        max_insights: int = DEFAULT_MAX_INSIGHTS,
+        max_code_length: int = MAX_CODE_LENGTH,
         optimization_time_budget: float | None = None,
     ):
-        super().__init__(ctx, dag_timeout=dag_timeout)
+        super().__init__(
+            ctx,
+            dag_timeout=dag_timeout,
+            stage_timeout=stage_timeout,
+            max_parallel=max_parallel,
+            max_insights=max_insights,
+            max_code_length=max_code_length,
+        )
         self._optimization_time_budget = (
             optimization_time_budget
             if optimization_time_budget is not None
@@ -664,12 +736,13 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
     def _add_context_stage_and_edges(self) -> None:
         """Add the AddContext stage (same as ContextPipelineBuilder)."""
         problem_ctx = self.ctx.problem_ctx
+        stage_timeout = self._stage_timeout
         self.add_stage(
             "AddContext",
             lambda: CallFileFunction(
                 path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
                 function_name="build_context",
-                timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT,
+                timeout=stage_timeout,
             ),
         )
         self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
@@ -752,13 +825,14 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         # OptunaPayloadBridge extracts best_program_output from Optuna.
         # PayloadResolver picks whichever payload source completed.
         # CallValidatorFunction always runs (single source of truth).
+        bridge_timeout = self._stage_timeout
         self.add_stage(
             "OptunaPayloadBridge",
-            lambda: OptunaPayloadBridge(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+            lambda: OptunaPayloadBridge(timeout=bridge_timeout),
         )
         self.add_stage(
             "PayloadResolver",
-            lambda: PayloadResolver(timeout=DEFAULT_SIMPLE_STAGE_TIMEOUT),
+            lambda: PayloadResolver(timeout=bridge_timeout),
         )
 
         # Data flow: Optuna → bridge → resolver → validator

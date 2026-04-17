@@ -67,6 +67,9 @@ pipeline_builder:
   stats_provider: ${prompt_stats_provider}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}
+  max_parallel: ${dag_concurrency}
+  max_insights: ${max_insights}
+  max_code_length: ${max_code_length}
   prior_beta: 3.0
 
 dag_blueprint:
