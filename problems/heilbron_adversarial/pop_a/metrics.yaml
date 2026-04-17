@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: "Adversarial fitness: 0.5*quality + 0.5*resistance (drives MAP-Elites selection)"
+    description: "Adversarial fitness in (0,1): ALPHA*quality + (1-ALPHA)*resistance, ALPHA=0.5. Resistance is smoothed via tanh on opponent improvement (see resistance metric); not a hard threshold."
     decimals: 5
     is_primary: true
     higher_is_better: true
@@ -40,7 +40,7 @@ specs:
     significant_change: 0.01
     sentinel_value: -1000.0
   resistance:
-    description: "Fraction of opponents that failed to improve the config (binary: 1 if delta==0, 0 otherwise)"
+    description: "Smoothed resistance to opponents in (0,1): mean over opponents of (tanh(-delta/Q_MAX)+1)/2 where delta = post_quality - raw_quality. >0.5 means opponents made the config worse on average; <0.5 means they improved it. Equals 1.0 only when no opponent ran (cold start / all failed)."
     decimals: 5
     is_primary: false
     higher_is_better: true

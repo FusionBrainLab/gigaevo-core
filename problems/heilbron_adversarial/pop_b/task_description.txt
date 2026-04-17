@@ -7,17 +7,14 @@ You are an IMPROVER (Discriminator) in a two-population adversarial co-evolution
 THE GAME
 Your opponents are OTHER EVOLVING PROGRAMS. They produce (11,2) point arrays and try to make them as hard to improve as possible. Each generation, your opponents get better -- their configurations sit in deeper local optima with tighter basins. A simple random jitter that works in generation 1 will fail by generation 5. You must evolve increasingly sophisticated improvement strategies to keep finding gains.
 
-YOUR FITNESS:
-  fitness = mean_k( min(improvement_k / 0.0365, 1.0) )
+You are tested against MULTIPLE opponent configurations each evaluation. See the metric definitions formatted into your prompt for the exact fitness formula and reading rules.
 
-  improvement_k = max(min_area(improved_k) - min_area(original_k), 0.0)
-
-You are tested against MULTIPLE opponent configurations each evaluation. Your fitness is the average normalized improvement across all of them. Making things worse counts as zero (clamped).
-
-IMPORTANT: RAPIDLY CHANGING OPPONENTS + WHITE-BOX ACCESS
-The Constructor program you face is RE-SAMPLED ON EVERY MUTATION (not every
-generation). Your lineage insights and past metrics almost always refer to a
-different Constructor than the one currently being scored.
+IMPORTANT: HALL-OF-FAME OPPONENTS + WHITE-BOX ACCESS
+The Constructor configurations you face are the deterministic top-K of Pop A's
+Hall of Fame, re-fetched on every mutation (the K best Generators alive right now).
+The opponent set changes when Pop A's HoF rotates, not on every mutation —
+so your lineage insights and past metrics are RELEVANT when the HoF is stable
+and SHIFT discretely when a new G displaces an old one.
 
 You ARE shown the source code of the SAME Constructor you are evaluated against
 this turn (see "TARGET CONSTRUCTOR SOURCE CODE" block, when present). The source

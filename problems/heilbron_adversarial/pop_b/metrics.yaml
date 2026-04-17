@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: "Mean normalized improvement across opponent configs (drives MAP-Elites selection)"
+    description: "Smoothed improvement fitness in (0,1): mean over opponent configs of (tanh(delta/Q_MAX)+1)/2 where delta = post_min_area - pre_min_area (Q_MAX=0.0365, the Heilbron upper bound). >0.5 means the improver increased min_area on average (good for D); =0.5 means no change or D-did-nothing; <0.5 means it made things worse."
     decimals: 5
     is_primary: true
     higher_is_better: true

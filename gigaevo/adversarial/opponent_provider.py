@@ -290,8 +290,20 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         )
 
     async def get_programs_by_ids(self, ids: list[str]) -> list[OpponentProgram]:
-        """Return OpponentProgram objects from cache for the given IDs."""
+        """Return OpponentProgram objects for the given IDs, refreshing cache on miss.
+
+        Used by post-step hooks (e.g. CompositionInjectionHook) that may run with
+        a stale or empty cache (the cache is populated by FetchOpponentIdsStage
+        inside the DAG; the hook runs *between* DAG steps). On any miss we
+        force a full _refresh_cache() — the archive is small enough that this
+        is cheap, and avoids silent injection failures.
+        """
         id_set = set(ids)
+        hits = [o for o in self._cache if o.program_id in id_set]
+        if len(hits) == len(id_set):
+            return hits
+        await self._refresh_cache()
+        self._cache_time = time.monotonic()
         return [o for o in self._cache if o.program_id in id_set]
 
     async def get_codes_by_ids(self, ids: list[str]) -> list[str]:

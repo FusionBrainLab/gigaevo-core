@@ -11,5 +11,11 @@ llm:
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: ${llm_base_url}
+      # httpx/openai SDK does not detect peer-closed TCP sockets (CLOSE-WAIT
+      # dead-connection bug). Without an inactivity timeout the DAG stage
+      # hangs until stage_timeout (1800s). 600s is generous for 235B-Thinking
+      # generation while still capping worst-case stall.
+      request_timeout: 600
+      max_retries: 2
   probabilities: [1.0]
   writer: ${writer}
