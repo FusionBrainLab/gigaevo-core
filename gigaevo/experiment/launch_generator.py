@@ -220,17 +220,24 @@ def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
     Run-scoped params (problem, pipeline, db, model) and contract-level
     params (max_generations) are emitted explicitly from their respective
     homes; nothing is inferred.
-    """
-    params = [
-        f"problem.name={run.problem_name}",
-        f"pipeline={run.pipeline}",
-        "prompts=default",
-        f"redis.db={run.db}",
-        f"max_generations={manifest.contract.max_generations}",
-        f"model_name={run.model_name}",
-        f'llm_base_url="{run.mutation_url}"',
-    ]
 
+    When ``contract.config.task_group`` is set, ``experiment=<task_group>``
+    is emitted as the FIRST override. This swaps the ``experiment:`` slot
+    in ``config/config.yaml``'s defaults list — Hydra composes the task
+    group file (which inherits ``base``) and all subsequent CLI overrides
+    (pipeline, extras, extra_overrides) win via Hydra's normal resolution.
+    """
+    params: list[str] = []
+
+    task_group = manifest.contract.config.task_group
+    if task_group:
+        params.append(f"experiment={task_group}")
+
+    # All Hydra overrides (including problem.name, pipeline, redis.db,
+    # max_generations, model_name, llm_base_url) come from the manifest:
+    # - contract.config.extra: shared across runs
+    # - runs[].extra_overrides: per-run
+    # Nothing hardcoded here — the manifest is the source of truth.
     for key, value in manifest.contract.config.extra.items():
         params.append(f"{key}={_format_hydra_value(value)}")
 
