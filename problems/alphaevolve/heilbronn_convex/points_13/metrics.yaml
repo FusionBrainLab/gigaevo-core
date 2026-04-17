@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: Scalarized fitness = ALPHA·quality + (1-ALPHA)·resistance (reporting only in v3; selection switched to role-specific axes)
+    description: Main objective [minimum triangle area among all 286 triangles]
     decimals: 4
     is_primary: true
     higher_is_better: true
@@ -18,74 +18,4 @@ specs:
     upper_bound: 1.0
     include_in_prompts: true
     significant_change: 1.0
-    sentinel_value: 0
-  quality:
-    description: G population intrinsic quality; min_triangle_area in cm² (primary BD axis x)
-    decimals: 4
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 0.0365
-    include_in_prompts: false
-    significant_change: 0.0001
-    sentinel_value: -1000.0
-  resistance:
-    description: G population resistance to D improvers; tanh-smoothed average over K=3 D opponents (v2 empirical range [0.287, 0.552]; reported, not selected in v3)
-    decimals: 3
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 1.0
-    include_in_prompts: false
-    significant_change: 0.01
-    sentinel_value: -1.0
-  g_tracker_coverage_count:
-    description: G population career coverage; count of distinct D programs this G has resisted (delta ≤ 0). Primary BD axis y for G.
-    decimals: 0
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0
-    upper_bound: 150
-    include_in_prompts: false
-    significant_change: 1
-    sentinel_value: -1
-  g_opponent_coverage_count:
-    description: G population per-eval opponent diversity; count of distinct D's in HoF at eval time (K=3). Pre-specified fallback if needed.
-    decimals: 0
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0
-    upper_bound: 3
-    include_in_prompts: false
-    significant_change: 1
-    sentinel_value: 0
-  mean_improvement:
-    description: D population mean improvement; tanh-smoothed mean of delta/Q_MAX vs current K=3 G HoF (primary BD axis x for D)
-    decimals: 3
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0.0
-    upper_bound: 1.0
-    include_in_prompts: false
-    significant_change: 0.01
-    sentinel_value: 0.5
-  tracker_coverage_count:
-    description: D population career coverage; count of distinct G programs this D has beaten (delta > 0). Primary BD axis y for D.
-    decimals: 0
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0
-    upper_bound: 150
-    include_in_prompts: false
-    significant_change: 1
-    sentinel_value: -1
-  opponent_coverage_count:
-    description: D population per-eval opponent diversity; count of distinct G's in sampling HoF at eval time (K=3). Pre-specified fallback if needed.
-    decimals: 0
-    is_primary: false
-    higher_is_better: true
-    lower_bound: 0
-    upper_bound: 3
-    include_in_prompts: false
-    significant_change: 1
     sentinel_value: 0
