@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from omegaconf import OmegaConf
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import yaml
 
 from gigaevo.experiment.lock import (
@@ -122,6 +122,9 @@ class RunSpec(BaseModel):
     log_path: str | None = None
     extra_overrides: list[str] | None = None
     role: RunRole | None = None
+    pinned: dict[str, Any] = Field(default_factory=dict)
+    # Per-run delta merged on top of contract.config.pinned. Lets one arm
+    # assert a different resolved value without touching the others.
 
     @field_validator("db")
     @classmethod
@@ -157,6 +160,9 @@ class LaunchInfo(BaseModel):
     commit: str | None = None
     confirmed_at: str | None = None
     attempt: int | None = None
+    config_fingerprint: dict[str, str] = Field(default_factory=dict)
+    # {relative_config_path: sha256 hex}. Populated by launch.py after the
+    # dry-run + pin check pass. A relaunch refuses if any hash differs.
 
 
 class BaselineInfo(BaseModel):
@@ -314,6 +320,59 @@ class ConfigSpec(BaseModel):
     n_workers: int | None = None
     max_generations: int | None = None
     extra: dict[str, Any] = {}
+
+    task_group: str | None = None
+    # Name of a Hydra experiment group at config/experiment/<name>.yaml.
+    # launch_generator emits ``experiment=<task_group>`` as the first CLI
+    # override; Hydra composes the group file (which inherits ``base``) and
+    # scalar overrides on the CLI win via Hydra's normal resolution rules.
+    # ``None`` = falls through to config.yaml's default (``experiment: base``).
+
+    pinned: dict[str, Any] = Field(default_factory=dict)
+    # Flat dict: dotted Hydra path -> required resolved value.
+    # Assertion contract — drift between pinned and resolved -> CRITICAL.
+    # Missing key = no assertion on that path.
+
+    @field_validator("pinned")
+    @classmethod
+    def validate_pinned_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Reject keys containing shell metachars / CLI-override syntax.
+
+        Keys must be bare dotted Hydra paths. The dry-run shells out to
+        ``python run.py`` so any shell-active character is unsafe.
+        CLI-override syntax (``=``, leading ``+``) would also break the
+        launch_generator's arg emission.
+        """
+        _FORBIDDEN_CHARS = set(";|&`$><\n\r\t \"'\\")
+        _FORBIDDEN_SUBSTRS = ("$(", "${")
+        for key in v:
+            if not isinstance(key, str) or not key:
+                raise ValueError(f"pinned key must be a non-empty string, got {key!r}")
+            if "\n" in key or "\r" in key:
+                raise ValueError(
+                    f"pinned key {key!r} contains newline; expected bare dotted Hydra path"
+                )
+            if "=" in key:
+                raise ValueError(
+                    f"pinned key {key!r} contains '='; pinned keys are paths, "
+                    f"not override expressions (use value side for the '=')"
+                )
+            if key.startswith(("+", "~", "++")):
+                raise ValueError(
+                    f"pinned key {key!r} starts with Hydra override prefix; "
+                    f"pinned keys are bare dotted paths"
+                )
+            if any(c in _FORBIDDEN_CHARS for c in key):
+                raise ValueError(
+                    f"pinned key {key!r} contains shell metachars; "
+                    f"expected bare dotted Hydra path"
+                )
+            if any(s in key for s in _FORBIDDEN_SUBSTRS):
+                raise ValueError(
+                    f"pinned key {key!r} contains shell expansion; "
+                    f"expected bare dotted Hydra path"
+                )
+        return v
 
 
 class PrChannelConfig(BaseModel):
