@@ -126,17 +126,8 @@ def generate(experiment: str) -> str:
         pid_vars.append(pid_var)
         cmd_params = _build_run_cmd(run, m, cfg_only=False)
 
-        # Env prefix for per-run chain URL (only if run has a specific URL;
-        # skip if null — the global export from custom_env handles shared LB)
-        env_prefix = ""
-        if run.chain_url:
-            chain_url_env_var = m.contract.config.extra.get(
-                "chain_url_env_var", "CHAIN_URL"
-            )
-            env_prefix = f'{chain_url_env_var}="{run.chain_url}" '
-
         lines.append(f"# ── Run {run.label}: {run.condition}")
-        lines.append(f'{env_prefix}nohup "$PYTHON" "$PROJ/run.py" \\')
+        lines.append('nohup "$PYTHON" "$PROJ/run.py" \\')
         for i, param in enumerate(cmd_params):
             lines.append(f"    {param} \\")
         lines.append(
@@ -211,26 +202,37 @@ def generate(experiment: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _format_hydra_value(value) -> str:
+    """Render a Python value as a Hydra override RHS."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    return str(value)
+
+
 def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
-    """Build run.py command-line parameters for a run."""
-    x = manifest.contract.config.extra
+    """Build run.py command-line parameters for a run.
+
+    Policy: every key in contract.config.extra is emitted as a Hydra
+    override verbatim. The generator imposes no defaults — absent keys
+    fall through to whatever the Hydra config hierarchy provides.
+    Run-scoped params (problem, pipeline, db, model) and contract-level
+    params (max_generations) are emitted explicitly from their respective
+    homes; nothing is inferred.
+    """
     params = [
         f"problem.name={run.problem_name}",
         f"pipeline={run.pipeline}",
         "prompts=default",
         f"redis.db={run.db}",
-        f"stage_timeout={x.get('stage_timeout', 3000)}",
-        f"dag_timeout={x.get('dag_timeout', 7200)}",
         f"max_generations={manifest.contract.max_generations}",
-        f"max_mutations_per_generation={x.get('max_mutations_per_generation', 8)}",
-        f"max_elites_per_generation={x.get('max_elites_per_generation', 8)}",
-        f"num_parents={x.get('num_parents', 1)}",
         f"model_name={run.model_name}",
         f'llm_base_url="{run.mutation_url}"',
     ]
 
-    if x.get("mutation_mode"):
-        params.append(f"mutation_mode={x['mutation_mode']}")
+    for key, value in manifest.contract.config.extra.items():
+        params.append(f"{key}={_format_hydra_value(value)}")
 
     # Extra per-run overrides from experiment.yaml (e.g. prompt_fetcher config)
     # Single-quote any override containing ${...} Hydra interpolation refs

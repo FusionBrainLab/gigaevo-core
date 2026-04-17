@@ -628,13 +628,7 @@ fragment of `launch.sh`; every fragment of `launch.sh` is traceable back to a fi
 | `experiment.max_generations` | `max_generations=<N>` Hydra override per run |
 | `servers[]` | `NO_PROXY` export: `localhost,127.0.0.1,api.github.com,<servers...>` |
 | `custom_env{}` | `export KEY="VALUE"` lines, then propagated to every run |
-| `config.stage_timeout` | `stage_timeout=<N>` Hydra override |
-| `config.dag_timeout` | `dag_timeout=<N>` Hydra override |
-| `config.max_mutations_per_generation` | `max_mutations_per_generation=<N>` |
-| `config.max_elites_per_generation` | `max_elites_per_generation=<N>` |
-| `config.num_parents` | `num_parents=<N>` |
-| `config.mutation_mode` | `mutation_mode=<...>` (optional) |
-| `config.chain_url_env_var` | Name of per-run env var prefix (default `CHAIN_URL`) |
+| `config.extra.*` | Every key emitted as a Hydra override `KEY=VALUE` (bool → `true`/`false`, `None` → `null`). No defaults imposed — absent keys fall through to the Hydra config hierarchy. Dotted keys (`pipeline_builder.archive_reeval`) pass through verbatim. |
 | `runs[].label` | PID variable name `PID_<label>`, log file `run_<label>.log`, label in `pids.txt` |
 | `runs[].db` | `redis.db=<N>` Hydra override |
 | `runs[].pipeline` | `pipeline=<name>` Hydra override |
