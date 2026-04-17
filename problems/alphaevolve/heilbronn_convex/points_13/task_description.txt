@@ -1,6 +1,10 @@
 TASK DEFINITION – HEILBRONN TRIANGLE PROBLEM (13 POINTS)
 
-Challenge: High-dimensional non-convex geometric optimization. Place 13 distinct points inside a unit-area convex region to maximize the smallest triangle area formed by any three points. Target: min_area ≥ 0.0309
+Challenge: High-dimensional non-convex geometric optimization within an adversarial co-evolution framework. Two populations (G=Generator, D=Disruptor) interact:
+  - G: Place 13 distinct points inside a unit-area convex region to maximize the smallest triangle area.
+  - D: Find alternative configurations that minimize the same area (adversarial search).
+  - Both populations evolve using MAP-Elites with role-specific quality-diversity behavior descriptors.
+  - Goal (G): min_area ≥ 0.0309 while resisting D's attacks.
 
 OBJECTIVE
 Return 13 distinct 2D coordinates inside a unit-area convex region such that:
@@ -8,8 +12,9 @@ Return 13 distinct 2D coordinates inside a unit-area convex region such that:
 2) (Distinctness) All points are distinct (no duplicates)
 3) (Non-degeneracy) No three points are collinear
 4) (Maximality) The minimum area among all C(13,3) = 286 triangles is maximized
+5) (Robustness — v3 context) Resist adversarial D improvers: configuration should be robust to D's perturbations
 
-Output: (13, 2) NumPy array  |  Fitness: min_triangle_area  |  Goal: min_triangle_area ≥ 0.0309
+Output: (13, 2) NumPy array  |  Fitness: min_triangle_area  |  Goal: min_triangle_area ≥ 0.0309 (robust to adversarial pressure)
 
 CONSTRAINTS
 - Convex region: unit area, points within or on boundary
