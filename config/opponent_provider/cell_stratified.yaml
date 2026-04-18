@@ -1,0 +1,14 @@
+# @package opponent_provider
+# v3: Cell-stratified top-K opponent selection.
+# One elite per distinct BD cell, descending by fitness_key.
+# fitness_key MUST be set per-run via extra_overrides (no sensible default):
+#   - G side samples D opponents → fitness_key=fitness  (D's mean improvement)
+#   - D side samples G opponents → fitness_key=actual_fitness  (G's intrinsic quality)
+_target_: gigaevo.adversarial.opponent_provider.CellStratifiedRedisOpponentArchiveProvider
+host: ${redis.host}
+port: ${redis.port}
+db: ${opponent_redis_db}
+prefix: ${opponent_redis_prefix}
+fitness_key: ???
+higher_is_better: true
+k: 3

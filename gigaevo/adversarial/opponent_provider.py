@@ -344,8 +344,12 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
         fitness_key: str,
         k: int = 3,
         higher_is_better: bool = True,
+        **_ignored: object,
     ):
         # Single-DB adapter for CellStratified (vs RedisOpponentArchiveProvider's multi-DB)
+        # `**_ignored` swallows legacy Hydra keys (sources, island_id, cache_ttl) that
+        # merge in from the inherited `adversarial_coevo.yaml` pipeline config — we do
+        # not need them here, but refusing the kwarg would crash Hydra instantiation.
         sources = [{"db": db, "prefix": prefix}]
         super().__init__(
             host=host,
