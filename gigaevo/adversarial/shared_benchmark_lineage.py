@@ -25,7 +25,7 @@ from loguru import logger
 
 from gigaevo.adversarial.structured_logging import emit_lineage_trend
 from gigaevo.database.program_storage import ProgramStorage
-from gigaevo.programs.core_types import StageIO
+from gigaevo.programs.core_types import ProgramStageResult, StageIO
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.common import CacheOnlyInput
