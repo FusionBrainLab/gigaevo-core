@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -12,6 +14,82 @@ from gigaevo.monitoring.run_spec import RunSpec
 from gigaevo.monitoring.snapshot import RunSnapshot
 
 _log = logger.bind(component="redis_queries")
+
+
+def _coerce_count(raw: Any) -> int:
+    """Best-effort coercion of a Redis INCR return (bytes/str/int) to int."""
+    if raw is None:
+        return 0
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, bytes):
+        try:
+            return int(raw.decode("ascii"))
+        except (UnicodeDecodeError, ValueError):
+            return 0
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return 0
+    return 0
+
+
+def count_events_in_window(
+    r: redis_lib.Redis,
+    prefix: str,
+    event_name: str,
+    window_minutes: int = 10,
+    now_minute: int | None = None,
+) -> int:
+    """Sum the last ``window_minutes`` of the minute-bucket counter.
+
+    Keys follow the ``{prefix}:events:{event_name}:{minute}`` schema written
+    by ``gigaevo.monitoring.emit``. Returns 0 on any Redis error — the
+    watchdog must never fail because the auxiliary counter table is down.
+    """
+    if window_minutes <= 0:
+        return 0
+    now = now_minute if now_minute is not None else int(time.time() // 60)
+    first = now - (window_minutes - 1)
+    keys = [f"{prefix}:events:{event_name}:{m}" for m in range(first, now + 1)]
+    try:
+        values = r.mget(keys)
+    except Exception:
+        return 0
+    return sum(_coerce_count(v) for v in values)
+
+
+def collect_event_window_counts(
+    r: redis_lib.Redis,
+    prefix: str,
+    event_names: Iterable[str],
+    window_minutes: int = 10,
+    now_minute: int | None = None,
+) -> dict[str, int]:
+    """Batch-read minute-bucket counts for multiple events in one MGET.
+
+    Given N events and W buckets, assembles all N*W keys in order and issues
+    a single ``MGET``, then slices the result per event. One round-trip
+    regardless of how many events are registered in ``CANONICAL_EVENTS``.
+    """
+    names = list(event_names)
+    if not names or window_minutes <= 0:
+        return {n: 0 for n in names}
+    now = now_minute if now_minute is not None else int(time.time() // 60)
+    first = now - (window_minutes - 1)
+    keys: list[str] = []
+    for name in names:
+        keys.extend(f"{prefix}:events:{name}:{m}" for m in range(first, now + 1))
+    try:
+        values = r.mget(keys)
+    except Exception:
+        return {n: 0 for n in names}
+    out: dict[str, int] = {}
+    for i, name in enumerate(names):
+        slab = values[i * window_minutes : (i + 1) * window_minutes]
+        out[name] = sum(_coerce_count(v) for v in slab)
+    return out
 
 
 def get_generation(r: redis_lib.Redis, prefix: str) -> int | None:
@@ -125,6 +203,7 @@ def collect_snapshot(
     run_spec: RunSpec,
     metric_names: list[str] | None = None,
     pid: int | None = None,
+    event_window_minutes: int = 10,
 ) -> RunSnapshot:
     """Collect a complete RunSnapshot from Redis for one run.
 
@@ -138,6 +217,9 @@ def collect_snapshot(
         run_spec: Parsed run specification.
         metric_names: Metric names to query. Defaults to ["fitness"].
         pid: Optional PID to check liveness for.
+        event_window_minutes: Size of the minute-bucket window used to
+            sum canonical-event counts. Set to 0 to skip the batch MGET
+            entirely — useful for tests or Redis-less contexts.
 
     Returns:
         RunSnapshot with all available data. On Redis errors,
@@ -156,6 +238,22 @@ def collect_snapshot(
         completion_reason = r.hget(
             f"{run_spec.prefix}:run_state", "engine:completion_reason"
         )
+
+        # Track B4: single MGET across all registered canonical events.
+        # ``None`` when disabled (window=0) or when the registry is empty,
+        # so AlertDetector's EVENT_RATE_ZERO predicate stays silent in
+        # those cases (matches backward-compat semantics).
+        event_window_counts: dict[str, int] | None = None
+        if event_window_minutes > 0:
+            from gigaevo.monitoring.events import CANONICAL_EVENTS
+
+            if CANONICAL_EVENTS:
+                event_window_counts = collect_event_window_counts(
+                    r,
+                    run_spec.prefix,
+                    list(CANONICAL_EVENTS.keys()),
+                    window_minutes=event_window_minutes,
+                )
 
         pid_alive = None
         if pid is not None:
@@ -184,6 +282,7 @@ def collect_snapshot(
             completed=completion_reason is not None,
             completion_reason=completion_reason,
             error=None,
+            event_window_counts=event_window_counts,
         )
     except Exception as exc:
         _log.error(f"Failed to collect snapshot for {run_spec}: {exc}")

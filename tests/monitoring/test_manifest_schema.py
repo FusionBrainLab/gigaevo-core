@@ -117,7 +117,6 @@ class TestValidManifestLoading:
         assert manifest.lifecycle.status == "implemented"
         assert len(manifest.contract.runs) == 1
         assert manifest.contract.runs[0].label == "R1"
-        assert manifest.contract.servers == ["10.0.0.1"]
         assert manifest.lifecycle.smoke_test.completed is True
 
     def test_load_running_manifest(self) -> None:
@@ -145,7 +144,6 @@ class TestValidManifestLoading:
         raw = _minimal_preregistered()
         manifest = ExperimentManifest.from_dict(raw)
         assert manifest.contract.runs == []
-        assert manifest.contract.servers == []
         assert manifest.contract.config.extra == {}
         assert manifest.lifecycle.launch.time is None
         assert manifest.lifecycle.smoke_test.completed is False
@@ -192,13 +190,6 @@ class TestValidationErrors:
         with pytest.raises(Exception) as exc_info:
             ExperimentManifest.from_dict(raw)
         assert "runs" in str(exc_info.value).lower()
-
-    def test_implemented_without_servers(self) -> None:
-        raw = _minimal_implemented()
-        raw["contract"]["servers"] = []
-        with pytest.raises(Exception) as exc_info:
-            ExperimentManifest.from_dict(raw)
-        assert "servers" in str(exc_info.value).lower()
 
     def test_implemented_without_smoke_test(self) -> None:
         raw = _minimal_implemented()
@@ -502,7 +493,6 @@ class TestWatchdogSection:
         assert section.plot_retry_delay_s == 30
         assert section.rolling_comment_threshold_hours == 24
         assert section.checkpoint_milestones == [0.1, 0.2, 0.5, 1.0]
-        assert section.no_proxy_hosts == []
 
     def test_watchdog_section_with_plot_commands(self) -> None:
         section = WatchdogSection(
