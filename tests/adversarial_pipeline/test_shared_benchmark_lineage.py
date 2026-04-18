@@ -10,7 +10,6 @@ import pytest
 from gigaevo.adversarial.dg_tracker import DGImprovementTracker
 from gigaevo.adversarial.shared_benchmark_lineage import (
     DGTrackerSharedOpponentResolver,
-    SharedBenchmarkLineageOutput,
     SharedBenchmarkLineageStage,
 )
 from gigaevo.programs.program import Program
@@ -58,9 +57,7 @@ def make_program(
 
 
 @pytest.mark.asyncio
-async def test_shared_benchmark_returns_intersection_of_faced_sets(
-    tracker, resolver
-):
+async def test_shared_benchmark_returns_intersection_of_faced_sets(tracker, resolver):
     """shared_benchmark returns g_ids both D's have faced."""
     # d1 faced {g1, g2, g3}
     # d2 faced {g2, g3, g4}
@@ -156,9 +153,7 @@ async def test_lineage_stage_returns_none_when_no_parent(resolver):
 
 
 @pytest.mark.asyncio
-async def test_lineage_stage_returns_none_when_insufficient_shared(
-    tracker, resolver
-):
+async def test_lineage_stage_returns_none_when_insufficient_shared(tracker, resolver):
     """SharedBenchmarkLineageStage returns None-trend when shared benchmark < min_shared."""
     # Only one shared g_id, but min_shared=2
     await tracker.record_batch(

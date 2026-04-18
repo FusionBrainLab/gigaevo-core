@@ -105,6 +105,10 @@ class OpponentArchiveProvider(ABC):
         """
         ...
 
+    async def close(self) -> None:
+        """Close all Redis connections."""
+        ...
+
 
 class RedisOpponentArchiveProvider(OpponentArchiveProvider):
     """Reads opponent programs from MAP-Elites archive(s) in Redis.
@@ -228,10 +232,13 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         # Redis HVALS iteration which is not guaranteed stable across
         # cache refreshes. F25 in FAILURE_MODES.md.
         if higher_is_better:
-            return sorted(
-                self._cache, key=lambda o: (-o.fitness, o.program_id)
-            )[:k]
+            return sorted(self._cache, key=lambda o: (-o.fitness, o.program_id))[:k]
         return sorted(self._cache, key=lambda o: (o.fitness, o.program_id))[:k]
+
+    async def close(self) -> None:
+        """Close all Redis connections."""
+        for client in self._redis_clients.values():
+            await client.close()
 
     async def _refresh_cache(self) -> None:
         """Read all opponent programs from all source archives."""
@@ -317,3 +324,126 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         """
         id_set = set(ids)
         return [o.code for o in self._cache if o.program_id in id_set]
+
+
+class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
+    """Top-K opponent selection with cell-stratification constraint.
+
+    When the archive has ≥ k populated cells, returns one elite per cell
+    (distinct cells). Otherwise falls back to plain top-K-by-fitness_key.
+    Fitness-key is passed in __init__ to support role-specific selection
+    (G samples D by mean_improvement; D samples G by quality).
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        db: int,
+        prefix: str,
+        fitness_key: str,
+        k: int = 3,
+        higher_is_better: bool = True,
+    ):
+        # Single-DB adapter for CellStratified (vs RedisOpponentArchiveProvider's multi-DB)
+        sources = [{"db": db, "prefix": prefix}]
+        super().__init__(
+            host=host,
+            port=port,
+            sources=sources,
+            island_id="fitness_island",
+            cache_ttl=30.0,
+        )
+        self._fitness_key = fitness_key
+        self._k = k
+        self._higher_is_better = higher_is_better
+        self._db = db
+        self._prefix = prefix
+
+    def _get_redis(self, db: int) -> aioredis.Redis:  # type: ignore[type-arg]
+        """Get Redis client, checking for test-injected _redis first."""
+        if hasattr(self, "_redis"):
+            return self._redis  # type: ignore[return-value]
+        return super()._get_redis(db)
+
+    async def get_top_k(
+        self, k: int, *, higher_is_better: bool = True
+    ) -> list[OpponentProgram]:
+        """Return up to k opponents, one elite per distinct BD cell.
+
+        Falls back to parent's get_top_k (plain fitness ranking) if archive
+        has fewer than k populated cells.
+
+        Args:
+            k: Number of opponents to return.
+            higher_is_better: Ignored; uses self._higher_is_better from __init__.
+
+        Returns:
+            List of up to k OpponentProgram, each from a distinct cell.
+        """
+        r = self._get_redis(self._db)
+        cells_key = f"{self._prefix}:archive:cells"
+
+        # List all cells
+        cell_strs = await r.smembers(cells_key)
+        if not cell_strs:
+            return []
+
+        # For each cell, fetch the elite (highest fitness in that cell)
+        cell_elites = []
+        for cell_str in cell_strs:
+            parts = cell_str.split(":")
+            if len(parts) != 2:
+                continue
+            try:
+                cell_x, cell_y = int(parts[0]), int(parts[1])
+            except ValueError:
+                continue
+
+            cell_key = f"{self._prefix}:archive:cell:{cell_x}:{cell_y}"
+            # Get the highest fitness program in this cell (ZSET, score = fitness)
+            if self._higher_is_better:
+                top_in_cell = await r.zrange(cell_key, -1, -1, withscores=True)
+            else:
+                top_in_cell = await r.zrange(cell_key, 0, 0, withscores=True)
+
+            if top_in_cell:
+                prog_id, fitness = top_in_cell[0]
+                cell_elites.append((float(fitness), prog_id, cell_str))
+
+        if not cell_elites:
+            return []
+
+        # Sort by fitness (descending if higher_is_better)
+        if self._higher_is_better:
+            cell_elites.sort(key=lambda x: (-x[0], x[1]))
+        else:
+            cell_elites.sort(key=lambda x: (x[0], x[1]))
+
+        # Pick one per cell, up to k
+        picked = []
+        seen_cells = set()
+        for fitness, prog_id, cell_str in cell_elites:
+            if cell_str in seen_cells or len(picked) >= k:
+                continue
+            prog_key = f"{self._prefix}:program:{prog_id}"
+            raw = await r.hget(prog_key, "code")
+            if raw:
+                picked.append(
+                    OpponentProgram(program_id=prog_id, code=raw, fitness=fitness)
+                )
+                seen_cells.add(cell_str)
+
+        # Sparse archive: if < k cells, fall back to parent's top-K
+        if len(picked) < k:
+            extra = await super().get_top_k(
+                k - len(picked), higher_is_better=self._higher_is_better
+            )
+            picked_ids = {p.program_id for p in picked}
+            for e in extra:
+                if e.program_id not in picked_ids:
+                    picked.append(e)
+                    if len(picked) >= k:
+                        break
+
+        return picked[:k]
