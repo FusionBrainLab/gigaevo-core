@@ -31,7 +31,7 @@ def discover_prefixes(
     help="Redis DB number(s) to inspect (repeat for multiple).",
 )
 @click.pass_context
-def inspect_cmd(ctx: click.Context, db: tuple[int, ...]) -> None:
+def inspect(ctx: click.Context, db: tuple[int, ...]) -> None:
     """Discover which experiment prefix(es) live in a Redis DB.
 
     Scans for instance-lock keys (`<prefix>:__instance_lock__`) and prints
