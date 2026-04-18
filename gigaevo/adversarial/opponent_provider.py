@@ -377,6 +377,9 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
         self._prefix = prefix
         # Populated by _refresh_cache: program_id -> cell_field (e.g. "7,5")
         self._cell_fields: dict[str, str] = {}
+        # Tracks the elite-id set returned by the previous get_top_k call, so
+        # HOF_ROTATE can fire on composition change. None = no prior fetch yet.
+        self._last_hof_elite_ids: frozenset[str] | None = None
 
     def _get_redis(self, db: int) -> aioredis.Redis:  # type: ignore[type-arg]
         """Get Redis client, checking for test-injected _redis first."""
@@ -541,5 +544,27 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
                 }
             ),
         )
+
+        # HOF_ROTATE: emit when the elite-id set differs from the previous
+        # non-empty fetch. Tracks composition change (not just size change),
+        # so a 1-for-1 swap still counts as a rotation.
+        new_elite_ids = frozenset(o.program_id for o in picked)
+        if new_elite_ids and new_elite_ids != self._last_hof_elite_ids:
+            old_size = (
+                0 if self._last_hof_elite_ids is None else len(self._last_hof_elite_ids)
+            )
+            logger.info(
+                "[HOF_ROTATE] {}",
+                json.dumps(
+                    {
+                        "event": "HOF_ROTATE",
+                        "label": f"db{self._db}:{self._prefix}",
+                        "old_hof_size": old_size,
+                        "new_hof_size": len(new_elite_ids),
+                        "fitness_key": self._fitness_key,
+                    }
+                ),
+            )
+            self._last_hof_elite_ids = new_elite_ids
 
         return picked

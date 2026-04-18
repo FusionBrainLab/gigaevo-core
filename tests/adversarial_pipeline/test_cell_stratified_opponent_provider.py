@@ -172,6 +172,91 @@ async def test_get_opponents_by_ids_parent_behavior(provider_with_archive):
     assert ids == ["p1", "p4"]
 
 
+# --------------------- HOF_ROTATE emission ---------------------
+
+
+@pytest.fixture
+def loguru_sink():
+    """Capture loguru messages into a list (loguru doesn't propagate to caplog)."""
+    from loguru import logger
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda m: messages.append(m), level="INFO")
+    yield messages
+    logger.remove(sink_id)
+
+
+@pytest.mark.asyncio
+async def test_hof_rotate_emits_on_initial_and_composition_change(
+    provider, loguru_sink
+):
+    """HOF_ROTATE fires when elite-id set changes between consecutive fetches.
+
+    Contract:
+      1. First non-empty fetch: old=0, new=k  → emit (initial rotation).
+      2. Same archive, second fetch: set unchanged → no new emit.
+      3. One cell's program swapped: set changed → emit.
+    """
+    seed = [("p1", 0.95, "0,0"), ("p2", 0.90, "0,1"), ("p3", 0.88, "1,0")]
+    for pid, q, cell in seed:
+        await provider._redis.hset(ARCHIVE_KEY, cell, pid)
+        await provider._redis.set(
+            f"{provider._prefix}:program:{pid}",
+            _program_json(pid, f"code_{pid}", {"quality": q}),
+        )
+
+    def _rotates_in(start_idx: int) -> list[dict]:
+        out = []
+        for msg in loguru_sink[start_idx:]:
+            if "[HOF_ROTATE]" in msg:
+                payload = json.loads(msg.split("[HOF_ROTATE]", 1)[1].strip())
+                out.append(payload)
+        return out
+
+    # First fetch — initial rotation from empty HoF.
+    mark = len(loguru_sink)
+    picked_1 = await provider.get_top_k(k=3)
+    assert [p.program_id for p in picked_1] == ["p1", "p2", "p3"]
+    rotates_1 = _rotates_in(mark)
+    assert len(rotates_1) == 1, (
+        f"expected 1 HOF_ROTATE on initial fetch, got {len(rotates_1)}"
+    )
+    assert rotates_1[0]["event"] == "HOF_ROTATE"
+    assert rotates_1[0]["old_hof_size"] == 0
+    assert rotates_1[0]["new_hof_size"] == 3
+
+    # Second fetch — unchanged archive, no rotation.
+    mark = len(loguru_sink)
+    picked_2 = await provider.get_top_k(k=3)
+    assert [p.program_id for p in picked_2] == ["p1", "p2", "p3"]
+    assert _rotates_in(mark) == [], "no rotation expected on stable archive"
+
+    # Swap cell 0,1 program p2 → q2 : composition change, same size.
+    await provider._redis.hset(ARCHIVE_KEY, "0,1", "q2")
+    await provider._redis.set(
+        f"{provider._prefix}:program:q2",
+        _program_json("q2", "code_q2", {"quality": 0.92}),
+    )
+
+    mark = len(loguru_sink)
+    picked_3 = await provider.get_top_k(k=3)
+    assert {p.program_id for p in picked_3} == {"p1", "q2", "p3"}
+    rotates_3 = _rotates_in(mark)
+    assert len(rotates_3) == 1, (
+        f"expected HOF_ROTATE on composition change (p2→q2), got {len(rotates_3)}"
+    )
+    assert rotates_3[0]["old_hof_size"] == 3
+    assert rotates_3[0]["new_hof_size"] == 3
+
+
+@pytest.mark.asyncio
+async def test_hof_rotate_suppressed_when_archive_empty(provider, loguru_sink):
+    """Empty archive → empty fetch → no HOF_ROTATE (there is nothing to rotate)."""
+    picked = await provider.get_top_k(k=3)
+    assert picked == []
+    assert not any("[HOF_ROTATE]" in m for m in loguru_sink)
+
+
 # --------------------- Integration harness ---------------------
 
 
