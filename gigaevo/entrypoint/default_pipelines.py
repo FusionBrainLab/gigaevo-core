@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from loguru import logger
 import yaml
 
 from gigaevo.entrypoint.constants import (
@@ -142,15 +141,6 @@ class PipelineBuilder:
 
     # Build the pipeline blueprint
     def build_blueprint(self) -> DAGBlueprint:
-        stage_names = sorted(self._nodes.keys())
-        logger.info(
-            "[PipelineBuilder] Building DAG blueprint: {} stages, "
-            "{} data flow edges, dag_timeout={}s",
-            len(self._nodes),
-            len(self._data_flow_edges),
-            self._dag_timeout,
-        )
-        logger.info("[PipelineBuilder] Stages: {}", ", ".join(stage_names))
         return DAGBlueprint(
             nodes=self._nodes,
             data_flow_edges=self._data_flow_edges,
