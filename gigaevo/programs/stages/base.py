@@ -238,7 +238,6 @@ class Stage:
     async def execute(self, program: Program) -> ProgramStageResult:
         started_at = datetime.now(UTC)
         t0 = time.monotonic()
-        logger.info("[{}] Executing for {}", self.stage_name, program.id[:8])
         _stage_exec_emitted = False
 
         def _emit_stage_exec() -> None:
@@ -289,11 +288,6 @@ class Stage:
                 result = self.get_cache_handler().on_complete(
                     result, self._current_inputs_hash
                 )
-                logger.debug(
-                    "[{stage}] ok (pass-through) in {dur:.2f}s",
-                    stage=self.stage_name,
-                    dur=(time.monotonic() - t0),
-                )
                 return result
 
             # None → only legal for VoidOutput stages
@@ -302,11 +296,6 @@ class Stage:
                     ok = ProgramStageResult.success(started_at=started_at)
                     ok = self.get_cache_handler().on_complete(
                         ok, self._current_inputs_hash
-                    )
-                    logger.debug(
-                        "[{stage}] ok (void) in {dur:.2f}s",
-                        stage=self.stage_name,
-                        dur=(time.monotonic() - t0),
                     )
                     return ok
                 raise TypeError(
@@ -322,11 +311,6 @@ class Stage:
 
             ok = ProgramStageResult.success(output=result, started_at=started_at)
             ok = self.get_cache_handler().on_complete(ok, self._current_inputs_hash)
-            logger.debug(
-                "[{stage}] ok in {dur:.2f}s",
-                stage=self.stage_name,
-                dur=(time.monotonic() - t0),
-            )
             return ok
 
         except Exception as exc:

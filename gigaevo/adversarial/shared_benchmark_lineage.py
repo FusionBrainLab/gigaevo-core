@@ -195,15 +195,6 @@ class SharedBenchmarkLineageStage(Stage):
         parent_mean = sum(p for _, p in pairs) / len(pairs)
         trend = child_mean - parent_mean
 
-        logger.info(
-            "[SharedBenchmarkLineageStage] {} trend={:.6f} (n_shared={} "
-            "child_mean={:.6f} parent_mean={:.6f})",
-            program.id[:8],
-            trend,
-            len(shared),
-            child_mean,
-            parent_mean,
-        )
         self._emit_lineage_event(program.id, d_id, parent_d_id, trend, len(shared))
         self._write_metrics(program, trend, len(shared))
         return SharedBenchmarkLineageOutput(trend=trend, n_shared=len(shared))

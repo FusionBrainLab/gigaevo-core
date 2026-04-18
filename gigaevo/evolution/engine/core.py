@@ -218,7 +218,6 @@ class EvolutionEngine:
     async def step(self) -> None:
         """One generation step (idle → mutate → idle → ingest → refresh → idle)."""
         gen = self.metrics.total_generations
-        logger.info("[EvolutionEngine] ──────────── Generation {} ────────────", gen)
         step_t0 = time.monotonic()
 
         if self._pre_step_hook:

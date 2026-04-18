@@ -24,9 +24,10 @@ Emission seams (each event has exactly one):
 
 from __future__ import annotations
 
+import math
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 CANONICAL_EVENTS: dict[str, type[BaseEvent]] = {}
 
@@ -142,3 +143,12 @@ class LineageTrend(BaseEvent):
     program_id: str
     gen: int | None = None
     trend: float | None = None
+
+    @field_validator("trend")
+    @classmethod
+    def _trend_must_be_finite(cls, v: float | None) -> float | None:
+        if v is None:
+            return v
+        if math.isnan(v) or math.isinf(v):
+            raise ValueError(f"trend must be finite, got {v!r}")
+        return v
