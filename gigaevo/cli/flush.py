@@ -91,9 +91,20 @@ def flush(
     no_kill_workers: bool,
     kill_only: bool,
 ) -> None:
-    """Kill workers and flush Redis databases.
+    """Kill stale workers and flush Redis databases.
 
-    Dry-run by default -- pass --confirm to execute.
+    DESTRUCTIVE — dry-run by default. Pass `--confirm` to actually execute.
+
+    For each target DB, the command kills any `run.py` writer processes,
+    then any `exec_runner.py` worker processes (matched by parent PID or
+    orphaned), then calls `FLUSHDB` on each Redis DB. Warns for 5 s
+    before flushing a non-empty DB so you can abort with Ctrl+C if you
+    forgot to archive.
+
+    DBs are bounded to 0-15 (per Redis default) and may be passed as
+    `--db 1 2 3`, `--db 1,2,3`, or `--db 1 --db 2 --db 3`. Use
+    `--kill-only` to stop workers without flushing, or
+    `--no-kill-workers` to flush without touching processes.
     """
     redis_host = ctx.obj["redis_host"]
     redis_port = ctx.obj["redis_port"]

@@ -142,7 +142,18 @@ def _build_columns(rows: list[dict]) -> list[str]:
 )
 @click.pass_context
 def status(ctx: click.Context, format_name: str | None) -> None:
-    """Show current run status from Redis."""
+    """Show current run status from Redis.
+
+    Displays generation, all metrics (formatted per `problems/<name>/metrics.yaml`
+    specs), recent invalidity rate, validator timing, key count, and PID
+    liveness for every resolved run.
+
+    Metrics are auto-discovered: in `-e/--experiment` mode, each run's
+    metric specs are loaded from `problems/<problem_name>/metrics.yaml`
+    and used to format values (percentages when `upper_bound: 1.0`, custom
+    `decimals`, `N/A` for `sentinel_value`). No `--metric` flag — all
+    metrics present in the manifest are shown.
+    """
     formatter: OutputFormatter = ctx.obj["formatter"]
     if format_name is not None:
         formatter = OutputFormatter(format_name=format_name)

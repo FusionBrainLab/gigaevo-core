@@ -81,7 +81,17 @@ def trajectory(
     metric: tuple[str, ...],
     format_name: str | None,
 ) -> None:
-    """Show gen-by-gen fitness trajectory."""
+    """Show gen-by-gen metric trajectory (running best + per-gen mean).
+
+    Reads `valid_frontier_<metric>` (running best, fitness-only monotone)
+    and `valid_gen_<metric>_mean` histories from Redis. Values are plain
+    (unsmoothed); use `gigaevo plot trajectory` for smoothed plots.
+
+    Metric selection: if `--metric` is omitted, metrics are auto-discovered
+    from the resolved runs' `metric_names` (populated from
+    `experiment.yaml`'s manifest in `-e/--experiment` mode, falling back
+    to `["fitness"]`). Pass `--metric` one or more times to override.
+    """
     formatter = ctx.obj["formatter"]
     if format_name is not None:
         formatter = OutputFormatter(format_name=format_name)

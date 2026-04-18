@@ -43,7 +43,16 @@ def watchdog(
     max_restarts: int,
     plugin_name: str | None,
 ) -> None:
-    """Start or manage the experiment watchdog."""
+    """Start the WatchdogEngine for a running experiment.
+
+    Reads plot metrics, plot commands, and poll cadence from
+    `experiment.yaml`'s `control_plane.watchdog` section. Plugin is
+    auto-detected from the manifest (adversarial / solo / prompt_coevo)
+    unless `--plugin` forces a specific one.
+
+    Sources `.env` to pick up Telegram credentials and `HTTPS_PROXY`
+    without relying on the caller having pre-sourced the shell env.
+    """
     experiment = ctx.obj.get("experiment")
     if not experiment:
         click.echo("Error: Watchdog requires --experiment flag.", err=True)

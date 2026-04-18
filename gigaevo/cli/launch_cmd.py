@@ -23,7 +23,23 @@ from gigaevo.experiment.launch import _generate_launch_script, run_launch
 def launch(
     ctx: click.Context, dry_run: bool, skip_preflight: bool, generate_script: bool
 ) -> None:
-    """Launch an implemented experiment: preflight, exec, set running, spawn watchdog."""
+    """Launch an implemented experiment end-to-end.
+
+    Default flow: run preflight (LLM endpoints, DB claims, pin checks) →
+    generate `launch.sh` → exec all runs via `nohup` → set status to
+    `running` → spawn watchdog.
+
+    Flags select a partial flow:
+      --dry-run          Preflight + DB claim only; do not exec. Writes
+                         LAUNCH_PREVIEW.md so the researcher can verify
+                         resolved config.
+      --skip-preflight   Assume preflight already passed (for re-launches
+                         after fixing a transient issue).
+      --generate-script  Write `experiments/<exp>/launch.sh` and exit.
+                         No preflight, no DB claim, no exec. Useful when
+                         you want to inspect / hand-edit / re-run `bash
+                         launch.sh` manually.
+    """
     experiment = ctx.obj.get("experiment")
     if not experiment:
         click.echo("Error: launch requires --experiment / -e flag.", err=True)
