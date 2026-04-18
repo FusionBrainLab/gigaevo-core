@@ -25,9 +25,21 @@ from typing import Any
 
 from omegaconf import OmegaConf
 
+from gigaevo.config.resolvers import register_resolvers
 from gigaevo.experiment import manifest as _manifest_mod
 from gigaevo.experiment.launch_generator import _build_run_cmd
 from gigaevo.experiment.manifest import experiment_dir, load_manifest
+
+# Register project resolvers (eval/get_object/merge/len/ref) so that
+# OmegaConf.to_container(..., resolve=True) can resolve ${get_object:...}
+# interpolations present in resolved --cfg job output. Safe to call repeatedly:
+# OmegaConf.register_new_resolver is idempotent when replace=False is omitted
+# (it no-ops on re-registration of the same name).
+try:
+    register_resolvers()
+except ValueError:
+    # Resolvers already registered in this process — fine.
+    pass
 
 PYTHON_PATH_DEFAULT = "python3"
 
