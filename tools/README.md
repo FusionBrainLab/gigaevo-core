@@ -117,7 +117,7 @@ gigaevo -e hover/my-exp manifest get control_plane.watchdog_pid
 gigaevo -e hover/my-exp manifest get runs --format json
 
 # Write fields
-gigaevo -e hover/my-exp manifest set status running           # uses status gate validator
+gigaevo -e hover/my-exp manifest update status running        # state-machine validated
 gigaevo -e hover/my-exp manifest update control_plane.watchdog_pid 12345
 
 # Gate checks (exit non-zero if gate not satisfied)
@@ -601,8 +601,8 @@ All subcommands require `-e/--experiment TASK/NAME`.
 | `get FIELD` | Read scalar field or dotted path | `gigaevo -e hover/foo manifest get status` |
 | `get runs` | Pretty-print runs table | `gigaevo -e hover/foo manifest get runs` |
 | `get <dotted.path>` | Traverse nested YAML | `gigaevo -e hover/foo manifest get control_plane.watchdog_pid` |
-| `set status VALUE` | Write via state machine | `gigaevo -e hover/foo manifest set status running` |
-| `update PATH VALUE` | Write any field (auto-coerces int/float/bool/null) | `gigaevo -e hover/foo manifest update control_plane.watchdog_pid 12345` |
+| `update status VALUE` | State-machine-validated status transition | `gigaevo -e hover/foo manifest update status running` |
+| `update PATH VALUE` | Write any other field (auto-coerces int/float/bool/null) | `gigaevo -e hover/foo manifest update control_plane.watchdog_pid 12345` |
 | `gate STATUS` | Assert status; exit 0 on match, 1 on mismatch | `gigaevo -e hover/foo manifest gate implemented` |
 | `pr-description [--push]` | Render Markdown PR body; optionally push via `gh` | `gigaevo -e hover/foo manifest pr-description --push` |
 | `record-pids --pids-file F --labels "A B C"` | Write launched PIDs into `runs[].pid` | Called by generated `launch.sh` |

@@ -70,8 +70,8 @@ gigaevo -e hover/foo manifest get runs --format json
 # Update launch time
 gigaevo -e hover/foo manifest update lifecycle.launch.time "2026-04-14T10:00:00Z"
 
-# Transition status with validation
-gigaevo -e hover/foo manifest set status running
+# Transition status with state-machine validation
+gigaevo -e hover/foo manifest update status running
 ```
 
 **Key behaviors**:
@@ -329,7 +329,7 @@ gigaevo -e hover/foo trajectory -r "prefix@5"
 ### Flush and restart
 ```bash
 gigaevo flush --db 5 6 7 --confirm  # Kill workers + flush 3 DBs
-gigaevo -e hover/foo manifest set status implemented  # Reset
+gigaevo -e hover/foo manifest update status implemented  # Reset
 /experiment-restart hover/foo  # Launch again with current code
 ```
 
@@ -350,7 +350,7 @@ Skills invoke CLI commands for atomic operations:
 # In /experiment-launch skill:
 gigaevo -e "$EXP" manifest gate implemented    # Hard gate
 gigaevo -e "$EXP" manifest get runs            # Discover run specs
-gigaevo -e "$EXP" manifest set status running  # State transition
+gigaevo -e "$EXP" manifest update status running  # State transition
 
 # In /experiment-checkpoint skill:
 gigaevo -e "$EXP" checkpoint --note "frontier improved"

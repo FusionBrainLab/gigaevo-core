@@ -8,7 +8,7 @@ Usage examples::
     gigaevo -e hover/foo manifest get status
     gigaevo -e hover/foo manifest get runs
     gigaevo -e hover/foo manifest get control_plane.watchdog_pid
-    gigaevo -e hover/foo manifest set status running
+    gigaevo -e hover/foo manifest update status running        # state-machine validated
     gigaevo -e hover/foo manifest update control_plane.watchdog_pid 12345
     gigaevo -e hover/foo manifest gate implemented
     gigaevo -e hover/foo manifest pr-description --push
@@ -198,37 +198,6 @@ def get(ctx: click.Context, field: str, format_name: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# set
-# ---------------------------------------------------------------------------
-
-
-@manifest.command("set")
-@click.argument("field")
-@click.argument("value")
-@click.pass_context
-def set_field(ctx: click.Context, field: str, value: str) -> None:
-    """Write a top-level field. Currently only supports 'status'.
-
-    For arbitrary fields, use 'manifest update' instead.
-    """
-    experiment = _require_experiment(ctx)
-
-    if field != "status":
-        click.echo(
-            f"Error: 'set' only supports 'status'. "
-            f"Use 'manifest update {field} {value}' for arbitrary fields.",
-            err=True,
-        )
-        ctx.exit(1)
-        return
-
-    from gigaevo.experiment.manifest import set_status
-
-    updated = set_status(experiment, value)
-    click.echo(f"Status updated: {updated.lifecycle.status}")
-
-
-# ---------------------------------------------------------------------------
 # update
 # ---------------------------------------------------------------------------
 
@@ -238,14 +207,43 @@ def set_field(ctx: click.Context, field: str, value: str) -> None:
 @click.argument("value")
 @click.pass_context
 def update(ctx: click.Context, path: str, value: str) -> None:
-    """Write any field by dotted path (e.g. control_plane.watchdog_pid 12345).
+    """Write any field by dotted path.
 
     Auto-converts values: integers, floats, booleans (true/false),
     null/None, or keeps as string.
+
+    \b
+    Special case: status
+    --------------------
+    When `path` is `status`, the write routes through the lifecycle
+    state machine (`preregistered → implemented → running → complete`)
+    and rejects invalid transitions. For every other path, the raw YAML
+    is updated in place (Pydantic schema validation still runs).
+
+    \b
+    Examples
+    --------
+      gigaevo -e hover/foo manifest update status running
+      gigaevo -e hover/foo manifest update control_plane.watchdog_pid 12345
+      gigaevo -e hover/foo manifest update lifecycle.launch.time 2026-01-01T00:00:00Z
     """
     experiment = _require_experiment(ctx)
 
     coerced = _coerce_value(value)
+
+    if path == "status":
+        # Route status transitions through the state machine so invalid
+        # transitions (e.g. preregistered → running) are blocked.
+        from gigaevo.experiment.manifest import set_status
+
+        try:
+            updated = set_status(experiment, str(coerced))
+        except ValueError as exc:
+            click.echo(f"Error: {exc}", err=True)
+            ctx.exit(1)
+            return
+        click.echo(f"Updated status = {updated.lifecycle.status!r}")
+        return
 
     from gigaevo.experiment.manifest import update_manifest
 
