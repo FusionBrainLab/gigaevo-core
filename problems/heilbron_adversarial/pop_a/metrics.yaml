@@ -1,12 +1,12 @@
 specs:
   fitness:
-    description: "Normalized min_area in [0, 1]: min(min_area / 0.0365, 1.0). BD x-axis and selection key."
+    description: "Resistance against current D HoF (intra-cell tiebreak only)"
     decimals: 5
-    is_primary: true
+    is_primary: false
     higher_is_better: true
     lower_bound: 0.0
     upper_bound: 1.0
-    include_in_prompts: true
+    include_in_prompts: false
     significant_change: 0.01
     sentinel_value: -1000.0
   is_valid:
@@ -20,9 +20,9 @@ specs:
     significant_change: 1.0
     sentinel_value: 0
   actual_fitness:
-    description: "Raw min_area of the constructor output (true Heilbron objective, for paper reporting)"
+    description: "Raw min_area of the constructor output (Heilbron objective, paper reporting scalar; BD x-axis; elite/migrant selection key)."
     decimals: 5
-    is_primary: false
+    is_primary: true
     higher_is_better: true
     lower_bound: 0.0
     upper_bound: 0.0365
@@ -60,12 +60,12 @@ specs:
     significant_change: 1.0
     sentinel_value: -1000.0
   wins:
-    description: "Career count of distinct D improvers this G has resisted (delta <= 0). BD y-axis."
+    description: "Distinct D improvers resisted (intra-cell tiebreak only)"
     decimals: 0
     is_primary: false
     higher_is_better: true
     lower_bound: 0.0
-    upper_bound: 150.0
-    include_in_prompts: true
+    upper_bound: 250.0
+    include_in_prompts: false
     significant_change: 1.0
     sentinel_value: -1.0
