@@ -56,6 +56,11 @@ class HofFetch(BaseEvent):
     n_elites: int = Field(ge=0)
     fitness_key: str
     gen: int | None = None
+    # Diagnostics (optional): how many were requested, and how many distinct
+    # cells ended up populated. Useful when n_elites < k_requested tells us
+    # the archive is under-populated.
+    k_requested: int | None = None
+    cells_populated: int | None = None
 
 
 class HofRotate(BaseEvent):
@@ -68,6 +73,8 @@ class HofRotate(BaseEvent):
     old_hof_size: int = Field(ge=0)
     new_hof_size: int = Field(ge=0)
     gen: int | None = None
+    # Optional diagnostics
+    fitness_key: str | None = None
 
 
 class CellPick(BaseEvent):

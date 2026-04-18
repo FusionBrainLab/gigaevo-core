@@ -18,7 +18,6 @@ written. This matches the invalidation pattern used by ``LineageStage`` /
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-import json
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -129,14 +128,12 @@ class SharedBenchmarkLineageStage(Stage):
         trend: float | None,
         n_shared: int,
     ) -> None:
-        payload = emit_lineage_trend(
-            program_id=program_id,
-            d_id=d_id,
-            parent_d_id=parent_d_id,
-            trend=trend,
-            n_shared=n_shared,
-        )
-        logger.info("[LINEAGE_TREND] {}", json.dumps(payload))
+        # d_id / parent_d_id / n_shared are no longer in the canonical schema
+        # (the registry schema is program_id, gen, trend). They remain as
+        # function args for call-site ergonomics and potential future debug
+        # logging, but are not part of the canonical event payload.
+        del d_id, parent_d_id, n_shared
+        emit_lineage_trend(program_id=program_id, trend=trend)
 
     def _write_metrics(
         self, program: Program, trend: float | None, n_shared: int | None

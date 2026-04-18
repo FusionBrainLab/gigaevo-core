@@ -17,6 +17,8 @@ from typing import (
 from loguru import logger
 from pydantic import ValidationError as PydanticValidationError
 
+from gigaevo.monitoring.emit import emit as _emit_event
+from gigaevo.monitoring.events import StageExec
 from gigaevo.programs.core_types import (
     FINAL_STATES,
     ProgramStageResult,
@@ -27,6 +29,8 @@ from gigaevo.programs.core_types import (
 from gigaevo.programs.stages.cache_handler import (
     DEFAULT_CACHE,
     CacheHandler,
+    InputHashCache,
+    NeverCached,
 )
 
 if TYPE_CHECKING:
@@ -235,6 +239,38 @@ class Stage:
         started_at = datetime.now(UTC)
         t0 = time.monotonic()
         logger.info("[{}] Executing for {}", self.stage_name, program.id[:8])
+        _stage_exec_emitted = False
+
+        def _emit_stage_exec() -> None:
+            """Emit exactly one STAGE_EXEC event for this execution."""
+            nonlocal _stage_exec_emitted
+            if _stage_exec_emitted:
+                return
+            _stage_exec_emitted = True
+            handler = self.get_cache_handler()
+            if isinstance(handler, NeverCached):
+                decision = "no_cache"
+            elif isinstance(handler, InputHashCache):
+                # Execute() only runs when should_rerun returned True —
+                # for InputHashCache that means stored_hash was None/changed.
+                decision = "miss"
+            else:
+                decision = "miss"
+            try:
+                _emit_event(
+                    StageExec(
+                        stage=self.stage_name,
+                        program_id=program.id,
+                        decision=decision,
+                        cache_key_hash=self._current_inputs_hash,
+                        upstream_changed=False,
+                        duration_ms=(time.monotonic() - t0) * 1000.0,
+                    )
+                )
+            except Exception:  # pragma: no cover — never fail the stage on logging
+                logger.opt(exception=True).debug(
+                    "[{}] STAGE_EXEC emission failed", self.stage_name
+                )
 
         try:
             # Compute inputs hash before execution (for cache handler)
@@ -321,6 +357,7 @@ class Stage:
                 fail_result, self._current_inputs_hash
             )
         finally:
+            _emit_stage_exec()
             self._raw_inputs.clear()
             self._params_obj = None
             self._current_inputs_hash = None

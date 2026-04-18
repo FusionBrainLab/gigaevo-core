@@ -13,10 +13,11 @@ Only positive deltas (D actually improved G) are stored.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 
 from loguru import logger
 from redis import asyncio as aioredis
+
+from gigaevo.adversarial.structured_logging import emit_tracker_write
 
 
 @dataclass
@@ -200,16 +201,14 @@ class DGImprovementTracker:
 
         await pipe.execute()
 
-        payload = {
-            "event": "TRACKER_WRITE",
-            "gen": gen,
-            "pairs_count": len(pairs),
-            "positive_count": positive_count,
-            "d_wins_added": sum(len(v) for v in d_wins.values()),
-            "g_resisted_added": sum(len(v) for v in g_resisted.values()),
-            "d_faced_added": sum(len(v) for v in d_deltas.values()),
-        }
-        logger.info("[TRACKER_WRITE] {}", json.dumps(payload))
+        emit_tracker_write(
+            pairs_count=len(pairs),
+            positive_count=positive_count,
+            d_wins_added=sum(len(v) for v in d_wins.values()),
+            g_resisted_added=sum(len(v) for v in g_resisted.values()),
+            d_faced_added=sum(len(v) for v in d_deltas.values()),
+            gen=gen,
+        )
         return positive_count
 
     async def count_g_beaten_by_d(self, d_id: str) -> int:

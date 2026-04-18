@@ -25,6 +25,8 @@ from gigaevo.evolution.mutation.mutation_operator import (
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
+from gigaevo.monitoring.emit import emit as _emit_event
+from gigaevo.monitoring.events import GenerationBoundary
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
@@ -278,6 +280,12 @@ class EvolutionEngine:
                 logger.error("[EvolutionEngine] post_step_hook failed: {}", e)
 
         self.metrics.total_generations += 1
+        try:
+            _emit_event(GenerationBoundary(gen=self.metrics.total_generations))
+        except Exception:  # pragma: no cover — never fail the engine on logging
+            logger.opt(exception=True).debug(
+                "[EvolutionEngine] GENERATION_BOUNDARY emission failed"
+            )
         await self.storage.save_run_state(
             _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
         )

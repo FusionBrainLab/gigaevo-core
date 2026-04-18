@@ -75,5 +75,12 @@ def setup_logger(
         diagnose=True,
     )
 
+    # Install the EXCEPTION canonical-event sink — emits one [EXCEPTION]
+    # line for every logger.exception(...). The sink guards against
+    # recursion via record["extra"]["canonical_event"].
+    from gigaevo.monitoring.exception_sink import install_exception_sink
+
+    install_exception_sink()
+
     logger.info(f"Logging to console and file: {log_file}")
     return log_file

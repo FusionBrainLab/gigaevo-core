@@ -14,11 +14,9 @@ program object directly, but the authoritative path for ``wins`` to reach
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
-
+from gigaevo.adversarial.structured_logging import emit_metric_emit
 from gigaevo.programs.core_types import VoidInput
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
@@ -53,18 +51,7 @@ class ComputeDWinsCountStage(Stage):
     async def compute(self, program: Program) -> FloatDictContainer:
         count = await self._tracker.count_g_beaten_by_d(program.id)
         program.metrics["wins"] = count
-        logger.info(
-            "[METRIC_EMIT] {}",
-            json.dumps(
-                {
-                    "event": "METRIC_EMIT",
-                    "program_id": program.id,
-                    "metric_name": "wins",
-                    "metric_value": int(count),
-                    "source": "ComputeDWinsCountStage",
-                }
-            ),
-        )
+        emit_metric_emit(program_id=program.id, metric="wins", value=int(count))
         return FloatDictContainer(data={"wins": float(count)})
 
 
@@ -92,16 +79,5 @@ class ComputeGResistedCountStage(Stage):
     async def compute(self, program: Program) -> FloatDictContainer:
         count = await self._tracker.count_d_resisted_by_g(program.id)
         program.metrics["wins"] = count
-        logger.info(
-            "[METRIC_EMIT] {}",
-            json.dumps(
-                {
-                    "event": "METRIC_EMIT",
-                    "program_id": program.id,
-                    "metric_name": "wins",
-                    "metric_value": int(count),
-                    "source": "ComputeGResistedCountStage",
-                }
-            ),
-        )
+        emit_metric_emit(program_id=program.id, metric="wins", value=int(count))
         return FloatDictContainer(data={"wins": float(count)})

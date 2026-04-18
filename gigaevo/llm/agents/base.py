@@ -6,6 +6,7 @@ state schema using TypedDict.
 """
 
 from abc import ABC, abstractmethod
+import time
 from typing import Any
 
 from langchain_core.runnables import Runnable
@@ -15,6 +16,8 @@ from langgraph.graph.state import CompiledStateGraph
 from loguru import logger
 
 from gigaevo.llm.models import MultiModelRouter, get_selected_model
+from gigaevo.monitoring.emit import emit as _emit_event
+from gigaevo.monitoring.events import LLMCall
 
 
 class LangGraphAgent(ABC):
@@ -80,7 +83,8 @@ class LangGraphAgent(ABC):
         """Generic async LLM call.
 
         Invokes the LLM with messages from state and stores response.
-        Also tracks which model was used for debugging.
+        Also tracks which model was used for debugging. Emits a single
+        LLM_CALL canonical event on every invocation (success or failure).
 
         Args:
             state: State with messages field
@@ -88,19 +92,47 @@ class LangGraphAgent(ABC):
         Returns:
             Updated state with llm_response field
         """
-        response = await self.llm.ainvoke(state["messages"])
-        state["llm_response"] = response
+        t0 = time.monotonic()
+        error_type: str | None = None
+        ok = False
+        try:
+            response = await self.llm.ainvoke(state["messages"])
+            state["llm_response"] = response
+            ok = True
 
-        # Track metadata
-        if "metadata" not in state:
-            state["metadata"] = {}
-        model_used = get_selected_model()
-        if model_used is None and hasattr(self.llm, "model_name"):
-            model_used = getattr(self.llm, "model_name")
-        if model_used:
-            state["metadata"]["model_used"] = model_used
+            # Track metadata
+            if "metadata" not in state:
+                state["metadata"] = {}
+            model_used = get_selected_model()
+            if model_used is None and hasattr(self.llm, "model_name"):
+                model_used = getattr(self.llm, "model_name")
+            if model_used:
+                state["metadata"]["model_used"] = model_used
 
-        return state
+            return state
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            try:
+                model = getattr(self.llm, "model_name", None) or (
+                    get_selected_model() or "unknown"
+                )
+                _emit_event(
+                    LLMCall(
+                        stage=self.__class__.__name__,
+                        endpoint="",
+                        model=str(model),
+                        attempt=1,
+                        ok=ok,
+                        latency_ms=(time.monotonic() - t0) * 1000.0,
+                        error_type=error_type,
+                    )
+                )
+            except Exception:  # pragma: no cover — never fail the call on logging
+                logger.opt(exception=True).debug(
+                    "[{}] LLM_CALL emission failed", self.__class__.__name__
+                )
 
     @abstractmethod
     def parse_response(self, state: Any) -> Any:

@@ -17,6 +17,11 @@ import numpy as np
 from redis import asyncio as aioredis  # noqa: I001
 from scipy.special import softmax
 
+from gigaevo.adversarial.structured_logging import (
+    emit_cell_pick,
+    emit_hof_fetch,
+    emit_hof_rotate,
+)
 from gigaevo.evolution.strategies.utils import weighted_sample_without_replacement
 
 
@@ -484,18 +489,12 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
         effective_higher = self._higher_is_better and higher_is_better
 
         if not self._cache:
-            logger.info(
-                "[HOF_FETCH] {}",
-                json.dumps(
-                    {
-                        "event": "HOF_FETCH",
-                        "label": f"db{self._db}:{self._prefix}",
-                        "n_elites": 0,
-                        "fitness_key": self._fitness_key,
-                        "k_requested": int(k),
-                        "cells_populated": 0,
-                    }
-                ),
+            emit_hof_fetch(
+                label=f"db{self._db}:{self._prefix}",
+                n_elites=0,
+                fitness_key=self._fitness_key,
+                k_requested=int(k),
+                cells_populated=0,
             )
             return []
 
@@ -516,33 +515,22 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
                 continue
             picked.append(op)
             seen_cells.add(cell_field)
-            logger.info(
-                "[CELL_PICK] {}",
-                json.dumps(
-                    {
-                        "event": "CELL_PICK",
-                        "cell_id": cell_field,
-                        "program_id": op.program_id,
-                        "fitness_key": self._fitness_key,
-                        "fitness_value": float(op.fitness),
-                    }
-                ),
+            emit_cell_pick(
+                label=f"db{self._db}:{self._prefix}",
+                cell_id=cell_field,
+                program_id=op.program_id,
+                fitness_key=self._fitness_key,
+                fitness_value=float(op.fitness),
             )
             if len(picked) >= k:
                 break
 
-        logger.info(
-            "[HOF_FETCH] {}",
-            json.dumps(
-                {
-                    "event": "HOF_FETCH",
-                    "label": f"db{self._db}:{self._prefix}",
-                    "n_elites": len(picked),
-                    "fitness_key": self._fitness_key,
-                    "k_requested": int(k),
-                    "cells_populated": len(seen_cells),
-                }
-            ),
+        emit_hof_fetch(
+            label=f"db{self._db}:{self._prefix}",
+            n_elites=len(picked),
+            fitness_key=self._fitness_key,
+            k_requested=int(k),
+            cells_populated=len(seen_cells),
         )
 
         # HOF_ROTATE: emit when the elite-id set differs from the previous
@@ -553,17 +541,11 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
             old_size = (
                 0 if self._last_hof_elite_ids is None else len(self._last_hof_elite_ids)
             )
-            logger.info(
-                "[HOF_ROTATE] {}",
-                json.dumps(
-                    {
-                        "event": "HOF_ROTATE",
-                        "label": f"db{self._db}:{self._prefix}",
-                        "old_hof_size": old_size,
-                        "new_hof_size": len(new_elite_ids),
-                        "fitness_key": self._fitness_key,
-                    }
-                ),
+            emit_hof_rotate(
+                label=f"db{self._db}:{self._prefix}",
+                old_hof_size=old_size,
+                new_hof_size=len(new_elite_ids),
+                fitness_key=self._fitness_key,
             )
             self._last_hof_elite_ids = new_elite_ids
 

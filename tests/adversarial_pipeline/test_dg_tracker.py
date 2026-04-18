@@ -296,40 +296,37 @@ async def test_record_batch_ttl_refreshed_on_new_keys(tracker):
 
 
 @pytest.mark.asyncio
-async def test_record_batch_emits_tracker_write_log(monkeypatch, tracker):
-    """record_batch emits [TRACKER_WRITE] structured JSON log for post-hoc audit (§13)."""
-    import gigaevo.adversarial.dg_tracker as mod
+async def test_record_batch_emits_tracker_write_log(tracker):
+    """record_batch emits [TRACKER_WRITE] canonical event via emit() seam."""
+    import json
+    import re
+
+    from loguru import logger
 
     captured: list[str] = []
 
-    def fake_info(msg, *args, **kwargs):
-        # Mirror loguru's {}-positional substitution so we see the rendered payload.
-        if "{}" in msg and args:
-            try:
-                captured.append(msg.format(*args))
-                return
-            except Exception:
-                pass
-        captured.append(msg)
+    def sink(message):
+        captured.append(str(message))
 
-    monkeypatch.setattr(mod.logger, "info", fake_info)
-
-    await tracker.record_batch(
-        [
-            ("d1", "g1", 0.05),
-            ("d1", "g2", -0.01),
-            ("d2", "g1", 0.03),
-        ],
-        gen=7,
-    )
+    sink_id = logger.add(sink, level="DEBUG", format="{message}")
+    try:
+        await tracker.record_batch(
+            [
+                ("d1", "g1", 0.05),
+                ("d1", "g2", -0.01),
+                ("d2", "g1", 0.03),
+            ],
+            gen=7,
+        )
+    finally:
+        logger.remove(sink_id)
 
     tracker_write_lines = [line for line in captured if "[TRACKER_WRITE]" in line]
     assert len(tracker_write_lines) >= 1
 
-    import json
-
-    payload_str = tracker_write_lines[0].split("[TRACKER_WRITE] ", 1)[1]
-    payload = json.loads(payload_str)
+    match = re.search(r"\[TRACKER_WRITE\]\s+(\{.*\})", tracker_write_lines[0])
+    assert match, f"unexpected shape: {tracker_write_lines[0]!r}"
+    payload = json.loads(match.group(1))
     assert payload["event"] == "TRACKER_WRITE"
     assert payload["gen"] == 7
     assert payload["pairs_count"] == 3
