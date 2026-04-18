@@ -76,7 +76,7 @@ def _traverse_raw(raw: dict[str, Any], dotted_path: str) -> Any:
     for part in parts:
         m = _BRACKET_RE.match(part)
         if m:
-            # Bracket-indexed access: 'runs[0]' or 'servers[-1]'
+            # Bracket-indexed access: 'runs[0]' or 'runs[-1]'
             key, idx = m.group(1), int(m.group(2))
             if not isinstance(current, dict) or key not in current:
                 raise KeyError(dotted_path)
@@ -145,7 +145,7 @@ _SCALAR_FIELD_TO_PATH = {
 def get(ctx: click.Context, field: str, format_name: str | None) -> None:
     """Read a manifest field by name or dotted path.
 
-    Special fields: status, runs, max_generations, servers.
+    Special fields: status, runs, max_generations.
     Dotted paths traverse the canonical nested YAML dict (e.g.
     ``control_plane.watchdog_pid`` or ``lifecycle.launch.time``).
     """
