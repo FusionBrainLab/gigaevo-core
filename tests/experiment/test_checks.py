@@ -23,10 +23,11 @@ def _make_run(label: str = "A", db: int = 5) -> MagicMock:
     run.label = label
     run.db = db
     run.pipeline = "standard"
-    run.mutation_url = "http://10.0.0.1:4000"
-    run.chain_url = "http://10.0.0.1:4000"
-    run.model_name = "gpt-4o"
     run.problem_name = "chains/hover"
+    run.extra_overrides = [
+        "llm_base_url=http://10.0.0.1:4000",
+        "model_name=gpt-4o",
+    ]
     return run
 
 
@@ -42,8 +43,8 @@ def _make_manifest(
     m.lifecycle.treatment_verification.completed = True
     m.lifecycle.treatment_verification.completed_at = "2026-04-14T10:00:00Z"
     m.contract.runs = runs or [_make_run("A", 5), _make_run("B", 6)]
-    m.contract.servers = ["10.0.0.1"]
     m.contract.custom_env = {"OPENAI_API_KEY": "test-key"}
+    m.contract.config.extra = {}
     m.contract.problem.has_test_set = False
     return m
 

@@ -75,19 +75,10 @@ def watchdog(
     manifest = load_manifest(experiment)
     watchdog_manifest = manifest.control_plane.watchdog
 
-    # Auto-configure NO_PROXY from manifest servers
-    no_proxy = os.environ.get("NO_PROXY", "")
-    extra_hosts = (
-        list(manifest.contract.servers)
-        + ["api.github.com"]
-        + list(watchdog_manifest.no_proxy_hosts)
-    )
-    for host in extra_hosts:
-        if host not in no_proxy:
-            no_proxy = ",".join(filter(None, [no_proxy, host]))
-    os.environ["NO_PROXY"] = no_proxy
-    os.environ["no_proxy"] = no_proxy
-    click.echo(f"  NO_PROXY: {no_proxy}")
+    # Proxy (HTTPS_PROXY / NO_PROXY) comes from the user's shell / .env —
+    # load_dotenv above already populated it. The watchdog no longer builds
+    # its own NO_PROXY from manifest fields.
+    click.echo(f"  NO_PROXY: {os.environ.get('NO_PROXY', '(unset)')}")
 
     # Resolve plugin class
     if plugin_name:

@@ -74,18 +74,14 @@ def run_checks(experiment: str) -> list[CheckResult]:
     if not c.passed:
         return results
 
-    # Set NO_PROXY before HTTP checks
-    if m.contract.servers:
-        existing = os.environ.get("NO_PROXY", "")
-        all_ips = ",".join(m.contract.servers)
-        os.environ["NO_PROXY"] = f"{existing},{all_ips}" if existing else all_ips
-        os.environ["no_proxy"] = os.environ["NO_PROXY"]
+    # Proxy (HTTPS_PROXY / NO_PROXY) is inherited from the user's shell/.env —
+    # the preflight no longer builds NO_PROXY from manifest fields.
 
     # 2. GIGAEVO_PYTHON
     _check_gigaevo_python(results)
 
-    # 3. Servers reachable
-    _check_servers_reachable(results, m)
+    # 3. LLM endpoint reachable (merged config)
+    _check_llm_reachable(results, m)
 
     # 4. Model IDs match
     _check_model_ids(results, m)
@@ -134,16 +130,41 @@ def _check_gigaevo_python(results: list[CheckResult]) -> None:
     results.append(c)
 
 
-def _check_servers_reachable(results: list[CheckResult], m) -> None:
-    c = CheckResult("Servers reachable (/v1/models)", Severity.CRITICAL)
+def _resolve_run_overrides(m, run) -> dict:
+    """Merge ``contract.config.extra`` with ``run.extra_overrides`` (run wins).
+
+    ``extra_overrides`` is a list of Hydra-style ``key=value`` strings; keys
+    containing dots (e.g. ``opponent_provider.cache_ttl``) are preserved as
+    flat string keys — the preflight does not expand dotted paths.
+    """
+    merged: dict = dict(m.contract.config.extra or {})
+    for ov in run.extra_overrides or []:
+        if "=" not in ov:
+            continue
+        key, _, value = ov.partition("=")
+        key = key.strip().lstrip("+").lstrip("~")
+        if not key:
+            continue
+        merged[key] = value.strip()
+    return merged
+
+
+def _check_llm_reachable(results: list[CheckResult], m) -> None:
+    """Probe ``{merged.llm_base_url}/models`` for each run.
+
+    Proxy behavior (HTTPS_PROXY / NO_PROXY) comes from the user's shell/.env —
+    we don't reach into the manifest. A probe failure that looks proxy-related
+    hints at a shell misconfiguration; all other failures are reported as-is.
+    """
+    c = CheckResult("LLM endpoint reachable (/v1/models)", Severity.CRITICAL)
     try:
         issues: list[str] = []
         all_urls: set[str] = set()
         for run in m.contract.runs:
-            if run.chain_url:
-                all_urls.add(run.chain_url)
-            if run.mutation_url:
-                all_urls.add(run.mutation_url)
+            merged = _resolve_run_overrides(m, run)
+            url = merged.get("llm_base_url")
+            if url:
+                all_urls.add(str(url))
         api_key = (m.contract.custom_env or {}).get("OPENAI_API_KEY", "None")
         for url in sorted(all_urls):
             try:
@@ -155,9 +176,14 @@ def _check_servers_reachable(results: list[CheckResult], m) -> None:
             except (URLError, OSError) as e:
                 issues.append(f"{url}: {e}")
         if issues:
-            c.fail("; ".join(issues))
+            c.fail(
+                "; ".join(issues)
+                + " (if behind a corporate proxy, check HTTPS_PROXY/NO_PROXY in your shell/.env)"
+            )
+        elif not all_urls:
+            c.ok("no llm_base_url set — skipping")
         else:
-            c.ok(f"{len(all_urls)} endpoints reachable")
+            c.ok(f"{len(all_urls)} endpoint(s) reachable")
     except Exception as e:
         c.fail(str(e))
     results.append(c)
@@ -167,28 +193,30 @@ def _check_model_ids(results: list[CheckResult], m) -> None:
     c = CheckResult("Model IDs match server /v1/models", Severity.CRITICAL)
     try:
         issues: list[str] = []
-        checked_urls: set[str] = set()
+        cache: dict[str, list[str]] = {}
         api_key = (m.contract.custom_env or {}).get("OPENAI_API_KEY", "None")
         for run in m.contract.runs:
-            url = run.mutation_url
-            if not url or url in checked_urls:
+            merged = _resolve_run_overrides(m, run)
+            url = merged.get("llm_base_url")
+            model_name = merged.get("model_name")
+            if not url or not model_name:
                 continue
-            checked_urls.add(url)
-            try:
-                req = Request(
-                    f"{url}/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-                resp = urlopen(req, timeout=15)
-                data = json.loads(resp.read())
-                model_ids = [obj.get("id", "") for obj in data.get("data", [])]
-                for run2 in m.contract.runs:
-                    if run2.mutation_url == url and run2.model_name not in model_ids:
-                        issues.append(
-                            f"{run2.label}: model '{run2.model_name}' not in {model_ids}"
-                        )
-            except (URLError, OSError) as e:
-                issues.append(f"{url}: unreachable ({e})")
+            url = str(url)
+            if url not in cache:
+                try:
+                    req = Request(
+                        f"{url}/models",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                    )
+                    resp = urlopen(req, timeout=15)
+                    data = json.loads(resp.read())
+                    cache[url] = [obj.get("id", "") for obj in data.get("data", [])]
+                except (URLError, OSError) as e:
+                    cache[url] = []
+                    issues.append(f"{run.label}: {url} unreachable ({e})")
+                    continue
+            if model_name not in cache[url]:
+                issues.append(f"{run.label}: model '{model_name}' not in {cache[url]}")
         if issues:
             c.fail("; ".join(issues))
         else:

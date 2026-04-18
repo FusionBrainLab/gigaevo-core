@@ -127,10 +127,13 @@ class TestGenerateProducesValidBash:
         assert "Experiment: toy/gen-test" in result
         assert "Branch: test-branch" in result
 
-    def test_contains_no_proxy(self, dummy_experiment):
+    def test_no_proxy_emission_removed(self, dummy_experiment):
+        """Proxy config comes from the user's shell/.env, not the generated
+        launch.sh. NO_PROXY / contract.servers are no longer written."""
         result = generate(dummy_experiment)
-        assert "example.com" in result
-        assert "NO_PROXY" in result
+        assert "export NO_PROXY=" not in result
+        assert "export no_proxy=" not in result
+        assert 'NO_PROXY="$NO_PROXY"' not in result
 
 
 @pytest.fixture()

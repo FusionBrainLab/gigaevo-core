@@ -25,10 +25,6 @@ def generate(experiment: str) -> str:
     m = load_manifest(experiment)
     exp_dir_rel = f"experiments/{experiment}"
 
-    # Collect all server IPs for NO_PROXY
-    no_proxy_hosts = ["localhost", "127.0.0.1", "api.github.com"] + m.contract.servers
-    no_proxy = ",".join(no_proxy_hosts)
-
     lines: list[str] = []
 
     # Header
@@ -53,8 +49,6 @@ def generate(experiment: str) -> str:
     lines.append(f'PYTHON="{PYTHON_PATH}"')
     lines.append(f'LOG_DIR="$PROJ/{exp_dir_rel}"')
     lines.append("")
-    lines.append(f'export NO_PROXY="{no_proxy}"')
-    lines.append('export no_proxy="$NO_PROXY"')
     lines.append('export GIGAEVO_PYTHON="$PYTHON"')
     lines.append("")
 
@@ -192,7 +186,6 @@ def generate(experiment: str) -> str:
     # Watchdog launch hint
     lines.append('echo ""')
     lines.append('echo "Launch watchdog:"')
-    lines.append('echo "  NO_PROXY=\\"$NO_PROXY\\" no_proxy=\\"$NO_PROXY\\" \\\\"')
     lines.append(f'echo "  nohup $PYTHON {exp_dir_rel}/run_watchdog.py \\\\"')
     lines.append(f'echo "      > {exp_dir_rel}/watchdog.log 2>&1 &"')
     lines.append(

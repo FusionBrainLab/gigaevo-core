@@ -175,11 +175,6 @@ def get(ctx: click.Context, field: str, format_name: str | None) -> None:
         )
         return
 
-    if field == "servers":
-        for server in manifest_obj.contract.servers:
-            click.echo(server)
-        return
-
     if field in _SCALAR_FIELD_TO_PATH:
         obj: Any = manifest_obj
         for attr in _SCALAR_FIELD_TO_PATH[field]:

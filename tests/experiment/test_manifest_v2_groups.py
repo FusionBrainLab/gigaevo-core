@@ -84,7 +84,6 @@ class TestContractSectionShape:
     def test_defaults(self):
         c = ContractSection(identity=ExperimentIdentity(name="x/y", task="x"))
         assert c.runs == []
-        assert c.servers == []
         assert c.custom_env == {}
         assert c.tools == []
         assert c.max_generations == 25
@@ -149,10 +148,6 @@ class TestManifestContractView:
         assert len(m.contract.runs) > 0
         # Every run has a label
         assert all(r.label for r in m.contract.runs)
-
-    def test_contract_servers_present(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
-        assert m.contract.servers
 
     def test_contract_max_generations_is_int(self):
         m = ExperimentManifest.from_dict(_heilbron_v2_yaml())

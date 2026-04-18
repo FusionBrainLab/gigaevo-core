@@ -101,7 +101,6 @@ class WatchdogSection(BaseModel):
     plot_retry_delay_s: int = 30
     rolling_comment_threshold_hours: int = 24
     checkpoint_milestones: list[float] = [0.1, 0.2, 0.5, 1.0]
-    no_proxy_hosts: list[str] = []
 
 
 class RunSpec(BaseModel):
@@ -115,9 +114,6 @@ class RunSpec(BaseModel):
     pipeline: str
     problem_name: str
     condition: str
-    chain_url: str | None = None
-    mutation_url: str | None = None
-    model_name: str
     pid: int | None = None
     log_path: str | None = None
     extra_overrides: list[str] | None = None
@@ -440,7 +436,6 @@ class ContractSection(BaseModel):
     problem: ProblemSpec = ProblemSpec()
     config: ConfigSpec = ConfigSpec()
     runs: list[RunSpec] = []
-    servers: list[str] = []
     custom_env: dict[str, str] = {}
     max_generations: int = 25
     baseline: BaselineInfo = BaselineInfo()
@@ -531,11 +526,6 @@ class ExperimentManifest(BaseModel):
                 errors.append(
                     f"contract.runs[] must be non-empty for status={status}. "
                     f"Add at least one run configuration."
-                )
-            if not self.contract.servers:
-                errors.append(
-                    f"contract.servers[] must be non-empty for status={status}. "
-                    f"Add the server hostnames used by this experiment."
                 )
             config_extras = self.contract.config.extra or {}
             config_typed_set = any(
