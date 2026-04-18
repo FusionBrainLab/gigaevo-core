@@ -1,8 +1,11 @@
 """Unit tests for heilbron_adversarial pop_a / pop_b under v3 semantics.
 
-Pop A (Constructor) — fitness is normalized min_area in [0, 1] (ALPHA/quality/
-resistance are gone; fitness IS quality by another name). The artifact still
-carries per-opponent fitness deltas for the DGTracker.
+Pop A (Constructor) — `fitness` is tanh-smoothed **resistance** against the
+current K D HoF: `(tanh(-mean_delta/Q_MAX)+1)/2` in [0, 1]. 0.5=neutral
+(no change), >0.5=G resisted (D made things worse or stagnant on average),
+<0.5=D improved G on average. `actual_fitness` carries raw min_area (paper
+scalar; BD x-axis). The artifact still carries per-opponent fitness deltas
+for the DGTracker.
 
 Pop B (Improver) — unchanged: tanh-smoothed mean Δ (D-did-nothing → 0.5).
 """
@@ -73,17 +76,17 @@ def _seed_grid(n: int = 11, seed: int = 42) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Pop A — Constructor (v3: fitness = normalized min_area; per-opp delta artifact)
+# Pop A — Constructor (v3: fitness = tanh-smoothed resistance; actual_fitness = raw min_area)
 # ---------------------------------------------------------------------------
 
 
 class TestPopAv3Fitness:
-    def test_cold_start_returns_normalized_quality(self):
-        """No opponents → fitness = min(raw_quality / Q_MAX, 1.0); artifact carries no deltas."""
+    def test_cold_start_returns_neutral_fitness(self):
+        """No opponents → fitness = 0.5 neutral; actual_fitness = raw min_area."""
         pts = _seed_grid()
         out, artifact = pop_a.evaluate([], pts)
-        raw_q = out["actual_fitness"]
-        assert out["fitness"] == pytest.approx(min(raw_q / pop_a.Q_MAX, 1.0))
+        assert out["fitness"] == pytest.approx(0.5)
+        assert out["actual_fitness"] > 0
         assert out["is_valid"] == 1.0
         assert out["n_opponents"] == 0.0
         assert out["mean_improvement"] == pytest.approx(0.0)
@@ -91,17 +94,18 @@ class TestPopAv3Fitness:
         assert artifact["role"] == "constructor"
         assert artifact["n_opponents"] == 0
 
-    def test_all_opponents_fail_keeps_fitness_equal_to_baseline(self):
-        """All opponents raise → fitness unchanged (depends only on raw_quality)."""
+    def test_all_opponents_fail_returns_neutral_fitness(self):
+        """All opponents raise → no successful deltas → mean_delta=0 → fitness=0.5 (neutral)."""
         pts = _seed_grid()
 
         def boom(_pts):
             raise RuntimeError("boom")
 
         out, artifact = pop_a.evaluate([boom, boom, boom], pts)
-        raw_q = out["actual_fitness"]
-        # v3: fitness = normalized quality — opponent outcomes don't enter the scalar.
-        assert out["fitness"] == pytest.approx(min(raw_q / pop_a.Q_MAX, 1.0))
+        # No measurement → neutral resistance by convention (matches D-did-nothing).
+        assert out["fitness"] == pytest.approx(0.5)
+        # actual_fitness still reflects the intrinsic min_area.
+        assert out["actual_fitness"] > 0
         # No successful improver → mean_improvement is 0 (empty deltas).
         assert out["mean_improvement"] == pytest.approx(0.0)
         # Failed opponents → NaN sentinels in artifact (no measurement).
@@ -109,8 +113,8 @@ class TestPopAv3Fitness:
         assert len(artifact["per_opp_delta"]) == 3
         assert all(math.isnan(d) for d in artifact["per_opp_delta"])
 
-    def test_mixed_outcomes_record_per_opp_delta(self):
-        """Mix of failure and real improver → artifact[0] finite, [1:] NaN."""
+    def test_mixed_outcomes_derive_fitness_from_successful_deltas(self):
+        """Mix of failure and real improver → fitness uses only successful deltas."""
         pts = _seed_grid()
 
         def winner(p):
@@ -123,16 +127,17 @@ class TestPopAv3Fitness:
             raise RuntimeError("nope")
 
         out, artifact = pop_a.evaluate([winner, loser, loser], pts)
-        # Fitness is normalized quality; unaffected by opponent outcomes in v3.
-        raw_q = out["actual_fitness"]
-        assert out["fitness"] == pytest.approx(min(raw_q / pop_a.Q_MAX, 1.0))
-        # Index alignment in the artifact: slot 0 finite, 1 & 2 NaN.
+        # Only slot 0 has a finite delta; fitness derives from that single sample.
         assert math.isfinite(artifact["per_opp_delta"][0])
         assert math.isnan(artifact["per_opp_delta"][1])
         assert math.isnan(artifact["per_opp_delta"][2])
+        # Sanity: fitness = (tanh(-delta_0/Q_MAX)+1)/2 for a single-successful case.
+        delta_0 = artifact["per_opp_delta"][0]
+        expected = (math.tanh(-delta_0 / pop_a.Q_MAX) + 1) / 2
+        assert out["fitness"] == pytest.approx(expected, abs=1e-9)
 
-    def test_strong_success_records_positive_delta_in_artifact(self):
-        """Monkey-patched helper yields delta=+Q_MAX for every opponent."""
+    def test_strong_improvement_drives_fitness_low(self):
+        """Monkey-patched helper yields delta=+Q_MAX for every opponent → fitness ≈ (1-tanh(1))/2 ≈ 0.119."""
         pts = _seed_grid()
         Q_MAX = pop_a.Q_MAX
         raw_q = float(pop_a_helper.get_smallest_triangle_area(pts))
@@ -161,9 +166,12 @@ class TestPopAv3Fitness:
         )
         # mean_improvement is the raw mean delta, not tanh-smoothed.
         assert out["mean_improvement"] == pytest.approx(Q_MAX, abs=1e-9)
+        # G's fitness = resistance = (tanh(-1)+1)/2 ≈ 0.119 (D cracked the config → low resistance).
+        expected = (math.tanh(-1.0) + 1.0) / 2.0
+        assert out["fitness"] == pytest.approx(expected, abs=1e-3)
 
-    def test_negative_delta_recorded_as_negative(self):
-        """When the improver makes things WORSE, the artifact preserves the negative sign."""
+    def test_negative_delta_drives_fitness_high(self):
+        """When D makes things WORSE, G's resistance is high → fitness > 0.5."""
         pts = _seed_grid()
         Q_MAX = pop_a.Q_MAX
         raw_q = float(pop_a_helper.get_smallest_triangle_area(pts))
@@ -192,6 +200,9 @@ class TestPopAv3Fitness:
             for d in artifact["per_opp_delta"]
         )
         assert out["mean_improvement"] == pytest.approx(-0.5 * Q_MAX, abs=1e-9)
+        # G's fitness = (tanh(-(-0.5))+1)/2 = (tanh(0.5)+1)/2 ≈ 0.731 (D failed → high resistance).
+        expected = (math.tanh(0.5) + 1.0) / 2.0
+        assert out["fitness"] == pytest.approx(expected, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------

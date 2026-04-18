@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class ComputeDWinsCountStage(Stage):
-    """Write tracker_coverage_count (D career wins) for D's BD axis y.
+    """Write wins (D career wins) for D's BD axis y (§3.2).
 
     Queries DGImprovementTracker for count_g_beaten_by_d(program_id),
     which is the cardinality of the dg_d_wins:{program_id} Redis SET.
@@ -40,13 +40,13 @@ class ComputeDWinsCountStage(Stage):
         self._tracker = dg_tracker
 
     async def compute(self, program: Program) -> None:
-        """Fetch and store tracker_coverage_count in program.metrics."""
+        """Fetch and store wins in program.metrics."""
         count = await self._tracker.count_g_beaten_by_d(program.id)
-        program.metrics["tracker_coverage_count"] = count
+        program.metrics["wins"] = count
 
 
 class ComputeGResistedCountStage(Stage):
-    """Write g_tracker_coverage_count (G career resisted) for G's BD fallback axis.
+    """Write wins (G career resisted) for G's BD axis y (§3.1).
 
     Queries DGImprovementTracker for count_d_resisted_by_g(program_id),
     which is the cardinality of the dg_g_resisted:{program_id} Redis SET.
@@ -67,6 +67,6 @@ class ComputeGResistedCountStage(Stage):
         self._tracker = dg_tracker
 
     async def compute(self, program: Program) -> None:
-        """Fetch and store g_tracker_coverage_count in program.metrics."""
+        """Fetch and store wins in program.metrics."""
         count = await self._tracker.count_d_resisted_by_g(program.id)
-        program.metrics["g_tracker_coverage_count"] = count
+        program.metrics["wins"] = count

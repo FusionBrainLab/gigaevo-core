@@ -7,12 +7,10 @@ You are an IMPROVER (Discriminator) in a two-population adversarial co-evolution
 THE GAME
 Your opponents are other evolving programs. They produce (11,2) point arrays and try to make them as hard to improve as possible. As the Generator population evolves, their configurations sit in progressively deeper local optima with tighter basins. A simple random jitter that worked early will stop finding gains — you must evolve increasingly sophisticated improvement strategies to keep scoring.
 
-Each evaluation you are tested against the current top-K Generator Hall-of-Fame and also tracked over your lifetime. Two things determine your standing:
+Each evaluation you are tested against the current top-K Generator Hall-of-Fame and also tracked over your lifetime. Your standing is determined by two first-class metrics — see the METRICS section of your prompt for exact formulas and ranges:
 
-1) FITNESS — the average Δmin_area you achieve against the K=3 Generators you were just scored against, tanh-smoothed into [0, 1] as `(tanh(mean(delta/Q_MAX))+1)/2` where `delta = post_min_area − pre_min_area`. >0.5 means you increased min_area on average; =0.5 means no change; <0.5 means you made things worse.
-2) WINS — how many distinct Generators you have EVER strictly improved (delta > 0) across your lifetime. This number only grows, and it is what distinguishes a one-trick improver from a broadly-capable one.
-
-See the metric definitions in your prompt for the exact formulas.
+- `fitness` — tanh-smoothed mean improvement against the current K=3 Generator HoF. >0.5 means you improved the configs on average; 0.5 is neutral; <0.5 means you made them worse.
+- `wins` — lifetime count of distinct Generators you have EVER strictly improved (delta > 0). Grows monotonically. Distinguishes a one-trick improver from a broadly-capable one.
 
 HALL-OF-FAME OPPONENTS + WHITE-BOX ACCESS
 The Generator configurations you face are the deterministic top-K of Pop A's Hall of Fame, re-fetched every evaluation (the K best Generators alive right now). The opponent set changes when Pop A's HoF rotates, not on every mutation — so your lineage insights and past metrics are RELEVANT when the HoF is stable and SHIFT discretely when a new G displaces an old one.

@@ -55,7 +55,7 @@ async def test_compute_d_wins_count_stage_records_count(tracker):
     prog = make_program("d1")
     await stage.compute(prog)
 
-    assert prog.metrics["tracker_coverage_count"] == 3
+    assert prog.metrics["wins"] == 3
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,7 @@ async def test_compute_d_wins_count_stage_zero_wins(tracker):
     prog = make_program("d1")
     await stage.compute(prog)
 
-    assert prog.metrics["tracker_coverage_count"] == 0
+    assert prog.metrics["wins"] == 0
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_compute_d_wins_count_stage_ignores_losses(tracker):
     prog = make_program("d1")
     await stage.compute(prog)
 
-    assert prog.metrics["tracker_coverage_count"] == 2
+    assert prog.metrics["wins"] == 2
 
 
 @pytest.mark.asyncio
@@ -107,7 +107,7 @@ async def test_compute_g_resisted_count_stage_records_count(tracker):
     prog = make_program("g1")
     await stage.compute(prog)
 
-    assert prog.metrics["g_tracker_coverage_count"] == 2
+    assert prog.metrics["wins"] == 2
 
 
 @pytest.mark.asyncio
@@ -117,7 +117,7 @@ async def test_compute_g_resisted_count_stage_zero_resists(tracker):
     prog = make_program("g1")
     await stage.compute(prog)
 
-    assert prog.metrics["g_tracker_coverage_count"] == 0
+    assert prog.metrics["wins"] == 0
 
 
 @pytest.mark.asyncio
@@ -137,4 +137,4 @@ async def test_compute_g_resisted_count_stage_includes_zero_delta(tracker):
     prog = make_program("g1")
     await stage.compute(prog)
 
-    assert prog.metrics["g_tracker_coverage_count"] == 3
+    assert prog.metrics["wins"] == 3

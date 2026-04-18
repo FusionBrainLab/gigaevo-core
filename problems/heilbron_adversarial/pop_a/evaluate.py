@@ -1,9 +1,20 @@
 """Adversarial evaluate.py for Pop A (Constructor) — v3 clean.
 
 v3 drops the ALPHA·quality + (1-ALPHA)·resistance scalarization. The scalar
-`fitness` is now just normalized quality: min(min_area / Q_MAX, 1.0). Selection
-and BD x-axis read `fitness`; the BD y-axis is `wins` (# D improvers this G
-has resisted, written by ComputeGResistedCountStage from the career tracker).
+`fitness` is now tanh-smoothed **resistance** against the K current D opponents:
+    fitness = (tanh(-mean_delta / Q_MAX) + 1) / 2  in [0, 1]
+where delta = post_min_area - pre_min_area (how much D improved this G). Lower
+delta → higher resistance → higher fitness.
+
+`actual_fitness` carries the intrinsic quality signal (raw min_area) — it is
+G's BD x-axis AND the paper reporting scalar AND the key `elite_selector` and
+`migrant_selector` read for parent/migrant sampling (see 01_design.md §4).
+`wins` is written separately by ComputeGResistedCountStage from the career
+tracker (BD y-axis).
+
+Cold start (no opponents): resistance is undefined. We emit fitness = 0.5
+(neutral, matches D-did-nothing on pop_b) so initial_programs enter the
+archive without overstating or understating their adversarial hardness.
 
 Receives:
     opponent_results: list of callables improve(points) -> improved_points  (from Pop B)
@@ -11,8 +22,8 @@ Receives:
 
 Returns: (metrics_dict, artifact_dict)
     metrics_dict — float-only metrics for MAP-Elites + paper.
-        fitness        = min(min_area / Q_MAX, 1.0)  ∈ [0, 1]
-        actual_fitness = raw min_area (paper reporting, comparable to baseline 0.03449).
+        fitness        = tanh-smoothed resistance  ∈ [0, 1]    (intra-cell tie-break)
+        actual_fitness = raw min_area              ∈ [0, Q_MAX] (BD x-axis, reporting)
     artifact_dict — per-opponent fitness deltas for DGTrackerStage, aligned
         with opponent_results order. Suppressed in the LLM prompt by
         NullArtifactStage in the adversarial pipeline.
@@ -20,10 +31,13 @@ Returns: (metrics_dict, artifact_dict)
 
 from __future__ import annotations
 
+import math
+
 from helper import get_smallest_triangle_area, get_unit_triangle, is_inside_triangle
 import numpy as np
 
 Q_MAX = 0.0365
+NEUTRAL_FITNESS = 0.5  # cold-start / no-improvement resistance value
 
 INVALID_METRICS = {
     "fitness": -1000.0,
@@ -76,11 +90,10 @@ def evaluate(opponent_results: list, program_output: object) -> tuple[dict, dict
     if raw_quality <= 0:
         return INVALID_METRICS, _invalid_artifact(n_in)
 
-    fitness = min(raw_quality / Q_MAX, 1.0)
-
     if not opponent_results:
+        # Cold start: no opponents to measure resistance against → neutral fitness.
         metrics = {
-            "fitness": float(fitness),
+            "fitness": NEUTRAL_FITNESS,
             "is_valid": 1.0,
             "actual_fitness": raw_quality,
             "mean_improvement": 0.0,
@@ -123,7 +136,10 @@ def evaluate(opponent_results: list, program_output: object) -> tuple[dict, dict
         "per_opp_delta": per_opp_delta,
     }
 
+    # Resistance: if no opponent successfully ran (deltas empty), mean_delta=0
+    # → fitness = 0.5 (neutral — matches D-did-nothing on pop_b).
     mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
+    fitness = (math.tanh(-mean_delta / Q_MAX) + 1.0) / 2.0
 
     metrics = {
         "fitness": float(fitness),

@@ -1,31 +1,32 @@
 defaults: [single_island, _self_]
 
 # 2D behavior space for G (Constructor) population v3
-# Primary axes: quality × resistance
+# x-axis: actual_fitness (intrinsic min_area, HoF-independent)
+# y-axis: wins (career count of distinct D programs resisted; fallback to g_tracker_coverage_count if quality/resistance correlated)
 behavior_space:
   _target_: gigaevo.config.helpers.build_behavior_space
-  keys: [quality, resistance]
-  bounds: [[0.0, 0.0365], [0.0, 1.0]]
-  resolutions: [15, 10]
+  keys: [actual_fitness, wins]
+  bounds: [[0.0, 0.0365], [0, 150]]
+  resolutions: [15, 15]
   binning_types: [linear, linear]
 
-# Niche-structured selection: use only primary BD axes, no scalarization
+# Niche-structured selection: intra-cell tie-break on quality (intrinsic); inter-cell diversity on career resistance
 archive_selector:
   _target_: gigaevo.evolution.strategies.selectors.SumArchiveSelector
-  fitness_keys: [quality]
+  fitness_keys: [fitness]
   fitness_key_higher_is_better: [true]
 
 archive_remover:
   _target_: gigaevo.evolution.strategies.removers.FitnessArchiveRemover
-  fitness_key: quality
+  fitness_key: fitness
   higher_is_better: true
 
 elite_selector:
   _target_: gigaevo.evolution.strategies.elite_selectors.FitnessProportionalEliteSelector
-  fitness_key: quality
+  fitness_key: actual_fitness
   higher_is_better: true
 
 migrant_selector:
   _target_: gigaevo.evolution.strategies.migrant_selectors.TopFitnessMigrantSelector
-  fitness_key: quality
+  fitness_key: actual_fitness
   higher_is_better: true

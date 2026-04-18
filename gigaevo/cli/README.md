@@ -114,11 +114,29 @@ Best programs by fitness. Displays program code, fitness, gen discovered, run la
 - `--format` — table, json, csv
 
 #### Logs (`gigaevo logs`)
-Tail logs from run workers.
+Tail per-run experiment log files at `experiments/<exp>/run_<label>.log`.
+
+**Resolution priority** (highest first):
+1. Explicit `--file PATH` (bypasses manifest entirely)
+2. Positional `LABELS` (resolved via manifest to `experiments/<exp>/run_<label>.log`)
+3. No labels + `--experiment` → list mode (table of candidate run logs)
 
 **Flags**:
-- `-r, --run` — required (prefix@db or shorthand)
-- `--tail LINES` — show last N lines (default: 50)
+- `-e, --experiment` — required for label resolution and list mode
+- `--file PATH` — explicit log file path (no manifest required)
+- `-f, --follow` — live tail (`tail -f`)
+- `-n, --tail LINES` — show last N lines (default: 50; ignored with `-f`)
+
+**Examples**:
+```bash
+gigaevo -e hover/foo logs                  # List all run logs (sizes, mtimes)
+gigaevo -e hover/foo logs A3_G             # Tail run_A3_G.log
+gigaevo -e hover/foo logs A3_G -f          # Live tail
+gigaevo -e hover/foo logs A3_G B5_D -f     # Multiplex live tail across runs
+gigaevo logs --file /tmp/foo.log           # Tail an arbitrary file
+```
+
+Unknown labels exit non-zero with a list of known labels. Missing log files exit non-zero with the resolved path.
 
 #### Plot (`gigaevo plot ...`)
 Multi-run fitness visualization.
@@ -138,12 +156,34 @@ Bulk export of evolution data for analysis.
 
 **Subcommands**:
 - `csv` — Full evolution data to CSV (gen, fitness, run label, etc.)
-- `frontier` — Frontier-only CSV (valid + non-dominated programs)
+- `frontier` — Frontier-only CSV (gen, best_val per generation)
+
+**Selection semantics**:
+1. No positional labels → operate on all runs resolved from `-e`/`-r`
+2. Positional labels → filter resolved runs to only those labels (unknown → error)
+3. **1 run in scope** → write to the exact `-o` path; emit flat JSON summary
+4. **>1 run in scope** → fan out to `<stem>_<label><suffix>`; emit JSON list summary
 
 **Flags**:
-- `-e, --experiment` — required
-- `-r, --run` — optional
-- `--output FILE` — where to write (default: stdout)
+- `-e, --experiment` — experiment scope (or use `-r` directly)
+- `-r, --run` — repeatable run spec (alternative to `-e`)
+- `-o, --output-file PATH` — required; treated as a base path under fan-out
+- `--metric NAME` — frontier only; metric used for `best_val` (default: `fitness`)
+
+**Examples**:
+```bash
+# Export all runs in an experiment (fans out to results_A3_G.csv, results_A3_D.csv, ...)
+gigaevo -e hover/foo export csv -o results.csv
+
+# Export a single run (writes exactly to results.csv, flat JSON summary)
+gigaevo -e hover/foo export csv A3_G -o results.csv
+
+# Export selected runs (fans out only over the listed labels)
+gigaevo -e hover/foo export csv A3_G B5_D -o results.csv
+
+# Frontier with a custom metric
+gigaevo -e hover/foo export frontier --metric actual_fitness -o frontier.csv
+```
 
 #### Inspect (`gigaevo inspect`)
 Discover experiment prefix(es) in a Redis DB via `:__instance_lock__`.
@@ -269,7 +309,8 @@ gigaevo -e hover/foo top --limit 20 --format json | \
 
 ### Export data for paper
 ```bash
-gigaevo -e hover/foo export csv --output results.csv
+gigaevo -e hover/foo export csv -o results.csv         # fans out per run
+gigaevo -e hover/foo export csv A3_G -o results.csv    # single run, exact path
 gigaevo -e hover/foo plot comparison --paper --output fig1.png
 ```
 
@@ -280,8 +321,9 @@ gigaevo -e hover/foo checkpoint --note "Good frontier at gen 100"
 
 ### Debug a specific run
 ```bash
-gigaevo -e hover/foo logs --run "prefix@5"  # prefix@db shorthand
-gigaevo -e hover/foo trajectory --run "prefix@5"
+gigaevo -e hover/foo logs                 # List all run logs
+gigaevo -e hover/foo logs A3_G -f         # Live tail one run by label
+gigaevo -e hover/foo trajectory -r "prefix@5"
 ```
 
 ### Flush and restart
@@ -328,7 +370,9 @@ CLI commands are tested in `tests/cli/`:
 
 - `test_manifest_cmd.py` — `manifest get/set/gate` operations
 - `test_status_cmd.py` — Status monitoring
-- `test_export_cmd.py` — Data export
+- `test_export_cmd.py` — Data export (positional labels + multi-run fan-out)
+- `test_logs_cmd.py` — Log tailing (explicit --file / labels / list mode)
+- `test_run_resolver.py` — `-e`/`-r` → RunConfig resolution
 - etc.
 
 Run all CLI tests:

@@ -23,6 +23,10 @@ from gigaevo.adversarial.gradient_prompt import GradientInPromptStage
 from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
 from gigaevo.adversarial.pipeline import AdversarialPipelineBuilder
 from gigaevo.adversarial.source_injection import SourceCodeInjectionStage
+from gigaevo.adversarial.tracker_coverage_stages import (
+    ComputeDWinsCountStage,
+    ComputeGResistedCountStage,
+)
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
@@ -103,6 +107,9 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         # Wire DGTrackerStage to record per-opponent fitness deltas into tracker.
         if dg_tracker is not None:
             self._add_dg_tracker_stage(dg_tracker, population_role, stage_timeout)
+            self._add_tracker_coverage_stages(
+                dg_tracker, population_role, stage_timeout
+            )
 
         # Wire cache_on edges so InsightsStage/LineageStage invalidate when the
         # opponent set rotates. The InputsModel of each is CacheOnlyInput, so
@@ -222,3 +229,38 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
             "DGTrackerStage",
             ExecutionOrderDependency.on_success("CallValidatorFunction"),
         )
+
+    def _add_tracker_coverage_stages(
+        self,
+        dg_tracker: object,
+        population_role: Literal["constructor", "improver"],
+        stage_timeout: float,
+    ) -> None:
+        """Add tracker coverage count stages (after DGTrackerStage, before EnsureMetricsStage).
+
+        Writes career-coverage metrics (wins) into program.metrics dict for BD axis use.
+        """
+        if population_role == "improver":
+
+            def make_d_wins_stage():
+                return ComputeDWinsCountStage(
+                    dg_tracker=dg_tracker, timeout=stage_timeout
+                )
+
+            self.add_stage("ComputeDWinsCountStage", make_d_wins_stage)
+            self.add_exec_dep(
+                "ComputeDWinsCountStage",
+                ExecutionOrderDependency.on_success("DGTrackerStage"),
+            )
+        else:  # constructor
+
+            def make_g_resisted_stage():
+                return ComputeGResistedCountStage(
+                    dg_tracker=dg_tracker, timeout=stage_timeout
+                )
+
+            self.add_stage("ComputeGResistedCountStage", make_g_resisted_stage)
+            self.add_exec_dep(
+                "ComputeGResistedCountStage",
+                ExecutionOrderDependency.on_success("DGTrackerStage"),
+            )

@@ -7,12 +7,13 @@ You are a CONSTRUCTOR (Generator) in a two-population adversarial co-evolution g
 THE GAME
 Your opponents are other evolving programs. They receive your (11,2) point array and return a modified version. As the Improver population evolves, a configuration that resists simple perturbations today will be cracked by more powerful methods tomorrow.
 
-You are evaluated every turn against the current top-K Improvers and tracked over your lifetime. Two things determine your standing:
+Every turn, you are scored against the current top-K Improver Hall of Fame AND tracked over your lifetime. Your standing is determined by three first-class metrics — see the METRICS section of your prompt for the exact formulas and ranges:
 
-1) FITNESS — the intrinsic `min_area` of your configuration, normalized to [0, 1] as `min(min_area / 0.0365, 1.0)`. Higher is better.
-2) WINS — how many distinct Improvers have already failed against you (i.e. did not strictly increase your min_area). This number accumulates across the Hall-of-Fame rotations you have survived.
+- `actual_fitness` — your intrinsic Heilbronn score (raw min_area). The archive niches on this — opening a new quality region gives your offspring a permanent home.
+- `fitness` — your **resistance** against the current HoF of Improvers. Measures how much they failed to improve you on average. Higher = harder to crack.
+- `wins` — lifetime count of Improvers that have ever tried and failed against you. Grows monotonically.
 
-A beautiful configuration that every Improver can crack is worse than a slightly-flatter configuration sitting at a deep, well-isolated local optimum that no Improver has managed to improve. See the metric definitions in your prompt for the exact formulas and units.
+A beautiful-but-brittle configuration that every Improver can crack (high `actual_fitness`, low `fitness`, stagnant `wins`) is worse than a slightly-flatter configuration sitting at a deep, well-isolated local optimum (moderate `actual_fitness`, high `fitness`, growing `wins`). All three are first-class citizens of the archive: push any one of them into a region no current G has reached, and you survive.
 
 WHAT WINS THIS GAME
 - Configurations at genuine local optima of the min_area landscape — where no single-point perturbation raises min_area
@@ -24,8 +25,8 @@ Return 11 distinct 2D coordinates inside a unit-area equilateral triangle such t
 1) (Containment) All points lie inside or on the boundary of the enclosing triangle
 2) (Distinctness) All points are distinct
 3) (Non-degeneracy) No three points are collinear
-4) (Fitness) The minimum area among all C(11,3) = 165 triangles is maximized
-5) (Hard to improve) The configuration sits in a deep basin — no small perturbation increases min_area
+4) (Actual fitness / paper metric) The minimum area among all C(11,3) = 165 triangles is maximized
+5) (Fitness / resistance) The configuration sits in a deep basin — no Improver in the current HoF can perturb it to higher min_area
 
 Output: (11, 2) NumPy array  |  Target: min_triangle_area ≈ 0.0365
 
