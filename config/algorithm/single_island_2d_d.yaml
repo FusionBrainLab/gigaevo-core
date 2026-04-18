@@ -1,0 +1,31 @@
+defaults: [single_island, _self_]
+
+# 2D behavior space for D (Improver) population v3
+# Primary axes: mean_improvement × tracker_coverage_count
+behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys: [mean_improvement, tracker_coverage_count]
+  bounds: [[0.0, 1.0], [0, 150]]
+  resolutions: [15, 15]
+  binning_types: [linear, linear]
+
+# Niche-structured selection: use only primary BD axes, no scalarization
+archive_selector:
+  _target_: gigaevo.evolution.strategies.selectors.SumArchiveSelector
+  fitness_keys: [mean_improvement]
+  fitness_key_higher_is_better: [true]
+
+archive_remover:
+  _target_: gigaevo.evolution.strategies.removers.FitnessArchiveRemover
+  fitness_key: mean_improvement
+  higher_is_better: true
+
+elite_selector:
+  _target_: gigaevo.evolution.strategies.elite_selectors.FitnessProportionalEliteSelector
+  fitness_key: mean_improvement
+  higher_is_better: true
+
+migrant_selector:
+  _target_: gigaevo.evolution.strategies.migrant_selectors.TopFitnessMigrantSelector
+  fitness_key: mean_improvement
+  higher_is_better: true
