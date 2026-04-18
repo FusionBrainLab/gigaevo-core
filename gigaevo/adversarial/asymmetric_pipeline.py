@@ -22,6 +22,10 @@ from gigaevo.adversarial.dg_tracker_stage import DGTrackerStage
 from gigaevo.adversarial.gradient_prompt import GradientInPromptStage
 from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
 from gigaevo.adversarial.pipeline import AdversarialPipelineBuilder
+from gigaevo.adversarial.shared_benchmark_lineage import (
+    DGTrackerSharedOpponentResolver,
+    SharedBenchmarkLineageStage,
+)
 from gigaevo.adversarial.source_injection import SourceCodeInjectionStage
 from gigaevo.adversarial.tracker_coverage_stages import (
     ComputeDWinsCountStage,
@@ -110,6 +114,8 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
             self._add_tracker_coverage_stages(
                 dg_tracker, population_role, stage_timeout
             )
+            if population_role == "improver":
+                self._add_shared_benchmark_lineage(ctx, dg_tracker, stage_timeout)
 
         # Wire cache_on edges so InsightsStage/LineageStage invalidate when the
         # opponent set rotates. The InputsModel of each is CacheOnlyInput, so
@@ -138,6 +144,10 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
             )
         if "LineageStage" in self._nodes:
             self.add_data_flow_edge("FetchOpponentIdsStage", "LineageStage", "cache_on")
+        if "SharedBenchmarkLineageStage" in self._nodes:
+            self.add_data_flow_edge(
+                "FetchOpponentIdsStage", "SharedBenchmarkLineageStage", "cache_on"
+            )
 
     def _add_source_injection(
         self,
@@ -264,3 +274,34 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
                 "ComputeGResistedCountStage",
                 ExecutionOrderDependency.on_success("DGTrackerStage"),
             )
+
+    def _add_shared_benchmark_lineage(
+        self,
+        ctx: EvolutionContext,
+        dg_tracker: object,
+        stage_timeout: float,
+    ) -> None:
+        """Add SharedBenchmarkLineageStage for D runs (§3.5 Prong 2, §9.1).
+
+        Computes an HoF-invariant lineage trend for D programs via intersection
+        of G's both child-D and parent-D have faced. Invalidates when the G HoF
+        rotates (``cache_on=opponent_ids``) — new tracker pairs enter the
+        shared benchmark primarily at HoF transitions. Emits ``[LINEAGE_TREND]``
+        canonical event for log-based verification (§13.3).
+        """
+        tracker = dg_tracker
+        storage = ctx.storage
+        timeout = stage_timeout
+
+        def make_stage():
+            return SharedBenchmarkLineageStage(
+                resolver=DGTrackerSharedOpponentResolver(tracker=tracker),
+                storage=storage,
+                timeout=timeout,
+            )
+
+        self.add_stage("SharedBenchmarkLineageStage", make_stage)
+        self.add_exec_dep(
+            "SharedBenchmarkLineageStage",
+            ExecutionOrderDependency.on_success("DGTrackerStage"),
+        )
