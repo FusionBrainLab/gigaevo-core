@@ -13,6 +13,7 @@ Only positive deltas (D actually improved G) are stored.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 from loguru import logger
 from redis import asyncio as aioredis
@@ -45,6 +46,14 @@ class DGImprovementTracker:
     _KEY_TEMPLATE = "{prefix}:dg_improvements:{g_id}"
     _GLOBAL_PAIRS_KEY_TEMPLATE = "{prefix}:dg_best_pairs"
     _INJECTED_PAIRS_KEY_TEMPLATE = "{prefix}:dg_injected_pairs"
+    # v3 inverted indices for MAP-Elites BD axes + shared-benchmark lineage.
+    _D_WINS_KEY_TEMPLATE = "{prefix}:dg_d_wins:{d_id}"  # SET of g_ids D has beaten
+    _G_RESISTED_KEY_TEMPLATE = (
+        "{prefix}:dg_g_resisted:{g_id}"  # SET of d_ids G has resisted
+    )
+    _D_DELTA_KEY_TEMPLATE = (
+        "{prefix}:dg_delta:{d_id}"  # HASH g_id -> raw delta (any sign)
+    )
 
     def __init__(
         self,
@@ -68,6 +77,15 @@ class DGImprovementTracker:
 
     def _injected_pairs_key(self) -> str:
         return self._INJECTED_PAIRS_KEY_TEMPLATE.format(prefix=self._prefix)
+
+    def _d_wins_key(self, d_id: str) -> str:
+        return self._D_WINS_KEY_TEMPLATE.format(prefix=self._prefix, d_id=d_id)
+
+    def _g_resisted_key(self, g_id: str) -> str:
+        return self._G_RESISTED_KEY_TEMPLATE.format(prefix=self._prefix, g_id=g_id)
+
+    def _d_delta_key(self, d_id: str) -> str:
+        return self._D_DELTA_KEY_TEMPLATE.format(prefix=self._prefix, d_id=d_id)
 
     async def is_pair_injected(self, d_id: str, g_id: str) -> bool:
         """Return True if (D, G) pair has already been composed and injected.
@@ -113,32 +131,129 @@ class DGImprovementTracker:
             delta,
         )
 
-    async def record_batch(self, pairs: list[tuple[str, str, float]]) -> int:
-        """Record multiple D-G improvement pairs via Redis pipeline.
+    async def record_batch(
+        self,
+        pairs: list[tuple[str, str, float]],
+        *,
+        gen: int | None = None,
+    ) -> int:
+        """Record multiple D-G improvement pairs via a single Redis pipeline.
 
-        Dual-writes to both per-G sorted sets and global best-pairs sorted set.
-        Returns the number of positive pairs actually recorded.
+        Writes to FIVE key families in one round trip (v3):
+          - Per-G sorted set ``dg_improvements:{g_id}``     (positive deltas only)
+          - Global best-pairs sorted set ``dg_best_pairs``  (positive deltas only)
+          - D-keyed SET ``dg_d_wins:{d_id}``                (positive deltas)
+          - G-keyed SET ``dg_g_resisted:{g_id}``            (non-positive deltas)
+          - D-keyed HASH ``dg_delta:{d_id}``                (every pair, any sign)
+
+        The D-delta hash is the substrate for ``SharedBenchmarkLineageStage``
+        (§3.5 Prong 2). The D-wins / G-resisted SETs are the BD y-axes.
+
+        Emits a ``[TRACKER_WRITE]`` structured JSON log line so post-hoc log
+        audit can reconstruct exactly what was persisted without re-reading
+        Redis (§13 log-based verification contract).
+
+        Returns the number of positive pairs (legacy contract — unchanged).
         """
-        positive = [(d, g, delta) for d, g, delta in pairs if delta > 0]
-        if not positive:
+        if not pairs:
             return 0
+
         pipe = self._redis.pipeline(transaction=False)
         global_key = self._global_pairs_key()
-        global_members = {}
-        for d_id, g_id, delta in positive:
-            key = self._key(g_id)
-            pipe.zadd(key, {d_id: delta}, gt=True)
-            pipe.expire(key, self._ttl)
-            # Accumulate for global sorted set
-            pair_member = f"{d_id}|{g_id}"
-            global_members[pair_member] = delta
-        # Dual-write to global best-pairs
+        global_members: dict[str, float] = {}
+
+        d_wins: dict[str, set[str]] = {}
+        g_resisted: dict[str, set[str]] = {}
+        d_deltas: dict[str, dict[str, str]] = {}
+
+        positive_count = 0
+        for d_id, g_id, delta in pairs:
+            d_val = float(delta)
+            # Raw delta hash captures every pair, regardless of sign.
+            d_deltas.setdefault(d_id, {})[g_id] = repr(d_val)
+            if d_val > 0:
+                positive_count += 1
+                key = self._key(g_id)
+                pipe.zadd(key, {d_id: d_val}, gt=True)
+                pipe.expire(key, self._ttl)
+                global_members[f"{d_id}|{g_id}"] = d_val
+                d_wins.setdefault(d_id, set()).add(g_id)
+            else:
+                g_resisted.setdefault(g_id, set()).add(d_id)
+
         if global_members:
             pipe.zadd(global_key, global_members, gt=True)
             pipe.expire(global_key, self._ttl)
+
+        for d_id, g_set in d_wins.items():
+            key = self._d_wins_key(d_id)
+            pipe.sadd(key, *g_set)
+            pipe.expire(key, self._ttl)
+        for g_id, d_set in g_resisted.items():
+            key = self._g_resisted_key(g_id)
+            pipe.sadd(key, *d_set)
+            pipe.expire(key, self._ttl)
+        for d_id, delta_map in d_deltas.items():
+            key = self._d_delta_key(d_id)
+            pipe.hset(key, mapping=delta_map)
+            pipe.expire(key, self._ttl)
+
         await pipe.execute()
-        logger.debug("[DGTracker] batch recorded {} positive pairs", len(positive))
-        return len(positive)
+
+        payload = {
+            "event": "TRACKER_WRITE",
+            "gen": gen,
+            "pairs_count": len(pairs),
+            "positive_count": positive_count,
+            "d_wins_added": sum(len(v) for v in d_wins.values()),
+            "g_resisted_added": sum(len(v) for v in g_resisted.values()),
+            "d_faced_added": sum(len(v) for v in d_deltas.values()),
+        }
+        logger.info("[TRACKER_WRITE] {}", json.dumps(payload))
+        return positive_count
+
+    async def count_g_beaten_by_d(self, d_id: str) -> int:
+        """Number of distinct G programs this D has strictly improved (delta > 0).
+
+        Source for D's BD y-axis ``tracker_coverage_count`` (§3.3).
+        """
+        return int(await self._redis.scard(self._d_wins_key(d_id)))
+
+    async def count_d_resisted_by_g(self, g_id: str) -> int:
+        """Number of distinct D programs this G has resisted (delta <= 0).
+
+        Source for G's fallback BD y-axis ``g_tracker_coverage_count`` (§3.2).
+        """
+        return int(await self._redis.scard(self._g_resisted_key(g_id)))
+
+    async def faced_by_d(self, d_id: str) -> set[str]:
+        """Set of G program IDs this D has been evaluated against (any outcome).
+
+        Substrate for ``SharedBenchmarkResolver`` intersection (§3.5 Prong 2).
+        """
+        keys = await self._redis.hkeys(self._d_delta_key(d_id))
+        return set(keys)
+
+    async def get_deltas_against(
+        self, d_a: str, d_b: str, g_ids: list[str]
+    ) -> list[tuple[float, float]]:
+        """For each g_id, return (delta_a, delta_b). Pairs missing on either side are skipped.
+
+        Consumed by ``SharedBenchmarkLineageStage`` to compute
+        ``mean(delta_child) - mean(delta_parent)`` over the intersection
+        of the two D's benchmark histories.
+        """
+        if not g_ids:
+            return []
+        g_list = list(g_ids)
+        deltas_a = await self._redis.hmget(self._d_delta_key(d_a), g_list)
+        deltas_b = await self._redis.hmget(self._d_delta_key(d_b), g_list)
+        paired: list[tuple[float, float]] = []
+        for da, db in zip(deltas_a, deltas_b):
+            if da is None or db is None:
+                continue
+            paired.append((float(da), float(db)))
+        return paired
 
     async def get_best_d_for_g(self, g_id: str) -> tuple[str, float] | None:
         """Return the D with the highest improvement delta for this G.
