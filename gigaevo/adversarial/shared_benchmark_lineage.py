@@ -25,7 +25,7 @@ from loguru import logger
 
 from gigaevo.adversarial.structured_logging import emit_lineage_trend
 from gigaevo.database.program_storage import ProgramStorage
-from gigaevo.programs.core_types import ProgramStageResult, StageIO
+from gigaevo.programs.core_types import StageIO
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.common import CacheOnlyInput
@@ -95,16 +95,22 @@ class SharedBenchmarkLineageStage(Stage):
         self._min_shared = min_shared
 
     async def _load_parent(self, program: Program) -> Program | None:
-        """Load the parent program. Override in tests if no storage is supplied."""
-        if program.parent_id is None:
+        """Load the first parent program. Override in tests if no storage is supplied.
+
+        ``Program.lineage.parents`` is a ``list[str]`` of parent IDs (seeds have
+        an empty list). We use the first parent for the lineage-delta signal —
+        for rewrite-mode mutation the list always has exactly one entry.
+        """
+        lineage = getattr(program, "lineage", None)
+        parent_ids = list(getattr(lineage, "parents", []) or [])
+        if not parent_ids:
             return None
         if self._storage is None:
             return None
-        parents = await self._storage.mget([program.parent_id])
-        if not parents:
+        loaded = await self._storage.mget([parent_ids[0]])
+        if not loaded:
             return None
-        parent = parents[0]
-        return parent
+        return loaded[0]
 
     def _d_id(self, program: Program) -> str:
         """D program id == d_id in tracker. Test hook via ``_parent_id_to_d_id``."""

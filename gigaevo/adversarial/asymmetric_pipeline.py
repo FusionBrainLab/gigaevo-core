@@ -34,6 +34,7 @@ from gigaevo.adversarial.tracker_coverage_stages import (
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
+from gigaevo.programs.stages.json_processing import MergeDictStage
 
 
 class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
@@ -246,34 +247,65 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         population_role: Literal["constructor", "improver"],
         stage_timeout: float,
     ) -> None:
-        """Add tracker coverage count stages (after DGTrackerStage, before EnsureMetricsStage).
+        """Add tracker coverage stages + route their output into the candidate dict.
 
-        Writes career-coverage metrics (wins) into program.metrics dict for BD axis use.
+        The default pipeline wires ``MergeMetricsStage → EnsureMetricsStage`` via
+        a data_flow_edge named ``candidate``. ``EnsureMetricsStage`` validates
+        that dict against :class:`MetricsContext` required keys — including
+        ``wins`` for v3 BD axes.  ``wins`` is produced by the coverage stage,
+        which runs in parallel with ``MergeMetricsStage`` and would be invisible
+        to ``EnsureMetricsStage`` if we only wrote to ``program.metrics``.
+
+        Fix: insert a ``MergeCoverageMetricsStage`` (a :class:`MergeDictStage`)
+        between ``MergeMetricsStage`` and ``EnsureMetricsStage`` and route the
+        coverage stage's ``FloatDictContainer`` output into it as ``second``
+        (second overrides first on key collision). Data-flow edges give us the
+        exec-order constraint for free.
         """
+        coverage_stage_name = (
+            "ComputeDWinsCountStage"
+            if population_role == "improver"
+            else "ComputeGResistedCountStage"
+        )
+
         if population_role == "improver":
 
-            def make_d_wins_stage():
+            def make_coverage_stage():
                 return ComputeDWinsCountStage(
                     dg_tracker=dg_tracker, timeout=stage_timeout
                 )
+        else:
 
-            self.add_stage("ComputeDWinsCountStage", make_d_wins_stage)
-            self.add_exec_dep(
-                "ComputeDWinsCountStage",
-                ExecutionOrderDependency.on_success("DGTrackerStage"),
-            )
-        else:  # constructor
-
-            def make_g_resisted_stage():
+            def make_coverage_stage():
                 return ComputeGResistedCountStage(
                     dg_tracker=dg_tracker, timeout=stage_timeout
                 )
 
-            self.add_stage("ComputeGResistedCountStage", make_g_resisted_stage)
-            self.add_exec_dep(
-                "ComputeGResistedCountStage",
-                ExecutionOrderDependency.on_success("DGTrackerStage"),
-            )
+        self.add_stage(coverage_stage_name, make_coverage_stage)
+        self.add_exec_dep(
+            coverage_stage_name,
+            ExecutionOrderDependency.on_success("DGTrackerStage"),
+        )
+
+        # Rewire MergeMetricsStage → MergeCoverageMetricsStage → EnsureMetricsStage.
+        # This guarantees `wins` is in the candidate dict EnsureMetricsStage reads,
+        # fixing `ValueError: Missing required metric keys: ['wins']`.
+        _coverage_timeout = stage_timeout
+
+        def make_coverage_merge():
+            return MergeDictStage[str, float](timeout=_coverage_timeout)
+
+        self.add_stage("MergeCoverageMetricsStage", make_coverage_merge)
+        self.remove_data_flow_edge("MergeMetricsStage", "EnsureMetricsStage")
+        self.add_data_flow_edge(
+            "MergeMetricsStage", "MergeCoverageMetricsStage", "first"
+        )
+        self.add_data_flow_edge(
+            coverage_stage_name, "MergeCoverageMetricsStage", "second"
+        )
+        self.add_data_flow_edge(
+            "MergeCoverageMetricsStage", "EnsureMetricsStage", "candidate"
+        )
 
     def _add_shared_benchmark_lineage(
         self,

@@ -327,12 +327,23 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
 
 
 class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
-    """Top-K opponent selection with cell-stratification constraint.
+    """Role-specific top-K opponent selection, stratified by BD cell.
 
-    When the archive has ≥ k populated cells, returns one elite per cell
-    (distinct cells). Otherwise falls back to plain top-K-by-fitness_key.
-    Fitness-key is passed in __init__ to support role-specific selection
-    (G samples D by mean_improvement; D samples G by quality).
+    Reads from the production archive schema written by ``RedisArchiveStorage``:
+
+      - ``island_{island_id}:archive`` HASH — field=cell_field → program_id
+      - ``{prefix}:program:{pid}`` STRING (JSON payload) — program data
+
+    Sorts opponents by ``metrics[fitness_key]`` (role-specific: G samples D by
+    ``mean_improvement``; D samples G by ``quality``) rather than the parent's
+    hardcoded ``metrics.fitness``. Because ``RedisArchiveStorage`` enforces
+    exactly one program per cell, the top-K-by-fitness_key view already yields
+    K distinct cells; the cell_field tracking below defends that invariant
+    against future schema changes.
+
+    The ``fitness_key`` value rides on ``OpponentProgram.fitness`` so downstream
+    consumers (fitness-proportional sampling, ``get_top_k``) rank by the
+    role-specific metric without further plumbing.
     """
 
     def __init__(
@@ -344,25 +355,28 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
         fitness_key: str,
         k: int = 3,
         higher_is_better: bool = True,
+        island_id: str = "fitness_island",
+        cache_ttl: float = 30.0,
         **_ignored: object,
     ):
-        # Single-DB adapter for CellStratified (vs RedisOpponentArchiveProvider's multi-DB)
-        # `**_ignored` swallows legacy Hydra keys (sources, island_id, cache_ttl) that
-        # merge in from the inherited `adversarial_coevo.yaml` pipeline config — we do
-        # not need them here, but refusing the kwarg would crash Hydra instantiation.
+        # Single-DB adapter for CellStratified (vs RedisOpponentArchiveProvider's multi-DB).
+        # `**_ignored` swallows legacy Hydra keys (e.g. sources) that merge in from the
+        # inherited `adversarial_coevo.yaml` pipeline config.
         sources = [{"db": db, "prefix": prefix}]
         super().__init__(
             host=host,
             port=port,
             sources=sources,
-            island_id="fitness_island",
-            cache_ttl=30.0,
+            island_id=island_id,
+            cache_ttl=cache_ttl,
         )
         self._fitness_key = fitness_key
         self._k = k
         self._higher_is_better = higher_is_better
         self._db = db
         self._prefix = prefix
+        # Populated by _refresh_cache: program_id -> cell_field (e.g. "7,5")
+        self._cell_fields: dict[str, str] = {}
 
     def _get_redis(self, db: int) -> aioredis.Redis:  # type: ignore[type-arg]
         """Get Redis client, checking for test-injected _redis first."""
@@ -370,84 +384,162 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
             return self._redis  # type: ignore[return-value]
         return super()._get_redis(db)
 
+    async def _refresh_cache(self) -> None:
+        """Override: sort by role-specific fitness_key, track cell_field per program.
+
+        Schema exactly matches ``RedisArchiveStorage``:
+          - ``island_{island_id}:archive`` HASH — cell_field → program_id
+          - ``{prefix}:program:{pid}`` STRING — JSON payload with ``.code`` and
+            ``.metrics[fitness_key]``.
+
+        Programs missing ``metrics[fitness_key]`` are silently skipped — this
+        happens during early-gen warmup where some eval stages have not yet
+        emitted the role-specific metric for every archived program.
+        """
+        opponents: list[OpponentProgram] = []
+        cell_map: dict[str, str] = {}
+        archive_key = f"island_{self._island_id}:archive"
+
+        for db, prefix in self._sources:
+            try:
+                r = self._get_redis(db)
+                # HGETALL: field=cell_field -> program_id
+                cell_to_pid = await r.hgetall(archive_key)
+                if not cell_to_pid:
+                    logger.debug(
+                        "[CellStratifiedOpponentProvider] empty archive db={} key={}",
+                        db,
+                        archive_key,
+                    )
+                    continue
+
+                items = list(cell_to_pid.items())
+                pipe = r.pipeline(transaction=False)
+                for _cell_field, pid in items:
+                    pipe.get(f"{prefix}:program:{pid}")
+                raw_programs = await pipe.execute()
+
+                for (cell_field, pid), raw in zip(items, raw_programs):
+                    if raw is None:
+                        continue
+                    try:
+                        data = json.loads(raw)
+                        code = data.get("code", "")
+                        metrics = data.get("metrics", {})
+                        fitness_value = metrics.get(self._fitness_key)
+                        if fitness_value is None or code == "":
+                            continue
+                        fitness = float(fitness_value)
+                    except (json.JSONDecodeError, ValueError, KeyError) as e:
+                        logger.warning(
+                            "[CellStratifiedOpponentProvider] parse error pid={} err={}",
+                            pid,
+                            e,
+                        )
+                        continue
+
+                    opponents.append(
+                        OpponentProgram(
+                            program_id=pid,
+                            code=code,
+                            fitness=fitness,
+                        )
+                    )
+                    cell_map[pid] = cell_field
+            except Exception as exc:
+                logger.warning(
+                    "[CellStratifiedOpponentProvider] error reading db={}: {}", db, exc
+                )
+
+        self._cache = opponents
+        self._cell_fields = cell_map
+        logger.debug(
+            "[CellStratifiedOpponentProvider] refreshed: {} opponents, "
+            "{} distinct cells, fitness_key={}",
+            len(opponents),
+            len(set(cell_map.values())),
+            self._fitness_key,
+        )
+
     async def get_top_k(
         self, k: int, *, higher_is_better: bool = True
     ) -> list[OpponentProgram]:
         """Return up to k opponents, one elite per distinct BD cell.
 
-        Falls back to parent's get_top_k (plain fitness ranking) if archive
-        has fewer than k populated cells.
+        Sort: role-specific ``fitness_key`` descending (if ``higher_is_better``)
+        with ``program_id`` as deterministic tiebreak.
 
-        Args:
-            k: Number of opponents to return.
-            higher_is_better: Ignored; uses self._higher_is_better from __init__.
-
-        Returns:
-            List of up to k OpponentProgram, each from a distinct cell.
+        Distinct-cell constraint is enforced via ``cell_field`` lookup; with
+        ``RedisArchiveStorage`` enforcing 1-per-cell, this is trivially satisfied
+        but remains a defensive invariant.
         """
-        r = self._get_redis(self._db)
-        cells_key = f"{self._prefix}:archive:cells"
+        now = time.monotonic()
+        if not self._cache or (now - self._cache_time) > self._cache_ttl:
+            await self._refresh_cache()
+            self._cache_time = now
 
-        # List all cells
-        cell_strs = await r.smembers(cells_key)
-        if not cell_strs:
-            return []
+        effective_higher = self._higher_is_better and higher_is_better
 
-        # For each cell, fetch the elite (highest fitness in that cell)
-        cell_elites = []
-        for cell_str in cell_strs:
-            parts = cell_str.split(":")
-            if len(parts) != 2:
-                continue
-            try:
-                cell_x, cell_y = int(parts[0]), int(parts[1])
-            except ValueError:
-                continue
-
-            cell_key = f"{self._prefix}:archive:cell:{cell_x}:{cell_y}"
-            # Get the highest fitness program in this cell (ZSET, score = fitness)
-            if self._higher_is_better:
-                top_in_cell = await r.zrange(cell_key, -1, -1, withscores=True)
-            else:
-                top_in_cell = await r.zrange(cell_key, 0, 0, withscores=True)
-
-            if top_in_cell:
-                prog_id, fitness = top_in_cell[0]
-                cell_elites.append((float(fitness), prog_id, cell_str))
-
-        if not cell_elites:
-            return []
-
-        # Sort by fitness (descending if higher_is_better)
-        if self._higher_is_better:
-            cell_elites.sort(key=lambda x: (-x[0], x[1]))
-        else:
-            cell_elites.sort(key=lambda x: (x[0], x[1]))
-
-        # Pick one per cell, up to k
-        picked = []
-        seen_cells = set()
-        for fitness, prog_id, cell_str in cell_elites:
-            if cell_str in seen_cells or len(picked) >= k:
-                continue
-            prog_key = f"{self._prefix}:program:{prog_id}"
-            raw = await r.hget(prog_key, "code")
-            if raw:
-                picked.append(
-                    OpponentProgram(program_id=prog_id, code=raw, fitness=fitness)
-                )
-                seen_cells.add(cell_str)
-
-        # Sparse archive: if < k cells, fall back to parent's top-K
-        if len(picked) < k:
-            extra = await super().get_top_k(
-                k - len(picked), higher_is_better=self._higher_is_better
+        if not self._cache:
+            logger.info(
+                "[HOF_FETCH] {}",
+                json.dumps(
+                    {
+                        "event": "HOF_FETCH",
+                        "label": f"db{self._db}:{self._prefix}",
+                        "n_elites": 0,
+                        "fitness_key": self._fitness_key,
+                        "k_requested": int(k),
+                        "cells_populated": 0,
+                    }
+                ),
             )
-            picked_ids = {p.program_id for p in picked}
-            for e in extra:
-                if e.program_id not in picked_ids:
-                    picked.append(e)
-                    if len(picked) >= k:
-                        break
+            return []
 
-        return picked[:k]
+        if effective_higher:
+            sorted_opponents = sorted(
+                self._cache, key=lambda o: (-o.fitness, o.program_id)
+            )
+        else:
+            sorted_opponents = sorted(
+                self._cache, key=lambda o: (o.fitness, o.program_id)
+            )
+
+        picked: list[OpponentProgram] = []
+        seen_cells: set[str] = set()
+        for op in sorted_opponents:
+            cell_field = self._cell_fields.get(op.program_id, op.program_id)
+            if cell_field in seen_cells:
+                continue
+            picked.append(op)
+            seen_cells.add(cell_field)
+            logger.info(
+                "[CELL_PICK] {}",
+                json.dumps(
+                    {
+                        "event": "CELL_PICK",
+                        "cell_id": cell_field,
+                        "program_id": op.program_id,
+                        "fitness_key": self._fitness_key,
+                        "fitness_value": float(op.fitness),
+                    }
+                ),
+            )
+            if len(picked) >= k:
+                break
+
+        logger.info(
+            "[HOF_FETCH] {}",
+            json.dumps(
+                {
+                    "event": "HOF_FETCH",
+                    "label": f"db{self._db}:{self._prefix}",
+                    "n_elites": len(picked),
+                    "fitness_key": self._fitness_key,
+                    "k_requested": int(k),
+                    "cells_populated": len(seen_cells),
+                }
+            ),
+        )
+
+        return picked
