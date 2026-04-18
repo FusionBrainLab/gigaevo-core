@@ -37,13 +37,7 @@ async def run_experiment(cfg: DictConfig) -> None:
         evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
         writer: LogWriter = config_with_instances.writer
 
-        logger.info(
-            "Redis DB {db} at {host}:{port} | pipeline={pipeline}",
-            db=cfg.redis.db,
-            host=cfg.redis.host,
-            port=cfg.redis.port,
-            pipeline=cfg.get("pipeline_builder", {}).get("_target_", "(default)"),
-        )
+        logger.info("Redis DB {} at {}:{}", cfg.redis.db, cfg.redis.host, cfg.redis.port)
         configure_event_counters_from_cfg(cfg)
 
         await redis_storage.acquire_instance_lock()
