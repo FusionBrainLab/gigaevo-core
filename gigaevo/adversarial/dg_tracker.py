@@ -12,7 +12,9 @@ Only positive deltas (D actually improved G) are stored.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from loguru import logger
 from redis import asyncio as aioredis
@@ -183,7 +185,11 @@ class DGImprovementTracker:
                 g_resisted.setdefault(g_id, set()).add(d_id)
 
         if global_members:
-            pipe.zadd(global_key, global_members, gt=True)
+            pipe.zadd(
+                global_key,
+                cast("Mapping[str | bytes, bytes | float | int | str]", global_members),
+                gt=True,
+            )
             pipe.expire(global_key, self._ttl)
 
         for d_id, g_set in d_wins.items():
@@ -196,7 +202,12 @@ class DGImprovementTracker:
             pipe.expire(key, self._ttl)
         for d_id, delta_map in d_deltas.items():
             key = self._d_delta_key(d_id)
-            pipe.hset(key, mapping=delta_map)
+            pipe.hset(
+                key,
+                mapping=cast(
+                    "Mapping[str | bytes, bytes | float | int | str]", delta_map
+                ),
+            )
             pipe.expire(key, self._ttl)
 
         await pipe.execute()

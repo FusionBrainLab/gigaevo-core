@@ -14,11 +14,14 @@ Parametric: n_opponents=k, source_prompt_k=l (l<=k).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
 from gigaevo.adversarial.dg_tracker_stage import DGTrackerStage
+
+if TYPE_CHECKING:
+    from gigaevo.adversarial.dg_tracker import DGImprovementTracker
 from gigaevo.adversarial.gradient_prompt import GradientInPromptStage
 from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
 from gigaevo.adversarial.pipeline import AdversarialPipelineBuilder
@@ -80,7 +83,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         per_opponent_timeout: float = 10.0,
         fallback_dir: str = "fallback",
         archive_reeval: bool = False,
-        dg_tracker: object = None,
+        dg_tracker: DGImprovementTracker | None = None,
         *,
         dag_timeout: float = 7200.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
@@ -179,7 +182,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
     def _add_gradient_prompt(
         self,
         d_provider: OpponentArchiveProvider,
-        dg_tracker: object | None,
+        dg_tracker: DGImprovementTracker | None,
         stage_timeout: float,
     ) -> None:
         provider = d_provider  # Capture for lambda closure.
@@ -203,7 +206,10 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         )
 
     def _add_dg_tracker_stage(
-        self, dg_tracker: object, population_role: str, stage_timeout: float
+        self,
+        dg_tracker: DGImprovementTracker,
+        population_role: str,
+        stage_timeout: float,
     ) -> None:
         """Add DGTrackerStage to record per-opponent fitness deltas into the tracker.
 
@@ -243,7 +249,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
 
     def _add_tracker_coverage_stages(
         self,
-        dg_tracker: object,
+        dg_tracker: DGImprovementTracker,
         population_role: Literal["constructor", "improver"],
         stage_timeout: float,
     ) -> None:
@@ -310,7 +316,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
     def _add_shared_benchmark_lineage(
         self,
         ctx: EvolutionContext,
-        dg_tracker: object,
+        dg_tracker: DGImprovementTracker,
         stage_timeout: float,
     ) -> None:
         """Add SharedBenchmarkLineageStage for D runs (§3.5 Prong 2, §9.1).

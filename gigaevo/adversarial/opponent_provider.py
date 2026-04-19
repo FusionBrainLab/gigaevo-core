@@ -367,7 +367,7 @@ class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
         # Single-DB adapter for CellStratified (vs RedisOpponentArchiveProvider's multi-DB).
         # `**_ignored` swallows legacy Hydra keys (e.g. sources) that merge in from the
         # inherited `adversarial_coevo.yaml` pipeline config.
-        sources = [{"db": db, "prefix": prefix}]
+        sources: list[dict[str, int | str]] = [{"db": db, "prefix": prefix}]
         super().__init__(
             host=host,
             port=port,

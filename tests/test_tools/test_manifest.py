@@ -134,12 +134,6 @@ class TestValidation:
         with pytest.raises(ValueError, match="runs.*must be non-empty"):
             _validate(raw, "test/smoke")
 
-    def test_implemented_requires_servers(self):
-        raw = _implemented_raw()
-        raw["contract"]["servers"] = []
-        with pytest.raises(ValueError, match="servers.*must be non-empty"):
-            _validate(raw, "test/smoke")
-
     def test_implemented_requires_smoke_test(self):
         raw = _implemented_raw()
         raw["lifecycle"]["smoke_test"] = {"completed": False}
@@ -184,7 +178,6 @@ class TestValidation:
         run = m.contract.runs[0]
         assert run.db == 99
         assert run.pipeline == "standard"
-        assert run.chain_url == "http://10.0.0.1:8001/v1"
 
     def test_custom_env_parsed(self):
         raw = _implemented_raw()

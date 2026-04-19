@@ -20,7 +20,7 @@ grep'd to verify recorded pairs and skip reasons.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
@@ -73,7 +73,7 @@ class DGTrackerStage(Stage):
 
     async def compute(self, program: Program) -> None:
         program_id = program.id
-        params = self.params
+        params = cast(DGTrackerStageInputs, self.params)
         opponent_ids: list[str] = list(params.opponent_ids.data or [])
         validation_payload = params.validation_result.data
         if not isinstance(validation_payload, tuple) or len(validation_payload) != 2:

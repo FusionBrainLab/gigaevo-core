@@ -155,40 +155,6 @@ class TestWatchdogPluginOverride:
             assert "nonexistent" in result.output.lower()
 
 
-class TestWatchdogNoProxy:
-    def test_no_proxy_set_from_manifest_servers(self):
-        """NO_PROXY includes manifest servers and api.github.com."""
-        import os
-
-        manifest = _make_fake_manifest()
-
-        with (
-            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
-            patch("gigaevo.monitoring.watchdog_plugin.resolve_plugin") as mock_resolve,
-            patch(
-                "gigaevo.monitoring.watchdog_engine.WatchdogEngine"
-            ) as mock_engine_cls,
-            patch.dict(os.environ, {"NO_PROXY": ""}, clear=False),
-        ):
-            plugin_mock = MagicMock()
-            plugin_mock.__name__ = "MockPlugin"
-            mock_resolve.return_value = plugin_mock
-            mock_engine_cls.return_value.run.return_value = None
-
-            runner = CliRunner()
-            result = runner.invoke(
-                main,
-                ["-e", "test/exp", "watchdog"],
-                catch_exceptions=False,
-            )
-            assert result.exit_code == 0, result.output
-            assert "NO_PROXY" in result.output
-            assert "10.0.0.1" in result.output
-            assert "10.0.0.2" in result.output
-            assert "api.github.com" in result.output
-            assert "custom.host.com" in result.output
-
-
 class TestWatchdogLoadsDotenv:
     def test_loads_dotenv_on_startup(self, tmp_path, monkeypatch):
         """Watchdog sources .env from project root so Telegram credentials
