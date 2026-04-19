@@ -31,9 +31,7 @@ def _synthetic_log() -> str:
     """Three runs: A (no role), B_G (role=G), B_D (role=D)."""
     lines: list[str] = []
     for run_label in ("A", "B_G", "B_D"):
-        lines.append(
-            _event_line("GENERATION_BOUNDARY", gen=1, run_label=run_label)
-        )
+        lines.append(_event_line("GENERATION_BOUNDARY", gen=1, run_label=run_label))
         lines.append(
             _event_line(
                 "STAGE_EXEC",
@@ -87,9 +85,7 @@ class TestEventsPlotPerRun:
         out = tmp_path / "out"
 
         runner = CliRunner()
-        result = runner.invoke(
-            events, ["plot", "--log", str(log), "--out", str(out)]
-        )
+        result = runner.invoke(events, ["plot", "--log", str(log), "--out", str(out)])
         assert result.exit_code == 0, result.output
         summary = (out / "summary.md").read_text()
         # At least one canonical event's health_question must appear verbatim.
