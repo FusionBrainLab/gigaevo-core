@@ -31,7 +31,7 @@ class CacheOnlyInput(StageIO):
     `compute()` would otherwise be value-stable across the rotation.
     """
 
-    cache_on: Any = None
+    cache_on: Any | None = None
 
 
 String = Box[str]

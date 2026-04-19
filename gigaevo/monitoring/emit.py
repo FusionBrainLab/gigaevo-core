@@ -70,7 +70,7 @@ def configure_event_counters_from_cfg(cfg: Any) -> None:
     program-storage client), and we never leak its construction into the
     caller. Silent no-op when the prefix is absent.
     """
-    prefix = cfg.redis.storage.key_prefix
+    prefix = cfg.redis_storage.config.key_prefix
     if not prefix:
         return
     import redis

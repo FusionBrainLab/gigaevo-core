@@ -1,14 +1,29 @@
 """Progress-based synchronization hook for adversarial co-evolution.
 
-ProgressBasedSyncHook blocks a population's engine until the opponent
-population(s) have processed a minimum number of additional programs.
-Unlike MainRunSyncHook (which waits for generation boundaries), this
-hook operates on continuous program-count progress — designed for
-SteadyStateEvolutionEngine where "generation" is just an epoch boundary.
+ProgressBasedSyncHook blocks a population's engine until the drift between
+this population and the opponent(s) falls within a configured cap. Unlike
+MainRunSyncHook (which waits for generation boundaries), this hook operates
+on continuous program-count progress — designed for SteadyStateEvolutionEngine
+where "generation" is an epoch boundary.
 
-Supports asymmetric update ratios via ``sync_every_n_epochs``:
-set to K for K:1 updates (this population runs K epochs per sync).
-Inspired by GAN training routines (critic iterations > generator).
+The wait condition is asymmetric by design (drift-cap semantics):
+
+    while own_progress - min(opponent_progress) > drift_cap:
+        sleep(poll_interval)
+
+Only the *ahead* population ever blocks; the *behind* population's wait
+condition reduces to a negative number and is always satisfied, so it
+proceeds freely. Deadlock is impossible by construction: there is no state
+in which both sides can be waiting for each other simultaneously.
+
+This replaces the prior symmetric "opponent advanced by min_delta since my
+last sync" semantics, which were observed to deadlock in k5-budget-v3's
+K3_1 pair (KF-07 in experiments/PATTERNS.md) when both populations landed
+in the pre-step hook at the same time.
+
+Supports asymmetric update ratios via ``sync_every_n_epochs``: set to K for
+K:1 updates (this population runs K epochs per sync). Inspired by GAN
+training routines (critic iterations > generator).
 """
 
 from __future__ import annotations
@@ -16,32 +31,41 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+import warnings
 
 from loguru import logger
 from redis import asyncio as aioredis
 
 
 class ProgressBasedSyncHook:
-    """Pre-step hook that blocks until opponent processes ``min_delta`` more programs.
+    """Pre-step hook enforcing a drift cap between this population and opponent(s).
 
-    Polls each opponent run's ``engine:programs_processed`` counter in Redis and
-    waits until the minimum across all sources advances by at least ``min_delta``.
+    Polls both this run's and each opponent run's ``engine:programs_processed``
+    counter in Redis and waits only while
+    ``own_progress - min(opponent_progress) > drift_cap``.
 
     Supports K:1 asymmetric update ratios via ``sync_every_n_epochs``: when set
     to K > 1, the hook is a no-op for K-1 out of every K calls.
 
     Args:
-        host: Redis host
-        port: Redis port
+        host: Redis host.
+        port: Redis port.
         sources: List of {"db": int, "prefix": str} — opponent run(s).
             Must be non-empty.
-        min_delta: Minimum programs opponent must process between syncs (default: 10).
-            MUST be <= max_mutations_per_generation to avoid deadlock when both
-            populations wait for each other to advance.
-        sync_every_n_epochs: Only sync every N epochs (default: 1).
-            Set to K for K:1 asymmetric updates.
-        timeout: Maximum seconds to wait before proceeding anyway (default: 7200)
-        poll_interval: Seconds between polls (default: 5.0)
+        own_db: Redis DB of this population's own run. Required.
+        own_prefix: Redis key prefix of this population's own run. Required.
+        drift_cap: Maximum number of programs this population is allowed to
+            lead the opponent by before blocking. Must be a non-negative int.
+            Required — pass explicitly per experiment (no silent default).
+        min_delta: Deprecated alias for ``drift_cap``. If ``drift_cap`` is
+            ``None`` and ``min_delta`` is provided, ``min_delta`` is used and
+            a DeprecationWarning is emitted.
+        sync_every_n_epochs: Only sync every N epochs (default: 1). Set to K
+            for K:1 asymmetric updates.
+        timeout: Last-resort safety net — maximum seconds to wait before
+            proceeding anyway (default: 7200). Under drift-cap semantics this
+            should almost never fire; kept in case of Redis outage or similar.
+        poll_interval: Seconds between polls (default: 5.0).
     """
 
     def __init__(
@@ -49,7 +73,10 @@ class ProgressBasedSyncHook:
         host: str,
         port: int,
         sources: list[dict[str, int | str]],
-        min_delta: int = 10,
+        own_db: int,
+        own_prefix: str,
+        drift_cap: int | None = None,
+        min_delta: int | None = None,
         sync_every_n_epochs: int = 1,
         timeout: float = 7200.0,
         poll_interval: float = 5.0,
@@ -58,23 +85,57 @@ class ProgressBasedSyncHook:
         if not sources:
             raise ValueError("ProgressBasedSyncHook requires at least one source")
 
+        if drift_cap is None and min_delta is None:
+            raise ValueError(
+                "ProgressBasedSyncHook requires `drift_cap` (or deprecated "
+                "alias `min_delta`) to be set explicitly. Example: drift_cap=8 "
+                "means this population may lead the opponent by at most 8 "
+                "programs before blocking."
+            )
+        if drift_cap is not None and min_delta is not None:
+            logger.warning(
+                "[ProgressBasedSyncHook] Both `drift_cap` ({}) and `min_delta` "
+                "({}) were passed; using `drift_cap` and ignoring `min_delta`.",
+                drift_cap,
+                min_delta,
+            )
+        if drift_cap is None:
+            warnings.warn(
+                "`min_delta` is a deprecated alias; pass `drift_cap` instead. "
+                "The semantic has changed from 'opponent must advance by N "
+                "since my last sync' (symmetric, deadlock-prone) to 'I must "
+                "not be more than N ahead of opponent' (asymmetric, "
+                "deadlock-free). The old name is kept as a compatibility "
+                "shim for existing configs.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            drift_cap = min_delta  # type: ignore[assignment]
+        assert drift_cap is not None  # for mypy
+        if drift_cap < 0:
+            raise ValueError(f"drift_cap must be >= 0, got {drift_cap}")
+
         self._host = host
         self._port = port
         self._sources = [(int(s["db"]), str(s["prefix"])) for s in sources]
-        self._min_delta = min_delta
+        self._own_db = int(own_db)
+        self._own_prefix = str(own_prefix)
+        self._drift_cap = drift_cap
         self._sync_every_n_epochs = max(1, sync_every_n_epochs)
         self._timeout = timeout
         self._poll_interval = poll_interval
-        self._last_progress: int = -1  # sentinel: not yet initialized
         self._epoch_call_count: int = 0
+        self._first_call: bool = True
         self._redis_clients: dict[int, aioredis.Redis] = {}  # type: ignore[type-arg]
 
         sources_desc = ", ".join(f"db={db} prefix={pfx!r}" for db, pfx in self._sources)
         logger.info(
-            "[ProgressBasedSyncHook] Init | sources=[{}] min_delta={} "
-            "sync_every={}epochs timeout={}s poll={}s",
+            "[ProgressBasedSyncHook] Init | own=db={} prefix={!r} "
+            "opponents=[{}] drift_cap={} sync_every={}epochs timeout={}s poll={}s",
+            self._own_db,
+            self._own_prefix,
             sources_desc,
-            self._min_delta,
+            self._drift_cap,
             self._sync_every_n_epochs,
             self._timeout,
             self._poll_interval,
@@ -90,30 +151,38 @@ class ProgressBasedSyncHook:
             )
         return self._redis_clients[db]
 
-    async def _get_min_progress(self) -> int:
-        """Read the minimum programs_processed across all tracked opponent runs."""
-        values = []
-        for db, prefix in self._sources:
-            try:
-                r = self._get_redis(db)
-                key = f"{prefix}:run_state"
-                raw = await r.hget(key, "engine:programs_processed")
-                values.append(int(raw) if raw else 0)
-            except Exception as exc:
-                logger.warning(
-                    "[ProgressBasedSyncHook] Error reading progress from db={}: {}",
-                    db,
-                    exc,
-                )
-                values.append(0)
+    async def _read_progress(self, db: int, prefix: str) -> int:
+        """Read ``engine:programs_processed`` for a single run. Missing -> 0."""
+        try:
+            r = self._get_redis(db)
+            raw = await r.hget(f"{prefix}:run_state", "engine:programs_processed")
+            return int(raw) if raw else 0
+        except Exception as exc:
+            logger.warning(
+                "[ProgressBasedSyncHook] Error reading progress from db={} prefix={!r}: {}",
+                db,
+                prefix,
+                exc,
+            )
+            return 0
+
+    async def _get_min_opponent_progress(self) -> int:
+        """Minimum ``programs_processed`` across all tracked opponent runs."""
+        values = [await self._read_progress(db, prefix) for db, prefix in self._sources]
         return min(values) if values else 0
 
-    async def __call__(self) -> None:
-        """Block until opponent has processed min_delta more programs.
+    async def _get_own_progress(self) -> int:
+        """This population's own ``programs_processed`` at the latest epoch boundary."""
+        return await self._read_progress(self._own_db, self._own_prefix)
 
-        On the first call, records the baseline progress and returns immediately.
-        Subsequent calls block until ``min_progress >= last_progress + min_delta``.
+    async def __call__(self) -> None:
+        """Block until drift between this population and opponent(s) is within cap.
+
         Respects ``sync_every_n_epochs``: skips K-1 out of every K calls.
+
+        On the first call, logs a baseline reading and returns immediately
+        (drift check is skipped for the first hook call to mirror the prior
+        "baseline, don't block" contract).
         """
         # Asymmetric ratio: skip this epoch if not a sync epoch
         self._epoch_call_count += 1
@@ -121,58 +190,70 @@ class ProgressBasedSyncHook:
             return
         self._epoch_call_count = 0
 
-        # First sync: record baseline, don't block
-        if self._last_progress < 0:
-            self._last_progress = await self._get_min_progress()
+        # First call: log baseline and skip drift check (contract preserved from
+        # prior semantics so engine startup is unaffected).
+        if self._first_call:
+            self._first_call = False
+            own_p = await self._get_own_progress()
+            opp_p = await self._get_min_opponent_progress()
             logger.info(
-                "[ProgressBasedSyncHook] Baseline recorded: progress={}",
-                self._last_progress,
+                "[ProgressBasedSyncHook] Baseline | own={} opp_min={} (drift={}, cap={})",
+                own_p,
+                opp_p,
+                own_p - opp_p,
+                self._drift_cap,
             )
             return
 
-        target = self._last_progress + self._min_delta
         start = time.monotonic()
         last_progress_log = start
 
         while True:
-            min_progress = await self._get_min_progress()
+            own_progress = await self._get_own_progress()
+            opp_progress = await self._get_min_opponent_progress()
+            drift = own_progress - opp_progress
 
-            if min_progress >= target:
+            # Drift-cap condition: block only while we are MORE than cap ahead.
+            # When drift <= cap (including the behind-side case drift < 0), proceed.
+            if drift <= self._drift_cap:
                 elapsed = time.monotonic() - start
-                logger.info(
-                    "[ProgressBasedSyncHook] Opponent advanced to {} "
-                    "(was {}, target={}, waited {:.1f}s, {} sources)",
-                    min_progress,
-                    self._last_progress,
-                    target,
-                    elapsed,
-                    len(self._sources),
-                )
-                self._last_progress = min_progress
+                if elapsed > self._poll_interval:
+                    logger.info(
+                        "[ProgressBasedSyncHook] Drift within cap | own={} opp_min={} "
+                        "drift={} cap={} (waited {:.1f}s)",
+                        own_progress,
+                        opp_progress,
+                        drift,
+                        self._drift_cap,
+                        elapsed,
+                    )
                 return
 
             elapsed = time.monotonic() - start
             if elapsed > self._timeout:
                 logger.warning(
-                    "[ProgressBasedSyncHook] Timeout after {:.0f}s waiting for "
-                    "progress >= {} (current min={}), proceeding",
+                    "[ProgressBasedSyncHook] Timeout after {:.0f}s with drift={} "
+                    "> cap={} (own={}, opp_min={}). Proceeding anyway — this "
+                    "should be rare under drift-cap semantics and likely "
+                    "indicates Redis or opponent-run failure, not mutual wait.",
                     elapsed,
-                    target,
-                    min_progress,
+                    drift,
+                    self._drift_cap,
+                    own_progress,
+                    opp_progress,
                 )
-                # Reset baseline to current reality so the NEXT epoch doesn't
-                # also wait the full timeout with a stale target.
-                self._last_progress = min_progress
                 return
 
             now = time.monotonic()
             if (now - last_progress_log) >= 60.0:
                 logger.info(
-                    "[ProgressBasedSyncHook] Waiting {:.0f}s for progress >= {} "
-                    "(current min={})",
+                    "[ProgressBasedSyncHook] Leading opponent by {} (cap={}) "
+                    "— waited {:.0f}s | own={} opp_min={}",
+                    drift,
+                    self._drift_cap,
                     elapsed,
-                    target,
-                    min_progress,
+                    own_progress,
+                    opp_progress,
                 )
                 last_progress_log = now
 
