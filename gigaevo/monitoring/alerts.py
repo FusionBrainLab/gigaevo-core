@@ -23,6 +23,7 @@ class AlertType(StrEnum):
     COMPLETION = "completion"
     LOW_THROUGHPUT = "low_throughput"
     MODEL_DRIFT = "model_drift"
+    EVENT_RATE_ZERO = "event_rate_zero"
 
 
 class AlertSeverity(StrEnum):
@@ -43,6 +44,12 @@ class Alert:
         run_label: Which run this alert is about (or "experiment" for global alerts).
         message: Human-readable summary.
         details: Optional structured data for programmatic consumers.
+        cooldown_discriminator: Optional extra key fed into cooldown tracking
+            so one alert subtype can't mask another with the same
+            ``(alert_type, run_label)`` pair. When set, the cooldown tracker
+            uses ``(alert_type, cooldown_discriminator)``; when unset it falls
+            back to ``(alert_type, run_label)``. This keeps cooldown generic —
+            emitters opt in without the tracker knowing about specific types.
     """
 
     alert_type: AlertType
@@ -50,6 +57,7 @@ class Alert:
     run_label: str
     message: str
     details: dict | None = field(default=None)
+    cooldown_discriminator: str | None = field(default=None)
 
     def __str__(self) -> str:
         return f"[{self.severity.upper()}] {self.alert_type}: {self.run_label} -- {self.message}"
@@ -169,6 +177,11 @@ class AlertDetector:
                     )
                 )
 
+            # --- Event rate zero (Track B4, generic) ---
+            for alert in self._event_rate_zero_alerts(snap):
+                log.warning(str(alert))
+                raw_alerts.append(alert)
+
         # --- Completion detection (global, not per-run) ---
         if snapshots and all(snap.completed for snap in snapshots):
             reasons = {
@@ -207,10 +220,81 @@ class AlertDetector:
 
         return alerts
 
+    def _event_rate_zero_alerts(self, snap: RunSnapshot) -> list[Alert]:
+        """Generic predicate: one alert per canonical event observed on this
+        snapshot whose ``expected_after_gen`` threshold has been crossed by
+        the run's generation AND whose minute-window count is zero.
+
+        Iterates ``snap.event_window_counts`` (what was actually measured),
+        not the full registry — we only alert on signals we collected. This
+        keeps the predicate scoped: an event the collector didn't sample
+        stays silent, so adding new canonical events is safe even before
+        the collector is taught to poll them.
+
+        Each alert is tagged with a ``cooldown_discriminator`` of
+        ``{run_label}:{event_name}`` so one zero-rate event doesn't suppress
+        another on the same run — the cooldown tracker stays generic and
+        never looks at ``alert_type``.
+
+        Events with ``expected_after_gen=0`` never trigger (would spam for
+        GENERATION_BOUNDARY-class events that fire from the very first
+        tick). Snapshots with no event counts collected (e.g. Redis
+        unreachable at collect time) are silent, preserving backward
+        compatibility.
+        """
+        # Imported lazily so tests that register scratch events after module
+        # import still appear in the registry snapshot.
+        from gigaevo.monitoring.events import CANONICAL_EVENTS
+
+        if snap.event_window_counts is None:
+            return []
+        if snap.generation is None:
+            return []
+
+        alerts: list[Alert] = []
+        for name, count in snap.event_window_counts.items():
+            cls = CANONICAL_EVENTS.get(name)
+            if cls is None:
+                continue
+            threshold = getattr(cls, "expected_after_gen", 0) or 0
+            if threshold <= 0:
+                continue
+            if snap.generation < threshold:
+                continue
+            if count > 0:
+                continue
+            health_q = getattr(cls, "health_question", "") or ""
+            alerts.append(
+                Alert(
+                    alert_type=AlertType.EVENT_RATE_ZERO,
+                    severity=AlertSeverity.WARN,
+                    run_label=snap.run_spec.label,
+                    message=(
+                        f"Run {snap.run_spec.label}: event {name} count is 0 at "
+                        f"gen {snap.generation} (expected after gen "
+                        f"{threshold}). {health_q}".rstrip()
+                    ),
+                    details={
+                        "event_name": name,
+                        "generation": snap.generation,
+                        "expected_after_gen": threshold,
+                        "count": count,
+                        "health_question": health_q,
+                    },
+                    cooldown_discriminator=f"{snap.run_spec.label}:{name}",
+                )
+            )
+        return alerts
+
     def _apply_cooldowns(self, raw_alerts: list[Alert]) -> list[Alert]:
         """Filter alerts through cooldown tracker.
 
-        Each (alert_type, run_label) pair gets a cooldown counter.
+        Each (alert_type, discriminator) pair gets a cooldown counter,
+        where ``discriminator`` is ``alert.cooldown_discriminator`` when set
+        and ``alert.run_label`` otherwise. This keeps the tracker generic:
+        emitters opt in to finer-grained suppression by populating the
+        discriminator field — the tracker never inspects ``alert_type``.
+
         On each call: first filter alerts (suppress if counter > 0),
         then decrement only pre-existing counters (NOT newly set ones).
 
@@ -223,14 +307,14 @@ class AlertDetector:
           Call 3: suppressed (counter 1 -> 0, deleted)
           Call 4: fires again
         """
-        # 1. Filter alerts against current cooldowns, track newly set keys
         emitted: list[Alert] = []
         new_keys: set[tuple[str, str]] = set()
         for alert in raw_alerts:
-            key = (alert.alert_type.value, alert.run_label)
+            discriminator = alert.cooldown_discriminator or alert.run_label
+            key = (alert.alert_type.value, discriminator)
             if key in self._cooldowns:
                 logger.bind(component="alerts").debug(
-                    f"Suppressed {alert.alert_type} for {alert.run_label} "
+                    f"Suppressed {alert.alert_type} for {discriminator} "
                     f"(cooldown: {self._cooldowns[key]} cycles remaining)"
                 )
                 continue

@@ -21,8 +21,9 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str]] = {
     "watchdog": ("gigaevo.cli.watchdog_cmd", "watchdog"),
     "checkpoint": ("gigaevo.cli.checkpoint", "checkpoint"),
     "manifest": ("gigaevo.cli.manifest_cmd", "manifest"),
-    "inspect": ("gigaevo.cli.inspect_cmd", "inspect_cmd"),
+    "inspect": ("gigaevo.cli.inspect_cmd", "inspect"),
     "launch": ("gigaevo.cli.launch_cmd", "launch"),
+    "events": ("gigaevo.cli.events_cmd", "events"),
 }
 
 
@@ -55,14 +56,20 @@ class LazyGroup(click.Group):
     "--experiment",
     type=str,
     default=None,
-    help="Experiment name (task/name). Reads experiment.yaml for run discovery.",
+    help=(
+        "Experiment name (task/name, e.g. 'heilbron/k5-budget-v3'). "
+        "Reads experiments/<name>/experiment.yaml and auto-discovers runs."
+    ),
 )
 @click.option(
     "-r",
     "--run",
     type=str,
     multiple=True,
-    help="Run spec prefix@db[:label]. Repeatable.",
+    help=(
+        "Run spec 'prefix@db[:label]' (e.g. 'adv_k5_1_G@1:K5_1_G'). "
+        "Repeatable — pass multiple times to target several runs."
+    ),
 )
 @click.option(
     "-f",
@@ -70,12 +77,30 @@ class LazyGroup(click.Group):
     "format_name",
     type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
     default=None,
-    help="Output format (auto-detects: table for terminal, json for pipe).",
+    help=(
+        "Output format for tabular data. Auto-detects: table for TTY, "
+        "json when piped. Subcommand-specific short flags (e.g. 'logs -f' "
+        "for follow) do NOT collide — Click consumes global flags first."
+    ),
 )
-@click.option("-q", "--quiet", is_flag=True, default=False, help="Suppress output.")
-@click.option("-v", "--verbose", is_flag=True, default=False, help="Verbose output.")
-@click.option("--redis-host", default="localhost", help="Redis server hostname.")
-@click.option("--redis-port", type=int, default=6379, help="Redis server port.")
+@click.option(
+    "-q", "--quiet", is_flag=True, default=False, help="Suppress non-error output."
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Emit debug-level progress messages.",
+)
+@click.option(
+    "--redis-host",
+    default="localhost",
+    help="Redis server hostname (default: localhost).",
+)
+@click.option(
+    "--redis-port", type=int, default=6379, help="Redis server port (default: 6379)."
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -87,7 +112,37 @@ def main(
     redis_host: str,
     redis_port: int,
 ) -> None:
-    """GigaEvo CLI -- unified experiment monitoring and analysis."""
+    """GigaEvo CLI -- unified experiment monitoring and analysis.
+
+    Run `gigaevo <subcommand> --help` for per-command documentation.
+    Common workflows: `status` for run health, `trajectory`/`top` for
+    fitness inspection, `plot` for visualisations, `logs` for tailing,
+    `manifest` for experiment.yaml edits, `launch`/`watchdog` for
+    lifecycle control, `flush` for teardown.
+
+    \b
+    Argument order
+    --------------
+    Global flags (-e, -r, -f, -q, -v, --redis-host, --redis-port) MUST
+    appear BEFORE the subcommand. Subcommands may re-use short flags
+    (e.g. `logs -f` for follow, `top -n 10` for top-N) — there's no
+    collision because Click consumes global flags first.
+
+    \b
+    Examples
+    --------
+      gigaevo -e heilbron/k5-budget-v3 status
+      gigaevo -e heilbron/k5-budget-v3 -f json trajectory --tail 20
+      gigaevo -r adv_k5_1_G@1:K5_1_G -r adv_k5_1_D@2:K5_1_D status
+      gigaevo -e heilbron/k5-budget-v3 top -n 5 --code
+      gigaevo -e heilbron/k5-budget-v3 logs -f        # -f here = --follow
+      gigaevo -e heilbron/k5-budget-v3 manifest get runs
+      gigaevo flush --db 1 2 3 --confirm              # no -e/-r needed
+
+    Target selection: pass `-e/--experiment` to auto-discover all runs
+    from the manifest, OR `-r/--run` (repeatable) to target specific
+    prefix@db pairs. Some commands (flush, inspect) ignore both.
+    """
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = OutputFormatter(format_name=format_name, quiet=quiet)
     ctx.obj["experiment"] = experiment

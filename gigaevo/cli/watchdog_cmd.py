@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import click
+from dotenv import find_dotenv, load_dotenv
 
 
 @click.command("watchdog")
@@ -41,12 +43,31 @@ def watchdog(
     max_restarts: int,
     plugin_name: str | None,
 ) -> None:
-    """Start or manage the experiment watchdog."""
+    """Start the WatchdogEngine for a running experiment.
+
+    Reads plot metrics, plot commands, and poll cadence from
+    `experiment.yaml`'s `control_plane.watchdog` section. Plugin is
+    auto-detected from the manifest (adversarial / solo / prompt_coevo)
+    unless `--plugin` forces a specific one.
+
+    Sources `.env` to pick up Telegram credentials and `HTTPS_PROXY`
+    without relying on the caller having pre-sourced the shell env.
+    """
     experiment = ctx.obj.get("experiment")
     if not experiment:
         click.echo("Error: Watchdog requires --experiment flag.", err=True)
         ctx.exit(1)
         return
+
+    # Load .env so Telegram credentials and HTTPS_PROXY are available without
+    # the caller (launch.sh, subprocess.Popen) having to pre-source the shell env.
+    # override=False keeps any pre-existing shell vars authoritative.
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+        click.echo(f"  .env: loaded from {Path(dotenv_path)}")
+    else:
+        click.echo("  .env: not found (skipping)")
 
     # Lazy imports to keep CLI startup fast
     from gigaevo.experiment.manifest import load_manifest
@@ -63,19 +84,10 @@ def watchdog(
     manifest = load_manifest(experiment)
     watchdog_manifest = manifest.control_plane.watchdog
 
-    # Auto-configure NO_PROXY from manifest servers
-    no_proxy = os.environ.get("NO_PROXY", "")
-    extra_hosts = (
-        list(manifest.contract.servers)
-        + ["api.github.com"]
-        + list(watchdog_manifest.no_proxy_hosts)
-    )
-    for host in extra_hosts:
-        if host not in no_proxy:
-            no_proxy = ",".join(filter(None, [no_proxy, host]))
-    os.environ["NO_PROXY"] = no_proxy
-    os.environ["no_proxy"] = no_proxy
-    click.echo(f"  NO_PROXY: {no_proxy}")
+    # Proxy (HTTPS_PROXY / NO_PROXY) comes from the user's shell / .env —
+    # load_dotenv above already populated it. The watchdog no longer builds
+    # its own NO_PROXY from manifest fields.
+    click.echo(f"  NO_PROXY: {os.environ.get('NO_PROXY', '(unset)')}")
 
     # Resolve plugin class
     if plugin_name:

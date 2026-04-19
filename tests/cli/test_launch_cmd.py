@@ -76,3 +76,46 @@ class TestLaunchCmd:
         mock_launch.assert_called_once_with(
             "hover/test", dry_run=True, skip_preflight=True
         )
+
+    def test_generate_script_writes_file_and_skips_launch(self, runner, tmp_path):
+        written = {}
+
+        def fake_gen(exp):
+            p = tmp_path / "launch.sh"
+            p.write_text(f"#!/usr/bin/env bash\n# generated for {exp}\n")
+            p.chmod(0o755)
+            written["path"] = p
+            return p
+
+        with (
+            patch(
+                "gigaevo.cli.launch_cmd._generate_launch_script", side_effect=fake_gen
+            ) as mock_gen,
+            patch("gigaevo.cli.launch_cmd.run_launch") as mock_launch,
+        ):
+            result = runner.invoke(
+                main, ["-e", "hover/test", "launch", "--generate-script"]
+            )
+
+        assert result.exit_code == 0, result.output
+        mock_gen.assert_called_once_with("hover/test")
+        mock_launch.assert_not_called()
+        assert "launch.sh" in result.output
+        assert written["path"].exists()
+
+    def test_generate_script_requires_experiment_flag(self, runner):
+        result = runner.invoke(main, ["launch", "--generate-script"])
+        assert result.exit_code != 0
+        assert (
+            "experiment" in result.output.lower() or "requires" in result.output.lower()
+        )
+
+    def test_generate_script_mutually_exclusive_with_dry_run(self, runner):
+        result = runner.invoke(
+            main, ["-e", "hover/test", "launch", "--generate-script", "--dry-run"]
+        )
+        assert result.exit_code != 0
+        assert (
+            "mutually exclusive" in result.output.lower()
+            or "cannot" in result.output.lower()
+        )

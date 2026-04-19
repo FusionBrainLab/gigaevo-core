@@ -11,6 +11,10 @@ from omegaconf import DictConfig
 from gigaevo.config.resolvers import register_resolvers
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
+from gigaevo.monitoring.emit import (
+    configure_event_counters_from_cfg,
+    reset_event_counters,
+)
 from gigaevo.problems.initial_loaders import InitialProgramLoader
 from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
 from gigaevo.runner.dag_runner import DagRunner
@@ -34,12 +38,9 @@ async def run_experiment(cfg: DictConfig) -> None:
         writer: LogWriter = config_with_instances.writer
 
         logger.info(
-            "Redis DB {db} at {host}:{port} | pipeline={pipeline}",
-            db=cfg.redis.db,
-            host=cfg.redis.host,
-            port=cfg.redis.port,
-            pipeline=cfg.get("pipeline_builder", {}).get("_target_", "(default)"),
+            "Redis DB {} at {}:{}", cfg.redis.db, cfg.redis.host, cfg.redis.port
         )
+        configure_event_counters_from_cfg(cfg)
 
         await redis_storage.acquire_instance_lock()
 
@@ -84,6 +85,7 @@ async def run_experiment(cfg: DictConfig) -> None:
         logger.exception("Experiment failed")
         raise
     finally:
+        reset_event_counters()
         await default_exec_runner_pool().shutdown()
         if redis_storage is not None:
             await redis_storage.close()

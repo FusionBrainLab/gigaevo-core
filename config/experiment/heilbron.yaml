@@ -1,0 +1,28 @@
+# @package _global_
+# Heilbron task-level tradition pins.
+#
+# Inherits `base` for the full standard composition chain, then overrides
+# only the scalars that are Heilbron-specific tacit conventions — values
+# that have held across every Heilbron experiment to date and differ from
+# the project-wide defaults in config/constants/.
+#
+# NOT pinned here (intentionally):
+#   stage_timeout / dag_timeout — vary per-experiment (1800/2400/3000/7200),
+#     not a tradition. Set via contract.config.extra when non-default.
+#   pipeline — experiment-specific variable. Researchers pass
+#     `pipeline=<name>` which wins over `base`'s `pipeline: auto`.
+#
+# Usage: run.py experiment=heilbron problem.name=heilbron/…
+# Emitted automatically when manifest contract.config.task_group: heilbron
+
+defaults:
+  - base
+
+# Programs sampled per mutation round. Heilbron consistently uses 1 for
+# tighter context; project-wide default (config/constants/evolution.yaml)
+# is 2.
+num_parents: 1
+
+# Elites kept per generation. Heilbron consistently uses 8 (vs default 5)
+# to preserve diversity across the adversarial populations.
+max_elites_per_generation: 8

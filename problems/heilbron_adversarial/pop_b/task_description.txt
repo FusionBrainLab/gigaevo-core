@@ -1,31 +1,32 @@
 TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL IMPROVER)
 
 You are an IMPROVER (Discriminator) in a two-population adversarial co-evolution game, analogous to a GAN:
-- YOUR OPPONENTS (Pop A, the "Generator"): evolve point configurations with high min_area that resist improvement
-- YOU (Pop B, the "Discriminator"): take their configuration and PROVE IT IS SUBOPTIMAL by producing a better one
+- YOUR OPPONENTS (Pop A, the "Generator"): evolve point configurations with high min_area sitting in deep local optima
+- YOU (Pop B, the "Improver"): take their configuration and PROVE IT IS SUBOPTIMAL by returning one with strictly higher min_area
 
 THE GAME
-Your opponents are OTHER EVOLVING PROGRAMS. They produce (11,2) point arrays and try to make them as hard to improve as possible. Each generation, your opponents get better -- their configurations sit in deeper local optima with tighter basins. A simple random jitter that works in generation 1 will fail by generation 5. You must evolve increasingly sophisticated improvement strategies to keep finding gains.
+Your opponents are other evolving programs. They produce (11,2) point arrays and try to make them as hard to improve as possible. As the Generator population evolves, their configurations sit in progressively deeper local optima with tighter basins. A simple random jitter that worked early will stop finding gains — you must evolve increasingly sophisticated improvement strategies to keep scoring.
 
-YOUR FITNESS:
-  fitness = mean_k( min(improvement_k / 0.0365, 1.0) )
+Each evaluation you are tested against the current top-K Generator Hall-of-Fame and also tracked over your lifetime. Your standing is determined by two first-class metrics — see the METRICS section of your prompt for exact formulas and ranges:
 
-  improvement_k = max(min_area(improved_k) - min_area(original_k), 0.0)
+- `fitness` — tanh-smoothed mean improvement against the current K=3 Generator HoF. >0.5 means you improved the configs on average; 0.5 is neutral; <0.5 means you made them worse.
+- `wins` — lifetime count of distinct Generators you have EVER strictly improved (delta > 0). Grows monotonically. Distinguishes a one-trick improver from a broadly-capable one.
 
-You are tested against MULTIPLE opponent configurations each evaluation. Your fitness is the average normalized improvement across all of them. Making things worse counts as zero (clamped).
+HALL-OF-FAME OPPONENTS + WHITE-BOX ACCESS
+The Generator configurations you face are the deterministic top-K of Pop A's Hall of Fame, re-fetched every evaluation (the K best Generators alive right now). The opponent set changes when Pop A's HoF rotates, not on every mutation — so your lineage insights and past metrics are RELEVANT when the HoF is stable and SHIFT discretely when a new G displaces an old one.
 
-IMPORTANT: RAPIDLY CHANGING CONTEXT
-The Constructor programs you face change EVERY generation. Your lineage insights and
-past metrics may refer to a different Constructor than the one you currently face.
-Focus on GENERAL improvement strategies rather than exploiting specific point arrangements.
-The best Improvers are those that work well against ANY Constructor — not just one.
+You ARE shown the source code of the SAME Constructor you are evaluated against this turn (see "TARGET CONSTRUCTOR SOURCE CODE" block, when present). The source you see has already survived competitive selection — it was scored against many Improvers and made it into the archive. Surface-level or naive improvements have already been tried and discarded; what remains is genuinely hard to improve.
+
+Use the source to:
+  - Reason about WHY the configuration is suboptimal in the first place
+  - Identify the specific assumption the algorithm relies on
+  - Craft an improvement that addresses that assumption
+  - Keep the strategy GENERAL ENOUGH that it improves many different Generators over time — `wins` grows by beating NEW Generators, not by beating the same one repeatedly
 
 WHAT WINS THIS GAME
-- The opponent configurations you receive will get progressively harder to improve as the game advances
-- Early on, simple approaches may work on unoptimized configs
-- As opponents evolve, you need increasingly creative and powerful approaches
-- The winning approach ADAPTS to the difficulty of the input — it uses general optimization
-  principles, not hardcoded responses to specific configurations
+- Strategies that generalize across Generator lineages (a broadly-applicable local optimizer beats a one-shot exploit)
+- Strategies that can find improvements even on configurations that already resist naive jitter
+- Strategies that remain competitive as the Generator population evolves toward deeper optima — flexibility beats specialization
 
 OBJECTIVE
 Write an `improve(points)` function that:

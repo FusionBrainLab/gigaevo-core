@@ -14,6 +14,9 @@ pipeline_builder:
   ctx: ${evolution_context}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}
+  max_parallel: ${dag_concurrency}
+  max_insights: ${max_insights}
+  max_code_length: ${max_code_length}
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

@@ -149,6 +149,18 @@ class TestImproverPipeline:
         assert "FetchOpponentIdsStage" in names
         assert "FetchOpponentResultsStage" in names
 
+    def test_cache_on_edges_wired_for_d(self):
+        """D runs wire FetchOpponentIdsStage → InsightsStage / LineageStage cache_on."""
+        builder = AdversarialAsymmetricPipelineBuilder(
+            ctx=_make_ctx(),
+            opponent_provider=FakeProvider(),
+            population_role="improver",
+            feedback_mode="composition",
+        )
+        edges = _edge_pairs(builder)
+        assert ("FetchOpponentIdsStage", "InsightsStage") in edges
+        assert ("FetchOpponentIdsStage", "LineageStage") in edges
+
 
 # ---------------------------------------------------------------------------
 # Tests: G (Constructor) runs
@@ -227,3 +239,33 @@ class TestConstructorPipeline:
         assert "FetchOpponentIdsStage" in names
         assert "FetchOpponentResultsStage" in names
         assert "CallValidatorFunction" in names
+
+    def test_cache_on_edges_wired_for_g(self):
+        """G runs wire FetchOpponentIdsStage → InsightsStage / LineageStage cache_on."""
+        builder = AdversarialAsymmetricPipelineBuilder(
+            ctx=_make_ctx(),
+            opponent_provider=FakeProvider(),
+            population_role="constructor",
+            feedback_mode="composition",
+        )
+        edges = _edge_pairs(builder)
+        assert ("FetchOpponentIdsStage", "InsightsStage") in edges
+        assert ("FetchOpponentIdsStage", "LineageStage") in edges
+
+
+# ---------------------------------------------------------------------------
+# Tests: cache_on edge does NOT bleed into non-adversarial pipelines (C18)
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultPipelineUnchanged:
+    def test_default_pipeline_has_no_cache_on_edge(self):
+        """DefaultPipelineBuilder must NOT get FetchOpponentIdsStage→InsightsStage."""
+        from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
+
+        builder = DefaultPipelineBuilder(_make_ctx())
+        edges = {
+            (e.source_stage, e.destination_stage) for e in builder._data_flow_edges
+        }
+        assert ("FetchOpponentIdsStage", "InsightsStage") not in edges
+        assert ("FetchOpponentIdsStage", "LineageStage") not in edges

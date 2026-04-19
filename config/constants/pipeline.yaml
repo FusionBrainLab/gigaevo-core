@@ -3,7 +3,12 @@
 
 stage_timeout: 2400               # lightweight stages only (validate, format, etc.)
 dag_timeout: 7200
-optimization_time_budget: null   # null = 0.75 * dag_timeout (auto-computed at runtime)
+# optimization_time_budget: null means it auto-computes as
+# 0.75 * dag_timeout at runtime (DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION in
+# gigaevo/entrypoint/constants.py). The 0.75 fraction itself is NOT
+# CLI-overridable — only the absolute budget is. Override via
+# `optimization_time_budget=<seconds>` on the CLI when you need a different split.
+optimization_time_budget: null
 dag_concurrency: 16
 max_code_length: 30000
 max_insights: 8

@@ -246,7 +246,13 @@ def comparison(
     paper: bool,
     sentinel: float | None,
 ) -> None:
-    """Plot fitness comparison across runs."""
+    """Plot fitness comparison across multiple runs on a single axis.
+
+    Produces `evolution_runs_comparison.{png,pdf,svg}` with one mean line
+    (with optional +/- 1 std band) per run, plus an optional dashed frontier
+    line. Metric auto-detected from the `--metric` flag; data fetched from
+    Redis via `-r/--run` specs or `-e/--experiment`.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -468,7 +474,12 @@ def trajectory(
     no_std: bool,
     sentinel: float | None,
 ) -> None:
-    """Plot fitness trajectory for a run."""
+    """Plot fitness trajectory (mean / std band / best) for one or more runs.
+
+    Produces `trajectory.png` (plus `trajectory.pdf` with `--pdf`). Unlike
+    `plot comparison`, this is the plain unsmoothed trajectory — useful for
+    single-run inspection. Metric selected via `--metric`.
+    """
     import matplotlib
 
     matplotlib.use("Agg")

@@ -17,6 +17,11 @@ import numpy as np
 from redis import asyncio as aioredis  # noqa: I001
 from scipy.special import softmax
 
+from gigaevo.adversarial.structured_logging import (
+    emit_cell_pick,
+    emit_hof_fetch,
+    emit_hof_rotate,
+)
 from gigaevo.evolution.strategies.utils import weighted_sample_without_replacement
 
 
@@ -103,6 +108,10 @@ class OpponentArchiveProvider(ABC):
             List of code strings for IDs found; IDs not in the archive are
             silently skipped.
         """
+        ...
+
+    async def close(self) -> None:
+        """Close all Redis connections."""
         ...
 
 
@@ -222,9 +231,19 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         if not self._cache or (now - self._cache_time) > self._cache_ttl:
             await self._refresh_cache()
             self._cache_time = now
-        return sorted(self._cache, key=lambda o: o.fitness, reverse=higher_is_better)[
-            :k
-        ]
+        # Two-key sort: primary on fitness, secondary on program_id for
+        # deterministic tiebreak. Without the id key, Python's stable sort
+        # would preserve cache-insertion order — and that order depends on
+        # Redis HVALS iteration which is not guaranteed stable across
+        # cache refreshes. F25 in FAILURE_MODES.md.
+        if higher_is_better:
+            return sorted(self._cache, key=lambda o: (-o.fitness, o.program_id))[:k]
+        return sorted(self._cache, key=lambda o: (o.fitness, o.program_id))[:k]
+
+    async def close(self) -> None:
+        """Close all Redis connections."""
+        for client in self._redis_clients.values():
+            await client.close()
 
     async def _refresh_cache(self) -> None:
         """Read all opponent programs from all source archives."""
@@ -283,8 +302,20 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         )
 
     async def get_programs_by_ids(self, ids: list[str]) -> list[OpponentProgram]:
-        """Return OpponentProgram objects from cache for the given IDs."""
+        """Return OpponentProgram objects for the given IDs, refreshing cache on miss.
+
+        Used by post-step hooks (e.g. CompositionInjectionHook) that may run with
+        a stale or empty cache (the cache is populated by FetchOpponentIdsStage
+        inside the DAG; the hook runs *between* DAG steps). On any miss we
+        force a full _refresh_cache() — the archive is small enough that this
+        is cheap, and avoids silent injection failures.
+        """
         id_set = set(ids)
+        hits = [o for o in self._cache if o.program_id in id_set]
+        if len(hits) == len(id_set):
+            return hits
+        await self._refresh_cache()
+        self._cache_time = time.monotonic()
         return [o for o in self._cache if o.program_id in id_set]
 
     async def get_codes_by_ids(self, ids: list[str]) -> list[str]:
@@ -298,3 +329,224 @@ class RedisOpponentArchiveProvider(OpponentArchiveProvider):
         """
         id_set = set(ids)
         return [o.code for o in self._cache if o.program_id in id_set]
+
+
+class CellStratifiedRedisOpponentArchiveProvider(RedisOpponentArchiveProvider):
+    """Role-specific top-K opponent selection, stratified by BD cell.
+
+    Reads from the production archive schema written by ``RedisArchiveStorage``:
+
+      - ``island_{island_id}:archive`` HASH — field=cell_field → program_id
+      - ``{prefix}:program:{pid}`` STRING (JSON payload) — program data
+
+    Sorts opponents by ``metrics[fitness_key]`` (role-specific: G samples D by
+    ``mean_improvement``; D samples G by ``quality``) rather than the parent's
+    hardcoded ``metrics.fitness``. Because ``RedisArchiveStorage`` enforces
+    exactly one program per cell, the top-K-by-fitness_key view already yields
+    K distinct cells; the cell_field tracking below defends that invariant
+    against future schema changes.
+
+    The ``fitness_key`` value rides on ``OpponentProgram.fitness`` so downstream
+    consumers (fitness-proportional sampling, ``get_top_k``) rank by the
+    role-specific metric without further plumbing.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        db: int,
+        prefix: str,
+        fitness_key: str,
+        k: int = 3,
+        higher_is_better: bool = True,
+        island_id: str = "fitness_island",
+        cache_ttl: float = 30.0,
+        **_ignored: object,
+    ):
+        # Single-DB adapter for CellStratified (vs RedisOpponentArchiveProvider's multi-DB).
+        # `**_ignored` swallows legacy Hydra keys (e.g. sources) that merge in from the
+        # inherited `adversarial_coevo.yaml` pipeline config.
+        sources: list[dict[str, int | str]] = [{"db": db, "prefix": prefix}]
+        super().__init__(
+            host=host,
+            port=port,
+            sources=sources,
+            island_id=island_id,
+            cache_ttl=cache_ttl,
+        )
+        self._fitness_key = fitness_key
+        self._k = k
+        self._higher_is_better = higher_is_better
+        self._db = db
+        self._prefix = prefix
+        # Populated by _refresh_cache: program_id -> cell_field (e.g. "7,5")
+        self._cell_fields: dict[str, str] = {}
+        # Tracks the elite-id set returned by the previous get_top_k call, so
+        # HOF_ROTATE can fire on composition change. None = no prior fetch yet.
+        self._last_hof_elite_ids: frozenset[str] | None = None
+
+    def _get_redis(self, db: int) -> aioredis.Redis:  # type: ignore[type-arg]
+        """Get Redis client, checking for test-injected _redis first."""
+        if hasattr(self, "_redis"):
+            return self._redis  # type: ignore[return-value]
+        return super()._get_redis(db)
+
+    async def _refresh_cache(self) -> None:
+        """Override: sort by role-specific fitness_key, track cell_field per program.
+
+        Schema exactly matches ``RedisArchiveStorage``:
+          - ``island_{island_id}:archive`` HASH — cell_field → program_id
+          - ``{prefix}:program:{pid}`` STRING — JSON payload with ``.code`` and
+            ``.metrics[fitness_key]``.
+
+        Programs missing ``metrics[fitness_key]`` are silently skipped — this
+        happens during early-gen warmup where some eval stages have not yet
+        emitted the role-specific metric for every archived program.
+        """
+        opponents: list[OpponentProgram] = []
+        cell_map: dict[str, str] = {}
+        archive_key = f"island_{self._island_id}:archive"
+
+        for db, prefix in self._sources:
+            try:
+                r = self._get_redis(db)
+                # HGETALL: field=cell_field -> program_id
+                cell_to_pid = await r.hgetall(archive_key)
+                if not cell_to_pid:
+                    logger.debug(
+                        "[CellStratifiedOpponentProvider] empty archive db={} key={}",
+                        db,
+                        archive_key,
+                    )
+                    continue
+
+                items = list(cell_to_pid.items())
+                pipe = r.pipeline(transaction=False)
+                for _cell_field, pid in items:
+                    pipe.get(f"{prefix}:program:{pid}")
+                raw_programs = await pipe.execute()
+
+                for (cell_field, pid), raw in zip(items, raw_programs):
+                    if raw is None:
+                        continue
+                    try:
+                        data = json.loads(raw)
+                        code = data.get("code", "")
+                        metrics = data.get("metrics", {})
+                        fitness_value = metrics.get(self._fitness_key)
+                        if fitness_value is None or code == "":
+                            continue
+                        fitness = float(fitness_value)
+                    except (json.JSONDecodeError, ValueError, KeyError) as e:
+                        logger.warning(
+                            "[CellStratifiedOpponentProvider] parse error pid={} err={}",
+                            pid,
+                            e,
+                        )
+                        continue
+
+                    opponents.append(
+                        OpponentProgram(
+                            program_id=pid,
+                            code=code,
+                            fitness=fitness,
+                        )
+                    )
+                    cell_map[pid] = cell_field
+            except Exception as exc:
+                logger.warning(
+                    "[CellStratifiedOpponentProvider] error reading db={}: {}", db, exc
+                )
+
+        self._cache = opponents
+        self._cell_fields = cell_map
+        logger.debug(
+            "[CellStratifiedOpponentProvider] refreshed: {} opponents, "
+            "{} distinct cells, fitness_key={}",
+            len(opponents),
+            len(set(cell_map.values())),
+            self._fitness_key,
+        )
+
+    async def get_top_k(
+        self, k: int, *, higher_is_better: bool = True
+    ) -> list[OpponentProgram]:
+        """Return up to k opponents, one elite per distinct BD cell.
+
+        Sort: role-specific ``fitness_key`` descending (if ``higher_is_better``)
+        with ``program_id`` as deterministic tiebreak.
+
+        Distinct-cell constraint is enforced via ``cell_field`` lookup; with
+        ``RedisArchiveStorage`` enforcing 1-per-cell, this is trivially satisfied
+        but remains a defensive invariant.
+        """
+        now = time.monotonic()
+        if not self._cache or (now - self._cache_time) > self._cache_ttl:
+            await self._refresh_cache()
+            self._cache_time = now
+
+        effective_higher = self._higher_is_better and higher_is_better
+
+        if not self._cache:
+            emit_hof_fetch(
+                label=f"db{self._db}:{self._prefix}",
+                n_elites=0,
+                fitness_key=self._fitness_key,
+                k_requested=int(k),
+                cells_populated=0,
+            )
+            return []
+
+        if effective_higher:
+            sorted_opponents = sorted(
+                self._cache, key=lambda o: (-o.fitness, o.program_id)
+            )
+        else:
+            sorted_opponents = sorted(
+                self._cache, key=lambda o: (o.fitness, o.program_id)
+            )
+
+        picked: list[OpponentProgram] = []
+        seen_cells: set[str] = set()
+        for op in sorted_opponents:
+            cell_field = self._cell_fields.get(op.program_id, op.program_id)
+            if cell_field in seen_cells:
+                continue
+            picked.append(op)
+            seen_cells.add(cell_field)
+            emit_cell_pick(
+                label=f"db{self._db}:{self._prefix}",
+                cell_id=cell_field,
+                program_id=op.program_id,
+                fitness_key=self._fitness_key,
+                fitness_value=float(op.fitness),
+            )
+            if len(picked) >= k:
+                break
+
+        emit_hof_fetch(
+            label=f"db{self._db}:{self._prefix}",
+            n_elites=len(picked),
+            fitness_key=self._fitness_key,
+            k_requested=int(k),
+            cells_populated=len(seen_cells),
+        )
+
+        # HOF_ROTATE: emit when the elite-id set differs from the previous
+        # non-empty fetch. Tracks composition change (not just size change),
+        # so a 1-for-1 swap still counts as a rotation.
+        new_elite_ids = frozenset(o.program_id for o in picked)
+        if new_elite_ids and new_elite_ids != self._last_hof_elite_ids:
+            old_size = (
+                0 if self._last_hof_elite_ids is None else len(self._last_hof_elite_ids)
+            )
+            emit_hof_rotate(
+                label=f"db{self._db}:{self._prefix}",
+                old_hof_size=old_size,
+                new_hof_size=len(new_elite_ids),
+                fitness_key=self._fitness_key,
+            )
+            self._last_hof_elite_ids = new_elite_ids
+
+        return picked

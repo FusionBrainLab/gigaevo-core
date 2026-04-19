@@ -1,13 +1,22 @@
-"""Tests for CompositionInjectionHook — code composition and delta gating."""
+"""Tests for CompositionInjectionHook — code-level D ∘ G composition with permanent dedup.
+
+The hook iterates ALL G programs in storage. For each G, it asks the
+DGImprovementTracker for the best D and (if the (D, G) pair has not been
+injected before) composes a new G program whose entrypoint chains D after G.
+Pairs are permanently marked — never repeated.
+"""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
 
-from gigaevo.adversarial.composition_injection import CompositionInjectionHook
+from gigaevo.adversarial.composition_injection import (
+    CompositionInjectionHook,
+    _rename_entrypoint,
+)
 from gigaevo.adversarial.opponent_provider import OpponentProgram
 from gigaevo.programs.program import Program
 
@@ -26,19 +35,15 @@ def g_storage():
 
 @pytest.fixture
 def dg_tracker():
-    return AsyncMock()
+    mock = AsyncMock()
+    # Default: no D recorded for any G.
+    mock.get_best_d_for_g.return_value = None
+    mock.is_pair_injected.return_value = False
+    return mock
 
 
 @pytest.fixture
-def hook(d_provider, g_storage):
-    return CompositionInjectionHook(
-        d_provider=d_provider,
-        g_storage=g_storage,
-    )
-
-
-@pytest.fixture
-def hook_with_tracker(d_provider, g_storage, dg_tracker):
+def hook(d_provider, g_storage, dg_tracker):
     return CompositionInjectionHook(
         d_provider=d_provider,
         g_storage=g_storage,
@@ -47,416 +52,256 @@ def hook_with_tracker(d_provider, g_storage, dg_tracker):
 
 
 # ===================================================================
-# Test 1: _compose_g_program produces valid G-style Python code
+# Test: _rename_entrypoint
 # ===================================================================
 
 
-class TestComposeGProgram:
-    def test_compose_g_program_returns_python_string(self):
-        """_compose_g_program takes d_code and g_points and returns a Python string."""
-        d_code = "import numpy as np\n\ndef entrypoint():\n    def improve(pts):\n        return pts * 1.1\n    return improve\n"
-        g_points = [[0.0, 0.0]] * 11
-        result = CompositionInjectionHook._compose_g_program(d_code, g_points)
-        assert isinstance(result, str)
-        assert "def entrypoint():" in result
-        assert "_d_entrypoint" in result
+class TestRenameEntrypoint:
+    def test_renames_first_def(self):
+        code = "def entrypoint():\n    return 1\n"
+        result = _rename_entrypoint(code, "_g_entrypoint")
+        assert "def _g_entrypoint(" in result
+        assert "def entrypoint(" not in result
 
-    def test_compose_g_program_renames_d_entrypoint(self):
-        """D's entrypoint is renamed to _d_entrypoint in the composed code."""
-        d_code = "def entrypoint():\n    def improve(pts):\n        return pts\n    return improve\n"
-        g_points = [[0.0, 0.0]] * 11
-        result = CompositionInjectionHook._compose_g_program(d_code, g_points)
-        assert "def _d_entrypoint(" in result
-        # The original entrypoint should not appear unmodified
-        lines = result.split("\n")
-        d_section_lines = [
-            line
-            for line in lines
-            if "def entrypoint" in line and "_d_entrypoint" not in line
-        ]
-        # The wrapper's entrypoint should be there once
-        assert len(d_section_lines) == 1
+    def test_only_renames_top_level(self):
+        # Inner `def entrypoint` (indented) should not be touched.
+        code = (
+            "def entrypoint():\n"
+            "    def entrypoint():\n"
+            "        return 1\n"
+            "    return entrypoint\n"
+        )
+        result = _rename_entrypoint(code, "_g_entrypoint")
+        # Top-level renamed once.
+        assert result.count("def _g_entrypoint(") == 1
+        # Inner one (indented) preserved.
+        assert "    def entrypoint(" in result
 
-    def test_compose_g_program_contains_g_points(self):
-        """The composed code embeds G's point configuration."""
+
+# ===================================================================
+# Test: _compose
+# ===================================================================
+
+
+class TestCompose:
+    def test_compose_returns_executable_program(self):
+        """The composed program defines entrypoint() that runs D(G())."""
+        g_code = (
+            "import numpy as np\n"
+            "def entrypoint():\n"
+            "    return np.array([[1.0, 2.0], [3.0, 4.0]])\n"
+        )
+        d_code = (
+            "import numpy as np\n"
+            "def entrypoint():\n"
+            "    def improve(pts):\n"
+            "        return pts * 2.0\n"
+            "    return improve\n"
+        )
+        composed = CompositionInjectionHook._compose(g_code, d_code)
+
+        assert "def _g_entrypoint(" in composed
+        assert "def _d_entrypoint(" in composed
+        assert "def entrypoint(" in composed
+
+        ns: dict = {}
+        exec(composed, ns)
+        result = ns["entrypoint"]()
+        np.testing.assert_array_equal(result, np.array([[2.0, 4.0], [6.0, 8.0]]))
+
+    def test_compose_does_not_hardcode_data(self):
+        """No `_G_POINTS` constant — composition is code-level."""
+        g_code = "def entrypoint():\n    return [[1.0, 2.0]]\n"
         d_code = "def entrypoint():\n    return lambda pts: pts\n"
-        g_points = [[1.0, 2.0], [3.0, 4.0]]
-        result = CompositionInjectionHook._compose_g_program(d_code, g_points)
-        assert "_G_POINTS" in result
-        assert "1.0" in result
-        assert "2.0" in result
-
-    def test_compose_g_program_executable(self):
-        """The composed program can be exec'd and defines entrypoint() returning ndarray."""
-        d_code = (
-            "import numpy as np\n"
-            "\n"
-            "def entrypoint():\n"
-            "    def improve(pts):\n"
-            "        return pts * 1.1\n"
-            "    return improve\n"
-        )
-        g_points = [[float(i), float(i)] for i in range(11)]
-        composed = CompositionInjectionHook._compose_g_program(d_code, g_points)
-
-        namespace: dict = {}
-        exec(composed, namespace)
-        result = namespace["entrypoint"]()
-        assert isinstance(result, np.ndarray)
-        assert result.shape == (11, 2)
+        composed = CompositionInjectionHook._compose(g_code, d_code)
+        assert "_G_POINTS" not in composed
 
 
 # ===================================================================
-# Test 3-4: inject() delta gating
+# Test: inject_all — empty cases
 # ===================================================================
 
 
-class TestInjectDeltaGating:
+class TestEmptyCases:
     @pytest.mark.asyncio
-    async def test_inject_only_when_output_differs(self, hook, d_provider, g_storage):
-        """inject() creates a Program only when D improves G (output differs)."""
-        d_provider.get_top_k.return_value = [
-            OpponentProgram(
-                program_id="d-1",
-                code=(
-                    "import numpy as np\n"
-                    "def entrypoint():\n"
-                    "    def improve(pts):\n"
-                    "        return pts * 1.5\n"
-                    "    return improve\n"
-                ),
-                fitness=0.8,
-            )
-        ]
-
-        g_points = np.array([[float(i), float(i)] for i in range(11)])
-        g_prog = Program(
-            code="import numpy as np\ndef entrypoint():\n    return np.array([[float(i), float(i)] for i in range(11)])\n",
-            metadata={},
-        )
-        g_storage.get_all.return_value = [g_prog]
-
-        # Mock run_exec_runner: first call returns G's points, second returns improved
-        improved_points = g_points * 1.5
-        with patch(
-            "gigaevo.adversarial.composition_injection.run_exec_runner",
-            new_callable=AsyncMock,
-        ) as mock_runner:
-            mock_runner.side_effect = [
-                (g_points.tolist(), b"", ""),  # G execution
-                (improved_points.tolist(), b"", ""),  # Composed execution
-            ]
-            result = await hook.inject()
-
-        assert result is not None
-        g_storage.add.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_inject_returns_none_when_no_improvement(
-        self, hook, d_provider, g_storage
-    ):
-        """inject() returns None when composed output equals original G output."""
-        d_provider.get_top_k.return_value = [
-            OpponentProgram(
-                program_id="d-1",
-                code="def entrypoint():\n    return lambda pts: pts\n",
-                fitness=0.5,
-            )
-        ]
-
-        g_points = [[1.0, 2.0]] * 11
-        g_prog = Program(
-            code="def entrypoint():\n    return [[1.0, 2.0]] * 11\n",
-            metadata={},
-        )
-        g_storage.get_all.return_value = [g_prog]
-
-        with patch(
-            "gigaevo.adversarial.composition_injection.run_exec_runner",
-            new_callable=AsyncMock,
-        ) as mock_runner:
-            mock_runner.side_effect = [
-                (g_points, b"", ""),  # G execution
-                (g_points, b"", ""),  # Composed execution (same = no improvement)
-            ]
-            result = await hook.inject()
-
-        assert result is None
-        g_storage.add.assert_not_called()
-
-
-# ===================================================================
-# Test 5-6: inject() with empty archives
-# ===================================================================
-
-
-class TestInjectEmptyArchives:
-    @pytest.mark.asyncio
-    async def test_inject_returns_none_when_d_archive_empty(
-        self, hook, d_provider, g_storage
-    ):
-        """inject() returns None when D's archive is empty."""
-        d_provider.get_top_k.return_value = []
-        result = await hook.inject()
-        assert result is None
-        g_storage.add.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_inject_returns_none_when_g_archive_empty(
-        self, hook, d_provider, g_storage
-    ):
-        """inject() returns None when G archive is empty (no G programs to improve)."""
-        d_provider.get_top_k.return_value = [
-            OpponentProgram(
-                program_id="d-1", code="def entrypoint(): pass", fitness=0.5
-            )
-        ]
+    async def test_empty_archive_returns_empty_list(self, hook, g_storage):
         g_storage.get_all.return_value = []
-        result = await hook.inject()
-        assert result is None
+        out = await hook.inject_all()
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_no_recorded_d_for_any_g_injects_nothing(
+        self, hook, g_storage, dg_tracker, d_provider
+    ):
+        g_storage.get_all.return_value = [
+            Program(code="def entrypoint(): pass", metadata={}),
+            Program(code="def entrypoint(): pass", metadata={}),
+        ]
+        dg_tracker.get_best_d_for_g.return_value = None
+        out = await hook.inject_all()
+        assert out == []
         g_storage.add.assert_not_called()
+        d_provider.get_programs_by_ids.assert_not_called()
 
 
 # ===================================================================
-# Test 7: Injected program metadata
+# Test: inject_all — happy path
 # ===================================================================
 
 
-class TestInjectedProgramMetadata:
+class TestInjectAllHappyPath:
     @pytest.mark.asyncio
-    async def test_injected_program_has_correct_metadata(
-        self, hook, d_provider, g_storage
+    async def test_injects_one_per_g_with_recorded_d(
+        self, hook, g_storage, d_provider, dg_tracker
     ):
-        """Injected program contains mutation_type, d_source_id, g_source_id metadata."""
-        d_provider.get_top_k.return_value = [
-            OpponentProgram(
-                program_id="d-best-42",
-                code=(
-                    "import numpy as np\n"
-                    "def entrypoint():\n"
-                    "    def improve(pts):\n"
-                    "        return pts * 2.0\n"
-                    "    return improve\n"
-                ),
-                fitness=0.9,
-            )
-        ]
-
-        g_points = np.array([[1.0, 1.0]] * 11)
-        g_prog = Program(code="def entrypoint():\n    pass\n", metadata={})
-        g_storage.get_all.return_value = [g_prog]
-
-        improved = g_points * 2.0
-        with patch(
-            "gigaevo.adversarial.composition_injection.run_exec_runner",
-            new_callable=AsyncMock,
-        ) as mock_runner:
-            mock_runner.side_effect = [
-                (g_points.tolist(), b"", ""),
-                (improved.tolist(), b"", ""),
-            ]
-            result = await hook.inject()
-
-        assert result is not None
-        injected = g_storage.add.call_args[0][0]
-        assert isinstance(injected, Program)
-        assert injected.metadata["mutation_type"] == "d_improvement"
-        assert injected.metadata["d_source_id"] == "d-best-42"
-        assert injected.metadata["g_source_id"] == g_prog.id
-
-
-# ===================================================================
-# Test 8: _compose_g_program produces G-valid code
-# ===================================================================
-
-
-class TestComposeGProgramValidity:
-    def test_composed_code_returns_float64_ndarray(self):
-        """The composed code returns np.float64 ndarray."""
-        d_code = (
-            "import numpy as np\n"
-            "\n"
-            "def entrypoint():\n"
-            "    def improve(pts):\n"
-            "        return pts + 0.01\n"
-            "    return improve\n"
+        g1 = Program(
+            code="import numpy as np\ndef entrypoint():\n    return np.zeros((3, 2))\n",
+            metadata={},
         )
-        g_points = [[float(i) * 0.1, float(i) * 0.1] for i in range(11)]
-        composed = CompositionInjectionHook._compose_g_program(d_code, g_points)
+        g2 = Program(
+            code="import numpy as np\ndef entrypoint():\n    return np.ones((3, 2))\n",
+            metadata={},
+        )
+        g_storage.get_all.return_value = [g1, g2]
 
-        namespace: dict = {}
-        exec(composed, namespace)
-        result = namespace["entrypoint"]()
+        # Each G has a different best-D recorded.
+        async def best_for(g_id):
+            return ("d-A", 0.123) if g_id == g1.id else ("d-B", 0.456)
 
-        assert isinstance(result, np.ndarray)
-        assert result.dtype == np.float64
-        assert result.shape == (11, 2)
+        dg_tracker.get_best_d_for_g.side_effect = best_for
+        dg_tracker.is_pair_injected.return_value = False
+
+        d_a = OpponentProgram(
+            program_id="d-A",
+            code=(
+                "import numpy as np\n"
+                "def entrypoint():\n"
+                "    return lambda pts: pts + 1.0\n"
+            ),
+            fitness=0.7,
+        )
+        d_b = OpponentProgram(
+            program_id="d-B",
+            code=(
+                "import numpy as np\n"
+                "def entrypoint():\n"
+                "    return lambda pts: pts * 2.0\n"
+            ),
+            fitness=0.9,
+        )
+
+        async def fetch_d(ids):
+            return [d_a if ids[0] == "d-A" else d_b]
+
+        d_provider.get_programs_by_ids.side_effect = fetch_d
+
+        out = await hook.inject_all()
+        assert len(out) == 2
+        assert g_storage.add.call_count == 2
+
+        # Each composed program is well-formed and metadata is right.
+        injected_progs = [c.args[0] for c in g_storage.add.call_args_list]
+        d_sources = {p.metadata["d_source_id"] for p in injected_progs}
+        g_sources = {p.metadata["g_source_id"] for p in injected_progs}
+        assert d_sources == {"d-A", "d-B"}
+        assert g_sources == {g1.id, g2.id}
+        for p in injected_progs:
+            assert p.metadata["mutation_type"] == "d_improvement"
+            assert "tracked_delta" in p.metadata
+
+        # Both pairs marked permanently.
+        marked = {
+            (c.args[0], c.args[1]) for c in dg_tracker.mark_pair_injected.call_args_list
+        }
+        assert marked == {("d-A", g1.id), ("d-B", g2.id)}
 
 
 # ===================================================================
-# Test: __call__ delegates to inject()
+# Test: inject_all — dedup
 # ===================================================================
 
 
-class TestCallDelegatesToInject:
+class TestDedup:
     @pytest.mark.asyncio
-    async def test_call_invokes_inject(self, hook, d_provider, g_storage):
-        """__call__ delegates to inject()."""
-        d_provider.get_top_k.return_value = []
-        await hook()
-        d_provider.get_top_k.assert_called_once()
-
-
-# ===================================================================
-# Test: dg_tracker recording
-# ===================================================================
-
-
-class TestDGTrackerRecording:
-    @pytest.mark.asyncio
-    async def test_tracker_called_on_successful_injection(
-        self, hook_with_tracker, d_provider, g_storage, dg_tracker
+    async def test_skip_already_injected_pair(
+        self, hook, g_storage, d_provider, dg_tracker
     ):
-        """dg_tracker.record_improvement is called with d_id, g_id, delta when injection succeeds."""
-        d_provider.get_top_k.return_value = [
+        g = Program(code="def entrypoint(): pass", metadata={})
+        g_storage.get_all.return_value = [g]
+        dg_tracker.get_best_d_for_g.return_value = ("d-1", 0.5)
+        dg_tracker.is_pair_injected.return_value = True  # already done
+
+        out = await hook.inject_all()
+        assert out == []
+        g_storage.add.assert_not_called()
+        d_provider.get_programs_by_ids.assert_not_called()
+        dg_tracker.mark_pair_injected.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partial_dedup(self, hook, g_storage, d_provider, dg_tracker):
+        """First G already injected, second G fresh — only second composes."""
+        g1 = Program(code="def entrypoint(): pass", metadata={})
+        g2 = Program(
+            code="import numpy as np\ndef entrypoint():\n    return np.zeros((2, 2))\n",
+            metadata={},
+        )
+        g_storage.get_all.return_value = [g1, g2]
+        dg_tracker.get_best_d_for_g.return_value = ("d-1", 0.4)
+
+        async def is_injected(d_id, g_id):
+            return g_id == g1.id
+
+        dg_tracker.is_pair_injected.side_effect = is_injected
+
+        d_provider.get_programs_by_ids.return_value = [
             OpponentProgram(
                 program_id="d-1",
                 code=(
                     "import numpy as np\n"
                     "def entrypoint():\n"
-                    "    def improve(pts):\n"
-                    "        return pts * 3.0\n"
-                    "    return improve\n"
+                    "    return lambda pts: pts + 0.1\n"
                 ),
-                fitness=0.7,
-            )
-        ]
-
-        g_points = np.array([[1.0, 1.0]] * 11)
-        g_prog = Program(code="def entrypoint():\n    pass\n", metadata={})
-        g_storage.get_all.return_value = [g_prog]
-
-        improved = g_points * 3.0
-        with patch(
-            "gigaevo.adversarial.composition_injection.run_exec_runner",
-            new_callable=AsyncMock,
-        ) as mock_runner:
-            mock_runner.side_effect = [
-                (g_points.tolist(), b"", ""),
-                (improved.tolist(), b"", ""),
-            ]
-            await hook_with_tracker.inject()
-
-        dg_tracker.record_improvement.assert_called_once()
-        call_kwargs = dg_tracker.record_improvement.call_args
-        assert call_kwargs[1]["d_id"] == "d-1"
-        assert call_kwargs[1]["g_id"] == g_prog.id
-        assert call_kwargs[1]["delta"] > 0  # positive delta when improvement occurred
-
-    @pytest.mark.asyncio
-    async def test_tracker_none_inject_succeeds_without_recording(
-        self, hook, d_provider, g_storage
-    ):
-        """When dg_tracker is None, inject() succeeds without recording (no error)."""
-        d_provider.get_top_k.return_value = [
-            OpponentProgram(
-                program_id="d-1",
-                code=(
-                    "import numpy as np\n"
-                    "def entrypoint():\n"
-                    "    def improve(pts):\n"
-                    "        return pts * 2.0\n"
-                    "    return improve\n"
-                ),
-                fitness=0.6,
-            )
-        ]
-
-        g_points = np.array([[1.0, 1.0]] * 11)
-        g_prog = Program(code="def entrypoint():\n    pass\n", metadata={})
-        g_storage.get_all.return_value = [g_prog]
-
-        improved = g_points * 2.0
-        with patch(
-            "gigaevo.adversarial.composition_injection.run_exec_runner",
-            new_callable=AsyncMock,
-        ) as mock_runner:
-            mock_runner.side_effect = [
-                (g_points.tolist(), b"", ""),
-                (improved.tolist(), b"", ""),
-            ]
-            result = await hook.inject()
-
-        assert result is not None  # injection succeeded
-        g_storage.add.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_tracker_not_called_when_no_improvement(
-        self, hook_with_tracker, d_provider, g_storage, dg_tracker
-    ):
-        """When inject() fails (no improvement), dg_tracker.record_improvement is NOT called."""
-        d_provider.get_top_k.return_value = [
-            OpponentProgram(
-                program_id="d-1",
-                code="def entrypoint():\n    return lambda pts: pts\n",
                 fitness=0.5,
             )
         ]
 
-        g_points = [[1.0, 2.0]] * 11
-        g_prog = Program(code="def entrypoint():\n    pass\n", metadata={})
-        g_storage.get_all.return_value = [g_prog]
-
-        with patch(
-            "gigaevo.adversarial.composition_injection.run_exec_runner",
-            new_callable=AsyncMock,
-        ) as mock_runner:
-            mock_runner.side_effect = [
-                (g_points, b"", ""),
-                (g_points, b"", ""),  # same output = no improvement
-            ]
-            result = await hook_with_tracker.inject()
-
-        assert result is None
-        dg_tracker.record_improvement.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_tracker_recording_exception_caught(
-        self, hook_with_tracker, d_provider, g_storage, dg_tracker
-    ):
-        """When dg_tracker.record_improvement raises, injection still succeeds."""
-        dg_tracker.record_improvement.side_effect = RuntimeError(
-            "Redis connection lost"
-        )
-        d_provider.get_top_k.return_value = [
-            OpponentProgram(
-                program_id="d-1",
-                code=(
-                    "import numpy as np\n"
-                    "def entrypoint():\n"
-                    "    def improve(pts):\n"
-                    "        return pts * 1.5\n"
-                    "    return improve\n"
-                ),
-                fitness=0.7,
-            )
-        ]
-
-        g_points = np.array([[1.0, 1.0]] * 11)
-        g_prog = Program(code="def entrypoint():\n    pass\n", metadata={})
-        g_storage.get_all.return_value = [g_prog]
-
-        improved = g_points * 1.5
-        with patch(
-            "gigaevo.adversarial.composition_injection.run_exec_runner",
-            new_callable=AsyncMock,
-        ) as mock_runner:
-            mock_runner.side_effect = [
-                (g_points.tolist(), b"", ""),
-                (improved.tolist(), b"", ""),
-            ]
-            result = await hook_with_tracker.inject()
-
-        # Injection still succeeded despite tracker error
-        assert result is not None
+        out = await hook.inject_all()
+        assert len(out) == 1
         g_storage.add.assert_called_once()
+        dg_tracker.mark_pair_injected.assert_called_once_with("d-1", g2.id)
+
+
+# ===================================================================
+# Test: inject_all — D missing from archive
+# ===================================================================
+
+
+class TestDMissing:
+    @pytest.mark.asyncio
+    async def test_skip_when_d_no_longer_in_archive(
+        self, hook, g_storage, d_provider, dg_tracker
+    ):
+        g = Program(code="def entrypoint(): pass", metadata={})
+        g_storage.get_all.return_value = [g]
+        dg_tracker.get_best_d_for_g.return_value = ("d-stale", 0.3)
+        dg_tracker.is_pair_injected.return_value = False
+        d_provider.get_programs_by_ids.return_value = []  # D evicted
+
+        out = await hook.inject_all()
+        assert out == []
+        g_storage.add.assert_not_called()
+        # We should NOT mark the pair as injected — D was simply missing.
+        dg_tracker.mark_pair_injected.assert_not_called()
+
+
+# ===================================================================
+# Test: __call__ delegates to inject_all
+# ===================================================================
+
+
+class TestCallDelegates:
+    @pytest.mark.asyncio
+    async def test_call_invokes_inject_all(self, hook, g_storage):
+        g_storage.get_all.return_value = []
+        await hook()
+        g_storage.get_all.assert_called_once()

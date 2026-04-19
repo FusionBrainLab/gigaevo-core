@@ -64,7 +64,7 @@ pre_step_hook:
   sources:
     - db: ${opponent_redis_db}
       prefix: ${opponent_redis_prefix}
-  min_delta: ${max_mutations_per_generation}
+  min_delta: ${sync_min_delta}
   sync_every_n_epochs: 1
   timeout: 7200
   poll_interval: 5.0
@@ -107,5 +107,6 @@ pipeline_builder:
   source_prompt_k: ${source_prompt_k}
   per_opponent_timeout: 300.0
   archive_reeval: false
+  dg_tracker: ${dg_tracker}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}

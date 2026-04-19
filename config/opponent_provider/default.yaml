@@ -1,0 +1,10 @@
+# @package opponent_provider
+# Default opponent provider: multi-DB top-K-by-fitness (pre-v3 behavior).
+_target_: gigaevo.adversarial.opponent_provider.RedisOpponentArchiveProvider
+host: ${redis.host}
+port: ${redis.port}
+sources:
+  - db: ${opponent_redis_db}
+    prefix: ${opponent_redis_prefix}
+island_id: ${island_id}
+cache_ttl: 30.0

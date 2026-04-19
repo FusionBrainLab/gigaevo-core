@@ -5,12 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.entrypoint.constants import (
     DEFAULT_DAG_CONCURRENCY,
     DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION,
 )
 from gigaevo.entrypoint.default_pipelines import (
+    AlgoTuneSpeedPipelineBuilder,
     CMAOptPipelineBuilder,
     ContextPipelineBuilder,
     CustomPipelineBuilder,
@@ -618,3 +621,261 @@ class TestPipelineBuilderEdgeCases:
         bp = builder.build_blueprint()
         assert bp.exec_order_deps is not None
         assert "A" in bp.exec_order_deps
+
+
+# ===================================================================
+# Phase -1 Fix A: stage_timeout threading (regression guard)
+# ===================================================================
+#
+# Audit `/tmp/hydra_bypass_audit.md` documented that 6 stage factories in
+# default_pipelines.py hardcoded DEFAULT_SIMPLE_STAGE_TIMEOUT, silently
+# ignoring the researcher-provided Hydra `stage_timeout` override.
+# These tests pin every critical bypass site and enforce that subclasses
+# (Context, AlgoTuneSpeed, CMAOpt, OptunaOpt) accept and thread
+# ``stage_timeout`` through to the stages they build.
+
+
+@pytest.fixture
+def real_problem_dir(tmp_path: Path) -> Path:
+    """Problem directory with stub context.py / validate.py / validate2.py
+    so that CallFileFunction, OptunaOptStage, etc. can materialise."""
+    prob_dir = tmp_path / "problem"
+    prob_dir.mkdir()
+    (prob_dir / "context.py").write_text("def build_context(**kw): return {}\n")
+    (prob_dir / "validate.py").write_text("def validate(**kw): return {}\n")
+    (prob_dir / "validate2.py").write_text("def validate(**kw): return {}\n")
+    return prob_dir
+
+
+_OVERRIDE = 6000  # distinct from DEFAULT_SIMPLE_STAGE_TIMEOUT=2400
+
+
+class TestStageTimeoutThreading:
+    """Every PipelineBuilder subclass must accept ``stage_timeout`` and thread
+    it into every stage it constructs. Audit ref: /tmp/hydra_bypass_audit.md
+    CRITICAL-1."""
+
+    def test_context_builder_accepts_stage_timeout_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = ContextPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        assert builder._stage_timeout == _OVERRIDE
+
+    def test_context_addcontext_stage_uses_stage_timeout(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = ContextPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        bp = builder.build_blueprint()
+        add_ctx = bp.nodes["AddContext"]()
+        assert add_ctx.timeout == _OVERRIDE, (
+            "AddContext stage ignored stage_timeout override — "
+            "default_pipelines.py:437 hardcodes DEFAULT_SIMPLE_STAGE_TIMEOUT"
+        )
+
+    def test_algotune_builder_accepts_stage_timeout_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = AlgoTuneSpeedPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        assert builder._stage_timeout == _OVERRIDE
+
+    def test_algotune_runtime_fitness_stage_uses_stage_timeout(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        # metrics.yaml is missing — the builder handles that gracefully.
+        builder = AlgoTuneSpeedPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        bp = builder.build_blueprint()
+        rt = bp.nodes["RuntimeFitnessStage"]()
+        assert rt.timeout == _OVERRIDE, (
+            "RuntimeFitnessStage ignored stage_timeout — "
+            "default_pipelines.py:481 hardcodes DEFAULT_SIMPLE_STAGE_TIMEOUT"
+        )
+
+    def test_cma_builder_accepts_stage_timeout_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = CMAOptPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        assert builder._stage_timeout == _OVERRIDE
+
+    def test_cma_addcontext_stage_uses_stage_timeout(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = CMAOptPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        bp = builder.build_blueprint()
+        add_ctx = bp.nodes["AddContext"]()
+        assert add_ctx.timeout == _OVERRIDE, (
+            "CMA AddContext ignored stage_timeout — "
+            "default_pipelines.py:546 hardcodes DEFAULT_SIMPLE_STAGE_TIMEOUT"
+        )
+
+    def test_optuna_builder_accepts_stage_timeout_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = OptunaOptPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        assert builder._stage_timeout == _OVERRIDE
+
+    def test_optuna_addcontext_stage_uses_stage_timeout(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = OptunaOptPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        bp = builder.build_blueprint()
+        add_ctx = bp.nodes["AddContext"]()
+        assert add_ctx.timeout == _OVERRIDE, (
+            "Optuna AddContext ignored stage_timeout — "
+            "default_pipelines.py:672 hardcodes DEFAULT_SIMPLE_STAGE_TIMEOUT"
+        )
+
+    def test_optuna_payload_bridge_uses_stage_timeout(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = OptunaOptPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        bp = builder.build_blueprint()
+        bridge = bp.nodes["OptunaPayloadBridge"]()
+        assert bridge.timeout == _OVERRIDE, (
+            "OptunaPayloadBridge ignored stage_timeout — "
+            "default_pipelines.py:757 hardcodes DEFAULT_SIMPLE_STAGE_TIMEOUT"
+        )
+
+    def test_optuna_payload_resolver_uses_stage_timeout(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = OptunaOptPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        bp = builder.build_blueprint()
+        resolver = bp.nodes["PayloadResolver"]()
+        assert resolver.timeout == _OVERRIDE, (
+            "PayloadResolver ignored stage_timeout — "
+            "default_pipelines.py:761 hardcodes DEFAULT_SIMPLE_STAGE_TIMEOUT"
+        )
+
+    def test_default_pipeline_stages_already_thread_stage_timeout(
+        self, real_problem_dir
+    ):
+        """Regression guard for the stages that were ALREADY correct in
+        DefaultPipelineBuilder (used local stage_timeout binding at
+        line 180). Catches any future regression that reintroduces the
+        literal constant at these sites."""
+        ctx = _make_ctx(problem_dir=real_problem_dir)
+        builder = DefaultPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        bp = builder.build_blueprint()
+        for name in [
+            "ValidateCodeStage",
+            "CallProgramFunction",
+            "CallValidatorFunction",
+            "FetchMetrics",
+            "FetchArtifact",
+            "FormatterStage",
+            "InsightsStage",
+            "MutationContextStage",
+            "ComputeComplexityStage",
+        ]:
+            stage = bp.nodes[name]()
+            assert stage.timeout == _OVERRIDE, (
+                f"{name} lost stage_timeout threading — check for "
+                "DEFAULT_SIMPLE_STAGE_TIMEOUT regression"
+            )
+
+
+_DAG_CONC_OVERRIDE = 32  # distinct from both 8 (old py) and 16 (hydra)
+
+
+class TestDagConcurrencyThreading:
+    """PipelineBuilder must accept a ``max_parallel`` override and propagate it
+    to ``DAGBlueprint.max_parallel_stages``.  Also guards against the Python
+    constant drifting from the Hydra default.
+    Audit ref: /tmp/hydra_bypass_audit.md CRITICAL-2."""
+
+    def test_python_and_hydra_defaults_agree(self):
+        """Regression guard: DEFAULT_DAG_CONCURRENCY must match
+        config/constants/pipeline.yaml's dag_concurrency."""
+        from omegaconf import OmegaConf
+
+        repo_root = Path(__file__).resolve().parents[2]
+        cfg = OmegaConf.load(repo_root / "config/constants/pipeline.yaml")
+        assert cfg.dag_concurrency == DEFAULT_DAG_CONCURRENCY, (
+            f"Hydra default dag_concurrency={cfg.dag_concurrency} != "
+            f"Python DEFAULT_DAG_CONCURRENCY={DEFAULT_DAG_CONCURRENCY} — "
+            "reconcile the two; one is silently losing."
+        )
+
+    def test_default_builder_accepts_max_parallel_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = DefaultPipelineBuilder(ctx, max_parallel=_DAG_CONC_OVERRIDE)
+        assert builder._max_parallel == _DAG_CONC_OVERRIDE
+
+    def test_default_builder_threads_max_parallel_into_blueprint(
+        self, real_problem_dir
+    ):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = DefaultPipelineBuilder(ctx, max_parallel=_DAG_CONC_OVERRIDE)
+        bp = builder.build_blueprint()
+        assert bp.max_parallel_stages == _DAG_CONC_OVERRIDE
+
+    def test_context_builder_accepts_max_parallel_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = ContextPipelineBuilder(ctx, max_parallel=_DAG_CONC_OVERRIDE)
+        assert builder._max_parallel == _DAG_CONC_OVERRIDE
+
+    def test_cma_builder_accepts_max_parallel_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = CMAOptPipelineBuilder(ctx, max_parallel=_DAG_CONC_OVERRIDE)
+        assert builder._max_parallel == _DAG_CONC_OVERRIDE
+
+    def test_optuna_builder_accepts_max_parallel_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = OptunaOptPipelineBuilder(ctx, max_parallel=_DAG_CONC_OVERRIDE)
+        assert builder._max_parallel == _DAG_CONC_OVERRIDE
+
+    def test_algotune_builder_accepts_max_parallel_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = AlgoTuneSpeedPipelineBuilder(ctx, max_parallel=_DAG_CONC_OVERRIDE)
+        assert builder._max_parallel == _DAG_CONC_OVERRIDE
+
+    def test_default_max_parallel_uses_default_dag_concurrency(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = DefaultPipelineBuilder(ctx)
+        assert builder._max_parallel == DEFAULT_DAG_CONCURRENCY
+
+
+_MAX_INSIGHTS_OVERRIDE = 21  # distinct from DEFAULT_MAX_INSIGHTS=8
+
+
+class TestMaxInsightsThreading:
+    """PipelineBuilder must accept ``max_insights`` and forward it to
+    InsightsStage. Audit ref: /tmp/hydra_bypass_audit.md CRITICAL-3."""
+
+    def test_default_builder_accepts_max_insights_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = DefaultPipelineBuilder(ctx, max_insights=_MAX_INSIGHTS_OVERRIDE)
+        assert builder._max_insights == _MAX_INSIGHTS_OVERRIDE
+
+    def test_default_insights_stage_uses_max_insights(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = DefaultPipelineBuilder(ctx, max_insights=_MAX_INSIGHTS_OVERRIDE)
+        bp = builder.build_blueprint()
+        stage = bp.nodes["InsightsStage"]()
+        assert stage._max_insights == _MAX_INSIGHTS_OVERRIDE, (
+            "InsightsStage ignored max_insights override — check for "
+            "DEFAULT_MAX_INSIGHTS literal regression"
+        )
+
+    def test_context_builder_accepts_max_insights_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = ContextPipelineBuilder(ctx, max_insights=_MAX_INSIGHTS_OVERRIDE)
+        assert builder._max_insights == _MAX_INSIGHTS_OVERRIDE
+
+
+_MAX_CODE_LENGTH_OVERRIDE = 12345  # distinct from MAX_CODE_LENGTH=30000
+
+
+class TestMaxCodeLengthThreading:
+    """PipelineBuilder must accept ``max_code_length`` and forward it to
+    ValidateCodeStage. Audit ref: /tmp/hydra_bypass_audit.md CRITICAL-4."""
+
+    def test_default_builder_accepts_max_code_length_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = DefaultPipelineBuilder(ctx, max_code_length=_MAX_CODE_LENGTH_OVERRIDE)
+        assert builder._max_code_length == _MAX_CODE_LENGTH_OVERRIDE
+
+    def test_default_validate_stage_uses_max_code_length(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
+        builder = DefaultPipelineBuilder(ctx, max_code_length=_MAX_CODE_LENGTH_OVERRIDE)
+        bp = builder.build_blueprint()
+        stage = bp.nodes["ValidateCodeStage"]()
+        assert stage.max_code_length == _MAX_CODE_LENGTH_OVERRIDE, (
+            "ValidateCodeStage ignored max_code_length override — check for "
+            "MAX_CODE_LENGTH literal regression"
+        )
+
+    def test_context_builder_accepts_max_code_length_kwarg(self, real_problem_dir):
+        ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
+        builder = ContextPipelineBuilder(ctx, max_code_length=_MAX_CODE_LENGTH_OVERRIDE)
+        assert builder._max_code_length == _MAX_CODE_LENGTH_OVERRIDE

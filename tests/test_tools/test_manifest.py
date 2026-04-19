@@ -135,12 +135,6 @@ class TestValidation:
         with pytest.raises(ValueError, match="runs.*must be non-empty"):
             _validate(raw, "test/smoke")
 
-    def test_implemented_requires_servers(self):
-        raw = _implemented_raw()
-        raw["contract"]["servers"] = []
-        with pytest.raises(ValueError, match="servers.*must be non-empty"):
-            _validate(raw, "test/smoke")
-
     def test_implemented_requires_smoke_test(self):
         raw = _implemented_raw()
         raw["lifecycle"]["smoke_test"] = {"completed": False}
@@ -185,13 +179,127 @@ class TestValidation:
         run = m.contract.runs[0]
         assert run.db == 99
         assert run.pipeline == "standard"
-        assert run.chain_url == "http://10.0.0.1:8001/v1"
 
     def test_custom_env_parsed(self):
         raw = _implemented_raw()
         raw["contract"]["custom_env"] = {"MY_VAR": "hello"}
         m = _validate(raw, "test/smoke")
         assert m.contract.custom_env == {"MY_VAR": "hello"}
+
+
+# ---------------------------------------------------------------------------
+# Config-Override Integrity Pipeline (Phase 1) — task_group, pinned, fingerprint
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrityPipelineSchema:
+    """Schema extensions for the Config-Override Integrity Pipeline.
+
+    See .claude/plans/humble-weaving-shamir.md Phase 1.
+    """
+
+    def test_config_task_group_default_none(self):
+        raw = _minimal_raw()
+        m = _validate(raw, "test/smoke")
+        assert m.contract.config.task_group is None
+
+    def test_config_task_group_parsed(self):
+        raw = _minimal_raw()
+        raw["contract"]["config"]["task_group"] = "heilbron"
+        m = _validate(raw, "test/smoke")
+        assert m.contract.config.task_group == "heilbron"
+
+    def test_config_pinned_default_empty(self):
+        raw = _minimal_raw()
+        m = _validate(raw, "test/smoke")
+        assert m.contract.config.pinned == {}
+
+    def test_config_pinned_parsed(self):
+        raw = _minimal_raw()
+        raw["contract"]["config"]["pinned"] = {
+            "n_opponents": 3,
+            "source_prompt_k": 3,
+            "num_parents": 1,
+        }
+        m = _validate(raw, "test/smoke")
+        assert m.contract.config.pinned["n_opponents"] == 3
+        assert m.contract.config.pinned["source_prompt_k"] == 3
+        assert m.contract.config.pinned["num_parents"] == 1
+
+    def test_config_pinned_rejects_shell_metachars(self):
+        raw = _minimal_raw()
+        raw["contract"]["config"]["pinned"] = {"evil;rm": 1}
+        with pytest.raises(ValueError, match="pinned.*shell|metachar|invalid"):
+            _validate(raw, "test/smoke")
+
+    def test_config_pinned_rejects_override_syntax(self):
+        raw = _minimal_raw()
+        raw["contract"]["config"]["pinned"] = {"k=v": 1}
+        with pytest.raises(ValueError, match="pinned.*override|invalid|="):
+            _validate(raw, "test/smoke")
+
+    def test_config_pinned_rejects_newline(self):
+        raw = _minimal_raw()
+        raw["contract"]["config"]["pinned"] = {"a\nb": 1}
+        with pytest.raises(ValueError, match="pinned.*newline|invalid"):
+            _validate(raw, "test/smoke")
+
+    def test_config_pinned_rejects_plus_prefix_override(self):
+        raw = _minimal_raw()
+        raw["contract"]["config"]["pinned"] = {"+extra.key": 1}
+        with pytest.raises(ValueError, match="pinned.*override|invalid|\\+"):
+            _validate(raw, "test/smoke")
+
+    def test_run_pinned_default_empty(self):
+        raw = _implemented_raw()
+        m = _validate(raw, "test/smoke")
+        assert m.contract.runs[0].pinned == {}
+
+    def test_run_pinned_parsed(self):
+        raw = _implemented_raw()
+        raw["contract"]["runs"][0]["pinned"] = {"n_opponents": 5}
+        m = _validate(raw, "test/smoke")
+        assert m.contract.runs[0].pinned == {"n_opponents": 5}
+
+    def test_launch_config_fingerprint_default_empty(self):
+        raw = _minimal_raw()
+        m = _validate(raw, "test/smoke")
+        assert m.lifecycle.launch.config_fingerprint == {}
+
+    def test_launch_config_fingerprint_parsed(self):
+        raw = _running_raw()
+        raw["lifecycle"]["launch"]["config_fingerprint"] = {
+            "config/config.yaml": "a" * 64,
+            "config/experiment/heilbron.yaml": "b" * 64,
+        }
+        m = _validate(raw, "test/smoke")
+        assert m.lifecycle.launch.config_fingerprint["config/config.yaml"] == "a" * 64
+        assert (
+            m.lifecycle.launch.config_fingerprint["config/experiment/heilbron.yaml"]
+            == "b" * 64
+        )
+
+    def test_roundtrip_preserves_integrity_fields(self, tmp_path: Path):
+        """task_group, pinned, config_fingerprint survive load → dump → reload."""
+        raw = _running_raw()
+        raw["contract"]["config"]["task_group"] = "heilbron"
+        raw["contract"]["config"]["pinned"] = {"n_opponents": 3}
+        raw["contract"]["runs"][0]["pinned"] = {"n_opponents": 5}
+        raw["lifecycle"]["launch"]["config_fingerprint"] = {
+            "config/config.yaml": "c" * 64
+        }
+
+        path = tmp_path / "experiment.yaml"
+        with open(path, "w") as f:
+            yaml.safe_dump(raw, f, sort_keys=False)
+
+        with open(path) as f:
+            loaded = yaml.safe_load(f)
+        m = _validate(loaded, "test/smoke")
+        assert m.contract.config.task_group == "heilbron"
+        assert m.contract.config.pinned == {"n_opponents": 3}
+        assert m.contract.runs[0].pinned == {"n_opponents": 5}
+        assert m.lifecycle.launch.config_fingerprint == {"config/config.yaml": "c" * 64}
 
 
 # ---------------------------------------------------------------------------

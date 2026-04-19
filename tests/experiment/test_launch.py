@@ -17,8 +17,10 @@ def _make_run(label: str, db: int) -> MagicMock:
     run.label = label
     run.db = db
     run.pipeline = "standard"
-    run.mutation_url = "http://10.0.0.1:4000"
-    run.model_name = "gpt-4o"
+    run.extra_overrides = [
+        "llm_base_url=http://10.0.0.1:4000",
+        "model_name=gpt-4o",
+    ]
     return run
 
 
@@ -32,7 +34,6 @@ def _make_manifest(
     m.lifecycle.status = status
     m.contract.runs = runs or [_make_run("A", 5), _make_run("B", 6)]
     m.contract.identity.name = experiment_name
-    m.contract.servers = ["10.0.0.1"]
     m.contract.max_generations = 25
     return m
 

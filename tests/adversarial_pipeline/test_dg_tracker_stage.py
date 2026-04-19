@@ -1,0 +1,249 @@
+"""Tests for DGTrackerStage — DAG-driven recording of (D, G, delta) pairs.
+
+Verifies:
+  - Real program.id is used (not the old "<program>" placeholder).
+  - Role-aware pair construction.
+  - NaN filtering, alignment validation, malformed-payload guard.
+  - Tracker.record_batch is awaited with the expected pairs.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import pytest
+
+from gigaevo.adversarial.dg_tracker_stage import DGTrackerStage
+from gigaevo.programs.program import Program
+from gigaevo.programs.stages.common import Box
+
+
+@pytest.fixture
+def tracker():
+    mock = AsyncMock()
+    mock.record_batch.return_value = 0
+    return mock
+
+
+def _make_stage(tracker, role: str) -> DGTrackerStage:
+    return DGTrackerStage(dg_tracker=tracker, role=role, timeout=5.0)
+
+
+def _attach(stage: DGTrackerStage, opponent_ids, validation_result) -> None:
+    stage.attach_inputs(
+        {
+            "opponent_ids": Box[object](data=opponent_ids),
+            "validation_result": Box[object](data=validation_result),
+        }
+    )
+
+
+@pytest.fixture
+def program():
+    return Program(code="def entrypoint(): pass", metadata={})
+
+
+# ===================================================================
+# Real program.id (not placeholder) — the bug we just fixed
+# ===================================================================
+
+
+class TestUsesRealProgramId:
+    @pytest.mark.asyncio
+    async def test_constructor_records_with_real_program_id(self, tracker, program):
+        stage = _make_stage(tracker, "constructor")
+        opponent_ids = ["d-opp-1", "d-opp-2"]
+        artifact = {
+            "role": "constructor",
+            "n_opponents": 2,
+            "per_opp_delta": [0.1, 0.2],
+        }
+        _attach(stage, opponent_ids, ({"fitness": 0.5}, artifact))
+
+        await stage.compute(program)
+
+        tracker.record_batch.assert_awaited_once()
+        pairs = tracker.record_batch.await_args.args[0]
+        # G is the program (real id), D is the opponent.
+        assert pairs == [
+            ("d-opp-1", program.id, 0.1),
+            ("d-opp-2", program.id, 0.2),
+        ]
+        # No "<program>" placeholder anywhere.
+        for d, g, _ in pairs:
+            assert d != "<program>"
+            assert g != "<program>"
+
+    @pytest.mark.asyncio
+    async def test_improver_records_with_real_program_id(self, tracker, program):
+        stage = _make_stage(tracker, "improver")
+        opponent_ids = ["g-opp-1", "g-opp-2"]
+        artifact = {
+            "role": "improver",
+            "n_opponents": 2,
+            "per_opp_delta": [0.05, 0.15],
+        }
+        _attach(stage, opponent_ids, ({"fitness": 0.4}, artifact))
+
+        await stage.compute(program)
+
+        pairs = tracker.record_batch.await_args.args[0]
+        # D is the program (real id), G is the opponent.
+        assert pairs == [
+            (program.id, "g-opp-1", 0.05),
+            (program.id, "g-opp-2", 0.15),
+        ]
+
+
+# ===================================================================
+# NaN filtering
+# ===================================================================
+
+
+class TestNanFiltering:
+    @pytest.mark.asyncio
+    async def test_nan_deltas_are_skipped(self, tracker, program):
+        stage = _make_stage(tracker, "constructor")
+        opponent_ids = ["d1", "d2", "d3"]
+        artifact = {"per_opp_delta": [float("nan"), 0.1, float("nan")]}
+        _attach(stage, opponent_ids, ({}, artifact))
+
+        await stage.compute(program)
+
+        pairs = tracker.record_batch.await_args.args[0]
+        assert pairs == [("d2", program.id, 0.1)]
+
+    @pytest.mark.asyncio
+    async def test_all_nan_does_not_call_record_batch(self, tracker, program):
+        stage = _make_stage(tracker, "constructor")
+        opponent_ids = ["d1", "d2"]
+        artifact = {"per_opp_delta": [float("nan"), float("nan")]}
+        _attach(stage, opponent_ids, ({}, artifact))
+
+        await stage.compute(program)
+        tracker.record_batch.assert_not_awaited()
+
+
+# ===================================================================
+# Negative deltas reach record_batch (which filters them)
+# ===================================================================
+
+
+class TestNegativeDeltas:
+    @pytest.mark.asyncio
+    async def test_negative_deltas_are_forwarded_to_tracker(self, tracker, program):
+        stage = _make_stage(tracker, "constructor")
+        opponent_ids = ["d1", "d2"]
+        artifact = {"per_opp_delta": [-0.05, 0.1]}
+        _attach(stage, opponent_ids, ({}, artifact))
+
+        await stage.compute(program)
+
+        pairs = tracker.record_batch.await_args.args[0]
+        assert pairs == [
+            ("d1", program.id, -0.05),
+            ("d2", program.id, 0.1),
+        ]
+
+
+# ===================================================================
+# Alignment validation
+# ===================================================================
+
+
+class TestAlignment:
+    @pytest.mark.asyncio
+    async def test_length_mismatch_skips_recording(self, tracker, program):
+        stage = _make_stage(tracker, "constructor")
+        _attach(
+            stage,
+            ["d1", "d2", "d3"],
+            ({}, {"per_opp_delta": [0.1, 0.2]}),  # length 2 != 3
+        )
+
+        await stage.compute(program)
+        tracker.record_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_missing_per_opp_delta_treated_as_empty(self, tracker, program):
+        stage = _make_stage(tracker, "constructor")
+        # Empty opponents + empty per_opp_delta → no pairs.
+        _attach(stage, [], ({}, {}))
+
+        await stage.compute(program)
+        tracker.record_batch.assert_not_awaited()
+
+
+# ===================================================================
+# Malformed validation payload
+# ===================================================================
+
+
+class TestMalformedPayload:
+    @pytest.mark.asyncio
+    async def test_non_tuple_validation_result_is_rejected(self, tracker, program):
+        stage = _make_stage(tracker, "constructor")
+        # validation_result.data is not a (metrics, artifact) tuple.
+        _attach(stage, ["d1"], {"fitness": 0.5})
+
+        await stage.compute(program)
+        tracker.record_batch.assert_not_awaited()
+
+
+# ===================================================================
+# Role validation
+# ===================================================================
+
+
+class TestRoleValidation:
+    def test_invalid_role_raises(self, tracker):
+        with pytest.raises(ValueError, match="role must be"):
+            DGTrackerStage(dg_tracker=tracker, role="invalid", timeout=5.0)
+
+
+# ===================================================================
+# F31 — artifact role vs stage role cross-check (wiring-bug detector)
+# ===================================================================
+
+
+class TestArtifactRoleCrossCheck:
+    @pytest.mark.asyncio
+    async def test_role_mismatch_skips_recording(self, tracker, program):
+        # Stage configured as constructor but artifact tagged as improver →
+        # wiring bug, must not record.
+        stage = _make_stage(tracker, "constructor")
+        opponent_ids = ["d1", "d2"]
+        artifact = {
+            "role": "improver",  # mismatched
+            "n_opponents": 2,
+            "per_opp_delta": [0.1, 0.2],
+        }
+        _attach(stage, opponent_ids, ({}, artifact))
+
+        await stage.compute(program)
+        tracker.record_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_role_match_records_normally(self, tracker, program):
+        stage = _make_stage(tracker, "improver")
+        opponent_ids = ["g1", "g2"]
+        artifact = {
+            "role": "improver",
+            "n_opponents": 2,
+            "per_opp_delta": [0.05, 0.10],
+        }
+        _attach(stage, opponent_ids, ({}, artifact))
+
+        await stage.compute(program)
+        tracker.record_batch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_role_field_does_not_block(self, tracker, program):
+        # Older artifacts without 'role' should still record (back-compat).
+        stage = _make_stage(tracker, "constructor")
+        opponent_ids = ["d1"]
+        artifact = {"per_opp_delta": [0.1]}  # no role
+        _attach(stage, opponent_ids, ({}, artifact))
+
+        await stage.compute(program)
+        tracker.record_batch.assert_awaited_once()

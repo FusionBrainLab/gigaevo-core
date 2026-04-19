@@ -134,19 +134,18 @@ async def test_tracker_selects_per_program_d(stage_with_tracker, provider, dg_tr
 
 
 @pytest.mark.asyncio
-async def test_tracker_none_falls_back_to_global(
-    stage_with_tracker, provider, dg_tracker
-):
-    """When dg_tracker returns None (no data for G), falls back to global best D."""
+async def test_tracker_none_skips_injection(stage_with_tracker, provider, dg_tracker):
+    """v3: tracker configured but no per-G entry → skip (no global fallback)."""
     dg_tracker.get_best_d_for_g.return_value = None
+    # Archive non-empty; global fallback would have picked this up previously.
     provider.get_top_k.return_value = [
         OpponentProgram(
             program_id="d-global", code="def global_improve(): pass", fitness=0.9
         )
     ]
     result = await stage_with_tracker.compute(_dummy_program("g-99"))
-    provider.get_top_k.assert_called_once_with(1, higher_is_better=True)
-    assert "def global_improve(): pass" in result.data
+    assert result.data == ""
+    provider.get_top_k.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -185,25 +184,25 @@ async def test_tracker_fetches_d_code_by_id(stage_with_tracker, provider, dg_tra
 
 
 @pytest.mark.asyncio
-async def test_tracker_d_evicted_falls_back_to_global(
+async def test_tracker_d_evicted_skips_injection(
     stage_with_tracker, provider, dg_tracker
 ):
-    """When tracker returns d_id but get_programs_by_ids returns empty, falls back to global."""
+    """v3: tracker's per-G D was evicted from archive → skip (no global fallback)."""
     dg_tracker.get_best_d_for_g.return_value = ("d-evicted", 0.1)
     provider.get_programs_by_ids.return_value = []  # D was evicted
     provider.get_top_k.return_value = [
         OpponentProgram(program_id="d-global", code="def global_d(): pass", fitness=0.8)
     ]
     result = await stage_with_tracker.compute(_dummy_program("g-1"))
-    provider.get_top_k.assert_called_once_with(1, higher_is_better=True)
-    assert "def global_d(): pass" in result.data
+    assert result.data == ""
+    provider.get_top_k.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_prompt_includes_d_fitness_and_code(
+async def test_prompt_includes_d_fitness_code_and_per_g_delta(
     stage_with_tracker, provider, dg_tracker
 ):
-    """The prompt text includes the specific D's fitness and code."""
+    """The prompt text includes the specific D's fitness, code, AND per-G delta."""
     dg_tracker.get_best_d_for_g.return_value = ("d-1", 0.07)
     provider.get_programs_by_ids.return_value = [
         OpponentProgram(
@@ -213,12 +212,25 @@ async def test_prompt_includes_d_fitness_and_code(
         )
     ]
     result = await stage_with_tracker.compute(_dummy_program("g-1"))
-    assert "0.54321" in result.data
+    assert "0.54321" in result.data  # D's intrinsic fitness
+    assert "+0.07000" in result.data  # per-G delta with sign + 5 decimals
+    assert "Per-program improvement" in result.data  # per-G header line present
     assert "def special_improve(pts): return pts * 2" in result.data
 
 
 @pytest.mark.asyncio
-async def test_empty_archive_no_tracker_returns_empty(
+async def test_no_tracker_header_omits_per_g_delta(stage, provider):
+    """Tracker-less path: header shows fitness but no 'Per-program improvement' line."""
+    provider.get_top_k.return_value = [
+        OpponentProgram(program_id="d-1", code="def improve(): pass", fitness=0.12345)
+    ]
+    result = await stage.compute(_dummy_program("g-1"))
+    assert "0.12345" in result.data
+    assert "Per-program improvement" not in result.data
+
+
+@pytest.mark.asyncio
+async def test_empty_archive_no_tracker_data_returns_empty(
     stage_with_tracker, provider, dg_tracker
 ):
     """Empty D archive + no tracker data returns empty string (cold start)."""

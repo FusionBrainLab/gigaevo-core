@@ -29,6 +29,10 @@ class RunSnapshot:
     completed: bool = False
     completion_reason: str | None = None
     error: str | None = None
+    # Track B4: per-event counts over the recent minute window. ``None`` means
+    # "not collected" (e.g. Redis unreachable at collect time); the
+    # AlertDetector EVENT_RATE_ZERO predicate treats that as silent.
+    event_window_counts: dict[str, int] | None = None
 
     @property
     def invalid_rate(self) -> float | None:

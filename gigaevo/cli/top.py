@@ -77,7 +77,12 @@ def top(
     save_dir: str | None,
     format_name: str | None,
 ) -> None:
-    """Inspect top programs by fitness."""
+    """Inspect top-N programs ranked by a metric.
+
+    Auto-detection: in `-e/--experiment` mode, `--metric` defaults to the
+    manifest's `problem.metric_name` (e.g. `actual_fitness`). Otherwise
+    defaults to `fitness`. Pass `--minimize` to rank ascending.
+    """
     formatter = ctx.obj["formatter"]
     if format_name is not None:
         formatter = OutputFormatter(format_name=format_name)

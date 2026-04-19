@@ -206,13 +206,13 @@ class TestManifestGate:
 
 
 # ---------------------------------------------------------------------------
-# set subcommand
+# update subcommand
 # ---------------------------------------------------------------------------
 
 
-class TestManifestSet:
-    def test_set_status_calls_set_status(self):
-        """set status running calls set_status with correct args."""
+class TestManifestUpdate:
+    def test_update_status_routes_through_set_status(self):
+        """update status running calls set_status (state-machine validated)."""
         updated_manifest = _make_manifest(status="running")
         with patch(
             f"{_MANIFEST_MOD}.set_status", return_value=updated_manifest
@@ -220,30 +220,41 @@ class TestManifestSet:
             runner = CliRunner()
             result = runner.invoke(
                 main,
-                ["-e", "hover/test", "manifest", "set", "status", "running"],
+                ["-e", "hover/test", "manifest", "update", "status", "running"],
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
             mock_set.assert_called_once_with("hover/test", "running")
 
-    def test_set_non_status_field_exits_1(self):
-        """set non-status field exits 1 with guidance message."""
+    def test_update_status_invalid_transition_exits_1(self):
+        """update status rejects invalid transitions via set_status ValueError."""
+        with patch(
+            f"{_MANIFEST_MOD}.set_status",
+            side_effect=ValueError("Invalid transition preregistered -> running"),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                ["-e", "hover/test", "manifest", "update", "status", "running"],
+                catch_exceptions=False,
+            )
+            assert result.exit_code == 1
+            assert "Invalid transition" in result.output
+
+    def test_set_subcommand_no_longer_exists(self):
+        """manifest set is hard-removed — Click reports 'No such command'."""
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["-e", "hover/test", "manifest", "set", "branch", "new-branch"],
+            ["-e", "hover/test", "manifest", "set", "status", "running"],
             catch_exceptions=False,
         )
-        assert result.exit_code == 1
-        assert "update" in result.output.lower()
+        assert result.exit_code != 0
+        assert (
+            "No such command" in result.output
+            or "no such command" in result.output.lower()
+        )
 
-
-# ---------------------------------------------------------------------------
-# update subcommand
-# ---------------------------------------------------------------------------
-
-
-class TestManifestUpdate:
     def test_update_nested_field(self):
         """update control_plane.watchdog_pid 12345 calls update_manifest."""
         updated_manifest = _make_manifest()
