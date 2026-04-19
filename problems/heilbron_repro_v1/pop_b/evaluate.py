@@ -45,20 +45,28 @@ def _validate_config(points: object) -> np.ndarray | None:
     return pts
 
 
-def evaluate(opponent_results: list, program_output: object) -> dict[str, float]:
-    """Cross-play: improver vs opponent constructor configs."""
+def evaluate(opponent_results: list, program_output: object):
+    """Cross-play: improver vs opponent constructor configs.
+
+    Returns (metrics, artifact). The artifact carries per_opp_delta aligned
+    index-wise with opponent_results (one entry per opponent; 0.0 when the
+    opponent config was invalid or execution failed) so DGTrackerStage can
+    record one (d_id=program, g_id=opponent, delta) pair per opponent.
+    role="improver" lets the tracker stage confirm wiring.
+    """
     improve_fn = program_output
+    per_opp_delta: list[float] = [0.0] * len(opponent_results)
     if not callable(improve_fn):
-        return INVALID
+        return INVALID, {"role": "improver", "per_opp_delta": per_opp_delta}
 
     if not opponent_results:
-        return INVALID
+        return INVALID, {"role": "improver", "per_opp_delta": per_opp_delta}
 
     scores = []
     pre_qualities = []
     post_qualities = []
 
-    for config in opponent_results:
+    for idx, config in enumerate(opponent_results):
         config = _validate_config(config)
         if config is None:
             continue
@@ -72,26 +80,29 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
                 scores.append(0.0)
                 pre_qualities.append(pre_q)
                 post_qualities.append(pre_q)
+                per_opp_delta[idx] = 0.0
                 continue
             post_q = float(get_smallest_triangle_area(improved))
             delta = post_q - pre_q
             scores.append(min(max(delta, 0.0) / Q_MAX, 1.0))
             pre_qualities.append(pre_q)
             post_qualities.append(post_q)
+            per_opp_delta[idx] = float(max(delta, 0.0))
         except Exception:
             scores.append(0.0)
             pre_qualities.append(pre_q)
             post_qualities.append(pre_q)
+            per_opp_delta[idx] = 0.0
 
     if not scores:
-        return INVALID
+        return INVALID, {"role": "improver", "per_opp_delta": per_opp_delta}
 
     fitness = sum(scores) / len(scores)
     mean_improvement_raw = sum(
         max(post - pre, 0.0) for pre, post in zip(pre_qualities, post_qualities)
     ) / len(scores)
 
-    return {
+    metrics = {
         "fitness": float(fitness),
         "is_valid": 1.0,
         "actual_fitness": float(max(post_qualities)),
@@ -101,3 +112,5 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
         "max_post_quality": float(max(post_qualities)),
         "n_opponents": float(len(scores)),
     }
+    artifact = {"role": "improver", "per_opp_delta": per_opp_delta}
+    return metrics, artifact

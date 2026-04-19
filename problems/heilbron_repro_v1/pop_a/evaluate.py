@@ -48,29 +48,38 @@ def _validate_config(points: object) -> np.ndarray | None:
     return pts
 
 
-def evaluate(opponent_results: list, program_output: object) -> dict[str, float]:
-    """Cross-play: constructor config vs opponent improvers."""
+def evaluate(opponent_results: list, program_output: object):
+    """Cross-play: constructor config vs opponent improvers.
+
+    Returns (metrics, artifact). The artifact carries per_opp_delta aligned
+    index-wise with opponent_results so DGTrackerStage can record one
+    (d_id, g_id, delta) pair per opponent. role="constructor" lets the
+    tracker stage confirm wiring.
+    """
     points = _validate_config(program_output)
     if points is None:
-        return INVALID
+        return INVALID, {"role": "constructor", "per_opp_delta": []}
 
     raw_quality = float(get_smallest_triangle_area(points))
     if raw_quality <= 0:
-        return INVALID
+        return INVALID, {"role": "constructor", "per_opp_delta": []}
 
     quality = min(raw_quality / Q_MAX, 1.0)
 
     if not opponent_results:
-        return {
-            "fitness": quality,
-            "is_valid": 1.0,
-            "actual_fitness": raw_quality,
-            "quality": quality,
-            "resistance": 1.0,
-            "mean_improvement": 0.0,
-            "best_post_improvement": raw_quality,
-            "n_opponents": 0.0,
-        }
+        return (
+            {
+                "fitness": quality,
+                "is_valid": 1.0,
+                "actual_fitness": raw_quality,
+                "quality": quality,
+                "resistance": 1.0,
+                "mean_improvement": 0.0,
+                "best_post_improvement": raw_quality,
+                "n_opponents": 0.0,
+            },
+            {"role": "constructor", "per_opp_delta": []},
+        )
 
     resistance_scores = []
     deltas = []
@@ -106,7 +115,7 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
     )
     fitness = ALPHA * quality + (1.0 - ALPHA) * resistance
 
-    return {
+    metrics = {
         "fitness": float(fitness),
         "is_valid": 1.0,
         "actual_fitness": raw_quality,
@@ -118,3 +127,8 @@ def evaluate(opponent_results: list, program_output: object) -> dict[str, float]
         else raw_quality,
         "n_opponents": float(len(deltas)),
     }
+    artifact = {
+        "role": "constructor",
+        "per_opp_delta": [float(d) for d in deltas],
+    }
+    return metrics, artifact
