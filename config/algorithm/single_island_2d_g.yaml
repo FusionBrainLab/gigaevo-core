@@ -1,3 +1,5 @@
+# @package _global_
+
 defaults: [single_island, _self_]
 
 # 2D behavior space for G (Constructor) population v3
@@ -19,14 +21,14 @@ archive_selector:
 archive_remover:
   _target_: gigaevo.evolution.strategies.removers.FitnessArchiveRemover
   fitness_key: fitness
-  higher_is_better: true
+  fitness_key_higher_is_better: true
 
 elite_selector:
   _target_: gigaevo.evolution.strategies.elite_selectors.FitnessProportionalEliteSelector
   fitness_key: actual_fitness
-  higher_is_better: true
+  fitness_key_higher_is_better: true
 
 migrant_selector:
   _target_: gigaevo.evolution.strategies.migrant_selectors.TopFitnessMigrantSelector
   fitness_key: actual_fitness
-  higher_is_better: true
+  fitness_key_higher_is_better: true
