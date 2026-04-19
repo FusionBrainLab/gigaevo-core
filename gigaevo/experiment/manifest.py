@@ -185,6 +185,7 @@ class RunSpec(BaseModel):
     log_path: str | None = None
     extra_overrides: list[str] | None = None
     role: RunRole | None = None
+    pinned: dict[str, Any] | None = None
 
     @field_validator("db")
     @classmethod

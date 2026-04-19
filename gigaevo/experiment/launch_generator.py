@@ -211,8 +211,16 @@ def generate(experiment: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
-    """Build run.py command-line parameters for a run."""
+def _build_run_cmd(
+    run, manifest, *, cfg_only: bool, shell_escape: bool = True
+) -> list[str]:
+    """Build run.py command-line parameters for a run.
+
+    shell_escape: when True, wrap ${...} overrides in single-quotes so bash
+    doesn't variable-expand them (KF-02). Set False when handing the list to
+    subprocess.run() without shell=True — literal single-quotes would end up
+    inside the argument and Hydra's override lexer would reject it.
+    """
     x = manifest.contract.config.extras
     params = [
         f"problem.name={run.problem_name}",
@@ -226,18 +234,17 @@ def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
         f"max_elites_per_generation={x.get('max_elites_per_generation', 8)}",
         f"num_parents={x.get('num_parents', 1)}",
         f"model_name={run.model_name}",
-        f'llm_base_url="{run.mutation_url}"',
+        f'llm_base_url="{run.mutation_url}"'
+        if shell_escape
+        else f"llm_base_url={run.mutation_url}",
     ]
 
     if x.get("mutation_mode"):
         params.append(f"mutation_mode={x['mutation_mode']}")
 
-    # Extra per-run overrides from experiment.yaml (e.g. prompt_fetcher config)
-    # Single-quote any override containing ${...} Hydra interpolation refs
-    # to prevent bash from expanding them as shell variables (KF-02).
     if run.extra_overrides:
         for ov in run.extra_overrides:
-            if "${" in ov:
+            if shell_escape and "${" in ov:
                 params.append(f"'{ov}'")
             else:
                 params.append(ov)

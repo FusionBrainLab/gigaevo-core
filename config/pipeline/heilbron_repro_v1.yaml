@@ -61,7 +61,7 @@ pre_step_hook:
   host: ${redis.host}
   port: ${redis.port}
   own_db: ${redis.db}
-  own_prefix: ${redis.prefix}
+  own_prefix: ${problem.name}  # I-12: ${redis.prefix} is undefined repo-wide; convention is ${problem.name} (matches redis_storage.key_prefix in config/redis/default.yaml:15)
   sources:
     - db: ${opponent_redis_db}
       prefix: ${opponent_redis_prefix}
