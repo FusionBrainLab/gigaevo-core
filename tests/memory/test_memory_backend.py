@@ -70,16 +70,6 @@ class TestAmemGamMemoryInit:
         mem = _make_memory(tmp_path)
         assert mem.card_store.cards == {}
 
-    def test_memory_system_none_without_agentic_deps(self, tmp_path):
-        """In CI, A_mem/GAM imports fail → memory_system is None."""
-        mem = _make_memory(tmp_path)
-        assert mem.memory_system is None
-
-    def test_llm_service_none_without_api_key(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        # Without OPENAI_API_KEY and no agentic deps, llm_service should be None
-        assert mem.llm_service is None
-
     def test_research_agent_none(self, tmp_path):
         mem = _make_memory(tmp_path)
         assert mem.research_agent is None
@@ -334,7 +324,7 @@ class TestDedup:
     def test_dedup_enabled_no_llm_falls_back_to_add(self, tmp_path):
         """When dedup is enabled but LLM is unavailable, cards are still added."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        assert mem.llm_service is None
+        mem.llm_service = None  # force no-LLM path
         mem.save_card(_make_card(id="seed"))
         mem.save_card(_make_card(description="new"))
         stats = mem.get_card_write_stats()

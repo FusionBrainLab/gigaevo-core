@@ -13,6 +13,25 @@ from pathlib import Path
 _THIS_DIR = Path(__file__).resolve().parent
 
 
+def _discover_default_memory_backend_path() -> Path:
+    """Find ``config/memory_backend.yaml`` by walking up from this package.
+
+    Works for any prefix depth before the repo root (e.g. ``…/gigaevo-core-internal``
+    or ``…/vendor/gigaevo-core-internal``) and tolerates extra nesting such as
+    ``repo/src/gigaevo/memory`` as long as a parent directory contains
+    ``config/memory_backend.yaml``.
+
+    Falls back to the historical single-hop layout (repo = ``gigaevo``'s parent)
+    when the file is not found (e.g. editable install without a sibling ``config/``).
+    """
+    name = "memory_backend.yaml"
+    for base in _THIS_DIR.parents:
+        candidate = base / "config" / name
+        if candidate.is_file():
+            return candidate
+    return _THIS_DIR.parents[1] / "config" / name
+
+
 def resolve_settings_path(settings_path: str | Path | None = None) -> Path:
     """Return the settings YAML path.
 
@@ -27,7 +46,7 @@ def resolve_settings_path(settings_path: str | Path | None = None) -> Path:
     env_fallback = os.getenv("EVO_MEMORY_SETTINGS_PATH")
     if env_fallback:
         return Path(env_fallback)
-    return _THIS_DIR.parents[2] / "config" / "memory_backend.yaml"
+    return _discover_default_memory_backend_path()
 
 
 def resolve_local_path(

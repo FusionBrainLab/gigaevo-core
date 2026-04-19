@@ -21,18 +21,30 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import StrEnum
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
+from loguru import logger
 from omegaconf import OmegaConf
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    field_validator,
+    model_validator,
+)
+from pydantic import (
+    ValidationError as PydanticValidationError,
+)
 import yaml
 
+from gigaevo.exceptions import ManifestValidationError
 from gigaevo.experiment.lock import (
-    _acquire_lock,
-    _get_redis,
-    _release_lock,
-    _write_manifest_atomic,
+    acquire_lock,
+    get_redis,
+    read_manifest_rt,
+    release_lock,
+    write_manifest_atomic,
 )
 
 
@@ -41,24 +53,75 @@ class RunRole(StrEnum):
     IMPROVER = "improver"
 
 
-PROJ = Path(__file__).parent.parent.parent
+class Status(StrEnum):
+    PREREGISTERED = "preregistered"
+    IMPLEMENTED = "implemented"
+    RUNNING = "running"
+    COMPLETE = "complete"
+    INVALID = "invalid"
+
+
+def _resolve_proj() -> Path:
+    """Resolve the project root, honoring the ``GIGAEVO_PROJ`` env override.
+
+    Useful for tests, non-standard checkouts, and integration harnesses that
+    want to point the manifest system at a scratch directory without
+    monkey-patching module state.
+    """
+    override = os.environ.get("GIGAEVO_PROJ")
+    if override:
+        p = Path(override).expanduser().resolve()
+        if not p.is_dir():
+            raise RuntimeError(
+                f"GIGAEVO_PROJ={override!r} does not point to an existing directory. "
+                f"Unset it or create the directory."
+            )
+        return p
+    return Path(__file__).parent.parent.parent
+
+
+PROJ = _resolve_proj()
 
 SUPPORTED_SCHEMA_VERSIONS = {2}
-VALID_STATUSES = {"preregistered", "implemented", "running", "complete", "invalid"}
 
-VALID_TRANSITIONS: dict[str, set[str]] = {
-    "preregistered": {"implemented"},
-    "implemented": {"running"},
-    "running": {"complete", "invalid"},
-    "complete": set(),
-    "invalid": {"preregistered"},
+REQUIRES_IMPLEMENTATION: frozenset[Status] = frozenset(
+    {
+        Status.IMPLEMENTED,
+        Status.RUNNING,
+        Status.COMPLETE,
+    }
+)
+
+REQUIRES_RUNTIME: frozenset[Status] = frozenset(
+    {
+        Status.RUNNING,
+        Status.COMPLETE,
+    }
+)
+
+TERMINAL: frozenset[Status] = frozenset(
+    {
+        Status.COMPLETE,
+        Status.INVALID,
+    }
+)
+
+VALID_TRANSITIONS: dict[Status, set[Status]] = {
+    Status.PREREGISTERED: {Status.IMPLEMENTED},
+    Status.IMPLEMENTED: {Status.RUNNING},
+    Status.RUNNING: {Status.COMPLETE, Status.INVALID},
+    Status.COMPLETE: set(),
+    Status.INVALID: {Status.PREREGISTERED},
 }
 
-RECOVERY_TRANSITIONS: dict[str, set[str]] = {
-    "running": {"implemented"},
+RECOVERY_TRANSITIONS: dict[Status, set[Status]] = {
+    Status.RUNNING: {Status.IMPLEMENTED},
 }
 
-DB_CLAIM_TTL = 86400 * 7
+# 7 days — covers long runs + weekend without manual refresh.
+DB_CLAIM_TTL_SECONDS = 7 * 24 * 60 * 60
+# Backwards-compatible alias; prefer DB_CLAIM_TTL_SECONDS going forward.
+DB_CLAIM_TTL = DB_CLAIM_TTL_SECONDS
 
 # ---------------------------------------------------------------------------
 # Pydantic Schema Models
@@ -101,6 +164,7 @@ class WatchdogSection(BaseModel):
     plot_retry_delay_s: int = 30
     rolling_comment_threshold_hours: int = 24
     checkpoint_milestones: list[float] = [0.1, 0.2, 0.5, 1.0]
+    no_proxy_hosts: list[str] = []
 
 
 class RunSpec(BaseModel):
@@ -114,13 +178,13 @@ class RunSpec(BaseModel):
     pipeline: str
     problem_name: str
     condition: str
+    chain_url: str | None = None
+    mutation_url: str | None = None
+    model_name: str
     pid: int | None = None
     log_path: str | None = None
     extra_overrides: list[str] | None = None
     role: RunRole | None = None
-    pinned: dict[str, Any] = Field(default_factory=dict)
-    # Per-run delta merged on top of contract.config.pinned. Lets one arm
-    # assert a different resolved value without touching the others.
 
     @field_validator("db")
     @classmethod
@@ -156,9 +220,6 @@ class LaunchInfo(BaseModel):
     commit: str | None = None
     confirmed_at: str | None = None
     attempt: int | None = None
-    config_fingerprint: dict[str, str] = Field(default_factory=dict)
-    # {relative_config_path: sha256 hex}. Populated by launch.py after the
-    # dry-run + pin check pass. A relaunch refuses if any hash differs.
 
 
 class BaselineInfo(BaseModel):
@@ -190,7 +251,7 @@ class TreatmentVerificationInfo(BaseModel):
 
     completed: bool = False
     completed_at: str | None = None
-    note: str | None = None
+    note: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +289,6 @@ class CheckpointEntry(BaseModel):
     timestamp: str
     run_metrics: list[RunMetric] = []
     notes: str = ""
-    metric_name: str | None = None
 
 
 class MidRunTestEvalInfo(BaseModel):
@@ -302,11 +362,14 @@ class ToolRef(BaseModel):
 class ConfigSpec(BaseModel):
     """Shared Hydra config overrides.
 
-    Standard keys are typed; problem-specific extras live in ``extra`` so the
-    model doesn't have to know every Hydra override that experiments use.
+    Standard keys are explicitly typed (``problem_name``, ``pipeline``, …).
+    Problem-specific extras (e.g. ``stage_timeout``, ``mutation_mode``)
+    arrive as plain top-level keys and are captured in
+    :pyattr:`pydantic.BaseModel.model_extra`. The :pyattr:`extras` property
+    is the canonical accessor — never reach into ``model_extra`` directly.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
 
     problem_name: str | None = None
     pipeline: str | None = None
@@ -315,60 +378,11 @@ class ConfigSpec(BaseModel):
     llm_model: str | None = None
     n_workers: int | None = None
     max_generations: int | None = None
-    extra: dict[str, Any] = {}
 
-    task_group: str | None = None
-    # Name of a Hydra experiment group at config/experiment/<name>.yaml.
-    # launch_generator emits ``experiment=<task_group>`` as the first CLI
-    # override; Hydra composes the group file (which inherits ``base``) and
-    # scalar overrides on the CLI win via Hydra's normal resolution rules.
-    # ``None`` = falls through to config.yaml's default (``experiment: base``).
-
-    pinned: dict[str, Any] = Field(default_factory=dict)
-    # Flat dict: dotted Hydra path -> required resolved value.
-    # Assertion contract — drift between pinned and resolved -> CRITICAL.
-    # Missing key = no assertion on that path.
-
-    @field_validator("pinned")
-    @classmethod
-    def validate_pinned_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
-        """Reject keys containing shell metachars / CLI-override syntax.
-
-        Keys must be bare dotted Hydra paths. The dry-run shells out to
-        ``python run.py`` so any shell-active character is unsafe.
-        CLI-override syntax (``=``, leading ``+``) would also break the
-        launch_generator's arg emission.
-        """
-        _FORBIDDEN_CHARS = set(";|&`$><\n\r\t \"'\\")
-        _FORBIDDEN_SUBSTRS = ("$(", "${")
-        for key in v:
-            if not isinstance(key, str) or not key:
-                raise ValueError(f"pinned key must be a non-empty string, got {key!r}")
-            if "\n" in key or "\r" in key:
-                raise ValueError(
-                    f"pinned key {key!r} contains newline; expected bare dotted Hydra path"
-                )
-            if "=" in key:
-                raise ValueError(
-                    f"pinned key {key!r} contains '='; pinned keys are paths, "
-                    f"not override expressions (use value side for the '=')"
-                )
-            if key.startswith(("+", "~", "++")):
-                raise ValueError(
-                    f"pinned key {key!r} starts with Hydra override prefix; "
-                    f"pinned keys are bare dotted paths"
-                )
-            if any(c in _FORBIDDEN_CHARS for c in key):
-                raise ValueError(
-                    f"pinned key {key!r} contains shell metachars; "
-                    f"expected bare dotted Hydra path"
-                )
-            if any(s in key for s in _FORBIDDEN_SUBSTRS):
-                raise ValueError(
-                    f"pinned key {key!r} contains shell expansion; "
-                    f"expected bare dotted Hydra path"
-                )
-        return v
+    @property
+    def extras(self) -> dict[str, Any]:
+        """Return the un-typed extras dict (always materialized, never ``None``)."""
+        return dict(self.model_extra or {})
 
 
 class PrChannelConfig(BaseModel):
@@ -436,6 +450,7 @@ class ContractSection(BaseModel):
     problem: ProblemSpec = ProblemSpec()
     config: ConfigSpec = ConfigSpec()
     runs: list[RunSpec] = []
+    servers: list[str] = []
     custom_env: dict[str, str] = {}
     max_generations: int = 25
     baseline: BaselineInfo = BaselineInfo()
@@ -484,7 +499,8 @@ class ExperimentManifest(BaseModel):
     sub-sections — there are no flat compatibility views.
 
     Status-gated validation: fields that are required depend on the current
-    experiment status (preregistered < implemented < running < complete).
+    experiment status. Forward transitions: preregistered → implemented → running
+    → {complete | invalid}. Recovery edge: running → implemented via recover_status.
 
     ``extra="ignore"`` silently drops any unknown top-level keys without
     failing validation, so task-specific metadata added outside the schema
@@ -512,22 +528,30 @@ class ExperimentManifest(BaseModel):
     @model_validator(mode="after")
     def validate_status_gates(self) -> ExperimentManifest:
         """Validate required fields based on experiment status."""
-        status = self.lifecycle.status
-        if status not in VALID_STATUSES:
+        status_str = self.lifecycle.status
+        try:
+            status = Status(status_str)
+        except ValueError:
+            valid = ", ".join(s.value for s in Status)
             raise ValueError(
-                f"Invalid lifecycle.status '{status}'. "
-                f"Valid statuses: {sorted(VALID_STATUSES)}"
-            )
+                f"Invalid lifecycle.status '{status_str}'. Valid statuses: {valid}"
+            ) from None
+
         errors: list[str] = []
 
         # implemented+ requires runs, servers, config, smoke_test.completed
-        if status in ("implemented", "running", "complete"):
+        if status in REQUIRES_IMPLEMENTATION:
             if not self.contract.runs:
                 errors.append(
-                    f"contract.runs[] must be non-empty for status={status}. "
+                    f"contract.runs[] must be non-empty for status={status.value}. "
                     f"Add at least one run configuration."
                 )
-            config_extras = self.contract.config.extra or {}
+            if not self.contract.servers:
+                errors.append(
+                    f"contract.servers[] must be non-empty for status={status.value}. "
+                    f"Add the server hostnames used by this experiment."
+                )
+            config_extras = self.contract.config.extras
             config_typed_set = any(
                 getattr(self.contract.config, k) is not None
                 for k in (
@@ -542,37 +566,37 @@ class ExperimentManifest(BaseModel):
             )
             if not config_extras and not config_typed_set:
                 errors.append(
-                    f"contract.config must be non-empty for status={status}. "
+                    f"contract.config must be non-empty for status={status.value}. "
                     f"Add the shared Hydra config overrides."
                 )
             if not self.lifecycle.smoke_test.completed:
                 errors.append(
-                    f"lifecycle.smoke_test.completed must be true for status={status}. "
+                    f"lifecycle.smoke_test.completed must be true for status={status.value}. "
                     f"Run a smoke test first."
                 )
 
         # running+ requires launch info and PIDs
-        if status in ("running", "complete"):
+        if status in REQUIRES_RUNTIME:
             if not self.lifecycle.launch.time:
                 errors.append(
-                    f"lifecycle.launch.time is required for status={status}. "
+                    f"lifecycle.launch.time is required for status={status.value}. "
                     f"Set to the ISO timestamp of the launch."
                 )
             if not self.lifecycle.launch.commit:
                 errors.append(
-                    f"lifecycle.launch.commit is required for status={status}. "
+                    f"lifecycle.launch.commit is required for status={status.value}. "
                     f"Set to the git commit hash at launch."
                 )
             for run in self.contract.runs:
                 if run.pid is None:
                     errors.append(
-                        f"contract.runs[{run.label}].pid is required for status={status}. "
+                        f"contract.runs[{run.label}].pid is required for status={status.value}. "
                         f"Record the PID after launching."
                     )
 
         if errors:
             raise ValueError(
-                f"Manifest validation failed (status={status}):\n"
+                f"Manifest validation failed (status={status.value}):\n"
                 + "\n".join(f"  - {e}" for e in errors)
             )
 
@@ -637,26 +661,10 @@ class ExperimentManifest(BaseModel):
         leaving a literal ``${...}`` string in the manifest.
         """
         path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(
-                f"No experiment.yaml at {path}. "
-                f"Create one from experiments/_template/experiment.yaml"
-            )
-        try:
-            raw = _load_yaml_with_omegaconf(path)
-        except FileNotFoundError:
-            raise
-        except Exception as exc:
-            raise ValueError(
-                f"Failed to load {path}: {exc}\nRecovery: git checkout {path}"
-            ) from exc
-
-        if not isinstance(raw, dict):
-            raise ValueError(f"{path} must be a YAML mapping, not {type(raw).__name__}")
-
+        raw = _read_yaml_file(path)
         try:
             return cls.from_dict(raw)
-        except ValueError as exc:
+        except (PydanticValidationError, ValueError) as exc:
             raise ValueError(
                 f"Validation failed for {path}:\n{exc}\nRecovery: git checkout {path}"
             ) from exc
@@ -718,39 +726,76 @@ def _load_yaml_with_omegaconf(path: Path) -> Any:
     return OmegaConf.to_container(cfg, resolve=True)
 
 
-def load_manifest(experiment: str) -> ExperimentManifest:
-    """Load and validate experiment.yaml.
+def _read_yaml_file(path: Path) -> dict[str, Any]:
+    """Read and parse experiment.yaml via OmegaConf.
 
-    Uses OmegaConf so ``${oc.env:NAME,default}`` and cross-section
-    interpolations resolve at load time.
-
-    Raises FileNotFoundError if the file doesn't exist.
-    Raises ValueError on schema validation failure or interpolation failure.
+    Shared IO path for ``load_manifest`` and ``ExperimentManifest.from_yaml_file``.
+    Raises ``FileNotFoundError`` for missing files and ``ValueError`` for
+    unreadable/non-mapping YAML — never a bare ``Exception``.
     """
-    path = manifest_path(experiment)
     if not path.exists():
         raise FileNotFoundError(
             f"No experiment.yaml at {path}. "
             f"Create one from experiments/_template/experiment.yaml"
         )
-
     try:
         raw = _load_yaml_with_omegaconf(path)
-    except Exception as e:
+    except (yaml.YAMLError, OSError, ValueError) as exc:
         raise ValueError(
-            f"Failed to load {path}: {e}\n"
-            f"Recovery: git checkout {path.relative_to(PROJ)}"
-        ) from e
+            f"Failed to load {path}: {exc}\nRecovery: git checkout {path}"
+        ) from exc
 
     if not isinstance(raw, dict):
-        raise ValueError(f"{path} is not a YAML mapping")
+        raise ValueError(f"{path} must be a YAML mapping, not {type(raw).__name__}")
+    return raw
 
+
+_KNOWN_TOP_LEVEL_KEYS = frozenset(
+    {"schema_version", "contract", "lifecycle", "telemetry", "control_plane"}
+)
+
+
+def load_manifest(experiment: str, *, strict: bool = False) -> ExperimentManifest:
+    """Load and validate ``experiment.yaml``.
+
+    Uses OmegaConf so ``${oc.env:NAME,default}`` and cross-section
+    interpolations resolve at load time.
+
+    When ``strict=True``, reject any unknown top-level keys. This catches
+    typos at the v2 root (``lifeycycle:`` vs ``lifecycle:``) that would
+    otherwise be silently dropped by the model's ``extra="ignore"`` policy.
+    Sub-section extras are by design (``ConfigSpec`` Hydra knobs,
+    ``RunMetric`` problem-specific ``best_X`` metrics) and remain allowed.
+
+    Raises FileNotFoundError if the file doesn't exist.
+    Raises ManifestValidationError on schema validation failure or
+        (in strict mode) on unknown top-level keys.
+    Raises ValueError on YAML parse / interpolation failure.
+    """
+    path = manifest_path(experiment)
+    raw = _read_yaml_file(path)
+    if strict:
+        unknown = sorted(set(raw) - _KNOWN_TOP_LEVEL_KEYS)
+        if unknown:
+            raise ManifestValidationError(
+                experiment,
+                f"unknown top-level keys: {unknown}. "
+                f"Allowed: {sorted(_KNOWN_TOP_LEVEL_KEYS)}",
+            )
     return _validate(raw, experiment)
 
 
 def _validate(raw: dict[str, Any], experiment: str) -> ExperimentManifest:
-    """Validate raw YAML dict and return ExperimentManifest."""
-    return ExperimentManifest.from_dict(raw)
+    """Validate raw YAML dict and return ExperimentManifest.
+
+    Wraps Pydantic ``ValidationError`` in ``ManifestValidationError`` so
+    downstream callers can recognize manifest-shape failures (as opposed
+    to IO or YAML parsing errors) without inspecting exception messages.
+    """
+    try:
+        return ExperimentManifest.from_dict(raw)
+    except (PydanticValidationError, ValueError) as exc:
+        raise ManifestValidationError(experiment, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -761,15 +806,12 @@ def _validate(raw: dict[str, Any], experiment: str) -> ExperimentManifest:
 def set_status(
     experiment: str,
     new_status: str,
-    *,
-    allow_recovery: bool = False,
 ) -> ExperimentManifest:
-    """Transition experiment to new_status. Validates transition.
+    """Forward-only status transition. Validates state machine.
 
     Args:
         experiment: e.g. "hover/feedback_softfit"
-        new_status: target status
-        allow_recovery: if True, also allow RECOVERY_TRANSITIONS
+        new_status: target status (must be reachable via VALID_TRANSITIONS)
 
     Returns:
         Updated manifest.
@@ -777,45 +819,104 @@ def set_status(
     Raises:
         ValueError on invalid transition or validation failure.
     """
-    r = _get_redis()
-    lock_key = _acquire_lock(r, experiment)
+    r = get_redis()
+    lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
-        with open(path) as f:
-            raw = yaml.safe_load(f)
+        raw = read_manifest_rt(path)
 
         current = (raw.get("lifecycle") or {}).get("status", "preregistered")
+        try:
+            current_status = Status(current)
+        except ValueError:
+            raise ValueError(f"Invalid current status: {current}") from None
 
-        allowed = VALID_TRANSITIONS.get(current, set())
-        if allow_recovery:
-            allowed = allowed | RECOVERY_TRANSITIONS.get(current, set())
+        allowed = VALID_TRANSITIONS.get(current_status, set())
+        target_status = Status(new_status)
 
-        if new_status not in allowed:
+        if target_status not in allowed:
             raise ValueError(
-                f"Invalid transition: {current} -> {new_status}. Allowed: {allowed}"
+                f"Invalid transition: {current} -> {new_status}. Allowed: {', '.join(s.value for s in allowed)}"
             )
 
         raw.setdefault("lifecycle", {})["status"] = new_status
 
-        # Validate the new state (will raise if required fields missing)
         manifest = _validate(raw, experiment)
 
-        _write_manifest_atomic(path, raw)
+        write_manifest_atomic(path, raw)
         return manifest
     finally:
-        _release_lock(r, lock_key)
+        release_lock(r, lock_key)
+
+
+def recover_status(
+    experiment: str,
+    new_status: str,
+) -> ExperimentManifest:
+    """Recovery-only status transition. For running → implemented recovery.
+
+    Allows transitions defined in RECOVERY_TRANSITIONS (currently: running → implemented).
+    Used when rolling back a stuck experiment to retry from an earlier state.
+
+    Args:
+        experiment: e.g. "hover/feedback_softfit"
+        new_status: target status (must be reachable via RECOVERY_TRANSITIONS)
+
+    Returns:
+        Updated manifest.
+
+    Raises:
+        ValueError on invalid recovery transition or validation failure.
+    """
+    r = get_redis()
+    lock_key = acquire_lock(r, experiment)
+    try:
+        path = manifest_path(experiment)
+        raw = read_manifest_rt(path)
+
+        current = (raw.get("lifecycle") or {}).get("status", "preregistered")
+        try:
+            current_status = Status(current)
+        except ValueError:
+            raise ValueError(f"Invalid current status: {current}") from None
+
+        allowed = RECOVERY_TRANSITIONS.get(current_status, set())
+        target_status = Status(new_status)
+
+        if target_status not in allowed:
+            raise ValueError(
+                f"Cannot recover to {new_status} from {current}. "
+                f"Recovery transitions: {', '.join(f'{k.value} → {", ".join(s.value for s in v)}' for k, v in RECOVERY_TRANSITIONS.items())}"
+            )
+
+        raw.setdefault("lifecycle", {})["status"] = new_status
+
+        manifest = _validate(raw, experiment)
+        write_manifest_atomic(path, raw)
+        return manifest
+    finally:
+        release_lock(r, lock_key)
 
 
 def update_manifest(
     experiment: str,
-    updater: Callable[[dict[str, Any]], None],
+    updater: Callable[[dict[str, Any]], dict[str, Any] | None],
 ) -> ExperimentManifest:
-    """Read-modify-write experiment.yaml under lock.
+    """Read-modify-write ``experiment.yaml`` under a Redis lock.
 
-    The updater function receives the raw dict and modifies it in-place.
-    Validation runs after the update.
+    The updater receives the parsed manifest as a round-trip
+    :class:`ruamel.yaml.comments.CommentedMap` and may either:
 
-    Usage:
+    - **mutate it in-place** and return ``None`` (preferred — preserves
+      comments and key order on disk), or
+    - **return a new mapping** that replaces it entirely (loses any
+      comments not present on the new mapping).
+
+    In both cases validation runs against the post-update mapping before
+    the atomic write.
+
+    Usage::
+
         def set_pids(raw):
             for run in raw["contract"]["runs"]:
                 if run["label"] == "F1":
@@ -823,20 +924,23 @@ def update_manifest(
 
         update_manifest("hover/feedback_softfit", set_pids)
     """
-    r = _get_redis()
-    lock_key = _acquire_lock(r, experiment)
+    r = get_redis()
+    lock_key = acquire_lock(r, experiment)
     try:
         path = manifest_path(experiment)
-        with open(path) as f:
-            raw = yaml.safe_load(f)
+        # Widened type so the optional dict-replacement branch type-checks;
+        # CommentedMap is a MutableMapping but isn't a dict subclass.
+        raw: dict[str, Any] = read_manifest_rt(path)
 
-        updater(raw)
+        result = updater(raw)
+        if result is not None:
+            raw = result
 
         manifest = _validate(raw, experiment)
-        _write_manifest_atomic(path, raw)
+        write_manifest_atomic(path, raw)
         return manifest
     finally:
-        _release_lock(r, lock_key)
+        release_lock(r, lock_key)
 
 
 # ---------------------------------------------------------------------------
@@ -844,32 +948,134 @@ def update_manifest(
 # ---------------------------------------------------------------------------
 
 
+def _db_claim_key(db: int) -> str:
+    return f"experiments:db_claim:{db}"
+
+
+# Lua: atomic all-or-nothing claim.
+# KEYS: N db_claim keys. ARGV[1]=experiment, ARGV[2]=TTL, ARGV[3..]=db numbers.
+# Returns a flat list [db1, owner1, db2, owner2, ...] of conflicts. An empty
+# list means every claim succeeded (new or idempotent re-claim by same owner).
+# On any conflict, NO keys are written.
+_CLAIM_DBS_LUA = """
+local failed = {}
+local exp = ARGV[1]
+local ttl = ARGV[2]
+for i=1,#KEYS do
+  local cur = redis.call('GET', KEYS[i])
+  if cur and cur ~= exp then
+    table.insert(failed, ARGV[2+i])
+    table.insert(failed, cur)
+  end
+end
+if #failed > 0 then
+  return failed
+end
+for i=1,#KEYS do
+  redis.call('SET', KEYS[i], exp, 'EX', ttl)
+end
+return {}
+"""
+
+# Lua: CAS refresh — extend TTL only if the current owner matches.
+# Returns number of keys refreshed. Silently skips keys owned by others or
+# already expired; caller can compare against len(dbs) to detect drift.
+_REFRESH_DB_CLAIMS_LUA = """
+local refreshed = 0
+local exp = ARGV[1]
+local ttl = ARGV[2]
+for i=1,#KEYS do
+  if redis.call('GET', KEYS[i]) == exp then
+    redis.call('EXPIRE', KEYS[i], ttl)
+    refreshed = refreshed + 1
+  end
+end
+return refreshed
+"""
+
+# Lua: CAS release — delete only if the current owner matches.
+# Prevents experiment A from releasing experiment B's claim on the same DB.
+_RELEASE_DB_CLAIMS_LUA = """
+local released = 0
+local exp = ARGV[1]
+for i=1,#KEYS do
+  if redis.call('GET', KEYS[i]) == exp then
+    redis.call('DEL', KEYS[i])
+    released = released + 1
+  end
+end
+return released
+"""
+
+
 def claim_dbs(experiment: str, dbs: list[int]) -> list[tuple[int, str]]:
-    """Atomically claim Redis DBs. Returns list of (db, owner) that failed."""
-    r = _get_redis()
+    """Atomically claim Redis DBs — all or nothing.
+
+    If any requested DB is currently owned by a different experiment, NO
+    claims are written and the conflict list is returned as
+    ``[(db, owner), ...]``. Re-claiming a DB already owned by the same
+    experiment is idempotent (TTL is not refreshed — use
+    :func:`refresh_db_claims` for that).
+
+    Uses a server-side Lua script so the check-then-set is atomic across
+    all DBs; there is no window where a half-claimed state is visible.
+    """
+    if not dbs:
+        return []
+    r = get_redis()
+    keys = [_db_claim_key(db) for db in dbs]
+    args = [experiment, str(DB_CLAIM_TTL_SECONDS), *[str(db) for db in dbs]]
+    result = r.eval(_CLAIM_DBS_LUA, len(keys), *keys, *args)
+    if not result:
+        return []
     failed: list[tuple[int, str]] = []
-    for db in dbs:
-        key = f"experiments:db_claim:{db}"
-        if not r.set(key, experiment, nx=True, ex=DB_CLAIM_TTL):
-            owner = (r.get(key) or b"unknown").decode()
-            if owner != experiment:
-                failed.append((db, owner))
+    for i in range(0, len(result), 2):
+        db = int(result[i].decode() if isinstance(result[i], bytes) else result[i])
+        owner = (
+            result[i + 1].decode()
+            if isinstance(result[i + 1], bytes)
+            else str(result[i + 1])
+        )
+        failed.append((db, owner))
     return failed
 
 
-def refresh_db_claims(experiment: str, dbs: list[int]) -> None:
-    """Refresh TTL on already-claimed DBs (called by watchdog each cycle)."""
-    r = _get_redis()
-    for db in dbs:
-        key = f"experiments:db_claim:{db}"
-        r.set(key, experiment, xx=True, ex=DB_CLAIM_TTL)
+def refresh_db_claims(experiment: str, dbs: list[int]) -> int:
+    """Refresh TTL on already-claimed DBs (called by watchdog each cycle).
+
+    Owner-checked (CAS): a claim is refreshed only when its current owner
+    matches ``experiment``. Returns the number of keys successfully
+    refreshed — callers can compare against ``len(dbs)`` to detect
+    claim drift (keys that expired or got stolen).
+    """
+    if not dbs:
+        return 0
+    r = get_redis()
+    keys = [_db_claim_key(db) for db in dbs]
+    return int(
+        r.eval(
+            _REFRESH_DB_CLAIMS_LUA,
+            len(keys),
+            *keys,
+            experiment,
+            str(DB_CLAIM_TTL_SECONDS),
+        )
+    )
 
 
-def release_db_claims(dbs: list[int]) -> None:
-    """Release DB claims (called by reset_status and closeout)."""
-    r = _get_redis()
-    for db in dbs:
-        r.delete(f"experiments:db_claim:{db}")
+def release_db_claims(experiment: str, dbs: list[int]) -> int:
+    """Release DB claims (called by reset_status and closeout).
+
+    Owner-checked (CAS): a claim is released only when its current owner
+    matches ``experiment``. Prevents experiment A from accidentally
+    releasing experiment B's claim on a shared DB number. Returns the
+    number of claims actually released.
+    """
+    if not dbs:
+        return 0
+    r = get_redis()
+    keys = [_db_claim_key(db) for db in dbs]
+    return int(r.eval(_RELEASE_DB_CLAIMS_LUA, len(keys), *keys, experiment))
 
 
 # ---------------------------------------------------------------------------
@@ -881,21 +1087,33 @@ def find_active_experiments() -> list[ExperimentManifest]:
     """Scan for experiments with status in (implemented, running).
 
     Includes 'implemented' to prevent TOCTOU race with DB claims.
+
+    Silently skipping broken manifests has historically masked real bugs
+    (stale PROJ root, malformed YAML, schema drift). We still *continue*
+    past a broken manifest — otherwise one stale yaml would block all
+    launches — but each skip is logged at WARNING so it shows up in CI.
     """
     active: list[ExperimentManifest] = []
     experiments_dir = PROJ / "experiments"
     for yaml_path in experiments_dir.glob("*/*/experiment.yaml"):
-        # Skip template
         if "_template" in str(yaml_path):
             continue
         rel = yaml_path.parent.relative_to(experiments_dir)
         experiment = str(rel)
         try:
             m = load_manifest(experiment)
-            if m.lifecycle.status in ("implemented", "running"):
-                active.append(m)
-        except (ValueError, yaml.YAMLError, FileNotFoundError):
+        except FileNotFoundError:
             continue
+        except (ManifestValidationError, ValueError, yaml.YAMLError) as exc:
+            logger.warning(
+                "find_active_experiments: skipping {} — {}: {}",
+                experiment,
+                type(exc).__name__,
+                exc,
+            )
+            continue
+        if m.lifecycle.status in ("implemented", "running"):
+            active.append(m)
     return active
 
 
@@ -918,79 +1136,109 @@ _STATUS_BADGES = {
 }
 
 
-def generate_pr_description(experiment: str) -> str:
-    """Generate PR_DESCRIPTION.md content from experiment.yaml."""
-    m = load_manifest(experiment)
-    identity = m.contract.identity
-    lifecycle = m.lifecycle
-    checkpoints = m.telemetry.checkpoints
-    badge = _STATUS_BADGES.get(lifecycle.status, lifecycle.status)
+def _format_status_badge(
+    status: str, max_generations: int, last_checkpoint_gen: int | None
+) -> str:
+    """Pick the badge string for a given lifecycle status.
 
-    # Running badge includes generation info
-    if lifecycle.status == "running" and checkpoints:
-        last_cp = checkpoints[-1]
-        gen = last_cp.gen
-        badge = f"🟡 Running (gen {gen}/{m.contract.max_generations})"
-    elif lifecycle.status == "running":
-        badge = f"🟡 Running (gen 0/{m.contract.max_generations})"
+    The ``running`` badge is overlaid with current/total generations so the
+    PR title reflects live progress; everything else is a static lookup.
+    """
+    if status != "running":
+        return _STATUS_BADGES.get(status, status)
+    gen = last_checkpoint_gen if last_checkpoint_gen is not None else 0
+    return f"🟡 Running (gen {gen}/{max_generations})"
 
+
+def _render_header(identity: ExperimentIdentity, badge: str) -> list[str]:
     lines = [
         f"# exp: {identity.name}",
         "",
         f"**Status**: {badge}",
         f"**Branch**: `{identity.branch}`",
-        f"**Tracking issue**: #{identity.tracking_issue}"
-        if identity.tracking_issue
-        else "",
+    ]
+    if identity.tracking_issue:
+        lines.append(f"**Tracking issue**: #{identity.tracking_issue}")
+    return lines
+
+
+def _render_design_link(name: str) -> list[str]:
+    return [
         "",
         "## Design",
         "",
-        f"See `experiments/{identity.name}/01_design.md` for full design.",
+        f"See `experiments/{name}/01_design.md` for full design.",
+    ]
+
+
+def _render_runs_table(runs: list[RunSpec]) -> list[str]:
+    lines = [
         "",
         "## Runs",
         "",
         "| Label | DB | Condition | Pipeline | PID |",
         "|-------|----|-----------|----------|-----|",
     ]
-
-    for run in m.contract.runs:
+    for run in runs:
         pid_str = str(run.pid) if run.pid else "-"
         lines.append(
             f"| {run.label} | {run.db} | {run.condition} | {run.pipeline} | {pid_str} |"
         )
+    return lines
 
-    lines.extend(["", "## Checkpoints", ""])
 
-    if checkpoints:
-        lines.append("| Gen | Time | Notes |")
-        lines.append("|-----|------|-------|")
-        for cp in checkpoints:
-            lines.append(f"| {cp.gen} | {cp.timestamp} | {cp.notes} |")
-    else:
+def _render_checkpoints(checkpoints: list[CheckpointEntry]) -> list[str]:
+    lines = ["", "## Checkpoints", ""]
+    if not checkpoints:
         lines.append("_No checkpoints yet._")
+        return lines
+    lines.append("| Gen | Time | Notes |")
+    lines.append("|-----|------|-------|")
+    for cp in checkpoints:
+        lines.append(f"| {cp.gen} | {cp.timestamp} | {cp.notes} |")
+    return lines
 
-    baseline = m.contract.baseline
-    if baseline.reference:
-        lines.extend(
-            [
-                "",
-                "## Baseline",
-                "",
-                f"Reference: `{baseline.reference}` "
-                f"(mean={baseline.mean}, metric={baseline.metric})",
-            ]
-        )
 
-    lines.extend(["", "## Archives", "", "_(pending)_", ""])
+def _render_baseline(baseline: BaselineInfo) -> list[str]:
+    if not baseline.reference:
+        return []
+    return [
+        "",
+        "## Baseline",
+        "",
+        f"Reference: `{baseline.reference}` "
+        f"(mean={baseline.mean}, metric={baseline.metric})",
+    ]
 
-    return "\n".join(line for line in lines if line is not None) + "\n"
+
+def generate_pr_description(experiment: str) -> str:
+    """Render ``PR_DESCRIPTION.md`` content from the experiment manifest."""
+    m = load_manifest(experiment)
+    last_cp_gen = m.telemetry.checkpoints[-1].gen if m.telemetry.checkpoints else None
+    badge = _format_status_badge(
+        m.lifecycle.status, m.contract.max_generations, last_cp_gen
+    )
+
+    sections: list[str] = []
+    sections += _render_header(m.contract.identity, badge)
+    sections += _render_design_link(m.contract.identity.name)
+    sections += _render_runs_table(m.contract.runs)
+    sections += _render_checkpoints(m.telemetry.checkpoints)
+    sections += _render_baseline(m.contract.baseline)
+    sections += ["", "## Archives", "", "_(pending)_", ""]
+    return "\n".join(sections) + "\n"
 
 
 __all__ = [
-    "VALID_STATUSES",
+    "ManifestValidationError",
+    "Status",
+    "REQUIRES_IMPLEMENTATION",
+    "REQUIRES_RUNTIME",
+    "TERMINAL",
     "VALID_TRANSITIONS",
     "RECOVERY_TRANSITIONS",
     "DB_CLAIM_TTL",
+    "DB_CLAIM_TTL_SECONDS",
     "PROJ",
     "RunSpec",
     "ProblemSpec",
@@ -1001,7 +1249,6 @@ __all__ = [
     "WatchdogSection",
     "AlertThresholds",
     "PlotCommand",
-    # v2 sub-models (added step 3 — not yet wired into ExperimentManifest)
     "RunMetric",
     "CheckpointEntry",
     "MidRunTestEvalInfo",
@@ -1014,7 +1261,6 @@ __all__ = [
     "PrChannelConfig",
     "TelegramChannelConfig",
     "NotificationsSection",
-    # v2 sub-model groups (added step 4)
     "ExperimentIdentity",
     "ContractSection",
     "LifecycleState",
@@ -1025,6 +1271,7 @@ __all__ = [
     "manifest_path",
     "load_manifest",
     "set_status",
+    "recover_status",
     "update_manifest",
     "claim_dbs",
     "refresh_db_claims",
@@ -1032,6 +1279,11 @@ __all__ = [
     "find_active_experiments",
     "has_test_set",
     "generate_pr_description",
-    "_validate",
-    "_write_manifest_atomic",
+    # Re-exports from gigaevo.experiment.lock for callers that already
+    # import from manifest. Prefer importing directly from the lock module
+    # for new code.
+    "get_redis",
+    "acquire_lock",
+    "release_lock",
+    "write_manifest_atomic",
 ]

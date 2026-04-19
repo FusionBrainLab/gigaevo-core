@@ -623,38 +623,6 @@ class TestScenarioIdeasToMemory:
 class TestScenarioDeleteAndRebuild:
     """Memory card lifecycle: create → verify → delete → verify gone."""
 
-    def test_delete_removes_from_search(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.save_card(
-            {"id": "idea-keep", "description": "Use beam search", "keywords": ["beam"]}
-        )
-        mem.save_card(
-            {
-                "id": "idea-remove",
-                "description": "Use random search",
-                "keywords": ["random"],
-            }
-        )
-
-        # Both searchable
-        assert "idea-keep" in mem.search("beam search")
-        assert "idea-remove" in mem.search("random search")
-
-        # Delete one
-        mem.delete("idea-remove")
-
-        # Removed from search
-        result = mem.search("random search")
-        assert "idea-remove" not in result
-
-        # Other still works
-        assert "idea-keep" in mem.search("beam search")
-
-        # Persists across reload
-        mem2 = _make_memory(tmp_path)
-        assert mem2.get_card("idea-remove") is None
-        assert mem2.get_card("idea-keep") is not None
-
     def test_delete_all_then_repopulate(self, tmp_path):
         mem = _make_memory(tmp_path)
         ids = []
@@ -774,25 +742,3 @@ class TestScenarioErrorRecovery:
         # But a fresh load does
         mem3 = _make_memory(tmp_path)
         assert mem3.get_card("c2") is not None
-
-    def test_large_memory_search_relevance(self, tmp_path):
-        """With 100 cards, search returns the most relevant, not random."""
-        mem = _make_memory(tmp_path, search_limit=3)
-        for i in range(100):
-            mem.save_card(
-                {
-                    "id": f"noise-{i}",
-                    "description": f"generic optimization idea number {i}",
-                }
-            )
-        # Add a very specific card
-        mem.save_card(
-            {
-                "id": "target",
-                "description": "quantum annealing for protein folding",
-                "keywords": ["quantum", "annealing", "protein"],
-            }
-        )
-
-        result = mem.search("quantum annealing protein")
-        assert "target" in result

@@ -144,7 +144,7 @@ def run_launch(
         )
     except Exception as exc:
         _log.error("Launch failed: {}", exc)
-        _release_claims(dbs)
+        _release_claims(experiment, dbs)
         return LaunchResult(
             experiment=experiment,
             status="implemented",
@@ -277,8 +277,8 @@ def _spawn_watchdog(experiment: str) -> int:
     return proc.pid
 
 
-def _release_claims(dbs: list[int]) -> None:
-    release_db_claims(dbs)
+def _release_claims(experiment: str, dbs: list[int]) -> None:
+    release_db_claims(experiment, dbs)
 
 
 def _git_head() -> str:

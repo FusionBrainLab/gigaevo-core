@@ -14,7 +14,7 @@ from functools import cached_property
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 import pandas as pd
@@ -26,6 +26,7 @@ from gigaevo.evolution.mutation.constants import (
 from gigaevo.memory.ideas_tracker.analyzers import (
     Analyzer,
     ClassifyingAnalyzer,
+    ClusteringAnalyzer,
 )
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, build_usage_payload
 from gigaevo.memory.ideas_tracker.models import (
@@ -48,6 +49,53 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _hf_cache_dir_usable(path: Path) -> bool:
+    try:
+        path = path.expanduser().resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".gigaevo_hf_write_probe"
+        probe.write_text("ok", encoding="ascii")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _ensure_writable_hf_cache() -> None:
+    """
+    Hugging Face / sentence-transformers follow HF_HOME and related env vars.
+    Shared clusters often set these to NFS roots that are not writable for this
+    user, which breaks embedding downloads. Clear bad entries and use ~/.cache.
+    """
+    fallback = Path.home() / ".cache" / "huggingface"
+    keys = (
+        "HF_HOME",
+        "HUGGINGFACE_HUB_CACHE",
+        "TRANSFORMERS_CACHE",
+        "SENTENCE_TRANSFORMERS_HOME",
+    )
+    for key in keys:
+        raw = os.environ.get(key)
+        if not raw or not str(raw).strip():
+            continue
+        if not _hf_cache_dir_usable(Path(raw)):
+            print(f"[Memory] Clearing unwritable {key}={raw!r}")
+            os.environ.pop(key, None)
+
+    hf = os.environ.get("HF_HOME")
+    if hf and _hf_cache_dir_usable(Path(hf)):
+        return
+
+    fallback.mkdir(parents=True, exist_ok=True)
+    os.environ["HF_HOME"] = str(fallback)
+    hub = fallback / "hub"
+    hub.mkdir(parents=True, exist_ok=True)
+    os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub)
+    os.environ["TRANSFORMERS_CACHE"] = str(hub)
+    os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(fallback)
+    print(f"[Memory] HF cache directory -> {fallback}")
 
 
 def _load_task_description(redis_prefix: str, package_path: Path) -> str:
@@ -399,6 +447,58 @@ class _SessionLog:
 
 
 # ---------------------------------------------------------------------------
+# Hydra / YAML factory (config/ideas_tracker/*.yaml)
+# ---------------------------------------------------------------------------
+
+_CLUSTERING_ANALYZER_KEYS = frozenset(
+    {
+        "embeddings_model",
+        "batch_size",
+        "min_samples_for_dbscan",
+        "dbscan_eps",
+        "dbscan_min_samples",
+        "max_attempts",
+        "max_rounds",
+        "refine_subgroup_size",
+        "llm_max_concurrent",
+    }
+)
+
+
+def _build_analyzer_from_hydra_fields(
+    *,
+    analyzer_type: str,
+    analyzer_model: str,
+    analyzer_base_url: str,
+    analyzer_reasoning: dict[str, Any] | None,
+    analyzer_fast_settings: dict[str, Any] | None,
+    description_rewriting: bool,
+) -> ClassifyingAnalyzer | ClusteringAnalyzer:
+    """Construct ClassifyingAnalyzer or ClusteringAnalyzer from flat Hydra kwargs."""
+    base_url = (analyzer_base_url or "").strip() or None
+    reasoning = analyzer_reasoning
+    kind = (analyzer_type or "default").strip().lower()
+
+    if kind == "fast":
+        fast = dict(analyzer_fast_settings or {})
+        fast.pop("recompute_center", None)
+        extra = {k: v for k, v in fast.items() if k in _CLUSTERING_ANALYZER_KEYS}
+        return ClusteringAnalyzer(
+            model=analyzer_model,
+            base_url=base_url,
+            reasoning=reasoning,
+            **extra,
+        )
+
+    return ClassifyingAnalyzer(
+        model=analyzer_model,
+        base_url=base_url,
+        reasoning=reasoning,
+        description_rewriting=description_rewriting,
+    )
+
+
+# ---------------------------------------------------------------------------
 # IdeaTracker
 # ---------------------------------------------------------------------------
 
@@ -412,8 +512,14 @@ class IdeaTracker(PostRunHook):
     both implement the Analyzer protocol, so the pipeline is identical for both.
 
     Args:
-        analyzer: The idea analyser to use. If None, defaults to ClassifyingAnalyzer
-            with its own default model — useful for the CLI entry point.
+        analyzer: Explicit analyser instance. When omitted, one is built from the
+            Hydra-style fields below (``analyzer_type``, ``analyzer_model``, …).
+        analyzer_type: ``"default"`` → ClassifyingAnalyzer; ``"fast"`` → ClusteringAnalyzer.
+        analyzer_model / analyzer_base_url / analyzer_reasoning: Passed to the analyser.
+        analyzer_fast_settings: Extra kwargs for ClusteringAnalyzer when ``fast``.
+        list_max_ideas, postprocessing_type, record_conversion_type,
+        memory_write_best_programs_percent, checkpoint_dir, namespace: Accepted for
+            YAML compatibility; the refactored pipeline does not use all of them yet.
         task_description: Human-readable description of the current task. If empty,
             loaded from the matching problems/ directory using redis_prefix.
         redis_prefix: Redis key prefix (e.g. "chains/hotpotqa/static") used to
@@ -430,17 +536,44 @@ class IdeaTracker(PostRunHook):
         self,
         *,
         analyzer: Analyzer | None = None,
+        analyzer_type: str = "default",
+        analyzer_model: str = "google/gemini-3-flash-preview",
+        analyzer_base_url: str = "https://openrouter.ai/api/v1",
+        analyzer_reasoning: dict[str, Any] | None = None,
+        analyzer_fast_settings: dict[str, Any] | None = None,
+        list_max_ideas: int = 20,
+        postprocessing_type: str = "default",
+        description_rewriting: bool = True,
+        record_conversion_type: str = "default",
+        memory_write_enabled: bool = True,
+        memory_write_best_programs_percent: float = 5.0,
+        memory_usage_tracking_enabled: bool = True,
+        checkpoint_dir: str | Path | None = None,
+        namespace: str | None = None,
         task_description: str = "",
         redis_prefix: str = "",
         chunk_size: int = 5,
-        memory_write_enabled: bool = True,
-        memory_usage_tracking_enabled: bool = True,
         fitness_key: str = "fitness",
         logs_dir: str | Path | None = None,
         config_path: Path | None = None,
+        **extras: Any,
     ) -> None:
+        if extras:
+            logger.debug("IdeaTracker: ignoring extra instantiate kwargs: {}", extras)
+
+        _ensure_writable_hf_cache()
         if analyzer is None:
-            analyzer = ClassifyingAnalyzer()
+            analyzer = cast(
+                Analyzer,
+                _build_analyzer_from_hydra_fields(
+                    analyzer_type=analyzer_type,
+                    analyzer_model=analyzer_model,
+                    analyzer_base_url=analyzer_base_url,
+                    analyzer_reasoning=analyzer_reasoning,
+                    analyzer_fast_settings=analyzer_fast_settings,
+                    description_rewriting=description_rewriting,
+                ),
+            )
 
         self._analyzer: Analyzer = analyzer
         self._bank = IdeaBank(chunk_size=chunk_size)

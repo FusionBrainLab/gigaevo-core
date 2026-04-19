@@ -261,7 +261,7 @@ def _check_db_claims(results: list[CheckResult], m, experiment: str) -> None:
                 try:
                     owner_m = load_manifest(owner)
                     if owner_m.lifecycle.status == "complete":
-                        release_db_claims([db])
+                        release_db_claims(owner, [db])
                         re_failed = claim_dbs(experiment, [db])
                         if re_failed:
                             still_blocked.append(

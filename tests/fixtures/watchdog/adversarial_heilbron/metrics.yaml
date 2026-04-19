@@ -1,4 +1,0 @@
-actual_fitness:
-  display_name: Actual Fitness
-  higher_is_better: true
-  upper_bound: null

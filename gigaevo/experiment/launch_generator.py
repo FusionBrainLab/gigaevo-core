@@ -25,6 +25,10 @@ def generate(experiment: str) -> str:
     m = load_manifest(experiment)
     exp_dir_rel = f"experiments/{experiment}"
 
+    # Collect all server IPs for NO_PROXY
+    no_proxy_hosts = ["localhost", "127.0.0.1", "api.github.com"] + m.contract.servers
+    no_proxy = ",".join(no_proxy_hosts)
+
     lines: list[str] = []
 
     # Header
@@ -49,6 +53,8 @@ def generate(experiment: str) -> str:
     lines.append(f'PYTHON="{PYTHON_PATH}"')
     lines.append(f'LOG_DIR="$PROJ/{exp_dir_rel}"')
     lines.append("")
+    lines.append(f'export NO_PROXY="{no_proxy}"')
+    lines.append('export no_proxy="$NO_PROXY"')
     lines.append('export GIGAEVO_PYTHON="$PYTHON"')
     lines.append("")
 
@@ -120,8 +126,17 @@ def generate(experiment: str) -> str:
         pid_vars.append(pid_var)
         cmd_params = _build_run_cmd(run, m, cfg_only=False)
 
+        # Env prefix for per-run chain URL (only if run has a specific URL;
+        # skip if null — the global export from custom_env handles shared LB)
+        env_prefix = ""
+        if run.chain_url:
+            chain_url_env_var = m.contract.config.extras.get(
+                "chain_url_env_var", "CHAIN_URL"
+            )
+            env_prefix = f'{chain_url_env_var}="{run.chain_url}" '
+
         lines.append(f"# ── Run {run.label}: {run.condition}")
-        lines.append('nohup "$PYTHON" "$PROJ/run.py" \\')
+        lines.append(f'{env_prefix}nohup "$PYTHON" "$PROJ/run.py" \\')
         for i, param in enumerate(cmd_params):
             lines.append(f"    {param} \\")
         lines.append(
@@ -186,6 +201,7 @@ def generate(experiment: str) -> str:
     # Watchdog launch hint
     lines.append('echo ""')
     lines.append('echo "Launch watchdog:"')
+    lines.append('echo "  NO_PROXY=\\"$NO_PROXY\\" no_proxy=\\"$NO_PROXY\\" \\\\"')
     lines.append(f'echo "  nohup $PYTHON {exp_dir_rel}/run_watchdog.py \\\\"')
     lines.append(f'echo "      > {exp_dir_rel}/watchdog.log 2>&1 &"')
     lines.append(
@@ -195,44 +211,26 @@ def generate(experiment: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _format_hydra_value(value) -> str:
-    """Render a Python value as a Hydra override RHS."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if value is None:
-        return "null"
-    return str(value)
-
-
 def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
-    """Build run.py command-line parameters for a run.
+    """Build run.py command-line parameters for a run."""
+    x = manifest.contract.config.extras
+    params = [
+        f"problem.name={run.problem_name}",
+        f"pipeline={run.pipeline}",
+        "prompts=default",
+        f"redis.db={run.db}",
+        f"stage_timeout={x.get('stage_timeout', 3000)}",
+        f"dag_timeout={x.get('dag_timeout', 7200)}",
+        f"max_generations={manifest.contract.max_generations}",
+        f"max_mutations_per_generation={x.get('max_mutations_per_generation', 8)}",
+        f"max_elites_per_generation={x.get('max_elites_per_generation', 8)}",
+        f"num_parents={x.get('num_parents', 1)}",
+        f"model_name={run.model_name}",
+        f'llm_base_url="{run.mutation_url}"',
+    ]
 
-    Policy: every key in contract.config.extra is emitted as a Hydra
-    override verbatim. The generator imposes no defaults — absent keys
-    fall through to whatever the Hydra config hierarchy provides.
-    Run-scoped params (problem, pipeline, db, model) and contract-level
-    params (max_generations) are emitted explicitly from their respective
-    homes; nothing is inferred.
-
-    When ``contract.config.task_group`` is set, ``experiment=<task_group>``
-    is emitted as the FIRST override. This swaps the ``experiment:`` slot
-    in ``config/config.yaml``'s defaults list — Hydra composes the task
-    group file (which inherits ``base``) and all subsequent CLI overrides
-    (pipeline, extras, extra_overrides) win via Hydra's normal resolution.
-    """
-    params: list[str] = []
-
-    task_group = manifest.contract.config.task_group
-    if task_group:
-        params.append(f"experiment={task_group}")
-
-    # All Hydra overrides (including problem.name, pipeline, redis.db,
-    # max_generations, model_name, llm_base_url) come from the manifest:
-    # - contract.config.extra: shared across runs
-    # - runs[].extra_overrides: per-run
-    # Nothing hardcoded here — the manifest is the source of truth.
-    for key, value in manifest.contract.config.extra.items():
-        params.append(f"{key}={_format_hydra_value(value)}")
+    if x.get("mutation_mode"):
+        params.append(f"mutation_mode={x['mutation_mode']}")
 
     # Extra per-run overrides from experiment.yaml (e.g. prompt_fetcher config)
     # Single-quote any override containing ${...} Hydra interpolation refs

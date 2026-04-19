@@ -599,7 +599,7 @@ class TestManifestResetStatus:
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
-            mock_release.assert_called_once_with([4, 5])
+            mock_release.assert_called_once_with("hover/test", [4, 5])
             raw = captured["raw"]
             assert raw["lifecycle"]["status"] == "implemented"
             assert raw["lifecycle"]["launch"] == {
@@ -610,8 +610,8 @@ class TestManifestResetStatus:
             assert raw["control_plane"]["watchdog_pid"] is None
             assert all(r["pid"] is None for r in raw["contract"]["runs"])
 
-    def test_reset_other_transition_uses_set_status_with_recovery(self):
-        """Non-(running->implemented) transitions go through set_status(allow_recovery=True)."""
+    def test_reset_other_transition_uses_set_status(self):
+        """Non-recovery transitions go through set_status()."""
         manifest = _make_manifest(status="invalid")
         with (
             patch(f"{_MANIFEST_MOD}.load_manifest", return_value=manifest),
@@ -634,9 +634,7 @@ class TestManifestResetStatus:
                 catch_exceptions=False,
             )
             assert result.exit_code == 0, result.output
-            mock_set.assert_called_once_with(
-                "hover/test", "preregistered", allow_recovery=True
-            )
+            mock_set.assert_called_once_with("hover/test", "preregistered")
             mock_update.assert_not_called()
 
 

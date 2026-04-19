@@ -7,17 +7,18 @@ import pytest
 import yaml
 
 from gigaevo.experiment.manifest import (
-    VALID_STATUSES,
     VALID_TRANSITIONS,
+    Status,
     _validate,
-    _write_manifest_atomic,
     claim_dbs,
     generate_pr_description,
     load_manifest,
+    recover_status,
     refresh_db_claims,
     release_db_claims,
     set_status,
     update_manifest,
+    write_manifest_atomic,
 )
 
 # ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ def _implemented_raw() -> dict:
         }
     ]
     raw["contract"]["servers"] = ["10.0.0.1"]
-    raw["contract"]["config"] = {"extra": {"stage_timeout": 300}}
+    raw["contract"]["config"] = {"stage_timeout": 300}
     raw["lifecycle"]["smoke_test"] = {"completed": True, "db": 98, "generations": 3}
     return raw
 
@@ -309,10 +310,11 @@ class TestIntegrityPipelineSchema:
 class TestTransitions:
     def test_all_valid_transitions(self):
         """Every status in VALID_TRANSITIONS maps to valid statuses."""
+        valid_statuses = {s.value for s in Status}
         for source, targets in VALID_TRANSITIONS.items():
-            assert source in VALID_STATUSES
+            assert source.value in valid_statuses
             for t in targets:
-                assert t in VALID_STATUSES
+                assert t.value in valid_statuses
 
     def test_preregistered_to_implemented(self):
         assert "implemented" in VALID_TRANSITIONS["preregistered"]
@@ -346,7 +348,7 @@ class TestAtomicWrite:
     def test_write_then_rename(self, tmp_path: Path):
         target = tmp_path / "test.yaml"
         data = {"key": "value", "nested": {"a": 1}}
-        _write_manifest_atomic(target, data)
+        write_manifest_atomic(target, data)
 
         assert target.exists()
         with open(target) as f:
@@ -355,14 +357,14 @@ class TestAtomicWrite:
 
     def test_tmp_cleaned_up(self, tmp_path: Path):
         target = tmp_path / "test.yaml"
-        _write_manifest_atomic(target, {"x": 1})
+        write_manifest_atomic(target, {"x": 1})
         tmp = target.with_suffix(".yaml.tmp")
         assert not tmp.exists()
 
     def test_overwrites_existing(self, tmp_path: Path):
         target = tmp_path / "test.yaml"
-        _write_manifest_atomic(target, {"version": 1})
-        _write_manifest_atomic(target, {"version": 2})
+        write_manifest_atomic(target, {"version": 1})
+        write_manifest_atomic(target, {"version": 2})
         with open(target) as f:
             loaded = yaml.safe_load(f)
         assert loaded["version"] == 2
@@ -422,7 +424,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", root),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r),
         ):
             # Need to add running requirements
             raw["contract"]["runs"][0]["pid"] = 99999
@@ -441,7 +443,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", root),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r),
         ):
             with pytest.raises(ValueError, match="Invalid transition"):
                 set_status(exp_name, "running")
@@ -453,7 +455,7 @@ class TestSetStatus:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", root),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r),
         ):
             # Normal transition: running -> implemented is NOT allowed
             with pytest.raises(ValueError, match="Invalid transition"):
@@ -464,7 +466,7 @@ class TestSetStatus:
             with open(root / "experiments/test/smoke/experiment.yaml", "w") as f:
                 yaml.safe_dump(raw, f, sort_keys=False)
 
-            m = set_status(exp_name, "implemented", allow_recovery=True)
+            m = recover_status(exp_name, "implemented")
             assert m.lifecycle.status == "implemented"
 
 
@@ -485,7 +487,7 @@ class TestUpdateManifest:
 
         with (
             patch("gigaevo.experiment.manifest.PROJ", tmp_path),
-            patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r),
+            patch("gigaevo.experiment.manifest.get_redis", return_value=mock_r),
         ):
             m = update_manifest("test/smoke", add_tracking_issue)
             assert m.contract.identity.tracking_issue == 42
@@ -502,44 +504,68 @@ class TestUpdateManifest:
 
 
 class TestDBClaims:
-    def test_claim_success(self):
-        mock_r = MagicMock()
-        mock_r.set.return_value = True
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
-            failed = claim_dbs("test/exp", [9, 10])
-        assert failed == []
-        assert mock_r.set.call_count == 2
+    """Tests the Lua-backed DB claim primitives against a real fakeredis.
 
-    def test_claim_collision(self):
-        mock_r = MagicMock()
-        # First call succeeds, second fails
-        mock_r.set.side_effect = [True, False]
-        mock_r.get.return_value = b"other/experiment"
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
-            failed = claim_dbs("test/exp", [9, 10])
-        assert len(failed) == 1
-        assert failed[0] == (10, "other/experiment")
+    The functions were rewritten to use server-side Lua for atomicity and
+    owner-checked CAS on release/refresh; these tests exercise the actual
+    Redis protocol rather than mocking call-level details.
+    """
 
-    def test_claim_idempotent_same_owner(self):
-        mock_r = MagicMock()
-        mock_r.set.return_value = False  # already claimed
-        mock_r.get.return_value = b"test/exp"  # by us
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
-            failed = claim_dbs("test/exp", [9])
-        assert failed == []  # not a failure if we own it
+    def _fake(self, monkeypatch):
+        import fakeredis
 
-    def test_refresh_uses_xx(self):
-        mock_r = MagicMock()
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
-            refresh_db_claims("test/exp", [9, 10])
-        for call in mock_r.set.call_args_list:
-            assert call.kwargs.get("xx") is True
+        r = fakeredis.FakeRedis()
+        monkeypatch.setattr("gigaevo.experiment.manifest.get_redis", lambda: r)
+        return r
 
-    def test_release(self):
-        mock_r = MagicMock()
-        with patch("gigaevo.experiment.manifest._get_redis", return_value=mock_r):
-            release_db_claims([9, 10])
-        assert mock_r.delete.call_count == 2
+    def test_claim_success(self, monkeypatch):
+        r = self._fake(monkeypatch)
+        assert claim_dbs("test/exp", [9, 10]) == []
+        assert r.get("experiments:db_claim:9") == b"test/exp"
+        assert r.get("experiments:db_claim:10") == b"test/exp"
+
+    def test_claim_collision_writes_nothing(self, monkeypatch):
+        """All-or-nothing: a single conflict prevents ANY claim from landing."""
+        r = self._fake(monkeypatch)
+        r.set("experiments:db_claim:10", "other/experiment", ex=3600)
+
+        failed = claim_dbs("test/exp", [9, 10])
+        assert failed == [(10, "other/experiment")]
+        # DB 9 must NOT have been claimed — atomic rollback.
+        assert r.get("experiments:db_claim:9") is None
+        assert r.get("experiments:db_claim:10") == b"other/experiment"
+
+    def test_claim_idempotent_same_owner(self, monkeypatch):
+        r = self._fake(monkeypatch)
+        r.set("experiments:db_claim:9", "test/exp", ex=3600)
+        assert claim_dbs("test/exp", [9]) == []
+        assert r.get("experiments:db_claim:9") == b"test/exp"
+
+    def test_claim_empty_list_is_noop(self, monkeypatch):
+        self._fake(monkeypatch)
+        assert claim_dbs("test/exp", []) == []
+
+    def test_refresh_only_refreshes_own_claims(self, monkeypatch):
+        r = self._fake(monkeypatch)
+        r.set("experiments:db_claim:9", "test/exp", ex=10)
+        r.set("experiments:db_claim:10", "other/exp", ex=10)
+
+        refreshed = refresh_db_claims("test/exp", [9, 10])
+        assert refreshed == 1
+        # Our claim got a fresh long TTL; foreign claim's TTL was left alone.
+        assert r.ttl("experiments:db_claim:9") > 100
+        assert r.ttl("experiments:db_claim:10") <= 10
+
+    def test_release_only_releases_own_claims(self, monkeypatch):
+        r = self._fake(monkeypatch)
+        r.set("experiments:db_claim:9", "test/exp", ex=3600)
+        r.set("experiments:db_claim:10", "other/exp", ex=3600)
+
+        released = release_db_claims("test/exp", [9, 10])
+        assert released == 1
+        assert r.get("experiments:db_claim:9") is None
+        # Foreign claim MUST survive — this is the whole point of CAS release.
+        assert r.get("experiments:db_claim:10") == b"other/exp"
 
 
 # ---------------------------------------------------------------------------
