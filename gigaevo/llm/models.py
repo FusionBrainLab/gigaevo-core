@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from langfuse.langchain import CallbackHandler
 from loguru import logger
 
-from gigaevo.llm.token_tracking import TokenTracker
+from gigaevo.llm.token_tracking import TokenTracker, TokenUsage
 from gigaevo.utils.trackers.base import LogWriter
 
 if TYPE_CHECKING:
@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 
 _selected_model_var: ContextVar[str | None] = ContextVar("selected_model", default=None)
+_last_token_usage_var: ContextVar[TokenUsage | None] = ContextVar(
+    "last_token_usage", default=None
+)
 
 
 def get_selected_model() -> str | None:
@@ -29,8 +32,24 @@ def get_selected_model() -> str | None:
     return _selected_model_var.get()
 
 
+def get_last_token_usage() -> TokenUsage | None:
+    """Return token usage from the most recent LLM call in the current async context.
+
+    Populated by ``MultiModelRouter`` and ``_StructuredOutputRouter`` after every
+    invocation that yields a response with usage metadata. ``None`` if the last
+    response had no usage info (e.g. stream chunk without metadata).
+    """
+    return _last_token_usage_var.get()
+
+
 def _remember_selected_model(model_name: str) -> None:
     _selected_model_var.set(model_name)
+
+
+def _remember_token_usage(response: Any) -> None:
+    usage = TokenUsage.from_response(response)
+    if usage is not None:
+        _last_token_usage_var.set(usage)
 
 
 def _create_langfuse_handler() -> CallbackHandler | None:
@@ -86,6 +105,7 @@ class MultiModelRouter(Runnable):
         probabilities: list[float],
         writer: LogWriter | None = None,
         name: str = "default",
+        structured_output_method: str | None = None,
     ):
         if len(models) != len(probabilities):
             raise ValueError(
@@ -99,6 +119,7 @@ class MultiModelRouter(Runnable):
         self.probabilities = [p / sum(probabilities) for p in probabilities]
         self._task_model_map: dict[int, str] = {}
         self._name = name
+        self._structured_output_method = structured_output_method
 
         self._tracker = TokenTracker(
             name=name,
@@ -218,6 +239,7 @@ class MultiModelRouter(Runnable):
         model, name = self._select()
         response = model.invoke(input, self._config(config, name), **kwargs)
         self._tracker.track(response, name)
+        _remember_token_usage(response)
         return response
 
     async def ainvoke(
@@ -226,6 +248,7 @@ class MultiModelRouter(Runnable):
         model, name = self._select()
         response = await model.ainvoke(input, self._config(config, name), **kwargs)
         self._tracker.track(response, name)
+        _remember_token_usage(response)
         return response
 
     def stream(
@@ -238,6 +261,7 @@ class MultiModelRouter(Runnable):
             yield chunk
         if last:
             self._tracker.track(last, name)
+            _remember_token_usage(last)
 
     async def astream(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
@@ -249,9 +273,17 @@ class MultiModelRouter(Runnable):
             yield chunk
         if last:
             self._tracker.track(last, name)
+            _remember_token_usage(last)
 
     def with_structured_output(self, schema: Any, **kwargs) -> _StructuredOutputRouter:
-        """Create a router that returns parsed Pydantic models with token tracking."""
+        """Create a router that returns parsed Pydantic models with token tracking.
+
+        If the router was constructed with ``structured_output_method`` (e.g.
+        ``"json_schema"`` or ``"function_calling"``), that method is forwarded
+        to each underlying model. Explicit ``method`` in ``**kwargs`` wins.
+        """
+        if self._structured_output_method is not None:
+            kwargs.setdefault("method", self._structured_output_method)
         wrapped = [
             m.with_structured_output(schema, include_raw=True, **kwargs)
             for m in self.models
@@ -305,9 +337,19 @@ class _StructuredOutputRouter(Runnable):
         return _with_langfuse(config, self._langfuse, model_name)
 
     def _process(self, response: dict, name: str) -> Any:
-        if raw := response.get("raw"):
+        raw = response.get("raw")
+        if raw:
             self._tracker.track(raw, name)
-        return response.get("parsed")
+            _remember_token_usage(raw)
+        parsed = response.get("parsed")
+        if parsed is None and raw is not None:
+            content = getattr(raw, "content", "")
+            excerpt = (content[:500] + "…") if len(content) > 500 else content
+            raise ValueError(
+                f"[{name}] Structured output parse failed: raw response had no parsable schema. "
+                f"content_excerpt={excerpt!r}"
+            )
+        return parsed
 
     def invoke(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs

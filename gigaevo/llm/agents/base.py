@@ -15,7 +15,11 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from loguru import logger
 
-from gigaevo.llm.models import MultiModelRouter, get_selected_model
+from gigaevo.llm.models import (
+    MultiModelRouter,
+    get_last_token_usage,
+    get_selected_model,
+)
 from gigaevo.monitoring.emit import emit as _emit_event
 from gigaevo.monitoring.events import LLMCall
 
@@ -118,6 +122,7 @@ class LangGraphAgent(ABC):
                 model = getattr(self.llm, "model_name", None) or (
                     get_selected_model() or "unknown"
                 )
+                usage = get_last_token_usage()
                 _emit_event(
                     LLMCall(
                         stage=self.__class__.__name__,
@@ -126,6 +131,8 @@ class LangGraphAgent(ABC):
                         attempt=1,
                         ok=ok,
                         latency_ms=(time.monotonic() - t0) * 1000.0,
+                        tokens_in=usage.context if usage else 0,
+                        tokens_out=usage.generated if usage else 0,
                         error_type=error_type,
                     )
                 )

@@ -18,5 +18,15 @@ llm:
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
+      # Pin to a single provider to avoid silent OpenRouter failover mid-run.
+      # Reasoning level left at Gemini 3's default (HIGH) — keep full capability.
+      extra_body:
+        provider:
+          order: [google-vertex]
+          allow_fallbacks: false
   probabilities: [1.0]
   writer: ${writer}
+  # Gemini 3 Pro + langchain's default function_calling method returns
+  # MALFORMED_FUNCTION_CALL ~40% of the time, which langchain maps to None
+  # silently. json_schema bypasses that path.
+  structured_output_method: json_schema
