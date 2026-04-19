@@ -19,6 +19,7 @@ import pytest
 
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -46,13 +47,20 @@ def _engine(**overrides) -> EvolutionEngine:
     storage.get_ids_by_status.return_value = []
     storage.snapshot = MagicMock()
 
+    # Preserve helper's public signature: accept max_generations=N kwarg and
+    # translate it internally into stopper=MaxGenerationsStopper(N).
+    max_gens = overrides.pop("max_generations", None)
+    config_kwargs = {
+        k: v for k, v in overrides.items() if k in EngineConfig.model_fields
+    }
+    if max_gens is not None:
+        config_kwargs["stopper"] = MaxGenerationsStopper(max_gens)
+
     engine = EvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=AsyncMock(),
-        config=EngineConfig(
-            **{k: v for k, v in overrides.items() if k in EngineConfig.model_fields}
-        ),
+        config=EngineConfig(**config_kwargs),
         writer=writer,
         metrics_tracker=metrics_tracker,
         pre_step_hook=overrides.get("pre_step_hook"),

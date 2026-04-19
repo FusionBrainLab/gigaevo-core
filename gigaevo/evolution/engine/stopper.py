@@ -56,6 +56,11 @@ class WallClockStopper(EvolutionStopper):
 
 
 class FitnessPlateauStopper(EvolutionStopper):
+    # TODO: FitnessPlateauStopper currently never fires because
+    # EvolutionEngine._build_stop_context() does not populate
+    # StopContext.best_fitness (EngineMetrics has no best-fitness field).
+    # Wire best fitness from the archive/strategy into StopContext before
+    # relying on this stopper. See audit notes in stopper/engine refactor.
     def __init__(self, window: int, min_delta: float = 0.001) -> None:
         self.window = window
         self.min_delta = min_delta

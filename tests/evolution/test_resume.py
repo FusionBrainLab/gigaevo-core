@@ -18,6 +18,7 @@ from gigaevo.evolution.engine.core import (
     _RUN_STATE_TOTAL_GENERATIONS,
     EvolutionEngine,
 )
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.evolution.strategies.elite_selectors import RandomEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
 from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
@@ -215,7 +216,7 @@ class TestEvolutionEngineRestoreState:
         await fakeredis_storage.save_run_state(_RUN_STATE_TOTAL_GENERATIONS, 7)
 
         engine = _make_engine(storage=fakeredis_storage)
-        engine.config = EngineConfig(max_generations=cap)
+        engine.config = EngineConfig(stopper=MaxGenerationsStopper(cap))
         await engine.restore_state()
 
         assert engine.metrics.total_generations == 7

@@ -24,6 +24,7 @@ from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import (
     RandomEliteSelector,
@@ -113,7 +114,7 @@ def _make_engine(storage: RedisProgramStorage) -> EvolutionEngine:
         storage=storage,
         strategy=strategy,
         mutation_operator=_NullMutator(),
-        config=EngineConfig(loop_interval=0.005, max_generations=1),
+        config=EngineConfig(loop_interval=0.005, stopper=MaxGenerationsStopper(1)),
         writer=writer,
         metrics_tracker=tracker,
     )

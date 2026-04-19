@@ -2,7 +2,7 @@ _target_: gigaevo.evolution.engine.stopper.CompositeStopper
 mode: any
 children:
   - _target_: gigaevo.evolution.engine.stopper.MaxGenerationsStopper
-    max_generations: 25
+    max_generations: ${max_generations}
   - _target_: gigaevo.evolution.engine.stopper.FitnessPlateauStopper
     window: 10
     min_delta: 0.001

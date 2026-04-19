@@ -18,6 +18,7 @@ from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
@@ -310,7 +311,7 @@ def build_system(
             max_elites_per_generation=1,
             max_mutations_per_generation=max_mutations,
             generation_timeout=60.0,
-            max_generations=max_generations,
+            stopper=MaxGenerationsStopper(max_generations),
         ),
         writer=writer,
         metrics_tracker=_make_metrics_tracker(),

@@ -25,6 +25,7 @@ import pytest
 
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -115,7 +116,7 @@ class DeterministicEngine:
         config = SteadyStateEngineConfig(
             max_in_flight=max_in_flight,
             max_mutations_per_generation=epoch_size,
-            max_generations=max_generations,
+            stopper=MaxGenerationsStopper(max_generations),
             loop_interval=0.01,
         )
 

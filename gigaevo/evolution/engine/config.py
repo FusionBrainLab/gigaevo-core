@@ -27,11 +27,6 @@ class EngineConfig(BaseModel):
     metrics_collection_interval: float = Field(
         default=1.0, gt=0, description="Interval in seconds for metrics collection"
     )
-    max_generations: int | None = Field(
-        default=None,
-        gt=0,
-        description="Maximum number of generations to run (None = unlimited)",
-    )
     parent_selector: ParentSelector = Field(
         default_factory=lambda: RandomParentSelector(num_parents=1)
     )
@@ -39,11 +34,11 @@ class EngineConfig(BaseModel):
         default_factory=lambda: DefaultProgramEvolutionAcceptor(),
         description="Acceptor for determining if programs should be accepted for evolution",
     )
-    stopper: EvolutionStopper | None = Field(
-        default=None,
-        description="Pluggable stopping criterion. When set, overrides max_generations. "
-        "When None, falls back to MaxGenerationsStopper(max_generations) if max_generations "
-        "is set, otherwise the engine runs indefinitely.",
+    stopper: EvolutionStopper = Field(
+        default_factory=EvolutionStopper,
+        description="Pluggable stopping criterion. Authoritative termination signal for the "
+        "engine loop. Configured via the ``stopper`` Hydra group "
+        "(``config/stopper/``). Default is a no-op stopper that never stops.",
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -57,8 +52,10 @@ class SteadyStateEngineConfig(EngineConfig):
       triggered after this many programs have been processed (ingested or
       discarded).  This is the closest analog to "generation size" — one epoch
       ≈ one generation's worth of work, but without the idle barrier.
-    * ``max_generations`` — maximum number of *epochs* (None = unlimited).
     * ``max_elites_per_generation`` — passed to ``select_elites()`` each call.
+
+    Termination is controlled by ``stopper`` (see ``config/stopper/``), e.g.
+    ``MaxGenerationsStopper`` caps total epochs.
     """
 
     max_in_flight: int = Field(

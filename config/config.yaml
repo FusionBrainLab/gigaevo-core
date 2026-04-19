@@ -3,6 +3,7 @@ defaults:
   - /migration_bus: disabled
   - ideas_tracker: none    # Post-run ideas analysis (override with ideas_tracker=default)
   - memory: none           # Memory provider (override with memory=local for treatment arms)
+  - stopper: max_generations  # Pluggable stopper (override with stopper=wall_clock, stopper=fitness_plateau, ...)
   - _self_
 
 # Problem metadata (set via command line or problem-specific config)
@@ -16,8 +17,3 @@ checkpoint_dir: null
 
 # Optional override for api.namespace in memory config.
 namespace: null
-
-# Stopper: pluggable stopping criterion for the evolution engine.
-# Override with stopper=max_generations, stopper=fitness_plateau, etc.
-# When null, engine falls back to evolution.max_generations.
-stopper: null

@@ -16,6 +16,7 @@ import pytest
 
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -123,7 +124,7 @@ async def _run_engine(
             max_elites_per_generation=1,
             max_mutations_per_generation=max_mutations,
             generation_timeout=120.0,
-            max_generations=max_generations,
+            stopper=MaxGenerationsStopper(max_generations),
         ),
         writer=writer,
         metrics_tracker=_make_metrics_tracker(),

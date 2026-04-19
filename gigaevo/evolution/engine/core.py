@@ -16,7 +16,6 @@ from gigaevo.evolution.engine.metrics import EngineMetrics
 from gigaevo.evolution.engine.mutation import generate_mutations
 from gigaevo.evolution.engine.stopper import (
     EvolutionStopper,
-    MaxGenerationsStopper,
     StopContext,
 )
 from gigaevo.evolution.mutation.base import MutationOperator
@@ -164,9 +163,9 @@ class EvolutionEngine:
 
     async def run(self) -> None:
         logger.info(
-            "[EvolutionEngine] Start | max_generations={} strategy={} acceptor={}"
+            "[EvolutionEngine] Start | stopper={} strategy={} acceptor={}"
             " | max_elites={} max_mutations={} loop_interval={}s",
-            self.config.max_generations,
+            type(self.config.stopper).__name__,
             type(self.strategy).__name__,
             type(self.config.program_acceptor).__name__,
             self.config.max_elites_per_generation,
@@ -296,7 +295,6 @@ class EvolutionEngine:
         step_elapsed = time.monotonic() - step_t0
         archive_size = len(await self.strategy.get_program_ids())
         best_str = self._metrics_tracker.format_best_summary()
-        eta_str = self._format_eta()
 
         archive_delta = archive_size - self._prev_archive_size
         self._prev_archive_size = archive_size
@@ -307,7 +305,7 @@ class EvolutionEngine:
 
         logger.info(
             "[EvolutionEngine] gen={} done | elites={} mutants={} refreshed={}"
-            " | archive={} ({:+d}){} ({:.1f}s){}",
+            " | archive={} ({:+d}){} ({:.1f}s)",
             gen,
             len(elites),
             len(mutation_ids) if mutation_ids is not None else 0,
@@ -316,7 +314,6 @@ class EvolutionEngine:
             archive_delta,
             best_str,
             step_elapsed,
-            eta_str,
         )
 
         if self._stagnant_gens >= 5:
@@ -324,26 +321,6 @@ class EvolutionEngine:
                 "[EvolutionEngine] Archive stagnant for {} consecutive generations",
                 self._stagnant_gens,
             )
-
-    def _format_eta(self) -> str:
-        """Return a compact ETA string based on elapsed time and generation progress."""
-        current_gen = self.metrics.total_generations
-        if (
-            not self.config.max_generations
-            or self._run_start_time is None
-            or current_gen <= self._run_start_gen
-        ):
-            return ""
-        elapsed_total = time.monotonic() - self._run_start_time
-        gens_done = current_gen - self._run_start_gen
-        avg_per_gen = elapsed_total / gens_done
-        remaining = self.config.max_generations - current_gen
-        eta_s = avg_per_gen * remaining
-        progress_pct = current_gen / self.config.max_generations * 100
-        return (
-            f" | progress={progress_pct:.0f}%"
-            f" ETA={eta_s / 60:.0f}min ({avg_per_gen:.1f}s/gen)"
-        )
 
     async def _await_idle(self) -> None:
         """Block until there are no programs in QUEUED or RUNNING."""
@@ -697,11 +674,7 @@ class EvolutionEngine:
 
     @property
     def stopper(self) -> EvolutionStopper:
-        if self.config.stopper is not None:
-            return self.config.stopper
-        if self.config.max_generations is not None:
-            return MaxGenerationsStopper(self.config.max_generations)
-        return EvolutionStopper()
+        return self.config.stopper
 
     def _build_stop_context(self) -> StopContext:
         elapsed = (

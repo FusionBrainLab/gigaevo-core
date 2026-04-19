@@ -10,6 +10,7 @@ import pytest
 from gigaevo.evolution.engine.config import EngineConfig, SteadyStateEngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxGenerationsStopper
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -42,10 +43,15 @@ def _make_ss_engine(
     storage.snapshot = MagicMock()
     strategy.get_program_ids.return_value = []
 
+    stopper = (
+        MaxGenerationsStopper(max_generations)
+        if max_generations is not None
+        else EvolutionStopper()
+    )
     config = SteadyStateEngineConfig(
         max_in_flight=max_in_flight,
         max_mutations_per_generation=max_mutations_per_generation,
-        max_generations=max_generations,
+        stopper=stopper,
         loop_interval=loop_interval,
     )
 

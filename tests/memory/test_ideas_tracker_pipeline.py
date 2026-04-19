@@ -18,6 +18,7 @@ import pytest
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.engine.hooks import NullPostRunHook, PostRunHook
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.memory.ideas_tracker.analyzers import (
     ClassifyingAnalyzer,
     ClusteringAnalyzer,
@@ -533,7 +534,7 @@ def _make_engine(*, post_run_hook=None, max_generations=1):
         storage=storage,
         strategy=AsyncMock(),
         mutation_operator=AsyncMock(),
-        config=EngineConfig(max_generations=max_generations),
+        config=EngineConfig(stopper=MaxGenerationsStopper(max_generations)),
         writer=writer,
         metrics_tracker=metrics_tracker,
         post_run_hook=post_run_hook,

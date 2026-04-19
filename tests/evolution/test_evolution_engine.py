@@ -9,6 +9,7 @@ import pytest
 
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxGenerationsStopper
 from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -515,7 +516,7 @@ class TestRunLoop:
     async def test_generation_cap_stops_loop(self) -> None:
         """run() stops after max_generations steps."""
         engine = _make_engine()
-        engine.config.max_generations = 2
+        engine.config.stopper = MaxGenerationsStopper(2)
         engine.config.loop_interval = 0.01
 
         # Make step() a fast no-op
@@ -537,7 +538,7 @@ class TestRunLoop:
     async def test_pause_resume_skips_step(self) -> None:
         """While paused, the engine sleeps but doesn't call step()."""
         engine = _make_engine()
-        engine.config.max_generations = 1
+        engine.config.stopper = MaxGenerationsStopper(1)
         engine.config.loop_interval = 0.01
 
         engine.storage.count_by_status.return_value = 0
@@ -581,7 +582,7 @@ class TestRunLoop:
     async def test_step_exception_doesnt_crash_loop(self) -> None:
         """An exception in step() is caught; loop continues."""
         engine = _make_engine()
-        engine.config.max_generations = 3
+        engine.config.stopper = MaxGenerationsStopper(3)
         engine.config.loop_interval = 0.01
 
         call_count = 0
@@ -606,7 +607,7 @@ class TestRunLoop:
     async def test_generation_timeout_deprecated_and_ignored(self) -> None:
         """generation_timeout is deprecated — setting it has no effect."""
         engine = _make_engine()
-        engine.config.max_generations = 2
+        engine.config.stopper = MaxGenerationsStopper(2)
         engine.config.generation_timeout = 0.001
         engine.config.loop_interval = 0.01
 
@@ -647,7 +648,7 @@ class TestRunLoop:
 
     async def test_reached_generation_cap(self) -> None:
         engine = _make_engine()
-        engine.config.max_generations = 5
+        engine.config.stopper = MaxGenerationsStopper(5)
         engine.metrics.total_generations = 4
         assert engine._reached_generation_cap() is False
 
@@ -656,7 +657,7 @@ class TestRunLoop:
 
     async def test_unlimited_generations(self) -> None:
         engine = _make_engine()
-        engine.config.max_generations = None
+        engine.config.stopper = EvolutionStopper()
         engine.metrics.total_generations = 999
         assert engine._reached_generation_cap() is False
 

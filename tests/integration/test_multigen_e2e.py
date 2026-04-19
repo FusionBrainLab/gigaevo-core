@@ -42,6 +42,7 @@ from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
@@ -258,7 +259,7 @@ def _build_engine(
             max_elites_per_generation=max_elites,
             max_mutations_per_generation=max_mutations,
             generation_timeout=30.0,
-            max_generations=max_generations,
+            stopper=MaxGenerationsStopper(max_generations),
         ),
         writer=_make_null_writer(),
         metrics_tracker=_make_metrics_tracker(),

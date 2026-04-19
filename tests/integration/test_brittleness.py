@@ -33,6 +33,7 @@ from gigaevo.evolution.engine.acceptor import (
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.engine.mutation import generate_mutations
+from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.parent_selector import (
     AllCombinationsParentSelector,
@@ -256,7 +257,7 @@ class TestIngestionAtomicity:
             strategy=strategy,
             mutation_operator=ExplodingMutator(),
             config=EngineConfig(
-                max_generations=1,
+                stopper=MaxGenerationsStopper(1),
                 loop_interval=0.005,
                 generation_timeout=10.0,
             ),

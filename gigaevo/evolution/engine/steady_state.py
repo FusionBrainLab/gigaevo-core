@@ -97,10 +97,10 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
     async def run(self) -> None:
         logger.info(
-            "[SteadyState] Start | max_in_flight={} epoch_size={} max_generations={}",
+            "[SteadyState] Start | max_in_flight={} epoch_size={} stopper={}",
             self._ss_config.max_in_flight,
             self._ss_config.epoch_trigger_count,
-            self._ss_config.max_generations,
+            type(self._ss_config.stopper).__name__,
         )
         self._running = True
         self._run_start_time = time.monotonic()
@@ -620,11 +620,10 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 self._stagnant_gens = 0
 
             best_str = self._metrics_tracker.format_best_summary()
-            eta_str = self._format_eta()
 
             logger.info(
                 "[SteadyState] epoch={} done | mutants={} refreshed={}"
-                " | archive={} ({:+d}){} ({:.1f}s){}",
+                " | archive={} ({:+d}){} ({:.1f}s)",
                 epoch,
                 self._epoch_mutants,
                 refreshed,
@@ -632,7 +631,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 archive_delta,
                 best_str,
                 epoch_elapsed,
-                eta_str,
             )
 
             if self._stagnant_gens >= 5:

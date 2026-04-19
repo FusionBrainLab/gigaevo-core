@@ -21,6 +21,7 @@ from gigaevo.evolution.engine.acceptor import (
 )
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxGenerationsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import (
     ScalarTournamentEliteSelector,
@@ -83,13 +84,20 @@ def _make_engine(
     writer = MagicMock()
     writer.bind.return_value = writer
 
-    engine_kwargs = dict(
+    engine_kwargs: dict = dict(
         loop_interval=0.005,
         max_generations=1,
     )
     if acceptor is not None:
         engine_kwargs["program_acceptor"] = acceptor
     engine_kwargs.update(overrides)
+
+    # Translate the legacy max_generations kwarg into a stopper instance.
+    max_gens = engine_kwargs.pop("max_generations", None)
+    if max_gens is not None:
+        engine_kwargs["stopper"] = MaxGenerationsStopper(max_gens)
+    else:
+        engine_kwargs["stopper"] = EvolutionStopper()
 
     return EvolutionEngine(
         storage=storage,

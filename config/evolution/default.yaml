@@ -21,7 +21,6 @@ engine_config:
   loop_interval: ${loop_interval}
   max_elites_per_generation: ${max_elites_per_generation}
   max_mutations_per_generation: ${max_mutations_per_generation}
-  max_generations: ${max_generations}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
   stopper: ${stopper}
