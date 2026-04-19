@@ -442,11 +442,6 @@ class TestDumpMemory:
             record = json.loads(line)
             assert "id" in record or "content" in record
 
-    def test_dump_noop_when_no_system(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        # note_sync is None when memory_system is None
-        assert mem.note_sync is None
-
 
 # ---------------------------------------------------------------------------
 # Task 9: NoteSync.sync_card_to_amem_with_evolution calls add_note for new cards

@@ -332,6 +332,7 @@ class TestFullPipelineE2E:
             enable_llm_card_enrichment=False,
         )
         mem = AmemGamMemory(config=mem_config)
+        mem.research_agent = None  # force local keyword search (no real LLM)
 
         card1 = mem.get_card("pipeline-idea-001")
         card2 = mem.get_card("pipeline-idea-002")

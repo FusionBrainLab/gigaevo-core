@@ -17,6 +17,25 @@ from loguru import logger
 from openai import AsyncOpenAI, OpenAI
 
 
+def _json_safe_dict(value: Any) -> dict[str, Any] | None:
+    """Coerce OmegaConf DictConfig / mappings to a JSON-serialisable dict."""
+    if value is None:
+        return None
+    try:
+        from omegaconf import OmegaConf
+
+        if OmegaConf.is_config(value):
+            out = OmegaConf.to_container(value, resolve=True)
+            if isinstance(out, dict):
+                return {str(k): v for k, v in out.items()}
+            return None
+    except ImportError:
+        pass
+    if isinstance(value, dict):
+        return {str(k): v for k, v in value.items()}
+    return None
+
+
 class _PromptLoader:
     """Loads prompt text files from the prompts/ directory next to llm.py."""
 
@@ -106,7 +125,9 @@ class LLMClient:
             "temperature": 0,
         }
         if self._is_openrouter and reasoning:
-            kwargs["extra_body"] = {"reasoning": reasoning}
+            safe = _json_safe_dict(reasoning)
+            if safe:
+                kwargs["extra_body"] = {"reasoning": safe}
         if not self._is_openrouter and "Qwen3.5" in self.model:
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         return kwargs

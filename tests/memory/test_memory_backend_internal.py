@@ -106,12 +106,12 @@ class TestApplyUpdateActions:
 class TestSaveCardCoreRebuild:
     def test_rebuild_called_after_interval(self, tmp_path):
         mem = _make_memory(tmp_path, rebuild_interval=3)
+        calls = []
+        original_rebuild = mem.rebuild
+        mem.rebuild = lambda: (calls.append(1), original_rebuild())[1]
         for i in range(3):
             mem.save_card({"id": f"c{i}", "description": f"card {i}"})
-        # rebuild() is called but early-returns when memory_system is None,
-        # so _iters_after_rebuild is NOT reset. This is a minor behavioral
-        # quirk: the counter keeps growing in local-only mode.
-        assert mem._iters_after_rebuild == 3
+        assert len(calls) == 1
 
     def test_no_rebuild_before_interval(self, tmp_path):
         mem = _make_memory(tmp_path, rebuild_interval=10)
@@ -299,6 +299,7 @@ class TestSaveCardBranching:
     def test_dedup_warning_only_once(self, tmp_path):
         """Missing LLM warning printed only once."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
+        mem.llm_service = None  # force no-LLM path so warning fires
         mem.save_card({"id": "seed", "description": "seed"})
         # First save with missing LLM triggers warning
         assert not mem._warned_missing_card_update_llm

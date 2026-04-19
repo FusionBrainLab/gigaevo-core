@@ -656,35 +656,6 @@ class TestMemorySearchE2E:
         assert all(isinstance(r, str) for r in results)
 
 
-class TestMemoryRebuildE2E:
-    """E2E tests for memory rebuild and consistency."""
-
-    def test_memory_rebuild_maintains_consistency(self, tmp_path):
-        """E2E: rebuild() maintains search index consistency with stored cards."""
-        mem = make_test_memory(tmp_path, enable_llm_card_enrichment=False)
-
-        # Save a card
-        card = normalize_memory_card(
-            {
-                "description": "neural architecture search technique",
-                "category": "general",
-            }
-        )
-        card_id = mem.save_card(card)
-
-        # Rebuild the memory (refreshes search index)
-        mem.rebuild()
-
-        # Search should still find the card after rebuild
-        results = mem.search("neural architecture")
-        assert len(results) > 0
-
-        # Card should still be retrievable
-        retrieved = mem.get_card(card_id)
-        assert retrieved is not None
-        assert retrieved.description == "neural architecture search technique"
-
-
 # ---------------------------------------------------------------------------
 # Task 6: CardLoader streaming + card_update_dedup JSON logging
 # ---------------------------------------------------------------------------

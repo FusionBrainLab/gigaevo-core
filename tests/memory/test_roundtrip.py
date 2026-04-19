@@ -552,6 +552,7 @@ class TestFullMemoryCycle:
             )
 
         mem2 = _make_memory(tmp_path)
+        mem2.research_agent = None  # force local keyword search (no real LLM)
         assert len(mem2.card_store.cards) == 50
 
         # Search for specific card
