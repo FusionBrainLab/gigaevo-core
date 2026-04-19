@@ -1,0 +1,78 @@
+# @package _global_
+# Heilbronn v1 replication pipeline.
+#
+# Reproduces the adversarial setup that produced 105.8% SOTA
+# (0.03648 / 0.03650) in heilbron/asymmetric-iterations (PR #204,
+# launch commit 04bd5e69). Paired with frozen problem dirs at:
+#   problems/heilbron_repro_v1/pop_a/
+#   problems/heilbron_repro_v1/pop_b/
+# which carry v1's ORIGINAL evaluate.py (hard-floor resistance + hard-
+# floor improvement) — later refactored to smoothed tanh in commit
+# e10ed3d1. The 0.0365 result was produced under this hard-floor
+# fitness, so replication MUST use it verbatim.
+#
+# Why v1 worked — refined hypothesis (2026-04-19 user observation):
+#
+# In v1, D consistently reached 2.1–2.4× more generations than G within
+# the same wallclock window (A1: G=12 D=27, A2: G=12 D=29, C1: G=8 D=17,
+# C2: G=9 D=19). This asymmetric compute rate is the core mechanism —
+# D's mutation-apply step is cheaper than G's config-generation step,
+# so D burns through epochs faster. v1's old min_delta=1 sync condition
+# was effectively permissive (continuously-publishing opponents trivially
+# satisfy "opponent advanced by 1 since my last sync"), so neither side
+# was throttled and the natural compute ratio emerged.
+#
+# The new drift-cap hook has different semantics: drift_cap=N means
+# "block while I am more than N ahead of opponent". A small cap enforces
+# lockstep, KILLING the asymmetric-rate mechanism. To preserve v1's
+# behavior we set drift_cap to a practical no-op value (100_000 — larger
+# than any realistic per-run program count of ~400). The hook is then
+# retained ONLY as KF-07 deadlock safety — mutual-wait remains impossible
+# by construction.
+#
+# Requires at run time:
+#   opponent_redis_db=N
+#   opponent_redis_prefix=...
+#   feedback_mode=composition|gradient_in_prompt
+#   population_role=constructor|improver
+#   d_sees_g_source=true (only for D / improver runs)
+#   d_archive_persistent=true (only for D runs)
+#
+# Residual gaps vs v1 (honest inventory — NOT a bit-for-bit replay):
+#   1. v1 bugs that caused early process death (KF-01, KF-04, etc.) are
+#      all fixed — runs will now reach max_generations instead of dying
+#      at gen 8–29. If v1's success depended on catching peaks before
+#      D-collapse pathology, monitor best-fitness trajectory per gen.
+#   2. Library code (pipeline builders, injection hooks, steady-state
+#      engine) has drifted since commit 04bd5e69. Only hyperparameters
+#      and problem files are frozen.
+#   3. Same model family (Qwen3-235B-A22B-Thinking-2507) but proxy/temp
+#      defaults may differ.
+
+defaults:
+  - adversarial_asymmetric
+
+# drift_cap=100000 is a deliberate no-op: it emulates v1's effectively
+# unthrottled behavior so D's natural ~2.2× compute advantage over G
+# emerges. The hook is retained solely for KF-07 deadlock safety
+# (mutual-wait impossible by construction even at cap=infinity).
+pre_step_hook:
+  _target_: gigaevo.adversarial.sync.ProgressBasedSyncHook
+  host: ${redis.host}
+  port: ${redis.port}
+  own_db: ${redis.db}
+  own_prefix: ${redis.prefix}
+  sources:
+    - db: ${opponent_redis_db}
+      prefix: ${opponent_redis_prefix}
+  drift_cap: 100000
+  min_delta: null # silence deprecation warning from parent config
+  sync_every_n_epochs: 1
+  timeout: 7200
+  poll_interval: 5.0
+
+# v1 had K=1 inner iterations (design said K=5 but K=1 is what ran).
+# Explicitly locked here so the compute-asymmetry knob cannot drift.
+inner_iterations: 1
+n_opponents: 1
+source_prompt_k: 1
