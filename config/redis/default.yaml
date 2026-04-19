@@ -6,6 +6,11 @@ redis:
   port: 6379
   db: 0
   resume: false
+  # Namespace for this run's Redis keys. Defaults to ${problem.name} so that
+  # pipelines can write `${redis.prefix}` and get the same key-prefix used by
+  # redis_storage.config.key_prefix below (I-12). Override per-run if a run
+  # needs a namespace that differs from its problem name.
+  prefix: ${problem.name}
 # Redis storage configuration
 redis_storage:
   _target_: gigaevo.database.redis_program_storage.RedisProgramStorage

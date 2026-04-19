@@ -9,12 +9,14 @@ Role-aware recording (uses real program.id from the DAG-supplied Program):
   constructor (G run): pair = (d_id=opponent_id, g_id=program.id, delta)
 
 Filtered: NaN deltas are skipped (no measurement). Non-positive deltas reach
-DGTracker.record_batch which discards them; we still log them at INFO so
-that "D made it worse" cases are visible in the run log.
+DGTracker.record_batch which discards them silently.
 
 Output: VoidOutput — this stage is a pure side-effect (Redis write).
-Per-stage and per-pair logging is INFO-level so production runs can be
-grep'd to verify recorded pairs and skip reasons.
+Only real failure modes log (role mismatch, length mismatch, unexpected
+shape) — per-pair and per-stage INFO chatter was removed (I-15) because
+every mutation produced 2*n_opp lines that buried genuine errors in the
+run log. The tracker itself is the source of truth; use DGTracker CLI /
+monitoring tools to inspect recorded pairs.
 """
 
 from __future__ import annotations
@@ -142,40 +144,16 @@ class DGTrackerStage(Stage):
             if self._role == "improver":
                 # D improves G; record (d=program, g=opponent, delta).
                 pairs.append((program_id, opponent_id, d_val))
-                logger.info(
-                    "[DGTrackerStage improver] D={} G={} fitness_delta={:.6f}",
-                    program_id[:8],
-                    opponent_id[:8],
-                    d_val,
-                )
             else:
                 # G resists D; record (d=opponent, g=program, delta).
                 pairs.append((opponent_id, program_id, d_val))
-                logger.info(
-                    "[DGTrackerStage constructor] D={} G={} fitness_delta={:.6f}",
-                    opponent_id[:8],
-                    program_id[:8],
-                    d_val,
-                )
 
         if pairs:
-            n_recorded = await self._tracker.record_batch(pairs)
-            logger.info(
-                "[DGTrackerStage {}] {} attempted={} recorded(positive)={} "
-                "skipped_nan={} non_positive={} opponents={}",
-                self._role,
-                program_id[:8],
-                len(pairs),
-                n_recorded,
-                n_skip_nan,
-                n_neg,
-                n_opp,
-            )
-        else:
-            logger.info(
-                "[DGTrackerStage {}] {} no pairs to record (all NaN); opponents={}",
-                self._role,
-                program_id[:8],
-                n_opp,
-            )
+            await self._tracker.record_batch(pairs)
+        # I-15: per-pair and per-stage summary INFO logs removed — they
+        # produced 2*n_opp lines per mutation and drowned out real errors.
+        # Counters (n_skip_nan, n_neg, n_opp, n_recorded) are retained as
+        # locals only to preserve the record_batch return-value contract
+        # and document the filter logic; they no longer emit log lines.
+        _ = (n_skip_nan, n_neg, n_opp)
         return None

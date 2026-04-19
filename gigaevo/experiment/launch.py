@@ -75,16 +75,25 @@ def run_launch(
     manifest = load_manifest(experiment)
 
     # Step 1: Gate check
-    if manifest.lifecycle.status != "implemented":
+    # Real launch requires status=implemented. Dry-run (read-only preview) is
+    # allowed from {preregistered, implemented, running} so LAUNCH_PREVIEW.md
+    # can be produced BEFORE smoke test (I-02). Pre-smoke gating is otherwise
+    # circular: skill Step 10c needs preview; Step 13 needs smoke; smoke needs
+    # preview to verify pins.
+    allowed = (
+        {"preregistered", "implemented", "running"} if dry_run else {"implemented"}
+    )
+    if manifest.lifecycle.status not in allowed:
         return LaunchResult(
             experiment=experiment,
             status=manifest.lifecycle.status,
             error=(
-                f"Expected status 'implemented', got '{manifest.lifecycle.status}'. "
+                f"Expected status in {sorted(allowed)}, "
+                f"got '{manifest.lifecycle.status}'. "
                 f"Use 'gigaevo -e {experiment} manifest reset-status implemented' to recover."
             ),
         )
-    _log.info("Gate check passed: status=implemented")
+    _log.info("Gate check passed: status={}", manifest.lifecycle.status)
 
     # Step 2: Preflight
     if not skip_preflight:
@@ -101,7 +110,15 @@ def run_launch(
     # Step 2b: LAUNCH_PREVIEW.md (best-effort — failure here does not block launch)
     _write_launch_preview(experiment)
 
-    # Step 3: Claim DBs
+    # Step 3: Claim DBs (skip on dry-run — preview must be side-effect-free
+    # and may run from status=preregistered where claiming is premature).
+    if dry_run:
+        return LaunchResult(
+            experiment=experiment,
+            status=manifest.lifecycle.status,
+            last_completed_step=LaunchStep.PREFLIGHT_PASSED,
+        )
+
     dbs = [r.db for r in manifest.contract.runs]
     claim_failures = _claim_dbs(experiment, dbs)
     if claim_failures:
@@ -113,13 +130,6 @@ def run_launch(
             error=f"DB claim failed: {owners}",
         )
     _log.info("DBs claimed: {}", dbs)
-
-    if dry_run:
-        return LaunchResult(
-            experiment=experiment,
-            status="implemented",
-            last_completed_step=LaunchStep.DBS_CLAIMED,
-        )
 
     # Step 4+: Generate, exec, record, set status, spawn watchdog
     try:

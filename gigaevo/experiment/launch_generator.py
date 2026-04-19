@@ -130,7 +130,7 @@ def generate(experiment: str) -> str:
         # skip if null — the global export from custom_env handles shared LB)
         env_prefix = ""
         if run.chain_url:
-            chain_url_env_var = m.contract.config.extras.get(
+            chain_url_env_var = m.contract.config.effective_overrides.get(
                 "chain_url_env_var", "CHAIN_URL"
             )
             env_prefix = f'{chain_url_env_var}="{run.chain_url}" '
@@ -198,11 +198,10 @@ def generate(experiment: str) -> str:
     )
     lines.append("")
 
-    # Watchdog launch hint
+    # Watchdog launch hint (CLI path: loads .env, wires Telegram + plugin).
     lines.append('echo ""')
-    lines.append('echo "Launch watchdog:"')
-    lines.append('echo "  NO_PROXY=\\"$NO_PROXY\\" no_proxy=\\"$NO_PROXY\\" \\\\"')
-    lines.append(f'echo "  nohup $PYTHON {exp_dir_rel}/run_watchdog.py \\\\"')
+    lines.append('echo "Launch watchdog (CLI — loads .env, wires Telegram):"')
+    lines.append(f'echo "  nohup gigaevo -e {experiment} watchdog \\\\"')
     lines.append(f'echo "      > {exp_dir_rel}/watchdog.log 2>&1 &"')
     lines.append(
         'echo "================================================================"'
@@ -211,33 +210,94 @@ def generate(experiment: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _build_run_cmd(run, manifest, *, cfg_only: bool) -> list[str]:
-    """Build run.py command-line parameters for a run."""
-    x = manifest.contract.config.extras
-    params = [
-        f"problem.name={run.problem_name}",
-        f"pipeline={run.pipeline}",
-        "prompts=default",
-        f"redis.db={run.db}",
-        f"stage_timeout={x.get('stage_timeout', 3000)}",
-        f"dag_timeout={x.get('dag_timeout', 7200)}",
-        f"max_generations={manifest.contract.max_generations}",
-        f"max_mutations_per_generation={x.get('max_mutations_per_generation', 8)}",
-        f"max_elites_per_generation={x.get('max_elites_per_generation', 8)}",
-        f"num_parents={x.get('num_parents', 1)}",
-        f"model_name={run.model_name}",
-        f'llm_base_url="{run.mutation_url}"',
-    ]
+# Keys consumed by the hand-rolled "base params" block below — must not be
+# re-emitted by the generic shared_overrides sweep or they would appear twice.
+_BUILTIN_EMITTED = frozenset(
+    {
+        "stage_timeout",
+        "dag_timeout",
+        "max_mutations_per_generation",
+        "max_elites_per_generation",
+        "num_parents",
+        "mutation_mode",
+    }
+)
+
+# Keys in contract.config.shared_overrides that are NOT Hydra overrides.
+# These drive launch.sh preamble/postamble behavior, not the run.py CLI.
+_NOT_HYDRA = frozenset({"chain_url_env_var"})
+
+
+def _build_run_cmd(
+    run, manifest, *, cfg_only: bool, shell_escape: bool = True
+) -> list[str]:
+    """Build run.py command-line parameters for a run.
+
+    shell_escape: when True, wrap ${...} overrides in single-quotes so bash
+    doesn't variable-expand them (KF-02). Set False when handing the list to
+    subprocess.run() without shell=True — literal single-quotes would end up
+    inside the argument and Hydra's override lexer would reject it.
+
+    Override precedence (lowest → highest):
+      1. ``contract.config.task_group`` — emitted FIRST as
+         ``experiment=<task_group>`` so ``config/experiment/<task_group>.yaml``
+         loads as the task-level tradition before anything else overrides it.
+      2. Built-in defaults from this file (``stage_timeout=3000`` etc).
+      3. ``contract.config.effective_overrides`` — merged view of flat legacy
+         ``flat_overrides`` (model_extra) + nested ``shared_overrides`` dict;
+         nested wins on key conflict (I-00). Any non-builtin, non-blacklisted
+         key lands on the command line as ``key=value``.
+      4. ``run.extra_overrides`` — per-run, wins over everything above because
+         Hydra treats later CLI args as overrides of earlier ones.
+    """
+    x = manifest.contract.config.effective_overrides
+    params: list[str] = []
+    # Task-group first so every later override can win over it.
+    task_group = manifest.contract.config.task_group
+    if task_group:
+        params.append(f"experiment={task_group}")
+    params.extend(
+        [
+            f"problem.name={run.problem_name}",
+            f"pipeline={run.pipeline}",
+            "prompts=default",
+            f"redis.db={run.db}",
+            f"stage_timeout={x.get('stage_timeout', 3000)}",
+            f"dag_timeout={x.get('dag_timeout', 7200)}",
+            f"max_generations={manifest.contract.max_generations}",
+            f"max_mutations_per_generation={x.get('max_mutations_per_generation', 8)}",
+            f"max_elites_per_generation={x.get('max_elites_per_generation', 8)}",
+            f"num_parents={x.get('num_parents', 1)}",
+            f"model_name={run.model_name}",
+            f'llm_base_url="{run.mutation_url}"'
+            if shell_escape
+            else f"llm_base_url={run.mutation_url}",
+        ]
+    )
 
     if x.get("mutation_mode"):
         params.append(f"mutation_mode={x['mutation_mode']}")
 
-    # Extra per-run overrides from experiment.yaml (e.g. prompt_fetcher config)
-    # Single-quote any override containing ${...} Hydra interpolation refs
-    # to prevent bash from expanding them as shell variables (KF-02).
+    # Forward any additional shared_overrides keys as Hydra overrides. Built-ins
+    # already landed above; _NOT_HYDRA keys steer launch.sh, not run.py. This
+    # is the fix for I-00: before, a user writing
+    # ``contract.config.shared_overrides.stopper: max_generations`` was silently
+    # dropped.
+    for key, val in x.items():
+        if key in _BUILTIN_EMITTED or key in _NOT_HYDRA or val is None:
+            continue
+        ov = f"{key}={val}"
+        if shell_escape and "${" in ov:
+            params.append(f"'{ov}'")
+        else:
+            params.append(ov)
+
     if run.extra_overrides:
         for ov in run.extra_overrides:
-            if "${" in ov:
+            # Writing `\${...}` in experiment.yaml is a no-op — ruamel.yaml
+            # strips the backslash — so this single-quote wrap is the ONLY
+            # defense against bash variable-expanding `${...}` to empty (I-04).
+            if shell_escape and "${" in ov:
                 params.append(f"'{ov}'")
             else:
                 params.append(ov)

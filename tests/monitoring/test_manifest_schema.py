@@ -146,7 +146,7 @@ class TestValidManifestLoading:
         manifest = ExperimentManifest.from_dict(raw)
         assert manifest.contract.runs == []
         assert manifest.contract.servers == []
-        assert manifest.contract.config.extras == {}
+        assert manifest.contract.config.flat_overrides == {}
         assert manifest.lifecycle.launch.time is None
         assert manifest.lifecycle.smoke_test.completed is False
         assert manifest.contract.baseline.reference is None

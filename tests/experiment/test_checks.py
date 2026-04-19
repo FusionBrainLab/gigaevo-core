@@ -44,7 +44,7 @@ def _make_manifest(
     m.lifecycle.treatment_verification.completed_at = "2026-04-14T10:00:00Z"
     m.contract.runs = runs or [_make_run("A", 5), _make_run("B", 6)]
     m.contract.custom_env = {"OPENAI_API_KEY": "test-key"}
-    m.contract.config.extra = {}
+    m.contract.config.shared_overrides = {}
     m.contract.problem.has_test_set = False
     return m
 

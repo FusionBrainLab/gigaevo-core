@@ -234,7 +234,7 @@ class TestConfigSpec:
     def test_defaults(self):
         c = ConfigSpec()
         assert c.pipeline is None
-        assert c.extras == {}
+        assert c.flat_overrides == {}
 
     def test_structured_plus_extra(self):
         c = ConfigSpec.model_validate(
@@ -250,8 +250,8 @@ class TestConfigSpec:
             }
         )
         assert c.pipeline == "adversarial_asymmetric"
-        assert c.extras["num_parents"] == 1
-        assert c.extras["stage_timeout"] == 2400
+        assert c.flat_overrides["num_parents"] == 1
+        assert c.flat_overrides["stage_timeout"] == 2400
 
 
 # ---------------------------------------------------------------------------

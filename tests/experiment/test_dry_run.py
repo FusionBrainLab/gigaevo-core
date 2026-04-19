@@ -34,7 +34,7 @@ def dummy_manifest(tmp_path: Path, monkeypatch):
             metric_name: fitness
           config:
             task_group: heilbron
-            extra:
+            shared_overrides:
               n_opponents: 3
               num_parents: 1
           runs:

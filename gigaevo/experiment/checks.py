@@ -131,13 +131,13 @@ def _check_gigaevo_python(results: list[CheckResult]) -> None:
 
 
 def _resolve_run_overrides(m, run) -> dict:
-    """Merge ``contract.config.extra`` with ``run.extra_overrides`` (run wins).
+    """Merge ``contract.config.shared_overrides`` with ``run.extra_overrides`` (run wins).
 
     ``extra_overrides`` is a list of Hydra-style ``key=value`` strings; keys
     containing dots (e.g. ``opponent_provider.cache_ttl``) are preserved as
     flat string keys — the preflight does not expand dotted paths.
     """
-    merged: dict = dict(m.contract.config.extra or {})
+    merged: dict = dict(m.contract.config.shared_overrides or {})
     for ov in run.extra_overrides or []:
         if "=" not in ov:
             continue

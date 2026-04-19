@@ -2,7 +2,7 @@
 
 Composes Phase 1 (ExperimentMonitor, AlertDetector), Phase 2
 (NotificationDispatcher), and Phase 3 (WatchdogPlugin) into the
-single run loop that replaces experiments/_template/run_watchdog.py.
+single run loop invoked via `gigaevo -e <exp> watchdog`.
 """
 
 from __future__ import annotations
