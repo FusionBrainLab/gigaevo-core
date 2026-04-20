@@ -649,6 +649,9 @@ class TestFullEvolutionMemoryRebuildCycle:
 
         cfg = MemoryConfig(checkpoint_path=tmp_path / "real_mem")
         mem = AmemGamMemory(config=cfg)
+        # Force local keyword search — no network calls to real LLM.
+        mem.research_agent = None
+        mem.api = None
 
         # Save cards
         mem.save_card(
@@ -692,6 +695,8 @@ class TestFullEvolutionMemoryRebuildCycle:
 
         # Persist + reload (new process)
         mem2 = AmemGamMemory(config=cfg)
+        mem2.research_agent = None
+        mem2.api = None
         assert len(mem2.card_store.cards) == 2
         assert (
             mem2.get_card("real-1").description == "enhanced SA with adaptive cooling"
