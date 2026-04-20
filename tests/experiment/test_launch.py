@@ -73,23 +73,50 @@ class TestLaunchResult:
 
 
 class TestGateCheck:
-    def test_rejects_non_implemented_status(self):
+    def test_real_launch_rejects_non_implemented_status(self):
+        """Real launch (dry_run=False) still requires status=implemented."""
         m = _make_manifest(status="preregistered")
         with patch("gigaevo.experiment.launch.load_manifest", return_value=m):
-            result = run_launch("hover/test", dry_run=True)
+            result = run_launch("hover/test", dry_run=False)
         assert not result.ok
         assert result.last_completed_step == LaunchStep.NONE
         assert "implemented" in result.error.lower()
+
+    def test_dry_run_allows_preregistered(self):
+        """I-02: dry_run must work from preregistered to unblock pre-smoke preview."""
+        m = _make_manifest(status="preregistered")
+        with (
+            patch("gigaevo.experiment.launch.load_manifest", return_value=m),
+            patch("gigaevo.experiment.launch._run_preflight") as mock_pf,
+            patch("gigaevo.experiment.launch._write_launch_preview"),
+            patch("gigaevo.experiment.launch._claim_dbs") as mock_claim,
+        ):
+            mock_pf.return_value = []
+            result = run_launch("hover/test", dry_run=True)
+        assert result.ok
+        assert result.last_completed_step == LaunchStep.PREFLIGHT_PASSED
+        mock_claim.assert_not_called()  # dry_run must not claim DBs
+
+    def test_dry_run_allows_running(self):
+        """Re-running preview on a live experiment should be allowed."""
+        m = _make_manifest(status="running")
+        with (
+            patch("gigaevo.experiment.launch.load_manifest", return_value=m),
+            patch("gigaevo.experiment.launch._run_preflight") as mock_pf,
+            patch("gigaevo.experiment.launch._write_launch_preview"),
+        ):
+            mock_pf.return_value = []
+            result = run_launch("hover/test", dry_run=True)
+        assert result.ok
 
     def test_accepts_implemented_status(self):
         m = _make_manifest(status="implemented")
         with (
             patch("gigaevo.experiment.launch.load_manifest", return_value=m),
             patch("gigaevo.experiment.launch._run_preflight") as mock_pf,
-            patch("gigaevo.experiment.launch._claim_dbs") as mock_claim,
+            patch("gigaevo.experiment.launch._write_launch_preview"),
         ):
             mock_pf.return_value = []
-            mock_claim.return_value = []
             result = run_launch("hover/test", dry_run=True)
         assert result.last_completed_step.value >= LaunchStep.GATE_CHECK.value
 
@@ -131,6 +158,8 @@ class TestPreflight:
 
 
 class TestDbClaims:
+    """DB claims only happen on real launch — dry_run is side-effect-free (I-02)."""
+
     def test_claim_failure_stops_launch(self):
         m = _make_manifest()
         with (
@@ -141,7 +170,7 @@ class TestDbClaims:
                 return_value=[(5, "hover/other-experiment")],
             ),
         ):
-            result = run_launch("hover/test", dry_run=True)
+            result = run_launch("hover/test", dry_run=False)
         assert not result.ok
         assert result.last_completed_step == LaunchStep.PREFLIGHT_PASSED
         assert "claim" in result.error.lower() or "DB" in result.error
@@ -152,8 +181,14 @@ class TestDbClaims:
             patch("gigaevo.experiment.launch.load_manifest", return_value=m),
             patch("gigaevo.experiment.launch._run_preflight", return_value=[]),
             patch("gigaevo.experiment.launch._claim_dbs", return_value=[]),
+            patch("gigaevo.experiment.launch._generate_launch_script") as mock_gen,
+            patch("gigaevo.experiment.launch._exec_launch_script") as mock_exec,
+            patch("gigaevo.experiment.launch._record_pids_and_set_running"),
+            patch("gigaevo.experiment.launch._spawn_watchdog", return_value=9999),
         ):
-            result = run_launch("hover/test", dry_run=True)
+            mock_gen.return_value = Path("/tmp/launch.sh")
+            mock_exec.return_value = {"A": 1234, "B": 5678}
+            result = run_launch("hover/test", dry_run=False)
         assert result.last_completed_step.value >= LaunchStep.DBS_CLAIMED.value
 
 
@@ -163,18 +198,21 @@ class TestDbClaims:
 
 
 class TestDryRun:
-    def test_dry_run_stops_after_claims(self):
+    def test_dry_run_stops_after_preflight_without_claiming(self):
+        """I-02: dry_run is a read-only preview. No DB claim, no exec."""
         m = _make_manifest()
         with (
             patch("gigaevo.experiment.launch.load_manifest", return_value=m),
             patch("gigaevo.experiment.launch._run_preflight", return_value=[]),
-            patch("gigaevo.experiment.launch._claim_dbs", return_value=[]),
+            patch("gigaevo.experiment.launch._write_launch_preview"),
+            patch("gigaevo.experiment.launch._claim_dbs") as mock_claim,
         ):
             result = run_launch("hover/test", dry_run=True)
         assert result.ok
-        assert result.last_completed_step == LaunchStep.DBS_CLAIMED
+        assert result.last_completed_step == LaunchStep.PREFLIGHT_PASSED
         assert result.run_pids == {}
         assert result.watchdog_pid is None
+        mock_claim.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

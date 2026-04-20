@@ -37,7 +37,7 @@ def manifest_with_pinned(tmp_path: Path, monkeypatch):
             fitness_type: fractional
             metric_name: fitness
           config:
-            extra:
+            shared_overrides:
               stage_timeout: 600
             pinned:
               n_opponents: 3
@@ -233,7 +233,7 @@ class TestResolvedConfigMatchesPinned:
                 fitness_type: fractional
                 metric_name: fitness
               config:
-                extra:
+                shared_overrides:
                   stage_timeout: 600
               runs:
               - label: A1

@@ -2,7 +2,7 @@
 
 Verifies ``write_launch_preview`` renders a markdown report with:
   - Per-run resolved-config table showing provenance (extra_overrides /
-    config.extra / task-group / hydra-default) and pin match status
+    shared_overrides / task-group / hydra-default) and pin match status
   - Hydra default fingerprint table
   - Header with task_group and pass/fail summary
 
@@ -42,7 +42,7 @@ def manifest_for_preview(tmp_path: Path, monkeypatch):
             metric_name: fitness
           config:
             task_group: heilbron
-            extra:
+            shared_overrides:
               n_opponents: 3
               source_prompt_k: 3
             pinned:
@@ -101,8 +101,8 @@ def result_for_preview():
         resolved={
             "A1": {
                 "num_parents": 1,  # task-group
-                "n_opponents": 3,  # config.extra
-                "source_prompt_k": 3,  # config.extra
+                "n_opponents": 3,  # shared_overrides
+                "source_prompt_k": 3,  # shared_overrides
                 "stage_timeout": 2400,  # task-group
                 "pipeline_builder": {"archive_reeval": True},  # extra_overrides
             }
@@ -192,7 +192,7 @@ class TestWriteLaunchPreview:
         assert "archive_reeval" in text
         assert "extra_overrides" in text
 
-    def test_provenance_reflects_config_extra(
+    def test_provenance_reflects_shared_overrides(
         self, manifest_for_preview, result_for_preview
     ):
         from gigaevo.experiment.launch_preview import write_launch_preview
@@ -200,8 +200,8 @@ class TestWriteLaunchPreview:
         exp, _ = manifest_for_preview
         out = write_launch_preview(exp, result_for_preview)
         text = out.read_text()
-        # n_opponents came from config.extra; table column header must exist
-        assert "config.extra" in text
+        # n_opponents came from shared_overrides; table column header must exist
+        assert "shared_overrides" in text
 
     def test_fingerprint_table_includes_all_files(
         self, manifest_for_preview, result_for_preview

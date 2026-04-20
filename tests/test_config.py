@@ -275,6 +275,33 @@ def test_sync_min_delta_decoupled_from_max_mutations():
         )
 
 
+def test_redis_prefix_resolves_to_problem_name():
+    """${redis.prefix} must resolve everywhere it's referenced (I-12).
+
+    Pipelines such as adversarial_coevo_ss.yaml reference ${redis.prefix} for
+    ProgressBasedSyncHook.own_prefix. Before the I-12 fix, `redis.prefix` was
+    never defined, so Hydra raised InterpolationKeyError at run time. The fix
+    defines `redis.prefix: ${problem.name}` in config/redis/default.yaml so
+    the intuitive "redis.prefix = my namespace" mental model actually works.
+    """
+    cfg = _compose()
+    assert cfg.redis.prefix == "_test_", (
+        "redis.prefix should resolve to ${problem.name} — did you delete the "
+        "`prefix:` line in config/redis/default.yaml? (regression of I-12)"
+    )
+
+    # Any pipeline that references ${redis.prefix} must now resolve cleanly.
+    cfg = _compose(
+        "pipeline=adversarial_coevo_ss",
+        "opponent_redis_db=2",
+        "opponent_redis_prefix=_test_opponent_",
+    )
+    assert cfg.pre_step_hook.own_prefix == "_test_", (
+        "adversarial_coevo_ss.pre_step_hook.own_prefix must resolve to "
+        "${problem.name} via ${redis.prefix} (I-12)"
+    )
+
+
 @pytest.mark.parametrize("variant", _group_choices("pipeline"))
 def test_pipeline_evolution_context_prompts_dir_when_defined(variant: str):
     """Any pipeline that defines evolution_context must include prompts_dir in it.

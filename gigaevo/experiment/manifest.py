@@ -147,11 +147,6 @@ class AlertThresholds(BaseModel):
     invalidity_rate: float = 0.75
     stagnation_window: int = 10
     generation_gap_threshold: int = 5
-    # Canonical event names to suppress in event_rate_zero alerts. Use when a
-    # pipeline legitimately never emits a given event (e.g. simple opponent
-    # provider emits no HOF_FETCH/HOF_ROTATE/CELL_PICK); listing it here stops
-    # the watchdog from crying wolf without disabling the check globally.
-    excluded_events: list[str] = []
 
 
 class WatchdogSection(BaseModel):
@@ -190,6 +185,9 @@ class RunSpec(BaseModel):
     log_path: str | None = None
     extra_overrides: list[str] | None = None
     role: RunRole | None = None
+    # Per-run pin overlay on contract.config.pinned. Dotted Hydra paths
+    # (e.g. {"n_opponents": 5}) asserted by the preflight pin check (I-01,
+    # I-09, I-11). Merged INTO the contract pins — a run-level key wins.
     pinned: dict[str, Any] | None = None
 
     @field_validator("db")
@@ -226,6 +224,9 @@ class LaunchInfo(BaseModel):
     commit: str | None = None
     confirmed_at: str | None = None
     attempt: int | None = None
+    # Per-file digests of the Hydra config tree at launch time. Written by
+    # run_launch() on a fresh launch; checked by
+    # _check_config_fingerprint_stable on re-launches to reject silent drift.
     config_fingerprint: dict[str, str] | None = None
 
 
@@ -258,7 +259,18 @@ class TreatmentVerificationInfo(BaseModel):
 
     completed: bool = False
     completed_at: str | None = None
+    # `note` is frequently written as `null` in YAML (that's the default in
+    # experiments/_template/experiment.yaml) which arrives here as None —
+    # reject-as-string_type broke manifest validation for any manifest
+    # that hadn't been touched since creation (6 redesign-sandbox yamls
+    # failed this way). Accept None (coerced to "") via pre-validator so
+    # downstream code can still treat `note` as a plain str.
     note: str = ""
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _coerce_note_none_to_empty(cls, v: Any) -> str:
+        return v if isinstance(v, str) else ""
 
 
 # ---------------------------------------------------------------------------
@@ -367,13 +379,28 @@ class ToolRef(BaseModel):
 
 
 class ConfigSpec(BaseModel):
-    """Shared Hydra config overrides.
+    """Shared Hydra config for an experiment.
 
-    Standard keys are explicitly typed (``problem_name``, ``pipeline``, …).
-    Problem-specific extras (e.g. ``stage_timeout``, ``mutation_mode``)
-    arrive as plain top-level keys and are captured in
-    :pyattr:`pydantic.BaseModel.model_extra`. The :pyattr:`extras` property
-    is the canonical accessor — never reach into ``model_extra`` directly.
+    The Hydra override hierarchy (lowest → highest precedence) is:
+
+        1. ``task_group``            — loads ``config/experiment/<task_group>.yaml``.
+                                       Active for every run in the experiment
+                                       and is emitted as the FIRST Hydra override
+                                       (``experiment=<task_group>``) so later
+                                       args can override it.
+        2. ``shared_overrides``      — key/value pairs shared by ALL runs in
+                                       this experiment (e.g. ``n_opponents: 3``).
+        3. ``runs[].extra_overrides`` — per-run overrides; wins over everything
+                                        above (Hydra: later CLI args win).
+
+    Standard keys are declared explicitly (``problem_name``, ``pipeline``,
+    ``pinned``, …). Undeclared top-level YAML keys under ``config:`` are
+    tolerated for back-compat (Pydantic ``extra="allow"``) and exposed via
+    :pyattr:`flat_overrides`; new experiments should use ``shared_overrides``
+    exclusively.
+
+    The merged view used by ``launch_generator`` is :pyattr:`effective_overrides`
+    (``flat_overrides`` ∪ ``shared_overrides``; nested wins on conflict).
     """
 
     model_config = ConfigDict(extra="allow")
@@ -385,11 +412,59 @@ class ConfigSpec(BaseModel):
     llm_model: str | None = None
     n_workers: int | None = None
     max_generations: int | None = None
+    # Name of a task-group file under ``config/experiment/`` — emitted as the
+    # FIRST Hydra override (``experiment=<task_group>``) so every run starts
+    # from the same task-level tradition (e.g. ``heilbron`` for the Heilbron
+    # triangle task). None = don't emit ``experiment=`` at all.
+    task_group: str | None = None
+    # Contract-level pin assertions (dotted Hydra paths → expected values).
+    # Preflight fails if the resolved Hydra config drifts from these. Per-run
+    # overlays live on RunSpec.pinned (I-01, I-09, I-11).
+    pinned: dict[str, Any] | None = None
+    # Shared Hydra overrides scoped into a nested dict. Preferred over the
+    # legacy "flat model_extra" form — an explicit field makes it unambiguous
+    # to downstream readers (launch_preview, checks.py, launch_generator).
+    shared_overrides: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_deprecated_extra_key(cls, data: Any) -> Any:
+        """Reject the old ``extra:`` YAML key with a clear migration error.
+
+        Historical schema used ``contract.config.extra:`` as the nested
+        override dict. It was renamed to ``shared_overrides`` for clarity
+        (the old name collided with Pydantic's own ``extra="allow"``
+        setting). Silent acceptance would hide the rename in ``model_extra``
+        and break downstream consumers. Fail loudly, with the fix.
+        """
+        if isinstance(data, dict) and "extra" in data:
+            raise ValueError(
+                "contract.config.extra was renamed to contract.config.shared_overrides. "
+                "Rename the YAML key — the nested dict body is unchanged."
+            )
+        return data
 
     @property
-    def extras(self) -> dict[str, Any]:
-        """Return the un-typed extras dict (always materialized, never ``None``)."""
+    def flat_overrides(self) -> dict[str, Any]:
+        """Legacy flat top-level overrides (anything not declared as a field).
+
+        Captured by Pydantic's ``extra="allow"`` into ``model_extra``. Kept
+        only for back-compat with pre-``shared_overrides`` manifests — new
+        experiments should put all cross-run overrides under
+        :pyattr:`shared_overrides`.
+        """
         return dict(self.model_extra or {})
+
+    @property
+    def effective_overrides(self) -> dict[str, Any]:
+        """Merged view of ``flat_overrides`` ∪ ``shared_overrides``.
+
+        Nested ``shared_overrides`` wins on key collision. Use this as the
+        single source of truth when enumerating Hydra overrides shared
+        across runs — ``launch_generator`` and ``launch_preview`` both read
+        from here.
+        """
+        return {**self.flat_overrides, **(self.shared_overrides or {})}
 
 
 class PrChannelConfig(BaseModel):
@@ -558,7 +633,7 @@ class ExperimentManifest(BaseModel):
                     f"contract.servers[] must be non-empty for status={status.value}. "
                     f"Add the server hostnames used by this experiment."
                 )
-            config_extras = self.contract.config.extras
+            config_extras = self.contract.config.effective_overrides
             config_typed_set = any(
                 getattr(self.contract.config, k) is not None
                 for k in (

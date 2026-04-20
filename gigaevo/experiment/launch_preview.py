@@ -6,7 +6,7 @@ Public surface:
 
 The preview is a markdown artifact committed to ``experiments/<exp>/``. It
 shows, per run, every pinned path's resolved value and the declared-source
-provenance (``extra_overrides`` > ``config.extra`` > ``task_group`` file >
+provenance (``extra_overrides`` > ``config.shared_overrides`` > ``task_group`` file >
 Hydra default). Reviewers (human and AI) read the preview at launch Gate 2
 and confirm every pinned row is ✓ and non-pinned overrides look right.
 """
@@ -117,7 +117,7 @@ def _render(experiment: str, manifest, result: DryRunResult) -> str:
         block.append(f"### Run {run.label} (db={run.db})")
         block.append("")
         block.append(
-            "| Path | Task group | config.extra | extra_overrides | Resolved | Pinned? | Match |"
+            "| Path | Task group | shared_overrides | extra_overrides | Resolved | Pinned? | Match |"
         )
         block.append(
             "|------|------------|--------------|-----------------|----------|---------|-------|"
@@ -127,7 +127,7 @@ def _render(experiment: str, manifest, result: DryRunResult) -> str:
                 "| {path} | {tg} | {ex} | {ov} | {res} | {pinned} | {match} |".format(
                     path=path,
                     tg=_fmt(row["task_group"]),
-                    ex=_fmt(row["config_extra"]),
+                    ex=_fmt(row["shared_overrides"]),
                     ov=_fmt(row["extra_override"]),
                     res=_fmt(row["resolved"]),
                     pinned=_fmt(row["pinned"])
@@ -172,8 +172,8 @@ def _build_row(
     run_pins: dict,
 ) -> dict[str, Any]:
     resolved_val = _lookup_dotted(resolved, path)
-    contract_extra = manifest.contract.config.extra or {}
-    config_extra_val = contract_extra.get(path, _MISSING)
+    shared = manifest.contract.config.shared_overrides or {}
+    shared_val = shared.get(path, _MISSING)
     extra_override_val = declared_overrides.get(path, _MISSING)
     task_group_val = task_group_values.get(path, _MISSING)
     pinned_val = run_pins.get(path, _MISSING)
@@ -186,7 +186,7 @@ def _build_row(
 
     return {
         "resolved": resolved_val,
-        "config_extra": config_extra_val,
+        "shared_overrides": shared_val,
         "extra_override": extra_override_val,
         "task_group": task_group_val,
         "pinned": pinned_val,
