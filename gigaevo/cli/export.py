@@ -119,8 +119,8 @@ def export() -> None:
 def csv_cmd(ctx: click.Context, labels: tuple[str, ...], output_file: str) -> None:
     """Export full evolution data to CSV.
 
+    \b
     Usage:
-
       gigaevo -e <exp> export csv -o out.csv            Export all runs (fans out).
       gigaevo -e <exp> export csv <label> -o out.csv    Export one run.
       gigaevo -e <exp> export csv <a> <b> -o out.csv    Export selected runs.
@@ -170,8 +170,8 @@ def frontier(
 ) -> None:
     """Export frontier-only CSV with gen and best_val columns.
 
+    \b
     Usage:
-
       gigaevo -e <exp> export frontier -o out.csv             All runs (fans out).
       gigaevo -e <exp> export frontier <label> -o out.csv     One run.
       gigaevo -e <exp> export frontier <a> <b> -o out.csv     Selected runs.

@@ -226,6 +226,7 @@ class LaunchInfo(BaseModel):
     commit: str | None = None
     confirmed_at: str | None = None
     attempt: int | None = None
+    config_fingerprint: dict[str, str] | None = None
 
 
 class BaselineInfo(BaseModel):

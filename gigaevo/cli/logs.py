@@ -106,8 +106,8 @@ def logs(
 ) -> None:
     """Tail experiment run log files.
 
+    \b
     Usage:
-
       gigaevo -e <exp> logs                 List all run logs (sizes, mtimes).
       gigaevo -e <exp> logs <label>         Tail run_<label>.log.
       gigaevo -e <exp> logs <label> -f      Live tail.

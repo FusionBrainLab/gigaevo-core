@@ -403,10 +403,12 @@ def reset_status(
 ) -> None:
     """Reset experiment status — escape hatch for stuck states.
 
+    \b
     Allows recovery transitions the normal state machine forbids:
-      running -> implemented  (launch failed, need to re-launch)
+      running -> implemented   (launch failed, need to re-launch)
       invalid -> preregistered (retry after fixing)
 
+    \b
     When reverting from `running`:
       - Redis DB claims are released.
       - For target `implemented`, launch.* fields and runs[].pid are cleared.
