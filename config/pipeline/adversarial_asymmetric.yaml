@@ -108,5 +108,11 @@ pipeline_builder:
   per_opponent_timeout: 300.0
   archive_reeval: false
   dg_tracker: ${dg_tracker}
+  opponent_result_mode: ${opponent_result_mode}
+  redis_host: ${redis.host}
+  redis_port: ${redis.port}
+  opponent_sources:
+    - db: ${opponent_redis_db}
+      prefix: ${opponent_redis_prefix}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}

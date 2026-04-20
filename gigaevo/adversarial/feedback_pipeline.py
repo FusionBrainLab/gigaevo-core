@@ -60,6 +60,10 @@ class AdversarialFeedbackPipelineBuilder(AdversarialPipelineBuilder):
         fallback_dir: str = "fallback",
         archive_reeval: bool = True,
         *,
+        opponent_result_mode: Literal["exec", "cached"] = "exec",
+        redis_host: str = "localhost",
+        redis_port: int = 6379,
+        opponent_sources: list[dict[str, int | str]] | None = None,
         dag_timeout: float = 3600.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
     ):
@@ -70,6 +74,10 @@ class AdversarialFeedbackPipelineBuilder(AdversarialPipelineBuilder):
             per_opponent_timeout,
             fallback_dir,
             archive_reeval,
+            opponent_result_mode=opponent_result_mode,
+            redis_host=redis_host,
+            redis_port=redis_port,
+            opponent_sources=opponent_sources,
             dag_timeout=dag_timeout,
             stage_timeout=stage_timeout,
         )

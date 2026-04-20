@@ -16,28 +16,28 @@ Two-stage DAG pattern for automatic archive re-evaluation:
 Pipeline wiring (AdversarialPipelineBuilder):
   FetchOpponentIdsStage → FetchOpponentResultsStage (opponent_ids)
   FetchOpponentResultsStage → CallValidatorFunction (context)
+
+FetchOpponentResultsStage is a thin coordinator over an
+`OpponentResultProvider` strategy (exec vs cached); see
+`opponent_result_provider.py` for the two concrete paths.
 """
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
 from typing import Any, cast
 
 from loguru import logger
 
-from gigaevo.adversarial.opponent_provider import (
-    OpponentArchiveProvider,
+from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
+from gigaevo.adversarial.opponent_result_provider import (
+    ExecOpponentResultProvider,
+    OpponentResultProvider,
 )
 from gigaevo.programs.core_types import StageIO, VoidInput
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import DEFAULT_CACHE, NO_CACHE
 from gigaevo.programs.stages.common import Box
-from gigaevo.programs.stages.python_executors.wrapper import (
-    ExecRunnerError,
-    run_exec_runner,
-)
 
 
 class FetchOpponentIdsStage(Stage):
@@ -84,88 +84,79 @@ class OpponentIdsInput(StageIO):
 
 
 class FetchOpponentResultsStage(Stage):
-    """Execute opponent programs given their IDs.
+    """Produce one evaluation payload per opponent id.
 
-    Uses DEFAULT_CACHE (InputHashCache): reruns automatically when the
-    opponent ID list changes.  Same IDs → cached results reused (no subprocess
-    overhead).  Different IDs → reruns with fresh opponents.
+    Delegates the actual work to an ``OpponentResultProvider`` strategy
+    (exec or cached). The stage itself is role-agnostic: it just wires
+    opponent ids in, provider output out, and handles the cold-start
+    fallback path when the archive is empty.
 
-    Fallback: when opponent_ids is empty (cold start), falls back to
-    pre-loaded fallback_codes if provided.
+    Cache: DEFAULT_CACHE (InputHashCache) when ``archive_reeval=True`` —
+    reruns only when the opponent ID list changes. NO_CACHE when
+    ``archive_reeval=False`` (adversarial-v2 baseline: always re-evaluate).
+
+    Fallback: when opponent_ids is empty or every slot comes back None
+    (cold start + archive empty), falls back to ``fallback_codes`` via
+    ExecOpponentResultProvider.produce_from_codes(). Fallback is always
+    run in-subprocess — we have codes, not stored outputs.
     """
 
     InputsModel = OpponentIdsInput
     OutputModel = Box[Any]
-    # DEFAULT_CACHE (InputHashCache) is the class default — reruns when opponent_ids hash changes
 
     def __init__(
         self,
-        opponent_provider: OpponentArchiveProvider,
-        n_opponents: int = 5,
+        *,
+        result_provider: OpponentResultProvider,
         fallback_codes: list[str] | None = None,
-        per_opponent_timeout: float = 10.0,
-        python_path: list[Path] | None = None,
-        max_memory_mb: int | None = None,
         archive_reeval: bool = True,
+        fallback_exec_provider: ExecOpponentResultProvider | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
-        self._provider = opponent_provider
-        self._n = n_opponents
-        self._fallback_codes = fallback_codes or []
-        self._per_timeout = per_opponent_timeout
-        self._python_path = python_path or []
-        self._max_memory_mb = max_memory_mb
+        self._result_provider = result_provider
+        self._fallback_codes = list(fallback_codes or [])
         self._archive_reeval = archive_reeval
+        # Fallback codes always execute (we only have source code, not
+        # cached outputs). If the main provider is already an Exec provider
+        # we reuse it; otherwise the caller must supply an Exec provider
+        # for fallback. Only required when fallback_codes is non-empty.
+        self._fallback_exec = fallback_exec_provider or (
+            result_provider
+            if isinstance(result_provider, ExecOpponentResultProvider)
+            else None
+        )
+        if self._fallback_codes and self._fallback_exec is None:
+            raise ValueError(
+                "FetchOpponentResultsStage: fallback_codes provided but no "
+                "ExecOpponentResultProvider available for fallback. Pass "
+                "fallback_exec_provider= explicitly when result_provider is "
+                "not an ExecOpponentResultProvider."
+            )
 
     def get_cache_handler(self):  # type: ignore[override]
         """InputHashCache when archive_reeval=True (re-eval only when IDs change).
-        NO_CACHE when archive_reeval=False (always re-evaluate — adversarial-v2 baseline)."""
+        NO_CACHE when archive_reeval=False (always re-evaluate)."""
         return DEFAULT_CACHE if self._archive_reeval else NO_CACHE
 
     async def compute(self, program: Program) -> Box[Any]:
         params = cast(OpponentIdsInput, self.params)
-        ids: list[str] = params.opponent_ids.data
-        codes = await self._provider.get_codes_by_ids(ids)
+        ids: list[str] = list(params.opponent_ids.data)
 
-        if not codes and self._fallback_codes:
-            codes = self._fallback_codes
+        results = await self._result_provider.produce(ids)
+
+        all_missing = not ids or all(r is None for r in results)
+        if all_missing and self._fallback_codes:
             logger.info(
-                "[FetchOpponentResults] using {} fallback opponents (archive empty)",
-                len(codes),
+                "[FetchOpponentResults] using {} fallback opponents (archive cold)",
+                len(self._fallback_codes),
             )
+            assert self._fallback_exec is not None  # guarded in __init__
+            results = await self._fallback_exec.produce_from_codes(self._fallback_codes)
 
-        if not codes:
-            logger.warning("[FetchOpponentResults] no opponents available")
-            return Box[Any](data=[])
-
-        tasks = [self._exec_one(code) for code in codes]
-        raw = await asyncio.gather(*tasks, return_exceptions=True)
-
-        results = [
-            r
-            for r in raw
-            if not isinstance(r, (Exception, BaseException)) and r is not None
-        ]
         logger.debug(
-            "[FetchOpponentResults] {}/{} opponents succeeded",
+            "[FetchOpponentResults] produced {}/{} slots populated",
+            sum(1 for r in results if r is not None),
             len(results),
-            len(codes),
         )
         return Box[Any](data=results)
-
-    async def _exec_one(self, code: str) -> Any:
-        """Execute one opponent's entrypoint() in a subprocess."""
-        try:
-            value, _, _ = await run_exec_runner(
-                code=code,
-                function_name="entrypoint",
-                python_path=self._python_path,
-                timeout=int(self._per_timeout),
-                max_memory_mb=self._max_memory_mb,
-                max_output_size=64 * 1024 * 1024,
-            )
-            return value
-        except (ExecRunnerError, TimeoutError, asyncio.CancelledError) as e:
-            logger.debug("[FetchOpponentResults] opponent exec failed: {}", e)
-            return None
