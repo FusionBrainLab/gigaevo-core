@@ -165,5 +165,6 @@ def watchdog(
         config=config,
         max_generations=max_generations or manifest.contract.max_generations,
         dispatcher=dispatcher,
+        excluded_events=list(watchdog_manifest.alert_thresholds.excluded_events),
     )
     engine.run()

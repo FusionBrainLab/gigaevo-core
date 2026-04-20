@@ -56,6 +56,7 @@ class WatchdogEngine:
         heartbeat_redis: redis_lib.Redis | None = None,
         plot_dir: Path | None = None,
         baseline: float | None = None,
+        excluded_events: list[str] | None = None,
     ):
         self.experiment_name = experiment_name
         self.plugin = plugin
@@ -67,7 +68,9 @@ class WatchdogEngine:
             redis_host=self.config.redis_host,
             redis_port=self.config.redis_port,
         )
-        self._alert_detector = alert_detector or AlertDetector()
+        self._alert_detector = alert_detector or AlertDetector(
+            excluded_events=excluded_events
+        )
         self._dispatcher = dispatcher or NotificationDispatcher([])
         self._heartbeat_redis = heartbeat_redis
         self._plot_dir = plot_dir or Path(
