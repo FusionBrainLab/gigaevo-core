@@ -7,6 +7,15 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 import pandas as pd
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _bypass_prefix_verification():
+    """Tests mock `_fetch_dataframe`; the real Redis probe would fail
+    against an empty local Redis and mask the behavior under test."""
+    with patch("gigaevo.cli.export._verify_prefixes_exist"):
+        yield
 
 
 def _make_evolution_df(n_rows: int = 20, label: str = "A") -> pd.DataFrame:

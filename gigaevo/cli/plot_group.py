@@ -297,6 +297,12 @@ def comparison(
         sentinel_value=sentinel,
     )
 
+    if not prepared_dfs:
+        raise click.ClickException(
+            f"No data found for metric '{metric}' across any resolved run. "
+            f"Check the metric name against problems/<name>/metrics.yaml, or whether runs have emitted data yet."
+        )
+
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
@@ -500,6 +506,12 @@ def trajectory(
         sentinel_value=sentinel,
     )
 
+    if not prepared_dfs:
+        raise click.ClickException(
+            f"No data found for metric '{metric}' across any resolved run. "
+            f"Check the metric name against problems/<name>/metrics.yaml, or whether runs have emitted data yet."
+        )
+
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
@@ -688,8 +700,23 @@ def arms_race(
         sentinel_value=sentinel,
     )
 
+    if not prepared_dfs:
+        raise click.ClickException(
+            f"No data found for metric '{metric}' across any resolved run. "
+            f"Check the metric name against problems/<name>/metrics.yaml, or whether runs have emitted data yet."
+        )
+
     # Index by label
     df_by_label: dict[str, pd.DataFrame] = {label: df for label, df in prepared_dfs}
+
+    # Validate pair labels resolve to fetched runs
+    known_labels = set(df_by_label.keys())
+    missing = {lbl for pair in pairs for lbl in pair if lbl not in known_labels}
+    if missing:
+        raise click.ClickException(
+            f"--paired references unknown labels: {', '.join(sorted(missing))}. "
+            f"Known labels: {', '.join(sorted(known_labels))}."
+        )
 
     if paper:
         plt.rcParams.update(

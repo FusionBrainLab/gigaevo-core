@@ -357,24 +357,52 @@ def plot(
 
 
 @events.command("audit")
+@click.argument("label", required=False)
 @click.option(
     "--log",
     "log_path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    required=True,
-    help="Log file to audit.",
+    default=None,
+    help="Explicit log file to audit (bypasses manifest resolution).",
 )
 @click.pass_context
-def audit(ctx: click.Context, log_path: Path) -> None:
+def audit(ctx: click.Context, label: str | None, log_path: Path | None) -> None:
     """Validate canonical events in a log against the Pydantic registry.
+
+    \b
+    Resolution priority:
+      1. --log <path>                                    (explicit file)
+      2. LABEL positional + -e/--experiment              (run_<label>.log)
 
     Exits 0 if every bracketed event parses, passes validation, and every
     event with `expected_after_gen > 0` is observed before the latest
-    generation boundary. Exits 1 otherwise. The experiment name is taken
-    from the top-level `-e/--experiment` flag and used only as a header
-    label in the rendered report.
+    generation boundary. Exits 1 otherwise.
     """
     exp_name = ctx.obj.get("experiment") or "<unknown>"
+
+    if log_path is None:
+        experiment = ctx.obj.get("experiment")
+        if not experiment:
+            raise click.UsageError(
+                "Provide --log <path> OR a LABEL together with -e/--experiment."
+            )
+        if not label:
+            raise click.UsageError(
+                "Provide a run LABEL (e.g. `events audit A1_G`) or --log <path>."
+            )
+        from gigaevo.experiment.manifest import load_manifest
+
+        manifest = load_manifest(experiment)
+        known = {run.label for run in manifest.contract.runs}
+        if label not in known:
+            raise click.UsageError(
+                f"Unknown run label {label!r}. Known: {', '.join(sorted(known))}"
+            )
+        candidate = Path("experiments") / experiment / f"run_{label}.log"
+        if not candidate.exists():
+            raise click.ClickException(f"Log file not found: {candidate}")
+        log_path = candidate
+
     log_text = log_path.read_text(encoding="utf-8", errors="replace")
     report = audit_log_text(log_text)
     click.echo(render_report(report, exp_name))

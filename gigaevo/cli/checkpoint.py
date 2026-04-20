@@ -57,7 +57,11 @@ def _build_columns(rows: list[dict]) -> list[str]:
     "format_name",
     type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
     default=None,
-    help="Output format override.",
+    help=(
+        "Output format override (table|json|csv|markdown). Passed AFTER "
+        "the subcommand — overrides the global `-f/--format` flag when "
+        "given."
+    ),
 )
 @click.pass_context
 def checkpoint(

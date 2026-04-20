@@ -65,7 +65,11 @@ def _fetch_top_programs(
     "format_name",
     type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
     default=None,
-    help="Output format override.",
+    help=(
+        "Output format override (table|json|csv|markdown). Passed AFTER "
+        "the subcommand — overrides the global `-f/--format` flag when "
+        "given."
+    ),
 )
 @click.pass_context
 def top(
@@ -83,6 +87,10 @@ def top(
     manifest's `problem.metric_name` (e.g. `actual_fitness`). Otherwise
     defaults to `fitness`. Pass `--minimize` to rank ascending.
     """
+    if top_n < 1:
+        raise click.BadParameter(
+            f"-n/--top-n must be >= 1 (got {top_n})", param_hint="-n/--top-n"
+        )
     formatter = ctx.obj["formatter"]
     if format_name is not None:
         formatter = OutputFormatter(format_name=format_name)

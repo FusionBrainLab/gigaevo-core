@@ -135,7 +135,11 @@ def _build_columns(rows: list[dict]) -> list[str]:
     "format_name",
     type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
     default=None,
-    help="Output format override.",
+    help=(
+        "Output format override (table|json|csv|markdown). Passed AFTER "
+        "the subcommand — overrides the global `-f/--format` flag when "
+        "given."
+    ),
 )
 @click.pass_context
 def status(ctx: click.Context, format_name: str | None) -> None:
@@ -147,9 +151,9 @@ def status(ctx: click.Context, format_name: str | None) -> None:
 
     Metrics are auto-discovered: in `-e/--experiment` mode, each run's
     metric specs are loaded from `problems/<problem_name>/metrics.yaml`
-    and used to format values (percentages when `upper_bound: 1.0`, custom
-    `decimals`, `N/A` for `sentinel_value`). No `--metric` flag — all
-    metrics present in the manifest are shown.
+    and used to format values (raw floats with spec-driven `decimals`,
+    `N/A` for `sentinel_value`). No `--metric` flag — all metrics present
+    in the manifest are shown.
     """
     formatter: OutputFormatter = ctx.obj["formatter"]
     if format_name is not None:

@@ -49,6 +49,18 @@ class LazyGroup(click.Group):
             return getattr(mod, attr_name)
         return None
 
+    def invoke(self, ctx: click.Context) -> Any:
+        # Convert missing-manifest errors from any subcommand into a clean
+        # ClickException (exit 1, no traceback) instead of an uncaught
+        # FileNotFoundError with exit 0.
+        try:
+            return super().invoke(ctx)
+        except FileNotFoundError as exc:
+            msg = str(exc)
+            if "experiment.yaml" in msg:
+                raise click.ClickException(msg) from exc
+            raise
+
 
 @click.group(cls=LazyGroup)
 @click.option(
@@ -78,9 +90,11 @@ class LazyGroup(click.Group):
     type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
     default=None,
     help=(
-        "Output format for tabular data. Auto-detects: table for TTY, "
-        "json when piped. Subcommand-specific short flags (e.g. 'logs -f' "
-        "for follow) do NOT collide — Click consumes global flags first."
+        "Output format for tabular data (table|json|csv|markdown). "
+        "Auto-detects: table for TTY, json when piped. Must appear "
+        "BEFORE the subcommand — Click consumes global flags first, "
+        "so subcommand short flags (e.g. `logs -f` for --follow) do "
+        "not collide."
     ),
 )
 @click.option(
@@ -124,9 +138,18 @@ def main(
     Argument order
     --------------
     Global flags (-e, -r, -f, -q, -v, --redis-host, --redis-port) MUST
-    appear BEFORE the subcommand. Subcommands may re-use short flags
-    (e.g. `logs -f` for follow, `top -n 10` for top-N) — there's no
-    collision because Click consumes global flags first.
+    appear BEFORE the subcommand. Click consumes them first, so
+    subcommands can re-use the same short letters without collision:
+
+    \b
+       Global                       Subcommand-local (after name)
+       ---------------------        -----------------------------
+       -e/--experiment              --
+       -r/--run                     --
+       -f/--format                  logs -f  = --follow
+                                    top/trajectory/manifest get -f = format override
+       -q/--quiet                   --
+       -v/--verbose                 --
 
     \b
     Examples

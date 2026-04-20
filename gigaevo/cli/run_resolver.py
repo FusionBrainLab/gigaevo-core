@@ -83,7 +83,10 @@ class RunResolver:
     ) -> list[RunConfig]:
         configs = []
         for raw in runs:
-            spec = RunSpec.parse(raw)
+            try:
+                spec = RunSpec.parse(raw)
+            except ValueError as exc:
+                raise click.BadParameter(str(exc), param_hint="--run/-r") from exc
             if spec.needs_prefix:
                 spec = RunResolver._autodiscover_prefix(spec, redis_host, redis_port)
             configs.append(RunConfig(run_spec=spec))

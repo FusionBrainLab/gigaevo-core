@@ -83,3 +83,91 @@ class TestContextObject:
         result = runner.invoke(main, ["_test_ctx"])
         assert result.exit_code == 0
         assert "formatter" in captured_ctx
+
+
+class TestMissingExperimentIsClickException:
+    """Missing experiment.yaml must exit 1 with a one-line error, no traceback."""
+
+    def test_status_missing_experiment(self):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-e", "nonexistent/does-not-exist", "status"])
+        assert result.exit_code == 1
+        assert "experiment.yaml" in result.output
+        assert "Traceback" not in result.output
+
+    def test_logs_missing_experiment(self):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-e", "nonexistent/xxx", "logs"])
+        assert result.exit_code == 1
+        assert "experiment.yaml" in result.output
+        assert "Traceback" not in result.output
+
+    def test_manifest_gate_missing_experiment(self):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["-e", "nonexistent/xxx", "manifest", "gate", "running"]
+        )
+        assert result.exit_code == 1
+        assert "experiment.yaml" in result.output
+        assert "Traceback" not in result.output
+
+
+class TestMalformedRunSpec:
+    """Malformed -r values must raise BadParameter, not raw ValueError."""
+
+    def test_garbage_run_spec_is_clean_error(self):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["-r", "wrong_syntax", "status"])
+        assert result.exit_code == 2
+        assert "Traceback" not in result.output
+        assert "--run" in result.output or "-r" in result.output
+
+
+class TestManifestGateEnum:
+    """`manifest gate <garbage>` must reject non-canonical status values."""
+
+    def test_invalid_status_rejected_before_manifest_load(self):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["-e", "nonexistent/x", "manifest", "gate", "bogus_state"]
+        )
+        # Click.Choice fires before command body → exit 2, no Traceback,
+        # and the error must name the valid choices.
+        assert result.exit_code == 2
+        assert "Traceback" not in result.output
+        assert "preregistered" in result.output
+        assert "running" in result.output
+
+
+class TestTopRangeValidation:
+    """-n/--top-n must reject <= 0 with BadParameter."""
+
+    def test_top_n_zero_rejected(self):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["-r", "p@1:L", "top", "-n", "0"], catch_exceptions=False
+        )
+        assert result.exit_code == 2
+        assert "must be >= 1" in result.output
+
+    def test_top_n_negative_rejected(self):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["-r", "p@1:L", "top", "-n", "-3"], catch_exceptions=False
+        )
+        assert result.exit_code == 2
+        assert "must be >= 1" in result.output

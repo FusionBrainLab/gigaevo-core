@@ -139,7 +139,11 @@ _SCALAR_FIELD_TO_PATH = {
     "format_name",
     type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
     default=None,
-    help="Output format override (propagates to parent formatter).",
+    help=(
+        "Output format override (table|json|csv|markdown). Passed AFTER "
+        "the subcommand — overrides the global `-f/--format` flag when "
+        "given."
+    ),
 )
 @click.pass_context
 def get(ctx: click.Context, field: str, format_name: str | None) -> None:
@@ -259,13 +263,29 @@ def update(ctx: click.Context, path: str, value: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _status_choices() -> list[str]:
+    """Canonical lifecycle status values — sourced from the Status enum.
+
+    Avoids duplicating the list that lives in `gigaevo.experiment.manifest`.
+    Lazy import keeps CLI startup light.
+    """
+    from gigaevo.experiment.manifest import Status
+
+    return [s.value for s in Status]
+
+
 @manifest.command()
-@click.argument("expected_status")
+@click.argument(
+    "expected_status",
+    type=click.Choice(_status_choices(), case_sensitive=False),
+)
 @click.pass_context
 def gate(ctx: click.Context, expected_status: str) -> None:
     """Assert experiment status matches expected value.
 
-    Exits 0 on match (GATE PASSED), exits 1 on mismatch (BLOCKED).
+    EXPECTED_STATUS must be one of: preregistered, implemented, running,
+    complete, invalid. Exits 0 on match (GATE PASSED), exits 1 on
+    mismatch (BLOCKED).
     """
     experiment = _require_experiment(ctx)
 
@@ -389,7 +409,10 @@ def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
 
 
 @manifest.command("reset-status")
-@click.argument("target_status")
+@click.argument(
+    "target_status",
+    type=click.Choice(_status_choices(), case_sensitive=False),
+)
 @click.option("--reason", required=True, help="Why the reset is needed (for audit).")
 @click.option(
     "--force/--no-force", default=False, help="Skip interactive confirmation prompt."
