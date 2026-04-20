@@ -108,6 +108,27 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
             n_opponents,
             archive_reeval,
         )
+        # Dead-config trap: per_opponent_timeout is only read by
+        # ExecOpponentResultProvider._exec_one. In cached mode the main
+        # provider never sees it, so a value like 300 on a cached-mode config
+        # silently does nothing while users assume it bounds the validator.
+        # Surface it at startup so the mistake doesn't repeat. See
+        # memory/feedback_per_opponent_timeout_cached.md for the heilbron
+        # incident that motivated this check.
+        if (
+            not isinstance(main_provider, ExecOpponentResultProvider)
+            and per_opponent_timeout is not None
+            and per_opponent_timeout != stage_timeout
+        ):
+            logger.warning(
+                "[AdversarialPipeline] per_opponent_timeout={}s is IGNORED in "
+                "cached mode (only ExecOpponentResultProvider reads it). "
+                "stage_timeout={}s is the effective validator budget. "
+                "Remove per_opponent_timeout from this config or set it to "
+                "${{stage_timeout}} to silence this warning.",
+                per_opponent_timeout,
+                stage_timeout,
+            )
 
         self._add_adversarial_stages(
             opponent_provider=opponent_provider,

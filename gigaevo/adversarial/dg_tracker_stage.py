@@ -113,20 +113,59 @@ class DGTrackerStage(Stage):
         n_opp = len(opponent_ids)
 
         if len(per_opp_delta) != n_opp:
-            # F22: silent drop on length mismatch was the prior behavior. Now
-            # logged at ERROR so it shows up in production grep and surfaces
-            # cache-leak / TOCTOU between FetchOpponentIdsStage and
-            # CallValidatorFunction. Skip semantics preserved.
-            logger.error(
-                "[DGTrackerStage {}] {} per_opp_delta length {} != opponent_ids length {} "
-                "(artifact role={}); SKIP batch — possible cache leak between "
-                "FetchOpponentIdsStage and CallValidatorFunction.",
-                self._role,
-                program_id[:8],
-                len(per_opp_delta),
-                n_opp,
-                artifact_role,
+            # F22: three legitimate mismatch shapes, only one is a real bug.
+            #   (a) candidate-failed: artifact reports n_opponents=0 /
+            #       is_valid=False / empty per_opp_delta while opponent_ids
+            #       is non-empty. The user's evaluate.py correctly returns no
+            #       deltas because the candidate itself never executed. Benign.
+            #   (b) init-race: per_opp_delta populated but opponent_ids empty
+            #       (gen-0 seed fallback when archive is empty). Benign.
+            #   (c) real mismatch: both sides have data but lengths disagree →
+            #       possible cache leak / TOCTOU between FetchOpponentIdsStage
+            #       and CallValidatorFunction. This is the one we want to grep.
+            candidate_failed = (
+                isinstance(artifact, dict)
+                and len(per_opp_delta) == 0
+                and n_opp >= 1
+                and (
+                    artifact.get("is_valid") is False
+                    or artifact.get("n_opponents") == 0
+                )
             )
+            init_race = len(per_opp_delta) > 0 and n_opp == 0
+            if candidate_failed:
+                logger.debug(
+                    "[DGTrackerStage {}] {} candidate failed validation "
+                    "(is_valid={}, n_opponents={}); no deltas recorded.",
+                    self._role,
+                    program_id[:8],
+                    artifact.get("is_valid"),
+                    artifact.get("n_opponents"),
+                )
+            elif init_race:
+                logger.debug(
+                    "[DGTrackerStage {}] {} gen-0 seed fallback: per_opp_delta "
+                    "length {} while opponent_ids is empty (archive not yet "
+                    "populated). Skipping.",
+                    self._role,
+                    program_id[:8],
+                    len(per_opp_delta),
+                )
+            else:
+                # Silent drop on length mismatch was the prior behavior. Now
+                # logged at ERROR so it shows up in production grep and
+                # surfaces cache-leak / TOCTOU between FetchOpponentIdsStage
+                # and CallValidatorFunction. Skip semantics preserved.
+                logger.error(
+                    "[DGTrackerStage {}] {} per_opp_delta length {} != opponent_ids length {} "
+                    "(artifact role={}); SKIP batch — possible cache leak between "
+                    "FetchOpponentIdsStage and CallValidatorFunction.",
+                    self._role,
+                    program_id[:8],
+                    len(per_opp_delta),
+                    n_opp,
+                    artifact_role,
+                )
             return None
 
         pairs: list[tuple[str, str, float]] = []
