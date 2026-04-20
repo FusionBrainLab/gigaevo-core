@@ -44,11 +44,12 @@ def _load_metric_specs(experiment: str | None) -> dict[str, dict]:
 def _format_metric_value(value: float | None, name: str, specs: dict[str, dict]) -> str:
     """Format a metric value according to its metrics.yaml spec.
 
-    - None: display as "?"
-    - sentinel_value: display as "N/A"
-    - upper_bound == 1.0: display as percentage (value * 100)
-    - decimals: control decimal places
-    - Default: 3 decimal places
+    Always displays the raw float; `decimals` controls precision
+    (default 3). Task-specific unit interpretation is the reader's job.
+
+    - None: "?"
+    - sentinel_value: "N/A"
+    - otherwise: f"{value:.{decimals}f}"
     """
     if value is None:
         return "?"
@@ -57,10 +58,6 @@ def _format_metric_value(value: float | None, name: str, specs: dict[str, dict])
     if sentinel is not None and value == sentinel:
         return "N/A"
     decimals = spec.get("decimals", 3)
-    upper_bound = spec.get("upper_bound")
-    if upper_bound is not None and upper_bound == 1.0:
-        pct_decimals = max(0, decimals - 2)
-        return f"{value * 100:.{pct_decimals}f}%"
     return f"{value:.{decimals}f}"
 
 

@@ -190,8 +190,8 @@ class TestFormatMetricValue:
         }
         assert _format_metric_value(-1.0, "fitness", specs) == "N/A"
 
-    def test_percentage_display_for_upper_bound_1(self):
-        """Metric with upper_bound=1.0 displays as percentage."""
+    def test_raw_display_even_when_upper_bound_is_1(self):
+        """All metrics display as raw float — no percentage conversion."""
         from gigaevo.cli.status import _format_metric_value
 
         specs = {
@@ -201,7 +201,7 @@ class TestFormatMetricValue:
                 "sentinel_value": -1.0,
             }
         }
-        assert _format_metric_value(0.85, "fitness", specs) == "85.000%"
+        assert _format_metric_value(0.85, "fitness", specs) == "0.85000"
 
     def test_raw_display_for_non_percentage_metric(self):
         """Metric with upper_bound != 1.0 displays as raw value with decimals."""
@@ -245,8 +245,8 @@ class TestFormatMetricValue:
 class TestSnapshotToRowWithSpecs:
     """Tests for _snapshot_to_row metric formatting integration."""
 
-    def test_snapshot_row_formats_percentage(self):
-        """_snapshot_to_row applies percentage formatting when specs provided."""
+    def test_snapshot_row_formats_raw_float(self):
+        """_snapshot_to_row shows raw float with spec decimals — never percent."""
         from gigaevo.cli.status import _snapshot_to_row
 
         snapshot = RunSnapshot(
@@ -256,7 +256,7 @@ class TestSnapshotToRowWithSpecs:
         )
         specs = {"fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0}}
         row = _snapshot_to_row(snapshot, metric_specs=specs)
-        assert row["Fitness"] == "76.000%"
+        assert row["Fitness"] == "0.76000"
 
     def test_snapshot_row_formats_sentinel_as_na(self):
         """_snapshot_to_row shows 'N/A' for sentinel values."""
