@@ -81,7 +81,6 @@ class LineageState(TypedDict):
 
 
 class LineageAgent(LangGraphAgent):
-    StateSchema = LineageState
     """Agent for analyzing program lineage.
 
     This agent does ALL the heavy lifting:

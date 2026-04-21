@@ -28,7 +28,8 @@ heilbron-g-side-lineage-filter.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Collection
+import math
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 def _aggregate_shared_metrics(
     parent_by_g: dict[str, dict[str, float]],
     child_by_g: dict[str, dict[str, float]],
-    shared_g: Iterable[str],
+    shared_g: Collection[str],
     ctx: MetricsContext,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, int]]:
     """Return (shared_parent_metrics, shared_child_metrics, per_metric_counts).
@@ -58,7 +59,9 @@ def _aggregate_shared_metrics(
         BOTH parent and child AND neither value is a sentinel per
         ctx.is_sentinel.
       - Zero surviving G's for a metric → both sides are set to that
-        metric's sentinel value (MetricsFormatter renders [sentinel]).
+        metric's sentinel value if one is declared, otherwise NaN.
+        NaN propagates as a missing-value marker rather than a spurious
+        0.0 the LLM could mistake for a real measurement.
     """
     shared_g = list(shared_g)
 
@@ -100,11 +103,13 @@ def _aggregate_shared_metrics(
             shared_child[m] = sum(c_vals) / len(c_vals)
         else:
             spec = ctx.specs.get(m)
-            sentinel = (
-                spec.sentinel_value if spec and spec.sentinel_value is not None else 0.0
+            fallback = (
+                spec.sentinel_value
+                if spec and spec.sentinel_value is not None
+                else math.nan
             )
-            shared_parent[m] = sentinel
-            shared_child[m] = sentinel
+            shared_parent[m] = fallback
+            shared_child[m] = fallback
 
     return shared_parent, shared_child, counts
 
@@ -127,6 +132,16 @@ class SharedBenchmarkFilteredLineageStage(LineageStage):
         inject_shared_evidence: bool = True,
         **kwargs: Any,
     ):
+        # min_shared < 1 would keep parents whose shared-opponent set is
+        # empty and then hand the LLM an all-sentinel evidence block
+        # (see _aggregate_shared_metrics zero-survivor branch). That
+        # defeats the whole point of the HoF-invariant subset — reject
+        # it loudly rather than silently degrading.
+        if min_shared < 1:
+            raise ValueError(
+                f"min_shared must be >= 1 (got {min_shared}); use the base "
+                "LineageStage for unfiltered lineage narratives."
+            )
         super().__init__(metrics_context=metrics_context, **kwargs)
         self._tracker = tracker
         self._metrics_context = metrics_context
@@ -138,15 +153,10 @@ class SharedBenchmarkFilteredLineageStage(LineageStage):
     ) -> dict[str, Any] | ProgramStageResult:
         parent_ids: list[str] = list(program.lineage.parents)
 
-        logger.info(
-            "[LineageStage] program={} n_parents={}",
-            program.id[:8],
-            len(parent_ids),
-        )
-
         if not parent_ids:
             logger.info(
-                "[LineageStage:SharedBenchmark] program={} kept 0/0 parents (no parents)",
+                "[LineageStage:SharedBenchmark] program={} n_parents=0 "
+                "(skipped: no parents)",
                 program.id[:8],
             )
             return ProgramStageResult.skipped(

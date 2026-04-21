@@ -117,6 +117,24 @@ def test_is_subclass_of_lineage_stage():
     assert issubclass(SharedBenchmarkFilteredLineageStage, LineageStage)
 
 
+def test_min_shared_zero_rejected_at_init(tracker, metrics_ctx):
+    """min_shared=0 keeps parents with empty shared sets and degrades the
+    HoF-invariant evidence block to all-sentinel — the filter must refuse
+    it at construction time, not silently emit garbage to the LLM."""
+    from gigaevo.adversarial.shared_benchmark_lineage import (
+        SharedBenchmarkFilteredLineageStage,
+    )
+
+    with pytest.raises(ValueError, match="min_shared must be >= 1"):
+        SharedBenchmarkFilteredLineageStage(
+            tracker=tracker,
+            metrics_context=metrics_ctx,
+            agent=MagicMock(),
+            min_shared=0,
+            storage=MagicMock(),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Filter behavior
 # ---------------------------------------------------------------------------

@@ -9,7 +9,10 @@ Role-aware recording (uses real program.id from the DAG-supplied Program):
   constructor (G run): pair = (d_id=opponent_id, g_id=program.id, delta)
 
 Filtered: NaN deltas are skipped (no measurement). Non-positive deltas reach
-DGTracker.record_metrics (one call per opponent, NaN entries skipped).
+DGTracker.record_batch (single pipelined write for ALL five key families:
+dg_improvements, dg_best_pairs, dg_d_wins, dg_g_resisted, dg_metrics).
+The metrics-dict schema is authored exclusively inside record_batch so this
+stage never duplicates it.
 
 Output: VoidOutput — this stage is a pure side-effect (Redis write).
 Only real failure modes log (role mismatch, length mismatch, unexpected
@@ -168,6 +171,7 @@ class DGTrackerStage(Stage):
                 )
             return None
 
+        pairs: list[tuple[str, str, float]] = []
         n_skip_nan = 0
         n_neg = 0
 
@@ -178,16 +182,13 @@ class DGTrackerStage(Stage):
             d_val = float(delta)
             if d_val <= 0:
                 n_neg += 1
-            metrics_dict = {"fitness_delta": d_val, "is_valid": 1.0}
             if self._role == "improver":
-                # D improves G; record (d=program, g=opponent).
-                d_id, g_id = program_id, opponent_id
+                pairs.append((program_id, opponent_id, d_val))
             else:
-                # G resists D; record (d=opponent, g=program).
-                d_id, g_id = opponent_id, program_id
-            await self._tracker.record_metrics(
-                d_id=d_id, g_id=g_id, metrics=metrics_dict
-            )
+                pairs.append((opponent_id, program_id, d_val))
+
+        if pairs:
+            await self._tracker.record_batch(pairs)
 
         # I-15: per-pair and per-stage summary INFO logs removed — they
         # produced 2*n_opp lines per mutation and drowned out real errors.
