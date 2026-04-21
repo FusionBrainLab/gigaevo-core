@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import StrEnum
 import json
 import random
 import time
@@ -44,6 +45,20 @@ def _softmax_weights(fitnesses: list[float]) -> list[float]:
     std = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
     temp = max(std, 0.01)
     return softmax(arr / temp).tolist()
+
+
+class OpponentSamplingMode(StrEnum):
+    """How FetchOpponentIdsStage picks opponents from the archive.
+
+    TOP_K     — deterministic top-K by fitness (Hall of Fame). Stable across
+                DAG runs; maximises InputHashCache hits on FetchOpponentResults.
+    SOFTMAX   — softmax fitness-proportional sampling without replacement via
+                ``OpponentArchiveProvider.get_opponents``. Stochastic → forces
+                broader archive re-evaluation across the population.
+    """
+
+    TOP_K = "top_k"
+    SOFTMAX = "softmax"
 
 
 @dataclass

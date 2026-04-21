@@ -21,7 +21,10 @@ from typing import Literal
 
 from loguru import logger
 
-from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
+from gigaevo.adversarial.opponent_provider import (
+    OpponentArchiveProvider,
+    OpponentSamplingMode,
+)
 from gigaevo.adversarial.opponent_result_provider import (
     ExecOpponentResultProvider,
     OpponentResultProvider,
@@ -66,6 +69,7 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         archive_reeval: bool = True,
         *,
         opponent_result_mode: Literal["exec", "cached"] = "exec",
+        opponent_sampling_mode: OpponentSamplingMode | str = OpponentSamplingMode.TOP_K,
         redis_host: str = "localhost",
         redis_port: int = 6379,
         opponent_sources: list[dict[str, int | str]] | None = None,
@@ -73,6 +77,9 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
     ):
         super().__init__(ctx, dag_timeout=dag_timeout, stage_timeout=stage_timeout)
+        # Normalise to enum at the builder boundary so downstream code is
+        # enum-typed (Hydra/OmegaConf passes strings).
+        opponent_sampling_mode = OpponentSamplingMode(opponent_sampling_mode)
         fallback_codes = self._load_fallback_codes(fallback_dir)
 
         problem_dir = ctx.problem_ctx.problem_dir
@@ -102,11 +109,12 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         )
         logger.info(
             "[AdversarialPipeline] opponent_result_mode={} per_opp_timeout={} "
-            "n_opponents={} archive_reeval={}",
+            "n_opponents={} archive_reeval={} opponent_sampling_mode={}",
             opponent_result_mode,
             per_opponent_timeout,
             n_opponents,
             archive_reeval,
+            opponent_sampling_mode.value,
         )
         # Dead-config trap: per_opponent_timeout is only read by
         # ExecOpponentResultProvider._exec_one. In cached mode the main
@@ -137,6 +145,7 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
             archive_reeval=archive_reeval,
             result_provider=main_provider,
             fallback_exec_provider=fallback_exec,
+            opponent_sampling_mode=opponent_sampling_mode,
         )
 
     def _load_fallback_codes(self, fallback_dir: str) -> list[str]:
@@ -159,6 +168,7 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         archive_reeval: bool,
         result_provider: OpponentResultProvider,
         fallback_exec_provider: ExecOpponentResultProvider,
+        opponent_sampling_mode: OpponentSamplingMode = OpponentSamplingMode.TOP_K,
     ) -> None:
         problem_dir = self.ctx.problem_ctx.problem_dir
         stage_timeout = self._stage_timeout
@@ -176,12 +186,16 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
             ),
         )
 
-        # Stage 1: FetchOpponentIdsStage — always fresh, NO_CACHE
+        # Stage 1: FetchOpponentIdsStage — always fresh, NO_CACHE.
+        # opponent_sampling_mode chooses top_k (deterministic) vs softmax
+        # (stochastic). See FetchOpponentIdsStage docstring.
+        _sampling_mode = opponent_sampling_mode
         self.add_stage(
             "FetchOpponentIdsStage",
             lambda: FetchOpponentIdsStage(
                 opponent_provider=opponent_provider,
                 n_opponents=n_opponents,
+                sampling_mode=_sampling_mode,
                 timeout=stage_timeout,
             ),
         )

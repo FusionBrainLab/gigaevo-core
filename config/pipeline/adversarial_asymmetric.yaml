@@ -78,6 +78,15 @@ d_sees_g_source: false
 d_archive_persistent: false
 inner_iterations: 1
 
+# Opponent sampling mode (see OpponentSamplingMode enum in opponent_provider.py).
+#   top_k   — deterministic top-K by fitness. Stable IDs across DAG runs →
+#             InputHashCache on FetchOpponentResults hits frequently,
+#             re-using cached evaluations when the archive hasn't rotated.
+#   softmax — softmax fitness-proportional sampling without replacement.
+#             Stochastic → hash changes more often → broader archive
+#             re-evaluation, better exploration but higher eval cost.
+opponent_sampling_mode: "top_k"
+
 # D-G improvement tracker (records which D improved which G and by how much)
 # Used by GradientInPromptStage for per-G-program D selection
 dg_tracker:
@@ -115,6 +124,7 @@ pipeline_builder:
   archive_reeval: false
   dg_tracker: ${dg_tracker}
   opponent_result_mode: ${opponent_result_mode}
+  opponent_sampling_mode: ${opponent_sampling_mode}
   redis_host: ${redis.host}
   redis_port: ${redis.port}
   opponent_sources:

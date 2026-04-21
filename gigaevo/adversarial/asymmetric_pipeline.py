@@ -23,7 +23,10 @@ from gigaevo.adversarial.dg_tracker_stage import DGTrackerStage
 if TYPE_CHECKING:
     from gigaevo.adversarial.dg_tracker import DGImprovementTracker
 from gigaevo.adversarial.gradient_prompt import GradientInPromptStage
-from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
+from gigaevo.adversarial.opponent_provider import (
+    OpponentArchiveProvider,
+    OpponentSamplingMode,
+)
 from gigaevo.adversarial.pipeline import AdversarialPipelineBuilder
 from gigaevo.adversarial.shared_benchmark_lineage import (
     DGTrackerSharedOpponentResolver,
@@ -86,6 +89,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         dg_tracker: DGImprovementTracker | None = None,
         *,
         opponent_result_mode: Literal["exec", "cached"] = "exec",
+        opponent_sampling_mode: OpponentSamplingMode | str = OpponentSamplingMode.TOP_K,
         redis_host: str = "localhost",
         redis_port: int = 6379,
         opponent_sources: list[dict[str, int | str]] | None = None,
@@ -100,6 +104,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
             fallback_dir,
             archive_reeval,
             opponent_result_mode=opponent_result_mode,
+            opponent_sampling_mode=opponent_sampling_mode,
             redis_host=redis_host,
             redis_port=redis_port,
             opponent_sources=opponent_sources,

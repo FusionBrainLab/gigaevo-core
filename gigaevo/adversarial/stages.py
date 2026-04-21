@@ -28,7 +28,10 @@ from typing import Any, cast
 
 from loguru import logger
 
-from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
+from gigaevo.adversarial.opponent_provider import (
+    OpponentArchiveProvider,
+    OpponentSamplingMode,
+)
 from gigaevo.adversarial.opponent_result_provider import (
     ExecOpponentResultProvider,
     OpponentResultProvider,
@@ -56,20 +59,32 @@ class FetchOpponentIdsStage(Stage):
         self,
         opponent_provider: OpponentArchiveProvider,
         n_opponents: int = 5,
+        sampling_mode: OpponentSamplingMode | str = OpponentSamplingMode.TOP_K,
         **kwargs: Any,
     ):
+        try:
+            self._sampling_mode = OpponentSamplingMode(sampling_mode)
+        except ValueError as e:
+            valid = [m.value for m in OpponentSamplingMode]
+            raise ValueError(
+                f"FetchOpponentIdsStage: unknown sampling_mode={sampling_mode!r}; "
+                f"must be one of {valid}"
+            ) from e
         super().__init__(**kwargs)
         self._provider = opponent_provider
         self._n = n_opponents
 
     async def compute(self, program: Program) -> Box[Any]:
-        # get_top_k() is deterministic top-K-by-fitness (Hall of Fame).
-        # Replaces stochastic get_opponents() so cache invalidation is governed
-        # by the archive ranking, not per-call sampling noise.
-        opponents = await self._provider.get_top_k(self._n)
+        if self._sampling_mode is OpponentSamplingMode.SOFTMAX:
+            opponents = await self._provider.get_opponents(self._n)
+            sampler_name = "get_opponents"
+        else:
+            opponents = await self._provider.get_top_k(self._n)
+            sampler_name = "get_top_k"
         ids = [o.program_id for o in opponents]
         logger.info(
-            "[FetchOpponentIds] get_top_k({}) -> {} ids: {}",
+            "[FetchOpponentIds] {}({}) -> {} ids: {}",
+            sampler_name,
             self._n,
             len(ids),
             ids[:3],
