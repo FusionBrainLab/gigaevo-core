@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -166,6 +167,20 @@ class MetricsContext(BaseModel):
             for k, spec in self.specs.items()
             if spec.sentinel_value is not None
         }
+
+    def is_valid(self, metrics: Mapping[str, float]) -> bool:
+        """True iff this metrics dict represents a valid evaluation.
+
+        Reads VALIDITY_KEY with a default of 1.0 so callers don't have to
+        remember the sentinel-vs-missing distinction. Any value strictly
+        less than 1.0 is treated as invalid.
+        """
+        return float(metrics.get(VALIDITY_KEY, 1.0)) >= 1.0
+
+    def is_sentinel(self, metric_name: str, value: float) -> bool:
+        """Delegate to MetricSpec.is_sentinel; False if metric is unknown."""
+        spec = self.specs.get(metric_name)
+        return spec is not None and spec.is_sentinel(value)
 
     def get_bounds(self, key: str) -> tuple[float, float] | None:
         """Get the bounds for a metric if defined.

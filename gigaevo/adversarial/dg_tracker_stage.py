@@ -9,7 +9,10 @@ Role-aware recording (uses real program.id from the DAG-supplied Program):
   constructor (G run): pair = (d_id=opponent_id, g_id=program.id, delta)
 
 Filtered: NaN deltas are skipped (no measurement). Non-positive deltas reach
-DGTracker.record_batch which discards them silently.
+DGTracker.record_batch (single pipelined write for ALL five key families:
+dg_improvements, dg_best_pairs, dg_d_wins, dg_g_resisted, dg_metrics).
+The metrics-dict schema is authored exclusively inside record_batch so this
+stage never duplicates it.
 
 Output: VoidOutput — this stage is a pure side-effect (Redis write).
 Only real failure modes log (role mismatch, length mismatch, unexpected
@@ -179,20 +182,17 @@ class DGTrackerStage(Stage):
             d_val = float(delta)
             if d_val <= 0:
                 n_neg += 1
-
             if self._role == "improver":
-                # D improves G; record (d=program, g=opponent, delta).
                 pairs.append((program_id, opponent_id, d_val))
             else:
-                # G resists D; record (d=opponent, g=program, delta).
                 pairs.append((opponent_id, program_id, d_val))
 
         if pairs:
             await self._tracker.record_batch(pairs)
+
         # I-15: per-pair and per-stage summary INFO logs removed — they
         # produced 2*n_opp lines per mutation and drowned out real errors.
-        # Counters (n_skip_nan, n_neg, n_opp, n_recorded) are retained as
-        # locals only to preserve the record_batch return-value contract
-        # and document the filter logic; they no longer emit log lines.
+        # Counters (n_skip_nan, n_neg, n_opp) are retained as locals only
+        # to document the filter logic; they no longer emit log lines.
         _ = (n_skip_nan, n_neg, n_opp)
         return None

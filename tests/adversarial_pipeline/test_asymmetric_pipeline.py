@@ -269,3 +269,87 @@ class TestDefaultPipelineUnchanged:
         }
         assert ("FetchOpponentIdsStage", "InsightsStage") not in edges
         assert ("FetchOpponentIdsStage", "LineageStage") not in edges
+
+
+# ---------------------------------------------------------------------------
+# Tests: D runs replace LineageStage with SharedBenchmarkFilteredLineageStage
+# ---------------------------------------------------------------------------
+
+
+class TestLineageStageReplacement:
+    """D runs must install SharedBenchmarkFilteredLineageStage as the "LineageStage" node."""
+
+    def _d_builder(self, **overrides):
+        from gigaevo.adversarial.asymmetric_pipeline import LineageFilterConfig
+        from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+
+        kwargs = dict(
+            ctx=_make_ctx(),
+            opponent_provider=FakeProvider(),
+            population_role="improver",
+            feedback_mode="composition",
+            dg_tracker=MagicMock(spec=DGImprovementTracker),
+            lineage_filter=LineageFilterConfig(
+                min_shared=1, inject_shared_evidence=True
+            ),
+        )
+        kwargs.update(overrides)
+        return AdversarialAsymmetricPipelineBuilder(**kwargs)
+
+    def test_lineage_stage_node_is_filtered_subclass(self):
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        builder = self._d_builder()
+        stage = builder._nodes["LineageStage"]()
+        assert isinstance(stage, SharedBenchmarkFilteredLineageStage)
+
+    def test_config_values_reach_stage(self):
+        from gigaevo.adversarial.asymmetric_pipeline import LineageFilterConfig
+
+        builder = self._d_builder(
+            lineage_filter=LineageFilterConfig(
+                min_shared=3, inject_shared_evidence=False
+            )
+        )
+        stage = builder._nodes["LineageStage"]()
+        assert stage._min_shared == 3
+        assert stage._inject_shared_evidence is False
+
+    def test_dead_shared_benchmark_lineage_node_removed(self):
+        builder = self._d_builder()
+        assert "SharedBenchmarkLineageStage" not in _stage_names(builder)
+
+    def test_lineage_stage_still_wired_to_fetch_opponent_ids(self):
+        builder = self._d_builder()
+        assert ("FetchOpponentIdsStage", "LineageStage") in _edge_pairs(builder)
+
+    def test_no_edges_point_at_deleted_node(self):
+        builder = self._d_builder()
+        edges = _edge_pairs(builder)
+        assert not any(dst == "SharedBenchmarkLineageStage" for _src, dst in edges)
+
+    def test_exec_dep_on_dg_tracker_stage_added(self):
+        builder = self._d_builder()
+        deps = getattr(builder, "_deps", {}) or {}
+        entries = deps.get("LineageStage", [])
+        assert any(
+            getattr(d, "stage_name", None) == "DGTrackerStage" for d in entries
+        ), f"Expected on_success(DGTrackerStage) dep on LineageStage, got {entries}"
+
+    def test_g_side_unaffected(self):
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+        from gigaevo.programs.stages.insights_lineage import LineageStage
+
+        builder = AdversarialAsymmetricPipelineBuilder(
+            ctx=_make_ctx(),
+            opponent_provider=FakeProvider(),
+            population_role="constructor",
+            feedback_mode="composition",
+        )
+        stage = builder._nodes["LineageStage"]()
+        assert not isinstance(stage, SharedBenchmarkFilteredLineageStage)
+        assert isinstance(stage, LineageStage)

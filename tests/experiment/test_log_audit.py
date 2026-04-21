@@ -80,18 +80,6 @@ class TestParseAndValidate:
         assert report.failures == {}
         assert report.event_counts["TRACKER_WRITE"] == 1
 
-    def test_lineage_trend_non_finite_rejected(self) -> None:
-        # Build with NaN — json lib emits "NaN" literal which json parser will
-        # accept by default. The Pydantic validator must reject it.
-        log = _make_log(
-            [
-                '[LINEAGE_TREND] {"event": "LINEAGE_TREND", "program_id": "p1", '
-                '"trend": NaN}',
-            ]
-        )
-        report = audit_log_text(log)
-        assert "LINEAGE_TREND" in report.failures
-
 
 class TestMissingByExpectedGen:
     def test_event_missing_past_expected_gen_is_flagged(self) -> None:

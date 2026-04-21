@@ -17,7 +17,7 @@ from typing import Any
 
 from gigaevo.adversarial.events import CellPick, HofFetch, HofRotate, TrackerWrite
 from gigaevo.monitoring.emit import emit
-from gigaevo.monitoring.events import LineageTrend, MetricEmit
+from gigaevo.monitoring.events import MetricEmit
 
 
 def emit_tracker_write(
@@ -109,12 +109,3 @@ def emit_metric_emit(
     value: Any,
 ) -> None:
     emit(MetricEmit(program_id=program_id, metric=metric, value=value))
-
-
-def emit_lineage_trend(
-    *,
-    program_id: str,
-    trend: float | None,
-    gen: int | None = None,
-) -> None:
-    emit(LineageTrend(program_id=program_id, trend=trend, gen=gen))

@@ -14,6 +14,7 @@ Parametric: n_opponents=k, source_prompt_k=l (l<=k).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
@@ -29,8 +30,7 @@ from gigaevo.adversarial.opponent_provider import (
 )
 from gigaevo.adversarial.pipeline import AdversarialPipelineBuilder
 from gigaevo.adversarial.shared_benchmark_lineage import (
-    DGTrackerSharedOpponentResolver,
-    SharedBenchmarkLineageStage,
+    SharedBenchmarkFilteredLineageStage,
 )
 from gigaevo.adversarial.source_injection import SourceCodeInjectionStage
 from gigaevo.adversarial.tracker_coverage_stages import (
@@ -41,6 +41,20 @@ from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
 from gigaevo.programs.stages.json_processing import MergeDictStage
+
+
+@dataclass(frozen=True)
+class LineageFilterConfig:
+    """Config for D-side SharedBenchmarkFilteredLineageStage.
+
+    min_shared must be >= 1 (the stage constructor rejects 0). To disable
+    filtering entirely, don't install the filtered variant at all — use
+    the base LineageStage. inject_shared_evidence=False ⇒ filter still
+    applies but no TransitionEvidence is emitted (ablation).
+    """
+
+    min_shared: int = 1
+    inject_shared_evidence: bool = True
 
 
 class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
@@ -88,6 +102,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         archive_reeval: bool = False,
         dg_tracker: DGImprovementTracker | None = None,
         *,
+        lineage_filter: LineageFilterConfig | None = None,
         opponent_result_mode: Literal["exec", "cached"] = "exec",
         opponent_sampling_mode: OpponentSamplingMode | str = OpponentSamplingMode.TOP_K,
         redis_host: str = "localhost",
@@ -132,7 +147,12 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
                 dg_tracker, population_role, stage_timeout
             )
             if population_role == "improver":
-                self._add_shared_benchmark_lineage(ctx, dg_tracker, stage_timeout)
+                self._replace_lineage_with_filtered(
+                    ctx,
+                    dg_tracker,
+                    lineage_filter or LineageFilterConfig(),
+                    stage_timeout,
+                )
 
         # Wire cache_on edges so InsightsStage/LineageStage invalidate when the
         # opponent set rotates. The InputsModel of each is CacheOnlyInput, so
@@ -161,10 +181,6 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
             )
         if "LineageStage" in self._nodes:
             self.add_data_flow_edge("FetchOpponentIdsStage", "LineageStage", "cache_on")
-        if "SharedBenchmarkLineageStage" in self._nodes:
-            self.add_data_flow_edge(
-                "FetchOpponentIdsStage", "SharedBenchmarkLineageStage", "cache_on"
-            )
 
     def _add_source_injection(
         self,
@@ -326,33 +342,44 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
             "MergeCoverageMetricsStage", "EnsureMetricsStage", "candidate"
         )
 
-    def _add_shared_benchmark_lineage(
+    def _replace_lineage_with_filtered(
         self,
         ctx: EvolutionContext,
         dg_tracker: DGImprovementTracker,
+        cfg: LineageFilterConfig,
         stage_timeout: float,
     ) -> None:
-        """Add SharedBenchmarkLineageStage for D runs (§3.5 Prong 2, §9.1).
+        """Swap default LineageStage for SharedBenchmarkFilteredLineageStage on D runs.
 
-        Computes an HoF-invariant lineage trend for D programs via intersection
-        of G's both child-D and parent-D have faced. Invalidates when the G HoF
-        rotates (``cache_on=opponent_ids``) — new tracker pairs enter the
-        shared benchmark primarily at HoF transitions. Emits ``[LINEAGE_TREND]``
-        canonical event for log-based verification (§13.3).
+        Node name stays ``"LineageStage"`` so all incoming/outgoing edges
+        (LineagesFromAncestors / LineagesToDescendants → MutationContextStage,
+        cache_on from FetchOpponentIdsStage) remain intact. The filtered
+        variant subclasses LineageStage, overrides preprocess() to drop
+        parents without a shared eval benchmark, and injects
+        TransitionEvidence into the LLM lineage agent.
         """
         tracker = dg_tracker
         storage = ctx.storage
-        timeout = stage_timeout
+        llm = ctx.llm_wrapper
+        task_description = ctx.problem_ctx.task_description
+        metrics_context = ctx.problem_ctx.metrics_context
+        prompts_dir = ctx.prompts_dir
 
-        def make_stage():
-            return SharedBenchmarkLineageStage(
-                resolver=DGTrackerSharedOpponentResolver(tracker=tracker),
+        def make_stage() -> SharedBenchmarkFilteredLineageStage:
+            return SharedBenchmarkFilteredLineageStage(
+                llm=llm,
+                task_description=task_description,
+                metrics_context=metrics_context,
                 storage=storage,
-                timeout=timeout,
+                prompts_dir=prompts_dir,
+                tracker=tracker,
+                min_shared=cfg.min_shared,
+                inject_shared_evidence=cfg.inject_shared_evidence,
+                timeout=stage_timeout,
             )
 
-        self.add_stage("SharedBenchmarkLineageStage", make_stage)
+        self.replace_stage("LineageStage", make_stage)
         self.add_exec_dep(
-            "SharedBenchmarkLineageStage",
+            "LineageStage",
             ExecutionOrderDependency.on_success("DGTrackerStage"),
         )

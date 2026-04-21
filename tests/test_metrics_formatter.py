@@ -333,3 +333,70 @@ class TestFormatMetricsDescription:
         fmt = MetricsFormatter(ctx)
         desc = fmt.format_metrics_description()
         assert "↓ better" in desc
+
+
+# ---------------------------------------------------------------------------
+# value_counts annotation (Task 3)
+# ---------------------------------------------------------------------------
+
+
+class TestFormatDeltaBlockValueCounts:
+    def test_value_counts_none_matches_legacy_output(self) -> None:
+        """Absent value_counts → output contains no 'valid)' annotation."""
+        fmt = MetricsFormatter(_make_ctx())
+        out = fmt.format_delta_block(
+            parent={"fitness": 0.1, "is_valid": 1.0},
+            child={"fitness": 0.3, "is_valid": 1.0},
+            include_primary=True,
+        )
+        assert "valid)" not in out
+
+    def test_value_counts_appends_ratio_annotation(self) -> None:
+        """Each row gets a '(K/N valid)' suffix in the impact column."""
+        fmt = MetricsFormatter(_make_ctx())
+        out = fmt.format_delta_block(
+            parent={"fitness": 0.1, "is_valid": 1.0},
+            child={"fitness": 0.3, "is_valid": 1.0},
+            include_primary=True,
+            value_counts={"fitness": 2, "is_valid": 3},
+            total_n=3,
+        )
+        assert "(2/3 valid)" in out, out
+        assert "(3/3 valid)" in out, out
+
+    def test_value_counts_partial_row_flags_zero_support(self) -> None:
+        """Zero-support metric still renders, but shows '(0/N valid)'."""
+        fmt = MetricsFormatter(_make_ctx())
+        out = fmt.format_delta_block(
+            parent={"fitness": -1e5, "is_valid": 0.0},
+            child={"fitness": -1e5, "is_valid": 0.0},
+            include_primary=True,
+            value_counts={"fitness": 0, "is_valid": 3},
+            total_n=3,
+        )
+        assert "(0/3 valid)" in out
+
+    def test_value_counts_works_in_bullets_style(self) -> None:
+        """Annotation works for the 'bullets' rendering branch too."""
+        fmt = MetricsFormatter(_make_ctx())
+        out = fmt.format_delta_block(
+            parent={"fitness": 0.1, "is_valid": 1.0},
+            child={"fitness": 0.3, "is_valid": 1.0},
+            include_primary=True,
+            style="bullets",
+            value_counts={"fitness": 2, "is_valid": 3},
+            total_n=3,
+        )
+        assert "(2/3 valid)" in out
+
+    def test_missing_key_in_value_counts_treated_as_zero(self) -> None:
+        """Metric present in delta but missing from value_counts → '(0/N valid)'."""
+        fmt = MetricsFormatter(_make_ctx())
+        out = fmt.format_delta_block(
+            parent={"fitness": 0.1, "is_valid": 1.0},
+            child={"fitness": 0.3, "is_valid": 1.0},
+            include_primary=True,
+            value_counts={"is_valid": 3},  # no 'fitness' key
+            total_n=3,
+        )
+        assert "(0/3 valid)" in out

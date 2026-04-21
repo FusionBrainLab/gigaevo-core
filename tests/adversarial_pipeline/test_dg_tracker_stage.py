@@ -4,7 +4,9 @@ Verifies:
   - Real program.id is used (not the old "<program>" placeholder).
   - Role-aware pair construction.
   - NaN filtering, alignment validation, malformed-payload guard.
-  - Tracker.record_batch is awaited with the expected pairs.
+  - Tracker.record_batch is awaited ONCE with an aligned pair list
+    (single pipelined write that also populates d_wins / g_resisted /
+    dg_metrics hashes — the metrics-dict schema lives in record_batch).
 """
 
 from __future__ import annotations
@@ -23,6 +25,17 @@ def tracker():
     mock = AsyncMock()
     mock.record_batch.return_value = 0
     return mock
+
+
+def _pairs_of(tracker) -> list[tuple[str, str, float]]:
+    """Return the pair list from the (only expected) record_batch call."""
+    assert tracker.record_batch.await_count == 1, (
+        f"expected a single record_batch call, got {tracker.record_batch.await_count}"
+    )
+    (call,) = tracker.record_batch.await_args_list
+    # record_batch(pairs) is positional-only in the stage; accept either shape.
+    pairs = call.args[0] if call.args else call.kwargs["pairs"]
+    return list(pairs)
 
 
 def _make_stage(tracker, role: str) -> DGTrackerStage:
@@ -62,17 +75,15 @@ class TestUsesRealProgramId:
 
         await stage.compute(program)
 
-        tracker.record_batch.assert_awaited_once()
-        pairs = tracker.record_batch.await_args.args[0]
+        pairs = _pairs_of(tracker)
         # G is the program (real id), D is the opponent.
         assert pairs == [
             ("d-opp-1", program.id, 0.1),
             ("d-opp-2", program.id, 0.2),
         ]
-        # No "<program>" placeholder anywhere.
-        for d, g, _ in pairs:
-            assert d != "<program>"
-            assert g != "<program>"
+        for d_id, g_id, _ in pairs:
+            assert d_id != "<program>"
+            assert g_id != "<program>"
 
     @pytest.mark.asyncio
     async def test_improver_records_with_real_program_id(self, tracker, program):
@@ -87,7 +98,7 @@ class TestUsesRealProgramId:
 
         await stage.compute(program)
 
-        pairs = tracker.record_batch.await_args.args[0]
+        pairs = _pairs_of(tracker)
         # D is the program (real id), G is the opponent.
         assert pairs == [
             (program.id, "g-opp-1", 0.05),
@@ -110,7 +121,8 @@ class TestNanFiltering:
 
         await stage.compute(program)
 
-        pairs = tracker.record_batch.await_args.args[0]
+        # Only d2 (non-NaN) survives the filter.
+        pairs = _pairs_of(tracker)
         assert pairs == [("d2", program.id, 0.1)]
 
     @pytest.mark.asyncio
@@ -139,7 +151,9 @@ class TestNegativeDeltas:
 
         await stage.compute(program)
 
-        pairs = tracker.record_batch.await_args.args[0]
+        # Both deltas (positive and negative) reach record_batch; the tracker
+        # itself decides which per-key family each delta contributes to.
+        pairs = _pairs_of(tracker)
         assert pairs == [
             ("d1", program.id, -0.05),
             ("d2", program.id, 0.1),
@@ -327,7 +341,10 @@ class TestArtifactRoleCrossCheck:
         _attach(stage, opponent_ids, ({}, artifact))
 
         await stage.compute(program)
-        tracker.record_batch.assert_awaited_once()
+        assert _pairs_of(tracker) == [
+            (program.id, "g1", 0.05),
+            (program.id, "g2", 0.10),
+        ]
 
     @pytest.mark.asyncio
     async def test_missing_role_field_does_not_block(self, tracker, program):
@@ -339,3 +356,85 @@ class TestArtifactRoleCrossCheck:
 
         await stage.compute(program)
         tracker.record_batch.assert_awaited_once()
+
+
+# ===================================================================
+# Task 4 (revised): DGTrackerStage emits ONE pipelined record_batch call.
+# The metrics-dict schema is authored inside record_batch — the stage
+# only hands it a list of (d_id, g_id, delta) tuples.
+# ===================================================================
+
+
+class TestDGTrackerStageBatchesPairs:
+    @pytest.mark.asyncio
+    async def test_improver_batches_all_pairs_in_one_call(self, tracker, program):
+        stage = _make_stage(tracker, "improver")
+        opponent_ids = ["g1", "g2"]
+        artifact = {"role": "improver", "per_opp_delta": [0.1, 0.2]}
+        _attach(stage, opponent_ids, ({"fitness": 0.5}, artifact))
+        await stage.compute(program)
+        # Single pipelined write — N-RTT-per-opponent is a regression.
+        assert tracker.record_batch.await_count == 1
+        assert tracker.record_metrics.await_count == 0
+        pairs = _pairs_of(tracker)
+        assert pairs == [
+            (program.id, "g1", 0.1),
+            (program.id, "g2", 0.2),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_nan_delta_is_dropped_from_batch(self, tracker, program):
+        stage = _make_stage(tracker, "improver")
+        _attach(
+            stage,
+            ["g1"],
+            ({"fitness": 0.0}, {"role": "improver", "per_opp_delta": [float("nan")]}),
+        )
+        await stage.compute(program)
+        # All-NaN → no pairs → no Redis write at all.
+        tracker.record_batch.assert_not_awaited()
+
+
+# ===================================================================
+# Regression guard: DGTrackerStage must populate dg_d_wins / dg_g_resisted
+# so TrackerCoverageStage (BD y-axis source) sees non-empty SETs.
+# Prior to this fix (commit dfefc096) the stage called record_metrics per
+# opponent, which only wrote dg_metrics and silently dropped the inverted
+# indices — breaking MAP-Elites BD axes in every adversarial run.
+# ===================================================================
+
+
+class TestInvertedIndexPopulation:
+    @pytest.mark.asyncio
+    async def test_improver_populates_d_wins_and_g_resisted(self, program):
+        import fakeredis.aioredis
+
+        from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+
+        real_tracker = DGImprovementTracker(
+            host="localhost", port=6379, db=0, prefix="test"
+        )
+        real_tracker._redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+        try:
+            stage = _make_stage(real_tracker, "improver")
+            artifact = {"role": "improver", "per_opp_delta": [0.1, -0.05]}
+            _attach(stage, ["g1", "g2"], ({"fitness": 0.4}, artifact))
+
+            await stage.compute(program)
+
+            d_wins = await real_tracker._redis.smembers(
+                real_tracker._d_wins_key(program.id)
+            )
+            assert d_wins == {"g1"}, (
+                "regression: DGTrackerStage must populate dg_d_wins for "
+                "TrackerCoverageStage (D's BD y-axis source)"
+            )
+            g2_resisted = await real_tracker._redis.smembers(
+                real_tracker._g_resisted_key("g2")
+            )
+            assert g2_resisted == {program.id}, (
+                "regression: DGTrackerStage must populate dg_g_resisted for "
+                "G's fallback BD y-axis source"
+            )
+        finally:
+            await real_tracker.close()

@@ -114,7 +114,7 @@ async def test_record_batch_stores_multiple_pairs(tracker):
 
 
 # ---------------------------------------------------------------------------
-# v3 inverted-index extension — dg_d_wins, dg_g_resisted, dg_delta
+# v3/v4 inverted-index extension — dg_d_wins, dg_g_resisted, dg_metrics
 # ---------------------------------------------------------------------------
 
 
@@ -157,12 +157,14 @@ async def test_record_batch_dual_writes_g_resisted(tracker):
 
 
 @pytest.mark.asyncio
-async def test_record_batch_writes_d_delta_hash_for_all_signs(tracker):
-    """record_batch writes every pair (pos, neg, zero) into dg_delta:{d_id} hash.
+async def test_record_batch_writes_metrics_hash_for_all_signs(tracker):
+    """record_batch writes every pair (pos, neg, zero) into dg_metrics:{d_id} hash.
 
-    SharedBenchmarkLineageStage reads this hash to compare child-D vs parent-D
+    SharedBenchmarkFilteredLineageStage reads this hash to compare child-D vs parent-D
     on the intersection of G's they have both been evaluated against.
     """
+    import json
+
     pairs = [
         ("d1", "g1", 0.05),
         ("d1", "g2", -0.01),
@@ -170,13 +172,13 @@ async def test_record_batch_writes_d_delta_hash_for_all_signs(tracker):
     ]
     await tracker.record_batch(pairs)
 
-    g_ids = await tracker._redis.hkeys(tracker._d_delta_key("d1"))
+    g_ids = await tracker._redis.hkeys(tracker._d_metrics_key("d1"))
     assert set(g_ids) == {"g1", "g2", "g3"}
 
-    deltas = await tracker._redis.hmget(tracker._d_delta_key("d1"), ["g1", "g2", "g3"])
-    assert float(deltas[0]) == pytest.approx(0.05)
-    assert float(deltas[1]) == pytest.approx(-0.01)
-    assert float(deltas[2]) == pytest.approx(0.0)
+    raw = await tracker._redis.hmget(tracker._d_metrics_key("d1"), ["g1", "g2", "g3"])
+    assert json.loads(raw[0])["fitness_delta"] == pytest.approx(0.05)
+    assert json.loads(raw[1])["fitness_delta"] == pytest.approx(-0.01)
+    assert json.loads(raw[2])["fitness_delta"] == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
@@ -219,7 +221,7 @@ async def test_count_d_resisted_by_g_empty(tracker):
 
 @pytest.mark.asyncio
 async def test_faced_by_d_returns_all_g_ids(tracker):
-    """faced_by_d returns HKEYS of dg_delta:{d_id} (all G's this D has been tested against)."""
+    """faced_by_d returns HKEYS of dg_metrics:{d_id} (all G's this D has been tested against)."""
     await tracker.record_batch(
         [
             ("d1", "g1", 0.05),  # win
@@ -282,7 +284,7 @@ async def test_get_deltas_against_empty_g_ids_returns_empty(tracker):
 
 @pytest.mark.asyncio
 async def test_record_batch_ttl_refreshed_on_new_keys(tracker):
-    """record_batch sets TTL on dg_d_wins, dg_g_resisted, and dg_delta keys."""
+    """record_batch sets TTL on dg_d_wins, dg_g_resisted, and dg_metrics keys."""
     await tracker.record_batch(
         [
             ("d1", "g1", 0.05),
@@ -292,7 +294,7 @@ async def test_record_batch_ttl_refreshed_on_new_keys(tracker):
 
     assert await tracker._redis.ttl(tracker._d_wins_key("d1")) > 0
     assert await tracker._redis.ttl(tracker._g_resisted_key("g2")) > 0
-    assert await tracker._redis.ttl(tracker._d_delta_key("d1")) > 0
+    assert await tracker._redis.ttl(tracker._d_metrics_key("d1")) > 0
 
 
 @pytest.mark.asyncio
@@ -341,3 +343,47 @@ async def test_record_batch_empty_is_noop(tracker):
     """record_batch([]) returns 0 and writes nothing."""
     count = await tracker.record_batch([])
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Widened tracker API — per-G full metrics dicts
+# ---------------------------------------------------------------------------
+
+
+class TestMetricsByD:
+    """Widened tracker API: per-G full metrics dicts."""
+
+    @pytest.mark.asyncio
+    async def test_record_metrics_round_trip(self, tracker):
+        await tracker.record_metrics(
+            "d-abc", "g-xyz", {"fitness_delta": 0.25, "is_valid": 1.0}
+        )
+        out = await tracker.metrics_by_d("d-abc")
+        assert out == {"g-xyz": {"fitness_delta": 0.25, "is_valid": 1.0}}
+
+    @pytest.mark.asyncio
+    async def test_metrics_by_d_multiple_opponents(self, tracker):
+        await tracker.record_metrics(
+            "d1", "g1", {"fitness_delta": 0.1, "is_valid": 1.0}
+        )
+        await tracker.record_metrics(
+            "d1", "g2", {"fitness_delta": 0.2, "is_valid": 1.0}
+        )
+        out = await tracker.metrics_by_d("d1")
+        assert set(out.keys()) == {"g1", "g2"}
+        assert out["g1"]["fitness_delta"] == 0.1
+        assert out["g2"]["fitness_delta"] == 0.2
+
+    @pytest.mark.asyncio
+    async def test_metrics_by_d_empty_for_unknown(self, tracker):
+        assert await tracker.metrics_by_d("does-not-exist") == {}
+
+    @pytest.mark.asyncio
+    async def test_faced_by_d_reads_new_key(self, tracker):
+        await tracker.record_metrics(
+            "d1", "g1", {"fitness_delta": 0.1, "is_valid": 1.0}
+        )
+        await tracker.record_metrics(
+            "d1", "g2", {"fitness_delta": 0.2, "is_valid": 0.0}
+        )
+        assert await tracker.faced_by_d("d1") == {"g1", "g2"}

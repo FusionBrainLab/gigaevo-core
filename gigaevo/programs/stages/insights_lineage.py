@@ -74,6 +74,11 @@ class LineageStage(LangGraphStage):
         self, program: Program, params: StageIO
     ) -> dict[str, Any] | ProgramStageResult:
         ids: list[str] = list(program.lineage.parents)
+        logger.info(
+            "[LineageStage] program={} n_parents={}",
+            program.id[:8],
+            len(ids),
+        )
         return {"parents": await self.storage.mget(ids)}
 
 

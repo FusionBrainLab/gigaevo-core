@@ -46,6 +46,8 @@ class MetricsFormatter:
         child: dict[str, float],
         include_primary: bool = False,
         style: str = "table",
+        value_counts: dict[str, int] | None = None,
+        total_n: int | None = None,
     ) -> str:
         ctx = self.context
         primary = ctx.get_primary_key()
@@ -74,6 +76,12 @@ class MetricsFormatter:
                 else ("no change" if d == 0 else "worsened")
             )
             sig = "★" if signif and abs(d) >= signif else ""
+            if value_counts is not None and total_n is not None:
+                k = value_counts.get(key, 0)
+                count_str = f" ({k}/{total_n} valid)"
+            else:
+                count_str = ""
+            impact_label = f"{impact} {sig}{count_str}".strip()
 
             parent_s = f"{p:.{decimals}f}{u(unit)}"
             child_s = f"{c:.{decimals}f}{u(unit)}"
@@ -96,7 +104,7 @@ class MetricsFormatter:
                     child_s,
                     delta_s,
                     pct_s,
-                    f"{impact} {sig}".strip(),
+                    impact_label,
                 )
             )
 
