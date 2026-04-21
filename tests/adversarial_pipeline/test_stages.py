@@ -54,6 +54,29 @@ class FakeArchiveProvider(OpponentArchiveProvider):
         return [id_map[i] for i in ids if i in id_map]
 
 
+class RecordingArchiveProvider(FakeArchiveProvider):
+    """FakeArchiveProvider that records which sampler method was called.
+
+    Used by sampling_mode routing tests to assert the stage picks the right
+    provider entry point (get_top_k vs get_opponents) without asserting on
+    stochastic output.
+    """
+
+    def __init__(self, opponents: list[OpponentProgram] | None = None):
+        super().__init__(opponents)
+        self.calls: list[tuple[str, int]] = []
+
+    async def get_opponents(self, n: int = 5) -> list[OpponentProgram]:
+        self.calls.append(("get_opponents", n))
+        return await super().get_opponents(n)
+
+    async def get_top_k(
+        self, k: int, *, higher_is_better: bool = True
+    ) -> list[OpponentProgram]:
+        self.calls.append(("get_top_k", k))
+        return await super().get_top_k(k, higher_is_better=higher_is_better)
+
+
 class ScriptedResultProvider(OpponentResultProvider):
     """Provider driven by a {id: result_or_None} map. Returns aligned list."""
 
@@ -110,6 +133,88 @@ class TestFetchOpponentIdsStage:
         )
         result = await stage.compute(_make_program())
         assert len(result.data) == 3
+
+    # ------------------------------------------------------------------
+    # sampling_mode ("top_k" default, "softmax" opt-in to reduce cache hits)
+    # ------------------------------------------------------------------
+
+    def test_invalid_sampling_mode_raises(self):
+        with pytest.raises(ValueError, match="sampling_mode"):
+            FetchOpponentIdsStage(
+                opponent_provider=FakeArchiveProvider(),
+                sampling_mode="bogus",
+                timeout=60.0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_top_k_sampling_mode_is_default_and_deterministic(self):
+        """Default stays top_k so repro-v1 and prior experiments are unchanged."""
+        opponents = [
+            OpponentProgram(program_id=f"p{i}", code=f"c{i}", fitness=float(i))
+            for i in range(5)
+        ]
+        provider = FakeArchiveProvider(opponents)
+        stage = FetchOpponentIdsStage(
+            opponent_provider=provider, n_opponents=2, timeout=60.0
+        )
+        r1 = await stage.compute(_make_program())
+        r2 = await stage.compute(_make_program())
+        # Deterministic: two calls return the same top-2 ids in the same order.
+        assert r1.data == r2.data
+        # Top-2 by fitness → p4, p3.
+        assert r1.data == ["p4", "p3"]
+
+    @pytest.mark.asyncio
+    async def test_softmax_sampling_mode_routes_to_get_opponents(self):
+        """sampling_mode='softmax' must call provider.get_opponents(n), NOT get_top_k(n)."""
+        opponents = [
+            OpponentProgram(program_id=f"p{i}", code=f"c{i}", fitness=float(i))
+            for i in range(5)
+        ]
+        provider = RecordingArchiveProvider(opponents)
+        stage = FetchOpponentIdsStage(
+            opponent_provider=provider,
+            n_opponents=3,
+            sampling_mode="softmax",
+            timeout=60.0,
+        )
+        await stage.compute(_make_program())
+        assert provider.calls == [("get_opponents", 3)]
+
+    @pytest.mark.asyncio
+    async def test_top_k_sampling_mode_routes_to_get_top_k(self):
+        """sampling_mode='top_k' explicitly must call provider.get_top_k(n)."""
+        opponents = [
+            OpponentProgram(program_id=f"p{i}", code=f"c{i}", fitness=float(i))
+            for i in range(5)
+        ]
+        provider = RecordingArchiveProvider(opponents)
+        stage = FetchOpponentIdsStage(
+            opponent_provider=provider,
+            n_opponents=2,
+            sampling_mode="top_k",
+            timeout=60.0,
+        )
+        await stage.compute(_make_program())
+        assert provider.calls == [("get_top_k", 2)]
+
+    @pytest.mark.asyncio
+    async def test_sampling_mode_accepts_enum_directly(self):
+        """Enum value passes through without string detour."""
+        from gigaevo.adversarial.opponent_provider import OpponentSamplingMode
+
+        opponents = [
+            OpponentProgram(program_id=f"p{i}", code=f"c{i}", fitness=float(i))
+            for i in range(3)
+        ]
+        stage = FetchOpponentIdsStage(
+            opponent_provider=FakeArchiveProvider(opponents),
+            n_opponents=2,
+            sampling_mode=OpponentSamplingMode.SOFTMAX,
+            timeout=60.0,
+        )
+        result = await stage.compute(_make_program())
+        assert len(result.data) == 2
 
 
 # ---------------------------------------------------------------------------
