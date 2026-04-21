@@ -47,9 +47,10 @@ from gigaevo.programs.stages.json_processing import MergeDictStage
 class LineageFilterConfig:
     """Config for D-side SharedBenchmarkFilteredLineageStage.
 
-    min_shared=0 ⇒ filter disabled (all parents kept, evidence computed
-    from whatever shared set exists). inject_shared_evidence=False ⇒
-    filter still applies but no TransitionEvidence is emitted (ablation).
+    min_shared must be >= 1 (the stage constructor rejects 0). To disable
+    filtering entirely, don't install the filtered variant at all — use
+    the base LineageStage. inject_shared_evidence=False ⇒ filter still
+    applies but no TransitionEvidence is emitted (ablation).
     """
 
     min_shared: int = 1
