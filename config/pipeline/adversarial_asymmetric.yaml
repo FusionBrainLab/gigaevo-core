@@ -123,6 +123,10 @@ pipeline_builder:
   per_opponent_timeout: ${stage_timeout}
   archive_reeval: false
   dg_tracker: ${dg_tracker}
+  lineage_filter:
+    _target_: gigaevo.adversarial.asymmetric_pipeline.LineageFilterConfig
+    min_shared: 1
+    inject_shared_evidence: true
   opponent_result_mode: ${opponent_result_mode}
   opponent_sampling_mode: ${opponent_sampling_mode}
   redis_host: ${redis.host}
