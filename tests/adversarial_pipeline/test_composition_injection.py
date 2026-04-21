@@ -217,6 +217,78 @@ class TestInjectAllHappyPath:
 
 
 # ===================================================================
+# Test: inject_all — lineage propagation (I-17 fix)
+#
+# Previously the hook constructed Program(code=..., metadata={...}) with no
+# lineage, so every injected program landed as generation=1, iteration=0,
+# is_root=True. That corrupted every `is_root` / generation slice of the
+# archive. Injected programs must inherit lineage from their G parent: the
+# composed code is a descendant of G, so generation = G.generation + 1 and
+# parents = [g_id]. D is NOT added to parents — D lives in a separate Redis
+# DB (G's graph walker cannot resolve it); the D reference stays in
+# metadata.d_source_id.
+# ===================================================================
+
+
+class TestInjectedLineage:
+    @pytest.mark.asyncio
+    async def test_injected_program_inherits_generation_from_g_plus_one(
+        self, hook, g_storage, d_provider, dg_tracker
+    ):
+        from gigaevo.programs.program import Lineage
+
+        g = Program(
+            code="def entrypoint():\n    return 0\n",
+            lineage=Lineage(parents=["any-parent"], mutation="seed", generation=7),
+        )
+        g_storage.get_all.return_value = [g]
+        dg_tracker.get_best_d_for_g.return_value = ("d-1", 0.1)
+        dg_tracker.is_pair_injected.return_value = False
+        d_provider.get_programs_by_ids.return_value = [
+            OpponentProgram(
+                program_id="d-1",
+                code="def entrypoint():\n    return lambda x: x\n",
+                fitness=0.5,
+            )
+        ]
+
+        await hook.inject_all()
+
+        injected = g_storage.add.call_args.args[0]
+        assert injected.lineage.generation == 8, (
+            f"generation must be G.generation + 1, got {injected.lineage.generation}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_injected_program_is_not_root_and_parents_is_g_only(
+        self, hook, g_storage, d_provider, dg_tracker
+    ):
+        g = Program(code="def entrypoint():\n    return 0\n", metadata={})
+        g_storage.get_all.return_value = [g]
+        dg_tracker.get_best_d_for_g.return_value = ("d-1", 0.1)
+        dg_tracker.is_pair_injected.return_value = False
+        d_provider.get_programs_by_ids.return_value = [
+            OpponentProgram(
+                program_id="d-1",
+                code="def entrypoint():\n    return lambda x: x\n",
+                fitness=0.5,
+            )
+        ]
+
+        await hook.inject_all()
+
+        injected = g_storage.add.call_args.args[0]
+        # D is NOT in parents (it lives in a different Redis DB); only G.
+        assert injected.lineage.parents == [g.id]
+        assert "d-1" not in injected.lineage.parents
+        assert injected.is_root is False
+        assert injected.lineage.mutation == "d_improvement"
+        # D reference still accessible via metadata.
+        assert injected.metadata["d_source_id"] == "d-1"
+        assert injected.metadata["g_source_id"] == g.id
+
+
+# ===================================================================
 # Test: inject_all — dedup
 # ===================================================================
 

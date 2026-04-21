@@ -44,11 +44,12 @@ def _load_metric_specs(experiment: str | None) -> dict[str, dict]:
 def _format_metric_value(value: float | None, name: str, specs: dict[str, dict]) -> str:
     """Format a metric value according to its metrics.yaml spec.
 
-    - None: display as "?"
-    - sentinel_value: display as "N/A"
-    - upper_bound == 1.0: display as percentage (value * 100)
-    - decimals: control decimal places
-    - Default: 3 decimal places
+    Always displays the raw float; `decimals` controls precision
+    (default 3). Task-specific unit interpretation is the reader's job.
+
+    - None: "?"
+    - sentinel_value: "N/A"
+    - otherwise: f"{value:.{decimals}f}"
     """
     if value is None:
         return "?"
@@ -57,10 +58,6 @@ def _format_metric_value(value: float | None, name: str, specs: dict[str, dict])
     if sentinel is not None and value == sentinel:
         return "N/A"
     decimals = spec.get("decimals", 3)
-    upper_bound = spec.get("upper_bound")
-    if upper_bound is not None and upper_bound == 1.0:
-        pct_decimals = max(0, decimals - 2)
-        return f"{value * 100:.{pct_decimals}f}%"
     return f"{value:.{decimals}f}"
 
 
@@ -138,7 +135,11 @@ def _build_columns(rows: list[dict]) -> list[str]:
     "format_name",
     type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
     default=None,
-    help="Output format override.",
+    help=(
+        "Output format override (table|json|csv|markdown). Passed AFTER "
+        "the subcommand — overrides the global `-f/--format` flag when "
+        "given."
+    ),
 )
 @click.pass_context
 def status(ctx: click.Context, format_name: str | None) -> None:
@@ -150,9 +151,9 @@ def status(ctx: click.Context, format_name: str | None) -> None:
 
     Metrics are auto-discovered: in `-e/--experiment` mode, each run's
     metric specs are loaded from `problems/<problem_name>/metrics.yaml`
-    and used to format values (percentages when `upper_bound: 1.0`, custom
-    `decimals`, `N/A` for `sentinel_value`). No `--metric` flag — all
-    metrics present in the manifest are shown.
+    and used to format values (raw floats with spec-driven `decimals`,
+    `N/A` for `sentinel_value`). No `--metric` flag — all metrics present
+    in the manifest are shown.
     """
     formatter: OutputFormatter = ctx.obj["formatter"]
     if format_name is not None:

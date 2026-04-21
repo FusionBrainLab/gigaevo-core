@@ -10,9 +10,7 @@ The audit parses a log file, tries to instantiate each canonical event via
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from tools.experiment.log_audit import AuditReport, audit_log_text
+from gigaevo.experiment.log_audit import AuditReport, audit_log_text
 
 
 def _make_log(lines: list[str]) -> str:
@@ -142,16 +140,3 @@ class TestReportFormat:
         assert isinstance(report.failures, dict)
         assert isinstance(report.event_counts, dict)
         assert isinstance(report.missing_after_gen, dict)
-
-
-class TestCLIPopulationRoleFlagRejected:
-    def test_population_role_flag_no_longer_supported(self, tmp_path: Path) -> None:
-        """The role flag was dropped per plan B3 — invariants live on events."""
-        from tools.experiment import log_audit as mod
-
-        # The parser should not know about --population-role=
-        assert "population_role" not in getattr(mod, "__dict__", {})
-        # And the audit signature is role-free.
-        sig = getattr(mod.audit_log_text, "__doc__", "") or ""
-        assert "constructor" not in sig
-        assert "improver" not in sig

@@ -135,8 +135,8 @@ class TestCheckpointMetricFormatting:
         row = _snapshot_to_row(snapshot, metric_specs=specs)
         assert row["Fitness"] == "N/A"
 
-    def test_percentage_display(self):
-        """Checkpoint formats upper_bound=1.0 metrics as percentages."""
+    def test_raw_display_even_when_upper_bound_is_1(self):
+        """Checkpoint formats all metrics as raw float — never percent."""
         from gigaevo.cli.checkpoint import _snapshot_to_row
 
         snapshot = RunSnapshot(
@@ -148,7 +148,7 @@ class TestCheckpointMetricFormatting:
         )
         specs = {"fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0}}
         row = _snapshot_to_row(snapshot, metric_specs=specs)
-        assert row["Fitness"] == "85.000%"
+        assert row["Fitness"] == "0.85000"
 
     def test_formats_identically_to_status(self):
         """Checkpoint and status format metrics identically."""

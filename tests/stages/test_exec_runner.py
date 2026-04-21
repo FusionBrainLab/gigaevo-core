@@ -267,6 +267,7 @@ class TestRunOne:
         (problem_dir / "helper.py").write_text("VALUE = 'problem'\n", encoding="utf-8")
 
         sys.path.insert(0, str(repo_dir))
+        sys.modules.pop("helper", None)
         try:
             import helper
 
@@ -298,6 +299,7 @@ class TestRunOne:
 
         sys.path.insert(0, str(repo_dir))
         sys.path.append(str(problem_dir))
+        sys.modules.pop("helper", None)
         try:
             payload: dict[str, Any] = {
                 "code": "from helper import VALUE\n\ndef read_value(): return VALUE\n",

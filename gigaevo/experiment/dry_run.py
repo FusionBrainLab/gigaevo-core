@@ -19,6 +19,7 @@ from __future__ import annotations
 import concurrent.futures
 from dataclasses import dataclass, field
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -40,6 +41,53 @@ try:
 except ValueError:
     # Resolvers already registered in this process — fine.
     pass
+
+
+def _hydra_stub_resolver(path: str) -> str:
+    """Stub for ``${hydra:...}`` references in re-loaded --cfg job dumps.
+
+    The real Hydra resolver is only registered inside a Hydra application
+    context; when we re-load ``cfg_run_<label>.yaml`` the config contains
+    entries like ``log_dir: ${hydra:runtime.output_dir}`` and
+    ``prompts.dir: ${hydra:runtime.cwd}/gigaevo/prompts/...`` that cannot be
+    resolved outside Hydra. The preview only needs values it can diff
+    against ``contract.config.pinned``; ``hydra:`` paths are never pinned.
+    Return a stable placeholder so resolution succeeds without affecting
+    pin-matching.
+    """
+    return f"<hydra:{path}>"
+
+
+try:
+    OmegaConf.register_new_resolver("hydra", _hydra_stub_resolver)
+except ValueError:
+    pass
+
+
+def _ref_stub_resolver(path: str) -> str:
+    """Stub for ``${ref:...}`` that returns a placeholder instead of instantiating.
+
+    The real resolver (``gigaevo.config.resolvers._ref_resolver``) calls
+    ``hydra.utils.instantiate`` on the referenced node — fine inside a
+    running Hydra application but fatal in dry-run, where the resolved
+    value must round-trip through ``OmegaConf.to_container`` as a
+    primitive. A live ``RedisProgramStorage`` instance is not a primitive
+    and triggers ``UnsupportedValueType``.
+
+    Pinned paths never point into a ``${ref:...}``-resolved node, so
+    returning a stable placeholder preserves pin-matching semantics.
+    """
+    return f"<ref:{path}>"
+
+
+OmegaConf.register_new_resolver("ref", _ref_stub_resolver, replace=True)
+
+
+# Set placeholder env vars for ${oc.env:...} references that appear in the
+# default LLM/logging configs. The preview only needs pin-match values;
+# secrets don't matter.
+for _env_key in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
+    os.environ.setdefault(_env_key, "<dry-run-stub>")
 
 PYTHON_PATH_DEFAULT = "python3"
 
@@ -85,7 +133,9 @@ def dry_run(
     # extras, and per-run overrides are all handled consistently).
     cli_args: dict[str, list[str]] = {}
     for run in manifest.contract.runs:
-        cli_args[run.label] = _build_run_cmd(run, manifest, cfg_only=True)
+        cli_args[run.label] = _build_run_cmd(
+            run, manifest, cfg_only=True, shell_escape=False
+        )
 
     # Step 2: Invoke run.py in parallel and persist.
     resolved: dict[str, dict[str, Any]] = {}

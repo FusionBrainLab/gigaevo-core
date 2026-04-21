@@ -85,6 +85,10 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         archive_reeval: bool = False,
         dg_tracker: DGImprovementTracker | None = None,
         *,
+        opponent_result_mode: Literal["exec", "cached"] = "exec",
+        redis_host: str = "localhost",
+        redis_port: int = 6379,
+        opponent_sources: list[dict[str, int | str]] | None = None,
         dag_timeout: float = 7200.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
     ):
@@ -95,6 +99,10 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
             per_opponent_timeout,
             fallback_dir,
             archive_reeval,
+            opponent_result_mode=opponent_result_mode,
+            redis_host=redis_host,
+            redis_port=redis_port,
+            opponent_sources=opponent_sources,
             dag_timeout=dag_timeout,
             stage_timeout=stage_timeout,
         )

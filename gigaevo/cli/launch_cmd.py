@@ -29,6 +29,7 @@ def launch(
     generate `launch.sh` → exec all runs via `nohup` → set status to
     `running` → spawn watchdog.
 
+    \b
     Flags select a partial flow:
       --dry-run          Preflight + DB claim only; do not exec. Writes
                          LAUNCH_PREVIEW.md so the researcher can verify

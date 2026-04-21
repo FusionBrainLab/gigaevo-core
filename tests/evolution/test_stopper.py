@@ -205,8 +205,12 @@ class TestHydraInstantiation:
         from hydra.utils import instantiate
         from omegaconf import OmegaConf
 
-        cfg = OmegaConf.load("config/stopper/max_generations.yaml")
-        stopper = instantiate(cfg)
+        # The yaml references ${max_generations} from the parent Hydra config.
+        # Wrap it in a parent scope that provides the value so resolution works
+        # standalone in tests.
+        stopper_cfg = OmegaConf.load("config/stopper/max_generations.yaml")
+        cfg = OmegaConf.create({"max_generations": 25, "stopper": stopper_cfg})
+        stopper = instantiate(cfg.stopper)
         assert isinstance(stopper, MaxGenerationsStopper)
         assert stopper.max_generations == 25
 
@@ -232,8 +236,13 @@ class TestHydraInstantiation:
         from hydra.utils import instantiate
         from omegaconf import OmegaConf
 
-        cfg = OmegaConf.load("config/stopper/max_generations_or_fitness_plateau.yaml")
-        stopper = instantiate(cfg)
+        # Composite child refers to ${max_generations} — wrap in a parent
+        # config that provides the value.
+        stopper_cfg = OmegaConf.load(
+            "config/stopper/max_generations_or_fitness_plateau.yaml"
+        )
+        cfg = OmegaConf.create({"max_generations": 50, "stopper": stopper_cfg})
+        stopper = instantiate(cfg.stopper)
         assert isinstance(stopper, CompositeStopper)
         assert stopper.mode == "any"
         assert len(stopper.children) == 2

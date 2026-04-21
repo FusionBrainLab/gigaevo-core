@@ -74,17 +74,69 @@ def _resolve_runs(ctx: click.Context, labels: tuple[str, ...]):
         known = {rc.run_spec.label for rc in run_configs}
         unknown = [label for label in labels if label not in known]
         if unknown:
-            click.echo(
-                f"Error: unknown run label(s): {', '.join(unknown)}. "
-                f"Known: {', '.join(sorted(known))}",
-                err=True,
+            raise click.ClickException(
+                f"unknown run label(s): {', '.join(unknown)}. "
+                f"Known: {', '.join(sorted(known))}"
             )
-            ctx.exit(1)
-            return None, redis_host, redis_port
         chosen = set(labels)
         run_configs = [rc for rc in run_configs if rc.run_spec.label in chosen]
 
+    _verify_prefixes_exist(ctx, run_configs, redis_host, redis_port)
+
     return run_configs, redis_host, redis_port
+
+
+def _verify_prefixes_exist(
+    ctx: click.Context, run_configs, redis_host: str, redis_port: int
+) -> None:
+    """Fail fast with a friendly error if a resolved prefix has no data in Redis.
+
+    Probes the instance-lock key OR any key under the prefix — either
+    indicates the run has touched Redis. Missing → ClickException listing
+    the prefixes actually present in each DB.
+
+    Skipped entirely when `ctx.obj["redis_factory"]` is set (test affordance)
+    or when Redis is unreachable — we don't want infra glitches to mask the
+    real export error the user is trying to produce.
+    """
+    if ctx.obj.get("redis_factory") is not None:
+        return
+
+    from redis.exceptions import RedisError
+
+    from gigaevo.cli.inspect_cmd import discover_prefixes
+
+    missing: list[tuple[str, int, list[str]]] = []
+    for rc in run_configs:
+        spec = rc.run_spec
+        try:
+            available = discover_prefixes(redis_host, redis_port, spec.db)
+        except RedisError:
+            return  # infra unreachable → let the main fetch path raise instead
+        if spec.prefix in available:
+            continue
+        import redis as redis_lib
+
+        r = redis_lib.Redis(
+            host=redis_host, port=redis_port, db=spec.db, decode_responses=True
+        )
+        try:
+            probe = r.scan(0, match=f"{spec.prefix}:*", count=1)
+            if probe[1]:
+                continue
+        except RedisError:
+            return
+        finally:
+            r.close()
+        missing.append((spec.prefix, spec.db, available))
+
+    if missing:
+        lines = [
+            f"  {prefix}@{db} — prefixes present in DB {db}: "
+            f"{', '.join(avail) if avail else '(none)'}"
+            for prefix, db, avail in missing
+        ]
+        raise click.ClickException("No Redis data found for:\n" + "\n".join(lines))
 
 
 def _labeled_path(base: Path, label: str) -> Path:
@@ -119,8 +171,8 @@ def export() -> None:
 def csv_cmd(ctx: click.Context, labels: tuple[str, ...], output_file: str) -> None:
     """Export full evolution data to CSV.
 
+    \b
     Usage:
-
       gigaevo -e <exp> export csv -o out.csv            Export all runs (fans out).
       gigaevo -e <exp> export csv <label> -o out.csv    Export one run.
       gigaevo -e <exp> export csv <a> <b> -o out.csv    Export selected runs.
@@ -170,8 +222,8 @@ def frontier(
 ) -> None:
     """Export frontier-only CSV with gen and best_val columns.
 
+    \b
     Usage:
-
       gigaevo -e <exp> export frontier -o out.csv             All runs (fans out).
       gigaevo -e <exp> export frontier <label> -o out.csv     One run.
       gigaevo -e <exp> export frontier <a> <b> -o out.csv     Selected runs.

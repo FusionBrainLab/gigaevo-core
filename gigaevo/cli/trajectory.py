@@ -72,7 +72,11 @@ def _fetch_trajectory(
     "format_name",
     type=click.Choice(["table", "json", "csv", "markdown"], case_sensitive=False),
     default=None,
-    help="Output format override.",
+    help=(
+        "Output format override (table|json|csv|markdown). Passed AFTER "
+        "the subcommand — overrides the global `-f/--format` flag when "
+        "given."
+    ),
 )
 @click.pass_context
 def trajectory(
@@ -123,6 +127,7 @@ def trajectory(
 
     redis_factory = ctx.obj.get("redis_factory")
     all_rows: list[dict] = []
+    rows_per_metric: dict[str, int] = dict.fromkeys(metrics_to_show, 0)
 
     for rc in run_configs:
         spec = rc.run_spec
@@ -135,6 +140,7 @@ def trajectory(
         try:
             for m in metrics_to_show:
                 rows = _fetch_trajectory(r, spec.prefix, m)
+                rows_per_metric[m] += len(rows)
                 for row in rows:
                     if len(run_configs) > 1:
                         row["Label"] = spec.label
@@ -143,6 +149,17 @@ def trajectory(
                 all_rows.extend(rows)
         finally:
             r.close()
+
+    # If user explicitly asked for metric(s) that returned zero rows across
+    # all runs, warn on stderr — otherwise the empty [] output is confusing.
+    if metric:
+        empty = [m for m in metrics_to_show if rows_per_metric[m] == 0]
+        if empty:
+            click.echo(
+                f"Warning: no trajectory data for metric(s): {', '.join(empty)}. "
+                f"Check the metric name or whether the run has emitted data yet.",
+                err=True,
+            )
 
     if tail is not None and tail > 0:
         all_rows = all_rows[-tail:]

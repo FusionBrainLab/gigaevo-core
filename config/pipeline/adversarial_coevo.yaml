@@ -49,6 +49,11 @@ evolution_context:
   prompt_fetcher: ${prompt_fetcher}
   memory_provider: ${memory_provider}
 
+# Opponent result production strategy:
+#   exec   → always re-run opponent entrypoint() in a subprocess (safe for closures)
+#   cached → read opponent CallProgramFunction output from Redis (static values only)
+opponent_result_mode: "exec"
+
 pipeline_builder:
   _target_: gigaevo.adversarial.pipeline.AdversarialPipelineBuilder
   ctx: ${evolution_context}
@@ -56,6 +61,12 @@ pipeline_builder:
   n_opponents: 5
   per_opponent_timeout: 10.0
   archive_reeval: true
+  opponent_result_mode: ${opponent_result_mode}
+  redis_host: ${redis.host}
+  redis_port: ${redis.port}
+  opponent_sources:
+    - db: ${opponent_redis_db}
+      prefix: ${opponent_redis_prefix}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}
 

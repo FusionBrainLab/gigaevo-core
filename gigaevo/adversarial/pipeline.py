@@ -6,18 +6,27 @@ Extends DefaultPipelineBuilder — adds two adversarial stages:
     Samples fresh opponent IDs on every DAG run.
 
   FetchOpponentResultsStage (InputHashCache)
-    Executes opponent code; reruns only when opponent IDs change.
-    Cache key = hash of opponent IDs → automatic re-evaluation when
-    the archive changes, without any engine-level hooks.
+    Produces opponent evaluation payloads; reruns only when opponent IDs
+    change. Delegates the actual work to an OpponentResultProvider
+    strategy (exec or cached). Cache key = hash of opponent IDs →
+    automatic re-evaluation when the archive changes, without any
+    engine-level hooks.
 
 CallValidatorFunction is reconfigured to call evaluate.py (not validate.py).
 """
 
 from __future__ import annotations
 
+from typing import Literal
+
 from loguru import logger
 
 from gigaevo.adversarial.opponent_provider import OpponentArchiveProvider
+from gigaevo.adversarial.opponent_result_provider import (
+    ExecOpponentResultProvider,
+    OpponentResultProvider,
+    build_opponent_result_provider,
+)
 from gigaevo.adversarial.stages import FetchOpponentIdsStage, FetchOpponentResultsStage
 from gigaevo.entrypoint.constants import (
     DEFAULT_SIMPLE_STAGE_TIMEOUT,
@@ -36,6 +45,15 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
     Inherits DefaultPipelineBuilder (gets all standard stages + edges + deps).
     Adds FetchOpponentIdsStage → FetchOpponentResultsStage wired as context
     to CallValidatorFunction.
+
+    Opponent result production is delegated to an OpponentResultProvider
+    strategy. Pass ``opponent_result_mode="exec"`` (default) to re-run
+    opponent code in a subprocess, or ``opponent_result_mode="cached"`` to
+    read the opponent's stored CallProgramFunction output from Redis.
+
+    The exec-fallback for cold-start (archive empty) always runs in
+    subprocess — we build a dedicated ExecOpponentResultProvider for that
+    path even when the main provider is cached.
     """
 
     def __init__(
@@ -47,17 +65,78 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         fallback_dir: str = "fallback",
         archive_reeval: bool = True,
         *,
+        opponent_result_mode: Literal["exec", "cached"] = "exec",
+        redis_host: str = "localhost",
+        redis_port: int = 6379,
+        opponent_sources: list[dict[str, int | str]] | None = None,
         dag_timeout: float = 3600.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
     ):
         super().__init__(ctx, dag_timeout=dag_timeout, stage_timeout=stage_timeout)
         fallback_codes = self._load_fallback_codes(fallback_dir)
-        self._add_adversarial_stages(
-            opponent_provider,
-            n_opponents,
+
+        problem_dir = ctx.problem_ctx.problem_dir
+        # Main result provider — exec or cached per config.
+        main_provider = build_opponent_result_provider(
+            opponent_result_mode,
+            archive_provider=opponent_provider,
+            host=redis_host,
+            port=redis_port,
+            sources=opponent_sources or [],
+            per_opponent_timeout=per_opponent_timeout,
+            python_path=[problem_dir.resolve()],
+            max_memory_mb=MAX_MEMORY_MB,
+        )
+        # Fallback provider — always exec. Reused when main is exec;
+        # constructed fresh when main is cached and we still have fallback
+        # codes to run on cold start.
+        fallback_exec = (
+            main_provider
+            if isinstance(main_provider, ExecOpponentResultProvider)
+            else ExecOpponentResultProvider(
+                archive_provider=opponent_provider,
+                per_opponent_timeout=per_opponent_timeout,
+                python_path=[problem_dir.resolve()],
+                max_memory_mb=MAX_MEMORY_MB,
+            )
+        )
+        logger.info(
+            "[AdversarialPipeline] opponent_result_mode={} per_opp_timeout={} "
+            "n_opponents={} archive_reeval={}",
+            opponent_result_mode,
             per_opponent_timeout,
-            fallback_codes,
+            n_opponents,
             archive_reeval,
+        )
+        # Dead-config trap: per_opponent_timeout is only read by
+        # ExecOpponentResultProvider._exec_one. In cached mode the main
+        # provider never sees it, so a value like 300 on a cached-mode config
+        # silently does nothing while users assume it bounds the validator.
+        # Surface it at startup so the mistake doesn't repeat. See
+        # memory/feedback_per_opponent_timeout_cached.md for the heilbron
+        # incident that motivated this check.
+        if (
+            not isinstance(main_provider, ExecOpponentResultProvider)
+            and per_opponent_timeout is not None
+            and per_opponent_timeout != stage_timeout
+        ):
+            logger.warning(
+                "[AdversarialPipeline] per_opponent_timeout={}s is IGNORED in "
+                "cached mode (only ExecOpponentResultProvider reads it). "
+                "stage_timeout={}s is the effective validator budget. "
+                "Remove per_opponent_timeout from this config or set it to "
+                "${{stage_timeout}} to silence this warning.",
+                per_opponent_timeout,
+                stage_timeout,
+            )
+
+        self._add_adversarial_stages(
+            opponent_provider=opponent_provider,
+            n_opponents=n_opponents,
+            fallback_codes=fallback_codes,
+            archive_reeval=archive_reeval,
+            result_provider=main_provider,
+            fallback_exec_provider=fallback_exec,
         )
 
     def _load_fallback_codes(self, fallback_dir: str) -> list[str]:
@@ -73,11 +152,13 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
 
     def _add_adversarial_stages(
         self,
-        provider: OpponentArchiveProvider,
+        *,
+        opponent_provider: OpponentArchiveProvider,
         n_opponents: int,
-        per_opponent_timeout: float,
         fallback_codes: list[str],
-        archive_reeval: bool = True,
+        archive_reeval: bool,
+        result_provider: OpponentResultProvider,
+        fallback_exec_provider: ExecOpponentResultProvider,
     ) -> None:
         problem_dir = self.ctx.problem_ctx.problem_dir
         stage_timeout = self._stage_timeout
@@ -99,7 +180,7 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         self.add_stage(
             "FetchOpponentIdsStage",
             lambda: FetchOpponentIdsStage(
-                opponent_provider=provider,
+                opponent_provider=opponent_provider,
                 n_opponents=n_opponents,
                 timeout=stage_timeout,
             ),
@@ -108,19 +189,21 @@ class AdversarialPipelineBuilder(DefaultPipelineBuilder):
         # Stage 2: FetchOpponentResultsStage
         # archive_reeval=True  → InputHashCache (reruns only when opponent IDs change)
         # archive_reeval=False → NO_CACHE (always reruns — adversarial-v2 baseline)
-        total_timeout = per_opponent_timeout * n_opponents + 30
+        # Outer timeout = stage_timeout + 30s buffer. Per-opponent caps still
+        # apply inside ExecOpponentResultProvider._exec_one.
+        total_timeout = stage_timeout + 30
         _archive_reeval = archive_reeval  # capture for lambda closure
+        _result_provider = result_provider  # capture for lambda closure
+        _fallback_exec = fallback_exec_provider  # capture for lambda closure
+        _fallback_codes = fallback_codes  # capture for lambda closure
         self.add_stage(
             "FetchOpponentResultsStage",
             lambda: FetchOpponentResultsStage(
-                opponent_provider=provider,
-                n_opponents=n_opponents,
-                fallback_codes=fallback_codes,
-                per_opponent_timeout=per_opponent_timeout,
-                python_path=[problem_dir.resolve()],
-                max_memory_mb=MAX_MEMORY_MB,
-                timeout=total_timeout,
+                result_provider=_result_provider,
+                fallback_codes=_fallback_codes,
                 archive_reeval=_archive_reeval,
+                fallback_exec_provider=_fallback_exec,
+                timeout=total_timeout,
             ),
         )
 

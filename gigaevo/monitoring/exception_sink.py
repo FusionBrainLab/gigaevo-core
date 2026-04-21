@@ -47,4 +47,8 @@ def install_exception_sink() -> int:
         except Exception:  # pragma: no cover — never fail the sink
             pass
 
-    return logger.add(_sink, level="DEBUG", format="{message}")
+    # enqueue=True: sink calls emit() which uses logger.info(...). Running on
+    # the calling thread would re-enter loguru's lock and raise
+    # `Could not acquire internal lock because it was already in use
+    # (deadlock avoided)`. Background thread breaks the re-entrance.
+    return logger.add(_sink, level="DEBUG", format="{message}", enqueue=True)

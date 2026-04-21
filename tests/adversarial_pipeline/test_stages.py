@@ -1,15 +1,24 @@
-"""Tests for gigaevo.adversarial.stages (two-stage DAG pattern)."""
+"""Tests for gigaevo.adversarial.stages (two-stage DAG pattern).
+
+Unit-level tests for FetchOpponentIdsStage and FetchOpponentResultsStage.
+Provider-level behaviour (exec vs cached) lives in
+test_opponent_result_provider.py; here we assert the stage coordinates the
+provider correctly and handles cold-start fallback.
+"""
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import patch
+from typing import Any
 
 import pytest
 
 from gigaevo.adversarial.opponent_provider import (
     OpponentArchiveProvider,
     OpponentProgram,
+)
+from gigaevo.adversarial.opponent_result_provider import (
+    ExecOpponentResultProvider,
+    OpponentResultProvider,
 )
 from gigaevo.adversarial.stages import FetchOpponentIdsStage, FetchOpponentResultsStage
 from gigaevo.programs.program import Program
@@ -20,7 +29,7 @@ from gigaevo.programs.stages.common import Box
 # ---------------------------------------------------------------------------
 
 
-class FakeProvider(OpponentArchiveProvider):
+class FakeArchiveProvider(OpponentArchiveProvider):
     """Provider that returns pre-set opponents."""
 
     def __init__(self, opponents: list[OpponentProgram] | None = None):
@@ -45,58 +54,48 @@ class FakeProvider(OpponentArchiveProvider):
         return [id_map[i] for i in ids if i in id_map]
 
 
+class ScriptedResultProvider(OpponentResultProvider):
+    """Provider driven by a {id: result_or_None} map. Returns aligned list."""
+
+    def __init__(self, mapping: dict[str, Any] | None = None):
+        self._map = mapping or {}
+        self.calls: list[list[str]] = []
+
+    async def produce(self, ids: list[str]) -> list[Any | None]:
+        self.calls.append(list(ids))
+        return [self._map.get(pid) for pid in ids]
+
+
 def _make_program(code: str = "def entrypoint(): return 42") -> Program:
     return Program(code=code)
 
 
 # ---------------------------------------------------------------------------
-# Tests: FetchOpponentIdsStage
+# FetchOpponentIdsStage
 # ---------------------------------------------------------------------------
 
 
 class TestFetchOpponentIdsStage:
     def test_uses_no_cache(self):
-        """Stage must use NO_CACHE handler — always re-samples on every DAG run."""
         from gigaevo.programs.stages.cache_handler import NO_CACHE
 
-        provider = FakeProvider()
-        stage = FetchOpponentIdsStage(opponent_provider=provider, timeout=60.0)
-        assert stage.cache_handler is NO_CACHE
-
-    def test_init_defaults(self):
-        provider = FakeProvider()
-        stage = FetchOpponentIdsStage(opponent_provider=provider, timeout=60.0)
-        assert stage._n == 5
-
-    def test_init_custom_n(self):
-        provider = FakeProvider()
         stage = FetchOpponentIdsStage(
-            opponent_provider=provider, n_opponents=3, timeout=60.0
+            opponent_provider=FakeArchiveProvider(), timeout=60.0
         )
-        assert stage._n == 3
+        assert stage.cache_handler is NO_CACHE
 
     @pytest.mark.asyncio
     async def test_returns_box_of_ids(self):
-        """compute() returns Box[Any](data=[id1, id2, ...])."""
         opponents = [
             OpponentProgram(program_id="p1", code="c1", fitness=0.5),
             OpponentProgram(program_id="p2", code="c2", fitness=0.8),
         ]
-        provider = FakeProvider(opponents)
-        stage = FetchOpponentIdsStage(opponent_provider=provider, timeout=60.0)
-        program = _make_program()
-        result = await stage.compute(program)
+        stage = FetchOpponentIdsStage(
+            opponent_provider=FakeArchiveProvider(opponents), timeout=60.0
+        )
+        result = await stage.compute(_make_program())
         assert isinstance(result, Box)
         assert set(result.data) == {"p1", "p2"}
-
-    @pytest.mark.asyncio
-    async def test_empty_archive_returns_empty_box(self):
-        provider = FakeProvider([])
-        stage = FetchOpponentIdsStage(opponent_provider=provider, timeout=60.0)
-        program = _make_program()
-        result = await stage.compute(program)
-        assert isinstance(result, Box)
-        assert result.data == []
 
     @pytest.mark.asyncio
     async def test_respects_n_opponents(self):
@@ -104,183 +103,151 @@ class TestFetchOpponentIdsStage:
             OpponentProgram(program_id=f"p{i}", code=f"c{i}", fitness=float(i))
             for i in range(10)
         ]
-        provider = FakeProvider(opponents)
         stage = FetchOpponentIdsStage(
-            opponent_provider=provider, n_opponents=3, timeout=60.0
+            opponent_provider=FakeArchiveProvider(opponents),
+            n_opponents=3,
+            timeout=60.0,
         )
-        program = _make_program()
-        result = await stage.compute(program)
-        assert len(result.data) <= 3
+        result = await stage.compute(_make_program())
+        assert len(result.data) == 3
 
 
 # ---------------------------------------------------------------------------
-# Tests: FetchOpponentResultsStage
+# FetchOpponentResultsStage (thin coordinator over provider)
 # ---------------------------------------------------------------------------
 
 
 class TestFetchOpponentResultsStage:
-    def test_uses_default_cache(self):
-        """Stage uses DEFAULT_CACHE (InputHashCache) — reruns when opponent IDs change."""
+    def test_default_cache_when_archive_reeval_true(self):
         from gigaevo.programs.stages.cache_handler import DEFAULT_CACHE
 
-        provider = FakeProvider()
         stage = FetchOpponentResultsStage(
-            opponent_provider=provider,
+            result_provider=ScriptedResultProvider(),
+            archive_reeval=True,
             timeout=60.0,
         )
-        assert stage.cache_handler is DEFAULT_CACHE
+        assert stage.get_cache_handler() is DEFAULT_CACHE
 
-    def test_init_defaults(self):
-        provider = FakeProvider()
+    def test_no_cache_when_archive_reeval_false(self):
+        from gigaevo.programs.stages.cache_handler import NO_CACHE
+
         stage = FetchOpponentResultsStage(
-            opponent_provider=provider,
+            result_provider=ScriptedResultProvider(),
+            archive_reeval=False,
             timeout=60.0,
         )
-        assert stage._n == 5
-        assert stage._fallback_codes == []
-        assert stage._per_timeout == 10.0
+        assert stage.get_cache_handler() is NO_CACHE
 
-    def test_init_custom(self):
-        provider = FakeProvider()
-        stage = FetchOpponentResultsStage(
-            opponent_provider=provider,
-            n_opponents=3,
-            fallback_codes=["code1", "code2"],
+    def test_fallback_without_exec_provider_raises(self):
+        """Cached-only provider + fallback_codes must explicitly receive an
+        exec provider for the cold-start path; fail loudly at construction."""
+
+        # A provider that is NOT Exec — use the ScriptedResultProvider.
+        with pytest.raises(ValueError, match="fallback_codes"):
+            FetchOpponentResultsStage(
+                result_provider=ScriptedResultProvider(),
+                fallback_codes=["def entrypoint(): return 1"],
+                timeout=60.0,
+            )
+
+    def test_fallback_reuses_exec_provider_when_available(self):
+        archive = FakeArchiveProvider()
+        exec_provider = ExecOpponentResultProvider(
+            archive_provider=archive,
             per_opponent_timeout=5.0,
-            python_path=[Path("/some/path")],
-            max_memory_mb=512,
-            timeout=30.0,
+            python_path=[],
+            max_memory_mb=None,
         )
-        assert stage._n == 3
-        assert len(stage._fallback_codes) == 2
-        assert stage._per_timeout == 5.0
-
-    @pytest.mark.asyncio
-    async def test_empty_archive_no_fallback_returns_empty(self):
-        """When archive is empty and no fallback, returns empty list."""
-        provider = FakeProvider([])
-        stage = FetchOpponentResultsStage(
-            opponent_provider=provider,
+        # Should not raise — Exec provider reused for fallback.
+        FetchOpponentResultsStage(
+            result_provider=exec_provider,
+            fallback_codes=["def entrypoint(): return 1"],
             timeout=60.0,
         )
+
+    @pytest.mark.asyncio
+    async def test_empty_ids_no_fallback_returns_empty(self):
+        provider = ScriptedResultProvider()
+        stage = FetchOpponentResultsStage(result_provider=provider, timeout=60.0)
         stage.attach_inputs({"opponent_ids": Box[object](data=[])})
-        program = _make_program()
-        result = await stage.compute(program)
-        assert isinstance(result, Box)
+        result = await stage.compute(_make_program())
         assert result.data == []
+        # Provider was still consulted with empty list.
+        assert provider.calls == [[]]
 
     @pytest.mark.asyncio
-    async def test_uses_fallback_when_archive_empty(self):
-        """When archive is empty (no IDs), falls back to fallback_codes."""
-        provider = FakeProvider([])
-        fallback_codes = [
-            "def entrypoint(): return 'fallback_a'",
-            "def entrypoint(): return 'fallback_b'",
-        ]
+    async def test_delegates_to_provider(self):
+        provider = ScriptedResultProvider({"p1": "r1", "p2": "r2"})
+        stage = FetchOpponentResultsStage(result_provider=provider, timeout=60.0)
+        stage.attach_inputs({"opponent_ids": Box[object](data=["p1", "p2"])})
+        result = await stage.compute(_make_program())
+        assert result.data == ["r1", "r2"]
+        assert provider.calls == [["p1", "p2"]]
+
+    @pytest.mark.asyncio
+    async def test_none_slots_preserved(self):
+        """Provider's None placeholders must flow through unchanged."""
+        provider = ScriptedResultProvider({"p1": "r1"})  # p2 missing -> None
+        stage = FetchOpponentResultsStage(result_provider=provider, timeout=60.0)
+        stage.attach_inputs({"opponent_ids": Box[object](data=["p1", "p2"])})
+        result = await stage.compute(_make_program())
+        assert result.data == ["r1", None]
+
+    @pytest.mark.asyncio
+    async def test_cold_start_fallback_triggers_exec(self):
+        """Empty ids + fallback_codes → fallback path runs via exec provider."""
+        archive = FakeArchiveProvider()
+        exec_provider = ExecOpponentResultProvider(
+            archive_provider=archive,
+            per_opponent_timeout=5.0,
+            python_path=[],
+            max_memory_mb=None,
+        )
+        recorded: list[str] = []
+
+        async def fake_produce_from_codes(codes):
+            recorded.extend(codes)
+            return [f"ran::{c}" for c in codes]
+
+        exec_provider.produce_from_codes = fake_produce_from_codes  # type: ignore[assignment]
+
         stage = FetchOpponentResultsStage(
-            opponent_provider=provider,
-            fallback_codes=fallback_codes,
+            result_provider=exec_provider,
+            fallback_codes=["code_a", "code_b"],
             timeout=60.0,
         )
         stage.attach_inputs({"opponent_ids": Box[object](data=[])})
-
-        async def mock_exec(**kwargs):
-            code = kwargs["code"]
-            if "fallback_a" in code:
-                return ("fallback_a", b"", "")
-            return ("fallback_b", b"", "")
-
-        program = _make_program()
-        with patch("gigaevo.adversarial.stages.run_exec_runner", side_effect=mock_exec):
-            result = await stage.compute(program)
-
-        assert isinstance(result, Box)
-        assert len(result.data) == 2
-        assert "fallback_a" in result.data
-        assert "fallback_b" in result.data
+        result = await stage.compute(_make_program())
+        assert result.data == ["ran::code_a", "ran::code_b"]
+        assert recorded == ["code_a", "code_b"]
 
     @pytest.mark.asyncio
-    async def test_executes_opponent_codes(self):
-        """Executes opponent entrypoint() via run_exec_runner for fetched IDs."""
-        opponents = [
-            OpponentProgram(
-                program_id="p1", code="def entrypoint(): return 1", fitness=0.5
-            ),
-            OpponentProgram(
-                program_id="p2", code="def entrypoint(): return 2", fitness=0.8
-            ),
-        ]
-        provider = FakeProvider(opponents)
+    async def test_all_none_triggers_fallback(self):
+        """Provider returns all Nones → fallback still kicks in."""
+
+        class AllNone(OpponentResultProvider):
+            async def produce(self, ids: list[str]) -> list[Any | None]:
+                return [None] * len(ids)
+
+        archive = FakeArchiveProvider()
+        exec_provider = ExecOpponentResultProvider(
+            archive_provider=archive,
+            per_opponent_timeout=5.0,
+            python_path=[],
+            max_memory_mb=None,
+        )
+
+        async def fake_produce_from_codes(codes):
+            return [f"fb::{c}" for c in codes]
+
+        exec_provider.produce_from_codes = fake_produce_from_codes  # type: ignore[assignment]
+
         stage = FetchOpponentResultsStage(
-            opponent_provider=provider,
+            result_provider=AllNone(),
+            fallback_codes=["code_x"],
+            fallback_exec_provider=exec_provider,
             timeout=60.0,
         )
         stage.attach_inputs({"opponent_ids": Box[object](data=["p1", "p2"])})
-
-        call_count = 0
-
-        async def mock_exec(**_kwargs):
-            nonlocal call_count
-            call_count += 1
-            return (call_count, b"", "")
-
-        program = _make_program()
-        with patch("gigaevo.adversarial.stages.run_exec_runner", side_effect=mock_exec):
-            result = await stage.compute(program)
-
-        assert isinstance(result, Box)
-        assert len(result.data) == 2
-        assert call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_filters_out_failed_opponents(self):
-        """Opponents that raise exceptions are filtered out."""
-        opponents = [
-            OpponentProgram(program_id="p1", code="good", fitness=0.5),
-            OpponentProgram(program_id="p2", code="bad", fitness=0.8),
-        ]
-        provider = FakeProvider(opponents)
-        stage = FetchOpponentResultsStage(
-            opponent_provider=provider,
-            timeout=60.0,
-        )
-        stage.attach_inputs({"opponent_ids": Box[object](data=["p1", "p2"])})
-
-        async def mock_exec(**kwargs):
-            if kwargs["code"] == "bad":
-                raise TimeoutError("timed out")
-            return ("good_result", b"", "")
-
-        program = _make_program()
-        with patch("gigaevo.adversarial.stages.run_exec_runner", side_effect=mock_exec):
-            result = await stage.compute(program)
-
-        assert isinstance(result, Box)
-        assert len(result.data) == 1
-        assert result.data[0] == "good_result"
-
-    @pytest.mark.asyncio
-    async def test_unknown_ids_silently_skipped(self):
-        """IDs not in provider cache are silently skipped (not an error)."""
-        opponents = [
-            OpponentProgram(
-                program_id="p1", code="def entrypoint(): return 1", fitness=0.5
-            ),
-        ]
-        provider = FakeProvider(opponents)
-        stage = FetchOpponentResultsStage(
-            opponent_provider=provider,
-            timeout=60.0,
-        )
-        # Request IDs including one that doesn't exist
-        stage.attach_inputs({"opponent_ids": Box[object](data=["p1", "unknown_id"])})
-
-        async def mock_exec(**_kwargs):
-            return (42, b"", "")
-
-        program = _make_program()
-        with patch("gigaevo.adversarial.stages.run_exec_runner", side_effect=mock_exec):
-            result = await stage.compute(program)
-
-        # Only p1 found; unknown_id silently skipped
-        assert len(result.data) == 1
+        result = await stage.compute(_make_program())
+        assert result.data == ["fb::code_x"]

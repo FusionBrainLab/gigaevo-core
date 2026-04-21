@@ -24,8 +24,8 @@ import click
 
 # Trigger registration.
 import gigaevo  # noqa: F401
+from gigaevo.experiment.log_audit import EVENT_LINE_RE, audit_log_text, render_report
 from gigaevo.monitoring.events import CANONICAL_EVENTS
-from tools.experiment.log_audit import _EVENT_LINE_RE
 
 
 @click.group("events")
@@ -38,12 +38,12 @@ def _parse_log(log_path: Path) -> list[dict]:
 
     Each entry carries the event name, run_label (None if absent), and the
     raw payload dict. Malformed lines are silently skipped — use
-    `gigaevo events audit` / `tools.experiment.log_audit` for strict
-    validation; plotting is tolerant by design.
+    `gigaevo events audit` for strict validation; plotting is tolerant by
+    design.
     """
     out: list[dict] = []
     for raw in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        match = _EVENT_LINE_RE.search(raw)
+        match = EVENT_LINE_RE.search(raw)
         if not match:
             continue
         name = match.group("name")
@@ -354,3 +354,57 @@ def plot(
     )
     (out_dir / "summary.md").write_text(summary)
     click.echo(f"Wrote {out_dir}")
+
+
+@events.command("audit")
+@click.argument("label", required=False)
+@click.option(
+    "--log",
+    "log_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Explicit log file to audit (bypasses manifest resolution).",
+)
+@click.pass_context
+def audit(ctx: click.Context, label: str | None, log_path: Path | None) -> None:
+    """Validate canonical events in a log against the Pydantic registry.
+
+    \b
+    Resolution priority:
+      1. --log <path>                                    (explicit file)
+      2. LABEL positional + -e/--experiment              (run_<label>.log)
+
+    Exits 0 if every bracketed event parses, passes validation, and every
+    event with `expected_after_gen > 0` is observed before the latest
+    generation boundary. Exits 1 otherwise.
+    """
+    exp_name = ctx.obj.get("experiment") or "<unknown>"
+
+    if log_path is None:
+        experiment = ctx.obj.get("experiment")
+        if not experiment:
+            raise click.UsageError(
+                "Provide --log <path> OR a LABEL together with -e/--experiment."
+            )
+        if not label:
+            raise click.UsageError(
+                "Provide a run LABEL (e.g. `events audit A1_G`) or --log <path>."
+            )
+        from gigaevo.experiment.manifest import load_manifest
+
+        manifest = load_manifest(experiment)
+        known = {run.label for run in manifest.contract.runs}
+        if label not in known:
+            raise click.UsageError(
+                f"Unknown run label {label!r}. Known: {', '.join(sorted(known))}"
+            )
+        candidate = Path("experiments") / experiment / f"run_{label}.log"
+        if not candidate.exists():
+            raise click.ClickException(f"Log file not found: {candidate}")
+        log_path = candidate
+
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    report = audit_log_text(log_text)
+    click.echo(render_report(report, exp_name))
+    if report.failures or report.missing_after_gen:
+        ctx.exit(1)

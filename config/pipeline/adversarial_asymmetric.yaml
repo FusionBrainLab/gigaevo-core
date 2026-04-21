@@ -105,8 +105,20 @@ pipeline_builder:
   feedback_mode: ${feedback_mode}
   n_opponents: ${n_opponents}
   source_prompt_k: ${source_prompt_k}
-  per_opponent_timeout: 300.0
+  # per_opponent_timeout is only used by ExecOpponentResultProvider (exec-mode G
+  # runs); CachedOpponentResultProvider (cached-mode D runs) ignores it entirely.
+  # Bound to stage_timeout so exec subprocesses get the same budget as the stage
+  # they run inside, and so cached runs inheriting this base never carry a
+  # surprising smaller value. See pipeline.py for the startup WARNING when a
+  # cached-mode run explicitly overrides this to a non-stage_timeout value.
+  per_opponent_timeout: ${stage_timeout}
   archive_reeval: false
   dg_tracker: ${dg_tracker}
+  opponent_result_mode: ${opponent_result_mode}
+  redis_host: ${redis.host}
+  redis_port: ${redis.port}
+  opponent_sources:
+    - db: ${opponent_redis_db}
+      prefix: ${opponent_redis_prefix}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}

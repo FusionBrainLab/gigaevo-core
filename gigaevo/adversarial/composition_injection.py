@@ -155,16 +155,27 @@ class CompositionInjectionHook:
                 )
                 continue
 
-            program = Program(
+            # I-17 fix: inject as a G-parent descendant, not a fresh root.
+            # Previously `Program(code=..., metadata={...})` defaulted to
+            # generation=1, parents=[], is_root=True on every composed program,
+            # regardless of when it was injected — corrupting every is_root and
+            # generation-based slice of the archive. The composed program is a
+            # Lamarckian descendant of G, so generation = G.generation + 1 and
+            # parents = [g_id]. D is NOT added to parents: D lives in a separate
+            # Redis DB, so G's graph walker cannot resolve a D id. The D
+            # reference stays in metadata.d_source_id.
+            program = Program.create_child(
+                parents=[g_prog],
                 code=composed_code,
-                metadata={
-                    "mutation_type": "d_improvement",
-                    "d_source_id": d_best.program_id,
-                    "g_source_id": g_id,
-                    "d_fitness": d_best.fitness,
-                    "tracked_delta": float(delta),
-                },
+                mutation="d_improvement",
             )
+            program.metadata = {
+                "mutation_type": "d_improvement",
+                "d_source_id": d_best.program_id,
+                "g_source_id": g_id,
+                "d_fitness": d_best.fitness,
+                "tracked_delta": float(delta),
+            }
             await self._g_storage.add(program)
             await self._dg_tracker.mark_pair_injected(d_id, g_id)
             injected_ids.append(program.id)

@@ -52,6 +52,11 @@ class TestExceptionSink:
         except ValueError:
             logger.exception("something failed")
 
+        # Exception sink runs on a background thread (enqueue=True) to avoid
+        # loguru's _protected_lock re-entry when emit() calls logger.info().
+        # Flush the queue before reading capture_sink.
+        logger.complete()
+
         lines = _exc_lines(capture_sink)
         assert len(lines) == 1, f"expected exactly one EXCEPTION line, got {lines}"
         body = json.loads(re.search(r"\{.*\}$", lines[0]).group(0))
@@ -64,6 +69,7 @@ class TestExceptionSink:
     ):
         logger.info("just info")
         logger.warning("just warning")
+        logger.complete()
         lines = _exc_lines(capture_sink)
         assert lines == []
 
@@ -74,6 +80,7 @@ class TestExceptionSink:
         inside the sink's scope must not re-trigger the sink (no recursion).
         """
         logger.bind(canonical_event=True).info('[EXCEPTION] {"fake":true}')
+        logger.complete()
         # The captured line IS the forged canonical event, but the sink did
         # NOT emit a fresh EXCEPTION event of its own.
         captured_event_lines = [m for m in capture_sink if "[EXCEPTION]" in m]

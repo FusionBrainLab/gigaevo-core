@@ -52,6 +52,12 @@ def setup_logger(
             "{message}"
         )
 
+    # enqueue=True routes messages through a background thread, which is
+    # required because sinks (and sink callbacks from logger.exception(...))
+    # may themselves log — without a queue that re-entrance trips loguru's
+    # per-handler `_protected_lock` and spams `RuntimeError: Could not
+    # acquire internal lock because it was already in use` tracebacks.
+
     # Add console handler
     logger.add(
         lambda msg: print(msg, end=""),
@@ -60,6 +66,7 @@ def setup_logger(
         colorize=enable_colors and sys.stdout.isatty(),
         backtrace=True,
         diagnose=True,
+        enqueue=True,
     )
 
     # Add file handler
@@ -73,6 +80,7 @@ def setup_logger(
         encoding="utf-8",
         backtrace=True,
         diagnose=True,
+        enqueue=True,
     )
 
     # Install the EXCEPTION canonical-event sink — emits one [EXCEPTION]

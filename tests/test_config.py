@@ -199,8 +199,9 @@ def test_evolution_constants_default_values():
     assert cfg.loop_interval == pytest.approx(1.0), (
         "loop_interval changed from 1.0 — affects engine polling frequency"
     )
-    assert cfg.max_generations is None, (
-        "max_generations should default to None (run until stopped)"
+    assert cfg.max_generations == 100, (
+        "max_generations changed from 100 — the default stopper "
+        "(config/stopper/max_generations.yaml) resolves this top-level value"
     )
 
 
@@ -236,42 +237,52 @@ def test_sync_min_delta_decoupled_from_max_mutations():
         "max_mutations_per_generation)"
     )
 
-    # 2. Both adversarial pipelines wire min_delta from sync_min_delta
+    # 2. Both adversarial pipelines wire the drift/sync value from sync_min_delta.
+    # ProgressBasedSyncHook accepts either `drift_cap` (preferred) or `min_delta`
+    # (legacy alias). Pipelines differ in which key they use:
+    #   adversarial_asymmetric: min_delta: ${sync_min_delta}
+    #   adversarial_coevo_ss:   drift_cap: ${sync_min_delta}
     _ADVERSARIAL_OVERRIDES = [
         "opponent_redis_db=0",
         "opponent_redis_prefix=test",
     ]
+
+    def _hook_sync_value(hook_cfg) -> int:
+        if "min_delta" in hook_cfg:
+            return hook_cfg.min_delta
+        return hook_cfg.drift_cap
+
     for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
         cfg = _compose(f"pipeline={pipeline}", *_ADVERSARIAL_OVERRIDES)
-        assert cfg.pre_step_hook.min_delta == 8, (
-            f"pipeline={pipeline}: pre_step_hook.min_delta should be 8 "
-            f"(from sync_min_delta), got {cfg.pre_step_hook.min_delta}"
+        assert _hook_sync_value(cfg.pre_step_hook) == 8, (
+            f"pipeline={pipeline}: pre_step_hook sync value should be 8 "
+            f"(from sync_min_delta), got {_hook_sync_value(cfg.pre_step_hook)}"
         )
 
-    # 3. Changing max_mutations does NOT change min_delta
+    # 3. Changing max_mutations does NOT change the hook's sync value.
     for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
         cfg = _compose(
             f"pipeline={pipeline}",
             "max_mutations_per_generation=40",
             *_ADVERSARIAL_OVERRIDES,
         )
-        assert cfg.pre_step_hook.min_delta == 8, (
-            f"pipeline={pipeline}: min_delta should stay 8 when "
+        assert _hook_sync_value(cfg.pre_step_hook) == 8, (
+            f"pipeline={pipeline}: sync value should stay 8 when "
             f"max_mutations_per_generation=40 — coupling not decoupled!"
         )
         assert cfg.max_mutations_per_generation == 40, (
             "max_mutations_per_generation override should take effect"
         )
 
-    # 4. sync_min_delta can be overridden independently
+    # 4. sync_min_delta can be overridden independently.
     for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
         cfg = _compose(
             f"pipeline={pipeline}",
             "sync_min_delta=1",
             *_ADVERSARIAL_OVERRIDES,
         )
-        assert cfg.pre_step_hook.min_delta == 1, (
-            f"pipeline={pipeline}: overriding sync_min_delta=1 should set min_delta=1"
+        assert _hook_sync_value(cfg.pre_step_hook) == 1, (
+            f"pipeline={pipeline}: overriding sync_min_delta=1 should set hook sync=1"
         )
 
 

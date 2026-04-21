@@ -6,6 +6,7 @@ and completion. Multi-signal detection prevents false alarms (P-WD-01).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -82,10 +83,12 @@ class AlertDetector:
         invalidity_threshold: float = 0.75,
         invalidity_min_generation: int = 3,
         cooldown_cycles: int = 2,
+        excluded_events: Iterable[str] | None = None,
     ):
         self._invalidity_threshold = invalidity_threshold
         self._invalidity_min_gen = invalidity_min_generation
         self._cooldown_cycles = cooldown_cycles
+        self._excluded_events: set[str] = set(excluded_events or ())
 
         # State between calls
         self._previous_snapshots: dict[str, RunSnapshot] = {}
@@ -255,6 +258,8 @@ class AlertDetector:
         for name, count in snap.event_window_counts.items():
             cls = CANONICAL_EVENTS.get(name)
             if cls is None:
+                continue
+            if name in self._excluded_events:
                 continue
             threshold = getattr(cls, "expected_after_gen", 0) or 0
             if threshold <= 0:

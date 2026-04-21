@@ -175,6 +175,98 @@ class TestAlignment:
 
 
 # ===================================================================
+# F22 mismatch triage — split ERROR into benign (DEBUG) vs real (ERROR)
+# ===================================================================
+
+
+@pytest.fixture
+def loguru_sink():
+    """Capture loguru messages (loguru does not propagate to pytest caplog)."""
+    from loguru import logger
+
+    messages: list[tuple[str, str]] = []
+    sink_id = logger.add(
+        lambda m: messages.append((m.record["level"].name, m.record["message"])),
+        level="DEBUG",
+    )
+    yield messages
+    logger.remove(sink_id)
+
+
+class TestF22MismatchTriage:
+    @pytest.mark.asyncio
+    async def test_candidate_failed_is_debug_not_error(
+        self, tracker, program, loguru_sink
+    ):
+        # G candidate failed validation: opponent_ids was sampled upstream but
+        # evaluate.py returned empty per_opp_delta with is_valid=False.
+        stage = _make_stage(tracker, "constructor")
+        _attach(
+            stage,
+            ["d1"],
+            (
+                {"fitness": -1.0},
+                {
+                    "role": "constructor",
+                    "is_valid": False,
+                    "n_opponents": 0,
+                    "per_opp_delta": [],
+                },
+            ),
+        )
+
+        await stage.compute(program)
+
+        tracker.record_batch.assert_not_awaited()
+        levels = [level for level, _ in loguru_sink]
+        assert "ERROR" not in levels, (
+            f"candidate-failed must not log ERROR: {loguru_sink}"
+        )
+        assert any("candidate failed validation" in msg for _, msg in loguru_sink)
+
+    @pytest.mark.asyncio
+    async def test_gen_zero_seed_race_is_debug_not_error(
+        self, tracker, program, loguru_sink
+    ):
+        # Gen-0: archive empty → opponent_ids empty, but fallback codes produced
+        # synthetic per_opp_delta entries. Benign, skip without ERROR noise.
+        stage = _make_stage(tracker, "constructor")
+        _attach(
+            stage,
+            [],
+            ({}, {"role": "constructor", "per_opp_delta": [0.1, 0.2]}),
+        )
+
+        await stage.compute(program)
+
+        tracker.record_batch.assert_not_awaited()
+        levels = [level for level, _ in loguru_sink]
+        assert "ERROR" not in levels, f"init-race must not log ERROR: {loguru_sink}"
+        assert any("gen-0 seed fallback" in msg for _, msg in loguru_sink)
+
+    @pytest.mark.asyncio
+    async def test_genuine_mismatch_still_errors(self, tracker, program, loguru_sink):
+        # Both sides non-empty but lengths disagree → real mismatch, keep ERROR.
+        stage = _make_stage(tracker, "constructor")
+        _attach(
+            stage,
+            ["d1", "d2"],
+            (
+                {},
+                {"role": "constructor", "is_valid": True, "per_opp_delta": [0.1]},
+            ),
+        )
+
+        await stage.compute(program)
+
+        tracker.record_batch.assert_not_awaited()
+        assert any(
+            level == "ERROR" and "possible cache leak" in msg
+            for level, msg in loguru_sink
+        ), f"genuine mismatch must log ERROR: {loguru_sink}"
+
+
+# ===================================================================
 # Malformed validation payload
 # ===================================================================
 
