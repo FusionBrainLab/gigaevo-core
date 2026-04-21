@@ -147,6 +147,11 @@ class AlertThresholds(BaseModel):
     invalidity_rate: float = 0.75
     stagnation_window: int = 10
     generation_gap_threshold: int = 5
+    # Canonical event names to suppress in event_rate_zero alerts. Use when a
+    # pipeline legitimately never emits a given event (e.g. simple opponent
+    # provider emits no HOF_FETCH/HOF_ROTATE/CELL_PICK); listing it here stops
+    # the watchdog from crying wolf without disabling the check globally.
+    excluded_events: list[str] = []
 
 
 class WatchdogSection(BaseModel):
