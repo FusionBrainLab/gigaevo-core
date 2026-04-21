@@ -4,7 +4,7 @@ Verifies:
   - Real program.id is used (not the old "<program>" placeholder).
   - Role-aware pair construction.
   - NaN filtering, alignment validation, malformed-payload guard.
-  - Tracker.record_batch is awaited with the expected pairs.
+  - Tracker.record_metrics is awaited with the expected per-opponent dicts.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from gigaevo.programs.stages.common import Box
 @pytest.fixture
 def tracker():
     mock = AsyncMock()
-    mock.record_batch.return_value = 0
+    mock.record_metrics.return_value = None
     return mock
 
 
@@ -62,17 +62,17 @@ class TestUsesRealProgramId:
 
         await stage.compute(program)
 
-        tracker.record_batch.assert_awaited_once()
-        pairs = tracker.record_batch.await_args.args[0]
+        assert tracker.record_metrics.await_count == 2
+        call_kwargs = [c.kwargs for c in tracker.record_metrics.await_args_list]
         # G is the program (real id), D is the opponent.
-        assert pairs == [
-            ("d-opp-1", program.id, 0.1),
-            ("d-opp-2", program.id, 0.2),
-        ]
+        assert call_kwargs[0]["d_id"] == "d-opp-1"
+        assert call_kwargs[0]["g_id"] == program.id
+        assert call_kwargs[1]["d_id"] == "d-opp-2"
+        assert call_kwargs[1]["g_id"] == program.id
         # No "<program>" placeholder anywhere.
-        for d, g, _ in pairs:
-            assert d != "<program>"
-            assert g != "<program>"
+        for kw in call_kwargs:
+            assert kw["d_id"] != "<program>"
+            assert kw["g_id"] != "<program>"
 
     @pytest.mark.asyncio
     async def test_improver_records_with_real_program_id(self, tracker, program):
@@ -87,12 +87,13 @@ class TestUsesRealProgramId:
 
         await stage.compute(program)
 
-        pairs = tracker.record_batch.await_args.args[0]
+        assert tracker.record_metrics.await_count == 2
+        call_kwargs = [c.kwargs for c in tracker.record_metrics.await_args_list]
         # D is the program (real id), G is the opponent.
-        assert pairs == [
-            (program.id, "g-opp-1", 0.05),
-            (program.id, "g-opp-2", 0.15),
-        ]
+        assert call_kwargs[0]["d_id"] == program.id
+        assert call_kwargs[0]["g_id"] == "g-opp-1"
+        assert call_kwargs[1]["d_id"] == program.id
+        assert call_kwargs[1]["g_id"] == "g-opp-2"
 
 
 # ===================================================================
@@ -110,18 +111,22 @@ class TestNanFiltering:
 
         await stage.compute(program)
 
-        pairs = tracker.record_batch.await_args.args[0]
-        assert pairs == [("d2", program.id, 0.1)]
+        # Only d2 (non-NaN) should be recorded.
+        assert tracker.record_metrics.await_count == 1
+        kw = tracker.record_metrics.await_args_list[0].kwargs
+        assert kw["d_id"] == "d2"
+        assert kw["g_id"] == program.id
+        assert kw["metrics"]["fitness_delta"] == 0.1
 
     @pytest.mark.asyncio
-    async def test_all_nan_does_not_call_record_batch(self, tracker, program):
+    async def test_all_nan_does_not_call_record_metrics(self, tracker, program):
         stage = _make_stage(tracker, "constructor")
         opponent_ids = ["d1", "d2"]
         artifact = {"per_opp_delta": [float("nan"), float("nan")]}
         _attach(stage, opponent_ids, ({}, artifact))
 
         await stage.compute(program)
-        tracker.record_batch.assert_not_awaited()
+        tracker.record_metrics.assert_not_awaited()
 
 
 # ===================================================================
@@ -139,11 +144,15 @@ class TestNegativeDeltas:
 
         await stage.compute(program)
 
-        pairs = tracker.record_batch.await_args.args[0]
-        assert pairs == [
-            ("d1", program.id, -0.05),
-            ("d2", program.id, 0.1),
-        ]
+        # Both deltas (positive and negative) are recorded via record_metrics.
+        assert tracker.record_metrics.await_count == 2
+        call_kwargs = [c.kwargs for c in tracker.record_metrics.await_args_list]
+        assert call_kwargs[0]["d_id"] == "d1"
+        assert call_kwargs[0]["g_id"] == program.id
+        assert call_kwargs[0]["metrics"]["fitness_delta"] == -0.05
+        assert call_kwargs[1]["d_id"] == "d2"
+        assert call_kwargs[1]["g_id"] == program.id
+        assert call_kwargs[1]["metrics"]["fitness_delta"] == 0.1
 
 
 # ===================================================================
@@ -162,7 +171,7 @@ class TestAlignment:
         )
 
         await stage.compute(program)
-        tracker.record_batch.assert_not_awaited()
+        tracker.record_metrics.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_missing_per_opp_delta_treated_as_empty(self, tracker, program):
@@ -171,7 +180,7 @@ class TestAlignment:
         _attach(stage, [], ({}, {}))
 
         await stage.compute(program)
-        tracker.record_batch.assert_not_awaited()
+        tracker.record_metrics.assert_not_awaited()
 
 
 # ===================================================================
@@ -217,7 +226,7 @@ class TestF22MismatchTriage:
 
         await stage.compute(program)
 
-        tracker.record_batch.assert_not_awaited()
+        tracker.record_metrics.assert_not_awaited()
         levels = [level for level, _ in loguru_sink]
         assert "ERROR" not in levels, (
             f"candidate-failed must not log ERROR: {loguru_sink}"
@@ -239,7 +248,7 @@ class TestF22MismatchTriage:
 
         await stage.compute(program)
 
-        tracker.record_batch.assert_not_awaited()
+        tracker.record_metrics.assert_not_awaited()
         levels = [level for level, _ in loguru_sink]
         assert "ERROR" not in levels, f"init-race must not log ERROR: {loguru_sink}"
         assert any("gen-0 seed fallback" in msg for _, msg in loguru_sink)
@@ -259,7 +268,7 @@ class TestF22MismatchTriage:
 
         await stage.compute(program)
 
-        tracker.record_batch.assert_not_awaited()
+        tracker.record_metrics.assert_not_awaited()
         assert any(
             level == "ERROR" and "possible cache leak" in msg
             for level, msg in loguru_sink
@@ -279,7 +288,7 @@ class TestMalformedPayload:
         _attach(stage, ["d1"], {"fitness": 0.5})
 
         await stage.compute(program)
-        tracker.record_batch.assert_not_awaited()
+        tracker.record_metrics.assert_not_awaited()
 
 
 # ===================================================================
@@ -313,7 +322,7 @@ class TestArtifactRoleCrossCheck:
         _attach(stage, opponent_ids, ({}, artifact))
 
         await stage.compute(program)
-        tracker.record_batch.assert_not_awaited()
+        tracker.record_metrics.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_role_match_records_normally(self, tracker, program):
@@ -327,7 +336,7 @@ class TestArtifactRoleCrossCheck:
         _attach(stage, opponent_ids, ({}, artifact))
 
         await stage.compute(program)
-        tracker.record_batch.assert_awaited_once()
+        assert tracker.record_metrics.await_count == 2
 
     @pytest.mark.asyncio
     async def test_missing_role_field_does_not_block(self, tracker, program):
@@ -338,4 +347,46 @@ class TestArtifactRoleCrossCheck:
         _attach(stage, opponent_ids, ({}, artifact))
 
         await stage.compute(program)
-        tracker.record_batch.assert_awaited_once()
+        tracker.record_metrics.assert_awaited_once()
+
+
+# ===================================================================
+# Task 4: DGTrackerStage must call record_metrics with synthesized dict
+# ===================================================================
+
+
+class TestDGTrackerStageWritesMetricsDict:
+    """DGTrackerStage must call tracker.record_metrics with synthesized dict per opponent."""
+
+    @pytest.mark.asyncio
+    async def test_improver_records_metrics_dict_per_opp(self, tracker, program):
+        stage = _make_stage(tracker, "improver")
+        opponent_ids = ["g1", "g2"]
+        artifact = {"role": "improver", "per_opp_delta": [0.1, 0.2]}
+        _attach(stage, opponent_ids, ({"fitness": 0.5}, artifact))
+        await stage.compute(program)
+        # Expect two record_metrics calls, each with synthesized dict
+        assert tracker.record_metrics.await_count == 2
+        call_args = [c.kwargs for c in tracker.record_metrics.await_args_list]
+        assert call_args[0] == {
+            "d_id": program.id,
+            "g_id": "g1",
+            "metrics": {"fitness_delta": 0.1, "is_valid": 1.0},
+        }
+        assert call_args[1] == {
+            "d_id": program.id,
+            "g_id": "g2",
+            "metrics": {"fitness_delta": 0.2, "is_valid": 1.0},
+        }
+
+    @pytest.mark.asyncio
+    async def test_nan_delta_becomes_invalid_dict(self, tracker, program):
+        stage = _make_stage(tracker, "improver")
+        _attach(
+            stage,
+            ["g1"],
+            ({"fitness": 0.0}, {"role": "improver", "per_opp_delta": [float("nan")]}),
+        )
+        await stage.compute(program)
+        # NaN-filter semantics: NaN entries are SKIPPED (not recorded) — preserve existing behavior
+        assert tracker.record_metrics.await_count == 0

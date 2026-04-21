@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import json
 from typing import cast
 
 from loguru import logger
@@ -54,8 +55,9 @@ class DGImprovementTracker:
     _G_RESISTED_KEY_TEMPLATE = (
         "{prefix}:dg_g_resisted:{g_id}"  # SET of d_ids G has resisted
     )
-    _D_DELTA_KEY_TEMPLATE = (
-        "{prefix}:dg_delta:{d_id}"  # HASH g_id -> raw delta (any sign)
+    # v4: full per-opponent metrics dict replaces the old scalar-delta hash.
+    _D_METRICS_KEY_TEMPLATE = (
+        "{prefix}:dg_metrics:{d_id}"  # HASH g_id -> JSON metrics dict
     )
 
     def __init__(
@@ -87,8 +89,8 @@ class DGImprovementTracker:
     def _g_resisted_key(self, g_id: str) -> str:
         return self._G_RESISTED_KEY_TEMPLATE.format(prefix=self._prefix, g_id=g_id)
 
-    def _d_delta_key(self, d_id: str) -> str:
-        return self._D_DELTA_KEY_TEMPLATE.format(prefix=self._prefix, d_id=d_id)
+    def _d_metrics_key(self, d_id: str) -> str:
+        return self._D_METRICS_KEY_TEMPLATE.format(prefix=self._prefix, d_id=d_id)
 
     async def is_pair_injected(self, d_id: str, g_id: str) -> bool:
         """Return True if (D, G) pair has already been composed and injected.
@@ -134,6 +136,27 @@ class DGImprovementTracker:
             delta,
         )
 
+    async def record_metrics(
+        self, d_id: str, g_id: str, metrics: dict[str, float]
+    ) -> None:
+        """Record a full per-opponent metrics dict for (D, G).
+
+        Stores the metrics dict as JSON in the dg_metrics:{d_id} hash keyed
+        by g_id. This is the v4 substrate — replaces the old scalar-delta hash.
+        """
+        key = self._d_metrics_key(d_id)
+        await self._redis.hset(key, g_id, json.dumps(metrics))
+        await self._redis.expire(key, self._ttl)
+
+    async def metrics_by_d(self, d_id: str) -> dict[str, dict[str, float]]:
+        """Return all per-G metrics dicts recorded for this D.
+
+        Returns {g_id: {metric_name: value}} for every G this D has been
+        evaluated against (via record_metrics).
+        """
+        raw = await self._redis.hgetall(self._d_metrics_key(d_id))
+        return {g_id: json.loads(payload) for g_id, payload in raw.items()}
+
     async def record_batch(
         self,
         pairs: list[tuple[str, str, float]],
@@ -147,9 +170,9 @@ class DGImprovementTracker:
           - Global best-pairs sorted set ``dg_best_pairs``  (positive deltas only)
           - D-keyed SET ``dg_d_wins:{d_id}``                (positive deltas)
           - G-keyed SET ``dg_g_resisted:{g_id}``            (non-positive deltas)
-          - D-keyed HASH ``dg_delta:{d_id}``                (every pair, any sign)
+          - D-keyed HASH ``dg_metrics:{d_id}``              (every pair, any sign)
 
-        The D-delta hash is the substrate for ``SharedBenchmarkLineageStage``
+        The D-metrics hash is the substrate for ``SharedBenchmarkLineageStage``
         (§3.5 Prong 2). The D-wins / G-resisted SETs are the BD y-axes.
 
         Emits a ``[TRACKER_WRITE]`` structured JSON log line so post-hoc log
@@ -167,13 +190,14 @@ class DGImprovementTracker:
 
         d_wins: dict[str, set[str]] = {}
         g_resisted: dict[str, set[str]] = {}
-        d_deltas: dict[str, dict[str, str]] = {}
+        d_metrics: dict[str, dict[str, str]] = {}
 
         positive_count = 0
         for d_id, g_id, delta in pairs:
             d_val = float(delta)
-            # Raw delta hash captures every pair, regardless of sign.
-            d_deltas.setdefault(d_id, {})[g_id] = repr(d_val)
+            # Metrics hash captures every pair, regardless of sign.
+            metrics_dict = {"fitness_delta": d_val, "is_valid": 1.0}
+            d_metrics.setdefault(d_id, {})[g_id] = json.dumps(metrics_dict)
             if d_val > 0:
                 positive_count += 1
                 key = self._key(g_id)
@@ -200,12 +224,12 @@ class DGImprovementTracker:
             key = self._g_resisted_key(g_id)
             pipe.sadd(key, *d_set)
             pipe.expire(key, self._ttl)
-        for d_id, delta_map in d_deltas.items():
-            key = self._d_delta_key(d_id)
+        for d_id, metrics_map in d_metrics.items():
+            key = self._d_metrics_key(d_id)
             pipe.hset(
                 key,
                 mapping=cast(
-                    "Mapping[str | bytes, bytes | float | int | str]", delta_map
+                    "Mapping[str | bytes, bytes | float | int | str]", metrics_map
                 ),
             )
             pipe.expire(key, self._ttl)
@@ -217,7 +241,7 @@ class DGImprovementTracker:
             positive_count=positive_count,
             d_wins_added=sum(len(v) for v in d_wins.values()),
             g_resisted_added=sum(len(v) for v in g_resisted.values()),
-            d_faced_added=sum(len(v) for v in d_deltas.values()),
+            d_faced_added=sum(len(v) for v in d_metrics.values()),
             gen=gen,
         )
         return positive_count
@@ -240,8 +264,9 @@ class DGImprovementTracker:
         """Set of G program IDs this D has been evaluated against (any outcome).
 
         Substrate for ``SharedBenchmarkResolver`` intersection (§3.5 Prong 2).
+        Reads from the v4 dg_metrics hash.
         """
-        keys = await self._redis.hkeys(self._d_delta_key(d_id))
+        keys = await self._redis.hkeys(self._d_metrics_key(d_id))
         return set(keys)
 
     async def get_deltas_against(
@@ -252,16 +277,19 @@ class DGImprovementTracker:
         Consumed by ``SharedBenchmarkLineageStage`` to compute
         ``mean(delta_child) - mean(delta_parent)`` over the intersection
         of the two D's benchmark histories.
+        Reads from the v4 dg_metrics hash (fitness_delta field).
         """
         if not g_ids:
             return []
         g_list = list(g_ids)
-        deltas_a = await self._redis.hmget(self._d_delta_key(d_a), g_list)
-        deltas_b = await self._redis.hmget(self._d_delta_key(d_b), g_list)
+        raw_a = await self._redis.hmget(self._d_metrics_key(d_a), g_list)
+        raw_b = await self._redis.hmget(self._d_metrics_key(d_b), g_list)
         paired: list[tuple[float, float]] = []
-        for da, db in zip(deltas_a, deltas_b):
-            if da is None or db is None:
+        for ra, rb in zip(raw_a, raw_b):
+            if ra is None or rb is None:
                 continue
+            da = json.loads(ra)["fitness_delta"]
+            db = json.loads(rb)["fitness_delta"]
             paired.append((float(da), float(db)))
         return paired
 

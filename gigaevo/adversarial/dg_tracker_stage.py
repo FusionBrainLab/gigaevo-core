@@ -9,7 +9,7 @@ Role-aware recording (uses real program.id from the DAG-supplied Program):
   constructor (G run): pair = (d_id=opponent_id, g_id=program.id, delta)
 
 Filtered: NaN deltas are skipped (no measurement). Non-positive deltas reach
-DGTracker.record_batch which discards them silently.
+DGTracker.record_metrics (one call per opponent, NaN entries skipped).
 
 Output: VoidOutput — this stage is a pure side-effect (Redis write).
 Only real failure modes log (role mismatch, length mismatch, unexpected
@@ -168,7 +168,6 @@ class DGTrackerStage(Stage):
                 )
             return None
 
-        pairs: list[tuple[str, str, float]] = []
         n_skip_nan = 0
         n_neg = 0
 
@@ -179,20 +178,20 @@ class DGTrackerStage(Stage):
             d_val = float(delta)
             if d_val <= 0:
                 n_neg += 1
-
+            metrics_dict = {"fitness_delta": d_val, "is_valid": 1.0}
             if self._role == "improver":
-                # D improves G; record (d=program, g=opponent, delta).
-                pairs.append((program_id, opponent_id, d_val))
+                # D improves G; record (d=program, g=opponent).
+                d_id, g_id = program_id, opponent_id
             else:
-                # G resists D; record (d=opponent, g=program, delta).
-                pairs.append((opponent_id, program_id, d_val))
+                # G resists D; record (d=opponent, g=program).
+                d_id, g_id = opponent_id, program_id
+            await self._tracker.record_metrics(
+                d_id=d_id, g_id=g_id, metrics=metrics_dict
+            )
 
-        if pairs:
-            await self._tracker.record_batch(pairs)
         # I-15: per-pair and per-stage summary INFO logs removed — they
         # produced 2*n_opp lines per mutation and drowned out real errors.
-        # Counters (n_skip_nan, n_neg, n_opp, n_recorded) are retained as
-        # locals only to preserve the record_batch return-value contract
-        # and document the filter logic; they no longer emit log lines.
+        # Counters (n_skip_nan, n_neg, n_opp) are retained as locals only
+        # to document the filter logic; they no longer emit log lines.
         _ = (n_skip_nan, n_neg, n_opp)
         return None
