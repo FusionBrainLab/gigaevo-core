@@ -1,200 +1,199 @@
-"""Shared-benchmark lineage signal (v3 D population, Prong 2 HoF-snapshot race fix).
+"""Shared-benchmark filter for D-side LineageStage.
 
-Lineage trend = mean(child_deltas) - mean(parent_deltas) on shared G benchmark.
-Shared benchmark = intersection of G's both child-D and parent-D have faced.
-This breaks HoF-snapshot race (HoF rotates, so current-HoF comparison is not
-meaningful across generations). Shared benchmark is stable (no rotation).
+Rationale
+---------
+D's LineageStage narrates parent-D → child-D fitness transitions to the
+mutation LLM. In adversarial co-evolution with a rotating G Hall-of-Fame
+the raw whole-eval deltas are apples-to-oranges: parent and child are
+usually scored against different G's. This stage subclasses LineageStage
+and overrides preprocess() to:
 
-Caching contract: the stage uses ``CacheOnlyInput`` with ``cache_on`` plumbed
-to the current opponent-id list from ``FetchOpponentIdsStage``. The tracker
-pairs backing the shared benchmark only grow meaningfully when the G HoF
-rotates (new G's enter the eval set), so opponent-id change is a defensible
-invalidation signal — within a single HoF window the trend estimate is stable
-because appended pairs are marginal and tracker deltas are immutable once
-written. This matches the invalidation pattern used by ``LineageStage`` /
-``InsightsStage`` in ``asymmetric_pipeline.py``.
+  1) Filter out parents that share fewer than min_shared evaluation
+     opponents with the child (tracker.faced_by_d intersection).
+  2) Build HoF-invariant per-metric means over the shared opponents,
+     respecting MetricsContext sentinels and the is_valid gate, and pass
+     them to the LLM agent as TransitionEvidence.
+
+Installation
+------------
+AdversarialAsymmetricPipelineBuilder uses PipelineBuilder.replace_stage(
+"LineageStage", ...) on D runs only (see Task 7). Node name stays
+"LineageStage" so downstream edges are preserved.
+
+Future work
+-----------
+G-side analog deferred — see experiments/IDEAS.yaml:
+heilbron-g-side-lineage-filter.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from gigaevo.adversarial.structured_logging import emit_lineage_trend
-from gigaevo.database.program_storage import ProgramStorage
-from gigaevo.programs.core_types import StageIO
+from gigaevo.llm.agents.lineage import TransitionEvidence
+from gigaevo.programs.core_types import ProgramStageResult, StageIO
+from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
 from gigaevo.programs.program import Program
-from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.common import CacheOnlyInput
+from gigaevo.programs.stages.insights_lineage import LineageStage
 
 if TYPE_CHECKING:
     from gigaevo.adversarial.dg_tracker import DGImprovementTracker
 
 
-class SharedBenchmarkLineageOutput(StageIO):
-    """Output of SharedBenchmarkLineageStage."""
+def _aggregate_shared_metrics(
+    parent_by_g: dict[str, dict[str, float]],
+    child_by_g: dict[str, dict[str, float]],
+    shared_g: Iterable[str],
+    ctx: MetricsContext,
+) -> tuple[dict[str, float], dict[str, float], dict[str, int]]:
+    """Return (shared_parent_metrics, shared_child_metrics, per_metric_counts).
 
-    trend: float | None = None
-    """Mean delta(child) - mean delta(parent) on shared benchmark. None if insufficient data."""
-
-    n_shared: int | None = None
-    """Number of shared G's used in trend calculation. None if insufficient."""
-
-
-class SharedBenchmarkResolver(ABC):
-    """Abstraction for finding the shared benchmark between two D programs."""
-
-    @abstractmethod
-    async def shared_benchmark(self, d_a: str, d_b: str) -> list[str]:
-        """Return G IDs both d_a and d_b have been evaluated against."""
-        pass
-
-
-class DGTrackerSharedOpponentResolver(SharedBenchmarkResolver):
-    """Shared benchmark resolver using DGImprovementTracker.faced_by_d intersection."""
-
-    def __init__(self, *, tracker: DGImprovementTracker):
-        self._tracker = tracker
-
-    async def shared_benchmark(self, d_a: str, d_b: str) -> list[str]:
-        faced_a = await self._tracker.faced_by_d(d_a)
-        faced_b = await self._tracker.faced_by_d(d_b)
-        return list(faced_a & faced_b)
-
-
-class SharedBenchmarkLineageStage(Stage):
-    """Compute lineage trend on shared-benchmark G's (D-side, v3 §3.5 Prong 2).
-
-    Args:
-        resolver: SharedBenchmarkResolver instance.
-        storage: ProgramStorage for loading parent by ``program.parent_id``.
-            Optional for tests that override ``_load_parent``.
-        min_shared: Minimum shared G's required to compute trend (default 2).
-
-    Caching: ``InputsModel = CacheOnlyInput`` — wire ``cache_on`` from
-    ``FetchOpponentIdsStage`` to invalidate on HoF rotation.
+    Rules:
+      - VALIDITY_KEY aggregated as a plain mean over ALL shared G's
+        (0/1 indicator → mean is the valid-rate).
+      - Other metrics: a G contributes only when ctx.is_valid holds on
+        BOTH parent and child AND neither value is a sentinel per
+        ctx.is_sentinel.
+      - Zero surviving G's for a metric → both sides are set to that
+        metric's sentinel value (MetricsFormatter renders [sentinel]).
     """
+    shared_g = list(shared_g)
 
-    InputsModel = CacheOnlyInput
-    OutputModel = SharedBenchmarkLineageOutput
+    all_metrics: set[str] = set()
+    for g in shared_g:
+        all_metrics |= parent_by_g.get(g, {}).keys()
+        all_metrics |= child_by_g.get(g, {}).keys()
+
+    shared_parent: dict[str, float] = {}
+    shared_child: dict[str, float] = {}
+    counts: dict[str, int] = {}
+
+    for m in all_metrics:
+        if m == VALIDITY_KEY:
+            p_vals = [float(parent_by_g[g].get(m, 0.0)) for g in shared_g]
+            c_vals = [float(child_by_g[g].get(m, 0.0)) for g in shared_g]
+            shared_parent[m] = sum(p_vals) / len(p_vals) if p_vals else 0.0
+            shared_child[m] = sum(c_vals) / len(c_vals) if c_vals else 0.0
+            counts[m] = len(shared_g)
+            continue
+
+        p_vals, c_vals = [], []
+        for g in shared_g:
+            p = parent_by_g.get(g, {})
+            c = child_by_g.get(g, {})
+            if not ctx.is_valid(p) or not ctx.is_valid(c):
+                continue
+            pv, cv = p.get(m), c.get(m)
+            if pv is None or cv is None:
+                continue
+            if ctx.is_sentinel(m, pv) or ctx.is_sentinel(m, cv):
+                continue
+            p_vals.append(float(pv))
+            c_vals.append(float(cv))
+
+        counts[m] = len(p_vals)
+        if p_vals:
+            shared_parent[m] = sum(p_vals) / len(p_vals)
+            shared_child[m] = sum(c_vals) / len(c_vals)
+        else:
+            spec = ctx.specs.get(m)
+            sentinel = (
+                spec.sentinel_value if spec and spec.sentinel_value is not None else 0.0
+            )
+            shared_parent[m] = sentinel
+            shared_child[m] = sentinel
+
+    return shared_parent, shared_child, counts
+
+
+class SharedBenchmarkFilteredLineageStage(LineageStage):
+    """LineageStage variant: filter parents by shared eval benchmark.
+
+    A parent survives iff
+    ``|tracker.faced_by_d(child) ∩ tracker.faced_by_d(parent)| >= min_shared``.
+    For survivors, builds a TransitionEvidence from tracker.metrics_by_d
+    with sentinel + is_valid gating and passes it to the LLM agent.
+    """
 
     def __init__(
         self,
         *,
-        resolver: SharedBenchmarkResolver,
-        storage: ProgramStorage | None = None,
-        min_shared: int = 2,
+        tracker: DGImprovementTracker,
+        metrics_context: MetricsContext,
+        min_shared: int = 1,
+        inject_shared_evidence: bool = True,
         **kwargs: Any,
     ):
-        super().__init__(**kwargs)
-        self._resolver = resolver
-        self._storage = storage
+        super().__init__(metrics_context=metrics_context, **kwargs)
+        self._tracker = tracker
+        self._metrics_context = metrics_context
         self._min_shared = min_shared
+        self._inject_shared_evidence = inject_shared_evidence
 
-    async def _load_parent(self, program: Program) -> Program | None:
-        """Load the first parent program. Override in tests if no storage is supplied.
+    async def preprocess(
+        self, program: Program, params: StageIO
+    ) -> dict[str, Any] | ProgramStageResult:
+        parent_ids: list[str] = list(program.lineage.parents)
 
-        ``Program.lineage.parents`` is a ``list[str]`` of parent IDs (seeds have
-        an empty list). We use the first parent for the lineage-delta signal —
-        for rewrite-mode mutation the list always has exactly one entry.
-        """
-        lineage = getattr(program, "lineage", None)
-        parent_ids = list(getattr(lineage, "parents", []) or [])
+        logger.info(
+            "[LineageStage] program={} n_parents={}",
+            program.id[:8],
+            len(parent_ids),
+        )
+
         if not parent_ids:
-            return None
-        if self._storage is None:
-            return None
-        loaded = await self._storage.mget([parent_ids[0]])
-        if not loaded:
-            return None
-        return loaded[0]
-
-    def _d_id(self, program: Program) -> str:
-        """D program id == d_id in tracker. Test hook via ``_parent_id_to_d_id``."""
-        mapping = getattr(self, "_parent_id_to_d_id", None)
-        if mapping is not None:
-            mapped = mapping.get(program.id)
-            if mapped is not None:
-                return mapped
-        return program.id
-
-    def _emit_lineage_event(
-        self,
-        program_id: str,
-        d_id: str,
-        parent_d_id: str,
-        trend: float | None,
-        n_shared: int,
-    ) -> None:
-        # d_id / parent_d_id / n_shared are no longer in the canonical schema
-        # (the registry schema is program_id, gen, trend). They remain as
-        # function args for call-site ergonomics and potential future debug
-        # logging, but are not part of the canonical event payload.
-        del d_id, parent_d_id, n_shared
-        emit_lineage_trend(program_id=program_id, trend=trend)
-
-    def _write_metrics(
-        self, program: Program, trend: float | None, n_shared: int | None
-    ) -> None:
-        """Stash trend + n_shared on program.metrics for BD / telemetry use."""
-        if program.metrics is None:
-            return
-        program.metrics["lineage_trend"] = trend if trend is not None else 0.0
-        program.metrics["n_shared"] = n_shared if n_shared is not None else 0
-
-    async def compute(self, program: Program) -> SharedBenchmarkLineageOutput:
-        """Compute shared-benchmark lineage trend for this program."""
-        d_id = self._d_id(program)
-
-        parent = await self._load_parent(program)
-        if parent is None:
-            logger.debug(
-                "[SharedBenchmarkLineageStage] {} no parent; trend=None",
+            logger.info(
+                "[LineageStage:SharedBenchmark] program={} kept 0/0 parents (no parents)",
                 program.id[:8],
             )
-            self._emit_lineage_event(program.id, d_id, "", None, 0)
-            self._write_metrics(program, None, None)
-            return SharedBenchmarkLineageOutput(trend=None, n_shared=None)
-
-        parent_d_id = self._d_id(parent)
-
-        shared = await self._resolver.shared_benchmark(d_id, parent_d_id)
-        if len(shared) < self._min_shared:
-            logger.debug(
-                "[SharedBenchmarkLineageStage] {} insufficient shared: {} < {}",
-                program.id[:8],
-                len(shared),
-                self._min_shared,
+            return ProgramStageResult.skipped(
+                message="no parents", stage=self.stage_name
             )
-            self._emit_lineage_event(program.id, d_id, parent_d_id, None, len(shared))
-            self._write_metrics(program, None, None)
-            return SharedBenchmarkLineageOutput(trend=None, n_shared=None)
 
-        tracker = getattr(self._resolver, "_tracker", None)
-        if tracker is None:
-            logger.error(
-                "[SharedBenchmarkLineageStage] resolver has no _tracker attribute"
+        child_by_g = await self._tracker.metrics_by_d(program.id)
+        child_faced = set(child_by_g.keys())
+
+        kept_ids: list[str] = []
+        evidence: list[TransitionEvidence] = []
+
+        for pid in parent_ids:
+            parent_by_g = await self._tracker.metrics_by_d(pid)
+            shared = child_faced & set(parent_by_g.keys())
+            if len(shared) < self._min_shared:
+                continue
+
+            kept_ids.append(pid)
+            if self._inject_shared_evidence:
+                sp, sc, counts = _aggregate_shared_metrics(
+                    parent_by_g, child_by_g, shared, self._metrics_context
+                )
+                evidence.append(
+                    TransitionEvidence(
+                        parent_id=pid,
+                        shared_opponent_ids=sorted(shared),
+                        shared_parent_metrics=sp,
+                        shared_child_metrics=sc,
+                        per_metric_shared_count=counts,
+                    )
+                )
+
+        logger.info(
+            "[LineageStage:SharedBenchmark] program={} kept {}/{} parents (min_shared={})",
+            program.id[:8],
+            len(kept_ids),
+            len(parent_ids),
+            self._min_shared,
+        )
+
+        if not kept_ids:
+            return ProgramStageResult.skipped(
+                message="no parents share eval benchmark", stage=self.stage_name
             )
-            self._emit_lineage_event(program.id, d_id, parent_d_id, None, len(shared))
-            self._write_metrics(program, None, None)
-            return SharedBenchmarkLineageOutput(trend=None, n_shared=None)
 
-        pairs = await tracker.get_deltas_against(d_id, parent_d_id, shared)
-        if not pairs:
-            logger.debug(
-                "[SharedBenchmarkLineageStage] {} no delta pairs from tracker",
-                program.id[:8],
-            )
-            self._emit_lineage_event(program.id, d_id, parent_d_id, None, len(shared))
-            self._write_metrics(program, None, None)
-            return SharedBenchmarkLineageOutput(trend=None, n_shared=None)
-
-        child_mean = sum(c for c, _ in pairs) / len(pairs)
-        parent_mean = sum(p for _, p in pairs) / len(pairs)
-        trend = child_mean - parent_mean
-
-        self._emit_lineage_event(program.id, d_id, parent_d_id, trend, len(shared))
-        self._write_metrics(program, trend, len(shared))
-        return SharedBenchmarkLineageOutput(trend=trend, n_shared=len(shared))
+        return {
+            "parents": await self.storage.mget(kept_ids),
+            "evidence": evidence if self._inject_shared_evidence else None,
+        }
