@@ -172,7 +172,7 @@ class DGImprovementTracker:
           - G-keyed SET ``dg_g_resisted:{g_id}``            (non-positive deltas)
           - D-keyed HASH ``dg_metrics:{d_id}``              (every pair, any sign)
 
-        The D-metrics hash is the substrate for ``SharedBenchmarkLineageStage``
+        The D-metrics hash is the substrate for ``SharedBenchmarkFilteredLineageStage``
         (§3.5 Prong 2). The D-wins / G-resisted SETs are the BD y-axes.
 
         Emits a ``[TRACKER_WRITE]`` structured JSON log line so post-hoc log
@@ -263,7 +263,7 @@ class DGImprovementTracker:
     async def faced_by_d(self, d_id: str) -> set[str]:
         """Set of G program IDs this D has been evaluated against (any outcome).
 
-        Substrate for ``SharedBenchmarkResolver`` intersection (§3.5 Prong 2).
+        Substrate for ``SharedBenchmarkFilteredLineageStage`` intersection (§3.5 Prong 2).
         Reads from the v4 dg_metrics hash.
         """
         keys = await self._redis.hkeys(self._d_metrics_key(d_id))
@@ -274,7 +274,7 @@ class DGImprovementTracker:
     ) -> list[tuple[float, float]]:
         """For each g_id, return (delta_a, delta_b). Pairs missing on either side are skipped.
 
-        Consumed by ``SharedBenchmarkLineageStage`` to compute
+        Consumed by ``SharedBenchmarkFilteredLineageStage`` to compute
         ``mean(delta_child) - mean(delta_parent)`` over the intersection
         of the two D's benchmark histories.
         Reads from the v4 dg_metrics hash (fitness_delta field).

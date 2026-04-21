@@ -19,15 +19,13 @@ Emission seams (each event has exactly one):
 - STAGE_EXEC          -> Stage.__call__ base-class wrapper
 - LLM_CALL            -> LLM client request/response wrapper
 - METRIC_EMIT         -> metric logging helper
-- LINEAGE_TREND       -> shared_benchmark_lineage trend computer
 """
 
 from __future__ import annotations
 
-import math
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict
 
 CANONICAL_EVENTS: dict[str, type[BaseEvent]] = {}
 
@@ -131,24 +129,3 @@ class MetricEmit(BaseEvent):
     program_id: str
     metric: str
     value: Any
-
-
-class LineageTrend(BaseEvent):
-    event: ClassVar[str] = "LINEAGE_TREND"
-    description: ClassVar[str] = "Child-vs-parent shared-benchmark trend computed."
-    health_question: ClassVar[str] = (
-        "Is fitness trending the right way across lineages?"
-    )
-
-    program_id: str
-    gen: int | None = None
-    trend: float | None = None
-
-    @field_validator("trend")
-    @classmethod
-    def _trend_must_be_finite(cls, v: float | None) -> float | None:
-        if v is None:
-            return v
-        if math.isnan(v) or math.isinf(v):
-            raise ValueError(f"trend must be finite, got {v!r}")
-        return v

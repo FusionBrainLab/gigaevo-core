@@ -160,7 +160,7 @@ async def test_record_batch_dual_writes_g_resisted(tracker):
 async def test_record_batch_writes_metrics_hash_for_all_signs(tracker):
     """record_batch writes every pair (pos, neg, zero) into dg_metrics:{d_id} hash.
 
-    SharedBenchmarkLineageStage reads this hash to compare child-D vs parent-D
+    SharedBenchmarkFilteredLineageStage reads this hash to compare child-D vs parent-D
     on the intersection of G's they have both been evaluated against.
     """
     import json
