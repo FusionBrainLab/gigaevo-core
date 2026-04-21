@@ -389,3 +389,84 @@ class TestConstructorAcceptsString:
         pc = ProblemContext(str(problem_dir))
         assert pc.task_description == "Solve the problem."
         assert pc.problem_dir == problem_dir.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Tests for new MetricsContext helpers: is_valid, is_sentinel.
+# ---------------------------------------------------------------------------
+
+from gigaevo.programs.metrics.context import (  # noqa: E402
+    VALIDITY_KEY,
+    MetricsContext,
+    MetricSpec,
+)
+
+
+def _ctx_for_helpers() -> MetricsContext:
+    return MetricsContext(
+        specs={
+            "fitness": MetricSpec(
+                description="main",
+                is_primary=True,
+                higher_is_better=True,
+                lower_bound=0.0,
+                upper_bound=1.0,
+            ),
+            "loss": MetricSpec(
+                description="loss",
+                higher_is_better=False,
+                lower_bound=0.0,
+                upper_bound=100.0,
+            ),
+            VALIDITY_KEY: MetricSpec(
+                description="validity",
+                higher_is_better=True,
+                lower_bound=0.0,
+                upper_bound=1.0,
+            ),
+        }
+    )
+
+
+class TestIsValid:
+    def test_is_valid_true_when_flag_is_one(self):
+        assert _ctx_for_helpers().is_valid({"fitness": 0.1, VALIDITY_KEY: 1.0}) is True
+
+    def test_is_valid_false_when_flag_is_zero(self):
+        assert _ctx_for_helpers().is_valid({"fitness": 0.1, VALIDITY_KEY: 0.0}) is False
+
+    def test_is_valid_false_when_flag_negative(self):
+        assert (
+            _ctx_for_helpers().is_valid({"fitness": 0.0, VALIDITY_KEY: -1.0}) is False
+        )
+
+    def test_is_valid_true_when_flag_missing(self):
+        """Absence of VALIDITY_KEY is interpreted as valid (default 1.0)."""
+        assert _ctx_for_helpers().is_valid({"fitness": 0.5}) is True
+
+    def test_is_valid_handles_fractional_values(self):
+        """Strict >=1.0 threshold — 0.9 is not valid."""
+        assert _ctx_for_helpers().is_valid({VALIDITY_KEY: 0.9}) is False
+        assert _ctx_for_helpers().is_valid({VALIDITY_KEY: 1.0}) is True
+
+
+class TestIsSentinel:
+    def test_higher_is_better_sentinel(self):
+        """Default sentinel for higher-is-better is MIN_VALUE_DEFAULT (-1e5)."""
+        assert _ctx_for_helpers().is_sentinel("fitness", -1e5) is True
+        assert _ctx_for_helpers().is_sentinel("fitness", 0.0) is False
+        assert _ctx_for_helpers().is_sentinel("fitness", 0.5) is False
+
+    def test_lower_is_better_sentinel(self):
+        """Default sentinel for lower-is-better is MAX_VALUE_DEFAULT (1e5)."""
+        assert _ctx_for_helpers().is_sentinel("loss", 1e5) is True
+        assert _ctx_for_helpers().is_sentinel("loss", 42.0) is False
+
+    def test_unknown_metric_returns_false(self):
+        """Unknown metric names gracefully return False (no KeyError)."""
+        assert _ctx_for_helpers().is_sentinel("does_not_exist", 0.0) is False
+
+    def test_epsilon_tolerance(self):
+        """Sentinel check uses EPSILON=1e-6 tolerance."""
+        assert _ctx_for_helpers().is_sentinel("fitness", -1e5 + 1e-7) is True
+        assert _ctx_for_helpers().is_sentinel("fitness", -1e5 + 1e-3) is False
