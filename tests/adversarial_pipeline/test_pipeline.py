@@ -217,6 +217,58 @@ class TestAdversarialPipelineBuilder:
         bp = builder.build_blueprint()
         assert bp.dag_timeout == 2000.0
 
+    def test_opponent_sampling_mode_default_is_top_k(self):
+        """Default threads TOP_K through to the stage factory — repro-v1 compat."""
+        from gigaevo.adversarial.opponent_provider import OpponentSamplingMode
+
+        ctx = _make_ctx()
+        bp = AdversarialPipelineBuilder(
+            ctx, opponent_provider=FakeProvider()
+        ).build_blueprint()
+        stage = bp.nodes["FetchOpponentIdsStage"]()
+        assert stage._sampling_mode is OpponentSamplingMode.TOP_K
+
+    def test_opponent_sampling_mode_softmax_reaches_stage(self):
+        """Builder must thread the configured mode all the way to the stage.
+
+        Regression guard: if the lambda closure in _add_adversarial_stages
+        dropped sampling_mode=, unit tests on the stage in isolation would
+        still pass. This test locks the wiring.
+        """
+        from gigaevo.adversarial.opponent_provider import OpponentSamplingMode
+
+        ctx = _make_ctx()
+        bp = AdversarialPipelineBuilder(
+            ctx,
+            opponent_provider=FakeProvider(),
+            opponent_sampling_mode="softmax",
+        ).build_blueprint()
+        stage = bp.nodes["FetchOpponentIdsStage"]()
+        assert stage._sampling_mode is OpponentSamplingMode.SOFTMAX
+
+    def test_opponent_sampling_mode_accepts_enum(self):
+        from gigaevo.adversarial.opponent_provider import OpponentSamplingMode
+
+        ctx = _make_ctx()
+        bp = AdversarialPipelineBuilder(
+            ctx,
+            opponent_provider=FakeProvider(),
+            opponent_sampling_mode=OpponentSamplingMode.SOFTMAX,
+        ).build_blueprint()
+        stage = bp.nodes["FetchOpponentIdsStage"]()
+        assert stage._sampling_mode is OpponentSamplingMode.SOFTMAX
+
+    def test_invalid_opponent_sampling_mode_raises(self):
+        import pytest
+
+        ctx = _make_ctx()
+        with pytest.raises(ValueError):
+            AdversarialPipelineBuilder(
+                ctx,
+                opponent_provider=FakeProvider(),
+                opponent_sampling_mode="bogus",
+            )
+
     def test_fallback_codes_loaded_from_directory(self, tmp_path: Path):
         """If fallback dir exists with .py files, they are loaded."""
         problem_dir = tmp_path / "problem"

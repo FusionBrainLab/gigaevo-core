@@ -54,6 +54,29 @@ class FakeArchiveProvider(OpponentArchiveProvider):
         return [id_map[i] for i in ids if i in id_map]
 
 
+class RecordingArchiveProvider(FakeArchiveProvider):
+    """FakeArchiveProvider that records which sampler method was called.
+
+    Used by sampling_mode routing tests to assert the stage picks the right
+    provider entry point (get_top_k vs get_opponents) without asserting on
+    stochastic output.
+    """
+
+    def __init__(self, opponents: list[OpponentProgram] | None = None):
+        super().__init__(opponents)
+        self.calls: list[tuple[str, int]] = []
+
+    async def get_opponents(self, n: int = 5) -> list[OpponentProgram]:
+        self.calls.append(("get_opponents", n))
+        return await super().get_opponents(n)
+
+    async def get_top_k(
+        self, k: int, *, higher_is_better: bool = True
+    ) -> list[OpponentProgram]:
+        self.calls.append(("get_top_k", k))
+        return await super().get_top_k(k, higher_is_better=higher_is_better)
+
+
 class ScriptedResultProvider(OpponentResultProvider):
     """Provider driven by a {id: result_or_None} map. Returns aligned list."""
 
@@ -144,25 +167,11 @@ class TestFetchOpponentIdsStage:
     @pytest.mark.asyncio
     async def test_softmax_sampling_mode_routes_to_get_opponents(self):
         """sampling_mode='softmax' must call provider.get_opponents(n), NOT get_top_k(n)."""
-
-        class RecordingProvider(FakeArchiveProvider):
-            def __init__(self, opponents):
-                super().__init__(opponents)
-                self.calls: list[tuple[str, int]] = []
-
-            async def get_opponents(self, n=5):
-                self.calls.append(("get_opponents", n))
-                return await super().get_opponents(n)
-
-            async def get_top_k(self, k, *, higher_is_better=True):
-                self.calls.append(("get_top_k", k))
-                return await super().get_top_k(k, higher_is_better=higher_is_better)
-
         opponents = [
             OpponentProgram(program_id=f"p{i}", code=f"c{i}", fitness=float(i))
             for i in range(5)
         ]
-        provider = RecordingProvider(opponents)
+        provider = RecordingArchiveProvider(opponents)
         stage = FetchOpponentIdsStage(
             opponent_provider=provider,
             n_opponents=3,
@@ -175,25 +184,11 @@ class TestFetchOpponentIdsStage:
     @pytest.mark.asyncio
     async def test_top_k_sampling_mode_routes_to_get_top_k(self):
         """sampling_mode='top_k' explicitly must call provider.get_top_k(n)."""
-
-        class RecordingProvider(FakeArchiveProvider):
-            def __init__(self, opponents):
-                super().__init__(opponents)
-                self.calls: list[tuple[str, int]] = []
-
-            async def get_opponents(self, n=5):
-                self.calls.append(("get_opponents", n))
-                return await super().get_opponents(n)
-
-            async def get_top_k(self, k, *, higher_is_better=True):
-                self.calls.append(("get_top_k", k))
-                return await super().get_top_k(k, higher_is_better=higher_is_better)
-
         opponents = [
             OpponentProgram(program_id=f"p{i}", code=f"c{i}", fitness=float(i))
             for i in range(5)
         ]
-        provider = RecordingProvider(opponents)
+        provider = RecordingArchiveProvider(opponents)
         stage = FetchOpponentIdsStage(
             opponent_provider=provider,
             n_opponents=2,

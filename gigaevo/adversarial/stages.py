@@ -62,6 +62,10 @@ class FetchOpponentIdsStage(Stage):
         sampling_mode: OpponentSamplingMode | str = OpponentSamplingMode.TOP_K,
         **kwargs: Any,
     ):
+        # Re-validate here even though AdversarialPipelineBuilder normalises at
+        # its boundary: this stage is independently constructed in tests, tools,
+        # and any future pipeline that instantiates it directly. Enum-of-enum
+        # is a no-op, so the cost is one isinstance check on the happy path.
         try:
             self._sampling_mode = OpponentSamplingMode(sampling_mode)
         except ValueError as e:
