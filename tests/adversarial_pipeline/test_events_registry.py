@@ -126,7 +126,6 @@ class TestFullRegistryAfterImport:
             "STAGE_EXEC",
             "LLM_CALL",
             "METRIC_EMIT",
-            "LINEAGE_TREND",
             # Adversarial (from gigaevo.adversarial.events)
             "TRACKER_WRITE",
             "HOF_FETCH",

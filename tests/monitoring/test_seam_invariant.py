@@ -35,11 +35,9 @@ ALLOWED_SEAMS: dict[str, tuple[str, ...]] = {
         "HOF_ROTATE",
         "CELL_PICK",
         "METRIC_EMIT",
-        "LINEAGE_TREND",
     ),
     "adversarial/dg_tracker.py": ("TRACKER_WRITE",),
     "adversarial/opponent_provider.py": ("HOF_FETCH", "HOF_ROTATE", "CELL_PICK"),
-    "adversarial/shared_benchmark_lineage.py": ("LINEAGE_TREND",),
     "adversarial/tracker_coverage_stages.py": ("METRIC_EMIT",),
 }
 
@@ -51,7 +49,6 @@ CANONICAL_EVENT_NAMES = {
     "STAGE_EXEC",
     "LLM_CALL",
     "METRIC_EMIT",
-    "LINEAGE_TREND",
     "TRACKER_WRITE",
     "HOF_FETCH",
     "HOF_ROTATE",
