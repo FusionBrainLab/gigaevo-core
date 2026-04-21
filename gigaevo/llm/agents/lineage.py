@@ -50,11 +50,27 @@ class TransitionAnalysis(BaseModel):
     insights: TransitionInsights
 
 
+class TransitionEvidence(BaseModel):
+    """HoF-invariant subset evidence for one parent→child transition.
+
+    Populated by SharedBenchmarkFilteredLineageStage.preprocess; consumed by
+    LineageAgent.build_prompt to render an optional SHARED-BENCHMARK SUBSET
+    block. Never persisted into TransitionAnalysis.
+    """
+
+    parent_id: str
+    shared_opponent_ids: list[str]
+    shared_parent_metrics: dict[str, float]
+    shared_child_metrics: dict[str, float]
+    per_metric_shared_count: dict[str, int]
+
+
 class LineageState(TypedDict):
     """Complete state for lineage analysis."""
 
     parent: Program
     child: Program
+    evidence: "TransitionEvidence | None"
     messages: list[BaseMessage]
     llm_response: AIMessage | TransitionInsights | None
     delta: float
@@ -217,6 +233,23 @@ class LineageAgent(LangGraphAgent):
         is_improvement = (delta > 0) == higher_is_better
         delta_interpretation = "IMPROVEMENT ✓" if is_improvement else "REGRESSION ✗"
 
+        evidence = state.get("evidence")
+        if evidence is not None:
+            shared_subset_block = (
+                "SHARED-BENCHMARK SUBSET (HoF-invariant — same "
+                f"{len(evidence.shared_opponent_ids)} opponents faced by both)\n"
+                f"Opponents: {evidence.shared_opponent_ids}\n"
+                + self.metrics_formatter.format_delta_block(
+                    parent=evidence.shared_parent_metrics,
+                    child=evidence.shared_child_metrics,
+                    include_primary=True,
+                    value_counts=evidence.per_metric_shared_count,
+                    total_n=len(evidence.shared_opponent_ids),
+                )
+            )
+        else:
+            shared_subset_block = ""
+
         user_prompt = self.user_prompt_template.format(
             task_description=self.task_description,
             metric_name=metric_name,
@@ -227,6 +260,7 @@ class LineageAgent(LangGraphAgent):
             parent_errors=parent_errors,
             child_errors=child_errors,
             additional_metrics=additional_metrics_str,
+            shared_subset_block=shared_subset_block,
             diff_blocks=rendered_blocks,
             parent_code=parent.code,
         )
@@ -265,23 +299,31 @@ class LineageAgent(LangGraphAgent):
         return state
 
     async def arun(
-        self, *, parents: list[Program], program: Program
+        self,
+        *,
+        parents: list[Program],
+        program: Program,
+        evidence: list[TransitionEvidence] | None = None,
     ) -> list[TransitionAnalysis]:
         """Run lineage analysis on parent→child transitions for multiple parents.
 
         Args:
             program: Child program
             parents: List of parent programs to analyze
+            evidence: Optional per-parent HoF-invariant subset evidence.
+                Matched to parents by parent_id; unmatched parents get None.
 
         Returns:
             List of LineageAnalysis for each parent→child transition
         """
+        evidence_by_parent = {e.parent_id: e for e in evidence} if evidence else {}
         analyses: list[TransitionAnalysis] = []
 
         for parent in parents:
             initial_state: LineageState = {
                 "parent": parent,
                 "child": program,
+                "evidence": evidence_by_parent.get(parent.id),
                 "messages": [],
                 "llm_response": None,
                 "delta": 0.0,

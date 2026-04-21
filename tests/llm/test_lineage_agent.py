@@ -616,3 +616,253 @@ class TestArunEdgeCases:
         assert captured_state["child"] is child
         assert captured_state["metadata"]["parent_id"] == parent.id
         assert captured_state["metadata"]["child_id"] == child.id
+
+
+# ---------------------------------------------------------------------------
+# TestTransitionEvidence
+# ---------------------------------------------------------------------------
+
+
+class TestTransitionEvidence:
+    """Tests for TransitionEvidence value object."""
+
+    def test_evidence_is_a_pydantic_model(self):
+        from gigaevo.llm.agents.lineage import TransitionEvidence
+
+        ev = TransitionEvidence(
+            parent_id="p-1",
+            shared_opponent_ids=["g1", "g2"],
+            shared_parent_metrics={"fitness": 0.1, "is_valid": 1.0},
+            shared_child_metrics={"fitness": 0.2, "is_valid": 1.0},
+            per_metric_shared_count={"fitness": 2, "is_valid": 2},
+        )
+        assert ev.parent_id == "p-1"
+        assert ev.per_metric_shared_count["fitness"] == 2
+        assert ev.shared_opponent_ids == ["g1", "g2"]
+        assert ev.shared_parent_metrics["fitness"] == pytest.approx(0.1)
+        assert ev.shared_child_metrics["fitness"] == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
+# TestBuildPromptWithEvidence
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPromptWithEvidence:
+    """Prompt includes SHARED-BENCHMARK SUBSET block iff evidence is present."""
+
+    @pytest.fixture
+    def agent_with_evidence_template(self):
+        from gigaevo.programs.metrics.context import MetricSpec
+
+        ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="main",
+                    is_primary=True,
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                ),
+                "is_valid": MetricSpec(
+                    description="validity",
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                ),
+            }
+        )
+        llm = _mock_llm()
+        formatter = MetricsFormatter(ctx)
+        return LineageAgent(
+            llm=llm,
+            system_prompt="SYS",
+            user_prompt_template=(
+                "TASK: {task_description}\n"
+                "Metric: {metric_name} ({metric_description})\n"
+                "Delta: {delta} ({higher_is_better_text})\n"
+                "Interpretation: {delta_interpretation}\n"
+                "Parent errors: {parent_errors}\n"
+                "Child errors: {child_errors}\n"
+                "ADDITIONAL: {additional_metrics}\n"
+                "{shared_subset_block}\n"
+                "DIFF: {diff_blocks}\n"
+                "PARENT: {parent_code}\n"
+            ),
+            task_description="T",
+            metrics_formatter=formatter,
+        )
+
+    def _mk_state(self, evidence):
+        parent = _make_program(
+            code="def f(): return 1", metrics={"fitness": 0.1, "is_valid": 1.0}
+        )
+        child = _make_program(
+            code="def f(): return 2", metrics={"fitness": 0.3, "is_valid": 1.0}
+        )
+        return {
+            "parent": parent,
+            "child": child,
+            "evidence": evidence,
+            "messages": [],
+            "llm_response": None,
+            "delta": 0.0,
+            "diff_blocks": [],
+            "insights": [],
+            "full_analysis": {},
+            "metadata": {},
+        }
+
+    def test_no_evidence_omits_shared_block(self, agent_with_evidence_template):
+        state = self._mk_state(evidence=None)
+        state = agent_with_evidence_template.build_prompt(state)
+        human = state["messages"][1].content
+        assert "SHARED-BENCHMARK" not in human
+
+    def test_with_evidence_includes_shared_block(self, agent_with_evidence_template):
+        from gigaevo.llm.agents.lineage import TransitionEvidence
+
+        ev = TransitionEvidence(
+            parent_id="p-1",
+            shared_opponent_ids=["g1", "g2", "g3"],
+            shared_parent_metrics={"fitness": 0.15, "is_valid": 1.0},
+            shared_child_metrics={"fitness": 0.28, "is_valid": 0.667},
+            per_metric_shared_count={"fitness": 3, "is_valid": 3},
+        )
+        state = self._mk_state(evidence=ev)
+        state = agent_with_evidence_template.build_prompt(state)
+        human = state["messages"][1].content
+        assert "SHARED-BENCHMARK" in human
+        assert "fitness" in human
+        assert "(3/3 valid)" in human
+        assert "g1" in human and "g2" in human and "g3" in human
+
+    def test_evidence_none_backward_compat_no_evidence_key(
+        self, agent_with_evidence_template
+    ):
+        """States without 'evidence' key (old callers) work as evidence=None."""
+        # Build state without 'evidence' key at all
+        parent = _make_program(
+            code="def f(): return 1", metrics={"fitness": 0.1, "is_valid": 1.0}
+        )
+        child = _make_program(
+            code="def f(): return 2", metrics={"fitness": 0.3, "is_valid": 1.0}
+        )
+        state = {
+            "parent": parent,
+            "child": child,
+            # no 'evidence' key
+            "messages": [],
+            "llm_response": None,
+            "delta": 0.0,
+            "diff_blocks": [],
+            "insights": [],
+            "full_analysis": {},
+            "metadata": {},
+        }
+        state = agent_with_evidence_template.build_prompt(state)
+        human = state["messages"][1].content
+        assert "SHARED-BENCHMARK" not in human
+
+
+class TestArunWithEvidence:
+    """Tests for LineageAgent.arun evidence kwarg."""
+
+    async def test_evidence_kwarg_accepted_no_error(self):
+        """arun accepts evidence kwarg without raising."""
+        from gigaevo.llm.agents.lineage import TransitionEvidence
+
+        agent = _make_agent()
+        parent = _make_program(code="def f(): return 1", metrics={"fitness": 0.5})
+        child = _make_program(code="def f(): return 2", metrics={"fitness": 0.8})
+
+        ev = TransitionEvidence(
+            parent_id=parent.id,
+            shared_opponent_ids=["g1"],
+            shared_parent_metrics={"fitness": 0.4},
+            shared_child_metrics={"fitness": 0.7},
+            per_metric_shared_count={"fitness": 1},
+        )
+
+        fake_analysis = TransitionAnalysis(
+            **{"from": parent.id, "to": child.id},
+            parent_metrics=parent.metrics,
+            child_metrics=child.metrics,
+            diff_blocks=[],
+            insights=_sample_insights(3),
+        )
+        captured_states = []
+
+        async def _capture(state):
+            captured_states.append(dict(state))
+            return {"full_analysis": fake_analysis}
+
+        agent.graph = MagicMock()
+        agent.graph.ainvoke = AsyncMock(side_effect=_capture)
+
+        results = await agent.arun(parents=[parent], program=child, evidence=[ev])
+        assert len(results) == 1
+        # Evidence was injected into state by parent_id lookup
+        assert captured_states[0]["evidence"] is ev
+
+    async def test_evidence_none_default(self):
+        """arun works with evidence=None (default)."""
+        agent = _make_agent()
+        parent = _make_program(metrics={"fitness": 0.5})
+        child = _make_program(metrics={"fitness": 0.8})
+
+        fake_analysis = TransitionAnalysis(
+            **{"from": parent.id, "to": child.id},
+            parent_metrics=parent.metrics,
+            child_metrics=child.metrics,
+            diff_blocks=[],
+            insights=_sample_insights(3),
+        )
+        captured_states = []
+
+        async def _capture(state):
+            captured_states.append(dict(state))
+            return {"full_analysis": fake_analysis}
+
+        agent.graph = MagicMock()
+        agent.graph.ainvoke = AsyncMock(side_effect=_capture)
+
+        results = await agent.arun(parents=[parent], program=child)
+        assert len(results) == 1
+        assert captured_states[0]["evidence"] is None
+
+    async def test_evidence_unmatched_parent_gets_none(self):
+        """Evidence for a different parent_id doesn't inject into state."""
+        from gigaevo.llm.agents.lineage import TransitionEvidence
+
+        agent = _make_agent()
+        parent = _make_program(metrics={"fitness": 0.5})
+        child = _make_program(metrics={"fitness": 0.8})
+
+        ev = TransitionEvidence(
+            parent_id="some-other-parent-id",
+            shared_opponent_ids=["g1"],
+            shared_parent_metrics={"fitness": 0.4},
+            shared_child_metrics={"fitness": 0.7},
+            per_metric_shared_count={"fitness": 1},
+        )
+
+        fake_analysis = TransitionAnalysis(
+            **{"from": parent.id, "to": child.id},
+            parent_metrics=parent.metrics,
+            child_metrics=child.metrics,
+            diff_blocks=[],
+            insights=_sample_insights(3),
+        )
+        captured_states = []
+
+        async def _capture(state):
+            captured_states.append(dict(state))
+            return {"full_analysis": fake_analysis}
+
+        agent.graph = MagicMock()
+        agent.graph.ainvoke = AsyncMock(side_effect=_capture)
+
+        results = await agent.arun(parents=[parent], program=child, evidence=[ev])
+        assert len(results) == 1
+        assert captured_states[0]["evidence"] is None
