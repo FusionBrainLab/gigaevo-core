@@ -76,6 +76,10 @@ def _aggregate_shared_metrics(
 
     for m in all_metrics:
         if m == VALIDITY_KEY:
+            # Invariant: DGImprovementTracker.record_batch always writes
+            # is_valid for every (D,G) pair, so .get(m, 0.0) is defensive
+            # — missing key implies a pre-v4 row or a writer bypassing
+            # record_batch, which the stage can safely treat as invalid.
             p_vals = [float(parent_by_g[g].get(m, 0.0)) for g in shared_g]
             c_vals = [float(child_by_g[g].get(m, 0.0)) for g in shared_g]
             shared_parent[m] = sum(p_vals) / len(p_vals) if p_vals else 0.0
