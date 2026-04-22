@@ -12,7 +12,7 @@ import hydra
 from hydra import compose, initialize_config_dir
 import pytest
 
-from gigaevo.programs.metrics.context import MetricSpec, MetricsContext
+from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
 PROBLEM_DIR = Path(__file__).resolve().parents[3] / "problems/heilbron_repro_v1/pop_b"
 CONFIG_DIR = str(Path(__file__).resolve().parents[3] / "config")

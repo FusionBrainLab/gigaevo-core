@@ -10,10 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import hydra
-import pytest
 from hydra import compose, initialize_config_dir
+import pytest
 
-from gigaevo.programs.metrics.context import MetricSpec, MetricsContext
+from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
 PROBLEM_DIR = Path(__file__).resolve().parents[3] / "problems/heilbron_repro_v1/pop_a"
 CONFIG_DIR = str(Path(__file__).resolve().parents[3] / "config")
@@ -36,8 +36,18 @@ INTRINSIC = {
 
 FIXTURE = {
     "per_opp_metrics": [
-        {"post_q": 0.0365 * 0.5, "delta": 0.0, "resistance_score": 1.0, "is_valid": 1.0},
-        {"post_q": 0.0365 * 0.5 + 0.04, "delta": 0.04, "resistance_score": 0.0, "is_valid": 1.0},
+        {
+            "post_q": 0.0365 * 0.5,
+            "delta": 0.0,
+            "resistance_score": 1.0,
+            "is_valid": 1.0,
+        },
+        {
+            "post_q": 0.0365 * 0.5 + 0.04,
+            "delta": 0.04,
+            "resistance_score": 0.0,
+            "is_valid": 1.0,
+        },
     ],
     "role": "constructor",
     "n_opponents": 2,
