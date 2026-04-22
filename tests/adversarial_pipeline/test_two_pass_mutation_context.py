@@ -104,15 +104,17 @@ def _reset_token():
 
 
 def _mk_program(pid: str, parent_ids: list[str] | None = None) -> Program:
-    """Mock Program with the two attributes SBF-Lineage actually reads.
+    """Mock Program with the attributes SBF-Lineage reads.
 
-    preprocess() reads program.id and program.lineage.parents; it never
-    touches program.code or program.metadata, so a mock is sufficient.
+    preprocess() reads program.id, program.lineage.parents, and
+    program.metrics (for shared-evidence injection); it never touches
+    program.code or program.metadata, so a mock is sufficient.
     """
     p = MagicMock(spec=Program)
     p.id = pid
     p.lineage = MagicMock()
     p.lineage.parents = parent_ids or []
+    p.metrics = {"fitness": 0.3}  # Dummy metrics
     return p
 
 
@@ -120,12 +122,18 @@ def _mk_filter_stage(tracker, metrics_ctx, storage):
     from gigaevo.adversarial.shared_benchmark_lineage import (
         SharedBenchmarkFilteredLineageStage,
     )
+    from gigaevo.programs.metrics.aggregators import ConfigurableAggregator, ConstantSpec, ReduceSpec
 
     s = SharedBenchmarkFilteredLineageStage.__new__(SharedBenchmarkFilteredLineageStage)
     s._tracker = tracker
     s._min_shared = 1
     s._inject_shared_evidence = True
     s._metrics_context = metrics_ctx
+    s._aggregator = ConfigurableAggregator(
+        outputs={"fitness": ReduceSpec(op="mean", field="fitness"), "is_valid": ConstantSpec(value=1.0)},
+        invalid_defaults={"fitness": 0.0, "is_valid": 0.0},
+        metrics_context=metrics_ctx,
+    )
     s.storage = storage
     return s
 
