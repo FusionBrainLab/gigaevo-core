@@ -26,6 +26,7 @@ __all__ = [
     "IntrinsicSpec",
     "LinearSpec",
     "MetricsAggregator",
+    "NullAggregator",
     "OutputSpec",
     "ReduceSpec",
 ]
@@ -216,3 +217,24 @@ class ConfigurableAggregator(MetricsAggregator):
         for key, spec in self._outputs.items():
             computed[key] = float(spec.compute(valid, intrinsic, computed))
         return computed
+
+
+class NullAggregator(MetricsAggregator):
+    """Sentinel 'no aggregator configured' marker.
+
+    The pipeline builder checks ``isinstance(aggregator, NullAggregator)``
+    and skips installing ParseMetricsStage when true — the DAG keeps the
+    legacy ``CallValidatorFunction → FetchMetrics`` edge, and evaluate.py's
+    old-contract ``metrics`` dict flows through unchanged.
+
+    This lets Hydra's ``aggregator=none`` default resolve to a real object
+    (no null footgun in ``${ref:aggregator}``) while preserving the
+    "non-Heilbron pipelines untouched" scope constraint.
+    """
+
+    @property
+    def output_keys(self) -> frozenset[str]:
+        return frozenset()
+
+    def aggregate(self, per_opp, intrinsic):
+        return {}
