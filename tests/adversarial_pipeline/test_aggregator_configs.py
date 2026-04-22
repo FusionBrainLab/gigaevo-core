@@ -244,25 +244,6 @@ class TestHeilbronConstructorYAML:
         assert result["mean_improvement"] == -1.0
         assert result["best_post_improvement"] == -1.0
 
-    def test_parity_with_heilbron_repro_v1_pop_a_evaluate(self):
-        """The constructor YAML reproduces pop_a/evaluate.py metrics from
-        per_opp_metrics + intrinsic metrics."""
-        ev, helper = _load_pop("heilbron_repro_v1", "pop_a")
-
-        pts = _seed_grid(helper)
-        opponents = [_noop_improver, _centroid_improver, _noop_improver]
-        metrics, artifact = ev.evaluate(opponents, pts)
-        assert metrics["is_valid"] == 1.0
-
-        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
-        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
-
-        reproduced = agg.aggregate(artifact["per_opp_metrics"], intrinsic=metrics)
-        for key in agg.output_keys:
-            assert key in metrics, f"aggregator emits {key!r}, evaluate.py does not"
-            assert reproduced[key] == pytest.approx(
-                metrics[key], rel=1e-9, abs=1e-12
-            ), f"key={key}: reproduced={reproduced[key]} vs metrics={metrics[key]}"
 
 
 # ===========================================================================
@@ -285,10 +266,6 @@ class TestHeilbronReproV1PipelineComposition:
         the shared singleton via the ref resolver.
         """
         from hydra import compose, initialize_config_dir
-
-        from gigaevo.config.resolvers import register_resolvers
-
-        register_resolvers()
         config_dir = str(PROJECT_ROOT / "config")
         with initialize_config_dir(config_dir=config_dir, version_base=None):
             cfg = compose(

@@ -4,10 +4,9 @@ Receives:
     opponent_results: list of callables improve(points) -> improved_points  (from Pop B)
     program_output:   (11, 2) np.ndarray  (this Constructor's point configuration)
 
-Fitness = ALPHA * quality + (1 - ALPHA) * resistance
-    quality    = min(min_area / Q_MAX, 1.0)
-    resistance = mean(float(delta_i <= 0))  — 1 if opponent failed to improve, 0 if succeeded
-    actual_fitness = raw min_area (tracked separately for paper reporting)
+Intrinsic metrics (quality, actual_fitness) are candidate-level, computed from the
+program output alone. Per-opponent resistance is computed and passed to the aggregator.
+The ConfigurableAggregator reduces these via heilbron_constructor.yaml.
 
 For sigmoid resistance scoring use pop_a_soft (IV2 soft-fitness variant).
 """
@@ -19,17 +18,6 @@ import numpy as np
 
 Q_MAX = 0.0365
 ALPHA = 0.5
-
-INVALID = {
-    "fitness": -1.0,
-    "is_valid": 0.0,
-    "actual_fitness": -1.0,
-    "quality": -1.0,
-    "resistance": -1.0,
-    "mean_improvement": -1.0,
-    "best_post_improvement": -1.0,
-    "n_opponents": 0.0,
-}
 
 
 def _validate_config(points: object) -> np.ndarray | None:
@@ -51,14 +39,13 @@ def _validate_config(points: object) -> np.ndarray | None:
 def evaluate(opponent_results: list, program_output: object):
     """Cross-play: constructor config vs opponent improvers.
 
-    Returns (metrics, artifact). The artifact carries per_opp_metrics aligned
-    index-wise with opponent_results so SBF-LineageStage can replay the
-    ConfigurableAggregator downstream. per_opp_delta is kept as a redundant
-    back-compat alias.
+    Returns (intrinsic, artifact). Intrinsic contains candidate-level metrics
+    (quality, actual_fitness) computed from the program output. Per-opponent
+    metrics are in the artifact for the aggregator to reduce downstream.
     """
     points = _validate_config(program_output)
     if points is None:
-        return INVALID, {
+        return {}, {
             "role": "constructor",
             "per_opp_metrics": [],
             "per_opp_delta": [],
@@ -66,7 +53,7 @@ def evaluate(opponent_results: list, program_output: object):
 
     raw_quality = float(get_smallest_triangle_area(points))
     if raw_quality <= 0:
-        return INVALID, {
+        return {}, {
             "role": "constructor",
             "per_opp_metrics": [],
             "per_opp_delta": [],
@@ -75,19 +62,11 @@ def evaluate(opponent_results: list, program_output: object):
     quality = min(raw_quality / Q_MAX, 1.0)
 
     if not opponent_results:
-        return (
-            {
-                "fitness": quality,
-                "is_valid": 1.0,
-                "actual_fitness": raw_quality,
-                "quality": quality,
-                "resistance": 1.0,
-                "mean_improvement": 0.0,
-                "best_post_improvement": raw_quality,
-                "n_opponents": 0.0,
-            },
-            {"role": "constructor", "per_opp_metrics": [], "per_opp_delta": []},
-        )
+        intrinsic = {
+            "quality": quality,
+            "actual_fitness": raw_quality,
+        }
+        return intrinsic, {"role": "constructor", "per_opp_metrics": [], "per_opp_delta": []}
 
     resistance_scores = []
     deltas = []
@@ -142,27 +121,13 @@ def evaluate(opponent_results: list, program_output: object):
                 }
             )
 
-    mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
-    resistance = (
-        sum(resistance_scores) / len(resistance_scores) if resistance_scores else 1.0
-    )
-    fitness = ALPHA * quality + (1.0 - ALPHA) * resistance
-
-    metrics = {
-        "fitness": float(fitness),
-        "is_valid": 1.0,
-        "actual_fitness": raw_quality,
+    intrinsic = {
         "quality": float(quality),
-        "resistance": float(resistance),
-        "mean_improvement": float(mean_delta),
-        "best_post_improvement": float(max(post_qualities))
-        if post_qualities
-        else raw_quality,
-        "n_opponents": float(len(deltas)),
+        "actual_fitness": raw_quality,
     }
     artifact = {
         "role": "constructor",
         "per_opp_metrics": per_opp_metrics,
         "per_opp_delta": [m["delta"] for m in per_opp_metrics],
     }
-    return metrics, artifact
+    return intrinsic, artifact

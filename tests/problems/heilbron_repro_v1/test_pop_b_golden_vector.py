@@ -12,13 +12,10 @@ import hydra
 from hydra import compose, initialize_config_dir
 import pytest
 
-from gigaevo.config.resolvers import register_resolvers
-from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
+from gigaevo.programs.metrics.context import MetricSpec, MetricsContext
 
 PROBLEM_DIR = Path(__file__).resolve().parents[3] / "problems/heilbron_repro_v1/pop_b"
 CONFIG_DIR = str(Path(__file__).resolve().parents[3] / "config")
-
-register_resolvers()
 
 EXPECTED = {
     "is_valid": 1.0,

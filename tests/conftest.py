@@ -8,7 +8,10 @@ from typing import Any
 import fakeredis.aioredis
 import pytest
 
+from gigaevo.config.resolvers import register_resolvers
 from gigaevo.database.redis import RedisProgramStorageConfig
+
+register_resolvers()
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.programs.core_types import (

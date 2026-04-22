@@ -72,7 +72,10 @@ def test_heilbron_repro_v1_d_uses_regular_override_not_plus_prefix():
     # Use OmegaConf.to_container(resolve=False) to access raw interpolation strings.
     raw_cfg = OmegaConf.to_container(cfg, resolve=False)
     assert raw_cfg["pipeline_builder"]["aggregator"] == "${ref:aggregator}"
-    assert raw_cfg["pipeline_builder"]["lineage_filter"]["aggregator"] == "${ref:aggregator}"
+    assert (
+        raw_cfg["pipeline_builder"]["lineage_filter"]["aggregator"]
+        == "${ref:aggregator}"
+    )
 
 
 def test_heilbron_repro_v1_g_uses_constructor_aggregator():
