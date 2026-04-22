@@ -10,8 +10,6 @@ import pytest
 
 from gigaevo.config.resolvers import register_resolvers
 from gigaevo.database.redis import RedisProgramStorageConfig
-
-register_resolvers()
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.programs.core_types import (
@@ -25,6 +23,8 @@ from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.utils.trackers.base import LogWriter
+
+register_resolvers()
 
 # ---------------------------------------------------------------------------
 # No-op LogWriter for tests
