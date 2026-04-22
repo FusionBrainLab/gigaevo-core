@@ -500,6 +500,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         # _resolve_lineage_filter in the builder's __init__ — it is safe to
         # forward directly here.
         aggregator = cfg.aggregator
+        assert aggregator is not None  # narrowed by _resolve_lineage_filter
 
         def make_stage() -> SharedBenchmarkFilteredLineageStage:
             return SharedBenchmarkFilteredLineageStage(

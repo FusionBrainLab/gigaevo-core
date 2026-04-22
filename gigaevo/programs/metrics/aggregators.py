@@ -16,7 +16,8 @@ single source of truth for what "valid evaluation" means.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import cast
 
 from gigaevo.programs.metrics.context import MetricsContext
 
@@ -88,12 +89,12 @@ class ReduceSpec(OutputSpec):
     ``count``, ``field`` is ignored.
     """
 
-    _OPS = {
+    _OPS: dict[str, Callable[[Sequence[float]], float]] = {
         "mean": lambda xs: sum(xs) / len(xs),
-        "max": max,
-        "min": min,
-        "sum": sum,
-        "count": len,
+        "max": lambda xs: float(max(xs)),
+        "min": lambda xs: float(min(xs)),
+        "sum": lambda xs: float(sum(xs)),
+        "count": lambda xs: float(len(xs)),
     }
 
     def __init__(self, op: str, field: str | None = None):
@@ -118,7 +119,7 @@ class LinearSpec(OutputSpec):
     """
 
     def __init__(self, terms: Sequence[Mapping[str, object]]):
-        parsed: list[dict[str, object]] = []
+        parsed: list[tuple[float, str, str]] = []
         for term in terms:
             source = str(term["source"])
             if source not in ("intrinsic", "output"):
@@ -126,19 +127,19 @@ class LinearSpec(OutputSpec):
                     f"Bad source: {source!r} (expected 'intrinsic' or 'output')"
                 )
             parsed.append(
-                {
-                    "coeff": float(term["coeff"]),
-                    "source": source,
-                    "key": str(term["key"]),
-                }
+                (
+                    float(cast(float, term["coeff"])),
+                    source,
+                    str(term["key"]),
+                )
             )
         self._terms = parsed
 
     def compute(self, per_opp, intrinsic, computed):  # noqa: ARG002
         total = 0.0
-        for term in self._terms:
-            src = intrinsic if term["source"] == "intrinsic" else computed
-            total += term["coeff"] * float(src[term["key"]])
+        for coeff, source, key in self._terms:
+            src = intrinsic if source == "intrinsic" else computed
+            total += coeff * float(src[key])
         return total
 
 
