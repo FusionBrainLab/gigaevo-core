@@ -268,3 +268,9 @@ def make_program():
         return p
 
     return _make
+
+
+@pytest.fixture
+def dummy_program():
+    """A simple test Program object."""
+    return Program(code="def entrypoint(): return 0", metadata={})

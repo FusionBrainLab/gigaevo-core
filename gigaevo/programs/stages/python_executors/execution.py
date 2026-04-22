@@ -13,6 +13,7 @@ from gigaevo.programs.core_types import (
     StageIO,
     VoidInput,
 )
+from gigaevo.programs.metrics.aggregators import MetricsAggregator
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.common import AnyContainer, Box
@@ -288,6 +289,71 @@ class CallValidatorFunction(PythonCodeExecutor):
         else:
             context = None
         return ([context, payload] if context is not None else [payload]), {}
+
+
+# ---------------------------------------------------------------------------
+# ParseMetricsStage — composes program.metrics from primitives.
+# ---------------------------------------------------------------------------
+#
+# CallValidatorFunction now emits `raw_validator_output` (the raw
+# (intrinsic, artifact) tuple from evaluate.py). ParseMetricsStage consumes
+# it, applies the aggregator, and emits the legacy `validation_result`
+# shape so FetchMetrics / FetchArtifact / DGTrackerStage are untouched.
+
+RawValidatorOutput = Box[tuple[dict[str, float], Any]]
+
+
+class RawValidatorInput(StageIO):
+    raw_validator_output: RawValidatorOutput
+
+
+@StageRegistry.register(
+    description="Compose program.metrics from per-opponent primitives via aggregator."
+)
+class ParseMetricsStage(Stage):
+    """Aggregator-driven metrics composition.
+
+    evaluate.py returns `(intrinsic, artifact)`. This stage:
+      1. Pulls `artifact["per_opp_metrics"]` (list of per-fight dicts).
+      2. Calls `aggregator.aggregate(per_opp, intrinsic)` → `metrics`.
+      3. Emits `(metrics, artifact)` so downstream is unchanged.
+
+    Candidate failure (empty / missing per_opp_metrics, or artifact=None)
+    falls through to `aggregator.invalid_defaults` — no per-stage special-
+    casing. `invalid_defaults.is_valid = 0.0` captures "no signal" uniformly.
+    """
+
+    InputsModel = RawValidatorInput
+    OutputModel = Box[tuple[dict[str, float], Any]]
+
+    def __init__(self, *, aggregator: MetricsAggregator, **kwargs: Any):
+        super().__init__(**kwargs)
+        if aggregator is None:
+            raise ValueError(
+                "ParseMetricsStage: aggregator required — no silent fallback."
+            )
+        self._aggregator = aggregator
+
+    async def compute(self, program: Program) -> Box[tuple[dict[str, float], Any]]:
+        params = cast(RawValidatorInput, self.params)
+        raw = params.raw_validator_output.data
+        if not isinstance(raw, tuple) or len(raw) != 2:
+            raise ValueError(
+                f"ParseMetricsStage expected (intrinsic, artifact) tuple from "
+                f"CallValidatorFunction, got {type(raw).__name__!r}"
+            )
+        intrinsic, artifact = raw
+        per_opp = []
+        if isinstance(artifact, dict):
+            per_opp = list(artifact.get("per_opp_metrics") or [])
+        metrics = self._aggregator.aggregate(per_opp, dict(intrinsic or {}))
+        logger.info(
+            "[ParseMetricsStage] {} keys={} n_per_opp={}",
+            program.id[:8],
+            sorted(metrics.keys()),
+            len(per_opp),
+        )
+        return Box(data=(metrics, artifact))
 
 
 class ValidationResult(StageIO):
