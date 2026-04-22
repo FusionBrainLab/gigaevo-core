@@ -4,8 +4,8 @@ Receives:
     opponent_results: list of (11, 2) np.ndarray  (point configs from Pop A)
     program_output:   callable improve(points) -> improved_points
 
-Fitness = mean(max(delta, 0) / Q_MAX) across opponent configurations, clipped to [0, 1]
-    actual_fitness = best post-improvement min_area achieved (for paper reporting)
+Emits per-opponent primitives (pre_q, post_q, delta, score, is_valid) in artifact.
+The ConfigurableAggregator composes these into program-level metrics via heilbron_improver.yaml.
 
 For sigmoid improvement scoring use pop_b_soft (IV2 soft-fitness variant).
 """
@@ -16,17 +16,6 @@ from helper import get_smallest_triangle_area, get_unit_triangle, is_inside_tria
 import numpy as np
 
 Q_MAX = 0.0365
-
-INVALID = {
-    "fitness": -1.0,
-    "is_valid": 0.0,
-    "actual_fitness": -1.0,
-    "mean_improvement_raw": -1.0,
-    "mean_pre_quality": -1.0,
-    "mean_post_quality": -1.0,
-    "max_post_quality": -1.0,
-    "n_opponents": 0.0,
-}
 
 
 def _validate_config(points: object) -> np.ndarray | None:
@@ -63,10 +52,10 @@ def _invalid_opp_metrics() -> dict[str, float]:
 def evaluate(opponent_results: list, program_output: object):
     """Cross-play: improver vs opponent constructor configs.
 
-    Returns (metrics, artifact). The artifact carries per_opp_metrics aligned
-    index-wise with opponent_results (one entry per opponent) so
-    DGTrackerStage / SBF-LineageStage can replay the aggregation downstream.
-    per_opp_delta is kept as a redundant back-compat alias.
+    Returns ({}, artifact). Intrinsic metrics are empty (all D metrics are
+    per-opponent reductions handled by ConfigurableAggregator).
+    The artifact carries per_opp_metrics aligned index-wise with opponent_results
+    so the aggregator can reproduce program-level metrics downstream.
     """
     improve_fn = program_output
     n = len(opponent_results)
@@ -80,10 +69,10 @@ def evaluate(opponent_results: list, program_output: object):
         }
 
     if not callable(improve_fn):
-        return INVALID, _artifact()
+        return {}, _artifact()
 
     if not opponent_results:
-        return INVALID, _artifact()
+        return {}, _artifact()
 
     scores = []
     pre_qualities = []
@@ -131,21 +120,6 @@ def evaluate(opponent_results: list, program_output: object):
             }
 
     if not scores:
-        return INVALID, _artifact()
+        return {}, _artifact()
 
-    fitness = sum(scores) / len(scores)
-    mean_improvement_raw = sum(
-        max(post - pre, 0.0) for pre, post in zip(pre_qualities, post_qualities)
-    ) / len(scores)
-
-    metrics = {
-        "fitness": float(fitness),
-        "is_valid": 1.0,
-        "actual_fitness": float(max(post_qualities)),
-        "mean_improvement_raw": float(mean_improvement_raw),
-        "mean_pre_quality": float(sum(pre_qualities) / len(pre_qualities)),
-        "mean_post_quality": float(sum(post_qualities) / len(post_qualities)),
-        "max_post_quality": float(max(post_qualities)),
-        "n_opponents": float(len(scores)),
-    }
-    return metrics, _artifact()
+    return {}, _artifact()

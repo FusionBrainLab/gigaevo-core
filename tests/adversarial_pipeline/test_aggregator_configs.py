@@ -172,26 +172,6 @@ class TestHeilbronImproverYAML:
         assert result["max_post_quality"] == -1.0
         assert result["mean_improvement_raw"] == -1.0
 
-    def test_parity_with_heilbron_repro_v1_pop_b_evaluate(self):
-        """The definitive gate: aggregator output EQUALS evaluate.py metrics
-        when fed the real per_opp_metrics artifact."""
-        ev, _ = _load_pop("heilbron_repro_v1", "pop_b")
-        _, helper = _load_pop("heilbron_repro_v1", "pop_a")
-
-        pts = _seed_grid(helper)
-        opponents = [pts, pts, pts]
-        metrics, artifact = ev.evaluate(opponents, _noop_improver)
-        assert metrics["is_valid"] == 1.0
-
-        cfg = OmegaConf.load(IMPROVER_YAML)
-        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
-
-        reproduced = agg.aggregate(artifact["per_opp_metrics"], intrinsic=metrics)
-        for key in agg.output_keys:
-            assert key in metrics, f"aggregator emits {key!r}, evaluate.py does not"
-            assert reproduced[key] == pytest.approx(
-                metrics[key], rel=1e-9, abs=1e-12
-            ), f"key={key}: reproduced={reproduced[key]} vs metrics={metrics[key]}"
 
 
 # ===========================================================================
@@ -296,27 +276,40 @@ class TestHeilbronReproV1PipelineComposition:
     """
 
     def test_pipeline_yaml_references_aggregator(self):
-        """Composition smoke-test: compose the pipeline config as a standalone
-        Hydra config group and check that
-        ``pipeline_builder.lineage_filter.aggregator`` has the expected
-        ``_target_``.
+        """Composition smoke-test: check that heilbron_repro_v1.yaml wires
+        aggregators via ${ref:aggregator} (unresolved string, not instantiated).
 
-        We point ``config_dir`` at ``config/`` (not ``config/pipeline/``) so
-        the ``- /aggregator/heilbron_improver@...`` default can be found.
-        ``config_name="pipeline/heilbron_repro_v1"`` treats the pipeline YAML
-        as a root config for this test; the full application config lives at
-        ``config/config.yaml`` but composing that requires runtime overrides
-        (opponent_redis_db, etc.) that are out of scope here.
+        We compose with aggregator=heilbron_improver to get the aggregator
+        config into the top-level namespace, then verify both
+        pipeline_builder.aggregator and lineage_filter.aggregator point to
+        the shared singleton via the ref resolver.
         """
         from hydra import compose, initialize_config_dir
 
+        from gigaevo.config.resolvers import register_resolvers
+
+        register_resolvers()
         config_dir = str(PROJECT_ROOT / "config")
         with initialize_config_dir(config_dir=config_dir, version_base=None):
-            cfg = compose(config_name="pipeline/heilbron_repro_v1")
-        agg_cfg = cfg.pipeline_builder.lineage_filter.aggregator
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "pipeline=heilbron_repro_v1",
+                    "aggregator=heilbron_improver",
+                    "problem.name=heilbron_repro_v1/pop_b",
+                    "redis.db=0",
+                ],
+            )
+        # Both aggregator slots reference the shared top-level singleton.
+        raw_cfg = OmegaConf.to_container(cfg, resolve=False)
+        assert raw_cfg["pipeline_builder"]["aggregator"] == "${ref:aggregator}"
         assert (
-            agg_cfg._target_
-            == "gigaevo.programs.metrics.aggregators.ConfigurableAggregator"
+            raw_cfg["pipeline_builder"]["lineage_filter"]["aggregator"]
+            == "${ref:aggregator}"
+        )
+        # The top-level aggregator is the improver config.
+        assert (
+            cfg.aggregator._target_.endswith("ConfigurableAggregator")
         )
         # And the outputs block matches the improver schema.
-        assert set(agg_cfg.outputs.keys()) == TestHeilbronImproverYAML.IMPROVER_KEYS
+        assert set(cfg.aggregator.outputs.keys()) == TestHeilbronImproverYAML.IMPROVER_KEYS
