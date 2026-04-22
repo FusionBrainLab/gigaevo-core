@@ -173,7 +173,6 @@ class TestHeilbronImproverYAML:
         assert result["mean_improvement_raw"] == -1.0
 
 
-
 # ===========================================================================
 # heilbron_constructor.yaml (pop_a / G-side)
 # ===========================================================================
@@ -245,7 +244,6 @@ class TestHeilbronConstructorYAML:
         assert result["best_post_improvement"] == -1.0
 
 
-
 # ===========================================================================
 # Pipeline composition — heilbron_repro_v1 wires aggregator via defaults:
 # ===========================================================================
@@ -266,6 +264,7 @@ class TestHeilbronReproV1PipelineComposition:
         the shared singleton via the ref resolver.
         """
         from hydra import compose, initialize_config_dir
+
         config_dir = str(PROJECT_ROOT / "config")
         with initialize_config_dir(config_dir=config_dir, version_base=None):
             cfg = compose(
@@ -285,8 +284,8 @@ class TestHeilbronReproV1PipelineComposition:
             == "${ref:aggregator}"
         )
         # The top-level aggregator is the improver config.
-        assert (
-            cfg.aggregator._target_.endswith("ConfigurableAggregator")
-        )
+        assert cfg.aggregator._target_.endswith("ConfigurableAggregator")
         # And the outputs block matches the improver schema.
-        assert set(cfg.aggregator.outputs.keys()) == TestHeilbronImproverYAML.IMPROVER_KEYS
+        assert (
+            set(cfg.aggregator.outputs.keys()) == TestHeilbronImproverYAML.IMPROVER_KEYS
+        )

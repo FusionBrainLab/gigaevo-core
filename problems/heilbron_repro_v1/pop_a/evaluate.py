@@ -66,7 +66,11 @@ def evaluate(opponent_results: list, program_output: object):
             "quality": quality,
             "actual_fitness": raw_quality,
         }
-        return intrinsic, {"role": "constructor", "per_opp_metrics": [], "per_opp_delta": []}
+        return intrinsic, {
+            "role": "constructor",
+            "per_opp_metrics": [],
+            "per_opp_delta": [],
+        }
 
     resistance_scores = []
     deltas = []
