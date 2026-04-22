@@ -14,10 +14,12 @@ Parametric: n_opponents=k, source_prompt_k=l (l<=k).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+import hydra
 from loguru import logger
+from omegaconf import DictConfig, OmegaConf
 
 from gigaevo.adversarial.dg_tracker_stage import DGTrackerStage
 
@@ -40,21 +42,74 @@ from gigaevo.adversarial.tracker_coverage_stages import (
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
+from gigaevo.programs.metrics.aggregators import MetricsAggregator
+from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.stages.json_processing import MergeDictStage
 
 
-@dataclass(frozen=True)
+@dataclass
 class LineageFilterConfig:
     """Config for D-side SharedBenchmarkFilteredLineageStage.
 
-    min_shared must be >= 1 (the stage constructor rejects 0). To disable
-    filtering entirely, don't install the filtered variant at all — use
-    the base LineageStage. inject_shared_evidence=False ⇒ filter still
-    applies but no TransitionEvidence is emitted (ablation).
+    The ``aggregator`` field is REQUIRED at build time — passing
+    ``LineageFilterConfig()`` (no aggregator) raises ``ValueError`` in the
+    pipeline builder. To disable filtering entirely, don't install the
+    filtered variant at all — use the base ``LineageStage``.
+    ``inject_shared_evidence=False`` ⇒ filter still applies but no
+    ``TransitionEvidence`` is emitted (ablation).
+
+    ``aggregator`` must be an already-instantiated :class:`MetricsAggregator`.
+    The pipeline builder also accepts a raw ``DictConfig`` in place of this
+    dataclass; in that case the aggregator sub-config is resolved via
+    ``hydra.utils.instantiate`` with ``metrics_context`` injected as kwarg.
     """
 
     min_shared: int = 1
     inject_shared_evidence: bool = True
+    aggregator: MetricsAggregator | None = field(default=None)
+
+
+def _resolve_lineage_filter(
+    spec: LineageFilterConfig | DictConfig | None,
+    metrics_context: MetricsContext,
+) -> LineageFilterConfig:
+    """Normalize the ``lineage_filter`` argument to a validated dataclass.
+
+    Accepts either an already-built :class:`LineageFilterConfig` or a raw
+    :class:`omegaconf.DictConfig`. A DictConfig must contain an
+    ``aggregator`` key with a ``_target_`` (Hydra instantiates it with
+    ``metrics_context`` injected as a kwarg — YAML doesn't need to
+    reference the shared singleton).
+
+    Raises ``ValueError`` if the resolved config has no aggregator.
+    """
+    if spec is None:
+        raise ValueError(
+            "lineage_filter.aggregator required — no silent fallback. "
+            "Pass LineageFilterConfig(aggregator=…) or a DictConfig with an "
+            "aggregator._target_."
+        )
+
+    if isinstance(spec, DictConfig):
+        agg_cfg = spec.get("aggregator")
+        if agg_cfg is None:
+            raise ValueError(
+                "lineage_filter.aggregator required — no silent fallback. "
+                "Add an `aggregator:` block with a `_target_` to the pipeline "
+                "config."
+            )
+        aggregator = hydra.utils.instantiate(agg_cfg, metrics_context=metrics_context)
+        raw = OmegaConf.to_container(spec, resolve=True)
+        assert isinstance(raw, dict)
+        return LineageFilterConfig(
+            min_shared=int(raw.get("min_shared", 1)),
+            inject_shared_evidence=bool(raw.get("inject_shared_evidence", True)),
+            aggregator=aggregator,
+        )
+
+    if spec.aggregator is None:
+        raise ValueError("lineage_filter.aggregator required — no silent fallback.")
+    return spec
 
 
 class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
@@ -102,7 +157,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         archive_reeval: bool = False,
         dg_tracker: DGImprovementTracker | None = None,
         *,
-        lineage_filter: LineageFilterConfig | None = None,
+        lineage_filter: LineageFilterConfig | DictConfig | None = None,
         opponent_result_mode: Literal["exec", "cached"] = "exec",
         opponent_sampling_mode: OpponentSamplingMode | str = OpponentSamplingMode.TOP_K,
         redis_host: str = "localhost",
@@ -147,10 +202,13 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
                 dg_tracker, population_role, stage_timeout
             )
             if population_role == "improver":
+                resolved_filter = _resolve_lineage_filter(
+                    lineage_filter, ctx.problem_ctx.metrics_context
+                )
                 self._replace_lineage_with_filtered(
                     ctx,
                     dg_tracker,
-                    lineage_filter or LineageFilterConfig(),
+                    resolved_filter,
                     stage_timeout,
                 )
 
@@ -365,6 +423,11 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         metrics_context = ctx.problem_ctx.metrics_context
         prompts_dir = ctx.prompts_dir
 
+        # cfg.aggregator has already been validated non-None by
+        # _resolve_lineage_filter in the builder's __init__ — it is safe to
+        # forward directly here.
+        aggregator = cfg.aggregator
+
         def make_stage() -> SharedBenchmarkFilteredLineageStage:
             return SharedBenchmarkFilteredLineageStage(
                 llm=llm,
@@ -373,6 +436,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
                 storage=storage,
                 prompts_dir=prompts_dir,
                 tracker=tracker,
+                aggregator=aggregator,
                 min_shared=cfg.min_shared,
                 inject_shared_evidence=cfg.inject_shared_evidence,
                 timeout=stage_timeout,

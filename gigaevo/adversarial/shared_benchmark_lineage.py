@@ -6,37 +6,50 @@ D's LineageStage narrates parent-D → child-D fitness transitions to the
 mutation LLM. In adversarial co-evolution with a rotating G Hall-of-Fame
 the raw whole-eval deltas are apples-to-oranges: parent and child are
 usually scored against different G's. This stage subclasses LineageStage
-and overrides preprocess() to:
+and overrides ``preprocess()`` to:
 
-  1) Filter out parents that share fewer than min_shared evaluation
-     opponents with the child (tracker.faced_by_d intersection).
-  2) Build HoF-invariant per-metric means over the shared opponents,
-     respecting MetricsContext sentinels and the is_valid gate, and pass
-     them to the LLM agent as TransitionEvidence.
+  1) Filter out parents that share fewer than ``min_shared`` evaluation
+     opponents with the child (``tracker.metrics_by_d`` key intersection).
+  2) Re-run the population's aggregation logic on the per-opponent records
+     restricted to the shared-G subset, via an injected
+     :class:`MetricsAggregator`. The aggregator returns a dict whose schema
+     matches ``program.metrics`` — so ``MetricsFormatter`` can render it
+     into the prompt without a ``KeyError``.
+
+Aggregator DI contract
+----------------------
+The aggregator is required (``aggregator=None`` ⇒ ``ValueError``). It is
+the single validity gate: every per-opponent record in the shared-G subset
+is forwarded to it, invalid entries and all; the aggregator's
+``metrics_context.is_valid`` decides what to keep.
+
+``per_metric_shared_count`` uses ``len(shared_opponent_ids)`` as a uniform
+denominator for every aggregator output key. The per-metric filtering
+that used to live here is now the aggregator's concern — the stage stops
+leaking that detail to ``TransitionEvidence``.
 
 Installation
 ------------
-AdversarialAsymmetricPipelineBuilder uses PipelineBuilder.replace_stage(
-"LineageStage", ...) on D runs only (see Task 7). Node name stays
-"LineageStage" so downstream edges are preserved.
+:class:`AdversarialAsymmetricPipelineBuilder` installs this on D runs only
+via ``replace_stage("LineageStage", ...)``. Node name stays
+``"LineageStage"`` so downstream edges are preserved.
 
 Future work
 -----------
-G-side analog deferred — see experiments/IDEAS.yaml:
-heilbron-g-side-lineage-filter.
+G-side analog deferred — see ``experiments/IDEAS.yaml``:
+``heilbron-g-side-lineage-filter``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection
-import math
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from gigaevo.llm.agents.lineage import TransitionEvidence
 from gigaevo.programs.core_types import ProgramStageResult, StageIO
-from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
+from gigaevo.programs.metrics.aggregators import MetricsAggregator
+from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.insights_lineage import LineageStage
 
@@ -44,103 +57,30 @@ if TYPE_CHECKING:
     from gigaevo.adversarial.dg_tracker import DGImprovementTracker
 
 
-def _aggregate_shared_metrics(
-    parent_by_g: dict[str, dict[str, float]],
-    child_by_g: dict[str, dict[str, float]],
-    shared_g: Collection[str],
-    ctx: MetricsContext,
-) -> tuple[dict[str, float], dict[str, float], dict[str, int]]:
-    """Return (shared_parent_metrics, shared_child_metrics, per_metric_counts).
-
-    Rules:
-      - VALIDITY_KEY aggregated as a plain mean over ALL shared G's
-        (0/1 indicator → mean is the valid-rate).
-      - Other metrics: a G contributes only when ctx.is_valid holds on
-        BOTH parent and child AND neither value is a sentinel per
-        ctx.is_sentinel.
-      - Zero surviving G's for a metric → both sides are set to that
-        metric's sentinel value if one is declared, otherwise NaN.
-        NaN propagates as a missing-value marker rather than a spurious
-        0.0 the LLM could mistake for a real measurement.
-    """
-    shared_g = list(shared_g)
-
-    all_metrics: set[str] = set()
-    for g in shared_g:
-        all_metrics |= parent_by_g.get(g, {}).keys()
-        all_metrics |= child_by_g.get(g, {}).keys()
-
-    shared_parent: dict[str, float] = {}
-    shared_child: dict[str, float] = {}
-    counts: dict[str, int] = {}
-
-    for m in all_metrics:
-        if m == VALIDITY_KEY:
-            # Invariant: DGImprovementTracker.record_batch always writes
-            # is_valid for every (D,G) pair, so .get(m, 0.0) is defensive
-            # — missing key implies a pre-v4 row or a writer bypassing
-            # record_batch, which the stage can safely treat as invalid.
-            p_vals = [float(parent_by_g[g].get(m, 0.0)) for g in shared_g]
-            c_vals = [float(child_by_g[g].get(m, 0.0)) for g in shared_g]
-            shared_parent[m] = sum(p_vals) / len(p_vals) if p_vals else 0.0
-            shared_child[m] = sum(c_vals) / len(c_vals) if c_vals else 0.0
-            counts[m] = len(shared_g)
-            continue
-
-        p_vals, c_vals = [], []
-        for g in shared_g:
-            p = parent_by_g.get(g, {})
-            c = child_by_g.get(g, {})
-            if not ctx.is_valid(p) or not ctx.is_valid(c):
-                continue
-            pv, cv = p.get(m), c.get(m)
-            if pv is None or cv is None:
-                continue
-            if ctx.is_sentinel(m, pv) or ctx.is_sentinel(m, cv):
-                continue
-            p_vals.append(float(pv))
-            c_vals.append(float(cv))
-
-        counts[m] = len(p_vals)
-        if p_vals:
-            shared_parent[m] = sum(p_vals) / len(p_vals)
-            shared_child[m] = sum(c_vals) / len(c_vals)
-        else:
-            spec = ctx.specs.get(m)
-            fallback = (
-                spec.sentinel_value
-                if spec and spec.sentinel_value is not None
-                else math.nan
-            )
-            shared_parent[m] = fallback
-            shared_child[m] = fallback
-
-    return shared_parent, shared_child, counts
-
-
 class SharedBenchmarkFilteredLineageStage(LineageStage):
     """LineageStage variant: filter parents by shared eval benchmark.
 
     A parent survives iff
     ``|tracker.faced_by_d(child) ∩ tracker.faced_by_d(parent)| >= min_shared``.
-    For survivors, builds a TransitionEvidence from tracker.metrics_by_d
-    with sentinel + is_valid gating and passes it to the LLM agent.
+    For survivors, calls ``aggregator.aggregate`` twice (parent intrinsic,
+    child intrinsic) on the shared-G subset of per-opponent records, and
+    packs the results into :class:`TransitionEvidence`.
 
     Cache invariant
     ---------------
     ``_refresh_pass_token`` is a class-level counter that the steady-state
     engine bumps before each archive-refresh pass (see
-    ``SteadyStateEngineConfig.refresh_passes``).  ``compute_hash`` folds
-    the token into the cache key so pass-2 re-evaluations cache-miss
-    relative to pass 1 — this is what closes the two-sided cross-program
-    tracker race: pass 1 re-runs DGTrackerStage, pass 2 re-runs this
-    stage against the globally-fresh tracker.  Within a single pass the
-    token is constant, so normal input-hash caching still deduplicates
-    work across concurrently-refreshing siblings.
+    ``SteadyStateEngineConfig.refresh_passes``). ``compute_hash`` folds the
+    token into the cache key so pass-2 re-evaluations cache-miss relative
+    to pass 1 — this is what closes the two-sided cross-program tracker
+    race: pass 1 re-runs ``DGTrackerStage``, pass 2 re-runs this stage
+    against the globally-fresh tracker. Within a single pass the token is
+    constant, so normal input-hash caching still deduplicates work across
+    concurrently-refreshing siblings.
     """
 
     # Bumped by SteadyStateEvolutionEngine._refresh_archive_programs before
-    # each refresh pass.  Per-process class state — each run is its own
+    # each refresh pass. Per-process class state — each run is its own
     # process, so no cross-run contamination.
     _refresh_pass_token: int = 0
 
@@ -169,16 +109,20 @@ class SharedBenchmarkFilteredLineageStage(LineageStage):
         self,
         *,
         tracker: DGImprovementTracker,
+        aggregator: MetricsAggregator,
         metrics_context: MetricsContext,
         min_shared: int = 1,
         inject_shared_evidence: bool = True,
         **kwargs: Any,
     ):
+        if aggregator is None:
+            raise ValueError(
+                "SharedBenchmarkFilteredLineageStage.aggregator is required — "
+                "no silent fallback. Wire it through config/aggregator/*.yaml."
+            )
         # min_shared < 1 would keep parents whose shared-opponent set is
-        # empty and then hand the LLM an all-sentinel evidence block
-        # (see _aggregate_shared_metrics zero-survivor branch). That
-        # defeats the whole point of the HoF-invariant subset — reject
-        # it loudly rather than silently degrading.
+        # empty and then hand the LLM an evidence block backed by zero
+        # records. Reject it loudly rather than silently degrading.
         if min_shared < 1:
             raise ValueError(
                 f"min_shared must be >= 1 (got {min_shared}); use the base "
@@ -186,6 +130,7 @@ class SharedBenchmarkFilteredLineageStage(LineageStage):
             )
         super().__init__(metrics_context=metrics_context, **kwargs)
         self._tracker = tracker
+        self._aggregator = aggregator
         self._metrics_context = metrics_context
         self._min_shared = min_shared
         self._inject_shared_evidence = inject_shared_evidence
@@ -208,44 +153,74 @@ class SharedBenchmarkFilteredLineageStage(LineageStage):
         child_by_g = await self._tracker.metrics_by_d(program.id)
         child_faced = set(child_by_g.keys())
 
-        kept_ids: list[str] = []
-        evidence: list[TransitionEvidence] = []
-
+        # Decide parent survival against the shared-opponent rule before we
+        # pay the storage.mget cost — that keeps the data fetch aligned
+        # with the set of parents we'll actually hand to the aggregator.
+        kept: list[tuple[str, set[str]]] = []
         for pid in parent_ids:
             parent_by_g = await self._tracker.metrics_by_d(pid)
             shared = child_faced & set(parent_by_g.keys())
             if len(shared) < self._min_shared:
                 continue
-
-            kept_ids.append(pid)
-            if self._inject_shared_evidence:
-                sp, sc, counts = _aggregate_shared_metrics(
-                    parent_by_g, child_by_g, shared, self._metrics_context
-                )
-                evidence.append(
-                    TransitionEvidence(
-                        parent_id=pid,
-                        shared_opponent_ids=sorted(shared),
-                        shared_parent_metrics=sp,
-                        shared_child_metrics=sc,
-                        per_metric_shared_count=counts,
-                    )
-                )
+            kept.append((pid, shared))
 
         logger.info(
             "[LineageStage:SharedBenchmark] program={} kept {}/{} parents (min_shared={})",
             program.id[:8],
-            len(kept_ids),
+            len(kept),
             len(parent_ids),
             self._min_shared,
         )
 
-        if not kept_ids:
+        if not kept:
             return ProgramStageResult.skipped(
                 message="no parents share eval benchmark", stage=self.stage_name
             )
 
+        kept_ids = [pid for pid, _ in kept]
+        parents = await self.storage.mget(kept_ids)
+        parents_by_id = {p.id: p for p in parents}
+
+        evidence: list[TransitionEvidence] | None
+        if not self._inject_shared_evidence:
+            evidence = None
+        else:
+            evidence = []
+            output_keys = self._aggregator.output_keys
+            for pid, shared in kept:
+                parent_prog = parents_by_id.get(pid)
+                if parent_prog is None:
+                    # Parent was filtered out by storage (e.g. missing).
+                    # Skip silently — the pipeline will still narrate the
+                    # other kept parents and downstream stages tolerate an
+                    # empty evidence list.
+                    continue
+                shared_sorted = sorted(shared)
+                # Refetch tracker data per-parent so we have the shared-G
+                # subset fresh and paired with the parent's hash.
+                parent_by_g = await self._tracker.metrics_by_d(pid)
+                parent_records = [parent_by_g[g] for g in shared_sorted]
+                child_records = [child_by_g[g] for g in shared_sorted]
+
+                parent_output = self._aggregator.aggregate(
+                    parent_records, parent_prog.metrics
+                )
+                child_output = self._aggregator.aggregate(
+                    child_records, program.metrics
+                )
+                evidence.append(
+                    TransitionEvidence(
+                        parent_id=pid,
+                        shared_opponent_ids=shared_sorted,
+                        shared_parent_metrics=parent_output,
+                        shared_child_metrics=child_output,
+                        per_metric_shared_count={
+                            k: len(shared_sorted) for k in output_keys
+                        },
+                    )
+                )
+
         return {
-            "parents": await self.storage.mget(kept_ids),
-            "evidence": evidence if self._inject_shared_evidence else None,
+            "parents": parents,
+            "evidence": evidence,
         }

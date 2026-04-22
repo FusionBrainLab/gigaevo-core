@@ -282,15 +282,25 @@ class TestLineageStageReplacement:
     def _d_builder(self, **overrides):
         from gigaevo.adversarial.asymmetric_pipeline import LineageFilterConfig
         from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+        from gigaevo.programs.metrics.aggregators import (
+            ConfigurableAggregator,
+            ReduceSpec,
+        )
 
+        ctx = overrides.get("ctx") or _make_ctx()
+        overrides.setdefault("ctx", ctx)
+        agg = ConfigurableAggregator(
+            outputs={"fitness": ReduceSpec(op="mean", field="delta")},
+            invalid_defaults={"fitness": 0.0},
+            metrics_context=ctx.problem_ctx.metrics_context,
+        )
         kwargs = dict(
-            ctx=_make_ctx(),
             opponent_provider=FakeProvider(),
             population_role="improver",
             feedback_mode="composition",
             dg_tracker=MagicMock(spec=DGImprovementTracker),
             lineage_filter=LineageFilterConfig(
-                min_shared=1, inject_shared_evidence=True
+                min_shared=1, inject_shared_evidence=True, aggregator=agg
             ),
         )
         kwargs.update(overrides)
@@ -307,11 +317,22 @@ class TestLineageStageReplacement:
 
     def test_config_values_reach_stage(self):
         from gigaevo.adversarial.asymmetric_pipeline import LineageFilterConfig
+        from gigaevo.programs.metrics.aggregators import (
+            ConfigurableAggregator,
+            ReduceSpec,
+        )
 
+        ctx = _make_ctx()
+        agg = ConfigurableAggregator(
+            outputs={"fitness": ReduceSpec(op="mean", field="delta")},
+            invalid_defaults={"fitness": 0.0},
+            metrics_context=ctx.problem_ctx.metrics_context,
+        )
         builder = self._d_builder(
+            ctx=ctx,
             lineage_filter=LineageFilterConfig(
-                min_shared=3, inject_shared_evidence=False
-            )
+                min_shared=3, inject_shared_evidence=False, aggregator=agg
+            ),
         )
         stage = builder._nodes["LineageStage"]()
         assert stage._min_shared == 3
@@ -353,3 +374,119 @@ class TestLineageStageReplacement:
         stage = builder._nodes["LineageStage"]()
         assert not isinstance(stage, SharedBenchmarkFilteredLineageStage)
         assert isinstance(stage, LineageStage)
+
+
+# ---------------------------------------------------------------------------
+# Tests: lineage_filter aggregator DI
+#
+# The stage now requires a MetricsAggregator. The builder MUST resolve it
+# from the lineage_filter config (supporting both a dataclass and an
+# OmegaConf DictConfig form) BEFORE instantiating the stage, and must
+# raise at build time if none is supplied — no silent fallback.
+# ---------------------------------------------------------------------------
+
+
+class TestLineageFilterAggregator:
+    def _mk_aggregator(self, metrics_ctx):
+        from gigaevo.programs.metrics.aggregators import (
+            ConfigurableAggregator,
+            ReduceSpec,
+        )
+
+        return ConfigurableAggregator(
+            outputs={"fitness": ReduceSpec(op="mean", field="delta")},
+            invalid_defaults={"fitness": 0.0},
+            metrics_context=metrics_ctx,
+        )
+
+    def test_aggregator_wired_from_dataclass_config(self):
+        """LineageFilterConfig with an ``aggregator`` field threads that
+        instance into the stage."""
+        from gigaevo.adversarial.asymmetric_pipeline import LineageFilterConfig
+        from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+        from gigaevo.programs.metrics.aggregators import ConfigurableAggregator
+
+        ctx = _make_ctx()
+        agg = self._mk_aggregator(ctx.problem_ctx.metrics_context)
+
+        builder = AdversarialAsymmetricPipelineBuilder(
+            ctx=ctx,
+            opponent_provider=FakeProvider(),
+            population_role="improver",
+            feedback_mode="composition",
+            dg_tracker=MagicMock(spec=DGImprovementTracker),
+            lineage_filter=LineageFilterConfig(aggregator=agg),
+        )
+        stage = builder._nodes["LineageStage"]()
+        assert isinstance(stage._aggregator, ConfigurableAggregator)
+        assert stage._aggregator is agg
+
+    def test_aggregator_wired_from_dictconfig(self):
+        """``lineage_filter`` given as a DictConfig with ``aggregator._target_``
+        is hydra-instantiated with ``metrics_context`` injected as a kwarg."""
+        from omegaconf import OmegaConf
+
+        from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+        from gigaevo.programs.metrics.aggregators import ConfigurableAggregator
+
+        cfg = OmegaConf.create(
+            {
+                "min_shared": 1,
+                "inject_shared_evidence": True,
+                "aggregator": {
+                    "_target_": "gigaevo.programs.metrics.aggregators.ConfigurableAggregator",
+                    "outputs": {
+                        "fitness": {
+                            "_target_": "gigaevo.programs.metrics.aggregators.ReduceSpec",
+                            "op": "mean",
+                            "field": "delta",
+                        }
+                    },
+                    "invalid_defaults": {"fitness": 0.0},
+                },
+            }
+        )
+        builder = AdversarialAsymmetricPipelineBuilder(
+            ctx=_make_ctx(),
+            opponent_provider=FakeProvider(),
+            population_role="improver",
+            feedback_mode="composition",
+            dg_tracker=MagicMock(spec=DGImprovementTracker),
+            lineage_filter=cfg,
+        )
+        stage = builder._nodes["LineageStage"]()
+        assert isinstance(stage._aggregator, ConfigurableAggregator)
+        assert "fitness" in stage._aggregator.output_keys
+
+    def test_missing_aggregator_raises_at_build(self):
+        """DictConfig with ``lineage_filter:`` block but no ``aggregator:`` key
+        raises ValueError at build time — no silent fallback."""
+        from omegaconf import OmegaConf
+
+        from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+
+        cfg = OmegaConf.create({"min_shared": 1, "inject_shared_evidence": True})
+        with pytest.raises(ValueError, match="aggregator.*required"):
+            AdversarialAsymmetricPipelineBuilder(
+                ctx=_make_ctx(),
+                opponent_provider=FakeProvider(),
+                population_role="improver",
+                feedback_mode="composition",
+                dg_tracker=MagicMock(spec=DGImprovementTracker),
+                lineage_filter=cfg,
+            )
+
+    def test_missing_aggregator_on_dataclass_raises_at_build(self):
+        """Plain ``LineageFilterConfig()`` (no aggregator) raises at build."""
+        from gigaevo.adversarial.asymmetric_pipeline import LineageFilterConfig
+        from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+
+        with pytest.raises(ValueError, match="aggregator.*required"):
+            AdversarialAsymmetricPipelineBuilder(
+                ctx=_make_ctx(),
+                opponent_provider=FakeProvider(),
+                population_role="improver",
+                feedback_mode="composition",
+                dg_tracker=MagicMock(spec=DGImprovementTracker),
+                lineage_filter=LineageFilterConfig(),
+            )
