@@ -1,8 +1,6 @@
-# @package _global_
 # Null-object aggregator. Sentinel that AsymmetricPipelineBuilder detects
 # via isinstance(aggregator, NullAggregator) and treats as 'no aggregator
 # wired — preserve the legacy CallValidatorFunction → FetchMetrics DAG'.
 # Default for every run; override with `aggregator=heilbron_improver` (etc.)
 # to opt into aggregator-driven metrics composition.
-aggregator:
-  _target_: gigaevo.programs.metrics.aggregators.NullAggregator
+_target_: gigaevo.programs.metrics.aggregators.NullAggregator
