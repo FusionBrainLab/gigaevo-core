@@ -1,0 +1,322 @@
+"""Hydra-instantiation tests for config/aggregator/*.yaml.
+
+Tests the declarative Heilbron aggregator YAMLs used by
+SharedBenchmarkFilteredLineageStage. These YAMLs MUST:
+
+1. Resolve under Hydra to :class:`ConfigurableAggregator` instances.
+2. Produce the same program-level metrics schema that the frozen
+   ``problems/heilbron_repro_v1/pop_{a,b}/evaluate.py`` emits — this
+   is the parity gate.
+3. Be composable through the ``heilbron_repro_v1`` pipeline config's
+   ``defaults:`` list at ``pipeline_builder.lineage_filter.aggregator``.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+import sys
+
+import hydra
+import numpy as np
+from omegaconf import OmegaConf
+import pytest
+
+from gigaevo.programs.metrics.aggregators import (
+    ConfigurableAggregator,
+    LinearSpec,
+)
+from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+AGG_DIR = PROJECT_ROOT / "config" / "aggregator"
+PIPELINE_DIR = PROJECT_ROOT / "config" / "pipeline"
+IMPROVER_YAML = AGG_DIR / "heilbron_improver.yaml"
+CONSTRUCTOR_YAML = AGG_DIR / "heilbron_constructor.yaml"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _ctx() -> MetricsContext:
+    """Minimal MetricsContext whose .is_valid() gates records on is_valid==1.0."""
+    return MetricsContext(
+        specs={
+            "fitness": MetricSpec(
+                description="fitness", higher_is_better=True, is_primary=True
+            ),
+            "is_valid": MetricSpec(description="validity", higher_is_better=True),
+        }
+    )
+
+
+def _load_module(name: str, file: Path, extra_path: Path):
+    sys.path.insert(0, str(extra_path))
+    try:
+        spec = importlib.util.spec_from_file_location(name, file)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+    finally:
+        sys.path.remove(str(extra_path))
+
+
+def _load_pop(problem: str, pop: str):
+    pop_dir = PROJECT_ROOT / "problems" / problem / pop
+    helper = _load_module(f"{problem}_{pop}_helper", pop_dir / "helper.py", pop_dir)
+    ev = _load_module(f"{problem}_{pop}_eval", pop_dir / "evaluate.py", pop_dir)
+    return ev, helper
+
+
+def _seed_grid(helper_mod, n: int = 11, seed: int = 42) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    A, B, C = helper_mod.get_unit_triangle()
+    pts = []
+    rows = 5
+    count = 0
+    for row in range(rows):
+        num = rows - row
+        v = (row + 0.5) / rows
+        for i in range(num):
+            if count >= n:
+                break
+            u = (i + 0.5) / num * (1.0 - v)
+            P = (1 - u - v) * A + u * B + v * C
+            P = P + rng.uniform(-0.001, 0.001, size=2)
+            pts.append(P)
+            count += 1
+        if count >= n:
+            break
+    return np.array(pts)
+
+
+def _noop_improver(p):
+    return p.copy()
+
+
+def _centroid_improver(p):
+    p = p.copy()
+    centroid = p.mean(axis=0)
+    p[0] = 0.7 * p[0] + 0.3 * centroid
+    return p
+
+
+# ===========================================================================
+# heilbron_improver.yaml (pop_b / D-side)
+# ===========================================================================
+
+
+class TestHeilbronImproverYAML:
+    IMPROVER_KEYS = frozenset(
+        {
+            "is_valid",
+            "n_opponents",
+            "fitness",
+            "actual_fitness",
+            "mean_pre_quality",
+            "mean_post_quality",
+            "max_post_quality",
+            "mean_improvement_raw",
+        }
+    )
+
+    def test_yaml_resolves_to_configurable_aggregator(self):
+        cfg = OmegaConf.load(IMPROVER_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+        assert isinstance(agg, ConfigurableAggregator)
+        assert agg.output_keys == self.IMPROVER_KEYS
+
+    def test_yaml_reduces_per_opp_records_correctly(self):
+        cfg = OmegaConf.load(IMPROVER_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+        per_opp = [
+            {
+                "pre_q": 0.30,
+                "post_q": 0.35,
+                "delta": 0.05,
+                "score": 0.5,
+                "is_valid": 1.0,
+            },
+            {
+                "pre_q": 0.30,
+                "post_q": 0.31,
+                "delta": 0.01,
+                "score": 0.2,
+                "is_valid": 1.0,
+            },
+        ]
+        result = agg.aggregate(per_opp, intrinsic={})
+        assert result["is_valid"] == 1.0
+        assert result["n_opponents"] == 2.0
+        assert result["fitness"] == pytest.approx((0.5 + 0.2) / 2)
+        assert result["actual_fitness"] == 0.35
+        assert result["mean_pre_quality"] == pytest.approx(0.30)
+        assert result["mean_post_quality"] == pytest.approx(0.33)
+        assert result["max_post_quality"] == 0.35
+        assert result["mean_improvement_raw"] == pytest.approx(0.03)
+
+    def test_yaml_invalid_defaults_returned_on_empty_per_opp(self):
+        cfg = OmegaConf.load(IMPROVER_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+        result = agg.aggregate([], intrinsic={})
+        assert result["is_valid"] == 0.0
+        assert result["n_opponents"] == 0.0
+        assert result["fitness"] == -1.0
+        assert result["actual_fitness"] == -1.0
+        assert result["mean_pre_quality"] == -1.0
+        assert result["mean_post_quality"] == -1.0
+        assert result["max_post_quality"] == -1.0
+        assert result["mean_improvement_raw"] == -1.0
+
+    def test_parity_with_heilbron_repro_v1_pop_b_evaluate(self):
+        """The definitive gate: aggregator output EQUALS evaluate.py metrics
+        when fed the real per_opp_metrics artifact."""
+        ev, _ = _load_pop("heilbron_repro_v1", "pop_b")
+        _, helper = _load_pop("heilbron_repro_v1", "pop_a")
+
+        pts = _seed_grid(helper)
+        opponents = [pts, pts, pts]
+        metrics, artifact = ev.evaluate(opponents, _noop_improver)
+        assert metrics["is_valid"] == 1.0
+
+        cfg = OmegaConf.load(IMPROVER_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+
+        reproduced = agg.aggregate(artifact["per_opp_metrics"], intrinsic=metrics)
+        for key in agg.output_keys:
+            assert key in metrics, f"aggregator emits {key!r}, evaluate.py does not"
+            assert reproduced[key] == pytest.approx(
+                metrics[key], rel=1e-9, abs=1e-12
+            ), f"key={key}: reproduced={reproduced[key]} vs metrics={metrics[key]}"
+
+
+# ===========================================================================
+# heilbron_constructor.yaml (pop_a / G-side)
+# ===========================================================================
+
+
+class TestHeilbronConstructorYAML:
+    CONSTRUCTOR_KEYS = frozenset(
+        {
+            "is_valid",
+            "n_opponents",
+            "actual_fitness",
+            "quality",
+            "resistance",
+            "mean_improvement",
+            "best_post_improvement",
+            "fitness",
+        }
+    )
+
+    def test_yaml_resolves_to_configurable_aggregator(self):
+        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+        assert isinstance(agg, ConfigurableAggregator)
+        assert agg.output_keys == self.CONSTRUCTOR_KEYS
+
+    def test_fitness_is_linear_spec(self):
+        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+        fitness_spec = agg._outputs["fitness"]
+        assert isinstance(fitness_spec, LinearSpec)
+        terms = fitness_spec._terms
+        assert len(terms) == 2
+        sources = {(t["source"], t["key"], t["coeff"]) for t in terms}
+        assert sources == {
+            ("intrinsic", "quality", 0.5),
+            ("output", "resistance", 0.5),
+        }
+
+    def test_yaml_reduces_per_opp_records_correctly(self):
+        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+        per_opp = [
+            {"post_q": 0.28, "delta": 0.0, "resistance_score": 1.0, "is_valid": 1.0},
+            {"post_q": 0.35, "delta": 0.05, "resistance_score": 0.0, "is_valid": 1.0},
+        ]
+        intrinsic = {"quality": 0.4, "actual_fitness": 0.0146}
+        result = agg.aggregate(per_opp, intrinsic=intrinsic)
+        assert result["is_valid"] == 1.0
+        assert result["n_opponents"] == 2.0
+        assert result["quality"] == 0.4
+        assert result["actual_fitness"] == pytest.approx(0.0146)
+        assert result["resistance"] == pytest.approx(0.5)
+        assert result["mean_improvement"] == pytest.approx(0.025)
+        assert result["best_post_improvement"] == 0.35
+        assert result["fitness"] == pytest.approx(0.5 * 0.4 + 0.5 * 0.5)
+
+    def test_yaml_invalid_defaults_match_pop_a_evaluate_sentinels(self):
+        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+        result = agg.aggregate([], intrinsic={})
+        assert result["is_valid"] == 0.0
+        assert result["n_opponents"] == 0.0
+        # pop_a INVALID dict uses -1.0 sentinels (except is_valid, n_opponents)
+        assert result["fitness"] == -1.0
+        assert result["actual_fitness"] == -1.0
+        assert result["quality"] == -1.0
+        assert result["resistance"] == -1.0
+        assert result["mean_improvement"] == -1.0
+        assert result["best_post_improvement"] == -1.0
+
+    def test_parity_with_heilbron_repro_v1_pop_a_evaluate(self):
+        """The constructor YAML reproduces pop_a/evaluate.py metrics from
+        per_opp_metrics + intrinsic metrics."""
+        ev, helper = _load_pop("heilbron_repro_v1", "pop_a")
+
+        pts = _seed_grid(helper)
+        opponents = [_noop_improver, _centroid_improver, _noop_improver]
+        metrics, artifact = ev.evaluate(opponents, pts)
+        assert metrics["is_valid"] == 1.0
+
+        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
+        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
+
+        reproduced = agg.aggregate(artifact["per_opp_metrics"], intrinsic=metrics)
+        for key in agg.output_keys:
+            assert key in metrics, f"aggregator emits {key!r}, evaluate.py does not"
+            assert reproduced[key] == pytest.approx(
+                metrics[key], rel=1e-9, abs=1e-12
+            ), f"key={key}: reproduced={reproduced[key]} vs metrics={metrics[key]}"
+
+
+# ===========================================================================
+# Pipeline composition — heilbron_repro_v1 wires aggregator via defaults:
+# ===========================================================================
+
+
+class TestHeilbronReproV1PipelineComposition:
+    """The pipeline YAML must install heilbron_improver.yaml at
+    ``pipeline_builder.lineage_filter.aggregator`` via its ``defaults:`` list.
+    """
+
+    def test_pipeline_yaml_references_aggregator(self):
+        """Composition smoke-test: compose the pipeline config as a standalone
+        Hydra config group and check that
+        ``pipeline_builder.lineage_filter.aggregator`` has the expected
+        ``_target_``.
+
+        We point ``config_dir`` at ``config/`` (not ``config/pipeline/``) so
+        the ``- /aggregator/heilbron_improver@...`` default can be found.
+        ``config_name="pipeline/heilbron_repro_v1"`` treats the pipeline YAML
+        as a root config for this test; the full application config lives at
+        ``config/config.yaml`` but composing that requires runtime overrides
+        (opponent_redis_db, etc.) that are out of scope here.
+        """
+        from hydra import compose, initialize_config_dir
+
+        config_dir = str(PROJECT_ROOT / "config")
+        with initialize_config_dir(config_dir=config_dir, version_base=None):
+            cfg = compose(config_name="pipeline/heilbron_repro_v1")
+        agg_cfg = cfg.pipeline_builder.lineage_filter.aggregator
+        assert (
+            agg_cfg._target_
+            == "gigaevo.programs.metrics.aggregators.ConfigurableAggregator"
+        )
+        # And the outputs block matches the improver schema.
+        assert set(agg_cfg.outputs.keys()) == TestHeilbronImproverYAML.IMPROVER_KEYS

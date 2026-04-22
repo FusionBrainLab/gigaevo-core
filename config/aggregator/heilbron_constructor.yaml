@@ -1,0 +1,63 @@
+# Heilbron G-side (pop_a / constructor) aggregator.
+#
+# Produces the exact program.metrics schema emitted by
+# problems/heilbron_repro_v1/pop_a/evaluate.py from per_opp_metrics records
+# ({post_q, delta, resistance_score, is_valid}) plus the program's own
+# intrinsic metrics (quality, actual_fitness).
+#
+# Shipped ahead of the G-side SBF-LineageStage (deferred in IDEAS.yaml).
+# Pipeline wiring for G-side filtering will land when that feature is
+# un-deferred — this YAML is ready to drop in.
+#
+# Fitness = ALPHA * quality + (1 - ALPHA) * resistance, ALPHA = 0.5.
+# Expressible as LinearSpec because resistance uses hard-floor scoring
+# (1 if delta<=0 else 0); the tanh-smoothed variant in
+# problems/heilbron_adversarial/pop_a is NOT expressible here — see the
+# Task 2 deferral note.
+#
+# metrics_context is NOT specified here — AsymmetricPipelineBuilder passes
+# it as a kwarg at hydra.utils.instantiate time.
+_target_: gigaevo.programs.metrics.aggregators.ConfigurableAggregator
+outputs:
+  is_valid:
+    _target_: gigaevo.programs.metrics.aggregators.ConstantSpec
+    value: 1.0
+  n_opponents:
+    _target_: gigaevo.programs.metrics.aggregators.ReduceSpec
+    op: count
+  actual_fitness:
+    _target_: gigaevo.programs.metrics.aggregators.IntrinsicSpec
+    key: actual_fitness
+  quality:
+    _target_: gigaevo.programs.metrics.aggregators.IntrinsicSpec
+    key: quality
+  resistance:
+    _target_: gigaevo.programs.metrics.aggregators.ReduceSpec
+    op: mean
+    field: resistance_score
+  mean_improvement:
+    _target_: gigaevo.programs.metrics.aggregators.ReduceSpec
+    op: mean
+    field: delta
+  best_post_improvement:
+    _target_: gigaevo.programs.metrics.aggregators.ReduceSpec
+    op: max
+    field: post_q
+  fitness:
+    _target_: gigaevo.programs.metrics.aggregators.LinearSpec
+    terms:
+      - coeff: 0.5
+        source: intrinsic
+        key: quality
+      - coeff: 0.5
+        source: output
+        key: resistance
+invalid_defaults:
+  is_valid: 0.0
+  n_opponents: 0.0
+  fitness: -1.0
+  actual_fitness: -1.0
+  quality: -1.0
+  resistance: -1.0
+  mean_improvement: -1.0
+  best_post_improvement: -1.0

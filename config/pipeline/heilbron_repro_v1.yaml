@@ -51,6 +51,13 @@
 
 defaults:
   - adversarial_asymmetric
+  # Install the D-side aggregator used by SharedBenchmarkFilteredLineageStage
+  # (SBF-Lineage) into the pipeline_builder.lineage_filter.aggregator slot.
+  # AsymmetricPipelineBuilder resolves the slot at build time (injecting the
+  # ProblemContext's MetricsContext as a kwarg). Only installed for D runs —
+  # heilbron_repro_v1 is a D-only SBF target; the G-side filter is deferred
+  # (IDEAS.yaml). Note: pop_b/evaluate.py is what this aggregator mirrors.
+  - /aggregator/heilbron_improver@pipeline_builder.lineage_filter.aggregator
 
 # drift_cap=100000 is a deliberate no-op: it emulates v1's effectively
 # unthrottled behavior so D's natural ~2.2× compute advantage over G
