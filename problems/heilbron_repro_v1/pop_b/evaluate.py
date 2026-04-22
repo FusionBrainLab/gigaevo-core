@@ -45,22 +45,45 @@ def _validate_config(points: object) -> np.ndarray | None:
     return pts
 
 
+def _invalid_opp_metrics() -> dict[str, float]:
+    """Per-opponent primitives for a skipped/invalid opponent slot.
+
+    Shape matches the pop_b schema emitted on the happy path; is_valid=0.0
+    gates this record out of the ConfigurableAggregator's reduction.
+    """
+    return {
+        "pre_q": 0.0,
+        "post_q": 0.0,
+        "delta": 0.0,
+        "score": 0.0,
+        "is_valid": 0.0,
+    }
+
+
 def evaluate(opponent_results: list, program_output: object):
     """Cross-play: improver vs opponent constructor configs.
 
-    Returns (metrics, artifact). The artifact carries per_opp_delta aligned
-    index-wise with opponent_results (one entry per opponent; 0.0 when the
-    opponent config was invalid or execution failed) so DGTrackerStage can
-    record one (d_id=program, g_id=opponent, delta) pair per opponent.
-    role="improver" lets the tracker stage confirm wiring.
+    Returns (metrics, artifact). The artifact carries per_opp_metrics aligned
+    index-wise with opponent_results (one entry per opponent) so
+    DGTrackerStage / SBF-LineageStage can replay the aggregation downstream.
+    per_opp_delta is kept as a redundant back-compat alias.
     """
     improve_fn = program_output
-    per_opp_delta: list[float] = [0.0] * len(opponent_results)
+    n = len(opponent_results)
+    per_opp_metrics: list[dict[str, float]] = [_invalid_opp_metrics() for _ in range(n)]
+
+    def _artifact() -> dict:
+        return {
+            "role": "improver",
+            "per_opp_metrics": per_opp_metrics,
+            "per_opp_delta": [m["delta"] for m in per_opp_metrics],
+        }
+
     if not callable(improve_fn):
-        return INVALID, {"role": "improver", "per_opp_delta": per_opp_delta}
+        return INVALID, _artifact()
 
     if not opponent_results:
-        return INVALID, {"role": "improver", "per_opp_delta": per_opp_delta}
+        return INVALID, _artifact()
 
     scores = []
     pre_qualities = []
@@ -77,25 +100,38 @@ def evaluate(opponent_results: list, program_output: object):
             improved = improve_fn(config.copy())
             improved = _validate_config(improved)
             if improved is None:
-                scores.append(0.0)
-                pre_qualities.append(pre_q)
-                post_qualities.append(pre_q)
-                per_opp_delta[idx] = 0.0
-                continue
-            post_q = float(get_smallest_triangle_area(improved))
-            delta = post_q - pre_q
-            scores.append(min(max(delta, 0.0) / Q_MAX, 1.0))
+                post_q = pre_q
+                delta = 0.0
+                score = 0.0
+            else:
+                post_q = float(get_smallest_triangle_area(improved))
+                raw_delta = post_q - pre_q
+                delta = max(raw_delta, 0.0)
+                score = min(delta / Q_MAX, 1.0)
+            scores.append(score)
             pre_qualities.append(pre_q)
             post_qualities.append(post_q)
-            per_opp_delta[idx] = float(max(delta, 0.0))
+            per_opp_metrics[idx] = {
+                "pre_q": float(pre_q),
+                "post_q": float(post_q),
+                "delta": float(delta),
+                "score": float(score),
+                "is_valid": 1.0,
+            }
         except Exception:
             scores.append(0.0)
             pre_qualities.append(pre_q)
             post_qualities.append(pre_q)
-            per_opp_delta[idx] = 0.0
+            per_opp_metrics[idx] = {
+                "pre_q": float(pre_q),
+                "post_q": float(pre_q),
+                "delta": 0.0,
+                "score": 0.0,
+                "is_valid": 1.0,
+            }
 
     if not scores:
-        return INVALID, {"role": "improver", "per_opp_delta": per_opp_delta}
+        return INVALID, _artifact()
 
     fitness = sum(scores) / len(scores)
     mean_improvement_raw = sum(
@@ -112,5 +148,4 @@ def evaluate(opponent_results: list, program_output: object):
         "max_post_quality": float(max(post_qualities)),
         "n_opponents": float(len(scores)),
     }
-    artifact = {"role": "improver", "per_opp_delta": per_opp_delta}
-    return metrics, artifact
+    return metrics, _artifact()

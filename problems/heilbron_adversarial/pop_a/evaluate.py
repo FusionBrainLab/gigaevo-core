@@ -49,6 +49,17 @@ INVALID_METRICS = {
 }
 
 
+def _invalid_opp_metrics() -> dict[str, float]:
+    """Per-opponent primitives for a skipped/invalid opponent slot."""
+    nan = float("nan")
+    return {
+        "post_q": nan,
+        "delta": nan,
+        "resistance_score": nan,
+        "is_valid": 0.0,
+    }
+
+
 def _invalid_artifact(n: int) -> dict:
     return {
         "role": "constructor",
@@ -56,6 +67,7 @@ def _invalid_artifact(n: int) -> dict:
         "per_opp_pre": [float("nan")] * n,
         "per_opp_post": [float("nan")] * n,
         "per_opp_delta": [float("nan")] * n,
+        "per_opp_metrics": [_invalid_opp_metrics() for _ in range(n)],
     }
 
 
@@ -106,6 +118,7 @@ def evaluate(opponent_results: list, program_output: object) -> tuple[dict, dict
     per_opp_pre: list[float] = [float("nan")] * n
     per_opp_post: list[float] = [float("nan")] * n
     per_opp_delta: list[float] = [float("nan")] * n
+    per_opp_metrics: list[dict[str, float]] = [_invalid_opp_metrics() for _ in range(n)]
 
     deltas: list[float] = []
     post_qualities: list[float] = [raw_quality]  # self baseline anchors the max
@@ -125,6 +138,12 @@ def evaluate(opponent_results: list, program_output: object) -> tuple[dict, dict
             per_opp_pre[i] = raw_quality
             per_opp_post[i] = post_q
             per_opp_delta[i] = delta
+            per_opp_metrics[i] = {
+                "post_q": float(post_q),
+                "delta": float(delta),
+                "resistance_score": float(delta <= 0),
+                "is_valid": 1.0,
+            }
         except Exception:
             continue
 
@@ -134,6 +153,7 @@ def evaluate(opponent_results: list, program_output: object) -> tuple[dict, dict
         "per_opp_pre": per_opp_pre,
         "per_opp_post": per_opp_post,
         "per_opp_delta": per_opp_delta,
+        "per_opp_metrics": per_opp_metrics,
     }
 
     # Resistance: if no opponent successfully ran (deltas empty), mean_delta=0

@@ -51,18 +51,26 @@ def _validate_config(points: object) -> np.ndarray | None:
 def evaluate(opponent_results: list, program_output: object):
     """Cross-play: constructor config vs opponent improvers.
 
-    Returns (metrics, artifact). The artifact carries per_opp_delta aligned
-    index-wise with opponent_results so DGTrackerStage can record one
-    (d_id, g_id, delta) pair per opponent. role="constructor" lets the
-    tracker stage confirm wiring.
+    Returns (metrics, artifact). The artifact carries per_opp_metrics aligned
+    index-wise with opponent_results so SBF-LineageStage can replay the
+    ConfigurableAggregator downstream. per_opp_delta is kept as a redundant
+    back-compat alias.
     """
     points = _validate_config(program_output)
     if points is None:
-        return INVALID, {"role": "constructor", "per_opp_delta": []}
+        return INVALID, {
+            "role": "constructor",
+            "per_opp_metrics": [],
+            "per_opp_delta": [],
+        }
 
     raw_quality = float(get_smallest_triangle_area(points))
     if raw_quality <= 0:
-        return INVALID, {"role": "constructor", "per_opp_delta": []}
+        return INVALID, {
+            "role": "constructor",
+            "per_opp_metrics": [],
+            "per_opp_delta": [],
+        }
 
     quality = min(raw_quality / Q_MAX, 1.0)
 
@@ -78,36 +86,61 @@ def evaluate(opponent_results: list, program_output: object):
                 "best_post_improvement": raw_quality,
                 "n_opponents": 0.0,
             },
-            {"role": "constructor", "per_opp_delta": []},
+            {"role": "constructor", "per_opp_metrics": [], "per_opp_delta": []},
         )
 
     resistance_scores = []
     deltas = []
     post_qualities = []
+    per_opp_metrics: list[dict[str, float]] = []
 
     for improve_fn in opponent_results:
         if not callable(improve_fn):
             resistance_scores.append(1.0)
             deltas.append(0.0)
             post_qualities.append(raw_quality)
+            per_opp_metrics.append(
+                {
+                    "post_q": float(raw_quality),
+                    "delta": 0.0,
+                    "resistance_score": 1.0,
+                    "is_valid": 1.0,
+                }
+            )
             continue
         try:
             improved = improve_fn(points.copy())
             improved = _validate_config(improved)
             if improved is None:
-                resistance_scores.append(1.0)
-                deltas.append(0.0)
-                post_qualities.append(raw_quality)
-                continue
-            post_q = float(get_smallest_triangle_area(improved))
-            delta = max(post_q - raw_quality, 0.0)
-            resistance_scores.append(float(delta <= 0))
+                post_q = raw_quality
+                delta = 0.0
+            else:
+                post_q = float(get_smallest_triangle_area(improved))
+                delta = max(post_q - raw_quality, 0.0)
+            resistance_score = float(delta <= 0)
+            resistance_scores.append(resistance_score)
             deltas.append(delta)
             post_qualities.append(post_q)
+            per_opp_metrics.append(
+                {
+                    "post_q": float(post_q),
+                    "delta": float(delta),
+                    "resistance_score": float(resistance_score),
+                    "is_valid": 1.0,
+                }
+            )
         except Exception:
             resistance_scores.append(1.0)
             deltas.append(0.0)
             post_qualities.append(raw_quality)
+            per_opp_metrics.append(
+                {
+                    "post_q": float(raw_quality),
+                    "delta": 0.0,
+                    "resistance_score": 1.0,
+                    "is_valid": 1.0,
+                }
+            )
 
     mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
     resistance = (
@@ -129,6 +162,7 @@ def evaluate(opponent_results: list, program_output: object):
     }
     artifact = {
         "role": "constructor",
-        "per_opp_delta": [float(d) for d in deltas],
+        "per_opp_metrics": per_opp_metrics,
+        "per_opp_delta": [m["delta"] for m in per_opp_metrics],
     }
     return metrics, artifact

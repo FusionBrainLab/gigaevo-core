@@ -40,6 +40,18 @@ INVALID_METRICS = {
 }
 
 
+def _invalid_opp_metrics() -> dict[str, float]:
+    """Per-opponent primitives for a skipped/invalid opponent slot."""
+    nan = float("nan")
+    return {
+        "pre_q": nan,
+        "post_q": nan,
+        "delta": nan,
+        "score": nan,
+        "is_valid": 0.0,
+    }
+
+
 def _invalid_artifact(n: int) -> dict:
     return {
         "role": "improver",
@@ -47,6 +59,7 @@ def _invalid_artifact(n: int) -> dict:
         "per_opp_pre": [float("nan")] * n,
         "per_opp_post": [float("nan")] * n,
         "per_opp_delta": [float("nan")] * n,
+        "per_opp_metrics": [_invalid_opp_metrics() for _ in range(n)],
     }
 
 
@@ -87,10 +100,23 @@ def evaluate(opponent_results: list, program_output: object) -> tuple[dict, dict
     per_opp_pre: list[float] = [float("nan")] * n
     per_opp_post: list[float] = [float("nan")] * n
     per_opp_delta: list[float] = [float("nan")] * n
+    per_opp_metrics: list[dict[str, float]] = [_invalid_opp_metrics() for _ in range(n)]
 
     scores = []
     pre_qualities = []
     post_qualities = []
+
+    def _record_valid(i, pre_q, post_q, delta, smoothed_score):
+        per_opp_pre[i] = pre_q
+        per_opp_post[i] = post_q
+        per_opp_delta[i] = delta
+        per_opp_metrics[i] = {
+            "pre_q": float(pre_q),
+            "post_q": float(post_q),
+            "delta": float(delta),
+            "score": float(smoothed_score),
+            "is_valid": 1.0,
+        }
 
     for i, config in enumerate(opponent_results):
         config = _validate_config(config)
@@ -108,29 +134,24 @@ def evaluate(opponent_results: list, program_output: object) -> tuple[dict, dict
                 scores.append(0.0)
                 pre_qualities.append(pre_q)
                 post_qualities.append(pre_q)
-                per_opp_pre[i] = pre_q
-                per_opp_post[i] = pre_q
-                per_opp_delta[i] = 0.0
+                _record_valid(i, pre_q, pre_q, 0.0, 0.0)
                 continue
             post_q = float(get_smallest_triangle_area(improved))
             delta = post_q - pre_q
             # Smoothed score ∈ (-1, 1); preserves both signs of delta so a D
             # that makes things worse is distinguishable from a D that did
             # nothing, and MAP-Elites does not collapse to a 0.5 point mass.
-            scores.append(math.tanh(delta / Q_MAX))
+            smoothed = math.tanh(delta / Q_MAX)
+            scores.append(smoothed)
             pre_qualities.append(pre_q)
             post_qualities.append(post_q)
-            per_opp_pre[i] = pre_q
-            per_opp_post[i] = post_q
-            per_opp_delta[i] = delta
+            _record_valid(i, pre_q, post_q, delta, smoothed)
         except Exception:
             # Exec failure: same neutral signal as D-did-nothing.
             scores.append(0.0)
             pre_qualities.append(pre_q)
             post_qualities.append(pre_q)
-            per_opp_pre[i] = pre_q
-            per_opp_post[i] = pre_q
-            per_opp_delta[i] = 0.0
+            _record_valid(i, pre_q, pre_q, 0.0, 0.0)
 
     artifact = {
         "role": "improver",
@@ -138,6 +159,7 @@ def evaluate(opponent_results: list, program_output: object) -> tuple[dict, dict
         "per_opp_pre": per_opp_pre,
         "per_opp_post": per_opp_post,
         "per_opp_delta": per_opp_delta,
+        "per_opp_metrics": per_opp_metrics,
     }
 
     if not scores:
