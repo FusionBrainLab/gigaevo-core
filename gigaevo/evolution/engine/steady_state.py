@@ -787,3 +787,107 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     elapsed,
                 )
             await asyncio.sleep(_DRAIN_POLL_S)
+
+    # ------------------------------------------------------------------
+    # Archive refresh (overrides base to support bucketed ordering)
+    # ------------------------------------------------------------------
+
+    async def _refresh_archive_programs(self) -> int:
+        """Refresh archive programs (DONE → QUEUED).
+
+        Dispatches on ``refresh_order`` from ``SteadyStateEngineConfig``:
+
+        * ``fifo`` (default) — delegate to the base-class one-shot flip.  All
+          archived programs become QUEUED in a single batch and re-run
+          concurrently under the normal DAG-runner backpressure.
+
+        * ``generation_bucketed`` — bucket the archive by
+          ``lineage.generation`` and flip one bucket at a time in ascending
+          order, awaiting idle between buckets.  This guarantees that every
+          program at generation *N* has fully completed (and written whatever
+          state it writes into shared stores like ``DGImprovementTracker``)
+          before any program at generation *N+1* begins — eliminating the
+          cross-program race window where a child's ``LineageStage`` could
+          read tracker data before its parent's ``DGTrackerStage`` wrote it.
+        """
+        if self._ss_config.refresh_order == "fifo":
+            return await super()._refresh_archive_programs()
+
+        # generation_bucketed
+        program_ids = await self.strategy.get_program_ids()
+        if not program_ids:
+            return 0
+
+        # Fetch generations for all ids.  mget is a single bulk read — the
+        # exclude set strips heavy fields so we pay only for the tiny
+        # lineage subdocument per program.
+        try:
+            programs = await self.storage.mget(
+                program_ids, exclude=EXCLUDE_STAGE_RESULTS
+            )
+        except Exception as e:
+            logger.error(
+                "[SteadyState] gen={} bucketed mget failed: {}; "
+                "falling back to fifo refresh",
+                self.metrics.total_generations,
+                e,
+            )
+            return await super()._refresh_archive_programs()
+
+        # Bucket by generation.  Programs missing from storage (shouldn't
+        # happen but defensive) are skipped.
+        by_gen: dict[int, list[str]] = {}
+        for prog in programs:
+            if prog is None:
+                continue
+            gen = prog.lineage.generation
+            by_gen.setdefault(gen, []).append(prog.id)
+
+        if not by_gen:
+            return 0
+
+        ordered_gens = sorted(by_gen.keys())
+        total_flipped = 0
+
+        logger.info(
+            "[SteadyState] gen={} Bucketed refresh: {} buckets ({})",
+            self.metrics.total_generations,
+            len(ordered_gens),
+            ", ".join(f"g{g}={len(by_gen[g])}" for g in ordered_gens),
+        )
+
+        for idx, gen in enumerate(ordered_gens):
+            bucket_ids = by_gen[gen]
+            try:
+                count = await self.storage.batch_transition_by_ids(
+                    bucket_ids,
+                    ProgramState.DONE.value,
+                    ProgramState.QUEUED.value,
+                )
+            except Exception as e:
+                logger.error(
+                    "[SteadyState] gen={} bucket g{} flip failed: {}",
+                    self.metrics.total_generations,
+                    gen,
+                    e,
+                )
+                continue
+
+            total_flipped += count
+            logger.info(
+                "[SteadyState] gen={} Bucket g{} submitted ({} programs)",
+                self.metrics.total_generations,
+                gen,
+                count,
+            )
+
+            # Await idle BETWEEN buckets (not after the last — the caller's
+            # step 8 does its own await_idle).  This enforces the invariant
+            # that bucket N's DGTrackerStage writes land before bucket N+1's
+            # LineageStage reads.
+            if idx < len(ordered_gens) - 1 and count:
+                await self._await_idle()
+
+        if total_flipped:
+            self.metrics.record_reprocess_metrics(total_flipped)
+        return total_flipped

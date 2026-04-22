@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.evolution.engine.acceptor import (
@@ -68,6 +70,34 @@ class SteadyStateEngineConfig(EngineConfig):
             "Optimal value depends on server count and concurrent runs: "
             "~4 concurrent per GPU server is the sweet spot (measured on "
             "Qwen3-235B).  Default 5 is tuned for 3-4 servers with 4 runs."
+        ),
+    )
+
+    refresh_order: Literal["fifo", "generation_bucketed"] = Field(
+        default="fifo",
+        description=(
+            "Ordering policy for the per-epoch archive refresh (DONE→QUEUED).\n"
+            "\n"
+            "'fifo' (default): all archived programs are flipped in one batch "
+            "and re-evaluated concurrently under the usual DAG-runner "
+            "backpressure.  Fast, but across concurrent programs there is NO "
+            "parent-before-child ordering: a child's LineageStage can read "
+            "the shared DGImprovementTracker (written by its parent's "
+            "DGTrackerStage) BEFORE the parent has written the new metrics, "
+            "yielding stale lineage deltas after a top-1 opponent flip.\n"
+            "\n"
+            "'generation_bucketed': programs are bucketed by "
+            "``lineage.generation`` and flipped one bucket at a time in "
+            "ascending order.  After each bucket's flip the engine awaits "
+            "idle before starting the next bucket — so every program in "
+            "generation N finishes writing to the shared DGImprovementTracker "
+            "before any program in generation N+1 reads from it.  Eliminates "
+            "the cross-program refresh race at the cost of loss of "
+            "concurrency between buckets.\n"
+            "\n"
+            "Required when a downstream stage on generation N+1 reads state "
+            "written by a sibling/parent stage on generation N via a shared "
+            "external store (Redis tracker, etc.).  Safe no-op otherwise."
         ),
     )
 

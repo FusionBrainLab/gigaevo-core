@@ -537,3 +537,201 @@ class TestStagnation:
 
         await engine._epoch_refresh()
         assert engine._stagnant_gens == 0
+
+
+# ---------------------------------------------------------------------------
+# Bucketed refresh order (generation-bucketed archive refresh)
+# ---------------------------------------------------------------------------
+
+
+def _prog_with_gen(generation: int, state: ProgramState = ProgramState.DONE) -> Program:
+    """Build a Program whose lineage.generation equals `generation`.
+
+    Program construction uses create_child to stamp lineage.generation; here we
+    assign state and verify metadata via the lineage attribute.
+    """
+    p = Program(code=f"def solve_{generation}(): return {generation}", state=state)
+    # Lineage is frozen-ish on Program; assign via direct attribute write which
+    # Pydantic allows because Lineage is a mutable submodel.
+    p.lineage.generation = generation
+    return p
+
+
+class TestRefreshOrderConfig:
+    """refresh_order config option (fifo vs. generation_bucketed)."""
+
+    def test_default_is_fifo(self) -> None:
+        """Default refresh_order preserves prior behaviour (fifo)."""
+        config = SteadyStateEngineConfig(
+            max_in_flight=1, max_mutations_per_generation=1
+        )
+        assert config.refresh_order == "fifo"
+
+    def test_accepts_generation_bucketed(self) -> None:
+        """refresh_order='generation_bucketed' is a valid setting."""
+        config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+        )
+        assert config.refresh_order == "generation_bucketed"
+
+    def test_rejects_unknown_value(self) -> None:
+        """Unknown refresh_order values are rejected by pydantic."""
+        with pytest.raises(Exception):  # pydantic.ValidationError
+            SteadyStateEngineConfig(
+                max_in_flight=1,
+                max_mutations_per_generation=1,
+                refresh_order="random",  # type: ignore[arg-type]
+            )
+
+
+class TestBucketedRefresh:
+    """Bucketed-by-generation archive refresh eliminates cross-program race."""
+
+    async def test_fifo_refresh_flips_all_at_once(self) -> None:
+        """fifo mode flips all ids in one batch_transition_by_ids call."""
+        engine = _make_ss_engine()
+        # default refresh_order is fifo
+        engine.strategy.get_program_ids.return_value = ["a", "b", "c"]
+        engine.storage.batch_transition_by_ids.return_value = 3
+
+        refreshed = await engine._refresh_archive_programs()
+
+        assert refreshed == 3
+        # Exactly one flip batch
+        assert engine.storage.batch_transition_by_ids.call_count == 1
+        flipped_ids = engine.storage.batch_transition_by_ids.call_args.args[0]
+        assert set(flipped_ids) == {"a", "b", "c"}
+
+    async def test_bucketed_flips_in_generation_order(self) -> None:
+        """Bucketed mode flips programs bucket-by-bucket in ascending generation order.
+
+        This is the race-fix: the bucket for gen N must fully drain before the
+        bucket for gen N+1 starts, so a child at gen N+1 never reads tracker
+        data before its parent at gen N has written it.
+        """
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+        )
+
+        # Three programs across two generations: parent gen=1, children gen=2.
+        p_gen1 = _prog_with_gen(1)
+        c1_gen2 = _prog_with_gen(2)
+        c2_gen2 = _prog_with_gen(2)
+
+        engine.strategy.get_program_ids.return_value = [
+            c1_gen2.id,
+            p_gen1.id,  # deliberately shuffled — bucketing must re-order
+            c2_gen2.id,
+        ]
+        engine.storage.mget.return_value = [c1_gen2, p_gen1, c2_gen2]
+
+        flip_order: list[frozenset[str]] = []
+
+        async def fake_flip(ids, old, new):
+            flip_order.append(frozenset(ids))
+            return len(ids)
+
+        engine.storage.batch_transition_by_ids.side_effect = fake_flip
+
+        # _await_idle is called between buckets — fake it so we don't block
+        engine._await_idle = AsyncMock()  # type: ignore[method-assign]
+
+        refreshed = await engine._refresh_archive_programs()
+
+        assert refreshed == 3
+        # Must be 2 flips (one per generation bucket)
+        assert len(flip_order) == 2, f"expected 2 buckets, got {len(flip_order)}"
+        # First bucket = gen 1 (parents)
+        assert flip_order[0] == {p_gen1.id}
+        # Second bucket = gen 2 (children)
+        assert flip_order[1] == {c1_gen2.id, c2_gen2.id}
+        # _await_idle called between buckets (at least once)
+        assert engine._await_idle.await_count >= 1
+
+    async def test_bucketed_awaits_idle_between_buckets(self) -> None:
+        """Bucketed mode MUST await idle after each bucket so next bucket sees drained state."""
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+        )
+
+        p1 = _prog_with_gen(1)
+        p2 = _prog_with_gen(2)
+        p3 = _prog_with_gen(3)
+
+        engine.strategy.get_program_ids.return_value = [p1.id, p2.id, p3.id]
+        engine.storage.mget.return_value = [p1, p2, p3]
+        engine.storage.batch_transition_by_ids.return_value = 1
+
+        call_sequence: list[str] = []
+
+        async def fake_flip(ids, old, new):
+            call_sequence.append(f"flip:{len(ids)}")
+            return len(ids)
+
+        async def fake_await_idle():
+            call_sequence.append("idle")
+
+        engine.storage.batch_transition_by_ids.side_effect = fake_flip
+        engine._await_idle = fake_await_idle  # type: ignore[method-assign]
+
+        await engine._refresh_archive_programs()
+
+        # Pattern: flip, idle, flip, idle, flip (last idle may or may not — we check interleaving)
+        flip_positions = [
+            i for i, s in enumerate(call_sequence) if s.startswith("flip")
+        ]
+        idle_positions = [i for i, s in enumerate(call_sequence) if s == "idle"]
+        assert len(flip_positions) == 3
+        # Between every two flips there is at least one idle call
+        for i in range(len(flip_positions) - 1):
+            between = [
+                p
+                for p in idle_positions
+                if flip_positions[i] < p < flip_positions[i + 1]
+            ]
+            assert between, (
+                f"no await_idle between bucket {i} and {i + 1}: {call_sequence}"
+            )
+
+    async def test_bucketed_empty_ids_returns_zero(self) -> None:
+        """Bucketed mode with no ids returns 0 and makes no calls."""
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+        )
+        engine.strategy.get_program_ids.return_value = []
+
+        refreshed = await engine._refresh_archive_programs()
+
+        assert refreshed == 0
+        engine.storage.batch_transition_by_ids.assert_not_called()
+
+    async def test_bucketed_single_generation_single_batch(self) -> None:
+        """All programs in same generation → single bucket, single flip."""
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+        )
+
+        progs = [_prog_with_gen(5) for _ in range(3)]
+        engine.strategy.get_program_ids.return_value = [p.id for p in progs]
+        engine.storage.mget.return_value = progs
+        engine.storage.batch_transition_by_ids.return_value = 3
+        engine._await_idle = AsyncMock()  # type: ignore[method-assign]
+
+        refreshed = await engine._refresh_archive_programs()
+
+        assert refreshed == 3
+        assert engine.storage.batch_transition_by_ids.call_count == 1
