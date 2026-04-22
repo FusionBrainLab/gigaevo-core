@@ -895,3 +895,188 @@ class TestMultiPassRefresh:
         await engine._refresh_archive_programs()
         # Two passes for fifo ⇒ two flips of the whole archive
         assert engine.storage.batch_transition_by_ids.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Two-pass refresh semantic: stage actually reads updated tracker state
+#
+# The existing TestMultiPassRefresh proves mechanics (counter bumps, flow
+# repeats).  This class proves the end-to-end SEMANTIC: when the engine
+# runs _refresh_archive_programs with refresh_passes=2, the downstream
+# SharedBenchmarkFilteredLineageStage reads tracker data that pass 1 wrote,
+# not the stale pre-refresh values.  That is the whole point of the
+# two-pass design on D — closing the cross-program tracker race so
+# LineageStage's narrative reflects fresh opponent metrics.
+# ---------------------------------------------------------------------------
+
+
+class TestTwoPassRefreshSemantic:
+    """End-to-end: engine's 2-pass refresh actually changes the stage's read.
+
+    Timeline enforced by the test:
+      T0: tracker seeded (child fitness vs g1 = 0.3)
+      T0: stage.preprocess(child) → evidence reports child_fitness=0.3
+      T0→T2: engine runs refresh_archive_programs(refresh_passes=2).
+            A hook on _refresh_archive_programs_one_pass mutates the tracker
+            during pass 1 to write fitness=0.5 — simulating what
+            DGTrackerStage would re-write under the refreshed HoF.
+      T2: stage.preprocess(child) → evidence reports child_fitness=0.5
+      T2: compute_hash(params) suffix advanced by +2 (one bump per pass)
+
+    If the engine didn't bump the token between passes, a real pipeline's
+    cache layer would return pass-1's stale output in pass 2 — the stage
+    would never "see" the fresh tracker data and the two-pass design
+    would be a no-op.  The hash assertion proves the cache key would miss.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_token(self):
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        saved = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        yield
+        SharedBenchmarkFilteredLineageStage._refresh_pass_token = saved
+
+    async def test_stage_reads_fresh_tracker_after_two_pass_refresh(self) -> None:
+        import fakeredis.aioredis
+        import pytest as _pytest
+
+        from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+        from gigaevo.programs.metrics.context import (
+            VALIDITY_KEY,
+            MetricsContext,
+            MetricSpec,
+        )
+        from gigaevo.programs.stages.common import CacheOnlyInput
+
+        # ---- Tracker (fakeredis-backed) -------------------------------
+        tracker = DGImprovementTracker(host="localhost", port=6379, db=0, prefix="tpr")
+        tracker._redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+        metrics_ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="main",
+                    is_primary=True,
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                ),
+                VALIDITY_KEY: MetricSpec(
+                    description="validity",
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                ),
+            }
+        )
+
+        # ---- Programs --------------------------------------------------
+        p_parent = _prog_with_gen(1)
+        p_child = _prog_with_gen(2)
+        p_child.lineage.parents = [p_parent.id]
+
+        await tracker.record_metrics(
+            p_parent.id, "g1", {"fitness": 0.1, VALIDITY_KEY: 1.0}
+        )
+        await tracker.record_metrics(
+            p_child.id, "g1", {"fitness": 0.3, VALIDITY_KEY: 1.0}
+        )
+
+        # ---- Stage (__new__ bypass; __init__ needs LLM we don't want) -
+        stage_storage = AsyncMock()
+
+        async def _fake_mget(ids):
+            return [p_parent] if p_parent.id in ids else []
+
+        stage_storage.mget.side_effect = _fake_mget
+
+        stage = SharedBenchmarkFilteredLineageStage.__new__(
+            SharedBenchmarkFilteredLineageStage
+        )
+        stage._tracker = tracker
+        stage._min_shared = 1
+        stage._inject_shared_evidence = True
+        stage._metrics_context = metrics_ctx
+        stage.storage = stage_storage
+
+        params = CacheOnlyInput(cache_on="probe")
+
+        # ---- Phase 1: pre-refresh stage read ---------------------------
+        pre = await stage.preprocess(p_child, params)
+        initial_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        hash_pre = SharedBenchmarkFilteredLineageStage.compute_hash(params)
+
+        assert isinstance(pre, dict), "parent should survive the shared filter"
+        assert pre["evidence"][0].shared_child_metrics["fitness"] == _pytest.approx(
+            0.3
+        ), "pre-refresh preprocess must read the seed tracker state"
+
+        # ---- Phase 2: engine 2-pass refresh; mutate tracker in pass 1 --
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+            refresh_passes=2,
+        )
+        engine.strategy.get_program_ids.return_value = [p_parent.id, p_child.id]
+        engine.storage.mget.return_value = [p_parent, p_child]
+        engine.storage.batch_transition_by_ids.return_value = 1
+        engine._await_idle = AsyncMock()  # type: ignore[method-assign]
+
+        # Hook one_pass so during pass-1 we mutate the tracker.  This
+        # simulates what DGTrackerStage does in a real pass 1: it re-runs
+        # against the refreshed HoF and rewrites per-(D,G) metrics.
+        call_count = {"n": 0}
+        original_one_pass = engine._refresh_archive_programs_one_pass
+
+        async def _one_pass_with_tracker_mutation() -> int:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Pass 1: simulate DGTrackerStage re-write.  Child's fitness
+                # against g1 moves from 0.3 (stale) → 0.5 (fresh HoF eval).
+                await tracker.record_metrics(
+                    p_child.id, "g1", {"fitness": 0.5, VALIDITY_KEY: 1.0}
+                )
+            return await original_one_pass()
+
+        engine._refresh_archive_programs_one_pass = _one_pass_with_tracker_mutation  # type: ignore[method-assign]
+
+        await engine._refresh_archive_programs()
+
+        # ---- Phase 3: post-refresh stage read --------------------------
+        post = await stage.preprocess(p_child, params)
+        final_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        hash_post = SharedBenchmarkFilteredLineageStage.compute_hash(params)
+
+        assert isinstance(post, dict)
+        assert post["evidence"][0].shared_child_metrics["fitness"] == _pytest.approx(
+            0.5
+        ), (
+            "Post-refresh preprocess must read the tracker state written "
+            "during pass 1; instead it read stale pre-refresh data — the "
+            "two-pass refresh was a no-op semantically."
+        )
+
+        # Two bumps ⇒ cache key distinguishable from pre-refresh probe.
+        assert final_token == initial_token + 2, (
+            f"refresh_passes=2 should bump token exactly twice "
+            f"(initial={initial_token}, final={final_token})"
+        )
+        assert hash_post != hash_pre, (
+            "compute_hash unchanged after 2-pass refresh — a real cache "
+            "would cache-HIT and return pass-1 stale output on pass 2."
+        )
+        assert hash_post.endswith(f":rp{initial_token + 2}")
+
+        # Call order sanity: one_pass hook invoked exactly once per pass.
+        assert call_count["n"] == 2, (
+            f"expected _refresh_archive_programs_one_pass called 2x, "
+            f"got {call_count['n']}"
+        )

@@ -346,3 +346,128 @@ async def test_stage_logs_kept_ratio(tracker, metrics_ctx):
     assert any(
         "[LineageStage:SharedBenchmark]" in m and "kept 1/1" in m for m in captured
     ), f"Expected kept-ratio log line in captured logs: {captured}"
+
+
+# ---------------------------------------------------------------------------
+# Refresh-pass cache-invariant
+#
+# The two-sided cross-program tracker race (pass 1 re-runs DGTrackerStage;
+# pass 2 re-runs this stage against the globally-fresh tracker) only closes
+# if pass 2 actually cache-misses on the stage.  Counting token bumps isn't
+# enough — the token must change the cache KEY.  These tests prove the
+# mechanism end-to-end:
+#   - compute_hash(params) differs across bump_refresh_pass()
+#   - compute_hash (execution path) == compute_hash_from_inputs (cache-check path)
+#   - None base hash propagates rather than being stringified
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshPassTokenCacheInvariant:
+    """Proves the token mechanism actually invalidates the cache key.
+
+    `_refresh_pass_token` is class-level state shared across tests in the
+    process — `_reset_token` snapshots and restores so tests are order-
+    independent.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_token(self):
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        saved = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        yield
+        SharedBenchmarkFilteredLineageStage._refresh_pass_token = saved
+
+    def test_compute_hash_differs_after_bump(self):
+        """Same params, different token ⇒ different cache key.
+
+        Without this, pass 2 of the engine's two-pass refresh would
+        cache-HIT on pass 1's stage output and never re-read the tracker
+        data that pass 1 wrote.  This is the load-bearing invariant of
+        the whole refresh_passes=2 design.
+        """
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        params = CacheOnlyInput(cache_on="same")
+        h_pass1 = SharedBenchmarkFilteredLineageStage.compute_hash(params)
+        SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+        h_pass2 = SharedBenchmarkFilteredLineageStage.compute_hash(params)
+
+        assert h_pass1 != h_pass2, (
+            "compute_hash returned the same key before and after "
+            "bump_refresh_pass() — cache would HIT on pass 2 and the "
+            "two-pass refresh would be a no-op semantically."
+        )
+
+    def test_compute_hash_suffix_encodes_current_token(self):
+        """Hash format is '<base>:rp<N>' — stable suffix so a grep for
+        `:rp1` vs `:rp2` in Redis keys can confirm pass identity post-hoc."""
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        params = CacheOnlyInput(cache_on="x")
+        t_before = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        h_before = SharedBenchmarkFilteredLineageStage.compute_hash(params)
+        assert h_before is not None
+        assert h_before.endswith(f":rp{t_before}")
+
+        SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+        h_after = SharedBenchmarkFilteredLineageStage.compute_hash(params)
+        assert h_after.endswith(f":rp{t_before + 1}")
+
+    def test_execution_and_cache_check_paths_stay_in_lockstep(self):
+        """compute_inputs_hash (taken at execution time) and
+        compute_hash_from_inputs (taken at cache-check time, without
+        instantiating the stage) must return the SAME value.  Drift
+        between the two is the classic silent-cache-bug: the stage
+        runs under key A, the cache is probed with key B ⇒ permanent
+        cache miss OR worse, stale-read from a different program's cache.
+        """
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        params = CacheOnlyInput(cache_on="probe")
+        raw = {"cache_on": "probe"}
+
+        h_exec = SharedBenchmarkFilteredLineageStage.compute_hash(params)
+        h_check = SharedBenchmarkFilteredLineageStage.compute_hash_from_inputs(raw)
+        assert h_exec == h_check
+
+        SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+        h_exec_b = SharedBenchmarkFilteredLineageStage.compute_hash(params)
+        h_check_b = SharedBenchmarkFilteredLineageStage.compute_hash_from_inputs(raw)
+        assert h_exec_b == h_check_b
+        assert h_exec != h_exec_b, "token bump must change both paths together"
+
+    def test_compute_hash_returns_none_when_base_returns_none(self):
+        """Subclass must propagate a None base hash, not stringify it.
+
+        A stringified None (`"None:rp3"`) would be a valid Redis key and
+        silently collide across programs whose inputs fail to validate.
+        """
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        h = SharedBenchmarkFilteredLineageStage.compute_hash_from_inputs(
+            {"nonexistent_field": object()}
+        )
+        assert h is None
+
+    def test_bump_returns_new_token_value(self):
+        """bump_refresh_pass returns the new token — callers (the engine
+        logs this for post-hoc verification) rely on the return value."""
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        before = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        returned = SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+        assert returned == before + 1
+        assert SharedBenchmarkFilteredLineageStage._refresh_pass_token == before + 1
