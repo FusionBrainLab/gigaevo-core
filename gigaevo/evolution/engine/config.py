@@ -73,6 +73,39 @@ class SteadyStateEngineConfig(EngineConfig):
         ),
     )
 
+    refresh_passes: int = Field(
+        default=1,
+        gt=0,
+        description=(
+            "Number of times the per-epoch archive refresh repeats.\n"
+            "\n"
+            "refresh_passes=1 (default): one refresh sweep per epoch.  Safe "
+            "when no downstream stage on generation N+1 reads cross-program "
+            "state written by a sibling/parent on generation N AFTER that "
+            "sibling's own downstream stages have read it.\n"
+            "\n"
+            "refresh_passes=2 (D side of the asymmetric adversarial "
+            "pipeline): closes a two-sided cross-program tracker race.\n"
+            "  * Pass 1 re-runs DGTrackerStage for every archived program in "
+            "generation-bucketed order — by the time pass 1 finishes, the "
+            "shared DGImprovementTracker holds current opponent-set "
+            "membership for the ENTIRE archive, both ancestors and "
+            "descendants of any program.\n"
+            "  * Pass 2 re-runs the filtered LineageStage with a globally "
+            "fresh tracker, so both ``lineage_ancestors`` (parent→self) and "
+            "``lineage_descendants`` (self→child) narratives are computed "
+            "against the true current shared-benchmark set rather than a "
+            "single-direction snapshot.\n"
+            "\n"
+            "Cache invalidation between passes is provided by "
+            "SharedBenchmarkFilteredLineageStage's class-level "
+            "``_refresh_pass_token``, which the engine bumps before each "
+            "pass.  Within a pass, normal input-hash caching still applies "
+            "— programs whose inputs haven't changed don't redundantly re-"
+            "run LLM calls inside one pass."
+        ),
+    )
+
     refresh_order: Literal["fifo", "generation_bucketed"] = Field(
         default="fifo",
         description=(

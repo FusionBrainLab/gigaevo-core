@@ -28,6 +28,9 @@ from typing import cast
 
 from loguru import logger
 
+from gigaevo.adversarial.shared_benchmark_lineage import (
+    SharedBenchmarkFilteredLineageStage,
+)
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig  # noqa: I001
 from gigaevo.evolution.engine.core import (
     _RUN_STATE_PROGRAMS_PROCESSED,
@@ -795,21 +798,69 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
     async def _refresh_archive_programs(self) -> int:
         """Refresh archive programs (DONE → QUEUED).
 
-        Dispatches on ``refresh_order`` from ``SteadyStateEngineConfig``:
+        Dispatches on ``refresh_order`` and ``refresh_passes`` from
+        ``SteadyStateEngineConfig``:
 
-        * ``fifo`` (default) — delegate to the base-class one-shot flip.  All
-          archived programs become QUEUED in a single batch and re-run
-          concurrently under the normal DAG-runner backpressure.
+        * ``refresh_order="fifo"`` (default): one-shot whole-archive flip
+          per pass.  All archived programs become QUEUED and re-run
+          concurrently under the normal DAG-runner backpressure.  If
+          ``refresh_passes > 1`` the whole flip + drain is repeated.
 
-        * ``generation_bucketed`` — bucket the archive by
-          ``lineage.generation`` and flip one bucket at a time in ascending
-          order, awaiting idle between buckets.  This guarantees that every
-          program at generation *N* has fully completed (and written whatever
-          state it writes into shared stores like ``DGImprovementTracker``)
-          before any program at generation *N+1* begins — eliminating the
-          cross-program race window where a child's ``LineageStage`` could
-          read tracker data before its parent's ``DGTrackerStage`` wrote it.
+        * ``refresh_order="generation_bucketed"``: bucket the archive by
+          ``lineage.generation`` and flip one bucket at a time in
+          ascending order, awaiting idle between buckets.  Guarantees
+          every program at generation *N* writes its shared-store state
+          (``DGImprovementTracker`` etc.) before any program at
+          generation *N+1* reads it — eliminating the cross-program race
+          where a child's ``LineageStage`` could read tracker data
+          before its parent's ``DGTrackerStage`` wrote it.
+
+        * ``refresh_passes > 1`` (D-side closure of the two-sided race):
+          repeats the refresh.  Pass 1 re-runs ``DGTrackerStage``
+          globally.  Pass 2 re-runs the filtered ``LineageStage`` with a
+          globally-fresh tracker (both ancestor and descendant tracker
+          data current).  Before each pass, bump
+          ``SharedBenchmarkFilteredLineageStage._refresh_pass_token`` so
+          the filtered stage cache-invalidates and actually re-runs.
+          Within a single pass the token is constant, so normal
+          input-hash caching still deduplicates LLM calls across
+          concurrent siblings.
         """
+        passes = self._ss_config.refresh_passes
+        total_flipped = 0
+
+        for pass_idx in range(passes):
+            # Bump the filtered-lineage cache-invalidation token BEFORE
+            # each pass.  The engine can't know from here whether the
+            # pipeline actually uses SharedBenchmarkFilteredLineageStage,
+            # but the bump is cheap (one int increment on a classvar) and
+            # harmless when the stage isn't installed.  Always bumping
+            # keeps the invariant simple: every refresh pass bumps the
+            # token exactly once, and pass k's cache key is distinct
+            # from pass k-1's.
+            SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+
+            if passes > 1 and pass_idx > 0:
+                # Between passes, drain whatever pass k-1 submitted
+                # before starting pass k — otherwise pass k could flip
+                # programs that are already QUEUED from pass k-1.
+                await self._await_idle()
+
+            total_flipped += await self._refresh_archive_programs_one_pass()
+
+        if total_flipped and passes > 1:
+            logger.info(
+                "[SteadyState] gen={} Multi-pass refresh done: "
+                "{} total flips across {} passes",
+                self.metrics.total_generations,
+                total_flipped,
+                passes,
+            )
+
+        return total_flipped
+
+    async def _refresh_archive_programs_one_pass(self) -> int:
+        """One archive refresh pass (see ``_refresh_archive_programs``)."""
         if self._ss_config.refresh_order == "fifo":
             return await super()._refresh_archive_programs()
 

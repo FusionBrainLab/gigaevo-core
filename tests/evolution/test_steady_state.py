@@ -735,3 +735,163 @@ class TestBucketedRefresh:
 
         assert refreshed == 3
         assert engine.storage.batch_transition_by_ids.call_count == 1
+
+
+class TestRefreshPassesConfig:
+    """refresh_passes config: how many times the bucketed refresh repeats."""
+
+    def test_default_is_one(self) -> None:
+        config = SteadyStateEngineConfig(
+            max_in_flight=1, max_mutations_per_generation=1
+        )
+        assert config.refresh_passes == 1
+
+    def test_accepts_two(self) -> None:
+        config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_passes=2,
+        )
+        assert config.refresh_passes == 2
+
+    def test_rejects_zero(self) -> None:
+        with pytest.raises(Exception):
+            SteadyStateEngineConfig(
+                max_in_flight=1,
+                max_mutations_per_generation=1,
+                refresh_passes=0,
+            )
+
+    def test_rejects_negative(self) -> None:
+        with pytest.raises(Exception):
+            SteadyStateEngineConfig(
+                max_in_flight=1,
+                max_mutations_per_generation=1,
+                refresh_passes=-1,
+            )
+
+
+class TestMultiPassRefresh:
+    """refresh_passes=N loops bucketed flow N times with await_idle between passes.
+
+    On D side the filtered LineageStage cache-invalidates per pass via a
+    class-level refresh token.  The engine bumps the token before each pass
+    so LineageStage re-runs with fresh cross-program tracker data in pass 2.
+    """
+
+    async def test_refresh_passes_two_loops_bucketed_twice(self) -> None:
+        """refresh_passes=2 ⇒ bucketed flow repeats twice, same gen order each pass."""
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+            refresh_passes=2,
+        )
+
+        p1 = _prog_with_gen(1)
+        p2 = _prog_with_gen(2)
+
+        engine.strategy.get_program_ids.return_value = [p1.id, p2.id]
+        engine.storage.mget.return_value = [p1, p2]
+
+        flip_history: list[frozenset[str]] = []
+
+        async def fake_flip(ids, old, new):
+            flip_history.append(frozenset(ids))
+            return len(ids)
+
+        engine.storage.batch_transition_by_ids.side_effect = fake_flip
+        engine._await_idle = AsyncMock()  # type: ignore[method-assign]
+
+        total = await engine._refresh_archive_programs()
+
+        # Two passes × two buckets = 4 flips
+        assert len(flip_history) == 4, (
+            f"expected 4 flips (2 passes × 2 buckets), got {len(flip_history)}"
+        )
+        # Pattern: (pass1: gen1, gen2) then (pass2: gen1, gen2)
+        assert flip_history[0] == {p1.id}
+        assert flip_history[1] == {p2.id}
+        assert flip_history[2] == {p1.id}
+        assert flip_history[3] == {p2.id}
+        # Total flipped = 2+2+2+2 = count reported by fake_flip
+        # (bucketed_refresh sums counts across all passes)
+        assert total == 4
+        # _await_idle called between buckets within each pass AND between passes
+        assert (
+            engine._await_idle.await_count >= 3
+        )  # ≥1 per between-bucket, ≥1 between-passes
+
+    async def test_refresh_passes_two_bumps_token_before_each_pass(self) -> None:
+        """Each refresh pass bumps SharedBenchmarkFilteredLineageStage token.
+
+        Token bumps are the cache-invalidation mechanism: with refresh_passes=2,
+        LineageStage sees distinct cache keys on pass 1 and pass 2.
+        """
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+            refresh_passes=2,
+        )
+        engine.strategy.get_program_ids.return_value = [_prog_with_gen(1).id]
+        engine.storage.mget.return_value = [_prog_with_gen(1)]
+        engine.storage.batch_transition_by_ids.return_value = 1
+        engine._await_idle = AsyncMock()  # type: ignore[method-assign]
+
+        initial_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        await engine._refresh_archive_programs()
+        final_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+
+        # Two passes ⇒ token bumped by at least 2
+        assert final_token - initial_token >= 2, (
+            f"expected token bumped ≥2 with refresh_passes=2, "
+            f"got {final_token - initial_token}"
+        )
+
+    async def test_refresh_passes_one_bumps_token_once(self) -> None:
+        """refresh_passes=1 (default) still bumps the token once per refresh."""
+        from gigaevo.adversarial.shared_benchmark_lineage import (
+            SharedBenchmarkFilteredLineageStage,
+        )
+
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="generation_bucketed",
+            refresh_passes=1,
+        )
+        engine.strategy.get_program_ids.return_value = [_prog_with_gen(1).id]
+        engine.storage.mget.return_value = [_prog_with_gen(1)]
+        engine.storage.batch_transition_by_ids.return_value = 1
+        engine._await_idle = AsyncMock()  # type: ignore[method-assign]
+
+        initial_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        await engine._refresh_archive_programs()
+        final_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+
+        assert final_token - initial_token == 1
+
+    async def test_fifo_refresh_passes_two_loops_twice(self) -> None:
+        """fifo mode with refresh_passes=2 flips twice (whole-archive each pass)."""
+        engine = _make_ss_engine()
+        engine._ss_config = SteadyStateEngineConfig(
+            max_in_flight=1,
+            max_mutations_per_generation=1,
+            refresh_order="fifo",
+            refresh_passes=2,
+        )
+        engine.strategy.get_program_ids.return_value = ["a", "b"]
+        engine.storage.batch_transition_by_ids.return_value = 2
+        engine._await_idle = AsyncMock()  # type: ignore[method-assign]
+
+        await engine._refresh_archive_programs()
+        # Two passes for fifo ⇒ two flips of the whole archive
+        assert engine.storage.batch_transition_by_ids.call_count == 2
