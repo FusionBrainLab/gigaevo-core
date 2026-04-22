@@ -241,6 +241,11 @@ class ValidatorInput(StageIO):
 
 
 ValidatorOutput = Box[tuple[dict[str, float], Any]]
+# Task 2: rename the stage's output label to advertise that it's a RAW
+# (pre-aggregator) tuple. Identical runtime type; ParseMetricsStage wraps it
+# before FetchMetrics / FetchArtifact / DGTrackerStage see their expected
+# `validation_result` shape.
+RawValidatorOutput = ValidatorOutput
 
 
 @StageRegistry.register(
@@ -250,7 +255,7 @@ class CallValidatorFunction(PythonCodeExecutor):
     """Loads validator file and calls function `validate(context?, program_output)`."""
 
     InputsModel = ValidatorInput
-    OutputModel = ValidatorOutput  # metrics dict and execution artifact
+    OutputModel = RawValidatorOutput  # raw (intrinsic, artifact) from evaluate.py
 
     def __init__(self, *, path: Path, function_name: str = "validate", **kwargs: Any):
         super().__init__(
@@ -299,8 +304,6 @@ class CallValidatorFunction(PythonCodeExecutor):
 # (intrinsic, artifact) tuple from evaluate.py). ParseMetricsStage consumes
 # it, applies the aggregator, and emits the legacy `validation_result`
 # shape so FetchMetrics / FetchArtifact / DGTrackerStage are untouched.
-
-RawValidatorOutput = Box[tuple[dict[str, float], Any]]
 
 
 class RawValidatorInput(StageIO):

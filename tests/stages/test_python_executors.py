@@ -652,3 +652,13 @@ class TestCallValidatorFunction:
             assert metrics["ctx"] == "my-context"
             assert metrics["payload"] == 3.0
             assert artifact is None
+
+
+def test_call_validator_output_is_raw_alias():
+    """Task 2: CallValidatorFunction emits RawValidatorOutput (pre-aggregator)."""
+    from gigaevo.programs.stages.python_executors.execution import (
+        CallValidatorFunction,
+        RawValidatorOutput,
+    )
+
+    assert CallValidatorFunction.OutputModel is RawValidatorOutput
