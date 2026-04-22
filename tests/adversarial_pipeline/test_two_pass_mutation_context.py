@@ -122,7 +122,11 @@ def _mk_filter_stage(tracker, metrics_ctx, storage):
     from gigaevo.adversarial.shared_benchmark_lineage import (
         SharedBenchmarkFilteredLineageStage,
     )
-    from gigaevo.programs.metrics.aggregators import ConfigurableAggregator, ConstantSpec, ReduceSpec
+    from gigaevo.programs.metrics.aggregators import (
+        ConfigurableAggregator,
+        ConstantSpec,
+        ReduceSpec,
+    )
 
     s = SharedBenchmarkFilteredLineageStage.__new__(SharedBenchmarkFilteredLineageStage)
     s._tracker = tracker
@@ -130,7 +134,10 @@ def _mk_filter_stage(tracker, metrics_ctx, storage):
     s._inject_shared_evidence = True
     s._metrics_context = metrics_ctx
     s._aggregator = ConfigurableAggregator(
-        outputs={"fitness": ReduceSpec(op="mean", field="fitness"), "is_valid": ConstantSpec(value=1.0)},
+        outputs={
+            "fitness": ReduceSpec(op="mean", field="fitness"),
+            "is_valid": ConstantSpec(value=1.0),
+        },
         invalid_defaults={"fitness": 0.0, "is_valid": 0.0},
         metrics_context=metrics_ctx,
     )

@@ -51,13 +51,12 @@
 
 defaults:
   - adversarial_asymmetric
-  # Install the D-side aggregator used by SharedBenchmarkFilteredLineageStage
-  # (SBF-Lineage) into the pipeline_builder.lineage_filter.aggregator slot.
-  # AsymmetricPipelineBuilder resolves the slot at build time (injecting the
-  # ProblemContext's MetricsContext as a kwarg). Only installed for D runs —
-  # heilbron_repro_v1 is a D-only SBF target; the G-side filter is deferred
-  # (IDEAS.yaml). Note: pop_b/evaluate.py is what this aggregator mirrors.
-  - /aggregator/heilbron_improver@pipeline_builder.lineage_filter.aggregator
+  # Top-level aggregator group (config.yaml defaults to `aggregator=none`).
+  # Launch scripts set `aggregator=heilbron_improver` (D) or
+  # `aggregator=heilbron_constructor` (G). The pipeline body below routes
+  # that SAME singleton into both ParseMetricsStage (program.metrics) and
+  # SBF-Lineage (shared-subset TransitionEvidence metrics) via
+  # ${ref:aggregator}, so the two slots can never drift.
 
 # drift_cap=100000 is a deliberate no-op: it emulates v1's effectively
 # unthrottled behavior so D's natural ~2.2× compute advantage over G
@@ -83,3 +82,19 @@ pre_step_hook:
 inner_iterations: 1
 n_opponents: 1
 source_prompt_k: 1
+
+# Route the top-level `aggregator` singleton into BOTH ParseMetricsStage
+# (program.metrics composition) and SBF-Lineage (shared-subset
+# TransitionEvidence). The shared reference guarantees schema parity —
+# drift between the two slots is impossible by construction.
+# Launch MUST pass `aggregator=heilbron_improver` (D) or
+# `aggregator=heilbron_constructor` (G); the top-level default is
+# NullAggregator, which leaves ParseMetricsStage uninstalled and causes
+# SBF-Lineage to raise at build-time (no silent fallback).
+pipeline_builder:
+  aggregator: ${ref:aggregator}
+  lineage_filter:
+    _target_: gigaevo.adversarial.asymmetric_pipeline.LineageFilterConfig
+    min_shared: 1
+    inject_shared_evidence: true
+    aggregator: ${ref:aggregator}

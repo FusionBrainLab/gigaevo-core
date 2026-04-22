@@ -311,16 +311,22 @@ class TestConfigurableAggregator:
 
 class TestNullAggregator:
     def test_is_metrics_aggregator_subclass(self):
-        from gigaevo.programs.metrics.aggregators import MetricsAggregator, NullAggregator
+        from gigaevo.programs.metrics.aggregators import (
+            MetricsAggregator,
+            NullAggregator,
+        )
+
         assert issubclass(NullAggregator, MetricsAggregator)
 
     def test_output_keys_is_empty(self):
         from gigaevo.programs.metrics.aggregators import NullAggregator
+
         assert NullAggregator().output_keys == frozenset()
 
     def test_aggregate_is_a_noop_returning_empty(self):
         """NullAggregator is a sentinel — the builder gates on isinstance and
         never actually calls it. But if something does call it, return {}."""
         from gigaevo.programs.metrics.aggregators import NullAggregator
+
         assert NullAggregator().aggregate([], {}) == {}
         assert NullAggregator().aggregate([{"x": 1.0}], {"y": 2.0}) == {}
