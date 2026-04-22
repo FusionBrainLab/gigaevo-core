@@ -42,9 +42,10 @@ from gigaevo.adversarial.tracker_coverage_stages import (
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
-from gigaevo.programs.metrics.aggregators import MetricsAggregator
+from gigaevo.programs.metrics.aggregators import MetricsAggregator, NullAggregator
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.stages.json_processing import MergeDictStage
+from gigaevo.programs.stages.python_executors.execution import ParseMetricsStage
 
 
 @dataclass
@@ -157,6 +158,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         archive_reeval: bool = False,
         dg_tracker: DGImprovementTracker | None = None,
         *,
+        aggregator: MetricsAggregator | None = None,
         lineage_filter: LineageFilterConfig | DictConfig | None = None,
         opponent_result_mode: Literal["exec", "cached"] = "exec",
         opponent_sampling_mode: OpponentSamplingMode | str = OpponentSamplingMode.TOP_K,
@@ -218,14 +220,85 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         # affecting compute(). Guarded so non-default pipelines stay safe.
         self._wire_cache_on_edges()
 
+        # Default aggregator to NullAggregator when Hydra hasn't supplied one,
+        # so downstream `isinstance(agg, NullAggregator)` checks work without
+        # None-special-casing. The None path only exists for legacy call sites
+        # that pre-date the Task 3 kwarg.
+        self._aggregator: MetricsAggregator = aggregator or NullAggregator()
+        if not isinstance(self._aggregator, NullAggregator):
+            self._insert_parse_metrics_stage(stage_timeout)
+
         logger.info(
             "[AsymmetricPipeline] role={} feedback={} n_opp={} source_prompt_k={} "
-            "dg_tracker={}",
+            "dg_tracker={} aggregator={}",
             population_role,
             feedback_mode,
             n_opponents,
             source_prompt_k,
             "yes" if dg_tracker is not None else "no",
+            type(self._aggregator).__name__,
+        )
+
+    def _insert_parse_metrics_stage(self, stage_timeout: float) -> None:
+        """Insert ParseMetricsStage between CallValidatorFunction and consumers.
+
+        evaluate.py returns `(intrinsic, artifact)`. ParseMetricsStage composes
+        `program.metrics` from `artifact.per_opp_metrics` via the aggregator
+        and emits the legacy `(metrics, artifact)` tuple under input_name
+        `validation_result` so FetchMetrics / FetchArtifact / DGTrackerStage
+        stay unchanged.
+
+        Gated on `not isinstance(self._aggregator, NullAggregator)` — the
+        null-object sentinel signals "no aggregator configured; preserve the
+        legacy DAG". Non-Heilbron adversarial pipelines inherit the top-level
+        `aggregator=none` default and so skip this insertion entirely.
+        """
+        agg = self._aggregator
+        timeout = stage_timeout
+
+        def make_parse_stage() -> ParseMetricsStage:
+            return ParseMetricsStage(aggregator=agg, timeout=timeout)
+
+        self.add_stage("ParseMetricsStage", make_parse_stage)
+
+        # Rewrite every CallValidatorFunction→X edge so that X reads from
+        # ParseMetricsStage instead.
+        new_edges = []
+        rewired_destinations: list[str] = []
+        from gigaevo.programs.dag.automata import DataFlowEdge
+
+        for e in self._data_flow_edges:
+            if (
+                e.source_stage == "CallValidatorFunction"
+                and e.input_name == "validation_result"
+            ):
+                new_edges.append(
+                    DataFlowEdge.create(
+                        source="ParseMetricsStage",
+                        destination=e.destination_stage,
+                        input_name="validation_result",
+                    )
+                )
+                rewired_destinations.append(e.destination_stage)
+            else:
+                new_edges.append(e)
+        self._data_flow_edges = new_edges
+
+        # Feed CallValidatorFunction's raw tuple into ParseMetricsStage.
+        self.add_data_flow_edge(
+            "CallValidatorFunction", "ParseMetricsStage", "raw_validator_output"
+        )
+        self.add_exec_dep(
+            "ParseMetricsStage",
+            ExecutionOrderDependency.on_success("CallValidatorFunction"),
+        )
+        # Downstream consumers now depend on ParseMetricsStage's success; keep
+        # any previous "always_after CallValidatorFunction" on them — they still
+        # wait for the raw call to finish, transitively via ParseMetricsStage.
+        logger.info(
+            "[AsymmetricPipeline] inserted ParseMetricsStage; rewired {} consumers: {}",
+            len(rewired_destinations),
+            sorted(set(rewired_destinations)),
         )
 
     def _wire_cache_on_edges(self) -> None:

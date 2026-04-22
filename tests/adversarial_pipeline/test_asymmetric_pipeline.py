@@ -490,3 +490,129 @@ class TestLineageFilterAggregator:
                 dg_tracker=MagicMock(spec=DGImprovementTracker),
                 lineage_filter=LineageFilterConfig(),
             )
+
+
+# ---------------------------------------------------------------------------
+# Task 3: ParseMetricsStage insertion
+# ---------------------------------------------------------------------------
+
+
+def _mk_configurable_aggregator(metrics_ctx):
+    from gigaevo.programs.metrics.aggregators import (
+        ConfigurableAggregator,
+        ConstantSpec,
+        ReduceSpec,
+    )
+
+    return ConfigurableAggregator(
+        outputs={
+            "fitness": ReduceSpec(op="mean", field="delta"),
+            "is_valid": ConstantSpec(value=1.0),
+        },
+        invalid_defaults={"fitness": 0.0, "is_valid": 0.0},
+        metrics_context=metrics_ctx,
+    )
+
+
+@pytest.fixture
+def dummy_d_builder():
+    from gigaevo.adversarial.asymmetric_pipeline import LineageFilterConfig
+    from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+
+    ctx = _make_ctx()
+    agg = _mk_configurable_aggregator(ctx.problem_ctx.metrics_context)
+    return AdversarialAsymmetricPipelineBuilder(
+        ctx=ctx,
+        opponent_provider=FakeProvider(),
+        population_role="improver",
+        feedback_mode="composition",
+        dg_tracker=MagicMock(spec=DGImprovementTracker),
+        aggregator=agg,
+        lineage_filter=LineageFilterConfig(aggregator=agg),
+    )
+
+
+@pytest.fixture
+def dummy_g_builder():
+    from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+
+    ctx = _make_ctx()
+    agg = _mk_configurable_aggregator(ctx.problem_ctx.metrics_context)
+    return AdversarialAsymmetricPipelineBuilder(
+        ctx=ctx,
+        opponent_provider=FakeProvider(),
+        population_role="constructor",
+        feedback_mode="composition",
+        dg_tracker=MagicMock(spec=DGImprovementTracker),
+        aggregator=agg,
+    )
+
+
+@pytest.fixture
+def dummy_d_builder_null_aggregator():
+    from gigaevo.adversarial.dg_tracker import DGImprovementTracker
+    from gigaevo.programs.metrics.aggregators import NullAggregator
+
+    ctx = _make_ctx()
+    agg = _mk_configurable_aggregator(ctx.problem_ctx.metrics_context)
+    from gigaevo.adversarial.asymmetric_pipeline import LineageFilterConfig
+
+    return AdversarialAsymmetricPipelineBuilder(
+        ctx=ctx,
+        opponent_provider=FakeProvider(),
+        population_role="improver",
+        feedback_mode="composition",
+        dg_tracker=MagicMock(spec=DGImprovementTracker),
+        aggregator=NullAggregator(),
+        # lineage_filter still needs an aggregator; Null wiring only disables
+        # ParseMetricsStage insertion, not the D-side lineage filter.
+        lineage_filter=LineageFilterConfig(aggregator=agg),
+    )
+
+
+class TestParseMetricsStageInsertion:
+    def test_parse_metrics_stage_present_in_d_pipeline(self, dummy_d_builder):
+        """D-side pipeline includes ParseMetricsStage when aggregator is real."""
+        blueprint = dummy_d_builder.build_blueprint()
+        assert "ParseMetricsStage" in blueprint.nodes
+
+    def test_parse_metrics_stage_present_in_g_pipeline(self, dummy_g_builder):
+        """G-side pipeline includes ParseMetricsStage when aggregator is real."""
+        blueprint = dummy_g_builder.build_blueprint()
+        assert "ParseMetricsStage" in blueprint.nodes
+
+    def test_call_validator_feeds_parse_metrics_stage(self, dummy_d_builder):
+        """CallValidator → ParseMetricsStage on raw_validator_output;
+        ParseMetricsStage → FetchMetrics/FetchArtifact/DGTrackerStage on validation_result."""
+        blueprint = dummy_d_builder.build_blueprint()
+        edges = list(blueprint.data_flow_edges)
+        cv_outgoing = [e for e in edges if e.source_stage == "CallValidatorFunction"]
+        # Exactly one outgoing edge from CallValidator now — the raw feed to
+        # ParseMetricsStage.
+        assert len(cv_outgoing) == 1
+        assert cv_outgoing[0].destination_stage == "ParseMetricsStage"
+        assert cv_outgoing[0].input_name == "raw_validator_output"
+
+        pm_outs = {
+            (e.destination_stage, e.input_name)
+            for e in edges
+            if e.source_stage == "ParseMetricsStage"
+        }
+        assert ("FetchMetrics", "validation_result") in pm_outs
+        assert ("FetchArtifact", "validation_result") in pm_outs
+        assert ("DGTrackerStage", "validation_result") in pm_outs
+
+    def test_null_aggregator_preserves_legacy_dag(
+        self, dummy_d_builder_null_aggregator
+    ):
+        """NullAggregator keeps the legacy CallValidator → consumers edges."""
+        blueprint = dummy_d_builder_null_aggregator.build_blueprint()
+        assert "ParseMetricsStage" not in blueprint.nodes
+        cv_dests = {
+            (e.destination_stage, e.input_name)
+            for e in blueprint.data_flow_edges
+            if e.source_stage == "CallValidatorFunction"
+        }
+        assert ("FetchMetrics", "validation_result") in cv_dests
+        assert ("FetchArtifact", "validation_result") in cv_dests
+        assert ("DGTrackerStage", "validation_result") in cv_dests
