@@ -113,9 +113,22 @@ class DGTrackerStage(Stage):
             if isinstance(artifact, dict)
             else []
         )
+        per_opp_metrics_raw = (
+            artifact.get("per_opp_metrics") if isinstance(artifact, dict) else None
+        )
+        per_opp_metrics: list[dict[str, float]] | None = (
+            list(per_opp_metrics_raw) if per_opp_metrics_raw is not None else None
+        )
         n_opp = len(opponent_ids)
 
-        if len(per_opp_delta) != n_opp:
+        # Length check. When per_opp_metrics is present it is authoritative;
+        # otherwise fall back to per_opp_delta. A mismatch on whichever source
+        # drives the loop triggers the F22 triage below.
+        driving_length = (
+            len(per_opp_metrics) if per_opp_metrics is not None else len(per_opp_delta)
+        )
+
+        if driving_length != n_opp:
             # F22: three legitimate mismatch shapes, only one is a real bug.
             #   (a) candidate-failed: artifact reports n_opponents=0 /
             #       is_valid=False / empty per_opp_delta while opponent_ids
@@ -171,20 +184,31 @@ class DGTrackerStage(Stage):
                 )
             return None
 
-        # TODO(Task 4): forward the full per_opp_metrics dict from the artifact
-        # instead of synthesising {"delta": scalar, "is_valid": 1.0} here.
+        # Task 4: forward per_opp_metrics dicts verbatim when the artifact
+        # provides them. The schema-agnostic tracker stores whatever it
+        # receives, and the downstream ConfigurableAggregator applies its
+        # own MetricsContext.is_valid gate (design §5.3) — so is_valid=0.0
+        # records ARE forwarded. Only NaN/None deltas ("no measurement")
+        # remain skipped, preserving the Task-3 semantic.
         pairs: list[tuple[str, str, dict[str, float]]] = []
         n_skip_nan = 0
         n_neg = 0
 
-        for opponent_id, delta in zip(opponent_ids, per_opp_delta):
+        for i, opponent_id in enumerate(opponent_ids):
+            if per_opp_metrics is not None:
+                record = dict(per_opp_metrics[i])
+                delta = record.get("delta")
+            else:
+                delta = per_opp_delta[i]
+                record = None  # synthesised below for non-NaN entries
             if delta is None or (isinstance(delta, float) and math.isnan(delta)):
                 n_skip_nan += 1
                 continue
             d_val = float(delta)
             if d_val <= 0:
                 n_neg += 1
-            record: dict[str, float] = {"delta": d_val, "is_valid": 1.0}
+            if record is None:
+                record = {"delta": d_val, "is_valid": 1.0}
             if self._role == "improver":
                 pairs.append((program_id, opponent_id, record))
             else:

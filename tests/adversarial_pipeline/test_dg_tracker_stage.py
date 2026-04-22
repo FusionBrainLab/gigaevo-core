@@ -404,6 +404,213 @@ class TestDGTrackerStageBatchesPairs:
 # ===================================================================
 
 
+# ===================================================================
+# Task 4: DGTrackerStage forwards `per_opp_metrics` dicts verbatim.
+# When the artifact carries `per_opp_metrics`, each pair's record is the
+# full per-opp dict. When only `per_opp_delta` is present (legacy),
+# synthesise `{"delta": d, "is_valid": 1.0}` for non-NaN entries.
+# Aggregator contract (design §5.3): tracker records everything; the
+# aggregator's MetricsContext.is_valid gates per-record downstream —
+# so `is_valid=0.0` dicts ARE forwarded, only NaN/None deltas are skipped.
+# ===================================================================
+
+
+class TestForwardsPerOppMetrics:
+    @pytest.mark.asyncio
+    async def test_improver_forwards_full_pop_b_dict(self, tracker, program):
+        stage = _make_stage(tracker, "improver")
+        opponent_ids = ["g1", "g2"]
+        per_opp_metrics = [
+            {
+                "pre_q": 0.3,
+                "post_q": 0.35,
+                "delta": 0.05,
+                "score": 0.5,
+                "is_valid": 1.0,
+            },
+            {
+                "pre_q": 0.25,
+                "post_q": 0.25,
+                "delta": 0.0,
+                "score": 0.0,
+                "is_valid": 1.0,
+            },
+        ]
+        artifact = {
+            "role": "improver",
+            "per_opp_delta": [0.05, 0.0],
+            "per_opp_metrics": per_opp_metrics,
+        }
+        _attach(stage, opponent_ids, ({"fitness": 0.25}, artifact))
+
+        await stage.compute(program)
+
+        pairs = _pairs_of(tracker)
+        assert pairs == [
+            (program.id, "g1", per_opp_metrics[0]),
+            (program.id, "g2", per_opp_metrics[1]),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_constructor_forwards_full_pop_a_dict(self, tracker, program):
+        stage = _make_stage(tracker, "constructor")
+        opponent_ids = ["d1", "d2"]
+        per_opp_metrics = [
+            {
+                "post_q": 0.40,
+                "delta": 0.00,
+                "resistance_score": 1.0,
+                "is_valid": 1.0,
+            },
+            {
+                "post_q": 0.45,
+                "delta": 0.05,
+                "resistance_score": 0.0,
+                "is_valid": 1.0,
+            },
+        ]
+        artifact = {
+            "role": "constructor",
+            "per_opp_delta": [0.0, 0.05],
+            "per_opp_metrics": per_opp_metrics,
+        }
+        _attach(stage, opponent_ids, ({"fitness": 0.5}, artifact))
+
+        await stage.compute(program)
+
+        pairs = _pairs_of(tracker)
+        # constructor role: pair = (opponent_id, program_id, record)
+        assert pairs == [
+            ("d1", program.id, per_opp_metrics[0]),
+            ("d2", program.id, per_opp_metrics[1]),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_missing_per_opp_metrics_falls_back_to_scalar_synthesis(
+        self, tracker, program
+    ):
+        # Legacy artifact: only per_opp_delta present. Fallback must
+        # synthesise {"delta": d, "is_valid": 1.0} for each non-NaN entry.
+        stage = _make_stage(tracker, "improver")
+        artifact = {"role": "improver", "per_opp_delta": [0.1, 0.2]}
+        _attach(stage, ["g1", "g2"], ({}, artifact))
+
+        await stage.compute(program)
+
+        pairs = _pairs_of(tracker)
+        assert pairs == [
+            (program.id, "g1", {"delta": 0.1, "is_valid": 1.0}),
+            (program.id, "g2", {"delta": 0.2, "is_valid": 1.0}),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_is_valid_false_entry_is_forwarded_not_skipped(
+        self, tracker, program
+    ):
+        # Design §5.3: ConfigurableAggregator filters via MetricsContext.is_valid.
+        # The tracker records ALL valid-schema entries; downstream aggregator
+        # applies the validity gate. So `is_valid=0.0` dicts are forwarded,
+        # not skipped. NaN deltas (no measurement at all) are still dropped.
+        stage = _make_stage(tracker, "improver")
+        per_opp_metrics = [
+            {
+                "pre_q": 0.3,
+                "post_q": 0.4,
+                "delta": 0.1,
+                "score": 1.0,
+                "is_valid": 1.0,
+            },
+            {
+                "pre_q": 0.0,
+                "post_q": 0.0,
+                "delta": 0.0,
+                "score": 0.0,
+                "is_valid": 0.0,
+            },
+        ]
+        artifact = {
+            "role": "improver",
+            "per_opp_delta": [0.1, 0.0],
+            "per_opp_metrics": per_opp_metrics,
+        }
+        _attach(stage, ["g1", "g2"], ({}, artifact))
+
+        await stage.compute(program)
+
+        pairs = _pairs_of(tracker)
+        assert pairs == [
+            (program.id, "g1", per_opp_metrics[0]),
+            (program.id, "g2", per_opp_metrics[1]),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_nan_delta_still_skipped_even_with_per_opp_metrics(
+        self, tracker, program
+    ):
+        # NaN/None delta still represents "no measurement" — skip preserves
+        # the Task-3 semantic even under the dict-forwarding contract.
+        stage = _make_stage(tracker, "improver")
+        per_opp_metrics = [
+            {
+                "pre_q": 0.3,
+                "post_q": float("nan"),
+                "delta": float("nan"),
+                "score": 0.0,
+                "is_valid": 0.0,
+            },
+            {
+                "pre_q": 0.3,
+                "post_q": 0.35,
+                "delta": 0.05,
+                "score": 0.5,
+                "is_valid": 1.0,
+            },
+        ]
+        artifact = {
+            "role": "improver",
+            "per_opp_delta": [float("nan"), 0.05],
+            "per_opp_metrics": per_opp_metrics,
+        }
+        _attach(stage, ["g1", "g2"], ({}, artifact))
+
+        await stage.compute(program)
+
+        pairs = _pairs_of(tracker)
+        assert pairs == [(program.id, "g2", per_opp_metrics[1])]
+
+    @pytest.mark.asyncio
+    async def test_length_mismatch_per_opp_metrics_errors_and_skips(
+        self, tracker, program, loguru_sink
+    ):
+        # If per_opp_metrics is present but its length disagrees with
+        # opponent_ids (and per_opp_delta also disagrees), treat as a
+        # real mismatch — SKIP batch + ERROR log (same triage as scalars).
+        stage = _make_stage(tracker, "improver")
+        artifact = {
+            "role": "improver",
+            "is_valid": True,
+            "per_opp_delta": [0.1],  # length 1
+            "per_opp_metrics": [
+                {
+                    "pre_q": 0.3,
+                    "post_q": 0.35,
+                    "delta": 0.05,
+                    "score": 0.5,
+                    "is_valid": 1.0,
+                }
+            ],
+        }
+        _attach(stage, ["g1", "g2"], ({}, artifact))  # opponents length 2
+
+        await stage.compute(program)
+
+        tracker.record_batch.assert_not_awaited()
+        assert any(
+            level == "ERROR" and "possible cache leak" in msg
+            for level, msg in loguru_sink
+        ), f"length mismatch must log ERROR: {loguru_sink}"
+
+
 class TestInvertedIndexPopulation:
     @pytest.mark.asyncio
     async def test_improver_populates_d_wins_and_g_resisted(self, program):
