@@ -45,9 +45,9 @@ async def test_compute_d_wins_count_stage_records_count(tracker):
     g_ids = [_PROG_IDS["g1"], str(uuid.uuid4()), str(uuid.uuid4())]
     await tracker.record_batch(
         [
-            (d1_id, g_ids[0], 0.05),
-            (d1_id, g_ids[1], 0.03),
-            (d1_id, g_ids[2], 0.01),
+            (d1_id, g_ids[0], {"delta": 0.05, "is_valid": 1.0}),
+            (d1_id, g_ids[1], {"delta": 0.03, "is_valid": 1.0}),
+            (d1_id, g_ids[2], {"delta": 0.01, "is_valid": 1.0}),
         ]
     )
 
@@ -76,9 +76,9 @@ async def test_compute_d_wins_count_stage_ignores_losses(tracker):
     g_ids = [_PROG_IDS["g1"], str(uuid.uuid4()), str(uuid.uuid4())]
     await tracker.record_batch(
         [
-            (d1_id, g_ids[0], 0.05),  # win
-            (d1_id, g_ids[1], -0.02),  # loss (not counted)
-            (d1_id, g_ids[2], 0.01),  # win
+            (d1_id, g_ids[0], {"delta": 0.05, "is_valid": 1.0}),  # win
+            (d1_id, g_ids[1], {"delta": -0.02, "is_valid": 1.0}),  # loss
+            (d1_id, g_ids[2], {"delta": 0.01, "is_valid": 1.0}),  # win
         ]
     )
 
@@ -97,9 +97,9 @@ async def test_compute_g_resisted_count_stage_records_count(tracker):
     d_ids = [_PROG_IDS["d1"], _PROG_IDS["d2"], _PROG_IDS["d3"]]
     await tracker.record_batch(
         [
-            (d_ids[0], g1_id, -0.05),  # resisted
-            (d_ids[1], g1_id, 0.0),  # resisted (zero delta)
-            (d_ids[2], g1_id, 0.03),  # not resisted (positive delta)
+            (d_ids[0], g1_id, {"delta": -0.05, "is_valid": 1.0}),  # resisted
+            (d_ids[1], g1_id, {"delta": 0.0, "is_valid": 1.0}),  # resisted (zero)
+            (d_ids[2], g1_id, {"delta": 0.03, "is_valid": 1.0}),  # not resisted
         ]
     )
 
@@ -127,9 +127,9 @@ async def test_compute_g_resisted_count_stage_includes_zero_delta(tracker):
     d_ids = [_PROG_IDS["d1"], _PROG_IDS["d2"], _PROG_IDS["d3"]]
     await tracker.record_batch(
         [
-            (d_ids[0], g1_id, -0.05),  # resisted (negative)
-            (d_ids[1], g1_id, 0.0),  # resisted (zero)
-            (d_ids[2], g1_id, 0.0),  # resisted (zero, different D)
+            (d_ids[0], g1_id, {"delta": -0.05, "is_valid": 1.0}),  # resisted
+            (d_ids[1], g1_id, {"delta": 0.0, "is_valid": 1.0}),  # resisted (zero)
+            (d_ids[2], g1_id, {"delta": 0.0, "is_valid": 1.0}),  # resisted (zero)
         ]
     )
 

@@ -12,7 +12,7 @@ Only positive deltas (D actually improved G) are stored.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
 from typing import cast
@@ -159,18 +159,23 @@ class DGImprovementTracker:
 
     async def record_batch(
         self,
-        pairs: list[tuple[str, str, float]],
+        pairs: Sequence[tuple[str, str, Mapping[str, float]]],
         *,
         gen: int | None = None,
     ) -> int:
-        """Record multiple D-G improvement pairs via a single Redis pipeline.
+        """Record multiple D-G per-pair metric dicts via a single Redis pipeline.
 
-        Writes to FIVE key families in one round trip (v3):
+        Writes to FIVE key families in one round trip:
           - Per-G sorted set ``dg_improvements:{g_id}``     (positive deltas only)
           - Global best-pairs sorted set ``dg_best_pairs``  (positive deltas only)
           - D-keyed SET ``dg_d_wins:{d_id}``                (positive deltas)
           - G-keyed SET ``dg_g_resisted:{g_id}``            (non-positive deltas)
           - D-keyed HASH ``dg_metrics:{d_id}``              (every pair, any sign)
+
+        Schema-agnostic: the per-pair ``Mapping[str, float]`` is stored verbatim
+        (JSON-serialised) in the ``dg_metrics`` hash. The only required key is
+        ``"delta"``, which drives positive/non-positive routing into the
+        ``dg_d_wins`` / ``dg_g_resisted`` inverted indices.
 
         The D-metrics hash is the substrate for ``SharedBenchmarkFilteredLineageStage``
         (§3.5 Prong 2). The D-wins / G-resisted SETs are the BD y-axes.
@@ -179,7 +184,7 @@ class DGImprovementTracker:
         audit can reconstruct exactly what was persisted without re-reading
         Redis (§13 log-based verification contract).
 
-        Returns the number of positive pairs (legacy contract — unchanged).
+        Returns the number of positive pairs (delta > 0).
         """
         if not pairs:
             return 0
@@ -193,11 +198,12 @@ class DGImprovementTracker:
         d_metrics: dict[str, dict[str, str]] = {}
 
         positive_count = 0
-        for d_id, g_id, delta in pairs:
-            d_val = float(delta)
-            # Metrics hash captures every pair, regardless of sign.
-            metrics_dict = {"fitness_delta": d_val, "is_valid": 1.0}
-            d_metrics.setdefault(d_id, {})[g_id] = json.dumps(metrics_dict)
+        for d_id, g_id, per_pair in pairs:
+            # Store the dict verbatim (schema-agnostic). Only the "delta" field
+            # is required — it drives positive/non-positive routing.
+            record = dict(per_pair)
+            d_val = float(record["delta"])
+            d_metrics.setdefault(d_id, {})[g_id] = json.dumps(record)
             if d_val > 0:
                 positive_count += 1
                 key = self._key(g_id)
@@ -277,7 +283,7 @@ class DGImprovementTracker:
         Consumed by ``SharedBenchmarkFilteredLineageStage`` to compute
         ``mean(delta_child) - mean(delta_parent)`` over the intersection
         of the two D's benchmark histories.
-        Reads from the v4 dg_metrics hash (fitness_delta field).
+        Reads from the dg_metrics hash (``delta`` field).
         """
         if not g_ids:
             return []
@@ -288,9 +294,9 @@ class DGImprovementTracker:
         for ra, rb in zip(raw_a, raw_b):
             if ra is None or rb is None:
                 continue
-            da = json.loads(ra)["fitness_delta"]
-            db = json.loads(rb)["fitness_delta"]
-            paired.append((float(da), float(db)))
+            da = float(json.loads(ra)["delta"])
+            db = float(json.loads(rb)["delta"])
+            paired.append((da, db))
         return paired
 
     async def get_best_d_for_g(self, g_id: str) -> tuple[str, float] | None:

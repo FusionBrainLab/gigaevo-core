@@ -171,7 +171,9 @@ class DGTrackerStage(Stage):
                 )
             return None
 
-        pairs: list[tuple[str, str, float]] = []
+        # TODO(Task 4): forward the full per_opp_metrics dict from the artifact
+        # instead of synthesising {"delta": scalar, "is_valid": 1.0} here.
+        pairs: list[tuple[str, str, dict[str, float]]] = []
         n_skip_nan = 0
         n_neg = 0
 
@@ -182,10 +184,11 @@ class DGTrackerStage(Stage):
             d_val = float(delta)
             if d_val <= 0:
                 n_neg += 1
+            record: dict[str, float] = {"delta": d_val, "is_valid": 1.0}
             if self._role == "improver":
-                pairs.append((program_id, opponent_id, d_val))
+                pairs.append((program_id, opponent_id, record))
             else:
-                pairs.append((opponent_id, program_id, d_val))
+                pairs.append((opponent_id, program_id, record))
 
         if pairs:
             await self._tracker.record_batch(pairs)

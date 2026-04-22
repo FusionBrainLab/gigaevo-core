@@ -27,7 +27,7 @@ def tracker():
     return mock
 
 
-def _pairs_of(tracker) -> list[tuple[str, str, float]]:
+def _pairs_of(tracker) -> list[tuple[str, str, dict[str, float]]]:
     """Return the pair list from the (only expected) record_batch call."""
     assert tracker.record_batch.await_count == 1, (
         f"expected a single record_batch call, got {tracker.record_batch.await_count}"
@@ -78,8 +78,8 @@ class TestUsesRealProgramId:
         pairs = _pairs_of(tracker)
         # G is the program (real id), D is the opponent.
         assert pairs == [
-            ("d-opp-1", program.id, 0.1),
-            ("d-opp-2", program.id, 0.2),
+            ("d-opp-1", program.id, {"delta": 0.1, "is_valid": 1.0}),
+            ("d-opp-2", program.id, {"delta": 0.2, "is_valid": 1.0}),
         ]
         for d_id, g_id, _ in pairs:
             assert d_id != "<program>"
@@ -101,8 +101,8 @@ class TestUsesRealProgramId:
         pairs = _pairs_of(tracker)
         # D is the program (real id), G is the opponent.
         assert pairs == [
-            (program.id, "g-opp-1", 0.05),
-            (program.id, "g-opp-2", 0.15),
+            (program.id, "g-opp-1", {"delta": 0.05, "is_valid": 1.0}),
+            (program.id, "g-opp-2", {"delta": 0.15, "is_valid": 1.0}),
         ]
 
 
@@ -123,7 +123,7 @@ class TestNanFiltering:
 
         # Only d2 (non-NaN) survives the filter.
         pairs = _pairs_of(tracker)
-        assert pairs == [("d2", program.id, 0.1)]
+        assert pairs == [("d2", program.id, {"delta": 0.1, "is_valid": 1.0})]
 
     @pytest.mark.asyncio
     async def test_all_nan_does_not_call_record_batch(self, tracker, program):
@@ -155,8 +155,8 @@ class TestNegativeDeltas:
         # itself decides which per-key family each delta contributes to.
         pairs = _pairs_of(tracker)
         assert pairs == [
-            ("d1", program.id, -0.05),
-            ("d2", program.id, 0.1),
+            ("d1", program.id, {"delta": -0.05, "is_valid": 1.0}),
+            ("d2", program.id, {"delta": 0.1, "is_valid": 1.0}),
         ]
 
 
@@ -342,8 +342,8 @@ class TestArtifactRoleCrossCheck:
 
         await stage.compute(program)
         assert _pairs_of(tracker) == [
-            (program.id, "g1", 0.05),
-            (program.id, "g2", 0.10),
+            (program.id, "g1", {"delta": 0.05, "is_valid": 1.0}),
+            (program.id, "g2", {"delta": 0.10, "is_valid": 1.0}),
         ]
 
     @pytest.mark.asyncio
@@ -378,8 +378,8 @@ class TestDGTrackerStageBatchesPairs:
         assert tracker.record_metrics.await_count == 0
         pairs = _pairs_of(tracker)
         assert pairs == [
-            (program.id, "g1", 0.1),
-            (program.id, "g2", 0.2),
+            (program.id, "g1", {"delta": 0.1, "is_valid": 1.0}),
+            (program.id, "g2", {"delta": 0.2, "is_valid": 1.0}),
         ]
 
     @pytest.mark.asyncio
