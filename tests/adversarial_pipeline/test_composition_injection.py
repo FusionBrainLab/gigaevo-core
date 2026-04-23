@@ -287,6 +287,40 @@ class TestInjectedLineage:
         assert injected.metadata["d_source_id"] == "d-1"
         assert injected.metadata["g_source_id"] == g.id
 
+    # -----------------------------------------------------------------
+    # I-18: Program.create_child silently defaulted iteration=0, so every
+    # injected program landed at step=0 on the frontier/per-iter stats
+    # regardless of when in the run it was produced. That made watchdog
+    # `comparison` plots look like the max-fitness line "starts at gen 0"
+    # even though the real breakthrough was at lineage.generation=8.
+    # Injected programs must inherit iteration from their G parent.
+    # -----------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_injected_program_iteration_matches_g_parent(
+        self, hook, g_storage, d_provider, dg_tracker
+    ):
+        g = Program(code="def entrypoint():\n    return 0\n", metadata={})
+        g.iteration = 12
+        g_storage.get_all.return_value = [g]
+        dg_tracker.get_best_d_for_g.return_value = ("d-1", 0.1)
+        dg_tracker.is_pair_injected.return_value = False
+        d_provider.get_programs_by_ids.return_value = [
+            OpponentProgram(
+                program_id="d-1",
+                code="def entrypoint():\n    return lambda x: x\n",
+                fitness=0.5,
+            )
+        ]
+
+        await hook.inject_all()
+
+        injected = g_storage.add.call_args.args[0]
+        assert injected.iteration == g.iteration, (
+            "injected program must inherit G's iteration (frontier/per-iter "
+            f"stats are indexed by program.iteration); got {injected.iteration}, "
+            f"expected {g.iteration}"
+        )
+
 
 # ===================================================================
 # Test: inject_all — dedup

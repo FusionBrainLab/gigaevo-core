@@ -255,7 +255,16 @@ class Program(BaseModel):
         code: str,
         mutation: str | None = None,
         name: str | None = None,
+        iteration: int | None = None,
     ) -> Program:
+        """Create a child program whose lineage.generation = max(parent.gen)+1
+        and whose top-level ``iteration`` defaults to ``max(parent.iteration)``
+        (I-18: frontier/per-iter stats in metrics_tracker are step-indexed by
+        program.iteration; leaving it at the Field default of 0 causes every
+        child produced outside the mutation engine to pile up at step=0 on the
+        frontier, which was the root cause of the "max-fitness line starts at
+        gen 0" confound in heilbron/adversarial-repro-v2).
+        """
         if not parents:
             raise ValueError("At least one parent is required")
         generation = max((p.lineage.generation for p in parents), default=0) + 1
@@ -264,7 +273,9 @@ class Program(BaseModel):
             mutation=mutation,
             generation=generation,
         )
-        return cls(code=code, lineage=lineage, name=name)
+        if iteration is None:
+            iteration = max((p.iteration for p in parents), default=0)
+        return cls(code=code, lineage=lineage, name=name, iteration=iteration)
 
     @classmethod
     def from_mutation_spec(cls, spec: MutationSpec) -> Program:
