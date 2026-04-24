@@ -29,11 +29,7 @@ from typing import cast
 from loguru import logger
 
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig  # noqa: I001
-from gigaevo.evolution.engine.core import (
-    _RUN_STATE_PROGRAMS_PROCESSED,
-    _RUN_STATE_TOTAL_GENERATIONS,
-    EvolutionEngine,
-)
+from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.engine.mutation import generate_mutations
 from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
@@ -107,12 +103,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self._run_start_gen = self.metrics.total_generations
 
         # Persist initial counters so status tools and sync hooks can read immediately
-        await self.storage.save_run_state(
-            _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
-        )
-        await self.storage.save_run_state(
-            _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
-        )
         await self._write_snapshot(
             total_generations=self.metrics.total_generations,
             programs_processed=self.metrics.programs_processed,
@@ -126,9 +116,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
             # Publish programs_processed after seed ingestion so adversarial
             # sync hooks can see our progress before the first hook call.
-            await self.storage.save_run_state(
-                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
-            )
             await self._write_snapshot(
                 programs_processed=self.metrics.programs_processed
             )
@@ -565,9 +552,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # Without this, adversarial ProgressBasedSyncHook deadlocks: both
             # populations block at the hook waiting for the other's counter to
             # advance, but the counter is only written at step 9 (after the hook).
-            await self.storage.save_run_state(
-                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
-            )
             await self._write_snapshot(
                 programs_processed=self.metrics.programs_processed
             )
@@ -614,9 +598,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
             # 9. Increment epoch counter
             self.metrics.total_generations += 1
-            await self.storage.save_run_state(
-                _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
-            )
             await self._write_snapshot(total_generations=self.metrics.total_generations)
             # programs_processed already saved at step 3a before sync hook
 

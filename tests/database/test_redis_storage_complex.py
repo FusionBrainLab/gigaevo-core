@@ -525,8 +525,8 @@ class TestRunState:
     """redis_program_storage.py L451-467: save/load run state for resume."""
 
     async def test_save_and_load_run_state(self, fakeredis_storage):
-        await fakeredis_storage.save_run_state("engine:total_generations", 42)
-        result = await fakeredis_storage.load_run_state("engine:total_generations")
+        await fakeredis_storage.save_run_state("test:counter", 42)
+        result = await fakeredis_storage.load_run_state("test:counter")
         assert result == 42
 
     async def test_load_nonexistent_field_returns_none(self, fakeredis_storage):

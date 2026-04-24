@@ -41,11 +41,6 @@ from gigaevo.utils.trackers.base import LogWriter
 if TYPE_CHECKING:
     from typing import Any
 
-# Redis run-state field names (used for resume persistence)
-_RUN_STATE_TOTAL_GENERATIONS = "engine:total_generations"
-_RUN_STATE_PROGRAMS_PROCESSED = "engine:programs_processed"
-_RUN_STATE_COMPLETION_REASON = "engine:completion_reason"
-
 
 class EvolutionEngine:
     """
@@ -195,9 +190,6 @@ class EvolutionEngine:
                         "[EvolutionEngine] Stop: {}",
                         stop_decision.reason,
                     )
-                    await self.storage.save_run_state(
-                        _RUN_STATE_COMPLETION_REASON, stop_decision.reason
-                    )
                     await self._write_snapshot(completion_reason=stop_decision.reason)
                     break
 
@@ -293,12 +285,6 @@ class EvolutionEngine:
             logger.opt(exception=True).debug(
                 "[EvolutionEngine] GENERATION_BOUNDARY emission failed"
             )
-        await self.storage.save_run_state(
-            _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
-        )
-        await self.storage.save_run_state(
-            _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
-        )
         await self._write_snapshot(
             total_generations=self.metrics.total_generations,
             programs_processed=self.metrics.programs_processed,
@@ -701,14 +687,13 @@ class EvolutionEngine:
     async def restore_state(self) -> None:
         """Restore total_generations and programs_processed from storage after a resume."""
         await self._load_snapshot_on_resume()
-        gen = await self.storage.load_run_state(_RUN_STATE_TOTAL_GENERATIONS)
-        if gen is not None:
-            self.metrics.total_generations = gen
-            logger.info("[EvolutionEngine] Restored total_generations={}", gen)
-        pp = await self.storage.load_run_state(_RUN_STATE_PROGRAMS_PROCESSED)
-        if pp is not None:
-            self.metrics.programs_processed = pp
-            logger.info("[EvolutionEngine] Restored programs_processed={}", pp)
+        self.metrics.total_generations = self._snapshot.total_generations
+        self.metrics.programs_processed = self._snapshot.programs_processed
+        logger.info(
+            "[EvolutionEngine] Restored total_generations={} programs_processed={}",
+            self._snapshot.total_generations,
+            self._snapshot.programs_processed,
+        )
 
     @property
     def stopper(self) -> EvolutionStopper:

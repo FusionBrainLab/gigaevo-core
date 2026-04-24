@@ -299,19 +299,17 @@ class TestEpochRefresh:
         engine.strategy.reindex_archive.assert_called()
 
     async def test_persists_programs_processed(self) -> None:
-        """Epoch refresh persists programs_processed to Redis."""
-        from gigaevo.evolution.engine.core import _RUN_STATE_PROGRAMS_PROCESSED
-
+        """Epoch refresh persists programs_processed via the engine snapshot."""
         engine = _make_ss_engine()
         engine.metrics.programs_processed = 37
 
         await engine._epoch_refresh()
 
-        # Verify save_run_state was called with programs_processed
+        # Verify the snapshot write carried programs_processed=37.
         calls = engine.storage.save_run_state.call_args_list
-        pp_calls = [c for c in calls if c.args[0] == _RUN_STATE_PROGRAMS_PROCESSED]
-        assert len(pp_calls) == 1
-        assert pp_calls[0].args[1] == 37
+        snap_calls = [c for c in calls if c.args[0] == "engine:snapshot"]
+        assert snap_calls, "_epoch_refresh must persist engine:snapshot"
+        assert any('"programs_processed":37' in c.args[1] for c in snap_calls)
 
 
 # ---------------------------------------------------------------------------
