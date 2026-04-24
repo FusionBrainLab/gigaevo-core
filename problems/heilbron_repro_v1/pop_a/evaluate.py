@@ -1,14 +1,21 @@
-"""Adversarial evaluate.py for Pop A (Constructor) — binary resistance scoring.
+"""Adversarial evaluate.py for Pop A (Constructor) — smooth resistance scoring.
 
 Receives:
     opponent_results: list of callables improve(points) -> improved_points  (from Pop B)
     program_output:   (11, 2) np.ndarray  (this Constructor's point configuration)
 
 Intrinsic metrics (quality, actual_fitness) are candidate-level, computed from the
-program output alone. Per-opponent resistance is computed and passed to the aggregator.
-The ConfigurableAggregator reduces these via heilbron_constructor.yaml.
+program output alone. Per-opponent resistance is computed and passed to the aggregator
+via the artifact. The ConfigurableAggregator reduces these via heilbron_constructor.yaml.
 
-For sigmoid resistance scoring use pop_a_soft (IV2 soft-fitness variant).
+Per-opponent semantics:
+    delta_i        = max(post_min_area - raw_min_area, 0)
+    resistance_i   = 1.0 - min(delta_i / Q_MAX, 1.0)   — continuous, zero-sum with D's fitness
+
+An opponent that fails to improve (delta=0) contributes resistance_i=1.0; an
+opponent that fully closes the gap (delta >= Q_MAX) contributes resistance_i=0.0.
+This is the direct complement of D's per-opponent score, giving a continuous
+gradient through the fitness landscape rather than the previous binary hard floor.
 """
 
 from __future__ import annotations
@@ -100,7 +107,7 @@ def evaluate(opponent_results: list, program_output: object):
             else:
                 post_q = float(get_smallest_triangle_area(improved))
                 delta = max(post_q - raw_quality, 0.0)
-            resistance_score = float(delta <= 0)
+            resistance_score = 1.0 - min(delta / Q_MAX, 1.0)
             resistance_scores.append(resistance_score)
             deltas.append(delta)
             post_qualities.append(post_q)
