@@ -1,4 +1,4 @@
-"""Adversarial evaluate.py for Pop B (Improver) — binary improvement scoring.
+"""Adversarial evaluate.py for Pop B (Improver) — continuous tanh improvement scoring.
 
 Receives:
     opponent_results: list of (11, 2) np.ndarray  (point configs from Pop A)
@@ -7,7 +7,8 @@ Receives:
 Emits per-opponent primitives (pre_q, post_q, delta, score, is_valid) in artifact.
 The ConfigurableAggregator composes these into program-level metrics via heilbron_improver.yaml.
 
-For sigmoid improvement scoring use pop_b_soft (IV2 soft-fitness variant).
+Score formula: 0.5 * (tanh(raw_delta / Q_MAX) + 1.0) — smooth, (0, 1), admits negative
+raw_delta so regressions are distinguished from ties. raw_delta = 0 maps to 0.5.
 """
 
 from __future__ import annotations
@@ -91,12 +92,12 @@ def evaluate(opponent_results: list, program_output: object):
             if improved is None:
                 post_q = pre_q
                 delta = 0.0
-                score = 0.0
+                score = 0.5
             else:
                 post_q = float(get_smallest_triangle_area(improved))
                 raw_delta = post_q - pre_q
-                delta = max(raw_delta, 0.0)
-                score = min(delta / Q_MAX, 1.0)
+                delta = raw_delta
+                score = 0.5 * (np.tanh(raw_delta / Q_MAX) + 1.0)
             scores.append(score)
             pre_qualities.append(pre_q)
             post_qualities.append(post_q)
@@ -108,14 +109,14 @@ def evaluate(opponent_results: list, program_output: object):
                 "is_valid": 1.0,
             }
         except Exception:
-            scores.append(0.0)
+            scores.append(0.5)
             pre_qualities.append(pre_q)
             post_qualities.append(pre_q)
             per_opp_metrics[idx] = {
                 "pre_q": float(pre_q),
                 "post_q": float(pre_q),
                 "delta": 0.0,
-                "score": 0.0,
+                "score": 0.5,
                 "is_valid": 1.0,
             }
 
