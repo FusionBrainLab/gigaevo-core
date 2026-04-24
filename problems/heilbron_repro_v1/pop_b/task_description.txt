@@ -1,64 +1,67 @@
 TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL IMPROVER)
 
-You are an IMPROVER (Discriminator) in a two-population adversarial co-evolution game, analogous to a GAN:
-- YOUR OPPONENTS (Pop A, the "Generator"): evolve point configurations with high min_area that resist improvement
-- YOU (Pop B, the "Discriminator"): take their configuration and PROVE IT IS SUBOPTIMAL by producing a better one
+You are an IMPROVER (Discriminator) in a two-population adversarial
+co-evolution game (GAN-analogue):
+- OPPONENTS (Pop A): evolve (11, 2) point configurations with high
+  min_area that resist improvement.
+- YOU (Pop B): take their configuration and produce a better one, proving
+  it is suboptimal.
 
 THE GAME
-Your opponents are OTHER EVOLVING PROGRAMS. They produce (11,2) point arrays and try to make them as hard to improve as possible. Each generation, your opponents get better -- their configurations sit in deeper local optima with tighter basins. A simple random jitter that works in generation 1 will fail by generation 5. You must evolve increasingly sophisticated improvement strategies to keep finding gains.
+Each evaluation you face several opponents sampled from the Pop A archive.
+For each, you receive an (11, 2) point array and return a modified
+version. If your version has higher min_area, you score. Opponents get
+stronger every generation -- their configurations sit in deeper local
+optima with tighter basins, so you must keep evolving sharper search
+strategies.
 
-YOUR FITNESS:
-  fitness = mean_k( min(improvement_k / 0.0365, 1.0) )
+YOUR FITNESS rewards the mean normalized improvement you produce across
+opponents. Making a configuration worse scores 0, not negative.
 
-  improvement_k = max(min_area(improved_k) - min_area(original_k), 0.0)
+(Exact formula: see the fitness metric description in your context.)
 
-You are tested against MULTIPLE opponent configurations each evaluation. Your fitness is the average normalized improvement across all of them. Making things worse counts as zero (clamped).
+IMPORTANT: CHANGING CONTEXT
+Opponents are re-sampled from the Pop A archive at every evaluation, and
+that archive evolves over time. Your lineage insights and past metrics may
+refer to a different opponent than the one you currently face. Focus on
+GENERAL improvement strategies rather than exploiting specific point
+arrangements -- the best improvers work against ANY opponent, not just
+one.
 
-IMPORTANT: RAPIDLY CHANGING CONTEXT
-The Constructor programs you face change EVERY generation. Your lineage insights and
-past metrics may refer to a different Constructor than the one you currently face.
-Focus on GENERAL improvement strategies rather than exploiting specific point arrangements.
-The best Improvers are those that work well against ANY Constructor — not just one.
-
-WHAT WINS THIS GAME
-- The opponent configurations you receive will get progressively harder to improve as the game advances
-- Early on, simple approaches may work on unoptimized configs
-- As opponents evolve, you need increasingly creative and powerful approaches
-- The winning approach ADAPTS to the difficulty of the input — it uses general optimization
-  principles, not hardcoded responses to specific configurations
+HOW TO WIN
+- Simple jitter works early; as opponents evolve, you need more powerful
+  search.
+- The winning approach ADAPTS to input difficulty via general optimization
+  principles, not hardcoded responses.
 
 OBJECTIVE
 Write an `improve(points)` function that:
-1) Takes an (11, 2) NumPy array of point coordinates (inside unit-area equilateral triangle)
-2) Returns an (11, 2) NumPy array of improved coordinates
-3) The improved configuration must satisfy ALL constraints (containment, distinctness, non-degeneracy)
-4) The improved configuration should have HIGHER min_area than the input
+1) Takes an (11, 2) NumPy array (inside the unit-area equilateral
+   triangle).
+2) Returns an (11, 2) NumPy array of improved coordinates.
+3) Satisfies ALL output constraints below -- otherwise the output counts
+   as zero improvement.
+4) Should have HIGHER min_area than the input.
 
 CONSTRAINTS ON OUTPUT
-- Enclosing triangle: equilateral, area = 1.0, flat-bottomed
-  Vertices: A=(0,0), B=(1.5197,0), C=(0.7598,1.3161)
-- Exactly 11 distinct points, all within or on boundary
-- No collinear triplets
-- If your improvement violates any constraint, it counts as zero improvement
+- Enclosing triangle: equilateral, area = 1.0, flat-bottomed.
+  Vertices: A = (0, 0), B = (1.5197, 0), C = (0.7598, 1.3161).
+- Exactly 11 distinct points, all within or on the boundary.
+- No collinear triplets.
 
-HELPER FUNCTIONS (must be imported from helper.py — not available globally):
+HELPER FUNCTIONS (import from helper.py -- not global):
   from helper import get_unit_triangle, get_smallest_triangle_area, is_inside_triangle
 
-- `get_unit_triangle() -> (A, B, C)`
-    Returns 3 arrays each shape (2,) — vertices of the unit-area equilateral triangle.
-
-- `get_smallest_triangle_area(coordinates: np.ndarray) -> float`
-    Input:  (n, 2) float array of n points
-    Output: minimum area among all C(n,3) triangles formed by the points
-
-- `is_inside_triangle(points, a, b, c) -> bool`
-    Input:  points — shape (n, 2) or (2,) for a single point; a, b, c — each shape (2,) vertices
-    Output: True if ALL given points lie inside or on the triangle boundary
+- get_unit_triangle() -> (A, B, C)
+    Each shape (2,) -- vertices of the enclosing triangle.
+- get_smallest_triangle_area(coordinates: np.ndarray) -> float
+    Input: (n, 2) array. Output: min area over all C(n, 3) triangles.
+- is_inside_triangle(points, a, b, c) -> bool
+    True iff all given points lie inside or on the triangle boundary.
 
 OUTPUT FORMAT
-Implement `def entrypoint():` that returns a callable:
-    `improve(points: np.ndarray) -> np.ndarray`
-where points is (11, 2) and the return is (11, 2).
-
-Use numpy, scipy, sklearn, or standard library as needed.
-Fix random seeds if using randomness.
+Implement `def entrypoint()` returning a callable:
+    improve(points: np.ndarray) -> np.ndarray
+where `points` is (11, 2) and the return is (11, 2).
+Use numpy, scipy, sklearn, or the standard library. Fix random seeds if
+using randomness.

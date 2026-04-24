@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: "Adversarial fitness: 0.5*quality + 0.5*resistance (drives MAP-Elites selection)"
+    description: "MAP-Elites selection signal: 0.5 * quality + 0.5 * resistance."
     decimals: 5
     is_primary: true
     higher_is_better: true
@@ -10,7 +10,7 @@ specs:
     significant_change: 0.01
     sentinel_value: -1.0
   is_valid:
-    description: "Whether the constructor output is valid (1 valid, 0 invalid)"
+    description: "1 if the configuration satisfies all constraints, 0 otherwise."
     decimals: 0
     is_primary: false
     higher_is_better: true
@@ -20,7 +20,7 @@ specs:
     significant_change: 1.0
     sentinel_value: 0
   actual_fitness:
-    description: "Raw min_area of the constructor output (true Heilbron objective, for paper reporting)"
+    description: "Raw min_area of the configuration (the Heilbronn objective, reported unnormalized)."
     decimals: 5
     is_primary: false
     higher_is_better: true
@@ -30,7 +30,7 @@ specs:
     significant_change: 0.001
     sentinel_value: -1.0
   quality:
-    description: "Normalized quality = min(min_area / 0.0365, 1.0)"
+    description: "min_area normalized to [0, 1] by dividing by the target 0.0365 and clamping."
     decimals: 5
     is_primary: false
     higher_is_better: true
@@ -40,7 +40,7 @@ specs:
     significant_change: 0.01
     sentinel_value: -1.0
   resistance:
-    description: "Fraction of opponents that failed to improve the config (binary: 1 if delta==0, 0 otherwise)"
+    description: "Mean over opponents of 1 - min(improvement / 0.0365, 1). 1.0 = no opponent improved the configuration; 0.0 = opponents improved it by the full target on average."
     decimals: 5
     is_primary: false
     higher_is_better: true
@@ -50,7 +50,7 @@ specs:
     significant_change: 0.01
     sentinel_value: -1.0
   mean_improvement:
-    description: "Mean raw improvement (delta in min_area units) achieved by opponents"
+    description: "Mean improvement in raw min_area units produced by opponents (lower = more resistant)."
     decimals: 6
     is_primary: false
     higher_is_better: false
@@ -60,7 +60,7 @@ specs:
     significant_change: 0.001
     sentinel_value: -1.0
   best_post_improvement:
-    description: "Best min_area achieved by any opponent improver on this config"
+    description: "Highest min_area any opponent reached after improving this configuration."
     decimals: 5
     is_primary: false
     higher_is_better: true
@@ -70,7 +70,7 @@ specs:
     significant_change: 0.001
     sentinel_value: -1.0
   n_opponents:
-    description: "Number of opponent improvers evaluated against"
+    description: "Number of opponents this configuration was evaluated against."
     decimals: 0
     is_primary: false
     higher_is_better: true
