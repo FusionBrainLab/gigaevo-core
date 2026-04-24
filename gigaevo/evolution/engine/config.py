@@ -97,12 +97,14 @@ class SteadyStateEngineConfig(EngineConfig):
             "against the true current shared-benchmark set rather than a "
             "single-direction snapshot.\n"
             "\n"
-            "Cache invalidation between passes is provided by "
-            "SharedBenchmarkFilteredLineageStage's class-level "
-            "``_refresh_pass_token``, which the engine bumps before each "
-            "pass.  Within a pass, normal input-hash caching still applies "
-            "— programs whose inputs haven't changed don't redundantly re-"
-            "run LLM calls inside one pass."
+            "Cache invalidation between passes is provided by the engine "
+            "snapshot's ``refresh_pass`` counter, which the engine advances "
+            "via ``_write_snapshot`` before each pass; stages such as "
+            "SharedBenchmarkFilteredLineageStage fold the counter into "
+            "their cache key via ``get_current_snapshot()``.  Within a "
+            "pass, normal input-hash caching still applies — programs "
+            "whose inputs haven't changed don't redundantly re-run LLM "
+            "calls inside one pass."
         ),
     )
 

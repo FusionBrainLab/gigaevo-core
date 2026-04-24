@@ -93,14 +93,15 @@ async def tracker():
 
 @pytest.fixture(autouse=True)
 def _reset_token():
-    """Token is class-level state; snapshot/restore so tests are order-safe."""
-    from gigaevo.adversarial.shared_benchmark_lineage import (
-        SharedBenchmarkFilteredLineageStage,
+    """refresh_pass now lives on the engine snapshot mirror — reset it so tests
+    are order-safe."""
+    from gigaevo.evolution.engine.snapshot import (
+        _reset_current_snapshot_for_tests,
     )
 
-    saved = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+    _reset_current_snapshot_for_tests()
     yield
-    SharedBenchmarkFilteredLineageStage._refresh_pass_token = saved
+    _reset_current_snapshot_for_tests()
 
 
 def _mk_program(pid: str, parent_ids: list[str] | None = None) -> Program:
@@ -231,10 +232,6 @@ async def test_cache_hit_without_bump_returns_stale_mutation_context(
     with is actually a cache — if this test fails, the miss-after-bump
     test below is meaningless.
     """
-    from gigaevo.adversarial.shared_benchmark_lineage import (
-        SharedBenchmarkFilteredLineageStage,
-    )
-
     child_id, parent_id = str(uuid.uuid4()), str(uuid.uuid4())
     await tracker.record_metrics(child_id, "g1", {"fitness": 0.3, VALIDITY_KEY: 1.0})
     await tracker.record_metrics(parent_id, "g1", {"fitness": 0.1, VALIDITY_KEY: 1.0})
@@ -251,7 +248,9 @@ async def test_cache_hit_without_bump_returns_stale_mutation_context(
     params = CacheOnlyInput(cache_on="k")
     cache: dict[str, str] = {}
 
-    token_snapshot = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+    from gigaevo.evolution.engine.snapshot import get_current_snapshot
+
+    token_snapshot = get_current_snapshot().refresh_pass
 
     # Run 1 — cold cache, tracker at T1 (child fitness=0.3)
     m1 = await _run_pipeline(filter_stage, mctx_stage, child_prog, params, cache)
@@ -261,7 +260,7 @@ async def test_cache_hit_without_bump_returns_stale_mutation_context(
 
     # Mutate tracker to T2 (child fitness=0.5), but do NOT bump token
     await tracker.record_metrics(child_id, "g1", {"fitness": 0.5, VALIDITY_KEY: 1.0})
-    assert SharedBenchmarkFilteredLineageStage._refresh_pass_token == token_snapshot
+    assert get_current_snapshot().refresh_pass == token_snapshot
 
     # Run 2 — same params, same token → cache HIT → stale output
     m2 = await _run_pipeline(filter_stage, mctx_stage, child_prog, params, cache)
@@ -286,8 +285,10 @@ async def test_bump_invalidates_cache_and_mutation_context_reflects_new_tracker(
     wrote.  Without the bump the cache hides the update (test above);
     with the bump it's forced to re-run against fresh tracker.
     """
-    from gigaevo.adversarial.shared_benchmark_lineage import (
-        SharedBenchmarkFilteredLineageStage,
+    from gigaevo.evolution.engine.snapshot import (
+        EngineSnapshot,
+        get_current_snapshot,
+        set_current_snapshot,
     )
 
     child_id, parent_id = str(uuid.uuid4()), str(uuid.uuid4())
@@ -311,7 +312,9 @@ async def test_bump_invalidates_cache_and_mutation_context_reflects_new_tracker(
 
     # Between passes: DGTrackerStage writes new metrics (T2), engine bumps.
     await tracker.record_metrics(child_id, "g1", {"fitness": 0.5, VALIDITY_KEY: 1.0})
-    SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+    set_current_snapshot(
+        EngineSnapshot(refresh_pass=get_current_snapshot().refresh_pass + 1)
+    )
 
     # Pass 2 — bumped token → cache miss → re-runs against T2 tracker
     m_pass2 = await _run_pipeline(filter_stage, mctx_stage, child_prog, params, cache)
@@ -356,8 +359,10 @@ async def test_mutation_context_text_changes_specifically_for_fitness_field(
     proving the pass-2 output reflects the specific tracker field that
     changed between passes.
     """
-    from gigaevo.adversarial.shared_benchmark_lineage import (
-        SharedBenchmarkFilteredLineageStage,
+    from gigaevo.evolution.engine.snapshot import (
+        EngineSnapshot,
+        get_current_snapshot,
+        set_current_snapshot,
     )
 
     child_id, parent_id = str(uuid.uuid4()), str(uuid.uuid4())
@@ -381,7 +386,9 @@ async def test_mutation_context_text_changes_specifically_for_fitness_field(
 
     # Between passes: tracker update + token bump
     await tracker.record_metrics(child_id, "g1", {"fitness": 0.5, VALIDITY_KEY: 1.0})
-    SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+    set_current_snapshot(
+        EngineSnapshot(refresh_pass=get_current_snapshot().refresh_pass + 1)
+    )
 
     # Pass 2
     m2 = await _run_pipeline(filter_stage, mctx_stage, child_prog, params, cache)
@@ -408,8 +415,10 @@ async def test_cache_key_suffix_is_observable_per_pass(tracker, metrics_ctx):
     `:rp1` / `:rp2` keys per program to confirm pass identity.  This
     test pins the format so the diagnostic stays stable.
     """
-    from gigaevo.adversarial.shared_benchmark_lineage import (
-        SharedBenchmarkFilteredLineageStage,
+    from gigaevo.evolution.engine.snapshot import (
+        EngineSnapshot,
+        get_current_snapshot,
+        set_current_snapshot,
     )
 
     child_id, parent_id = str(uuid.uuid4()), str(uuid.uuid4())
@@ -425,12 +434,12 @@ async def test_cache_key_suffix_is_observable_per_pass(tracker, metrics_ctx):
     params = CacheOnlyInput(cache_on="k")
     cache: dict[str, str] = {}
 
-    t0 = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+    t0 = get_current_snapshot().refresh_pass
     await _run_pipeline(
         filter_stage, mctx_stage, _mk_program(child_id, [parent_id]), params, cache
     )
 
-    SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+    set_current_snapshot(EngineSnapshot(refresh_pass=t0 + 1))
     await _run_pipeline(
         filter_stage, mctx_stage, _mk_program(child_id, [parent_id]), params, cache
     )
