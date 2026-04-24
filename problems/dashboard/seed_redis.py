@@ -18,6 +18,7 @@ import uuid
 
 import redis as redis_lib
 
+from gigaevo.evolution.engine.snapshot import ENGINE_SNAPSHOT_KEY, EngineSnapshot
 from gigaevo.programs.program import Lineage, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.json import dumps as gjson_dumps
@@ -270,10 +271,11 @@ def seed_run(r: redis_lib.Redis, spec: dict, rng: random.Random) -> tuple[int, i
         r.hset(f"{prefix}:archive", mapping=archive_mapping)
 
     # ---- run_state ----
+    snap = EngineSnapshot(total_generations=n_gens)
     r.hset(
         f"{prefix}:run_state",
         mapping={
-            "engine:total_generations": str(n_gens),
+            ENGINE_SNAPSHOT_KEY: snap.model_dump_json(),
             "engine:total_gens_planned": str(total_gens),
         },
     )
