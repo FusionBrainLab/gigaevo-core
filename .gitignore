@@ -1,30 +1,18 @@
 # GigaEvo .gitignore
-# Comprehensive ignore patterns for evolutionary computation project
+# Grouped by concern. If you add a rule, put it in the matching section.
+# Re-includes (!pattern) override broader rules above them.
 
-# Git worktrees (used by Claude Code for isolated feature work)
-.claude/worktrees/
-
-# Claude Code auto-generated / ephemeral files
-.claude/scheduled_tasks.lock
-docs/superpowers/
-graphify-out/
-
-# MkDocs build output
-site/
-
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Python
-# =============================================================================
-
-# Byte-compiled / optimized / DLL files
+# ---------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
-# *.so
-
-# Distribution / packaging
+*.egg
+*.egg-info/
+*.manifest
+*.spec
+.installed.cfg
 .Python
 build/
 develop-eggs/
@@ -36,583 +24,163 @@ lib/
 lib64/
 parts/
 sdist/
+share/python-wheels/
 var/
 wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 MANIFEST
-*top_programs
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-*results*
-!experiments/**/05_results.md
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/#use-with-ide
-.pdm.toml
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
+# Environments / dep managers
 .env
+.env.*
+!.env.example
 .venv
-env/
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
+__pypackages__/
+.pdm.toml
 
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
+# Test / coverage / type-check caches
+.cache
+.coverage
+.coverage.*
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
+.hypothesis/
+.mypy_cache/
+.nox/
 .pyre/
-
-# pytype static type analyzer
+.pytest_cache/
 .pytype/
+.ruff_cache/
+.tox/
+cover/
+coverage.xml
+htmlcov/
+nosetests.xml
+*.cover
+*.py,cover
 
-# Cython debug symbols
-cython_debug/
+# Profiling
+*.prof
+*.profile
 
-# =============================================================================
-# Node.js / JavaScript / Frontend
-# =============================================================================
+# Jupyter / IPython
+.ipynb_checkpoints/
+*.ipynb
+!tools/**/*.ipynb
+ipython_config.py
+profile_default/
 
-# Dependencies
+# ---------------------------------------------------------------------------
+# Node / frontend (for tools/dag_builder)
+# ---------------------------------------------------------------------------
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory used by tools like istanbul
-coverage/
-*.lcov
-
-# nyc test coverage
-.nyc_output
-
-# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
-.grunt
-
-# Bower dependency directory (https://bower.io/)
-bower_components
-
-# node-waf configuration
-.lock-wscript
-
-# Compiled binary addons (https://nodejs.org/api/addons.html)
-build/Release
-
-# Dependency directories
-jspm_packages/
-
-# TypeScript cache
 *.tsbuildinfo
-
-# Optional npm cache directory
 .npm
-
-# Optional eslint cache
 .eslintcache
-
-# Optional stylelint cache
 .stylelintcache
-
-# Microbundle cache
-.rpt2_cache/
-.rts2_cache_cjs/
-.rts2_cache_es/
-.rts2_cache_umd/
-
-# Optional REPL history
-.node_repl_history
-
-# Output of 'npm pack'
+.parcel-cache
+.next/
+.nuxt/
+storybook-static/
 *.tgz
 
-# Yarn Integrity file
-.yarn-integrity
-
-# dotenv environment variable files
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
-
-# parcel-bundler cache (https://parceljs.org/)
-.cache
-.parcel-cache
-
-# Next.js build output
-.next
-out
-
-# Nuxt.js build / generate output
-.nuxt
-dist
-
-# Gatsby files
-.cache/
-public
-
-# Vuepress build output
-.vuepress/dist
-
-# Serverless directories
-.serverless/
-
-# FuseBox cache
-.fusebox/
-
-# DynamoDB Local files
-.dynamodb/
-
-# TernJS port file
-.tern-port
-
-# Stores VSCode versions used for testing VSCode extensions
-.vscode-test
-
-# yarn v2
-.yarn/cache
-.yarn/unplugged
-.yarn/build-state.yml
-.yarn/install-state.gz
-.pnp.*
-
-# React build outputs
-build/
-dist/
-
-# Storybook build outputs
-storybook-static/
-
-# =============================================================================
-# GigaEvo Specific
-# =============================================================================
-
-# Log files
-logs/
-*.log
-evolution_*.log
-mutation_*.log
-
-# LLM mutation logs
-llm_mutation_logs/
-mutation_llm_*.txt
-mutation_llm_*.json
-mutation_summary.log
-
-# Redis database dumps
-*.rdb
-dump.rdb
-
-# Results and analysis outputs
-results_*/
-evolution_data*.csv
-evolution_data*.txt
-island_statistics*.txt
-top_programs_analysis*.txt
-stage_results_statistics*.txt
-time_since_update_statistics*.txt
-outputs
-
-# Generated plots and visualizations
-*.png
-*.pdf
-*.jpg
-*.jpeg
-*.svg
-
-# Temporary files
-*.tmp
-*.temp
+# ---------------------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
 *.swp
 *.swo
 *~
-
-# IDE and editor files
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-
-# OS generated files
 .DS_Store
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
-ehthumbs.db
 Thumbs.db
+ehthumbs.db
+desktop.ini
 
-# =============================================================================
-# Memory
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Logs, pids, backups, temp
+# ---------------------------------------------------------------------------
+*.log
+logs/
+*.pid
+*.pid.lock
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+*.dump
+*.hprof
+*.zip
+*.tar.gz
+*.tar.bz2
+*.rar
+scratch/
+temp/
+tmp/
 
-evo_memory_agent/evo_test/
-evo_memory_agent/memory_usage_store/
-insights_appearence/
-selected_ideas/
-redis_commands.txt
-
-# =============================================================================
-# Development and Testing
-# =============================================================================
-
-# Test outputs
-test_results/
-test_outputs/
-.pytest_cache/
-
-# Coverage reports
-htmlcov/
-.coverage
-coverage.xml
-
-# Profiling data
-*.prof
-*.profile
-
-# =============================================================================
-# Data and Models
-# =============================================================================
-
-# Large data files
+# ---------------------------------------------------------------------------
+# Data & model binaries
+# ---------------------------------------------------------------------------
 *.csv
 *.json
-!pyrightconfig.json
 *.jsonl
 *.pickle
 *.pkl
 *.h5
 *.hdf5
 *.parquet
-.nltk_data/
-
-# Model files
+*.npz
+*.rdb
 *.model
 *.pth
 *.pt
 *.ckpt
 *.weights
-
-# =============================================================================
-# Security and Configuration
-# =============================================================================
-
-# API keys and secrets
-.env
-.env.local
-.env.production
-.env.staging
-secrets.json
-config.json
-
-# SSH keys
-id_rsa
-id_rsa.pub
-*.pem
-
-# =============================================================================
-# Documentation Build
-# =============================================================================
-
-# Sphinx build
-docs/_build/
-docs/build/
-
-# =============================================================================
-# Jupyter Notebooks (if any)
-# =============================================================================
-
-.ipynb_checkpoints/
-*.ipynb
-
-# =============================================================================
-# CI/CD
-# =============================================================================
-
-.gitlab-ci.yml
-.travis.yml
-.circleci/
-azure-pipelines.yml
-
-# =============================================================================
-# Backup and Archive Files
-# =============================================================================
-
-*.bak
-*.backup
-*.old
-*.orig
-*.save
-*.archive
-*.zip
-*.tar.gz
-*.tar.bz2
-*.rar
-
-# =============================================================================
-# Performance and Monitoring
-# =============================================================================
-
-# Performance monitoring data
-performance_*.log
-monitoring_*.log
-metrics_*.log
-
-# Memory dumps
-*.dump
-*.hprof
-
-# =============================================================================
-# Evolution-specific patterns
-# =============================================================================
-
-# Evolution experiment outputs
-evolution_experiment_*/
-experiment_*/
-run_*/
-benchmark
-
-# Program archives
-program_archive/
-archive_*/
-archives/
-
-# Fitness data
-fitness_*.csv
-fitness_*.json
-fitness_*.txt
-
-# Behavior space data
-behavior_*.csv
-behavior_*.json
-
-# Island migration data
-migration_*.csv
-migration_*.json
-
-# =============================================================================
-# LLM and AI-specific
-# =============================================================================
-
-# LLM cache
-.llm_cache/
-llm_cache/
-
-# Model downloads
-models/
 *.bin
 *.safetensors
-
-# Token usage logs
-token_usage_*.log
-api_calls_*.log
-
-# =============================================================================
-# Temporary and Scratch Files
-# =============================================================================
-
-# Scratch files
-scratch/
-temp/
-tmp/
-*.scratch
-*.temp
-
-# Debug files
-debug_*.log
-debug_*.txt
-
-# =============================================================================
-# Version Control
-# =============================================================================
-
-# Git
-.git/
-.gitignore~
-
-# Mercurial
-.hg/
-.hgignore
-
-# SVN
-.svn/
-
-# =============================================================================
-# Network and Database
-# =============================================================================
-
-# Database files
 *.db
 *.sqlite
 *.sqlite3
 
-# Network logs
-network_*.log
-connection_*.log
+# Keep these config JSON files in-repo
+!pyrightconfig.json
 
-# =============================================================================
-# System-specific
-# =============================================================================
+# Keep benchmark history (small, append-only) — rebuild with scripts if lost
+!tools/benchmark_history.jsonl
 
-# Windows
-*.lnk
-desktop.ini
+# ---------------------------------------------------------------------------
+# Generated visual artifacts
+# ---------------------------------------------------------------------------
+*.png
+*.pdf
+*.jpg
+*.jpeg
+*.svg
 
-# macOS
-.AppleDouble
-.LSOverride
-Icon?
-
-# Linux
-*~
-
-# =============================================================================
-# Project-specific overrides
-# =============================================================================
-
-# Keep important configuration files
-!pyproject.toml
-!README.md
-
-# Keep example problems (but ignore their outputs)
-!problems/*/
-problems/*/results/
-problems/*/logs/
-problems/*/*.log
-problems/*/*.png
-problems/*/*.pdf
-problems/*/*.csv
-problems/*/*.json
-
-# Keep source code
-!gigaevo/**/*.py
-!gigaevo/**/*.md
-!gigaevo/**/*.txt
-
-# Keep documentation
-!docs/**/*.md
-!docs/**/*.rst
-!docs/**/*.txt
-!tools/**/*.ipynb
+# Keep UI/demo SVGs checked in
 !demos/**/*.svg
 
-# Runtime data directories (binary artifacts, not for VCS)
-data/
-outcmaes/
-
-# Numpy compressed arrays
-*.npz
-
-# Experiment runtime artifacts (plots, test evals, archives, pids, cfg dumps)
+# ---------------------------------------------------------------------------
+# GigaEvo experiment runtime artifacts
+# ---------------------------------------------------------------------------
 experiments/**/plots/
 experiments/**/test_evals/
 experiments/**/archives/
@@ -620,52 +188,105 @@ experiments/**/*.yaml.tmp
 experiments/**/*.yaml.lock
 experiments/**/pids.txt
 experiments/**/cfg_run_*.txt
+experiments/*/paper_draft.md
+experiments/*/paper_review.md
+experiments/*/paper_data.json
 
-# Dataset indexes (large binary files — rebuild locally with build_*_index.py)
+# Evolution outputs scattered at root / top-level
+*results*
+*top_programs
+
+# Keep 05_results.md despite the broad *results* rule above
+!experiments/**/05_results.md
+results_*/
+outputs/
+run_*/
+experiment_*/
+evolution_experiment_*/
+program_archive/
+archive_*/
+archives/
+evolution_data*
+fitness_*.csv
+fitness_*.json
+fitness_*.txt
+behavior_*.csv
+behavior_*.json
+migration_*.csv
+migration_*.json
+
+# Data roots (binary artifacts)
+data/
+outcmaes/
+plots/
+snapshots/
+benchmark
+
+# ---------------------------------------------------------------------------
+# LLM / memory stores (local caches, not for VCS)
+# ---------------------------------------------------------------------------
+.llm_cache/
+llm_cache/
+models/
+evo_memory_agent/
+gigaevo.memory/
+gigaevo/memory/memory_usage_store/
+insights_appearence/
+selected_ideas/
+redis_commands.txt
+mut_dmp/
+token_usage_*.log
+api_calls_*.log
+
+# Dataset indexes (rebuild locally)
+bm25s_index/
+task_bm25s_index
 problems/chains/hotpotqa/dataset/bm25s_index/
 problems/chains/hotpotqa/dataset/colbert_index/
+problems/chains/hover/dataset/bm25s_index/
+problems/chains/hover/dataset/*.gz
+problems/chains/hover/dataset/*.pkl
+problems/chains/hover/dataset/*.tar.bz2
+problems/chains/hover/dataset/*.jsonl
+wiki17_abstracts.jsonl.gz
 
-# LiteLLM proxy (generated config, DB, logs, pidfile)
+# ---------------------------------------------------------------------------
+# Tooling: litellm proxy (generated config/DB/logs/pidfile)
+# ---------------------------------------------------------------------------
 tools/.litellm_config.yaml
 tools/.litellm.db
 tools/.litellm.log
 tools/.litellm.pid
 
-# Claude Code (machine-specific memory and indexes — not for sharing)
+# ---------------------------------------------------------------------------
+# Claude Code & agent tooling (machine-specific)
+# ---------------------------------------------------------------------------
 .claude/projects/
 .claude/agent-memory/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
 .claude/perf-sprint-*.md
 .claude/hookify.*.local.md
 AGENTS.md
-snapshots/
-
-# Skill-generated paper draft artifacts (generated by /experiment-paper-draft)
-experiments/*/paper_draft.md
-experiments/*/paper_review.md
-experiments/*/paper_data.json
-
-# Large dataset files (downloaded by dataset scripts)
-problems/chains/hover/dataset/*.gz
-problems/chains/hover/dataset/*.pkl
-problems/chains/hover/dataset/*.tar.bz2
-problems/chains/hover/dataset/bm25s_index/
-problems/chains/hover/dataset/*.jsonl
-gigaevo/llm/ideas_tracker/utils/it_logger_description.md
-
-gigaevo.memory/
-mut_dmp/
 .codex
-evo_memory_agent/
-insights_appearence/
-selected_ideas/
-redis_commands.txt
-gigaevo/memory/memory_usage_store/
-bm25s_index/
-wiki17_abstracts.jsonl.gz
-task_bm25s_index
+.worktrees/
+.gitnexus/
+docs/superpowers/
+graphify-out/
+site/
+
+# ---------------------------------------------------------------------------
+# Repo-local scratch files
+# ---------------------------------------------------------------------------
 check_openrouter_key.py
 experiments.txt
 AlgoTune-main/
-.env
-.gitnexus
-.worktrees
+gigaevo/llm/ideas_tracker/utils/it_logger_description.md
+
+# ---------------------------------------------------------------------------
+# Secrets / keys (belt and suspenders; .env is already ignored above)
+# ---------------------------------------------------------------------------
+secrets.json
+id_rsa
+id_rsa.pub
+*.pem
