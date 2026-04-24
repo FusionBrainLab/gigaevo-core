@@ -8,6 +8,7 @@ import fakeredis
 
 from gigaevo.monitoring.experiment_monitor import ExperimentMonitor, RunConfig
 from gigaevo.monitoring.run_spec import RunSpec
+from tests.conftest import write_engine_snapshot_sync
 
 
 def _metric_entry(step: int, value: float, ts: int = 123) -> str:
@@ -25,7 +26,7 @@ def _populate_run(
 ) -> None:
     """Populate a fakeredis DB with standard run data."""
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    r.hset(f"{prefix}:run_state", "engine:total_generations", str(generation))
+    write_engine_snapshot_sync(r, prefix, total_generations=generation)
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
         _metric_entry(generation, fitness),
@@ -93,14 +94,14 @@ def test_collect_multiple_runs() -> None:
 def test_collect_with_different_metric_names() -> None:
     server = fakeredis.FakeServer()
     r4 = fakeredis.FakeRedis(server=server, db=4, decode_responses=True)
-    r4.hset("prefix_a:run_state", "engine:total_generations", "10")
+    write_engine_snapshot_sync(r4, "prefix_a", total_generations=10)
     r4.rpush(
         "prefix_a:metrics:history:program_metrics:valid_frontier_fitness",
         _metric_entry(10, 0.76),
     )
 
     r5 = fakeredis.FakeRedis(server=server, db=5, decode_responses=True)
-    r5.hset("prefix_b:run_state", "engine:total_generations", "20")
+    write_engine_snapshot_sync(r5, "prefix_b", total_generations=20)
     r5.rpush(
         "prefix_b:metrics:history:program_metrics:valid_frontier_fitness",
         _metric_entry(20, 0.82),

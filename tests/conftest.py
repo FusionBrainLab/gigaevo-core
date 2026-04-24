@@ -298,6 +298,19 @@ async def write_engine_snapshot(storage, **overrides) -> EngineSnapshot:
     return snap
 
 
+def write_engine_snapshot_sync(r, prefix: str, **overrides) -> EngineSnapshot:
+    """Sync test helper: write an EngineSnapshot via a sync redis client.
+
+    Mirrors :func:`write_engine_snapshot` for monitoring tests that use
+    sync ``fakeredis.FakeRedis``. Writes the JSON blob into the
+    ``{prefix}:run_state`` hash at field ``engine:snapshot`` — the same
+    location the live engine uses through ``storage.save_run_state``.
+    """
+    snap = EngineSnapshot(**overrides)
+    r.hset(f"{prefix}:run_state", ENGINE_SNAPSHOT_KEY, snap.model_dump_json())
+    return snap
+
+
 @pytest.fixture(autouse=True)
 def _reset_engine_snapshot_mirror():
     """Reset the process-wide snapshot mirror before and after every test.

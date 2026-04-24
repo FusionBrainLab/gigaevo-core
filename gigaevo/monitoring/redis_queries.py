@@ -10,10 +10,33 @@ from loguru import logger
 if TYPE_CHECKING:
     import redis as redis_lib
 
+from gigaevo.evolution.engine.snapshot import ENGINE_SNAPSHOT_KEY, EngineSnapshot
 from gigaevo.monitoring.run_spec import RunSpec
 from gigaevo.monitoring.snapshot import RunSnapshot
 
 _log = logger.bind(component="redis_queries")
+
+
+def _read_engine_snapshot(r: redis_lib.Redis, prefix: str) -> EngineSnapshot | None:
+    """Read and parse the ``engine:snapshot`` JSON blob from ``{prefix}:run_state``.
+
+    Returns ``None`` when the snapshot is absent or the JSON is corrupt; a
+    warning is logged on corruption with enough context to identify the run.
+    Sync counterpart of :func:`gigaevo.evolution.engine.snapshot.load_engine_snapshot`,
+    used here because this module speaks sync ``redis.Redis`` for watchdog /
+    monitor reads.
+    """
+    raw = r.hget(f"{prefix}:run_state", ENGINE_SNAPSHOT_KEY)
+    if raw is None:
+        return None
+    try:
+        return EngineSnapshot.model_validate_json(raw)
+    except Exception as exc:
+        _log.warning(
+            f"engine:snapshot JSON corrupt for prefix={prefix!r} ({exc}); "
+            "treating as missing"
+        )
+        return None
 
 
 def _coerce_count(raw: Any) -> int:
@@ -93,18 +116,17 @@ def collect_event_window_counts(
 
 
 def get_generation(r: redis_lib.Redis, prefix: str) -> int | None:
-    """Get the current generation count from run_state hash.
+    """Get the current generation count from the engine snapshot.
 
     This is the CANONICAL source of generation count.
-    Never use log grep or metric step values.
+    Never use log grep or metric step values. Returns ``None`` when the
+    snapshot is absent or its JSON is corrupt — callers downstream
+    distinguish "no data yet" from "zero generations".
     """
-    raw = r.hget(f"{prefix}:run_state", "engine:total_generations")
-    if raw is None:
+    snap = _read_engine_snapshot(r, prefix)
+    if snap is None:
         return None
-    try:
-        return int(raw)
-    except (ValueError, TypeError):
-        return None
+    return snap.total_generations
 
 
 def get_frontier_metrics(
@@ -229,15 +251,17 @@ def collect_snapshot(
         metric_names = ["fitness"]
 
     try:
-        gen = get_generation(r, run_spec.prefix)
+        # Single read of the engine snapshot covers both generation and
+        # completion_reason — fewer round-trips than two separate hget calls,
+        # and keeps the two fields consistent (they share one JSON blob).
+        snap = _read_engine_snapshot(r, run_spec.prefix)
+        gen = snap.total_generations if snap is not None else None
+        completion_reason = snap.completion_reason if snap is not None else None
         metrics = get_frontier_metrics(r, run_spec.prefix, metric_names)
         total, valid = get_program_counts(r, run_spec.prefix)
         val_mean, val_max = get_validator_duration(r, run_spec.prefix)
         status_counts = get_status_counts(r, run_spec.prefix)
         total_keys = r.dbsize()
-        completion_reason = r.hget(
-            f"{run_spec.prefix}:run_state", "engine:completion_reason"
-        )
 
         # Track B4: single MGET across all registered canonical events.
         # ``None`` when disabled (window=0) or when the registry is empty,

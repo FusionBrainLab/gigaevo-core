@@ -16,6 +16,7 @@ from gigaevo.monitoring.redis_queries import (
     get_validator_duration,
 )
 from gigaevo.monitoring.run_spec import RunSpec
+from tests.conftest import write_engine_snapshot_sync
 
 PREFIX = "chains/hotpotqa/static"
 
@@ -39,7 +40,7 @@ def _metric_entry(step: int, value: float, ts: int = 123) -> str:
 
 def test_get_generation_normal() -> None:
     r = _make_redis()
-    r.hset(f"{PREFIX}:run_state", "engine:total_generations", "42")
+    write_engine_snapshot_sync(r, PREFIX, total_generations=42)
     assert get_generation(r, PREFIX) == 42
 
 
@@ -48,9 +49,10 @@ def test_get_generation_missing_key() -> None:
     assert get_generation(r, PREFIX) is None
 
 
-def test_get_generation_non_numeric() -> None:
+def test_get_generation_corrupt_snapshot() -> None:
     r = _make_redis()
-    r.hset(f"{PREFIX}:run_state", "engine:total_generations", "not_a_number")
+    r.hset(f"{PREFIX}:run_state", "engine:snapshot", "not_a_json")
+    # Corrupt JSON is treated the same as a missing snapshot.
     assert get_generation(r, PREFIX) is None
 
 
@@ -197,7 +199,7 @@ def test_collect_snapshot_complete() -> None:
     spec = _make_spec()
 
     # Populate generation
-    r.hset(f"{PREFIX}:run_state", "engine:total_generations", "5")
+    write_engine_snapshot_sync(r, PREFIX, total_generations=5)
 
     # Populate frontier fitness
     r.rpush(
