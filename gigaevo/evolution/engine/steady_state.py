@@ -116,6 +116,10 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         await self.storage.save_run_state(
             _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
         )
+        await self._write_snapshot(
+            total_generations=self.metrics.total_generations,
+            programs_processed=self.metrics.programs_processed,
+        )
 
         try:
             # Phase 0: drain initial population (seed programs already queued)
@@ -127,6 +131,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # sync hooks can see our progress before the first hook call.
             await self.storage.save_run_state(
                 _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+            )
+            await self._write_snapshot(
+                programs_processed=self.metrics.programs_processed
             )
 
             # Call pre_step_hook once at startup (mirrors parent's per-step call)
@@ -564,6 +571,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             await self.storage.save_run_state(
                 _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
             )
+            await self._write_snapshot(
+                programs_processed=self.metrics.programs_processed
+            )
 
             # 4. Pre-step hook (called once per epoch, mirrors parent's per-step call)
             if self._pre_step_hook:
@@ -610,6 +620,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             await self.storage.save_run_state(
                 _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
             )
+            await self._write_snapshot(total_generations=self.metrics.total_generations)
             # programs_processed already saved at step 3a before sync hook
 
             # 10. Log epoch summary

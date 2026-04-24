@@ -14,6 +14,12 @@ from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.hooks import NullPostRunHook, PostRunHook
 from gigaevo.evolution.engine.metrics import EngineMetrics
 from gigaevo.evolution.engine.mutation import generate_mutations
+from gigaevo.evolution.engine.snapshot import (
+    ENGINE_SNAPSHOT_KEY,
+    EngineSnapshot,
+    load_engine_snapshot,
+    set_current_snapshot,
+)
 from gigaevo.evolution.engine.stopper import (
     EvolutionStopper,
     StopContext,
@@ -92,6 +98,8 @@ class EvolutionEngine:
         self._pre_step_hook = pre_step_hook
         self._post_step_hook = post_step_hook
         self._post_run_hook = post_run_hook or NullPostRunHook()
+
+        self._snapshot: EngineSnapshot = EngineSnapshot()
 
         logger.info(
             "[EvolutionEngine] Init | strategy={}, acceptor={}, stopper={}",
@@ -190,6 +198,7 @@ class EvolutionEngine:
                     await self.storage.save_run_state(
                         _RUN_STATE_COMPLETION_REASON, stop_decision.reason
                     )
+                    await self._write_snapshot(completion_reason=stop_decision.reason)
                     break
 
                 try:
@@ -289,6 +298,10 @@ class EvolutionEngine:
         )
         await self.storage.save_run_state(
             _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+        )
+        await self._write_snapshot(
+            total_generations=self.metrics.total_generations,
+            programs_processed=self.metrics.programs_processed,
         )
 
         # Log generation summary for easy diagnosis
@@ -661,8 +674,33 @@ class EvolutionEngine:
                 exc,
             )
 
+    async def _write_snapshot(self, **updates: Any) -> None:
+        """Merge fields into the snapshot, bump version, persist to Redis,
+        and mirror into the process-wide sync cache.
+
+        Last-writer-wins — the engine is single-process async with a single
+        writer coroutine.
+
+        If ``save_run_state`` raises, the in-process mirror reflects the attempted
+        write; the caller is expected to retry or treat engine state as divergent.
+        """
+        # EngineSnapshot is frozen; rebuild via model_copy instead of in-place mutation.
+        self._snapshot = self._snapshot.model_copy(
+            update={**updates, "version": self._snapshot.version + 1}
+        )
+        set_current_snapshot(self._snapshot)
+        await self.storage.save_run_state(
+            ENGINE_SNAPSHOT_KEY, self._snapshot.model_dump_json()
+        )
+
+    async def _load_snapshot_on_resume(self) -> None:
+        """Hydrate ``self._snapshot`` from Redis during engine startup."""
+        self._snapshot = await load_engine_snapshot(self.storage)
+        set_current_snapshot(self._snapshot)
+
     async def restore_state(self) -> None:
         """Restore total_generations and programs_processed from storage after a resume."""
+        await self._load_snapshot_on_resume()
         gen = await self.storage.load_run_state(_RUN_STATE_TOTAL_GENERATIONS)
         if gen is not None:
             self.metrics.total_generations = gen
