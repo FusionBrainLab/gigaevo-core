@@ -6,10 +6,11 @@
 # SharedBenchmarkFilteredLineageStage to re-aggregate metrics over the
 # subset of opponents both parent and child programs faced.
 #
-# metrics_context is NOT specified here — AsymmetricPipelineBuilder passes
-# it as a kwarg at hydra.utils.instantiate time (it is the shared
-# MetricsContext singleton owned by ProblemContext).
+# metrics_context resolves to the top-level MetricsContext singleton
+# (built by config/algorithm/_base.yaml from ProblemContext); the ref
+# resolver memoizes, so every consumer sees the same object.
 _target_: gigaevo.programs.metrics.aggregators.ConfigurableAggregator
+metrics_context: ${ref:metrics_context}
 outputs:
   is_valid:
     _target_: gigaevo.programs.metrics.aggregators.ConstantSpec

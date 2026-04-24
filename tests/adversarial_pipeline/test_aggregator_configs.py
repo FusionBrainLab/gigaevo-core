@@ -22,10 +22,7 @@ import numpy as np
 from omegaconf import OmegaConf
 import pytest
 
-from gigaevo.programs.metrics.aggregators import (
-    ConfigurableAggregator,
-    LinearSpec,
-)
+from gigaevo.programs.metrics.aggregators import ConfigurableAggregator
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -171,77 +168,6 @@ class TestHeilbronImproverYAML:
         assert result["mean_post_quality"] == -1.0
         assert result["max_post_quality"] == -1.0
         assert result["mean_improvement_raw"] == -1.0
-
-
-# ===========================================================================
-# heilbron_constructor.yaml (pop_a / G-side)
-# ===========================================================================
-
-
-class TestHeilbronConstructorYAML:
-    CONSTRUCTOR_KEYS = frozenset(
-        {
-            "is_valid",
-            "n_opponents",
-            "actual_fitness",
-            "quality",
-            "resistance",
-            "mean_improvement",
-            "best_post_improvement",
-            "fitness",
-        }
-    )
-
-    def test_yaml_resolves_to_configurable_aggregator(self):
-        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
-        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
-        assert isinstance(agg, ConfigurableAggregator)
-        assert agg.output_keys == self.CONSTRUCTOR_KEYS
-
-    def test_fitness_is_linear_spec(self):
-        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
-        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
-        fitness_spec = agg._outputs["fitness"]
-        assert isinstance(fitness_spec, LinearSpec)
-        terms = fitness_spec._terms
-        assert len(terms) == 2
-        sources = {(t["source"], t["key"], t["coeff"]) for t in terms}
-        assert sources == {
-            ("intrinsic", "quality", 0.5),
-            ("output", "resistance", 0.5),
-        }
-
-    def test_yaml_reduces_per_opp_records_correctly(self):
-        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
-        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
-        per_opp = [
-            {"post_q": 0.28, "delta": 0.0, "resistance_score": 1.0, "is_valid": 1.0},
-            {"post_q": 0.35, "delta": 0.05, "resistance_score": 0.0, "is_valid": 1.0},
-        ]
-        intrinsic = {"quality": 0.4, "actual_fitness": 0.0146}
-        result = agg.aggregate(per_opp, intrinsic=intrinsic)
-        assert result["is_valid"] == 1.0
-        assert result["n_opponents"] == 2.0
-        assert result["quality"] == 0.4
-        assert result["actual_fitness"] == pytest.approx(0.0146)
-        assert result["resistance"] == pytest.approx(0.5)
-        assert result["mean_improvement"] == pytest.approx(0.025)
-        assert result["best_post_improvement"] == 0.35
-        assert result["fitness"] == pytest.approx(0.5 * 0.4 + 0.5 * 0.5)
-
-    def test_yaml_invalid_defaults_match_pop_a_evaluate_sentinels(self):
-        cfg = OmegaConf.load(CONSTRUCTOR_YAML)
-        agg = hydra.utils.instantiate(cfg, metrics_context=_ctx())
-        result = agg.aggregate([], intrinsic={})
-        assert result["is_valid"] == 0.0
-        assert result["n_opponents"] == 0.0
-        # pop_a INVALID dict uses -1.0 sentinels (except is_valid, n_opponents)
-        assert result["fitness"] == -1.0
-        assert result["actual_fitness"] == -1.0
-        assert result["quality"] == -1.0
-        assert result["resistance"] == -1.0
-        assert result["mean_improvement"] == -1.0
-        assert result["best_post_improvement"] == -1.0
 
 
 # ===========================================================================

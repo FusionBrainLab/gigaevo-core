@@ -13,10 +13,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import (
-    _RUN_STATE_PROGRAMS_PROCESSED,
-    _RUN_STATE_TOTAL_GENERATIONS,
-    EvolutionEngine,
+from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.snapshot import (
+    ENGINE_SNAPSHOT_KEY,
+    EngineSnapshot,
+    load_engine_snapshot,
 )
 from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
 from gigaevo.evolution.strategies.elite_selectors import RandomEliteSelector
@@ -146,7 +147,10 @@ class TestRecoverStrandedPrograms:
 class TestEvolutionEngineRestoreState:
     async def test_restores_total_generations(self, fakeredis_storage) -> None:
         """restore_state() loads total_generations from Redis."""
-        await fakeredis_storage.save_run_state(_RUN_STATE_TOTAL_GENERATIONS, 17)
+        snap = EngineSnapshot(total_generations=17)
+        await fakeredis_storage.save_run_state(
+            ENGINE_SNAPSHOT_KEY, snap.model_dump_json()
+        )
 
         engine = _make_engine(storage=fakeredis_storage)
         assert engine.metrics.total_generations == 0  # starts at 0
@@ -181,12 +185,15 @@ class TestEvolutionEngineRestoreState:
 
         await engine.step()
 
-        saved = await fakeredis_storage.load_run_state(_RUN_STATE_TOTAL_GENERATIONS)
-        assert saved == 1
+        saved = await load_engine_snapshot(fakeredis_storage)
+        assert saved.total_generations == 1
 
     async def test_generation_continues_after_restore(self, fakeredis_storage) -> None:
         """A resumed engine continues counting from the restored value."""
-        await fakeredis_storage.save_run_state(_RUN_STATE_TOTAL_GENERATIONS, 10)
+        snap = EngineSnapshot(total_generations=10)
+        await fakeredis_storage.save_run_state(
+            ENGINE_SNAPSHOT_KEY, snap.model_dump_json()
+        )
 
         engine = _make_engine(storage=fakeredis_storage)
         await engine.restore_state()
@@ -201,8 +208,8 @@ class TestEvolutionEngineRestoreState:
         await engine.step()
 
         assert engine.metrics.total_generations == 11
-        saved = await fakeredis_storage.load_run_state(_RUN_STATE_TOTAL_GENERATIONS)
-        assert saved == 11
+        saved = await load_engine_snapshot(fakeredis_storage)
+        assert saved.total_generations == 11
 
     async def test_max_generations_cap_respected_after_restore(
         self, fakeredis_storage
@@ -213,7 +220,10 @@ class TestEvolutionEngineRestoreState:
         the generation cap must count across stop/restart cycles.
         """
         cap = 10
-        await fakeredis_storage.save_run_state(_RUN_STATE_TOTAL_GENERATIONS, 7)
+        snap = EngineSnapshot(total_generations=7)
+        await fakeredis_storage.save_run_state(
+            ENGINE_SNAPSHOT_KEY, snap.model_dump_json()
+        )
 
         engine = _make_engine(storage=fakeredis_storage)
         engine.config = EngineConfig(stopper=MaxGenerationsStopper(cap))
@@ -242,7 +252,10 @@ class TestEvolutionEngineRestoreState:
 
     async def test_restores_programs_processed(self, fakeredis_storage) -> None:
         """restore_state() loads programs_processed from Redis."""
-        await fakeredis_storage.save_run_state(_RUN_STATE_PROGRAMS_PROCESSED, 42)
+        snap = EngineSnapshot(programs_processed=42)
+        await fakeredis_storage.save_run_state(
+            ENGINE_SNAPSHOT_KEY, snap.model_dump_json()
+        )
 
         engine = _make_engine(storage=fakeredis_storage)
         assert engine.metrics.programs_processed == 0
@@ -276,8 +289,8 @@ class TestEvolutionEngineRestoreState:
         engine.metrics.programs_processed = 15
         await engine.step()
 
-        saved = await fakeredis_storage.load_run_state(_RUN_STATE_PROGRAMS_PROCESSED)
-        assert saved == 15
+        saved = await load_engine_snapshot(fakeredis_storage)
+        assert saved.programs_processed == 15
 
 
 # ---------------------------------------------------------------------------

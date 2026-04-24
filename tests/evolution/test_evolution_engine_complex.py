@@ -174,20 +174,24 @@ class TestPreStepHook:
 
 
 class TestRestoreState:
-    """core.py L396-401: restore total_generations from storage."""
+    """restore_state reads total_generations from the engine snapshot."""
 
     async def test_restore_existing_generation_count(self):
         engine = _engine()
-        engine.storage.load_run_state.return_value = 17
+        from gigaevo.evolution.engine.snapshot import EngineSnapshot
+
+        engine.storage.load_run_state_str.return_value = EngineSnapshot(
+            total_generations=17
+        ).model_dump_json()
 
         await engine.restore_state()
 
         assert engine.metrics.total_generations == 17
 
     async def test_restore_no_saved_state(self):
-        """When no saved state, total_generations stays at 0."""
+        """When no saved snapshot, total_generations stays at 0."""
         engine = _engine()
-        engine.storage.load_run_state.return_value = None
+        engine.storage.load_run_state_str.return_value = None
 
         await engine.restore_state()
 
@@ -441,13 +445,13 @@ class TestStepGenerationPersistence:
         ):
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
-        gen_calls = [
+        snap_calls = [
             c
             for c in engine.storage.save_run_state.call_args_list
-            if c.args[0] == "engine:total_generations"
+            if c.args[0] == "engine:snapshot"
         ]
-        assert len(gen_calls) == 1
-        assert gen_calls[0].args == ("engine:total_generations", 1)
+        assert snap_calls, "step() must persist engine:snapshot"
+        assert '"total_generations":1' in snap_calls[-1].args[1]
 
     async def test_generation_counter_increments_each_step(self):
         engine = _engine()
@@ -466,13 +470,14 @@ class TestStepGenerationPersistence:
             await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
 
         assert engine.metrics.total_generations == 3
-        # Last generation save should be generation 3
-        gen_calls = [
+        # Last snapshot save should record total_generations=3
+        snap_calls = [
             c
             for c in engine.storage.save_run_state.call_args_list
-            if c.args[0] == "engine:total_generations"
+            if c.args[0] == "engine:snapshot"
         ]
-        assert gen_calls[-1].args == ("engine:total_generations", 3)
+        assert snap_calls, "step() must persist engine:snapshot"
+        assert '"total_generations":3' in snap_calls[-1].args[1]
 
 
 # ===================================================================

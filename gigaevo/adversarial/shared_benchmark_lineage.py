@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from gigaevo.evolution.engine.snapshot import get_current_snapshot
 from gigaevo.llm.agents.lineage import TransitionEvidence
 from gigaevo.programs.core_types import ProgramStageResult, StageIO
 from gigaevo.programs.metrics.aggregators import MetricsAggregator
@@ -68,42 +69,34 @@ class SharedBenchmarkFilteredLineageStage(LineageStage):
 
     Cache invariant
     ---------------
-    ``_refresh_pass_token`` is a class-level counter that the steady-state
-    engine bumps before each archive-refresh pass (see
-    ``SteadyStateEngineConfig.refresh_passes``). ``compute_hash`` folds the
-    token into the cache key so pass-2 re-evaluations cache-miss relative
-    to pass 1 — this is what closes the two-sided cross-program tracker
-    race: pass 1 re-runs ``DGTrackerStage``, pass 2 re-runs this stage
-    against the globally-fresh tracker. Within a single pass the token is
-    constant, so normal input-hash caching still deduplicates work across
-    concurrently-refreshing siblings.
+    ``compute_hash`` suffixes the base hash with the current engine
+    ``refresh_pass``, read from the :class:`EngineSnapshot` mirror in
+    ``gigaevo.evolution.engine.snapshot``. The steady-state engine bumps
+    ``refresh_pass`` via ``_write_snapshot`` before each archive-refresh
+    pass (see ``SteadyStateEngineConfig.refresh_passes``). Pass-2
+    re-evaluations cache-miss relative to pass 1 — this closes the
+    two-sided cross-program tracker race: pass 1 re-runs
+    ``DGTrackerStage``, pass 2 re-runs this stage against the
+    globally-fresh tracker. Within a single pass the counter is constant,
+    so normal input-hash caching still deduplicates work across
+    concurrently-refreshing siblings. See
+    ``docs/superpowers/specs/2026-04-24-engine-snapshot-design.md``.
     """
-
-    # Bumped by SteadyStateEvolutionEngine._refresh_archive_programs before
-    # each refresh pass. Per-process class state — each run is its own
-    # process, so no cross-run contamination.
-    _refresh_pass_token: int = 0
-
-    @classmethod
-    def bump_refresh_pass(cls) -> int:
-        """Bump the refresh-pass token and return the new value."""
-        cls._refresh_pass_token += 1
-        return cls._refresh_pass_token
 
     @classmethod
     def compute_hash(cls, params: StageIO) -> str | None:
-        """Suffix the base hash with the current refresh-pass token.
+        """Suffix the base hash with the current engine ``refresh_pass``.
 
-        Routes through the normal ``Stage.compute_hash`` contract: both
-        ``compute_inputs_hash`` (execution path) and
-        ``compute_hash_from_inputs`` (cache-check path) end here, so the
-        two hashes stay in lockstep — no drift between cache check and
-        execution.
+        ``refresh_pass`` is the generic engine counter maintained by
+        :class:`EvolutionEngine` via ``_write_snapshot``; the snapshot is
+        mirrored into process memory so this sync classmethod can read it
+        without awaiting.
         """
         base = super().compute_hash(params)
         if base is None:
             return None
-        return f"{base}:rp{cls._refresh_pass_token}"
+        rp = get_current_snapshot().refresh_pass
+        return f"{base}:rp{rp}"
 
     def __init__(
         self,

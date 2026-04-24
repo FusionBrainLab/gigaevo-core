@@ -36,12 +36,14 @@ import warnings
 from loguru import logger
 from redis import asyncio as aioredis
 
+from gigaevo.evolution.engine.snapshot import ENGINE_SNAPSHOT_KEY, EngineSnapshot
+
 
 class ProgressBasedSyncHook:
     """Pre-step hook enforcing a drift cap between this population and opponent(s).
 
-    Polls both this run's and each opponent run's ``engine:programs_processed``
-    counter in Redis and waits only while
+    Polls both this run's and each opponent run's ``programs_processed`` field
+    from the ``engine:snapshot`` JSON blob in Redis and waits only while
     ``own_progress - min(opponent_progress) > drift_cap``.
 
     Supports K:1 asymmetric update ratios via ``sync_every_n_epochs``: when set
@@ -152,11 +154,30 @@ class ProgressBasedSyncHook:
         return self._redis_clients[db]
 
     async def _read_progress(self, db: int, prefix: str) -> int:
-        """Read ``engine:programs_processed`` for a single run. Missing -> 0."""
+        """Read ``programs_processed`` from a run's ``engine:snapshot``.
+
+        Missing snapshot or corrupt JSON -> 0 (matches
+        :func:`load_engine_snapshot` fallback semantics). We read across DBs
+        directly via aioredis here because the snapshot helper takes a single
+        storage abstraction and this hook must poll foreign-run prefixes.
+        """
         try:
             r = self._get_redis(db)
-            raw = await r.hget(f"{prefix}:run_state", "engine:programs_processed")
-            return int(raw) if raw else 0
+            raw = await r.hget(f"{prefix}:run_state", ENGINE_SNAPSHOT_KEY)
+            if raw is None:
+                return 0
+            try:
+                snap = EngineSnapshot.model_validate_json(raw)
+            except Exception as exc:
+                logger.warning(
+                    "[ProgressBasedSyncHook] engine:snapshot JSON corrupt on "
+                    "db={} prefix={!r} ({}); treating as 0",
+                    db,
+                    prefix,
+                    exc,
+                )
+                return 0
+            return snap.programs_processed
         except Exception as exc:
             logger.warning(
                 "[ProgressBasedSyncHook] Error reading progress from db={} prefix={!r}: {}",
@@ -167,12 +188,12 @@ class ProgressBasedSyncHook:
             return 0
 
     async def _get_min_opponent_progress(self) -> int:
-        """Minimum ``programs_processed`` across all tracked opponent runs."""
+        """Minimum snapshot ``programs_processed`` across all tracked opponent runs."""
         values = [await self._read_progress(db, prefix) for db, prefix in self._sources]
         return min(values) if values else 0
 
     async def _get_own_progress(self) -> int:
-        """This population's own ``programs_processed`` at the latest epoch boundary."""
+        """This population's own snapshot ``programs_processed`` at the latest epoch boundary."""
         return await self._read_progress(self._own_db, self._own_prefix)
 
     async def __call__(self) -> None:

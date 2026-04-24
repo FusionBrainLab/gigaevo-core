@@ -28,15 +28,8 @@ from typing import cast
 
 from loguru import logger
 
-from gigaevo.adversarial.shared_benchmark_lineage import (
-    SharedBenchmarkFilteredLineageStage,
-)
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig  # noqa: I001
-from gigaevo.evolution.engine.core import (
-    _RUN_STATE_PROGRAMS_PROCESSED,
-    _RUN_STATE_TOTAL_GENERATIONS,
-    EvolutionEngine,
-)
+from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.engine.mutation import generate_mutations
 from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
@@ -110,11 +103,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self._run_start_gen = self.metrics.total_generations
 
         # Persist initial counters so status tools and sync hooks can read immediately
-        await self.storage.save_run_state(
-            _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
-        )
-        await self.storage.save_run_state(
-            _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+        await self._write_snapshot(
+            total_generations=self.metrics.total_generations,
+            programs_processed=self.metrics.programs_processed,
         )
 
         try:
@@ -125,8 +116,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
             # Publish programs_processed after seed ingestion so adversarial
             # sync hooks can see our progress before the first hook call.
-            await self.storage.save_run_state(
-                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+            await self._write_snapshot(
+                programs_processed=self.metrics.programs_processed
             )
 
             # Call pre_step_hook once at startup (mirrors parent's per-step call)
@@ -561,8 +552,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # Without this, adversarial ProgressBasedSyncHook deadlocks: both
             # populations block at the hook waiting for the other's counter to
             # advance, but the counter is only written at step 9 (after the hook).
-            await self.storage.save_run_state(
-                _RUN_STATE_PROGRAMS_PROCESSED, self.metrics.programs_processed
+            await self._write_snapshot(
+                programs_processed=self.metrics.programs_processed
             )
 
             # 4. Pre-step hook (called once per epoch, mirrors parent's per-step call)
@@ -607,9 +598,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
 
             # 9. Increment epoch counter
             self.metrics.total_generations += 1
-            await self.storage.save_run_state(
-                _RUN_STATE_TOTAL_GENERATIONS, self.metrics.total_generations
-            )
+            await self._write_snapshot(total_generations=self.metrics.total_generations)
             # programs_processed already saved at step 3a before sync hook
 
             # 10. Log epoch summary
@@ -819,26 +808,28 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
           repeats the refresh.  Pass 1 re-runs ``DGTrackerStage``
           globally.  Pass 2 re-runs the filtered ``LineageStage`` with a
           globally-fresh tracker (both ancestor and descendant tracker
-          data current).  Before each pass, bump
-          ``SharedBenchmarkFilteredLineageStage._refresh_pass_token`` so
-          the filtered stage cache-invalidates and actually re-runs.
-          Within a single pass the token is constant, so normal
-          input-hash caching still deduplicates LLM calls across
-          concurrent siblings.
+          data current).  Before each pass, advance the engine
+          snapshot's ``refresh_pass`` counter via ``_write_snapshot`` so
+          any stage keyed on it (e.g.
+          :class:`SharedBenchmarkFilteredLineageStage`) cache-invalidates
+          and actually re-runs.  Within a single pass the counter is
+          constant, so normal input-hash caching still deduplicates
+          LLM calls across concurrent siblings.
         """
         passes = self._ss_config.refresh_passes
         total_flipped = 0
 
         for pass_idx in range(passes):
-            # Bump the filtered-lineage cache-invalidation token BEFORE
-            # each pass.  The engine can't know from here whether the
-            # pipeline actually uses SharedBenchmarkFilteredLineageStage,
-            # but the bump is cheap (one int increment on a classvar) and
-            # harmless when the stage isn't installed.  Always bumping
-            # keeps the invariant simple: every refresh pass bumps the
-            # token exactly once, and pass k's cache key is distinct
-            # from pass k-1's.
-            SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+            # Advance the engine-snapshot refresh_pass counter BEFORE
+            # each pass.  The engine can't know from here whether any
+            # stage actually reads the counter, but the bump is cheap
+            # (one snapshot write) and harmless when no consumer is
+            # installed.  Always advancing keeps the invariant simple:
+            # every refresh pass bumps the counter exactly once, and
+            # pass k's cache key is distinct from pass k-1's.
+            await self._write_snapshot(
+                refresh_pass=self._snapshot.refresh_pass + 1,
+            )
 
             if passes > 1 and pass_idx > 0:
                 # Between passes, drain whatever pass k-1 submitted

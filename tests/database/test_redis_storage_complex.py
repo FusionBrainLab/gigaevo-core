@@ -525,8 +525,8 @@ class TestRunState:
     """redis_program_storage.py L451-467: save/load run state for resume."""
 
     async def test_save_and_load_run_state(self, fakeredis_storage):
-        await fakeredis_storage.save_run_state("engine:total_generations", 42)
-        result = await fakeredis_storage.load_run_state("engine:total_generations")
+        await fakeredis_storage.save_run_state("test:counter", 42)
+        result = await fakeredis_storage.load_run_state("test:counter")
         assert result == 42
 
     async def test_load_nonexistent_field_returns_none(self, fakeredis_storage):
@@ -607,3 +607,24 @@ class TestCountByStatus:
         assert await fakeredis_storage.count_by_status("queued") == 3
         assert await fakeredis_storage.count_by_status("running") == 2
         assert await fakeredis_storage.count_by_status("done") == 0
+
+
+# ===================================================================
+# Category O: load_run_state_str (string-valued run-state scalars)
+# ===================================================================
+
+
+class TestLoadRunStateStr:
+    """String-returning counterpart to load_run_state. Used for JSON payloads
+    (e.g. engine:snapshot) where the stored value is a string, not an int."""
+
+    async def test_load_run_state_str_round_trips(self, fakeredis_storage):
+        await fakeredis_storage.save_run_state(
+            "engine:snapshot", '{"total_generations": 9}'
+        )
+        result = await fakeredis_storage.load_run_state_str("engine:snapshot")
+        assert result == '{"total_generations": 9}'
+
+    async def test_load_run_state_str_returns_none_if_missing(self, fakeredis_storage):
+        result = await fakeredis_storage.load_run_state_str("engine:missing")
+        assert result is None

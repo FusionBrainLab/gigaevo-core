@@ -16,12 +16,15 @@ import time
 from loguru import logger
 from redis import asyncio as aioredis
 
+from gigaevo.evolution.engine.snapshot import ENGINE_SNAPSHOT_KEY, EngineSnapshot
+
 
 class MainRunSyncHook:
     """Pre-step hook that blocks until main run(s) advance by 1 generation.
 
-    Polls each main run's ``engine:total_generations`` counter in Redis and
-    waits until the minimum across all sources exceeds the previous value.
+    Polls each main run's ``total_generations`` field from the
+    ``engine:snapshot`` JSON blob in Redis and waits until the minimum across
+    all sources exceeds the previous value.
 
     Supports both single-source (backwards compat) and multi-source configs.
 
@@ -84,14 +87,37 @@ class MainRunSyncHook:
         return self._redis_clients[db]
 
     async def _get_min_gen(self) -> int:
-        """Read the minimum generation across all tracked main runs."""
+        """Read the minimum ``total_generations`` across all tracked main runs.
+
+        Reads the ``engine:snapshot`` JSON blob from each source's run-state
+        hash. Missing snapshot or corrupt JSON -> 0 (matches
+        :func:`gigaevo.evolution.engine.snapshot.load_engine_snapshot` fallback
+        semantics). We read across DBs directly via aioredis here because the
+        snapshot helper takes a single storage abstraction and this hook must
+        poll foreign-run prefixes.
+        """
         gens = []
         for db, prefix in self._sources:
             try:
                 r = self._get_redis(db)
                 key = f"{prefix}:run_state"
-                raw = await r.hget(key, "engine:total_generations")
-                gens.append(int(raw) if raw else 0)
+                raw = await r.hget(key, ENGINE_SNAPSHOT_KEY)
+                if raw is None:
+                    gens.append(0)
+                    continue
+                try:
+                    snap = EngineSnapshot.model_validate_json(raw)
+                except Exception as exc:
+                    logger.warning(
+                        "[MainRunSyncHook] engine:snapshot JSON corrupt on "
+                        "db={} prefix={!r} ({}); treating as 0",
+                        db,
+                        prefix,
+                        exc,
+                    )
+                    gens.append(0)
+                    continue
+                gens.append(snap.total_generations)
             except Exception as exc:
                 logger.warning(
                     "[MainRunSyncHook] Error reading gen from db={}: {}", db, exc

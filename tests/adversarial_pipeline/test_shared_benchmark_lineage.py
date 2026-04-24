@@ -558,36 +558,40 @@ class TestLogEmission:
 
 
 class TestRefreshPassTokenCacheInvariant:
-    """Proves the token mechanism actually invalidates the cache key.
+    """Proves the snapshot refresh_pass mechanism actually invalidates the cache key.
 
-    ``_refresh_pass_token`` is class-level state shared across tests in the
-    process — ``_reset_token`` snapshots and restores so tests are order-
-    independent.
+    ``refresh_pass`` lives on the engine snapshot mirror; ``_reset`` resets
+    the mirror before and after each test so tests are order-independent.
     """
 
     @pytest.fixture(autouse=True)
-    def _reset_token(self):
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
+    def _reset_snapshot(self):
+        from gigaevo.evolution.engine.snapshot import (
+            _reset_current_snapshot_for_tests,
         )
 
-        saved = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        _reset_current_snapshot_for_tests()
         yield
-        SharedBenchmarkFilteredLineageStage._refresh_pass_token = saved
+        _reset_current_snapshot_for_tests()
 
     def test_compute_hash_differs_after_bump(self):
         from gigaevo.adversarial.shared_benchmark_lineage import (
             SharedBenchmarkFilteredLineageStage,
         )
+        from gigaevo.evolution.engine.snapshot import (
+            EngineSnapshot,
+            set_current_snapshot,
+        )
 
         params = CacheOnlyInput(cache_on="same")
+        set_current_snapshot(EngineSnapshot(refresh_pass=0))
         h_pass1 = SharedBenchmarkFilteredLineageStage.compute_hash(params)
-        SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+        set_current_snapshot(EngineSnapshot(refresh_pass=1))
         h_pass2 = SharedBenchmarkFilteredLineageStage.compute_hash(params)
 
         assert h_pass1 != h_pass2, (
             "compute_hash returned the same key before and after "
-            "bump_refresh_pass() — cache would HIT on pass 2 and the "
+            "refresh_pass bump — cache would HIT on pass 2 and the "
             "two-pass refresh would be a no-op semantically."
         )
 
@@ -595,14 +599,19 @@ class TestRefreshPassTokenCacheInvariant:
         from gigaevo.adversarial.shared_benchmark_lineage import (
             SharedBenchmarkFilteredLineageStage,
         )
+        from gigaevo.evolution.engine.snapshot import (
+            EngineSnapshot,
+            get_current_snapshot,
+            set_current_snapshot,
+        )
 
         params = CacheOnlyInput(cache_on="x")
-        t_before = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        t_before = get_current_snapshot().refresh_pass
         h_before = SharedBenchmarkFilteredLineageStage.compute_hash(params)
         assert h_before is not None
         assert h_before.endswith(f":rp{t_before}")
 
-        SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+        set_current_snapshot(EngineSnapshot(refresh_pass=t_before + 1))
         h_after = SharedBenchmarkFilteredLineageStage.compute_hash(params)
         assert h_after.endswith(f":rp{t_before + 1}")
 
@@ -610,19 +619,24 @@ class TestRefreshPassTokenCacheInvariant:
         from gigaevo.adversarial.shared_benchmark_lineage import (
             SharedBenchmarkFilteredLineageStage,
         )
+        from gigaevo.evolution.engine.snapshot import (
+            EngineSnapshot,
+            set_current_snapshot,
+        )
 
         params = CacheOnlyInput(cache_on="probe")
         raw = {"cache_on": "probe"}
 
+        set_current_snapshot(EngineSnapshot(refresh_pass=0))
         h_exec = SharedBenchmarkFilteredLineageStage.compute_hash(params)
         h_check = SharedBenchmarkFilteredLineageStage.compute_hash_from_inputs(raw)
         assert h_exec == h_check
 
-        SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
+        set_current_snapshot(EngineSnapshot(refresh_pass=1))
         h_exec_b = SharedBenchmarkFilteredLineageStage.compute_hash(params)
         h_check_b = SharedBenchmarkFilteredLineageStage.compute_hash_from_inputs(raw)
         assert h_exec_b == h_check_b
-        assert h_exec != h_exec_b, "token bump must change both paths together"
+        assert h_exec != h_exec_b, "refresh_pass bump must change both paths together"
 
     def test_compute_hash_returns_none_when_base_returns_none(self):
         from gigaevo.adversarial.shared_benchmark_lineage import (
@@ -633,13 +647,3 @@ class TestRefreshPassTokenCacheInvariant:
             {"nonexistent_field": object()}
         )
         assert h is None
-
-    def test_bump_returns_new_token_value(self):
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
-        )
-
-        before = SharedBenchmarkFilteredLineageStage._refresh_pass_token
-        returned = SharedBenchmarkFilteredLineageStage.bump_refresh_pass()
-        assert returned == before + 1
-        assert SharedBenchmarkFilteredLineageStage._refresh_pass_token == before + 1

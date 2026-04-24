@@ -299,19 +299,17 @@ class TestEpochRefresh:
         engine.strategy.reindex_archive.assert_called()
 
     async def test_persists_programs_processed(self) -> None:
-        """Epoch refresh persists programs_processed to Redis."""
-        from gigaevo.evolution.engine.core import _RUN_STATE_PROGRAMS_PROCESSED
-
+        """Epoch refresh persists programs_processed via the engine snapshot."""
         engine = _make_ss_engine()
         engine.metrics.programs_processed = 37
 
         await engine._epoch_refresh()
 
-        # Verify save_run_state was called with programs_processed
+        # Verify the snapshot write carried programs_processed=37.
         calls = engine.storage.save_run_state.call_args_list
-        pp_calls = [c for c in calls if c.args[0] == _RUN_STATE_PROGRAMS_PROCESSED]
-        assert len(pp_calls) == 1
-        assert pp_calls[0].args[1] == 37
+        snap_calls = [c for c in calls if c.args[0] == "engine:snapshot"]
+        assert snap_calls, "_epoch_refresh must persist engine:snapshot"
+        assert any('"programs_processed":37' in c.args[1] for c in snap_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -829,10 +827,6 @@ class TestMultiPassRefresh:
         Token bumps are the cache-invalidation mechanism: with refresh_passes=2,
         LineageStage sees distinct cache keys on pass 1 and pass 2.
         """
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
-        )
-
         engine = _make_ss_engine()
         engine._ss_config = SteadyStateEngineConfig(
             max_in_flight=1,
@@ -845,22 +839,18 @@ class TestMultiPassRefresh:
         engine.storage.batch_transition_by_ids.return_value = 1
         engine._await_idle = AsyncMock()  # type: ignore[method-assign]
 
-        initial_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        initial_token = engine._snapshot.refresh_pass
         await engine._refresh_archive_programs()
-        final_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        final_token = engine._snapshot.refresh_pass
 
-        # Two passes ⇒ token bumped by at least 2
+        # Two passes ⇒ counter bumped by at least 2
         assert final_token - initial_token >= 2, (
-            f"expected token bumped ≥2 with refresh_passes=2, "
+            f"expected refresh_pass bumped ≥2 with refresh_passes=2, "
             f"got {final_token - initial_token}"
         )
 
     async def test_refresh_passes_one_bumps_token_once(self) -> None:
-        """refresh_passes=1 (default) still bumps the token once per refresh."""
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
-        )
-
+        """refresh_passes=1 (default) still bumps the counter once per refresh."""
         engine = _make_ss_engine()
         engine._ss_config = SteadyStateEngineConfig(
             max_in_flight=1,
@@ -873,9 +863,9 @@ class TestMultiPassRefresh:
         engine.storage.batch_transition_by_ids.return_value = 1
         engine._await_idle = AsyncMock()  # type: ignore[method-assign]
 
-        initial_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        initial_token = engine._snapshot.refresh_pass
         await engine._refresh_archive_programs()
-        final_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        final_token = engine._snapshot.refresh_pass
 
         assert final_token - initial_token == 1
 
@@ -931,13 +921,13 @@ class TestTwoPassRefreshSemantic:
 
     @pytest.fixture(autouse=True)
     def _reset_token(self):
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
+        from gigaevo.evolution.engine.snapshot import (
+            _reset_current_snapshot_for_tests,
         )
 
-        saved = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        _reset_current_snapshot_for_tests()
         yield
-        SharedBenchmarkFilteredLineageStage._refresh_pass_token = saved
+        _reset_current_snapshot_for_tests()
 
     async def test_stage_reads_fresh_tracker_after_two_pass_refresh(self) -> None:
         import fakeredis.aioredis
@@ -1008,8 +998,10 @@ class TestTwoPassRefreshSemantic:
         params = CacheOnlyInput(cache_on="probe")
 
         # ---- Phase 1: pre-refresh stage read ---------------------------
+        from gigaevo.evolution.engine.snapshot import get_current_snapshot
+
         pre = await stage.preprocess(p_child, params)
-        initial_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        initial_token = get_current_snapshot().refresh_pass
         hash_pre = SharedBenchmarkFilteredLineageStage.compute_hash(params)
 
         assert isinstance(pre, dict), "parent should survive the shared filter"
@@ -1052,7 +1044,7 @@ class TestTwoPassRefreshSemantic:
 
         # ---- Phase 3: post-refresh stage read --------------------------
         post = await stage.preprocess(p_child, params)
-        final_token = SharedBenchmarkFilteredLineageStage._refresh_pass_token
+        final_token = get_current_snapshot().refresh_pass
         hash_post = SharedBenchmarkFilteredLineageStage.compute_hash(params)
 
         assert isinstance(post, dict)

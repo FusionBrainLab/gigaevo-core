@@ -356,7 +356,7 @@ class ParseMetricsStage(Stage):
             sorted(metrics.keys()),
             len(per_opp),
         )
-        return Box(data=(metrics, artifact))
+        return Box[tuple[dict[str, float], Any]](data=(metrics, artifact))
 
 
 class ValidationResult(StageIO):

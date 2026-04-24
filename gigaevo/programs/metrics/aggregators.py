@@ -184,7 +184,10 @@ class ConfigurableAggregator(MetricsAggregator):
             every key in ``outputs``.
         metrics_context: the population's
             :class:`MetricsContext`. Its ``is_valid(record)`` method
-            gates each per-opponent record.
+            gates each per-opponent record. Wire via
+            ``metrics_context: ${ref:metrics_context}`` in the aggregator
+            YAML — Hydra resolves the top-level singleton at instantiate
+            time.
     """
 
     def __init__(

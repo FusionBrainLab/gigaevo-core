@@ -12,6 +12,11 @@ from gigaevo.config.resolvers import register_resolvers
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
+from gigaevo.evolution.engine.snapshot import (
+    ENGINE_SNAPSHOT_KEY,
+    EngineSnapshot,
+    _reset_current_snapshot_for_tests,
+)
 from gigaevo.programs.core_types import (
     ProgramStageResult,
     StageIO,
@@ -277,3 +282,41 @@ def make_program():
 def dummy_program():
     """A simple test Program object."""
     return Program(code="def entrypoint(): return 0", metadata={})
+
+
+# ---------------------------------------------------------------------------
+# EngineSnapshot process-wide mirror — reset between every test.
+# ---------------------------------------------------------------------------
+
+
+async def write_engine_snapshot(storage, **overrides) -> EngineSnapshot:
+    """Test helper: write an EngineSnapshot to Redis. Returns the snapshot so
+    tests can assert on its fields.
+    """
+    snap = EngineSnapshot(**overrides)
+    await storage.save_run_state(ENGINE_SNAPSHOT_KEY, snap.model_dump_json())
+    return snap
+
+
+def write_engine_snapshot_sync(r, prefix: str, **overrides) -> EngineSnapshot:
+    """Sync test helper: write an EngineSnapshot via a sync redis client.
+
+    Mirrors :func:`write_engine_snapshot` for monitoring tests that use
+    sync ``fakeredis.FakeRedis``. Writes the JSON blob into the
+    ``{prefix}:run_state`` hash at field ``engine:snapshot`` — the same
+    location the live engine uses through ``storage.save_run_state``.
+    """
+    snap = EngineSnapshot(**overrides)
+    r.hset(f"{prefix}:run_state", ENGINE_SNAPSHOT_KEY, snap.model_dump_json())
+    return snap
+
+
+@pytest.fixture(autouse=True)
+def _reset_engine_snapshot_mirror():
+    """Reset the process-wide snapshot mirror before and after every test.
+
+    Prevents cross-test bleed via module-level state.
+    """
+    _reset_current_snapshot_for_tests()
+    yield
+    _reset_current_snapshot_for_tests()

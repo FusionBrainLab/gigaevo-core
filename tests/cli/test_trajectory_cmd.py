@@ -8,6 +8,7 @@ from click.testing import CliRunner
 import fakeredis
 
 from gigaevo.cli import main
+from tests.conftest import write_engine_snapshot_sync
 
 
 def _metric_entry(step: int, value: float, ts: int = 123) -> str:
@@ -25,7 +26,7 @@ def _populate_trajectory(
     Each tuple is (gen, frontier_fitness, mean_fitness).
     """
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    r.hset(f"{prefix}:run_state", "engine:total_generations", str(len(generations)))
+    write_engine_snapshot_sync(r, prefix, total_generations=len(generations))
     for gen, frontier, mean in generations:
         r.rpush(
             f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
@@ -145,7 +146,7 @@ class TestTrajectoryMetricOption:
         """--metric uses a different metric name for frontier/mean."""
         server = fakeredis.FakeServer()
         r = fakeredis.FakeRedis(server=server, db=4, decode_responses=True)
-        r.hset("test/prefix:run_state", "engine:total_generations", "2")
+        write_engine_snapshot_sync(r, "test/prefix", total_generations=2)
         r.rpush(
             "test/prefix:metrics:history:program_metrics:valid_frontier_accuracy",
             _metric_entry(1, 0.80),

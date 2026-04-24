@@ -12,6 +12,7 @@ import asyncio
 import fakeredis.aioredis
 
 from gigaevo.adversarial.sync import ProgressBasedSyncHook
+from gigaevo.evolution.engine.snapshot import EngineSnapshot
 
 
 def _make_hook(
@@ -46,9 +47,10 @@ def _make_hook(
 async def _set_progress(
     server: fakeredis.FakeServer, db: int, prefix: str, value: int
 ) -> None:
-    """Set engine:programs_processed in fakeredis."""
+    """Set the engine:snapshot programs_processed in fakeredis."""
     r = fakeredis.aioredis.FakeRedis(server=server, db=db, decode_responses=True)
-    await r.hset(f"{prefix}:run_state", "engine:programs_processed", str(value))
+    snap_json = EngineSnapshot(programs_processed=value).model_dump_json()
+    await r.hset(f"{prefix}:run_state", "engine:snapshot", snap_json)
     await r.aclose()
 
 

@@ -9,6 +9,17 @@ import warnings
 import pytest
 
 from gigaevo.adversarial.sync import ProgressBasedSyncHook
+from gigaevo.evolution.engine.snapshot import EngineSnapshot
+
+
+def _snap(progress: int | None) -> str | None:
+    """Encode a programs_processed value as the engine:snapshot JSON blob.
+
+    ``None`` is passed through (represents a missing Redis key).
+    """
+    if progress is None:
+        return None
+    return EngineSnapshot(programs_processed=progress).model_dump_json()
 
 
 def _make_hook(
@@ -34,11 +45,24 @@ def _make_hook(
 
 
 def _install_mock(hook: ProgressBasedSyncHook, db: int, return_values) -> AsyncMock:
+    """Install a mock aioredis client with canned ``hget`` returns.
+
+    ``return_values`` is an int programs_processed (or None for missing key), or a
+    list of the same for sequenced reads. Ints are encoded as engine:snapshot JSON.
+    Raw strings are also accepted (kept for tests that want to smuggle arbitrary
+    payloads e.g. to exercise corrupt-JSON fallback).
+    """
+
+    def _encode(v):
+        if v is None or isinstance(v, str):
+            return v
+        return _snap(v)
+
     mock_redis = AsyncMock()
     if isinstance(return_values, list):
-        mock_redis.hget = AsyncMock(side_effect=return_values)
+        mock_redis.hget = AsyncMock(side_effect=[_encode(v) for v in return_values])
     else:
-        mock_redis.hget = AsyncMock(return_value=return_values)
+        mock_redis.hget = AsyncMock(return_value=_encode(return_values))
     hook._redis_clients[db] = mock_redis
     return mock_redis
 
@@ -133,8 +157,8 @@ class TestProgressBasedSyncHookFirstCall:
         """First call reads own+opponent progress, logs baseline, does not block."""
         hook = _make_hook(drift_cap=10)
         # Own is very far ahead — would normally block, but first-call skips drift check
-        _install_mock(hook, 1, "500")  # own
-        _install_mock(hook, 2, "0")  # opp
+        _install_mock(hook, 1, 500)  # own
+        _install_mock(hook, 2, 0)  # opp
 
         start = time.monotonic()
         await hook()
@@ -151,8 +175,8 @@ class TestProgressBasedSyncHookDriftCap:
         """When |own - opp| <= drift_cap, hook returns without polling-loop wait."""
         hook = _make_hook(drift_cap=10)
         hook._first_call = False  # skip baseline
-        _install_mock(hook, 1, "25")  # own
-        _install_mock(hook, 2, "20")  # opp, drift = +5 within cap
+        _install_mock(hook, 1, 25)  # own
+        _install_mock(hook, 2, 20)  # opp, drift = +5 within cap
 
         start = time.monotonic()
         await hook()
@@ -164,8 +188,8 @@ class TestProgressBasedSyncHookDriftCap:
         """Both sides at identical progress => drift=0 <= cap; no block on either side."""
         hook = _make_hook(drift_cap=10)
         hook._first_call = False
-        _install_mock(hook, 1, "42")
-        _install_mock(hook, 2, "42")
+        _install_mock(hook, 1, 42)
+        _install_mock(hook, 2, 42)
 
         start = time.monotonic()
         await hook()
@@ -177,8 +201,8 @@ class TestProgressBasedSyncHookDriftCap:
         """The 'behind' side's wait condition is always false -> never blocks."""
         hook = _make_hook(drift_cap=10)
         hook._first_call = False
-        _install_mock(hook, 1, "5")  # own, far behind
-        _install_mock(hook, 2, "100")  # opp, far ahead
+        _install_mock(hook, 1, 5)  # own, far behind
+        _install_mock(hook, 2, 100)  # opp, far ahead
 
         start = time.monotonic()
         await hook()
@@ -195,8 +219,8 @@ class TestProgressBasedSyncHookDriftCap:
         hook = _make_hook(drift_cap=10)
         hook._first_call = False
         # own stays at 30; opp advances 10 -> 15 -> 22 (catches up on third poll)
-        own_mock = _install_mock(hook, 1, "30")
-        _install_mock(hook, 2, ["10", "15", "22"])  # drift: 20, 15, 8 (<=10 -> unblock)
+        own_mock = _install_mock(hook, 1, 30)
+        _install_mock(hook, 2, [10, 15, 22])  # drift: 20, 15, 8 (<=10 -> unblock)
 
         await hook()
 
@@ -220,8 +244,8 @@ class TestProgressBasedSyncHookDriftCap:
             drift_cap=8,
         )
         d_hook._first_call = False
-        _install_mock(d_hook, 10, "283")  # own = D
-        _install_mock(d_hook, 11, "319")  # opp = G
+        _install_mock(d_hook, 10, 283)  # own = D
+        _install_mock(d_hook, 11, 319)  # opp = G
 
         start = time.monotonic()
         await d_hook()
@@ -239,8 +263,8 @@ class TestProgressBasedSyncHookDriftCap:
             drift_cap=8,
         )
         g_hook._first_call = False
-        _install_mock(g_hook, 11, "319")  # own = G stays at 319 while waiting
-        _install_mock(g_hook, 10, ["283", "290", "311"])  # opp advances
+        _install_mock(g_hook, 11, 319)  # own = G stays at 319 while waiting
+        _install_mock(g_hook, 10, [283, 290, 311])  # opp advances
 
         start = time.monotonic()
         await g_hook()
@@ -255,8 +279,8 @@ class TestProgressBasedSyncHookEpochSkip:
         """With sync_every_n_epochs=3, first 2 calls are no-ops, 3rd does check."""
         hook = _make_hook(drift_cap=10, sync_every_n_epochs=3)
         hook._first_call = False
-        own_mock = _install_mock(hook, 1, "100")
-        opp_mock = _install_mock(hook, 2, "100")
+        own_mock = _install_mock(hook, 1, 100)
+        opp_mock = _install_mock(hook, 2, 100)
 
         # Call 1: skip
         await hook()
@@ -279,8 +303,8 @@ class TestProgressBasedSyncHookTimeout:
         """If waiting for opponent to catch up exceeds timeout, proceed anyway."""
         hook = _make_hook(drift_cap=10, timeout=0.05)
         hook._first_call = False
-        _install_mock(hook, 1, "100")  # own
-        _install_mock(hook, 2, "0")  # opp stays at 0 forever -> drift 100 > 10
+        _install_mock(hook, 1, 100)  # own
+        _install_mock(hook, 2, 0)  # opp stays at 0 forever -> drift 100 > 10
 
         start = time.monotonic()
         await hook()
@@ -307,9 +331,9 @@ class TestProgressBasedSyncHookMultiSource:
             poll_interval=0.01,
         )
         hook._first_call = False
-        _install_mock(hook, 1, "30")  # own
-        _install_mock(hook, 4, "50")  # opp A far ahead
-        _install_mock(hook, 5, ["15", "25"])  # opp B catches up on 2nd poll
+        _install_mock(hook, 1, 30)  # own
+        _install_mock(hook, 4, 50)  # opp A far ahead
+        _install_mock(hook, 5, [15, 25])  # opp B catches up on 2nd poll
 
         await hook()
         # drift on 2nd poll = 30 - min(50, 25) = 30 - 25 = 5 <= 10 -> proceed
@@ -333,17 +357,13 @@ class TestProgressBasedSyncHookRedisKey:
             sources=[{"db": 2, "prefix": "chains/hover/opp"}],
             drift_cap=10,
         )
-        own_mock = _install_mock(hook, 1, "10")
-        opp_mock = _install_mock(hook, 2, "8")
+        own_mock = _install_mock(hook, 1, 10)
+        opp_mock = _install_mock(hook, 2, 8)
 
         await hook()  # first-call baseline
 
-        own_mock.hget.assert_any_call(
-            "chains/hover/own:run_state", "engine:programs_processed"
-        )
-        opp_mock.hget.assert_any_call(
-            "chains/hover/opp:run_state", "engine:programs_processed"
-        )
+        own_mock.hget.assert_any_call("chains/hover/own:run_state", "engine:snapshot")
+        opp_mock.hget.assert_any_call("chains/hover/opp:run_state", "engine:snapshot")
 
 
 class TestProgressBasedSyncHookGetRedis:

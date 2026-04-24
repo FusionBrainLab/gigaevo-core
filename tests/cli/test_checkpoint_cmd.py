@@ -10,6 +10,7 @@ import fakeredis
 from gigaevo.cli import main
 from gigaevo.monitoring.run_spec import RunSpec
 from gigaevo.monitoring.snapshot import RunSnapshot
+from tests.conftest import write_engine_snapshot_sync
 
 
 def _metric_entry(step: int, value: float, ts: int = 123) -> str:
@@ -24,7 +25,7 @@ def _populate_run(
     fitness: float,
 ) -> None:
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    r.hset(f"{prefix}:run_state", "engine:total_generations", str(generation))
+    write_engine_snapshot_sync(r, prefix, total_generations=generation)
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
         _metric_entry(generation, fitness),

@@ -15,6 +15,7 @@ import os
 
 import redis as redis_lib
 
+from gigaevo.evolution.engine.snapshot import ENGINE_SNAPSHOT_KEY, EngineSnapshot
 from gigaevo.programs.program import Program
 from gigaevo.utils.json import loads as gjson_loads
 
@@ -168,7 +169,14 @@ def _build_run_context(r: redis_lib.Redis, spec: dict) -> dict:
         else v
         for k, v in run_state_raw.items()
     }
-    current_gen = int(run_state.get("engine:total_generations", 0))
+    raw_snap = run_state.get(ENGINE_SNAPSHOT_KEY)
+    if raw_snap:
+        try:
+            current_gen = EngineSnapshot.model_validate_json(raw_snap).total_generations
+        except Exception:
+            current_gen = 0
+    else:
+        current_gen = 0
 
     # ---- Metrics history ----
     gen_fitness_mean = _read_hist(

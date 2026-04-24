@@ -6,7 +6,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from gigaevo.evolution.engine.snapshot import EngineSnapshot
 from gigaevo.prompts.coevolution.sync import MainRunSyncHook
+
+
+def _snap(total_generations: int | None) -> str | None:
+    """Encode a total_generations value as the engine:snapshot JSON blob.
+
+    ``None`` is passed through (represents a missing Redis key).
+    """
+    if total_generations is None:
+        return None
+    return EngineSnapshot(total_generations=total_generations).model_dump_json()
+
+
+def _encode(v):
+    """Encode int/None/str fixtures into snapshot JSON (or pass through)."""
+    if v is None or isinstance(v, str):
+        return v
+    return _snap(v)
 
 
 class TestMainRunSyncHookInit:
@@ -64,14 +82,12 @@ class TestMainRunSyncHookCall:
             poll_interval=0.01,
         )
         mock_redis = AsyncMock()
-        mock_redis.hget = AsyncMock(return_value="5")
+        mock_redis.hget = AsyncMock(return_value=_encode(5))
         hook._redis_clients[0] = mock_redis
 
         await hook()
 
-        mock_redis.hget.assert_called_once_with(
-            "test:run_state", "engine:total_generations"
-        )
+        mock_redis.hget.assert_called_once_with("test:run_state", "engine:snapshot")
         assert hook._last_main_gen == 5
 
     @pytest.mark.asyncio
@@ -86,7 +102,7 @@ class TestMainRunSyncHookCall:
         )
         mock_redis = AsyncMock()
         hook._last_main_gen = 3
-        mock_redis.hget = AsyncMock(side_effect=["3", "3", "4"])
+        mock_redis.hget = AsyncMock(side_effect=[_encode(3), _encode(3), _encode(4)])
         hook._redis_clients[0] = mock_redis
 
         await hook()
@@ -107,7 +123,7 @@ class TestMainRunSyncHookCall:
         )
         hook._last_main_gen = 10
         mock_redis = AsyncMock()
-        mock_redis.hget = AsyncMock(return_value="10")
+        mock_redis.hget = AsyncMock(return_value=_encode(10))
         hook._redis_clients[0] = mock_redis
 
         await hook()
@@ -145,15 +161,15 @@ class TestMainRunSyncHookCall:
         mock_redis = AsyncMock()
         hook._redis_clients[0] = mock_redis
 
-        mock_redis.hget = AsyncMock(return_value="0")
+        mock_redis.hget = AsyncMock(return_value=_encode(0))
         await hook()
         assert hook._last_main_gen == 0
 
-        mock_redis.hget = AsyncMock(return_value="1")
+        mock_redis.hget = AsyncMock(return_value=_encode(1))
         await hook()
         assert hook._last_main_gen == 1
 
-        mock_redis.hget = AsyncMock(return_value="3")
+        mock_redis.hget = AsyncMock(return_value=_encode(3))
         await hook()
         assert hook._last_main_gen == 3
 
@@ -168,13 +184,13 @@ class TestMainRunSyncHookCall:
             poll_interval=0.01,
         )
         mock_redis = AsyncMock()
-        mock_redis.hget = AsyncMock(return_value="1")
+        mock_redis.hget = AsyncMock(return_value=_encode(1))
         hook._redis_clients[0] = mock_redis
 
         await hook()
 
         mock_redis.hget.assert_called_with(
-            "chains/hotpotqa:run_state", "engine:total_generations"
+            "chains/hotpotqa:run_state", "engine:snapshot"
         )
 
     @pytest.mark.asyncio
@@ -195,8 +211,8 @@ class TestMainRunSyncHookCall:
         hook._redis_clients[5] = mock_r5
 
         # DB4 at gen 3, DB5 at gen 1 → min=1 > -1 → proceed
-        mock_r4.hget = AsyncMock(return_value="3")
-        mock_r5.hget = AsyncMock(return_value="1")
+        mock_r4.hget = AsyncMock(return_value=_encode(3))
+        mock_r5.hget = AsyncMock(return_value=_encode(1))
 
         await hook()
         assert hook._last_main_gen == 1
@@ -221,8 +237,8 @@ class TestMainRunSyncHookCall:
 
         # First poll: DB4=5, DB5=2 → min=2, not > 2 → wait
         # Second poll: DB4=5, DB5=3 → min=3 > 2 → proceed
-        mock_r4.hget = AsyncMock(side_effect=["5", "5"])
-        mock_r5.hget = AsyncMock(side_effect=["2", "3"])
+        mock_r4.hget = AsyncMock(side_effect=[_encode(5), _encode(5)])
+        mock_r5.hget = AsyncMock(side_effect=[_encode(2), _encode(3)])
 
         await hook()
         assert hook._last_main_gen == 3
