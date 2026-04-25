@@ -1,0 +1,62 @@
+# @package _global_
+# Heilbron v1-honest reproduction pipeline.
+#
+# Reproduces v1's adversarial setup (heilbron/asymmetric-iterations PR #204,
+# 0.0365 SOTA) on CURRENT main code — no commit revert. Differs from
+# heilbron_repro_v1.yaml in two deliberate ways:
+#
+#   1. lineage_filter: null  — disables the SBF (Shared-Benchmark-Filtered)
+#      LineageStage variant that was added AFTER v1 launched. Standard
+#      LineageStage still runs (population_role=constructor and improver),
+#      matching v1's lineage behavior.
+#
+#   2. Problem dir: problems/heilbron_v1_honest/  — v1 task_description.txt +
+#      metrics.yaml restored from commit 562a1210; pop_a evaluate.py uses
+#      v1 BINARY resistance scoring (resistance_score = float(delta <= 0)),
+#      pop_b uses v1 LINEAR improvement scoring (score = min(max(δ,0)/Q_MAX, 1)).
+#
+# Required at runtime:
+#   opponent_redis_db=N
+#   opponent_redis_prefix=...
+#   feedback_mode=composition|gradient_in_prompt
+#   population_role=constructor|improver
+#   aggregator=heilbron_constructor|heilbron_improver
+#
+# Compared to v1's actual launch (commit 562a1210), this pipeline still ships
+# the post-v1 ConfigurableAggregator infrastructure (mandatory on current
+# code). The aggregator routing under K=1 opponent is semantically identical
+# to v1: mean(resistance_score) over K=1 = the scalar resistance v1 emitted.
+
+defaults:
+  - adversarial_asymmetric
+
+# v1 used effectively unthrottled sync (drift_cap=∞). 100_000 is a deliberate
+# no-op against the realistic per-run program count of ~400, so D's natural
+# ~2.2× compute advantage emerges. The hook is retained for KF-07 deadlock
+# safety (mutual-wait impossible by construction even at this cap).
+pre_step_hook:
+  _target_: gigaevo.adversarial.sync.ProgressBasedSyncHook
+  host: ${redis.host}
+  port: ${redis.port}
+  own_db: ${redis.db}
+  own_prefix: ${problem.name}
+  sources:
+    - db: ${opponent_redis_db}
+      prefix: ${opponent_redis_prefix}
+  drift_cap: 100000
+  min_delta: null
+  sync_every_n_epochs: 1
+  timeout: 7200
+  poll_interval: 5.0
+
+# v1 hyperparameters — locked.
+inner_iterations: 1
+n_opponents: 1
+source_prompt_k: 1
+
+# Aggregator wired into ParseMetricsStage. lineage_filter explicitly null —
+# standard LineageStage runs without SBF (Shared-Benchmark-Filtered) re-
+# aggregation. v1 had no SBF; this is the honest replication choice.
+pipeline_builder:
+  aggregator: ${ref:aggregator}
+  lineage_filter: null
