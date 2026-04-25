@@ -160,6 +160,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         *,
         aggregator: MetricsAggregator | None = None,
         lineage_filter: LineageFilterConfig | DictConfig | None = None,
+        disable_lineage_on_improver: bool = False,
         opponent_result_mode: Literal["exec", "cached"] = "exec",
         opponent_sampling_mode: OpponentSamplingMode | str = OpponentSamplingMode.TOP_K,
         redis_host: str = "localhost",
@@ -204,15 +205,24 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
                 dg_tracker, population_role, stage_timeout
             )
             if population_role == "improver":
-                resolved_filter = _resolve_lineage_filter(
-                    lineage_filter, ctx.problem_ctx.metrics_context
-                )
-                self._replace_lineage_with_filtered(
-                    ctx,
-                    dg_tracker,
-                    resolved_filter,
-                    stage_timeout,
-                )
+                if disable_lineage_on_improver:
+                    self.remove_stage("LineageStage")
+                    self.remove_stage("LineagesToDescendants")
+                    self.remove_stage("LineagesFromAncestors")
+                    logger.info(
+                        "[AsymmetricPipeline] disable_lineage_on_improver=true: "
+                        "removed LineageStage, LineagesToDescendants, LineagesFromAncestors"
+                    )
+                else:
+                    resolved_filter = _resolve_lineage_filter(
+                        lineage_filter, ctx.problem_ctx.metrics_context
+                    )
+                    self._replace_lineage_with_filtered(
+                        ctx,
+                        dg_tracker,
+                        resolved_filter,
+                        stage_timeout,
+                    )
 
         # Wire cache_on edges so InsightsStage/LineageStage invalidate when the
         # opponent set rotates. The InputsModel of each is CacheOnlyInput, so
