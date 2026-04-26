@@ -317,10 +317,7 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         invalidation forces an LLM re-run every generation with no semantic
         change.
         """
-        if (
-            self._cache_insights_on_opponents
-            and "InsightsStage" in self._nodes
-        ):
+        if self._cache_insights_on_opponents and "InsightsStage" in self._nodes:
             self.add_data_flow_edge(
                 "FetchOpponentIdsStage", "InsightsStage", "cache_on"
             )
