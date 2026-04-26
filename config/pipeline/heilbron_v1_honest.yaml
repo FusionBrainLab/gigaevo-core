@@ -57,6 +57,15 @@ source_prompt_k: 1
 # Aggregator wired into ParseMetricsStage. lineage_filter explicitly null —
 # standard LineageStage runs without SBF (Shared-Benchmark-Filtered) re-
 # aggregation. v1 had no SBF; this is the honest replication choice.
+#
+# cache_insights_on_opponents: false — restores v1 InsightsStage caching
+# semantics. v1 (PR #204, merged before commit 1d25a9a8 on 2026-04-17) cached
+# insights purely on program identity. Current main wires
+# FetchOpponentIdsStage → InsightsStage cache_on, which invalidates the cache
+# on every opponent rotation and forces an LLM re-run per generation. That
+# extra D-side work is a structural confound for the v1-honest reproduction;
+# disabling here matches v1 exactly.
 pipeline_builder:
   aggregator: ${ref:aggregator}
   lineage_filter: null
+  cache_insights_on_opponents: false
