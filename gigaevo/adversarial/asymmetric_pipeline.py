@@ -167,7 +167,9 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         opponent_sources: list[dict[str, int | str]] | None = None,
         dag_timeout: float = 7200.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
+        cache_insights_on_opponents: bool = True,
     ):
+        self._cache_insights_on_opponents = cache_insights_on_opponents
         super().__init__(
             ctx,
             opponent_provider,
@@ -217,7 +219,8 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         # Wire cache_on edges so InsightsStage/LineageStage invalidate when the
         # opponent set rotates. The InputsModel of each is CacheOnlyInput, so
         # the field value (opponent IDs) is folded into the cache hash without
-        # affecting compute(). Guarded so non-default pipelines stay safe.
+        # affecting compute(). InsightsStage edge is gated on
+        # cache_insights_on_opponents (default True). See _wire_cache_on_edges.
         self._wire_cache_on_edges()
 
         # Default aggregator to NullAggregator when Hydra hasn't supplied one,
@@ -305,8 +308,16 @@ class AdversarialAsymmetricPipelineBuilder(AdversarialPipelineBuilder):
         """Attach FetchOpponentIdsStage output as cache_on for LLM stages.
 
         Idempotent and safe: only fires when the target stage is registered.
+
+        InsightsStage wiring is gated on `cache_insights_on_opponents` (default
+        True). Disable it (`pipeline_builder.cache_insights_on_opponents=false`)
+        to match v1 (PR #204) behavior, where insights were cached purely on
+        program identity — opponent rotation did not invalidate them.
+        Insights describe a program in isolation, so the rotation-driven
+        invalidation forces an LLM re-run every generation with no semantic
+        change.
         """
-        if "InsightsStage" in self._nodes:
+        if self._cache_insights_on_opponents and "InsightsStage" in self._nodes:
             self.add_data_flow_edge(
                 "FetchOpponentIdsStage", "InsightsStage", "cache_on"
             )
