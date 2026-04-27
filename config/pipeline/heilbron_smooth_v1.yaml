@@ -1,29 +1,24 @@
 # @package _global_
-# Heilbronn v1 replication pipeline.  ** RETIRED FOR NEW WORK — 2026-04-27 **
+# Heilbronn smoothed-fitness baseline pipeline.
 #
-# Use `heilbron_smooth_v1` for any new experiment. This file and its paired
-# problem dirs (`problems/heilbron_repro_v1/pop_a|b/`) are kept on disk only
-# to back the archives of CLOSED experiments:
-#   - heilbron/adversarial-repro-v1  (PR #...)
-#   - heilbron/adversarial-repro-v2  (PR #...)
-#   - heilbron/v1-honest-repro       (PR #...)
-# Their evaluate.py files were mutated in place by PR #219 (G linear smooth)
-# and commit 3eb41b43 (D tanh smooth), so the name "repro_v1" no longer
-# truthfully describes hard-floor v1 fitness. Pointing a new experiment here
-# silently inherits the smoothed evaluate.py — which is what
-# heilbron_smooth_v1 says it does explicitly.
+# This pipeline ships the v1 adversarial topology (commit 04bd5e69 / PR #204)
+# WITH the fitness smoothing patches applied to both populations:
+#   - pop_a (G / Constructor): linear-smoothed resistance, commit 2de8267e (PR #219)
+#   - pop_b (D / Improver):    tanh-smoothed improvement, commit 3eb41b43
 #
-# Reproduces the adversarial setup that produced 105.8% SOTA
-# (0.03648 / 0.03650) in heilbron/asymmetric-iterations (PR #204,
-# launch commit 04bd5e69). Paired with frozen problem dirs at:
-#   problems/heilbron_repro_v1/pop_a/
-#   problems/heilbron_repro_v1/pop_b/
-# which carry v1's ORIGINAL evaluate.py (hard-floor resistance + hard-
-# floor improvement) — later refactored to smoothed tanh in commit
-# e10ed3d1. The 0.0365 result was produced under this hard-floor
-# fitness, so replication MUST use it verbatim.
+# Paired with frozen problem dirs at:
+#   problems/heilbron_smooth_v1/pop_a/   — linear smooth
+#   problems/heilbron_smooth_v1/pop_b/   — tanh smooth
 #
-# Why v1 worked — refined hypothesis (2026-04-19 user observation):
+# `heilbron_repro_v1` (the older pipeline + dirs) is RETIRED for new work.
+# That dir was originally meant to freeze v1's hard-floor fitness, but PRs
+# #219 and the d-smoothing-minimal predecessor mutated its evaluate.py in
+# place — so the name no longer matches its contents. We keep
+# heilbron_repro_v1/ on disk only as the archive backing for closed
+# experiments (heilbron/adversarial-repro-v1, adversarial-repro-v2,
+# v1-honest-repro). New experiments must reference heilbron_smooth_v1.
+#
+# Why v1 worked — refined hypothesis (preserved from heilbron_repro_v1.yaml):
 #
 # In v1, D consistently reached 2.1–2.4× more generations than G within
 # the same wallclock window (A1: G=12 D=27, A2: G=12 D=29, C1: G=8 D=17,
@@ -60,6 +55,9 @@
 #      and problem files are frozen.
 #   3. Same model family (Qwen3-235B-A22B-Thinking-2507) but proxy/temp
 #      defaults may differ.
+#   4. Fitness smoothing (linear on G, tanh on D) is a deliberate
+#      departure from v1's hard floors — see KF-06 for context. The
+#      hard-floor behavior is no longer reachable from this pipeline.
 
 defaults:
   - adversarial_asymmetric

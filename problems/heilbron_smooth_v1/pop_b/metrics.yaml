@@ -1,0 +1,81 @@
+specs:
+  fitness:
+    description: "MAP-Elites selection signal: mean over opponent configs of 0.5*(tanh(raw_delta / 0.0365) + 1). Smooth in (0, 1); raw_delta=0 maps to 0.5; regressions score below 0.5, full-target improvements approach 1.0."
+    decimals: 5
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: -1.0
+  is_valid:
+    description: "1 if the improver callable ran successfully, 0 otherwise."
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0
+  actual_fitness:
+    description: "Best post-improvement min_area achieved across all opponent configs."
+    decimals: 5
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 0.0365
+    include_in_prompts: true
+    significant_change: 0.001
+    sentinel_value: -1.0
+  mean_improvement_raw:
+    description: "Mean improvement in raw min_area units across opponent configs."
+    decimals: 6
+    is_primary: false
+    higher_is_better: true
+    lower_bound: -0.0365
+    upper_bound: 0.0365
+    include_in_prompts: false
+    significant_change: 0.001
+    sentinel_value: -1.0
+  mean_pre_quality:
+    description: "Mean min_area of opponent configs before this improver ran."
+    decimals: 5
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 0.0365
+    include_in_prompts: false
+    significant_change: 0.001
+    sentinel_value: -1.0
+  mean_post_quality:
+    description: "Mean min_area of opponent configs after this improver ran."
+    decimals: 5
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 0.0365
+    include_in_prompts: false
+    significant_change: 0.001
+    sentinel_value: -1.0
+  max_post_quality:
+    description: "Best min_area this improver achieved on any single opponent config."
+    decimals: 5
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 0.0365
+    include_in_prompts: false
+    significant_change: 0.001
+    sentinel_value: -1.0
+  n_opponents:
+    description: "Number of opponent configurations evaluated against."
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 10.0
+    include_in_prompts: false
+    significant_change: 1.0
+    sentinel_value: -1.0

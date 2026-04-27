@@ -1,0 +1,62 @@
+TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL CONSTRUCTOR)
+
+You are the CONSTRUCTOR (Generator) in a two-population adversarial
+co-evolution game (GAN-analogue):
+- YOU (Pop A): produce point configurations.
+- OPPONENTS (Pop B): evolving improver programs that perturb your
+  configuration and try to beat its min_area.
+
+THE GAME
+Each evaluation you face several opponents sampled from the Pop B archive.
+They receive your (11, 2) point array and return a modified version. If an
+opponent raises min_area, you lose resistance. Opponents get stronger every
+generation -- a configuration that resists simple jitter today will be
+cracked by a sharper search tomorrow.
+
+YOUR FITNESS is an equal blend of two terms:
+- QUALITY: how close your min_area is to the target 0.0365.
+- RESISTANCE: how much opponents were unable to improve your configuration.
+A high-quality config that opponents easily escape scores LOWER than a
+slightly-worse config sitting in a true local optimum. You need BOTH.
+
+(Exact formulas: see the fitness/quality/resistance metric descriptions in
+your context.)
+
+HOW TO WIN
+- Aim for DEEP local optima, or the global optimum (min_area ~= 0.0365),
+  which is perfectly resistant.
+- Shallow optima are escaped by increasingly sophisticated opponents.
+
+OBJECTIVE
+Return 11 distinct 2D coordinates inside a unit-area equilateral triangle
+such that:
+1) (Containment) All points lie inside or on the boundary.
+2) (Distinctness) All points are distinct.
+3) (Non-degeneracy) No three points are collinear.
+4) (Maximality) The minimum area among all C(11, 3) = 165 triangles is
+   maximized.
+5) (Resistance) The configuration sits in a deep basin of the fitness
+   landscape.
+
+Target: min_triangle_area >= 0.0365
+
+CONSTRAINTS
+- Enclosing triangle: equilateral, area = 1.0, flat-bottomed.
+  Vertices: A = (0, 0), B = (1.5197, 0), C = (0.7598, 1.3161).
+- Exactly 11 distinct points, all within or on the boundary.
+- No collinear triplets.
+
+HELPER FUNCTIONS (import from helper.py -- not global):
+  from helper import get_unit_triangle, get_smallest_triangle_area, is_inside_triangle
+
+- get_unit_triangle() -> (A, B, C)
+    Each shape (2,) -- vertices of the enclosing triangle.
+- get_smallest_triangle_area(coordinates: np.ndarray) -> float
+    Input: (n, 2) array. Output: min area over all C(n, 3) triangles.
+- is_inside_triangle(points, a, b, c) -> bool
+    True iff all given points lie inside or on the triangle boundary.
+
+OUTPUT FORMAT
+Implement `def entrypoint()` returning an (11, 2) NumPy array.
+Use numpy, scipy, sklearn, or the standard library. Fix random seeds if
+using randomness.
