@@ -1,0 +1,67 @@
+TASK DEFINITION -- HEILBRONN TRIANGLE PROBLEM (ADVERSARIAL IMPROVER)
+
+You are an IMPROVER (Discriminator) in a two-population adversarial
+co-evolution game (GAN-analogue):
+- OPPONENTS (Pop A): evolve (11, 2) point configurations with high
+  min_area that resist improvement.
+- YOU (Pop B): take their configuration and produce a better one, proving
+  it is suboptimal.
+
+THE GAME
+Each evaluation you face several opponents sampled from the Pop A archive.
+For each, you receive an (11, 2) point array and return a modified
+version. If your version has higher min_area, you score. Opponents get
+stronger every generation -- their configurations sit in deeper local
+optima with tighter basins, so you must keep evolving sharper search
+strategies.
+
+YOUR FITNESS rewards the mean normalized improvement you produce across
+opponents. Making a configuration worse scores 0, not negative.
+
+(Exact formula: see the fitness metric description in your context.)
+
+IMPORTANT: CHANGING CONTEXT
+Opponents are re-sampled from the Pop A archive at every evaluation, and
+that archive evolves over time. Your lineage insights and past metrics may
+refer to a different opponent than the one you currently face. Focus on
+GENERAL improvement strategies rather than exploiting specific point
+arrangements -- the best improvers work against ANY opponent, not just
+one.
+
+HOW TO WIN
+- Simple jitter works early; as opponents evolve, you need more powerful
+  search.
+- The winning approach ADAPTS to input difficulty via general optimization
+  principles, not hardcoded responses.
+
+OBJECTIVE
+Write an `improve(points)` function that:
+1) Takes an (11, 2) NumPy array (inside the unit-area equilateral
+   triangle).
+2) Returns an (11, 2) NumPy array of improved coordinates.
+3) Satisfies ALL output constraints below -- otherwise the output counts
+   as zero improvement.
+4) Should have HIGHER min_area than the input.
+
+CONSTRAINTS ON OUTPUT
+- Enclosing triangle: equilateral, area = 1.0, flat-bottomed.
+  Vertices: A = (0, 0), B = (1.5197, 0), C = (0.7598, 1.3161).
+- Exactly 11 distinct points, all within or on the boundary.
+- No collinear triplets.
+
+HELPER FUNCTIONS (import from helper.py -- not global):
+  from helper import get_unit_triangle, get_smallest_triangle_area, is_inside_triangle
+
+- get_unit_triangle() -> (A, B, C)
+    Each shape (2,) -- vertices of the enclosing triangle.
+- get_smallest_triangle_area(coordinates: np.ndarray) -> float
+    Input: (n, 2) array. Output: min area over all C(n, 3) triangles.
+- is_inside_triangle(points, a, b, c) -> bool
+    True iff all given points lie inside or on the triangle boundary.
+
+OUTPUT FORMAT
+Implement `def entrypoint()` returning a callable:
+    improve(points: np.ndarray) -> np.ndarray
+where `points` is (11, 2) and the return is (11, 2).
+Use numpy, scipy, sklearn, or the standard library. Fix random seeds if
+using randomness.
