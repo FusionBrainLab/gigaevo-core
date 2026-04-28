@@ -150,7 +150,7 @@ class TestImproverPipeline:
         assert "FetchOpponentResultsStage" in names
 
     def test_cache_on_edges_wired_for_d(self):
-        """D runs wire FetchOpponentIdsStage → InsightsStage / LineageStage cache_on."""
+        """D runs wire FetchOpponentIdsStage → InsightsStage / LineageStage cache_on by default."""
         builder = AdversarialAsymmetricPipelineBuilder(
             ctx=_make_ctx(),
             opponent_provider=FakeProvider(),
@@ -159,6 +159,19 @@ class TestImproverPipeline:
         )
         edges = _edge_pairs(builder)
         assert ("FetchOpponentIdsStage", "InsightsStage") in edges
+        assert ("FetchOpponentIdsStage", "LineageStage") in edges
+
+    def test_insights_cache_on_disabled_for_d(self):
+        """`cache_insights_on_opponents=False` drops the InsightsStage edge but keeps LineageStage."""
+        builder = AdversarialAsymmetricPipelineBuilder(
+            ctx=_make_ctx(),
+            opponent_provider=FakeProvider(),
+            population_role="improver",
+            feedback_mode="composition",
+            cache_insights_on_opponents=False,
+        )
+        edges = _edge_pairs(builder)
+        assert ("FetchOpponentIdsStage", "InsightsStage") not in edges
         assert ("FetchOpponentIdsStage", "LineageStage") in edges
 
 
@@ -241,7 +254,7 @@ class TestConstructorPipeline:
         assert "CallValidatorFunction" in names
 
     def test_cache_on_edges_wired_for_g(self):
-        """G runs wire FetchOpponentIdsStage → InsightsStage / LineageStage cache_on."""
+        """G runs wire FetchOpponentIdsStage → InsightsStage / LineageStage cache_on by default."""
         builder = AdversarialAsymmetricPipelineBuilder(
             ctx=_make_ctx(),
             opponent_provider=FakeProvider(),
@@ -250,6 +263,19 @@ class TestConstructorPipeline:
         )
         edges = _edge_pairs(builder)
         assert ("FetchOpponentIdsStage", "InsightsStage") in edges
+        assert ("FetchOpponentIdsStage", "LineageStage") in edges
+
+    def test_insights_cache_on_disabled_for_g(self):
+        """`cache_insights_on_opponents=False` drops the InsightsStage edge but keeps LineageStage."""
+        builder = AdversarialAsymmetricPipelineBuilder(
+            ctx=_make_ctx(),
+            opponent_provider=FakeProvider(),
+            population_role="constructor",
+            feedback_mode="composition",
+            cache_insights_on_opponents=False,
+        )
+        edges = _edge_pairs(builder)
+        assert ("FetchOpponentIdsStage", "InsightsStage") not in edges
         assert ("FetchOpponentIdsStage", "LineageStage") in edges
 
 
