@@ -2,6 +2,51 @@
 
 <!-- version list -->
 
+## v1.30.0 (2026-05-14)
+
+### Bug Fixes
+
+- **profiler**: Caption + hover + stable colors (#230 #231 #238)
+  ([#239](https://github.com/KhrulkovV/gigaevo-core-internal/pull/239),
+  [`843919c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/843919cc73b3b7f2cdc5cfaf90f622958a7c9ce5))
+
+- **telegram_notify**: Use datetime.UTC alias (mypy unblocker)
+  ([#242](https://github.com/KhrulkovV/gigaevo-core-internal/pull/242),
+  [`afecfe3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/afecfe349ea3063a8cf5ef30452d8f4104ba9828))
+
+### Continuous Integration
+
+- Bump test job timeout 30→45 min
+  ([#244](https://github.com/KhrulkovV/gigaevo-core-internal/pull/244),
+  [`389c37b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/389c37bb945b7f615bbf06f80cf5976de7afbd05))
+
+### Documentation
+
+- Add canonical-docs rule to CLAUDE.md + refresh tools/README
+  ([#245](https://github.com/KhrulkovV/gigaevo-core-internal/pull/245),
+  [`f678f22`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f678f22add4e9d6aaa0ddddafaa9967be9f30235))
+
+### Features
+
+- **cli**: Gigaevo metrics — dump metrics from Redis (#235)
+  ([#240](https://github.com/KhrulkovV/gigaevo-core-internal/pull/240),
+  [`e1363bd`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e1363bdd9e8a3613375b3c0771f97930bcd91060))
+
+- **monitoring**: Live frontier-compare loop
+  ([#242](https://github.com/KhrulkovV/gigaevo-core-internal/pull/242),
+  [`afecfe3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/afecfe349ea3063a8cf5ef30452d8f4104ba9828))
+
+- **monitoring**: Live frontier-compare loop (#236)
+  ([#242](https://github.com/KhrulkovV/gigaevo-core-internal/pull/242),
+  [`afecfe3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/afecfe349ea3063a8cf5ef30452d8f4104ba9828))
+
+### Refactoring
+
+- **engine**: Rename EngineMetrics.total_mutants → iteration (#232 slice 1)
+  ([#243](https://github.com/KhrulkovV/gigaevo-core-internal/pull/243),
+  [`46693cc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/46693cc2b11d4761f72e730ef6ce9fd743010d39))
+
+
 ## v1.29.0 (2026-05-14)
 
 ### Bug Fixes
