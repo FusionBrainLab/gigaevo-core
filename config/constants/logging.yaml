@@ -14,3 +14,22 @@ live_profiler:
   last_n: 50
   # Seconds between re-renders.
   interval_s: 60.0
+
+# Live frontier-comparison loop — periodic in-run snapshot of how the
+# current population compares to the frontier (best-so-far / HoF).
+# See gigaevo/monitoring/live_frontier_compare.py.
+live_frontier_compare:
+  # Set to false to disable the loop entirely.
+  enabled: true
+  # Seconds between comparison snapshots.
+  interval_s: 60.0
+  # Metric names to compare. Must match the keys MetricsTracker writes
+  # (typically the names in the problem's metrics.yaml).
+  metrics: ["fitness"]
+  # Where the frontier comes from. v1 only supports "hof" (the current
+  # run's hall-of-fame as written by MetricsTracker to Redis). Other
+  # values are reserved for future implementations.
+  frontier_source: "hof"
+  # Emit targets: subset of ["log", "telegram"]. "log" writes via loguru
+  # at INFO; "telegram" calls tools.telegram_notify.notify.
+  emit_targets: ["log"]

@@ -22,7 +22,7 @@ Setup: see docs/setup/telegram-bot.md
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 import os
 import time
 
@@ -227,7 +227,7 @@ def post_fitness_update(
     exp_name: str, gen: int, fitness: float, label: str = ""
 ) -> None:
     """Hourly fitness update from watchdog."""
-    ts = datetime.now(datetime.UTC).strftime("%H:%M UTC")
+    ts = datetime.now(UTC).strftime("%H:%M UTC")
     run_label = f" ({label})" if label else ""
     msg = f"📈 *{exp_name}*{run_label}\nGen {gen} | Fitness {fitness:.1%} | {ts}"
     notify(msg)

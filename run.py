@@ -15,6 +15,7 @@ from gigaevo.monitoring.emit import (
     configure_event_counters_from_cfg,
     reset_event_counters,
 )
+from gigaevo.monitoring.live_frontier_compare import start_live_frontier_compare
 from gigaevo.monitoring.live_profiler import start_live_profiler
 from gigaevo.problems.initial_loaders import InitialProgramLoader
 from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
@@ -113,7 +114,57 @@ def main(cfg: DictConfig) -> None:
         interval_s=float(cfg.live_profiler.interval_s),
         last_n=last_n if last_n > 0 else None,
     )
+    _maybe_start_live_frontier_compare(cfg)
     asyncio.run(run_experiment(cfg))
+
+
+def _maybe_start_live_frontier_compare(cfg: DictConfig) -> None:
+    """Wire ``cfg.live_frontier_compare`` to the daemon entry point.
+
+    The cfg group is optional — older configs may not declare it. We
+    silently skip when missing so this never breaks an existing run.
+    """
+    lfc = cfg.get("live_frontier_compare") if hasattr(cfg, "get") else None
+    if lfc is None:
+        return
+    if not bool(lfc.get("enabled", True)):
+        return
+
+    # Resolve higher_is_better per metric from problems/<name>/metrics.yaml.
+    import yaml
+
+    metrics_yaml = Path(cfg.problem.dir) / "metrics.yaml"
+    higher_is_better: dict[str, bool] = {}
+    if metrics_yaml.exists():
+        with open(metrics_yaml) as f:
+            data = yaml.safe_load(f) or {}
+        for name, spec in (data.get("specs") or {}).items():
+            if isinstance(spec, dict):
+                higher_is_better[name] = bool(spec.get("higher_is_better", True))
+
+    frontier_source = str(lfc.get("frontier_source", "hof"))
+    if frontier_source != "hof":
+        logger.warning(
+            "[live_frontier_compare] frontier_source={!r} not yet "
+            "implemented; falling back to 'hof'.",
+            frontier_source,
+        )
+
+    redis_url = f"redis://{cfg.redis.host}:{cfg.redis.port}/{cfg.redis.db}"
+    # The metrics tracker writes under "${problem.name}:metrics" — same as
+    # the RedisMetricsConfig.key_prefix in config/logging/{tensorboard,wandb}.yaml.
+    key_prefix = f"{cfg.problem.name}:metrics"
+    metrics = [str(m) for m in lfc.get("metrics", ["fitness"])]
+    emit_targets = [str(t) for t in lfc.get("emit_targets", ["log"])]
+
+    start_live_frontier_compare(
+        redis_url=redis_url,
+        key_prefix=key_prefix,
+        metrics=metrics,
+        higher_is_better=higher_is_better,
+        interval_s=float(lfc.get("interval_s", 60.0)),
+        emit_targets=emit_targets,
+    )
 
 
 if __name__ == "__main__":
