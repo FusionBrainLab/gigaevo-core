@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextvars import ContextVar
+import json
 import os
 import random
 from typing import TYPE_CHECKING, Any, cast
+import urllib.error
+import urllib.request
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
@@ -154,57 +157,52 @@ class MultiModelRouter(Runnable):
         self._verify_models()
 
     def _verify_models(self) -> None:
-        """Best-effort startup probe — verify configured models exist on servers."""
-        import json as _json
-        import urllib.request
+        """Startup probe — verify configured models exist on their servers.
 
-        checked: set[str] = set()
+        Raises ``RuntimeError`` if any base URL is unreachable. Missing model
+        names on a reachable server are logged as warnings.
+        """
+        by_base_url: dict[str, list[ChatOpenAI]] = {}
         for model in self.models:
             base_url = getattr(model, "base_url", None) or getattr(
                 model, "openai_api_base", None
             )
-            if not base_url or base_url in checked:
+            if not isinstance(base_url, str):
                 continue
-            checked.add(base_url)
+            by_base_url.setdefault(base_url, []).append(model)
+
+        token = os.getenv("OPENAI_API_TOKEN", "")
+        for base_url, models in by_base_url.items():
+            url = f"{base_url.rstrip('/')}/models"
+            req = urllib.request.Request(
+                url, method="GET", headers={"Authorization": f"Bearer {token}"}
+            )
             try:
-                url = f"{base_url}/models"
-                req = urllib.request.Request(
-                    url,
-                    method="GET",
-                    headers={
-                        "Authorization": f"Bearer {os.getenv('OPENAI_API_TOKEN')}"
-                    },
-                )
                 with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
-                    data = _json.loads(resp.read())
-                available = [d["id"] for d in data.get("data", [])]
-                for m in self.models:
-                    m_url = getattr(m, "base_url", None) or getattr(
-                        m, "openai_api_base", None
+                    payload = json.loads(resp.read())
+            except (urllib.error.URLError, OSError) as exc:
+                raise RuntimeError(
+                    f"[MultiModelRouter:{self._name}] Cannot reach LLM endpoint "
+                    f"at {base_url}: {exc}"
+                ) from exc
+
+            available = {entry["id"] for entry in payload.get("data", [])}
+            for model in models:
+                if model.model_name in available:
+                    logger.info(
+                        "[MultiModelRouter:{}] Model {} verified on {}",
+                        self._name,
+                        model.model_name,
+                        base_url,
                     )
-                    if m_url == base_url:
-                        if m.model_name in available:
-                            logger.info(
-                                "[MultiModelRouter:{}] Model {} verified on {}",
-                                self._name,
-                                m.model_name,
-                                base_url,
-                            )
-                        else:
-                            logger.warning(
-                                "[MultiModelRouter:{}] Model {} NOT FOUND on {}. Available: {}",
-                                self._name,
-                                m.model_name,
-                                base_url,
-                                available,
-                            )
-            except Exception as exc:
-                logger.warning(
-                    "[MultiModelRouter:{}] Cannot verify models at {}: {}",
-                    self._name,
-                    base_url,
-                    exc,
-                )
+                else:
+                    logger.warning(
+                        "[MultiModelRouter:{}] Model {} NOT FOUND on {}. Available: {}",
+                        self._name,
+                        model.model_name,
+                        base_url,
+                        sorted(available),
+                    )
 
     @staticmethod
     def _current_task_id() -> int | None:
