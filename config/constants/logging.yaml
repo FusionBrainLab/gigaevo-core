@@ -5,3 +5,12 @@ log_rotation: "50 MB"
 log_retention: "30 days"
 log_dir: ${hydra:runtime.output_dir}
 tag: experiment
+
+# Live flow-profiler dashboard (profile_live.html).
+live_profiler:
+  # Initial y-axis window: only the most recent N programs are visible on
+  # page open. Toolbar buttons let viewers widen or show all. Set to 0 to
+  # disable clipping entirely.
+  last_n: 50
+  # Seconds between re-renders.
+  interval_s: 60.0

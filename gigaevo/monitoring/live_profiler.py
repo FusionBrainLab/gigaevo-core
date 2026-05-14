@@ -25,6 +25,7 @@ import time
 from loguru import logger
 
 from gigaevo.monitoring.flow_profiler import (
+    DEFAULT_LAST_N_ROWS,
     compute_saturation,
     compute_utilization,
     parse_log,
@@ -32,7 +33,13 @@ from gigaevo.monitoring.flow_profiler import (
 )
 
 
-def _render_once(log_path: Path, html_path: Path, label: str) -> tuple[int, int]:
+def _render_once(
+    log_path: Path,
+    html_path: Path,
+    label: str,
+    *,
+    last_n: int | None = DEFAULT_LAST_N_ROWS,
+) -> tuple[int, int]:
     """One render iteration. Returns ``(n_programs, n_llm_events)``."""
     programs, refreshes, llm_events, backpressure = parse_log(log_path)
     util = compute_utilization(programs, refreshes, llm_events)
@@ -46,6 +53,7 @@ def _render_once(log_path: Path, html_path: Path, label: str) -> tuple[int, int]
         utilization=util,
         backpressure=backpressure,
         saturation=sat,
+        last_n=last_n,
     )
     tmp = html_path.with_suffix(html_path.suffix + ".tmp")
     tmp.write_text(html)
@@ -59,6 +67,8 @@ def _loop(
     label: str,
     interval_s: float,
     stop: threading.Event,
+    *,
+    last_n: int | None,
 ) -> None:
     """Run-loop: wait until the log file exists, then re-render on tick."""
     # Hold off until the writer has actually created the file. setup_logger
@@ -68,7 +78,7 @@ def _loop(
     while not stop.is_set():
         t0 = time.monotonic()
         try:
-            n_prog, n_llm = _render_once(log_path, html_path, label)
+            n_prog, n_llm = _render_once(log_path, html_path, label, last_n=last_n)
             logger.debug(
                 "[live_profiler] rendered {} ({} programs, {} LLM events) in {:.2f}s",
                 html_path,
@@ -91,6 +101,7 @@ def start_live_profiler(
     label: str = "live",
     interval_s: float = 60.0,
     filename: str = "profile_live.html",
+    last_n: int | None = DEFAULT_LAST_N_ROWS,
 ) -> threading.Event:
     """Start a daemon thread that periodically re-renders the profiler HTML.
 
@@ -103,6 +114,11 @@ def start_live_profiler(
             parsing a 70MB log takes ~1s and the page is fully usable
             without redraw.
         filename: output filename inside ``out_dir``.
+        last_n: initial y-axis window size. Only the most recent
+            ``last_n`` programs are shown on page open; toolbar buttons
+            allow widening or showing all. Pass ``None`` to disable
+            clipping. Defaults to
+            :data:`gigaevo.monitoring.flow_profiler.DEFAULT_LAST_N_ROWS`.
 
     Returns:
         A :class:`threading.Event` you can ``set()`` to ask the loop to
@@ -117,14 +133,16 @@ def start_live_profiler(
     thread = threading.Thread(
         target=_loop,
         args=(log_path, html_path, label, float(interval_s), stop),
+        kwargs=dict(last_n=last_n),
         name="live-profiler",
         daemon=True,
     )
     thread.start()
     logger.info(
-        "[live_profiler] watching {} -> {} (every {:.0f}s)",
+        "[live_profiler] watching {} -> {} (every {:.0f}s, last_n={})",
         log_path,
         html_path,
         interval_s,
+        last_n,
     )
     return stop

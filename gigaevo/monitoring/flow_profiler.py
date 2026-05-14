@@ -280,14 +280,19 @@ def parse_log(
 
 
 def assign_rows(programs: dict[str, Program]) -> list[Program]:
-    """Stable row ordering: seeds, then accepted mutants, then everything else."""
+    """Iteration-order row assignment: seeds first, then strictly by birth.
+
+    Birth time is the only stable proxy for evolution iteration available
+    here (we don't track Task N on Program). Keeping seeds at the top is
+    natural — they have ``birth=None`` and precede every mutant. The "last
+    N rows" window on the dashboard therefore always shows the most
+    recently produced programs.
+    """
     seeds = [p for p in programs.values() if p.birth is None]
-    accepted = [p for p in programs.values() if p.birth is not None and p.accepted]
-    others = [p for p in programs.values() if p.birth is not None and not p.accepted]
+    born = [p for p in programs.values() if p.birth is not None]
     seeds.sort(key=lambda p: p.short_id)
-    accepted.sort(key=lambda p: p.birth)  # type: ignore[arg-type,return-value]
-    others.sort(key=lambda p: p.birth)  # type: ignore[arg-type,return-value]
-    ordered = seeds + accepted + others
+    born.sort(key=lambda p: p.birth)  # type: ignore[arg-type,return-value]
+    ordered = seeds + born
     for i, p in enumerate(ordered):
         p.row = i
     return ordered
@@ -818,8 +823,71 @@ def _build_label(p: Program) -> str:
     return f"<b>{p.short_id}</b>"
 
 
-def make_figure(programs: dict[str, Program], refreshes: list[datetime]):
-    """Build the Plotly figure. Plotly is imported lazily."""
+DEFAULT_LAST_N_ROWS = 50
+
+
+def _visible_rows(n: int, last_n: int | None) -> int:
+    """Number of rows to size the canvas for (capped to ``last_n``)."""
+    if last_n is None or n <= last_n:
+        return n
+    return last_n
+
+
+def _initial_y_range(n: int, last_n: int | None) -> list[float] | None:
+    """Initial reversed y-axis range showing the last ``last_n`` rows.
+
+    Returns ``None`` when the full chart fits (``n <= last_n`` or
+    ``last_n`` is ``None``); otherwise returns ``[bottom_value, top_value]``
+    for a reversed axis so the highest-indexed (newest) rows sit at the
+    bottom of the visible window and older rows are scrollable above.
+    """
+    if last_n is None or n <= last_n:
+        return None
+    return [n - 0.5, n - last_n - 0.5]
+
+
+def _yaxis_layout(n: int, y_labels: list[str], last_n: int | None) -> dict:
+    """Y-axis layout dict, honoring the ``last_n`` initial window."""
+    layout: dict = dict(
+        title=None,
+        tickmode="array",
+        tickvals=list(range(n)),
+        ticktext=y_labels,
+        tickfont=dict(size=13, color="#24292f"),
+        showgrid=False,
+        zeroline=False,
+        linecolor="#d0d7de",
+        showline=True,
+        mirror=True,
+        automargin=True,
+        # Pannable so the user can scroll back to older programs even
+        # when the initial window clips to the last N rows.
+        fixedrange=False,
+    )
+    rng = _initial_y_range(n, last_n)
+    if rng is None:
+        layout["autorange"] = "reversed"
+    else:
+        layout["autorange"] = False
+        layout["range"] = rng
+    return layout
+
+
+def make_figure(
+    programs: dict[str, Program],
+    refreshes: list[datetime],
+    *,
+    last_n: int | None = DEFAULT_LAST_N_ROWS,
+):
+    """Build the Plotly figure. Plotly is imported lazily.
+
+    ``last_n`` controls the initial y-axis window: when set and the number
+    of programs exceeds it, only the last ``last_n`` rows (highest indices
+    after :func:`assign_rows`) are visible by default. Y-axis is left
+    pannable (``fixedrange=False``) so users can scroll back to older
+    programs; the toolbar exposes quick row-window buttons too. Set
+    ``last_n=None`` to render the full chart with autoranged y.
+    """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -1163,22 +1231,8 @@ def make_figure(programs: dict[str, Program], refreshes: list[datetime]):
             showline=True,
             mirror=True,
         ),
-        yaxis=dict(
-            title=None,
-            tickmode="array",
-            tickvals=list(range(n)),
-            ticktext=y_labels,
-            autorange="reversed",
-            tickfont=dict(size=13, color="#24292f"),
-            showgrid=False,
-            zeroline=False,
-            linecolor="#d0d7de",
-            showline=True,
-            mirror=True,
-            automargin=True,
-            fixedrange=True,
-        ),
-        height=max(560, 30 * n + 220),
+        yaxis=_yaxis_layout(n, y_labels, last_n),
+        height=max(560, 30 * _visible_rows(n, last_n) + 220),
         width=1480,
         plot_bgcolor="#ffffff",
         paper_bgcolor="#ffffff",
@@ -1692,7 +1746,16 @@ _HTML_TEMPLATE = """<!doctype html>
 {utilization}
 {saturation}
 <div class="toolbar">
-  <button id="reset-view-btn" type="button" title="Reset zoom to full view">⟲ reset view</button>
+  <button id="reset-view-btn" type="button" title="Reset zoom to the initial last-N window">⟲ reset view</button>
+  <span class="sep"></span>
+  <span class="group">
+    <span class="lbl">rows</span>
+    <button data-rows="50"  type="button" title="Show the last 50 programs">last 50</button>
+    <button data-rows="100" type="button" title="Show the last 100 programs">last 100</button>
+    <button data-rows="200" type="button" title="Show the last 200 programs">last 200</button>
+    <button data-rows="500" type="button" title="Show the last 500 programs">last 500</button>
+    <button data-rows="all" type="button" title="Show every program">all ({total_n})</button>
+  </span>
   <span class="sep"></span>
   <span class="group">
     <span class="lbl">events</span>
@@ -1713,8 +1776,8 @@ _HTML_TEMPLATE = """<!doctype html>
     </label>
   </span>
   <span class="hint">
-    drag = zoom · dblclick chart = reset · click legend = toggle one trace ·
-    dblclick legend = isolate trace · range slider below to pan
+    drag plot = zoom · drag y-axis labels = pan rows · dblclick chart = reset ·
+    range slider below = pan time · row buttons above clamp the y-window
   </span>
 </div>
 <div class="chart">
@@ -1742,15 +1805,51 @@ _HTML_TEMPLATE = """<!doctype html>
     var plot = document.getElementById("{div_id}");
     if (!plot || !window.Plotly) return;
 
+    // Injected by render_full_html — total program count and the initial
+    // last-N window. We use the highest row indices (newest programs by
+    // birth) as the "last N" since assign_rows orders strictly by birth.
+    var TOTAL_N = {total_n};
+    var INITIAL_LAST_N = {initial_last_n};
+
+    // Reversed y-axis: range is [bottom_value, top_value]. Bottom = newest
+    // row (TOTAL_N - 0.5), top = TOTAL_N - k - 0.5 for "last k rows".
+    function rangeForLastK(k) {{
+      if (!TOTAL_N) return null;
+      if (k === "all" || k >= TOTAL_N) {{
+        return [TOTAL_N - 0.5, -0.5];
+      }}
+      return [TOTAL_N - 0.5, TOTAL_N - k - 0.5];
+    }}
+
+    var INITIAL_Y_RANGE = rangeForLastK(INITIAL_LAST_N);
+
     var btn = document.getElementById("reset-view-btn");
     if (btn) {{
       btn.addEventListener("click", function () {{
-        Plotly.relayout(plot, {{
-          "xaxis.autorange": true,
-          "yaxis.autorange": "reversed",
-        }});
+        var update = {{ "xaxis.autorange": true }};
+        if (INITIAL_Y_RANGE) {{
+          update["yaxis.autorange"] = false;
+          update["yaxis.range"] = INITIAL_Y_RANGE;
+        }} else {{
+          update["yaxis.autorange"] = "reversed";
+        }}
+        Plotly.relayout(plot, update);
       }});
     }}
+
+    document.querySelectorAll(".toolbar button[data-rows]")
+      .forEach(function (b) {{
+        b.addEventListener("click", function () {{
+          var raw = b.dataset.rows;
+          var k = raw === "all" ? "all" : parseInt(raw, 10);
+          var rng = rangeForLastK(k);
+          if (!rng) return;
+          Plotly.relayout(plot, {{
+            "yaxis.autorange": false,
+            "yaxis.range": rng,
+          }});
+        }});
+      }});
 
     var CAT_TRACES = {{
       "lifecycle": ["DAG span", "stage exec", "cached skip", "birth"],
@@ -1789,14 +1888,21 @@ def render_full_html(
     utilization: UtilizationReport | None = None,
     backpressure: list[BackpressureSampleEvent] | None = None,
     saturation: SaturationReport | None = None,
+    *,
+    last_n: int | None = DEFAULT_LAST_N_ROWS,
 ) -> str:
     """Return a standalone HTML document with Plotly.js inlined.
 
     Plotly is embedded directly (not loaded from a CDN) so the file
     renders inside sandboxed previews (VS Code HTML preview, archived
     artifacts, offline shares) without needing network access.
+
+    ``last_n`` sets the initial y-axis window — only the most recent
+    ``last_n`` programs are visible on open. The toolbar exposes quick
+    buttons to widen the window or show all rows. Pass ``last_n=None``
+    to disable clipping entirely.
     """
-    fig = make_figure(programs, refreshes)
+    fig = make_figure(programs, refreshes, last_n=last_n)
     plot_div = fig.to_html(
         full_html=False,
         include_plotlyjs="inline",
@@ -1829,6 +1935,8 @@ def render_full_html(
     bp_block = (
         _backpressure_timeseries_html(backpressure, div_id) if backpressure else ""
     )
+    total_n = len(programs)
+    initial_last_n = last_n if (last_n is not None and total_n > last_n) else total_n
     return _HTML_TEMPLATE.format(
         title=title,
         subtitle=subtitle,
@@ -1839,4 +1947,6 @@ def render_full_html(
         plot_div=plot_div,
         min_bar_s=MIN_BAR_VISUAL_MS / 1000,
         div_id=div_id,
+        total_n=total_n,
+        initial_last_n=initial_last_n,
     )

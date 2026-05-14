@@ -22,6 +22,7 @@ from pathlib import Path
 import click
 
 from gigaevo.monitoring.flow_profiler import (
+    DEFAULT_LAST_N_ROWS,
     compute_saturation,
     compute_utilization,
     format_summary_text,
@@ -53,6 +54,7 @@ def _profile_one(
     emit_text: bool,
     emit_html: bool,
     subtitle: str = "",
+    last_n: int | None = DEFAULT_LAST_N_ROWS,
 ) -> None:
     """Parse one log and write the requested artifacts."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -83,6 +85,7 @@ def _profile_one(
             utilization=utilization,
             backpressure=backpressure,
             saturation=saturation,
+            last_n=last_n,
         )
         html_path.write_text(html)
         click.echo(f"wrote {html_path}")
@@ -121,6 +124,17 @@ def _profile_one(
     default=False,
     help="Only emit the .html dashboard (skip text summary).",
 )
+@click.option(
+    "--last-n",
+    type=int,
+    default=DEFAULT_LAST_N_ROWS,
+    show_default=True,
+    help=(
+        "Initial y-axis window: show only the last N programs on page "
+        "open. Toolbar buttons let viewers widen or show all. Use 0 (or "
+        "any non-positive value) to disable clipping."
+    ),
+)
 @click.pass_context
 def profiler(
     ctx: click.Context,
@@ -129,6 +143,7 @@ def profiler(
     out_dir: str | None,
     text_only: bool,
     html_only: bool,
+    last_n: int,
 ) -> None:
     """Profile evolution runner logs into text summary + HTML dashboard.
 
@@ -147,6 +162,7 @@ def profiler(
         raise click.UsageError("--text-only and --html-only are mutually exclusive")
     emit_text = not html_only
     emit_html = not text_only
+    last_n_arg: int | None = last_n if last_n and last_n > 0 else None
 
     experiment: str | None = ctx.obj.get("experiment")
 
@@ -167,6 +183,7 @@ def profiler(
             label,
             emit_text=emit_text,
             emit_html=emit_html,
+            last_n=last_n_arg,
         )
         ctx.exit(0)
         return
@@ -214,6 +231,7 @@ def profiler(
             emit_text=emit_text,
             emit_html=emit_html,
             subtitle=f"{experiment} / {label}",
+            last_n=last_n_arg,
         )
 
     ctx.exit(0)

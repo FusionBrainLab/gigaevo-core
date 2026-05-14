@@ -106,7 +106,13 @@ def main(cfg: DictConfig) -> None:
     hydra_config = hydra.core.hydra_config.HydraConfig.get().runtime
     output_dir = Path(hydra_config.output_dir)
     logger.info("Output dir: {} | Log: {}", output_dir, log_file_path)
-    start_live_profiler(log_file_path, output_dir)
+    last_n = int(cfg.live_profiler.last_n)
+    start_live_profiler(
+        log_file_path,
+        output_dir,
+        interval_s=float(cfg.live_profiler.interval_s),
+        last_n=last_n if last_n > 0 else None,
+    )
     asyncio.run(run_experiment(cfg))
 
 
