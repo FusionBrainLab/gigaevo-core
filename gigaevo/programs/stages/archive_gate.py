@@ -64,14 +64,19 @@ class AllIslandsGateProvider(ArchiveGateProvider):
         self._islands = list(islands)
 
     def targets_for(self, program: Program) -> Sequence[ArchiveGateTarget]:
+        # Production ``MapElitesIsland`` keeps behavior_space + archive_selector
+        # under ``island.config``; only ``archive_storage`` is a flat attribute
+        # (see gigaevo/evolution/strategies/island.py). Reaching for flat
+        # ``island.behavior_space`` crashed every gate evaluation.
         targets: list[ArchiveGateTarget] = []
         for island in self._islands:
+            cfg = island.config
             targets.append(
                 ArchiveGateTarget(
-                    behavior_space=island.behavior_space,
+                    behavior_space=cfg.behavior_space,
                     archive_storage=island.archive_storage,
-                    archive_selector=island.archive_selector,
-                    behavior_keys=frozenset(island.behavior_keys),
+                    archive_selector=cfg.archive_selector,
+                    behavior_keys=frozenset(cfg.behavior_space.behavior_keys),
                 )
             )
         return targets

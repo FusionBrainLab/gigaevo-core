@@ -30,8 +30,13 @@ from gigaevo.programs.stages.archive_gate import (
 
 
 class _StubBehaviorSpace:
-    def __init__(self, cell_fn: Any = None) -> None:
+    def __init__(
+        self,
+        cell_fn: Any = None,
+        behavior_keys: frozenset[str] = frozenset({"fitness"}),
+    ) -> None:
         self._cell_fn = cell_fn or (lambda m: ("c",))
+        self.behavior_keys = behavior_keys
 
     def get_cell(self, metrics: dict[str, float]) -> tuple[Any, ...]:
         return self._cell_fn(metrics)
@@ -60,18 +65,38 @@ def _always_false(_p: Program, _c: Program) -> bool:
     return False
 
 
+class _StubIslandConfig:
+    """Mirrors ``IslandConfig`` shape: behavior_space + archive_selector
+    live here on the real island via ``island.config.<attr>``."""
+
+    def __init__(
+        self,
+        behavior_space: Any,
+        archive_selector: Any,
+    ) -> None:
+        self.behavior_space = behavior_space
+        self.archive_selector = archive_selector
+
+
 class _StubIsland:
+    """Mirrors ``MapElitesIsland`` shape: ``archive_storage`` is a direct
+    attribute, everything else is nested under ``.config``. Keeping this
+    in sync with the real class is what prevents the regression where
+    ``AllIslandsGateProvider`` reached for flat attributes that don't
+    exist on the production island.
+    """
+
     def __init__(
         self,
         behavior_space: Any,
         archive_storage: Any,
         archive_selector: Any,
-        behavior_keys: frozenset[str],
     ) -> None:
-        self.behavior_space = behavior_space
         self.archive_storage = archive_storage
-        self.archive_selector = archive_selector
-        self.behavior_keys = behavior_keys
+        self.config = _StubIslandConfig(
+            behavior_space=behavior_space,
+            archive_selector=archive_selector,
+        )
 
 
 def _make_program(metrics: dict[str, float] | None = None) -> Any:
@@ -102,16 +127,14 @@ def test_archive_gate_target_is_frozen_pydantic():
 
 
 def test_all_islands_gate_provider_returns_one_target_per_island():
-    i1 = _StubIsland(
-        _StubBehaviorSpace(), _StubArchiveStorage(), _always_true, frozenset({"f"})
-    )
-    i2 = _StubIsland(
-        _StubBehaviorSpace(), _StubArchiveStorage(), _always_false, frozenset({"f"})
-    )
+    bs = _StubBehaviorSpace(behavior_keys=frozenset({"f"}))
+    i1 = _StubIsland(bs, _StubArchiveStorage(), _always_true)
+    i2 = _StubIsland(bs, _StubArchiveStorage(), _always_false)
     provider = AllIslandsGateProvider(islands=[i1, i2])
     targets = list(provider.targets_for(program=None))  # type: ignore[arg-type]
     assert len(targets) == 2
     assert all(isinstance(t, ArchiveGateTarget) for t in targets)
+    assert all(t.behavior_keys == frozenset({"f"}) for t in targets)
 
 
 def test_all_islands_gate_provider_empty_islands_returns_empty():
