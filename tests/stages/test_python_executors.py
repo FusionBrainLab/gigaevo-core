@@ -662,3 +662,80 @@ def test_call_validator_output_is_raw_alias():
     )
 
     assert CallValidatorFunction.OutputModel is RawValidatorOutput
+
+
+# ---------------------------------------------------------------------------
+# run_exec_runner — worker_side_eval hook (parent-side integration)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerSideEvalIntegration:
+    async def test_hook_transforms_result(self) -> None:
+        """Supplying worker_side_eval transforms the result the parent receives."""
+        code = "def make(): return 6"
+
+        def square(raw: int) -> dict[str, int]:
+            return {"squared": raw * raw}
+
+        result, _, _ = await run_exec_runner(
+            code=code,
+            function_name="make",
+            worker_side_eval=square,
+            timeout=10,
+        )
+        assert result == {"squared": 36}
+
+    async def test_hook_omitted_preserves_existing_behavior(self) -> None:
+        """Omitting worker_side_eval is byte-identical to today's behavior."""
+        code = "def make(): return 6"
+        result, _, _ = await run_exec_runner(
+            code=code, function_name="make", timeout=10
+        )
+        assert result == 6
+
+    async def test_hook_reduces_non_picklable_to_picklable(self) -> None:
+        """A non-picklable result can be reduced to a picklable dict inside the worker.
+
+        Simulates the PyCapsule case: the evolved function returns something that
+        cannot cross the IPC boundary; worker_side_eval extracts a picklable
+        measurement from it before pickling.
+        """
+        code = """
+import threading
+
+class NonPicklable:
+    def __init__(self, value):
+        self.value = value
+        self._lock = threading.Lock()  # cannot be cloudpickled
+
+def make():
+    return NonPicklable(value=123)
+"""
+
+        def measure(obj: object) -> dict[str, int]:
+            return {"value": obj.value}
+
+        result, _, _ = await run_exec_runner(
+            code=code,
+            function_name="make",
+            worker_side_eval=measure,
+            timeout=10,
+        )
+        assert result == {"value": 123}
+
+    async def test_hook_exception_raises_exec_runner_error(self) -> None:
+        """An exception inside worker_side_eval surfaces as ExecRunnerError (same as user-code exception)."""
+        code = "def make(): return 6"
+
+        def boom(_raw: int) -> int:
+            raise RuntimeError("hook exploded")
+
+        with pytest.raises(ExecRunnerError) as exc_info:
+            await run_exec_runner(
+                code=code,
+                function_name="make",
+                worker_side_eval=boom,
+                timeout=10,
+            )
+        assert "RuntimeError" in exc_info.value.stderr
+        assert "hook exploded" in exc_info.value.stderr

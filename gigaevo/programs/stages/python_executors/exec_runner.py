@@ -215,6 +215,9 @@ def _run_one(payload: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None
 
         with redirect_stdout(captured), redirect_stderr(captured):
             result = fn(*args, **kwargs)
+            worker_side_eval = payload.get("worker_side_eval")
+            if worker_side_eval is not None:
+                result = worker_side_eval(result)
 
         printed = captured.getvalue()
         if printed:

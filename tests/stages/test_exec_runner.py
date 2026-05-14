@@ -319,6 +319,80 @@ class TestRunOne:
 
 
 # ---------------------------------------------------------------------------
+# _run_one — worker_side_eval hook
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerSideEval:
+    def test_hook_applied_to_result(self) -> None:
+        """When payload['worker_side_eval'] is supplied, it transforms the result."""
+        payload: dict[str, Any] = {
+            "code": "def make(): return 7",
+            "function_name": "make",
+            "args": [],
+            "kwargs": {},
+            "worker_side_eval": lambda raw: {"squared": raw * raw},
+        }
+        result, error = _run_one(payload)
+        assert error is None
+        assert result == {"squared": 49}
+        sys.modules.pop("user_code", None)
+        linecache.cache.pop(_CODE_FILENAME, None)
+
+    def test_hook_omitted_is_noop(self) -> None:
+        """When payload['worker_side_eval'] is missing, behavior is unchanged."""
+        payload: dict[str, Any] = {
+            "code": "def make(): return 7",
+            "function_name": "make",
+            "args": [],
+            "kwargs": {},
+        }
+        result, error = _run_one(payload)
+        assert error is None
+        assert result == 7
+        sys.modules.pop("user_code", None)
+        linecache.cache.pop(_CODE_FILENAME, None)
+
+    def test_hook_none_is_noop(self) -> None:
+        """Explicit None is the same as omitting the key."""
+        payload: dict[str, Any] = {
+            "code": "def make(): return 7",
+            "function_name": "make",
+            "args": [],
+            "kwargs": {},
+            "worker_side_eval": None,
+        }
+        result, error = _run_one(payload)
+        assert error is None
+        assert result == 7
+        sys.modules.pop("user_code", None)
+        linecache.cache.pop(_CODE_FILENAME, None)
+
+    def test_hook_exception_surfaces_as_error_envelope(self) -> None:
+        """An exception inside the hook produces the same error envelope as a user-code exception."""
+
+        def boom(_result: Any) -> Any:
+            raise RuntimeError("hook exploded")
+
+        payload: dict[str, Any] = {
+            "code": "def make(): return 7",
+            "function_name": "make",
+            "args": [],
+            "kwargs": {},
+            "worker_side_eval": boom,
+        }
+        result, error = _run_one(payload)
+        assert result is None
+        assert error is not None
+        assert error["_error"] is True
+        assert error["returncode"] == 1
+        assert "RuntimeError" in error["stderr"]
+        assert "hook exploded" in error["stderr"]
+        sys.modules.pop("user_code", None)
+        linecache.cache.pop(_CODE_FILENAME, None)
+
+
+# ---------------------------------------------------------------------------
 # _worker_loop
 # ---------------------------------------------------------------------------
 

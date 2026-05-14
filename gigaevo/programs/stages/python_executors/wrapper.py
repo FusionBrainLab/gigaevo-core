@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 import os
 from pathlib import Path
@@ -263,6 +263,7 @@ async def run_exec_runner(
     function_name: str,
     args: Sequence[Any] | None = None,
     kwargs: dict[str, Any] | None = None,
+    worker_side_eval: Callable[[Any], Any] | None = None,
     python_path: Sequence[Path] | None = None,
     env_updates: dict[str, Any] | None = None,
     timeout: int,
@@ -280,6 +281,10 @@ async def run_exec_runner(
         function_name: Function to call in the code
         args: Positional arguments for the function
         kwargs: Keyword arguments for the function
+        worker_side_eval: Optional callable applied to the result inside the worker,
+            before pickling. Use this to reduce non-picklable objects (e.g. compiled
+            kernel handles) to a picklable measurement. Exceptions surface as
+            ExecRunnerError, same as exceptions in the user code.
         python_path: Additional paths to add to sys.path
         timeout: Maximum execution time in seconds
         max_memory_mb: Maximum memory in MB (None = unlimited)
@@ -316,6 +321,7 @@ async def run_exec_runner(
         "args": list(args or []),
         "kwargs": dict(kwargs or {}),
         "env": dict(env_updates) if env_updates else {},
+        "worker_side_eval": worker_side_eval,
     }
     data = cloudpickle.dumps(payload, protocol=cloudpickle.DEFAULT_PROTOCOL)
 
