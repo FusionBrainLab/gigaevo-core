@@ -74,6 +74,10 @@ test = [
     "pytest-timeout>=2.4",
     "fakeredis[lua]>=2.19.0",
     "hypothesis>=6.0",
+    # Required by gigaevo.monitoring.flow_profiler (HTML dashboard render path).
+    # Profiler and live_profiler tests exercise the real render path; missing
+    # plotly produces ModuleNotFoundError on CI even though main deps build.
+    "plotly>=5.0",
 ]
 
 [project.scripts]

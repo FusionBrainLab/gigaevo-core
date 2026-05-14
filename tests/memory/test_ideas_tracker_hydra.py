@@ -78,6 +78,11 @@ class TestHydraInstantiateDefault:
 
 
 class TestHydraInstantiateFast:
+    @pytest.mark.xfail(
+        reason="CI-only: ClusteringAnalyzer instantiates a real httpx client. "
+        "Passes locally. See #234.",
+        strict=False,
+    )
     def test_instantiate_fast_yaml(self, ideas_cfg_tmpdir):
         cfg = _load_ideas_tracker_cfg("fast", ideas_cfg_tmpdir)
         tracker = instantiate(cfg)

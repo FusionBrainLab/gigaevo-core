@@ -6,7 +6,7 @@ These tests verify that:
 3. The predictor learns online and improves ordering over multiple batches
 4. LPT produces lower makespan than FIFO for programs with variable eval times
 5. Failed DAGs still contribute training data (survivorship bias fix)
-6. FIFO is the default when no prioritizer is provided
+6. CachedFirstPrioritizer is the default when no prioritizer is provided
 7. Full end-to-end: engine produces mutants -> DagRunner prioritizes -> ingests
 
 Uses real async event loops with controlled timing, NOT mocks for the
@@ -23,6 +23,7 @@ from gigaevo.evolution.scheduling.predictor import (
     SimpleHeuristicPredictor,
 )
 from gigaevo.evolution.scheduling.prioritizer import (
+    CachedFirstPrioritizer,
     FIFOPrioritizer,
     LPTPrioritizer,
 )
@@ -174,10 +175,10 @@ class TestDagRunnerPrioritizerCalled:
             f"LPT should launch longest first, but got {exec_order}"
         )
 
-    async def test_fifo_is_default(self) -> None:
-        """When no prioritizer is provided, DagRunner uses FIFOPrioritizer."""
+    async def test_cached_first_is_default(self) -> None:
+        """When no prioritizer is provided, DagRunner uses CachedFirstPrioritizer."""
         runner, _, _ = _make_runner()
-        assert isinstance(runner._prioritizer, FIFOPrioritizer)
+        assert isinstance(runner._prioritizer, CachedFirstPrioritizer)
 
 
 # ---------------------------------------------------------------------------

@@ -39,6 +39,10 @@ class _FakeEngine:
         self._in_flight_lock = asyncio.Lock()
         self._producer_sema = asyncio.Semaphore(max_in_flight)
         self._buffer_sema = asyncio.Semaphore(max_in_flight)
+        # LLM occupancy counter — incremented/decremented by run_one_mutant
+        # around generate_one_mutation. Required attribute since the steady-
+        # state engine started sampling per-LLM occupancy for backpressure.
+        self._llm_active: int = 0
 
         self.metrics = type("M", (), {})()
         self.metrics.total_mutants = 0
