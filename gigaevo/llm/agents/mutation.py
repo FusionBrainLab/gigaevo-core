@@ -22,6 +22,7 @@ from gigaevo.llm.models import (
     get_last_token_usage,
     get_selected_model,
 )
+from gigaevo.llm.token_tracking import llm_stage_context
 from gigaevo.monitoring.emit import emit as _emit_event
 from gigaevo.monitoring.events import LLMCall
 from gigaevo.programs.program import Program
@@ -255,7 +256,10 @@ class MutationAgent(LangGraphAgent):
         ok = False
         structured_response: Any = None
         try:
-            structured_response = await self.structured_llm.ainvoke(state["messages"])
+            with llm_stage_context(self.__class__.__name__):
+                structured_response = await self.structured_llm.ainvoke(
+                    state["messages"]
+                )
             state["llm_response"] = structured_response
             state["structured_output"] = structured_response
             if "metadata" not in state:

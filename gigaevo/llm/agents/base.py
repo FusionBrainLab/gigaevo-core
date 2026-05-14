@@ -20,6 +20,7 @@ from gigaevo.llm.models import (
     get_last_token_usage,
     get_selected_model,
 )
+from gigaevo.llm.token_tracking import llm_stage_context
 from gigaevo.monitoring.emit import emit as _emit_event
 from gigaevo.monitoring.events import LLMCall
 
@@ -100,7 +101,8 @@ class LangGraphAgent(ABC):
         error_type: str | None = None
         ok = False
         try:
-            response = await self.llm.ainvoke(state["messages"])
+            with llm_stage_context(self.__class__.__name__):
+                response = await self.llm.ainvoke(state["messages"])
             state["llm_response"] = response
             ok = True
 

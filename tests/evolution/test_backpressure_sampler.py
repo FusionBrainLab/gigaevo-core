@@ -173,6 +173,76 @@ async def test_sampler_stops_when_engine_running_flag_clears(
 
 
 @pytest.mark.asyncio
+async def test_sampler_writes_scalars_to_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each emitted sample must also write 5 scalars to engine._writer.
+
+    These scalars feed TensorBoard via the live profiler — without them,
+    operators can only see queue depth in event logs, not in plots. The
+    metrics are namespaced under ``backpressure/`` so they don't collide
+    with other engine scalars.
+    """
+    _collect_emitted_events(monkeypatch)
+    engine = _make_engine(max_in_flight=4, backpressure_sample_interval=0.01)
+    engine._running = True
+
+    # Track all scalar() calls on any writer derived from engine._writer.
+    scalar_calls: list[tuple[str, float, tuple[str, ...]]] = []
+
+    bound_writer = MagicMock()
+
+    def _record_scalar(metric: str, value: float, **kw: object) -> None:
+        path = tuple(kw.get("path", ())) if kw.get("path") else ()
+        scalar_calls.append((metric, float(value), path))
+
+    bound_writer.scalar.side_effect = _record_scalar
+    bound_writer.bind.return_value = bound_writer
+    engine._writer.bind.return_value = bound_writer
+
+    # Pre-occupy slots so values are non-trivial.
+    await engine._producer_sema.acquire()
+    await engine._buffer_sema.acquire()
+    await engine._buffer_sema.acquire()
+    async with engine._in_flight_lock:
+        engine._in_flight.add("aaaaaaaa")
+        engine._llm_active = 1
+
+    task = asyncio.create_task(backpressure_sampler_loop(engine))
+    try:
+        await asyncio.sleep(0.025)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # Every expected metric must appear at least once.
+    metric_names = {m for m, _, _ in scalar_calls}
+    expected = {
+        "producer_held",
+        "buffer_held",
+        "in_flight",
+        "llm_active",
+        "max_in_flight",
+    }
+    assert expected.issubset(metric_names), (
+        f"missing scalars: {expected - metric_names}"
+    )
+
+    # Spot-check a known value: max_in_flight == 4.
+    max_calls = [v for m, v, _ in scalar_calls if m == "max_in_flight"]
+    assert max_calls and all(v == 4.0 for v in max_calls)
+
+    # Held counts should reflect the pre-acquired slots.
+    producer_calls = [v for m, v, _ in scalar_calls if m == "producer_held"]
+    buffer_calls = [v for m, v, _ in scalar_calls if m == "buffer_held"]
+    assert producer_calls and producer_calls[0] == 1.0
+    assert buffer_calls and buffer_calls[0] == 2.0
+
+
+@pytest.mark.asyncio
 async def test_run_starts_and_cancels_the_sampler_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -45,6 +45,12 @@ async def backpressure_sampler_loop(engine: SteadyStateEvolutionEngine) -> None:
     cfg = engine._ss_config
     cap = cfg.max_in_flight
     interval = cfg.backpressure_sample_interval
+    # Bind once: the writer is created in EvolutionEngine.__init__ as
+    # writer.bind(path=["evolution_engine"]); we add a "backpressure" segment
+    # so each scalar lands at evolution_engine/backpressure/<metric> and gets
+    # its own TensorBoard panel. Binding inside the loop would re-create the
+    # bound writer 1Hz × cap_seconds, which is wasted allocation.
+    bp_writer = engine._writer.bind(path=["backpressure"])
     try:
         while engine._running:
             try:
@@ -61,6 +67,19 @@ async def backpressure_sampler_loop(engine: SteadyStateEvolutionEngine) -> None:
                     llm_active=max(0, llm_active),
                 )
                 emit(sample)
+                # Mirror the sample into TensorBoard so operators see queue
+                # depth in plots, not just in event logs. Wrapped so a writer
+                # backend hiccup never crashes the observability sidecar.
+                try:
+                    bp_writer.scalar("producer_held", float(sample.producer_held))
+                    bp_writer.scalar("buffer_held", float(sample.buffer_held))
+                    bp_writer.scalar("in_flight", float(sample.in_flight))
+                    bp_writer.scalar("llm_active", float(sample.llm_active))
+                    bp_writer.scalar("max_in_flight", float(sample.max_in_flight))
+                except Exception as scalar_exc:  # pragma: no cover — defensive
+                    logger.warning(
+                        "[BackpressureSampler] scalar write failed: {}", scalar_exc
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
