@@ -334,7 +334,7 @@ class TestEvolutionWithMetricsPipeline:
         await storage.add(seed)
 
         engine = await _run_with_metrics(storage, metrics_ctx, max_generations=5)
-        assert engine.metrics.total_mutants == 5
+        assert engine.metrics.iteration == 5
 
         programs = await _get_archive_programs(server)
         # With the two-semaphore pipeline (steady-state depth ~2N), a producer

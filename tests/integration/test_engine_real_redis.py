@@ -272,8 +272,8 @@ async def test_real_redis_steady_state_smoke(real_redis_storage) -> None:
         await dag.stop()
 
     # ---- Bounded overshoot ----
-    assert 6 <= engine.metrics.total_mutants <= 6 + 2, (
-        f"engine finished outside cap window: {engine.metrics.total_mutants}"
+    assert 6 <= engine.metrics.iteration <= 6 + 2, (
+        f"engine finished outside cap window: {engine.metrics.iteration}"
     )
 
     # ---- No slot leak ----
@@ -300,9 +300,9 @@ async def test_real_redis_steady_state_smoke(real_redis_storage) -> None:
     raw = await storage.load_run_state_str(ENGINE_SNAPSHOT_KEY)
     assert raw is not None, "engine snapshot was never persisted to Redis"
     redis_snap = EngineSnapshot.model_validate_json(raw)
-    assert redis_snap.total_mutants == engine.metrics.total_mutants, (
+    assert redis_snap.total_mutants == engine.metrics.iteration, (
         f"Redis snapshot lagged memory: redis={redis_snap.total_mutants} "
-        f"memory={engine.metrics.total_mutants}"
+        f"memory={engine.metrics.iteration}"
     )
     assert redis_snap.version == engine._snapshot.version
 

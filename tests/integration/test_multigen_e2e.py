@@ -355,7 +355,7 @@ class TestMultiGenArchiveTrajectory:
 
         # The cap is a *floor* trigger (≥ max); concurrent in-flight
         # mutants may bring total_mutants slightly above max.
-        assert engine.metrics.total_mutants >= 5
+        assert engine.metrics.iteration >= 5
 
         programs = await _get_archive(server)
         assert len(programs) >= 3, (
@@ -386,7 +386,7 @@ class TestMultiGenArchiveTrajectory:
             f"Expected fitness improvement over seed, got fitnesses: {fitnesses}"
         )
         # The cap is a *floor* trigger (≥ max).
-        assert engine.metrics.total_mutants >= 5
+        assert engine.metrics.iteration >= 5
 
 
 class TestMultiGenLineageChains:
@@ -458,7 +458,7 @@ class TestMultiGenMetrics:
         await _add_seed(storage)
 
         engine, _ = await _run(storage, max_generations=4)
-        assert engine.metrics.total_mutants >= 4
+        assert engine.metrics.iteration >= 4
 
     async def test_mutations_created_positive(self) -> None:
         """At least some mutations were created across all generations."""
@@ -780,6 +780,6 @@ class TestMultiGenStrategyGeneration:
 
         # The cap is a floor (≥ max) — restore must preserve whatever value
         # was persisted.
-        assert engine2.metrics.total_mutants >= 3
+        assert engine2.metrics.iteration >= 3
         assert strategy2.generation > 0
         await check_storage.close()

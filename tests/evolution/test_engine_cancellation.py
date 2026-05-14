@@ -233,15 +233,14 @@ async def test_cancel_midrun_leaves_engine_recoverable() -> None:
         # Wait until at least 3 mutants are persisted (== have advanced
         # the cap counter past the seed).
         deadline = asyncio.get_event_loop().time() + 20.0
-        while engine.metrics.total_mutants < 3:
+        while engine.metrics.iteration < 3:
             if asyncio.get_event_loop().time() > deadline:
                 pytest.fail(
-                    f"never reached 3 mutants; total_mutants="
-                    f"{engine.metrics.total_mutants}"
+                    f"never reached 3 mutants; total_mutants={engine.metrics.iteration}"
                 )
             await asyncio.sleep(0.005)
 
-        tm_at_cancel = engine.metrics.total_mutants
+        tm_at_cancel = engine.metrics.iteration
         pp_at_cancel = engine.metrics.programs_processed
         run_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -266,11 +265,11 @@ async def test_cancel_midrun_leaves_engine_recoverable() -> None:
     )
 
     # ---- Invariant 3: total_mutants did not regress on cancel ----
-    assert engine.metrics.total_mutants >= tm_at_cancel, (
-        f"total_mutants regressed: {tm_at_cancel} -> {engine.metrics.total_mutants}"
+    assert engine.metrics.iteration >= tm_at_cancel, (
+        f"total_mutants regressed: {tm_at_cancel} -> {engine.metrics.iteration}"
     )
     # And was bounded by the configured cap + max_in_flight overshoot.
-    assert engine.metrics.total_mutants <= 10 + 4
+    assert engine.metrics.iteration <= 10 + 4
 
     # ---- Invariant 4: programs_processed did not regress on cancel ----
     assert engine.metrics.programs_processed >= pp_at_cancel, (
@@ -279,7 +278,7 @@ async def test_cancel_midrun_leaves_engine_recoverable() -> None:
     )
 
     # ---- Invariant 5: snapshot is consistent with metrics ----
-    assert engine._snapshot.total_mutants == engine.metrics.total_mutants
+    assert engine._snapshot.total_mutants == engine.metrics.iteration
     assert engine._snapshot.programs_processed == engine.metrics.programs_processed
 
 
@@ -315,7 +314,7 @@ async def test_cancel_before_first_mutant_drains_cleanly() -> None:
         f"|in_flight|={len(engine._in_flight)} != max_in_flight=2"
     )
     # Counter is bounded.
-    assert engine.metrics.total_mutants <= 5 + 2
+    assert engine.metrics.iteration <= 5 + 2
 
 
 @pytest.mark.timeout(60)
@@ -341,11 +340,10 @@ async def test_cancel_drains_done_programs_via_final_sweep() -> None:
         # Wait until the engine has produced several mutants, ensuring the
         # final sweep has real work to do.
         deadline = asyncio.get_event_loop().time() + 20.0
-        while engine.metrics.total_mutants < 5:
+        while engine.metrics.iteration < 5:
             if asyncio.get_event_loop().time() > deadline:
                 pytest.fail(
-                    f"never reached 5 mutants; total_mutants="
-                    f"{engine.metrics.total_mutants}"
+                    f"never reached 5 mutants; total_mutants={engine.metrics.iteration}"
                 )
             await asyncio.sleep(0.005)
 
@@ -368,10 +366,10 @@ async def test_cancel_drains_done_programs_via_final_sweep() -> None:
     # in practice the sweep drains everything — but we only assert the
     # weaker invariant: programs_processed should have advanced PAST the
     # in-process counter at cancel, proving the sweep ran.
-    assert engine.metrics.programs_processed >= engine.metrics.total_mutants - 4, (
+    assert engine.metrics.programs_processed >= engine.metrics.iteration - 4, (
         f"final sweep did not drain DONE programs: "
         f"programs_processed={engine.metrics.programs_processed} "
-        f"vs total_mutants={engine.metrics.total_mutants}"
+        f"vs total_mutants={engine.metrics.iteration}"
     )
 
 

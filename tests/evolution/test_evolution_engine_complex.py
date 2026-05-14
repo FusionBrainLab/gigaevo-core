@@ -84,7 +84,7 @@ class TestRestoreState:
 
         await engine.restore_state()
 
-        assert engine.metrics.total_mutants == 17
+        assert engine.metrics.iteration == 17
 
     async def test_restore_no_saved_state(self):
         """When no saved snapshot, total_mutants stays at 0."""
@@ -93,7 +93,7 @@ class TestRestoreState:
 
         await engine.restore_state()
 
-        assert engine.metrics.total_mutants == 0
+        assert engine.metrics.iteration == 0
 
 
 # ===================================================================

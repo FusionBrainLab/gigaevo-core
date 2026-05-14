@@ -416,7 +416,7 @@ class TestMemoryE2EWithRealEngine:
         )
 
         # Engine completed at least 5 mutants (JIT cap is a floor trigger)
-        assert engine.metrics.total_mutants >= 5
+        assert engine.metrics.iteration >= 5
 
         # Programs were processed
         done = await storage.get_all_by_status(ProgramState.DONE.value)

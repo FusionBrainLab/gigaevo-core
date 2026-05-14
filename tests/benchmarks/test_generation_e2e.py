@@ -164,7 +164,7 @@ class TestGenerationWallTime:
     ) -> None:
         engine, elapsed_s = await _run_engine(archive_size, redis_url=redis_url)
 
-        assert engine.metrics.total_mutants == 1
+        assert engine.metrics.iteration == 1
         progs_per_s = (archive_size + 3) / elapsed_s
         backend = "redis" if redis_url else "fakeredis"
         print(
@@ -183,7 +183,7 @@ class TestGenerationWithCollector:
             archive_size, include_collector=True, redis_url=redis_url
         )
 
-        assert engine.metrics.total_mutants == 1
+        assert engine.metrics.iteration == 1
         backend = "redis" if redis_url else "fakeredis"
         print(
             f"BENCHMARK: generation_with_collector N={archive_size} ({backend}): "
@@ -201,7 +201,7 @@ class TestThreeGenerations:
             archive_size, max_generations=3, redis_url=redis_url
         )
 
-        assert engine.metrics.total_mutants == 3
+        assert engine.metrics.iteration == 3
         per_gen = elapsed_s / 3
         backend = "redis" if redis_url else "fakeredis"
         print(

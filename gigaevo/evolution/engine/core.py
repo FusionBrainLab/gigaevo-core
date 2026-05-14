@@ -180,7 +180,7 @@ class EvolutionEngine:
             if elapsed > 30 and int(elapsed) % 60 < self.config.loop_interval:
                 logger.info(
                     "[EvolutionEngine] mutants={} Waiting for idle ({:.0f}s elapsed)",
-                    self.metrics.total_mutants,
+                    self.metrics.iteration,
                     elapsed,
                 )
             # Ghost safety: after 30s, verify counts with full fetch (once)
@@ -234,7 +234,7 @@ class EvolutionEngine:
         parents = await self.strategy.select_elites(total=num_parents)
         logger.debug(
             "[EvolutionEngine] mutants={} Parents selected: {}",
-            self.metrics.total_mutants,
+            self.metrics.iteration,
             len(parents),
         )
         self.metrics.elites_selected += len(parents)
@@ -253,7 +253,7 @@ class EvolutionEngine:
         if not done_ids:
             logger.debug(
                 "[EvolutionEngine] mutants={} No completed programs to ingest",
-                self.metrics.total_mutants,
+                self.metrics.iteration,
             )
             return
 
@@ -263,7 +263,7 @@ class EvolutionEngine:
         if not new_ids:
             logger.debug(
                 "[EvolutionEngine] mutants={} {} DONE programs all in archive, skipping",
-                self.metrics.total_mutants,
+                self.metrics.iteration,
                 len(done_ids),
             )
             return
@@ -281,7 +281,7 @@ class EvolutionEngine:
 
         logger.info(
             "[EvolutionEngine] mutants={} Ingest {} program(s) ({} in archive skipped)",
-            self.metrics.total_mutants,
+            self.metrics.iteration,
             len(completed),
             len(done_ids) - len(new_ids),
         )
@@ -364,7 +364,7 @@ class EvolutionEngine:
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
         logger.info(
             "[EvolutionEngine] mutants={} Ingest done | added={}, rejected_validation={}, rejected_strategy={}",
-            self.metrics.total_mutants,
+            self.metrics.iteration,
             added,
             rej_valid,
             rej_strategy,
@@ -452,12 +452,16 @@ class EvolutionEngine:
         set_current_snapshot(self._snapshot)
 
     async def restore_state(self) -> None:
-        """Restore total_mutants and programs_processed from storage after a resume."""
+        """Restore iteration and programs_processed from storage after a resume.
+
+        Note: EngineSnapshot still spells the persisted field ``total_mutants``;
+        the rename to ``iteration`` will land in a follow-up slice (#232).
+        """
         await self._load_snapshot_on_resume()
-        self.metrics.total_mutants = self._snapshot.total_mutants
+        self.metrics.iteration = self._snapshot.total_mutants
         self.metrics.programs_processed = self._snapshot.programs_processed
         logger.info(
-            "[EvolutionEngine] Restored total_mutants={} programs_processed={}",
+            "[EvolutionEngine] Restored iteration={} programs_processed={}",
             self._snapshot.total_mutants,
             self._snapshot.programs_processed,
         )
@@ -473,7 +477,7 @@ class EvolutionEngine:
             else 0.0
         )
         return StopContext(
-            total_mutants=self.metrics.total_mutants,
+            total_mutants=self.metrics.iteration,
             elapsed_seconds=elapsed,
             best_fitness=self._metrics_tracker.get_best_fitness(),
             programs_processed=self.metrics.programs_processed,

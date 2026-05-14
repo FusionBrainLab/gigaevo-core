@@ -83,7 +83,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self._run_start_time = time.monotonic()
 
         await self._write_snapshot(
-            total_mutants=self.metrics.total_mutants,
+            total_mutants=self.metrics.iteration,
             programs_processed=self.metrics.programs_processed,
         )
 

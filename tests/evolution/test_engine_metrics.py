@@ -5,17 +5,18 @@ from __future__ import annotations
 from gigaevo.evolution.engine.metrics import EngineMetrics
 
 
-def test_total_mutants_replaces_total_generations():
-    """Engine progress counter is named total_mutants, not total_generations."""
+def test_iteration_is_the_canonical_progress_counter():
+    """Engine progress counter is named ``iteration`` (canonical, per #232)."""
     m = EngineMetrics()
-    assert m.total_mutants == 0
+    assert m.iteration == 0
     assert "total_generations" not in EngineMetrics.model_fields
+    assert "total_mutants" not in EngineMetrics.model_fields
 
 
 class TestEngineMetricsDefaults:
     def test_all_counters_start_at_zero(self):
         m = EngineMetrics()
-        assert m.total_mutants == 0
+        assert m.iteration == 0
         assert m.programs_processed == 0
         assert m.mutations_created == 0
         assert m.added == 0
@@ -91,16 +92,16 @@ class TestEngineMetricsCombined:
         assert m.submitted_for_refresh == 7
         assert m.mutations_created == 4
         # These aren't touched
-        assert m.total_mutants == 0
+        assert m.iteration == 0
         assert m.programs_processed == 0
 
     def test_direct_field_mutation(self):
-        """total_mutants and programs_processed are set directly, not via record methods."""
+        """iteration and programs_processed are set directly, not via record methods."""
         m = EngineMetrics()
-        m.total_mutants = 42
+        m.iteration = 42
         m.programs_processed = 100
 
-        assert m.total_mutants == 42
+        assert m.iteration == 42
         assert m.programs_processed == 100
 
     def test_realistic_multi_generation_scenario(self):
@@ -108,7 +109,7 @@ class TestEngineMetricsCombined:
         m = EngineMetrics()
 
         for _gen in range(3):
-            m.total_mutants += 1
+            m.iteration += 1
             m.elites_selected += 2
             m.mutations_created += 2
             m.record_ingestion_metrics(
@@ -117,7 +118,7 @@ class TestEngineMetricsCombined:
             m.submitted_for_refresh += 2
             m.programs_processed += 2
 
-        assert m.total_mutants == 3
+        assert m.iteration == 3
         assert m.elites_selected == 6
         assert m.mutations_created == 6
         assert m.added == 6

@@ -4,7 +4,7 @@ Area 2 — EvolutionEngine:
   1. Engine with zero seed programs — first generation produces mutations from
      an empty archive (no crash; elites=[] → created=0 → generation still advances).
   2. After max_generations, engine.task completes and
-     engine.metrics.total_mutants == max_generations.
+     engine.metrics.iteration == max_generations.
   3. A generation where all mutations are rejected by the archive (duplicate bins)
      — engine still advances generation counter.
 
@@ -256,7 +256,7 @@ class TestMaxGenerationsCap:
 
         engine = await _run_engine(storage, max_generations=3)
 
-        assert engine.metrics.total_mutants >= 3
+        assert engine.metrics.iteration >= 3
 
     async def test_engine_task_is_done_after_max_generations(self) -> None:
         """engine.task must be done (not cancelled, not running) after cap is reached."""
@@ -287,7 +287,7 @@ class TestMaxGenerationsCap:
         # The cap is a *floor* trigger (≥ max) with bounded overshoot up
         # to max_in_flight - 1 because multiple async mutant tasks may
         # already be producing when the dispatcher next checks.
-        assert engine.metrics.total_mutants >= 2
+        assert engine.metrics.iteration >= 2
 
     async def test_engine_does_not_overshoot_generation_cap(self) -> None:
         """total_mutants overshoots are bounded by max_in_flight - 1.
@@ -305,10 +305,10 @@ class TestMaxGenerationsCap:
         engine = await _run_engine(storage, max_generations=4)
 
         # Bound: max + (max_in_flight default 5) - 1 = 8
-        assert engine.metrics.total_mutants <= 4 + engine.config.max_in_flight, (
-            f"Engine overshot cap: total_mutants={engine.metrics.total_mutants}"
+        assert engine.metrics.iteration <= 4 + engine.config.max_in_flight, (
+            f"Engine overshot cap: total_mutants={engine.metrics.iteration}"
         )
-        assert engine.metrics.total_mutants >= 4
+        assert engine.metrics.iteration >= 4
 
 
 # ---------------------------------------------------------------------------
@@ -386,8 +386,8 @@ class TestAllMutationsRejected:
         # Counter must have advanced past the cap despite all archive rejections
         # (mutants are *created* — total_mutants ticks — but the strategy rejects
         # them in the ingestor; the cap still fires).
-        assert engine.metrics.total_mutants >= 3, (
-            f"Expected ≥3 mutants produced, got {engine.metrics.total_mutants}"
+        assert engine.metrics.iteration >= 3, (
+            f"Expected ≥3 mutants produced, got {engine.metrics.iteration}"
         )
 
 

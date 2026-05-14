@@ -293,7 +293,7 @@ class _FakeEngine:
         self._producer_sema = asyncio.Semaphore(8)
         self._buffer_sema = asyncio.Semaphore(8)
         self.metrics = type("M", (), {})()
-        self.metrics.total_mutants = 0
+        self.metrics.iteration = 0
         self.metrics.mutations_created = 0
         self.metrics.submitted_for_refresh = 0
 

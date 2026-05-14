@@ -253,10 +253,10 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
     finally:
         await dag_a.stop()
 
-    assert 5 <= engine_a.metrics.total_mutants <= 5 + 2, (
-        f"engine A finished outside cap window: {engine_a.metrics.total_mutants}"
+    assert 5 <= engine_a.metrics.iteration <= 5 + 2, (
+        f"engine A finished outside cap window: {engine_a.metrics.iteration}"
     )
-    a_total_mutants = engine_a.metrics.total_mutants
+    a_total_mutants = engine_a.metrics.iteration
     a_programs_processed = engine_a.metrics.programs_processed
 
     # Engine A snapshot survived the run.
@@ -293,9 +293,9 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
 
     # Restore counters from the snapshot persisted by engine A.
     await engine_b.restore_state()
-    assert engine_b.metrics.total_mutants == a_total_mutants, (
+    assert engine_b.metrics.iteration == a_total_mutants, (
         f"restore_state did not hydrate total_mutants: "
-        f"got {engine_b.metrics.total_mutants}, expected {a_total_mutants}"
+        f"got {engine_b.metrics.iteration}, expected {a_total_mutants}"
     )
     assert engine_b.metrics.programs_processed == a_programs_processed
 
@@ -308,8 +308,8 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
         await storage_b.close()
 
     # ---- Invariant: engine B reached cap=10 with bounded overshoot ----
-    assert 10 <= engine_b.metrics.total_mutants <= 10 + 2, (
-        f"engine B finished outside cap window: {engine_b.metrics.total_mutants}"
+    assert 10 <= engine_b.metrics.iteration <= 10 + 2, (
+        f"engine B finished outside cap window: {engine_b.metrics.iteration}"
     )
 
     # ---- Invariant: no slot leak on engine B's exit ----
@@ -322,7 +322,7 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
     )
 
     # ---- Invariant: progress is strictly forward across the resume ----
-    assert engine_b.metrics.total_mutants > a_total_mutants, (
+    assert engine_b.metrics.iteration > a_total_mutants, (
         "resumed engine did not produce additional mutants"
     )
     assert engine_b.metrics.programs_processed >= a_programs_processed, (
@@ -331,7 +331,7 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
     )
 
     # ---- Invariant: snapshot is consistent with metrics at end ----
-    assert engine_b._snapshot.total_mutants == engine_b.metrics.total_mutants
+    assert engine_b._snapshot.total_mutants == engine_b.metrics.iteration
     assert engine_b._snapshot.programs_processed == engine_b.metrics.programs_processed
 
 

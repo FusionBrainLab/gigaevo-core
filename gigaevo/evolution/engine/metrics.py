@@ -6,12 +6,15 @@ from pydantic import BaseModel, Field
 class EngineMetrics(BaseModel):
     """Simplified metrics tracking (extracted)."""
 
-    total_mutants: int = Field(
+    iteration: int = Field(
         default=0,
         description=(
-            "Total number of mutants produced (incremented once per "
-            "successful generate_mutations call, before DAG evaluation). "
-            "Monotone, single source of truth for engine progress."
+            "Program-ordinal counter — the canonical name for the engine's "
+            "progress counter. Incremented once per successful "
+            "generate_mutations call, before DAG evaluation. Monotone, "
+            "single source of truth for engine progress. Mirrored into "
+            "Program.iteration on each new program. See "
+            "gigaevo/programs/README.md (Canonical vocabulary)."
         ),
     )
     programs_processed: int = Field(

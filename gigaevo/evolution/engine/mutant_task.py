@@ -84,7 +84,7 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                 mutator=engine.mutation_operator,
                 storage=engine.storage,
                 state_manager=engine.state,
-                iteration=engine.metrics.total_mutants,
+                iteration=engine.metrics.iteration,
                 task_id=task_id,
             )
         finally:
@@ -112,12 +112,14 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
         # Ticket ownership has transferred to the ingestor; null it locally
         # so the `finally` block does not double-release the same locks.
         ticket = None
-        engine.metrics.total_mutants += 1
+        engine.metrics.iteration += 1
         engine.metrics.mutations_created += 1
         # Persist counter so a resume after a crash continues from the
         # correct mutant count rather than 0. Without this,
         # MaxMutantsStopper would run the full budget again on resume.
-        await engine._write_snapshot(total_mutants=engine.metrics.total_mutants)
+        # (EngineSnapshot still spells the field ``total_mutants``; rename
+        # follow-up tracked under #232.)
+        await engine._write_snapshot(total_mutants=engine.metrics.iteration)
         return new_id
 
     finally:

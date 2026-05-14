@@ -331,7 +331,7 @@ class TestResumeEndToEnd:
         await _add_seed(storage)
 
         engine = await _run(storage, max_generations=5)
-        assert engine.metrics.total_mutants == 5
+        assert engine.metrics.iteration == 5
 
         programs = await _get_archive_programs(server)
         values = _archive_values(programs)
@@ -365,7 +365,7 @@ class TestResumeEndToEnd:
         storage_c = _make_fakeredis_storage(server_c)
         await _add_seed(storage_c)
         engine_c = await _run(storage_c, max_generations=5)
-        assert engine_c.metrics.total_mutants == 5
+        assert engine_c.metrics.iteration == 5
 
         programs_c = await _get_archive_programs(server_c)
         values_c = _archive_values(programs_c)
@@ -375,7 +375,7 @@ class TestResumeEndToEnd:
         storage_s1 = _make_fakeredis_storage(server_s)
         await _add_seed(storage_s1)
         engine_p1 = await _run(storage_s1, max_generations=3)
-        assert engine_p1.metrics.total_mutants == 3
+        assert engine_p1.metrics.iteration == 3
 
         programs_after_p1 = await _get_archive_programs(server_s)
         # Pipeline depth ~2 allows mutant collisions → up to 4 cells, at
@@ -387,7 +387,7 @@ class TestResumeEndToEnd:
         # --- Split run: part 2 (resume → 2 more gens, total cap = 5) ---
         storage_s2 = _make_fakeredis_storage(server_s)
         engine_p2 = await _resume(storage_s2, total_cap=5)
-        assert engine_p2.metrics.total_mutants == 5
+        assert engine_p2.metrics.iteration == 5
 
         programs_s = await _get_archive_programs(server_s)
         values_s = _archive_values(programs_s)
@@ -458,7 +458,7 @@ class TestResumeEndToEnd:
         storage1 = _make_fakeredis_storage(server)
         await _add_seed(storage1)
         engine1 = await _run(storage1, max_generations=3)
-        assert engine1.metrics.total_mutants == 3
+        assert engine1.metrics.iteration == 3
 
         # Inspect restored counters without running any more gens
         storage2 = _make_fakeredis_storage(server)
@@ -466,15 +466,15 @@ class TestResumeEndToEnd:
         await engine2.restore_state()
         await engine2.strategy.restore_state()
 
-        assert engine2.metrics.total_mutants == 3, (
-            f"Engine counter must be restored to 3, got {engine2.metrics.total_mutants}"
+        assert engine2.metrics.iteration == 3, (
+            f"Engine counter must be restored to 3, got {engine2.metrics.iteration}"
         )
         # Strategy generation is bumped on every select_elites call (one per
         # mutant attempt). The seed is ingested before mutation, so
         # strategy.generation ≤ total_mutants.
-        assert 0 < engine2.strategy.generation <= engine2.metrics.total_mutants, (
+        assert 0 < engine2.strategy.generation <= engine2.metrics.iteration, (
             f"Strategy generation {engine2.strategy.generation} out of expected range "
-            f"(0, {engine2.metrics.total_mutants}]"
+            f"(0, {engine2.metrics.iteration}]"
         )
         await storage2.close()
 
@@ -490,7 +490,7 @@ class TestResumeEndToEnd:
         storage1 = _make_fakeredis_storage(server)
         await _add_seed(storage1)
         engine1 = await _run(storage1, max_generations=5)
-        assert engine1.metrics.total_mutants == 5
+        assert engine1.metrics.iteration == 5
 
         values_before = _archive_values(await _get_archive_programs(server))
 
@@ -499,7 +499,7 @@ class TestResumeEndToEnd:
         engine2 = await _resume(storage2, total_cap=5)
 
         # Counter must remain at 5 (zero additional steps taken)
-        assert engine2.metrics.total_mutants == 5
+        assert engine2.metrics.iteration == 5
 
         # Archive must be identical to what it was before the no-op resume
         values_after = _archive_values(await _get_archive_programs(server))

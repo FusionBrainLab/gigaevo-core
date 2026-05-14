@@ -292,9 +292,9 @@ async def test_two_sema_pipeline_drains_cleanly(real_redis_storage) -> None:
     # Bounded overshoot: cap=30, max_in_flight=3 ⇒ at most 30 + 3 mutants
     # can complete before the stopper drains the pipeline. An unbounded
     # overshoot would silently mask a stopper/drain-logic regression.
-    assert 30 <= engine.metrics.total_mutants <= 30 + 3, (
+    assert 30 <= engine.metrics.iteration <= 30 + 3, (
         f"engine finished outside cap window: total_mutants="
-        f"{engine.metrics.total_mutants} (expected 30..33)"
+        f"{engine.metrics.iteration} (expected 30..33)"
     )
 
 

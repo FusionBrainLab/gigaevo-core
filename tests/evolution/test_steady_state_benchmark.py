@@ -398,10 +398,10 @@ class TestRealisticE2E:
         elapsed = time.monotonic() - t0
         print(
             f"\nSteady-state E2E: {elapsed:.3f}s, {mutation_count} mutations, "
-            f"{engine.metrics.total_mutants} epochs"
+            f"{engine.metrics.iteration} epochs"
         )
 
-        assert engine.metrics.total_mutants >= 2
+        assert engine.metrics.iteration >= 2
         assert mutation_count >= 8  # at least 1 epoch's worth
 
 

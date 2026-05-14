@@ -417,11 +417,11 @@ async def test_stress_invariants(
     # is only incremented after a mutant is persisted. With up to max_in_flight
     # tasks in flight, the engine can overshoot the configured cap by at most
     # max_in_flight slots — this is documented steady-state behavior.
-    assert n_mutants <= engine.metrics.total_mutants <= n_mutants + max_in_flight, (
-        f"total_mutants={engine.metrics.total_mutants} outside expected window "
+    assert n_mutants <= engine.metrics.iteration <= n_mutants + max_in_flight, (
+        f"total_mutants={engine.metrics.iteration} outside expected window "
         f"[{n_mutants}, {n_mutants + max_in_flight}]"
     )
-    spawned = engine.metrics.total_mutants
+    spawned = engine.metrics.iteration
 
     # ---- Invariant 4: programs_processed == accepted + rejected ----
     accepted = engine.metrics.added
@@ -465,7 +465,7 @@ async def test_stress_invariants(
         last_tm, last_pp = tm, pp
 
     # Final snapshot values agree with in-process metrics.
-    assert engine._snapshot.total_mutants == engine.metrics.total_mutants
+    assert engine._snapshot.total_mutants == engine.metrics.iteration
     assert engine._snapshot.programs_processed == engine.metrics.programs_processed
 
 

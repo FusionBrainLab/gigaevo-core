@@ -3,7 +3,7 @@
 Covers three failure modes that would make a resumed run diverge from a
 contiguous run:
   1. RUNNING programs stuck forever  →  recover_stranded_programs()
-  2. EngineMetrics.total_mutants reset to 0  →  EvolutionEngine.restore_state()
+  2. EngineMetrics.iteration reset to 0  →  EvolutionEngine.restore_state()
   3. MapElitesMultiIsland.generation / last_migration reset to 0
        →  MapElitesMultiIsland.restore_state()
 """
@@ -151,17 +151,17 @@ class TestEvolutionEngineRestoreState:
         )
 
         engine = _make_engine(storage=fakeredis_storage)
-        assert engine.metrics.total_mutants == 0  # starts at 0
+        assert engine.metrics.iteration == 0  # starts at 0
 
         await engine.restore_state()
 
-        assert engine.metrics.total_mutants == 17
+        assert engine.metrics.iteration == 17
 
     async def test_no_saved_state_keeps_zero(self, fakeredis_storage) -> None:
         """When no state is persisted, total_mutants stays at 0."""
         engine = _make_engine(storage=fakeredis_storage)
         await engine.restore_state()
-        assert engine.metrics.total_mutants == 0
+        assert engine.metrics.iteration == 0
 
     async def test_restores_programs_processed(self, fakeredis_storage) -> None:
         """restore_state() loads programs_processed from Redis."""

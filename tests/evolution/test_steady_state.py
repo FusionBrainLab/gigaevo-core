@@ -150,7 +150,7 @@ class TestGenerationCap:
 
         engine = _make_ss_engine(max_mutants=1)
         engine._running = True
-        engine.metrics.total_mutants = 1  # already at cap
+        engine.metrics.iteration = 1  # already at cap
 
         await asyncio.wait_for(dispatcher_loop(engine), timeout=SS_TEST_TIMEOUT)
 
@@ -171,5 +171,5 @@ class TestRestore:
             return_value=snap.model_dump_json()
         )
         await engine.restore_state()
-        assert engine.metrics.total_mutants == 42
+        assert engine.metrics.iteration == 42
         assert engine.metrics.programs_processed == 7

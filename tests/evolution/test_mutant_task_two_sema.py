@@ -45,7 +45,7 @@ class _FakeEngine:
         self._llm_active: int = 0
 
         self.metrics = type("M", (), {})()
-        self.metrics.total_mutants = 0
+        self.metrics.iteration = 0
         self.metrics.mutations_created = 0
         self.metrics.submitted_for_refresh = 0
 

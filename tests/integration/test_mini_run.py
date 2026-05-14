@@ -319,7 +319,7 @@ class TestMiniRunBasic:
 
         # JIT cap is a *floor* trigger (≥ max); concurrent in-flight mutants
         # may bring total_mutants slightly above max.
-        assert engine.metrics.total_mutants >= 5
+        assert engine.metrics.iteration >= 5
 
     async def test_archive_grows(self) -> None:
         _reset_counter()
@@ -468,7 +468,7 @@ class TestMiniRunEngineMetrics:
         server = fakeredis.FakeServer()
         engine, _, _ = await _run_mini(server, max_generations=4)
         # JIT cap is a *floor* trigger.
-        assert engine.metrics.total_mutants >= 4
+        assert engine.metrics.iteration >= 4
 
     async def test_mutations_created(self) -> None:
         _reset_counter()
@@ -566,7 +566,7 @@ class TestMiniRunResume:
         await strategy2.restore_state()
 
         # JIT cap floor: persisted value may be ≥ 3.
-        assert engine2.metrics.total_mutants >= 3
+        assert engine2.metrics.iteration >= 3
         assert strategy2.generation > 0
         await storage.close()
 
